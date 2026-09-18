@@ -340,6 +340,7 @@ pub struct Args {
     /// target at or below it.
     pub palw_single_lottery_devnet_daa: Option<u64>,
     pub palw_verification_v2_devnet_daa: Option<u64>,
+    pub palw_readiness_v2_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -469,6 +470,7 @@ impl Default for Args {
             palw_work_target_devnet_daa: None,
             palw_single_lottery_devnet_daa: None,
             palw_verification_v2_devnet_daa: None,
+            palw_readiness_v2_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -791,6 +793,26 @@ impl Args {
             config.params.palw_verification_v2 = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-verification-v2-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_readiness_v2_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-readiness-v2-devnet is devnet/simnet only (got {net:?}). Arming readiness V2 is a consensus change \
+                     and ships in a release, not a command line."
+                );
+            }
+            if config.params.palw_model_registry.is_none() {
+                panic!(
+                    "--palw-readiness-v2-devnet={daa} needs --palw-model-registry-devnet at or below it: a possession proof \
+                     proves possession of a class the registry holds"
+                );
+            }
+            config.params.palw_readiness_v2 = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-readiness-v2-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1444,6 +1466,20 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_VERIFICATION_V2_DEVNET"),
         )
         .arg(
+            Arg::new("palw-readiness-v2-devnet")
+                .long("palw-readiness-v2-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0133 §11.2 on a PRIVATE devnet: arm readiness V2 at this DAA score — a seat proves possession with a \
+                     multiproof over the sixteen leaves the (class, bond, span) challenge draws from the whole artifact, the \
+                     one-leaf V1 proof is refused, and only a V2 row counts a seat ready. Needs \
+                     --palw-model-registry-devnet at or below it. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_READINESS_V2_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-work-target-devnet")
                 .long("palw-work-target-devnet")
                 .value_name("daa-score")
@@ -1865,6 +1901,10 @@ impl Args {
                 .get_one::<u64>("palw-verification-v2-devnet")
                 .copied()
                 .or(defaults.palw_verification_v2_devnet_daa),
+            palw_readiness_v2_devnet_daa: m
+                .get_one::<u64>("palw-readiness-v2-devnet")
+                .copied()
+                .or(defaults.palw_readiness_v2_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),

@@ -1,6 +1,6 @@
 # Testnet-11: the DAA 6,001 PALW upgrade, and Verification V2 at 6,100
 
-**Fingerprint of the release: `a8f99dac4638a1fac9eef649dc9a23c7b12f6e62fa7920ac2e488eb0263717d9`.**
+**Fingerprint of the release: `c472a17b461bb5578ca16023e7dda48ced0996585e93c2f2b0f459f6a3633c12`.**
 Every node on testnet-11 must run this build **before DAA 6,000**. The build currently deployed prints
 `ae1d6162…` and is refused from 6,000 — it schedules the held regime and the audit's deep fixes at 7,000,
 the height the operator moved to 6,000 on 2026-09-17.
@@ -31,10 +31,17 @@ of it fires without the rest:
 | the single lottery — an attempt block's Layer-0 digest is no longer compared to `bits`, the class ticket is the whole lottery | 0132 S |
 | the short challenge window: a claim licensed past 6,001 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
 
-**DAA 6,100 — Verification V2 (S1, segmented replay).** A receipt may name the segments of a job it
+**DAA 6,100 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
 attests; a claim licenses when the panel's quorum holds **and** every segment of the anchor's cut is
 attested twice. A whole-job receipt is a full attestation, so this changes no licence until seats file
 partial masks — a fleet adopts segment replay seat by seat. ADR-0133 §11.1.
+
+The same day, a seat's possession proof becomes a **multiproof over the whole artifact**: the
+challenge draws sixteen leaves from the full inventory for each (class, bond, span), the proof opens
+them all at once, and its signature covers the bytes it opened. The one-leaf proof of 6,001 is
+refused from 6,100, and a seat re-proves every few spans instead of every thirty. A seat that holds
+the artifact needs no change beyond running this build; a seat that was answering with one window
+will stop counting. ADR-0133 §11.2.
 
 **DAA 6,201 — the compute overlay retires** (ADR-0134). **DAA 6,900 — the market's least seed** (ADR-0120).
 

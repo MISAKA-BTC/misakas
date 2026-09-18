@@ -1210,6 +1210,14 @@ pub struct Params {
     /// without `palw_model_registry` at or below it. Operator's order (2026-09-18): V1 → S1 → S3 if
     /// needed → S2 if speed wins; no zero-knowledge proof.
     pub palw_verification_v2: Option<ForkActivation>,
+    /// **ADR-0133 §11.2 — readiness V2: a possession proof over the whole artifact.** Past this
+    /// fence a seat proves possession with `SeatReadinessProvedV2` — the sixteen leaves the
+    /// (class, bond, span) challenge draws from the whole inventory, in one multiproof, signed over
+    /// the leaves it opened — the V1 one-leaf object is refused, and only a V2 row counts a seat
+    /// ready (for eight spans, not thirty). `Some(6,100)` on testnet-11, the same day Verification
+    /// V2 takes; `None` elsewhere; hashed Some-only; refused without `palw_model_registry` at or
+    /// below it. H-6 of the 2026-09-18 audit, which the 6,001 bundle deliberately left as V1.
+    pub palw_readiness_v2: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2638,6 +2646,18 @@ impl Params {
                 ));
             }
         }
+        // ADR-0133 §11.2: readiness V2 replaces the registry's own possession proof, so it never
+        // precedes the registry that seats one.
+        if let Some(v2) = self.palw_readiness_v2.filter(|f| *f != ForkActivation::never()) {
+            let registry_below =
+                self.palw_model_registry.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= v2.daa_score());
+            if !registry_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_readiness_v2 is armed without palw_model_registry armed at or below its height: a possession proof \
+                     proves possession of a class the registry holds",
+                ));
+            }
+        }
         // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
         // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
         // reach the fingerprint whether or not the height does.
@@ -3947,6 +3967,9 @@ impl Params {
         if self.palw_verification_v2 == Some(ForkActivation::never()) {
             self.palw_verification_v2 = None;
         }
+        if self.palw_readiness_v2 == Some(ForkActivation::never()) {
+            self.palw_readiness_v2 = None;
+        }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
         }
@@ -4266,6 +4289,11 @@ impl Params {
     /// ADR-0133 Verification V2: whether segment-scoped licensing is in force at `daa_score`.
     pub fn palw_verification_v2_at(&self, daa_score: u64) -> bool {
         self.palw_verification_v2.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0133 §11.2: whether readiness V2 (the whole-artifact possession proof) is in force.
+    pub fn palw_readiness_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_readiness_v2.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0132 §7.6: arms (or clears) the short challenge window's fence AND the V2 bundle's copy
@@ -4911,6 +4939,7 @@ impl Params {
             palw_single_lottery,
             palw_short_challenge_window,
             palw_verification_v2,
+            palw_readiness_v2,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -4985,6 +5014,7 @@ impl Params {
             ("palw_single_lottery", *palw_single_lottery),
             ("palw_short_challenge_window", *palw_short_challenge_window),
             ("palw_verification_v2", *palw_verification_v2),
+            ("palw_readiness_v2", *palw_readiness_v2),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5471,6 +5501,7 @@ impl Params {
             palw_single_lottery,
             palw_short_challenge_window,
             palw_verification_v2,
+            palw_readiness_v2,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5705,6 +5736,14 @@ impl Params {
         }
         // ADR-0133 Verification V2, a bare fence: the same treatment again.
         match palw_verification_v2.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0133 §11.2 readiness V2, a bare fence: the same treatment again.
+        match palw_readiness_v2.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6173,6 +6212,7 @@ impl Params {
             palw_single_lottery,
             palw_short_challenge_window,
             palw_verification_v2,
+            palw_readiness_v2,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6404,6 +6444,11 @@ impl Params {
         // ADR-0133 Verification V2: the height only, Some-only.
         if let Some(activation) = palw_verification_v2 {
             h.write(b"palw_verification_v2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0133 §11.2 readiness V2: the height only, Some-only.
+        if let Some(activation) = palw_readiness_v2 {
+            h.write(b"palw_readiness_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -7054,6 +7099,7 @@ impl Params {
             palw_single_lottery: self.palw_single_lottery,
             palw_short_challenge_window: self.palw_short_challenge_window,
             palw_verification_v2: self.palw_verification_v2,
+            palw_readiness_v2: self.palw_readiness_v2,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -7995,6 +8041,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_readiness_v2: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8189,6 +8236,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_readiness_v2: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8365,6 +8413,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_readiness_v2: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -12072,11 +12121,13 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     // ADR-0135 Upgrade A, ADR-0132 Upgrade C and ADR-0137 ride the same flag day.
     params.palw_model_registry = None;
     params.palw_verification_v2 = None;
+    params.palw_readiness_v2 = None;
     params.palw_economic_payout = None;
     params.palw_work_target = None;
     params.palw_single_lottery = None;
     params.set_palw_short_challenge_window(None);
     params.palw_verification_v2 = None;
+    params.palw_readiness_v2 = None;
 }
 
 /// **The fleet's release as deployed (`13520042`, fingerprint `ae1d6162…`)**: no flag-day set, no
@@ -12571,6 +12622,9 @@ pub fn palw_rc_base_params() -> Params {
     params.set_palw_short_challenge_window(Some(flag_day_6001));
     // ADR-0133 Verification V2: its own day, a hundred DAA past the flag day.
     params.palw_verification_v2 = Some(ForkActivation::new(PALW_RC_VERIFICATION_V2_FENCE_DAA));
+    // ADR-0133 §11.2: readiness V2 takes the same day — the possession proof the 6,001 bundle left
+    // as V1 (H-6 of the 2026-09-18 audit) becomes a whole-artifact multiproof here.
+    params.palw_readiness_v2 = Some(ForkActivation::new(PALW_RC_VERIFICATION_V2_FENCE_DAA));
     params.dns_bft_gate =
         Some(DnsBftGateV1 { activation: flag_day_6001, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 });
     // **ADR-0134 — the compute overlay's committee beacon retires at its own height** (2026-09-17):
@@ -12956,6 +13010,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_readiness_v2: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -17055,7 +17110,7 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                "a8f99dac4638a1fac9eef649dc9a23c7b12f6e62fa7920ac2e488eb0263717d9",
+                "c472a17b461bb5578ca16023e7dda48ced0996585e93c2f2b0f459f6a3633c12",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17850,6 +17905,7 @@ mod consensus_params_id_tests {
                 "palw_single_lottery",
                 "palw_short_challenge_window",
                 "palw_verification_v2",
+                "palw_readiness_v2",
                 "palw_execution_lane",
                 "palw_overlay_carve",
                 "palw_model_market",
@@ -18822,6 +18878,7 @@ mod consensus_params_id_tests {
             // The registry and the payout ride the economy's height; a moved economy moves them off.
             scheduled.palw_model_registry = None;
             scheduled.palw_verification_v2 = None;
+            scheduled.palw_readiness_v2 = None;
             scheduled.palw_economic_payout = None;
             scheduled.palw_work_target = None;
             scheduled.palw_single_lottery = None;
@@ -18948,6 +19005,7 @@ mod consensus_params_id_tests {
         dormant.palw_panel_economy = None;
         dormant.palw_model_registry = None;
         dormant.palw_verification_v2 = None;
+        dormant.palw_readiness_v2 = None;
         dormant.palw_economic_payout = None;
         dormant.palw_work_target = None;
         dormant.palw_single_lottery = None;
@@ -20123,6 +20181,7 @@ mod palw_model_registry_fence_tests {
         let mut rc = shipped.clone();
         rc.palw_model_registry = None;
         rc.palw_verification_v2 = None;
+        rc.palw_readiness_v2 = None;
         rc.palw_economic_payout = None;
         rc.palw_work_target = None;
         rc.palw_single_lottery = None;
@@ -20171,6 +20230,7 @@ mod palw_model_registry_fence_tests {
         rc.palw_single_lottery = None;
         // Verification V2 (6,100) follows the registry; this test moves the registry past it.
         rc.palw_verification_v2 = None;
+        rc.palw_readiness_v2 = None;
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_single_lottery" && fence.is_none()));
         let mut never = rc.clone();
         never.palw_single_lottery = Some(ForkActivation::never());
@@ -20244,8 +20304,12 @@ mod palw_model_registry_fence_tests {
         ];
         const COMPATIBILITY_6000: &[&str] =
             &["palw_held_context", "palw_shard_court", "palw_fp_da_pins", "palw_audit_2026_09_11_deep"];
-        const LATER: &[(&str, u64)] =
-            &[("palw_verification_v2", 6_100), ("palw_compute_overlay_retired", 6_201), ("palw_model_seed_v2", 6_900)];
+        const LATER: &[(&str, u64)] = &[
+            ("palw_verification_v2", 6_100),
+            ("palw_readiness_v2", 6_100),
+            ("palw_compute_overlay_retired", 6_201),
+            ("palw_model_seed_v2", 6_900),
+        ];
         for name in UPGRADE_6001 {
             assert_eq!(by_name.get(name).copied().flatten(), Some(6_001), "{name}: on the flag day");
         }
@@ -20284,10 +20348,11 @@ mod palw_model_registry_fence_tests {
         assert_eq!(at_6002, at_6001, "and nothing else fires until 6,100");
         assert_eq!(
             active_at(6_100).difference(&at_6001).copied().collect::<Vec<_>>(),
-            vec!["palw_verification_v2"],
-            "6,100 is Verification V2's own day"
+            vec!["palw_readiness_v2", "palw_verification_v2"],
+            "6,100 is ADR-0133's own day: segmented licensing and the whole-artifact possession proof together"
         );
         assert!(!rc.palw_verification_v2_at(6_099) && rc.palw_verification_v2_at(6_100));
+        assert!(!rc.palw_readiness_v2_at(6_099) && rc.palw_readiness_v2_at(6_100));
         for name in UPGRADE_6001 {
             assert!(!at_6000.contains(name), "{name} is not active at 6,000");
         }
@@ -20355,6 +20420,7 @@ mod palw_model_registry_fence_tests {
         // refusals this test is about could not fire.
         rc.palw_model_registry = None;
         rc.palw_verification_v2 = None;
+        rc.palw_readiness_v2 = None;
         rc.palw_economic_payout = None;
         let mut never = rc.clone();
         never.palw_work_target = Some(ForkActivation::never());
@@ -20417,6 +20483,7 @@ mod palw_model_registry_fence_tests {
         let mut rc = shipped.clone();
         rc.palw_model_registry = None;
         rc.palw_verification_v2 = None;
+        rc.palw_readiness_v2 = None;
         rc.palw_economic_payout = None;
         rc.palw_work_target = None;
         rc.palw_single_lottery = None;

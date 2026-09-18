@@ -420,6 +420,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
     pub(super) palw_verification_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0133 §11.2: `Params::palw_readiness_v2` — past it a possession proof is a whole-artifact
+    /// multiproof, the one-leaf object is refused, and only a V2 row counts a seat ready.
+    pub(super) palw_readiness_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 Upgrade C: `Params::palw_economic_payout` — past it a claim snapshots its economics
     /// at acceptance and is paid at the rate; the registry reads the cap ceiling.
     pub(super) palw_economic_payout: Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
@@ -917,6 +920,7 @@ impl VirtualStateProcessor {
             palw_work_target: params.palw_work_target,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
+            palw_readiness_v2: params.palw_readiness_v2,
             palw_economic_payout: params.palw_economic_payout_fence(),
             palw_genesis_model_works: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
@@ -6557,11 +6561,44 @@ impl VirtualStateProcessor {
                 // The FENCE is checked here as well as in the fold. The fold refusing it is what
                 // makes it a rule; this refusing it is what stops a block from being folded at all
                 // on a network where the rule is dormant.
+                Obj::SeatReadinessProvedV2 { bond, class_id, span, proof, signature } => {
+                    if !self.palw_model_registry_at(point.daa_score) {
+                        return Err(format!("a possession proof for class {class_id} below the model registry's fence"));
+                    }
+                    if !self.palw_readiness_v2_at(point.daa_score) {
+                        return Err(format!("a V2 possession proof for class {class_id} below readiness V2's fence (ADR-0133 §11.2)"));
+                    }
+                    let record =
+                        state.bond(bond).ok_or_else(|| format!("a possession proof names bond {bond:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_model_registry_v1::palw_seat_readiness_message_v2(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        &borsh::to_vec(bond).expect("a bond key is borsh-serializable"),
+                        class_id,
+                        *span,
+                        proof,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_model_registry_v1::PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {bond:?}'s possession proof is not signed by the key it registered"));
+                    }
+                }
                 Obj::SeatReadinessProved { bond, class_id, span, opening, signature } => {
                     // ADR-0135: below the fence the object does not exist; above it the seat's own
                     // key must sign the proof, or a relayer could volunteer another bond's collateral.
                     if !self.palw_model_registry_at(point.daa_score) {
                         return Err(format!("a readiness proof for class {class_id} below the model registry's fence"));
+                    }
+                    if self.palw_readiness_v2_at(point.daa_score) {
+                        return Err(format!(
+                            "class {class_id}: the one-leaf possession proof is superseded at this height (ADR-0133 §11.2)"
+                        ));
                     }
                     let record =
                         state.bond(bond).ok_or_else(|| format!("a readiness proof names bond {bond:?} this chain does not have"))?;
@@ -7546,6 +7583,7 @@ impl VirtualStateProcessor {
             work_target_active: self.palw_work_target_at(daa_score),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
+            readiness_v2_active: self.palw_readiness_v2_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7626,6 +7664,11 @@ impl VirtualStateProcessor {
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
     pub(super) fn palw_verification_v2_at(&self, daa_score: u64) -> bool {
         self.palw_verification_v2.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0133 §11.2: whether the whole-artifact possession proof is in force at `daa_score`.
+    pub(super) fn palw_readiness_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_readiness_v2.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     pub(super) fn palw_single_lottery_at(&self, daa_score: u64) -> bool {
@@ -12447,6 +12490,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::SeatReadinessProved { .. } => "SeatReadinessProved",
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        O::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",

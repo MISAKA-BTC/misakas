@@ -351,6 +351,53 @@ assembles `ReceiptLicensedV2` by coverage; (4) the court resumes from a checkpoi
 Until (1)–(3) land a seat replays whole and attests the full mask, and V2 is byte-for-byte V1 at the licence
 — which is what makes 6,100 safe to cross before the runtime half ships.
 
+### 11.2 Readiness V2 (H-6), built 2026-09-18 — fenced at testnet-11's DAA 6,100
+
+The 2026-09-18 pre-arming audit (`docs/palw-audit-2026-09-18-6001.md`, finding H-6) put the
+possession proof's own words to the test: ADR-0135 Decision 4 calls readiness "evidence, not
+declaration", and V1's evidence is one leaf of a **contiguous eight-leaf window**
+(`PALW_READINESS_CHALLENGE_WIDTH_V1`), signed over the leaf's INDEX and not its bytes. A seat
+holding one window of a 400,000-leaf artifact — or able to fetch eight rows on demand — answered
+every challenge it was ever asked. The operator's decision (2026-09-18): **6,001 keeps V1**, and the
+fix arrives as its own object at **6,100**, the day Verification V2 takes.
+
+`SeatReadinessProvedV2 { bond, class_id, span, proof, signature }` (tag 50), behind
+`Params::palw_readiness_v2` (`Some(6,100)` on testnet-11, `None` elsewhere, refused without
+`palw_model_registry` at or below it):
+
+* **The whole artifact, deterministically.** `palw_readiness_v2_leaves_v1(seed, leaf_count)` draws
+  `PALW_READINESS_V2_CHUNKS_V1 = 16` distinct leaves from the FULL range by hashing the seed with a
+  counter, ascending and de-duplicated. The seed is
+  `palw_readiness_v2_challenge_seed_v1(class, bond, span)` under its own domain, so the set is a
+  function of the chain: the prover, every validator and the court draw the same leaves, another
+  bond draws different ones, and no seat knows its leaves before the span it must prove them in. A
+  seat holding a fraction `f` of the artifact passes with probability `f¹⁶`.
+* **One multiproof.** `PalwArtifactMultiproofV1 { leaf_count, opened, siblings }`
+  (`consensus/core/src/palw_artifact.rs`) carries the opened leaves in ascending order and only the
+  siblings the verifier cannot derive from them — two leaves that share an ancestor share its path,
+  which is what makes sixteen leaves affordable in one object. `palw_artifact_multiproof_v1` builds
+  it from the inventory's own leaf hashes; `verify_artifact_multiproof_v1` walks the tree level by
+  level, exactly as `artifact_root_v1` folds it (promoted odd node included), and refuses a proof
+  with a hash left over or one short.
+* **The signature covers the bytes.** `palw_seat_readiness_message_v2` hashes the network, the bond,
+  the class, the span, the inventory's size and the leaf hash of every opened operand — V1's message
+  covered only the index, so a published opening could be re-signed by a bond that never held the
+  data.
+* **The rotation bites.** The row records the evidence (`proof_version`, `chunks`), and past the
+  fence only a V2 row counts a seat ready, for `PALW_READINESS_V2_MAX_AGE_SPANS_V1 = 8` spans
+  instead of the globals' thirty. The V1 object is refused past the fence, at acceptance and in the
+  transition alike.
+
+Pinned by `a_multiproof_opens_many_leaves_of_every_tree_shape_and_refuses_every_tamper` and
+`a_multiproof_shares_the_ancestors_two_leaves_have_in_common` (artifact),
+`adr0133_readiness_v2_opens_the_whole_artifact_and_supersedes_the_one_leaf_proof` (state) and the
+flag-day table (params). The node's submitter builds V2 past the fence
+(`kaspad/src/palw_panel.rs::readiness_duties`); `--palw-readiness-v2-devnet` and the drill scripts'
+`READINESS_V2_AT` arm it on a private devnet.
+
+**What is still V1 by design:** everything at 6,001. A fleet crossing the flag day proves possession
+the old way and has its own day at 6,100 to cross to the new one.
+
 ## 12. Number hygiene
 
 0133 was free when written; the next free number is 0134.

@@ -3446,6 +3446,21 @@ pub enum PalwConsensusObjectV2 {
         claim: Hash64,
         receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
     },
+    /// **ADR-0133 §11.2 (H-6 of the 2026-09-18 audit): a seat proves it HOLDS the artifact.** A V1
+    /// proof opens one leaf of a contiguous eight-leaf window, so one window of a 400,000-leaf
+    /// artifact answered every challenge — possession meant reach. A V2 proof opens the sixteen
+    /// leaves `palw_readiness_v2_leaves_v1` draws from the whole inventory for this (class, bond,
+    /// span), in one multiproof, signed over the leaves it opened
+    /// (`palw_seat_readiness_message_v2` — V1's message covered only the index, so a published
+    /// opening could be re-signed by a bond that held nothing). Accepted only past
+    /// `Params::palw_readiness_v2`, where the V1 object is refused in turn. Tag 50; appended last.
+    SeatReadinessProvedV2 {
+        bond: PalwBondKeyV2,
+        class_id: Hash64,
+        span: u64,
+        proof: Box<crate::palw_artifact::PalwArtifactMultiproofV1>,
+        signature: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4849,6 +4864,10 @@ pub enum PalwStateV2Error {
     ClassManifestRefused(String),
     #[error("verification V2 is not in force on this chain at this height (ADR-0133)")]
     VerificationV2Dormant,
+    #[error("readiness V2 is not in force on this chain at this height (ADR-0133 §11.2)")]
+    ReadinessV2Dormant,
+    #[error("the V1 possession proof for class {0} is superseded at this height: readiness V2 is in force")]
+    ReadinessV1Superseded(Hash64),
     #[error("class {class} is {state} under the model registry and admits no new claims")]
     ClassNotAdmitting { class: Hash64, state: String },
     #[error("class {class} has {inflight} claims in flight against the registry's cap of {cap}")]
@@ -8129,6 +8148,8 @@ impl<'a> TransitionBuilder<'a> {
                 proved_daa: span.saturating_mul(span_daa.max(1)),
                 proved_span: span,
                 leaf_index: opening.leaf_index,
+                proof_version: 1,
+                chunks: 1,
             }),
         );
         Ok(())
@@ -8190,6 +8211,70 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// **A seat's V2 possession proof** (`SeatReadinessProvedV2`, ADR-0133 §11.2): the multiproof
+    /// reconstructs the class's registered artifact root, the leaves it opened are exactly the ones
+    /// this (class, bond, span) challenge draws from the whole inventory, and the span is this one
+    /// or one the landing window still admits. The row it writes is what the draw reads — stamped
+    /// `proof_version = 2`, because past the fence nothing else counts.
+    fn apply_seat_readiness_v2(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        bond: &PalwBondKeyV2,
+        class_id: &Hash64,
+        span: u64,
+        proof: &crate::palw_artifact::PalwArtifactMultiproofV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_model_registry_v1 as registry;
+        if !self.extras.readiness_v2_active {
+            return Err(PalwStateV2Error::ReadinessV2Dormant);
+        }
+        let Some(fold) = self.model_registry_fold() else { return Err(PalwStateV2Error::ModelRegistryDormant) };
+        let span_daa = fold.span_daa;
+        let record = self.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?;
+        if !matches!(record.status, PalwBondStatusV2::Active) {
+            return Err(PalwStateV2Error::BondNotActive(*bond));
+        }
+        let class = self.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+        if proof.operand_bytes() > registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
+            return Err(PalwStateV2Error::ReadinessProofRefused(format!(
+                "the proof carries {} bytes of operands, above the {} a proof may ride with",
+                proof.operand_bytes(),
+                registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1
+            )));
+        }
+        crate::palw_artifact::verify_artifact_multiproof_v1(proof, class.artifact_root)
+            .map_err(|e| PalwStateV2Error::ReadinessProofRefused(format!("{e}")))?;
+        let span_now = crate::palw_execution_lane_v1::palw_execution_span_v1(ctx.daa_score, span_daa);
+        let landing = registry::palw_readiness_landing_spans_v1(span_daa);
+        if span > span_now || span_now - span > landing {
+            return Err(PalwStateV2Error::ReadinessProofRefused(format!(
+                "the proof names span {span} at span {span_now} (a proof lands within {landing} spans)"
+            )));
+        }
+        let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");
+        let seed = registry::palw_readiness_v2_challenge_seed_v1(class_id, &bond_bytes, span);
+        let wanted = registry::palw_readiness_v2_leaves_v1(&seed, proof.leaf_count);
+        if proof.opened_indices() != wanted {
+            return Err(PalwStateV2Error::ReadinessProofRefused(format!(
+                "the proof opens {:?} of {} leaves; this span's challenge names {:?}",
+                proof.opened_indices(),
+                proof.leaf_count,
+                wanted
+            )));
+        }
+        self.write_seat_readiness(
+            (*bond, *class_id),
+            Some(registry::PalwSeatReadinessRowV1 {
+                proved_daa: span.saturating_mul(span_daa.max(1)),
+                proved_span: span,
+                leaf_index: wanted.first().copied().unwrap_or(0),
+                proof_version: 2,
+                chunks: proof.opened.len().min(u32::MAX as usize) as u32,
+            }),
+        );
+        Ok(())
+    }
+
     fn open_model_lifecycle(
         &mut self,
         ctx: &PalwBlockContextV2,
@@ -8242,7 +8327,14 @@ impl<'a> TransitionBuilder<'a> {
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> u32 {
-        let max_age_daa = (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
+        // ADR-0133 §11.2: past readiness V2 a row stands for eight spans, not thirty, and a V1 row
+        // does not stand at all — the challenge rotates every span and the rotation has to bite.
+        let max_age_spans = if self.extras.readiness_v2_active {
+            crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1
+        } else {
+            fold.globals.readiness_probe_max_age_spans
+        };
+        let max_age_daa = (max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
         let floor = self.params.min_collateral_sompi();
         let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
         let mut ready = 0u32;
@@ -8251,6 +8343,9 @@ impl<'a> TransitionBuilder<'a> {
                 continue;
             }
             let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { continue };
+            if self.extras.readiness_v2_active && row.proof_version < 2 {
+                continue; // a one-leaf proof is not possession past the fence
+            }
             if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
                 continue;
             }
@@ -14025,7 +14120,14 @@ fn apply_object(
             );
         }
         PalwConsensusObjectV2::SeatReadinessProved { bond, class_id, span, opening, signature: _ } => {
+            // ADR-0133 §11.2: past readiness V2 the one-leaf proof is not evidence any more.
+            if builder.extras.readiness_v2_active {
+                return Err(PalwStateV2Error::ReadinessV1Superseded(*class_id));
+            }
             builder.apply_seat_readiness(ctx, bond, class_id, *span, opening)?;
+        }
+        PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id, span, proof, signature: _ } => {
+            builder.apply_seat_readiness_v2(ctx, bond, class_id, *span, proof)?;
         }
         PalwConsensusObjectV2::ClassManifestV2 { class_id, artifact_bytes, registrant_bond, signature: _ } => {
             builder.apply_class_manifest(class_id, *artifact_bytes, registrant_bond)?;
@@ -14739,6 +14841,10 @@ pub struct PalwTransitionExtrasV1 {
     /// a segment-scoped receipt set is refused; past it, it licenses by coverage and the V1 object
     /// still licenses by quorum.
     pub verification_v2_active: bool,
+    /// ADR-0133 §11.2: `Params::palw_readiness_v2` resolved at the block's DAA. Past it a possession
+    /// proof is a multiproof over the whole artifact, the V1 object is refused, and only a V2 row
+    /// counts a seat ready.
+    pub readiness_v2_active: bool,
     /// `Params::palw_model_lines` resolved at the block's DAA (ADR-0088 Decision 11). Below it
     /// the ten registry objects are refused and no claim is attributed.
     pub model_lines_active: bool,
@@ -18512,6 +18618,168 @@ pub(crate) mod tests {
             // A re-measured file is a new commitment from the same registrant, not a duplicate.
             let (s4, _) = step(&s3, &p, &ctx(4, 112, 4), &[manifest(bond_key(2), FILE + 1)], None, Some(f.clone())).unwrap();
             assert_eq!(s4.model_lifecycle(&kimi_id()).unwrap().work.artifact_bytes, FILE + 1);
+        }
+
+        #[test]
+        fn adr0133_readiness_v2_opens_the_whole_artifact_and_supersedes_the_one_leaf_proof() {
+            // **H-6 of the 2026-09-18 audit, fenced at testnet-11's 6,100.** A V1 proof opens one
+            // leaf of a contiguous window; a V2 proof opens the leaves this (class, bond, span)
+            // challenge draws from the WHOLE inventory, in one multiproof, signed over what it
+            // opened. Past the fence the V1 object is refused and only a V2 row counts a seat ready.
+            use crate::palw_artifact::{artifact_leaf_v1, palw_artifact_multiproof_v1};
+            use crate::palw_model_registry_v1::{
+                PALW_READINESS_V2_CHUNKS_V1, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_leaves_v1,
+                palw_seat_readiness_message_v2,
+            };
+            let p = params();
+            // A 40-leaf inventory: the challenge names sixteen of forty, so the proof is a subset
+            // and the walk has to share ancestors.
+            let operands: Vec<PalwArtifactOperandV1> = (0..40u32)
+                .map(|i| PalwArtifactOperandV1 {
+                    tensor_name: "w".to_string(),
+                    layer: None,
+                    row_start: i * 8,
+                    bytes: vec![i as u8; 8],
+                })
+                .collect();
+            let root = PalwArtifactInventoryV1::new(operands.clone()).expect("a well-formed inventory").root();
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let (s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+
+            let seat = bond_key(2);
+            let bond_bytes = borsh::to_vec(&seat).unwrap();
+            let span = 11u64;
+            let seed = palw_readiness_v2_challenge_seed_v1(&kimi_id(), &bond_bytes, span);
+            let wanted = palw_readiness_v2_leaves_v1(&seed, 40);
+            assert_eq!(wanted.len(), PALW_READINESS_V2_CHUNKS_V1 as usize, "sixteen leaves of forty");
+            assert!(wanted.windows(2).all(|w| w[0] < w[1]), "ascending and distinct: {wanted:?}");
+            assert!(wanted.iter().any(|i| *i >= 16), "drawn from the whole inventory, not a window: {wanted:?}");
+            assert_ne!(
+                wanted,
+                palw_readiness_v2_leaves_v1(&palw_readiness_v2_challenge_seed_v1(&kimi_id(), &bond_bytes, span + 1), 40),
+                "the challenge rotates every span"
+            );
+            assert_ne!(
+                wanted,
+                palw_readiness_v2_leaves_v1(
+                    &palw_readiness_v2_challenge_seed_v1(&kimi_id(), &borsh::to_vec(&bond_key(3)).unwrap(), span),
+                    40
+                ),
+                "…and names different leaves for another bond"
+            );
+
+            let opened: Vec<(u32, PalwArtifactOperandV1)> = wanted.iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+            let proof = palw_artifact_multiproof_v1(&leaves, &opened).expect("the seat holds the artifact");
+            let v2 = |span: u64, proof: crate::palw_artifact::PalwArtifactMultiproofV1| PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                bond: seat,
+                class_id: kimi_id(),
+                span,
+                proof: Box::new(proof),
+                signature: vec![1],
+            };
+            assert_eq!(borsh::to_vec(&v2(span, proof.clone())).unwrap()[0], 50, "appended last");
+            let on = PalwTransitionExtrasV1 { readiness_v2_active: true, ..extras(Some(f.clone())) };
+            let off = extras(Some(f.clone()));
+
+            // Below the fence the object is refused; past it, it writes the row.
+            let dormant = apply_palw_transition_v2_with_extras(
+                &s2,
+                &p,
+                &ctx(3, 111, 3),
+                &[v2(span, proof.clone())],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &off,
+            );
+            assert!(matches!(dormant, Err(PalwStateV2Error::ReadinessV2Dormant)), "{dormant:?}");
+            let (s3, d3) = apply_palw_transition_v2_with_extras(
+                &s2,
+                &p,
+                &ctx(3, 111, 3),
+                &[v2(span, proof.clone())],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            )
+            .expect("past the fence the multiproof is possession");
+            let row = s3.seat_readiness(&seat, &kimi_id()).expect("the row exists");
+            assert_eq!((row.proof_version, row.chunks), (2, PALW_READINESS_V2_CHUNKS_V1), "the row records the evidence");
+            assert_ne!(s3.state_root(), s2.state_root(), "the row is rooted");
+            assert_eq!(revert_delta_v2(&s3, &d3, &p).expect("reverts").state_root(), s2.state_root());
+
+            // The V1 object is superseded past the fence, and a V1 row stops counting a seat ready.
+            let one = proof.opened[0].clone();
+            let v1 = PalwConsensusObjectV2::SeatReadinessProved {
+                bond: seat,
+                class_id: kimi_id(),
+                span,
+                opening: open_artifact_leaf_v1(&operands, one.0).expect("the leaf opens"),
+                signature: vec![1],
+            };
+            let refused = apply_palw_transition_v2_with_extras(&s2, &p, &ctx(3, 111, 3), &[v1], None, false, false, false, false, &on);
+            assert!(matches!(refused, Err(PalwStateV2Error::ReadinessV1Superseded(_))), "{refused:?}");
+
+            // A proof that opens the wrong leaves, the wrong span, or leaves it does not hold.
+            let short = palw_artifact_multiproof_v1(&leaves, &opened[..15]).expect("fifteen leaves");
+            let wrong_set = apply_palw_transition_v2_with_extras(
+                &s2,
+                &p,
+                &ctx(3, 111, 3),
+                &[v2(span, short)],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            );
+            assert!(
+                matches!(&wrong_set, Err(PalwStateV2Error::ReadinessProofRefused(why)) if why.contains("challenge names")),
+                "{wrong_set:?}"
+            );
+            let future = apply_palw_transition_v2_with_extras(
+                &s2,
+                &p,
+                &ctx(3, 111, 3),
+                &[v2(span + 50, proof.clone())],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            );
+            assert!(matches!(&future, Err(PalwStateV2Error::ReadinessProofRefused(why)) if why.contains("names span")), "{future:?}");
+            let mut forged = proof.clone();
+            forged.opened[0].1.bytes[0] ^= 0xFF;
+            let tampered = apply_palw_transition_v2_with_extras(
+                &s2,
+                &p,
+                &ctx(3, 111, 3),
+                &[v2(span, forged.clone())],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            );
+            assert!(tampered.is_err(), "a tampered operand does not reconstruct the root");
+            // …and the signature the acceptance layer checks covers exactly those bytes.
+            let net = h64(999);
+            assert_ne!(
+                palw_seat_readiness_message_v2(net, &bond_bytes, &kimi_id(), span, &proof),
+                palw_seat_readiness_message_v2(net, &bond_bytes, &kimi_id(), span, &forged),
+                "the signed message carries the leaves it opened"
+            );
         }
 
         #[test]
@@ -34137,6 +34405,7 @@ pub(crate) mod tests {
                 work_target_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,
+                readiness_v2_active: false,
                 model_lines_active: true,
                 // ADR-0094's instalments ride ADR-0095's fence, and the EVM lane keeps the carrier
                 // lane's rule, so this fixture stands past it.
@@ -34367,6 +34636,7 @@ pub(crate) mod tests {
                 work_target_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,
+                readiness_v2_active: false,
                 model_lines_active: true,
                 model_benefits_active: false,
                 evm_market_active: false,

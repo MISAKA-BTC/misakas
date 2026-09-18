@@ -598,6 +598,7 @@ mod tests {
             "palw_single_lottery" => params.palw_single_lottery = Some(at),
             "palw_short_challenge_window" => params.set_palw_short_challenge_window(Some(at)),
             "palw_verification_v2" => params.palw_verification_v2 = Some(at),
+            "palw_readiness_v2" => params.palw_readiness_v2 = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,
@@ -1432,6 +1433,7 @@ mod tests {
         // ADR-0133 V2 has its own day (6,100); the counterfactual moves it with the rest so the
         // schedule reads as a build without the whole upgrade.
         at_6000.palw_verification_v2 = Some(six_thousand);
+        at_6000.palw_readiness_v2 = Some(six_thousand);
         assert_eq!(
             at_6000.fence_schedule_v1(),
             without_the_set.fence_schedule_v1(),

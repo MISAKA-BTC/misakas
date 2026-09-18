@@ -548,6 +548,13 @@ pub struct PalwSeatReadinessRowV1 {
     pub proved_daa: u64,
     pub proved_span: u64,
     pub leaf_index: u32,
+    /// **Which evidence wrote this row** (H-6, ADR-0133 §11.2): `1` for a V1 proof — one leaf of a
+    /// contiguous eight-leaf window — and `2` for a `SeatReadinessProvedV2` multiproof over leaves
+    /// drawn from the whole artifact. Past `Params::palw_readiness_v2` only a V2 row counts a seat
+    /// ready, so a V1 row ages out instead of standing in for possession it never showed.
+    pub proof_version: u8,
+    /// How many leaves the proof opened (1 for V1).
+    pub chunks: u32,
 }
 
 /// **What the fold is handed when the registry is active at a block** (`PalwTransitionExtrasV1`):
@@ -598,6 +605,21 @@ pub const PALW_SEAT_READINESS_V1_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v1
 pub const PALW_SEAT_READINESS_V1_CHALLENGE_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v1/challenge/v1";
 pub const PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/seat-readiness-v1/mldsa87/v1";
 
+/// **ADR-0133 §11.2 / H-6: the leaves a V2 possession proof opens.** Sixteen, drawn independently
+/// from the WHOLE artifact rather than from one contiguous window of eight — a seat holding a
+/// fraction `f` of the artifact answers a challenge with probability `f¹⁶`, so possession is what is
+/// shown rather than reach. Capped at the inventory's own size for a small artifact.
+pub const PALW_READINESS_V2_CHUNKS_V1: u32 = 16;
+/// **How fresh a V2 row must be to count a seat ready**, in execution spans. The challenge already
+/// rotates every span (the seed carries it); this is what makes the rotation bite — a proof stands
+/// for eight spans, not the thirty a V1 row was given.
+pub const PALW_READINESS_V2_MAX_AGE_SPANS_V1: u32 = 8;
+/// The bytes a V2 proof's opened operands may carry in total, before the object's own cap.
+pub const PALW_READINESS_V2_OPERAND_MAX_BYTES_V1: usize = 1 << 20;
+pub const PALW_SEAT_READINESS_V2_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v2/message/v1";
+pub const PALW_SEAT_READINESS_V2_CHALLENGE_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v2/challenge/v1";
+pub const PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/seat-readiness-v2/mldsa87/v1";
+
 fn keyed64(domain: &[u8]) -> blake2b_simd::State {
     blake2b_simd::Params::new().hash_length(64).key(domain).to_state()
 }
@@ -618,6 +640,74 @@ pub fn palw_readiness_challenge_seed_v1(class_id: &Hash64, bond: &[u8], span: u6
 }
 
 /// **The leaves the challenge names**: `(start, width)` over `leaf_count`, wrapping.
+/// **ADR-0133 §11.2: the V2 challenge — `k` leaves of the whole artifact, for this (class, bond,
+/// span).** Independent draws from the full range, de-duplicated by advancing the counter, returned
+/// in ascending order. A function of the chain alone: the seed is
+/// [`palw_readiness_v2_challenge_seed_v1`], so the prover, every validator and the court draw the
+/// same set, and no seat learns its leaves before the span it must prove them in.
+pub fn palw_readiness_v2_leaves_v1(seed: &Hash64, leaf_count: u32) -> Vec<u32> {
+    if leaf_count == 0 {
+        return Vec::new();
+    }
+    let want = PALW_READINESS_V2_CHUNKS_V1.min(leaf_count) as usize;
+    let mut picked: Vec<u32> = Vec::with_capacity(want);
+    // A bounded walk: every draw either adds a leaf or collides, and a collision costs one counter
+    // step. `want ≤ leaf_count`, so the walk terminates well inside the cap.
+    let cap = (want as u64).saturating_mul(64).saturating_add(256);
+    let mut counter = 0u64;
+    while picked.len() < want && counter < cap {
+        let mut state = keyed64(PALW_SEAT_READINESS_V2_CHALLENGE_DOMAIN);
+        state.update(seed.as_byte_slice());
+        state.update(&counter.to_le_bytes());
+        let digest = finish64(state);
+        let bytes = digest.as_bytes();
+        let word = u64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]);
+        let leaf = (word % leaf_count as u64) as u32;
+        if !picked.contains(&leaf) {
+            picked.push(leaf);
+        }
+        counter += 1;
+    }
+    picked.sort_unstable();
+    picked
+}
+
+/// The V2 challenge's seed: the class, the bond and the span, under the V2 domain (so a V1 seed is
+/// never a V2 seed, whatever a relayer replays).
+pub fn palw_readiness_v2_challenge_seed_v1(class_id: &Hash64, bond: &[u8], span: u64) -> Hash64 {
+    let mut state = keyed64(PALW_SEAT_READINESS_V2_CHALLENGE_DOMAIN);
+    state.update(class_id.as_byte_slice());
+    state.update(&(bond.len() as u64).to_le_bytes());
+    state.update(bond);
+    state.update(&span.to_le_bytes());
+    finish64(state)
+}
+
+/// **What a V2 proof's signature covers**: the network, the bond, the class, the span, the
+/// inventory's size and **the bytes it opened** — the last of which V1's message omitted, so one
+/// seat's published opening could be re-signed by another bond that never held the data.
+pub fn palw_seat_readiness_message_v2(
+    network_domain: Hash64,
+    bond: &[u8],
+    class_id: &Hash64,
+    span: u64,
+    proof: &crate::palw_artifact::PalwArtifactMultiproofV1,
+) -> Hash64 {
+    let mut state = keyed64(PALW_SEAT_READINESS_V2_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(&(bond.len() as u64).to_le_bytes());
+    state.update(bond);
+    state.update(class_id.as_byte_slice());
+    state.update(&span.to_le_bytes());
+    state.update(&proof.leaf_count.to_le_bytes());
+    state.update(&(proof.opened.len() as u64).to_le_bytes());
+    for (index, operand) in &proof.opened {
+        state.update(&index.to_le_bytes());
+        state.update(crate::palw_artifact::artifact_leaf_v1(operand).as_byte_slice());
+    }
+    finish64(state)
+}
+
 pub fn palw_readiness_window_v1(seed: &Hash64, leaf_count: u32) -> (u32, u32) {
     if leaf_count == 0 {
         return (0, 0);
@@ -1311,12 +1401,14 @@ mod tests {
         let span = 5;
         assert!(palw_readiness_duty_due_v1(None, 1_000, 200, None, span, &g), "no proof on the chain: due");
         assert!(!palw_readiness_duty_due_v1(None, 1_000, 200, Some(200), span, &g), "already sent this span");
-        let fresh = PalwSeatReadinessRowV1 { proved_daa: 990, proved_span: 198, leaf_index: 3 };
+        let fresh = PalwSeatReadinessRowV1 { proved_daa: 990, proved_span: 198, leaf_index: 3, proof_version: 1, chunks: 1 };
         assert!(!palw_readiness_duty_due_v1(Some(&fresh), 1_000, 200, None, span, &g), "a fresh proof is not repeated");
         let half = PalwSeatReadinessRowV1 {
             proved_daa: 1_000 - (g.readiness_probe_max_age_spans as u64 * span) / 2 - 1,
             proved_span: 0,
             leaf_index: 3,
+            proof_version: 1,
+            chunks: 1,
         };
         assert!(
             palw_readiness_duty_due_v1(Some(&half), 1_000, 200, None, span, &g),

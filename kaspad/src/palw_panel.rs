@@ -859,6 +859,70 @@ impl PalwPanelService {
                 continue;
             }
             let seed = palw_readiness_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
+            // **ADR-0133 §11.2: past readiness V2 the proof is a multiproof over the whole
+            // artifact.** The challenge names sixteen leaves of the inventory for this (class, bond,
+            // span); the seat opens each one, builds one proof from the digest's own leaf hashes,
+            // and signs the leaves it opened. Below the fence it is V1's single leaf, unchanged.
+            if self.consensus_config.params.palw_readiness_v2_at(current_daa) {
+                use kaspa_consensus_core::palw_model_registry_v1::{
+                    PALW_READINESS_V2_OPERAND_MAX_BYTES_V1, PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
+                    palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_leaves_v1, palw_seat_readiness_message_v2,
+                };
+                let leaves: Vec<kaspa_hashes::Hash64> = digest.rows().iter().map(|row| row.leaf_hash).collect();
+                let seed_v2 = palw_readiness_v2_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
+                let wanted = palw_readiness_v2_leaves_v1(&seed_v2, digest.leaf_count());
+                let mut opened: Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)> =
+                    Vec::with_capacity(wanted.len());
+                let mut failed = None;
+                for index in &wanted {
+                    match backend.artifact_row_opening(*index) {
+                        Ok(opening) => opened.push((*index, opening.operand)),
+                        Err(e) => {
+                            failed = Some(format!("leaf {index} cannot be opened ({e})"));
+                            break;
+                        }
+                    }
+                }
+                if let Some(why) = failed {
+                    self.readiness_note(class.class_id, format!("no proof — {why}"));
+                    continue;
+                }
+                let bytes: usize = opened.iter().map(|(_, operand)| operand.bytes.len()).sum();
+                if bytes > PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
+                    self.readiness_note(
+                        class.class_id,
+                        format!("no proof — the challenged leaves carry {bytes} bytes, above the {PALW_READINESS_V2_OPERAND_MAX_BYTES_V1} a proof may ride with"),
+                    );
+                    continue;
+                }
+                let Some(proof) = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened) else {
+                    self.readiness_note(class.class_id, "no proof — the opened leaves are not the inventory's".to_string());
+                    continue;
+                };
+                if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, class.artifact_root) {
+                    self.readiness_note(class.class_id, format!("no proof — the multiproof does not open the registered root ({e})"));
+                    continue;
+                }
+                let message = palw_seat_readiness_message_v2(domain, &bond_bytes, &class.class_id, span_now, &proof);
+                let Some(signature) = self.sign(message.as_byte_slice(), PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT) else { continue };
+                self.readiness_note(
+                    class.class_id,
+                    format!(
+                        "proving {} leaves of {} for span {span_now} ({bytes} bytes, {} siblings)",
+                        proof.opened.len(),
+                        digest.leaf_count(),
+                        proof.siblings.len()
+                    ),
+                );
+                out.push(PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                    bond: bond_key,
+                    class_id: class.class_id,
+                    span: span_now,
+                    proof: Box::new(proof),
+                    signature,
+                });
+                continue;
+            }
             let (start, width) = palw_readiness_window_v1(&seed, digest.leaf_count());
             let mut opened = None;
             for offset in 0..width.max(1) {
@@ -5038,7 +5102,14 @@ impl PalwPanelService {
                     *self.readiness_read_at.lock().unwrap() = None;
                 }
                 for object in self.readiness_duties(&session, current_daa, synced_for_proofs) {
-                    let PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. } = &object else { continue };
+                    // ADR-0133 §11.2: the submitter builds V1 below the fence and V2 past it, and
+                    // both ride the same carrier path — reading only the V1 shape here would drop
+                    // every V2 proof on the floor without a word.
+                    let (class_id, span) = match &object {
+                        PalwConsensusObjectV2::SeatReadinessProved { class_id, span, .. }
+                        | PalwConsensusObjectV2::SeatReadinessProvedV2 { class_id, span, .. } => (class_id, span),
+                        _ => continue,
+                    };
                     let (class_id, span) = (*class_id, *span);
                     let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
                         readiness_waiting = true;
@@ -5544,6 +5615,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::SeatReadinessProved { .. } => "SeatReadinessProved",
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
         PalwConsensusObjectV2::ModelSell { .. } => "ModelSell",

@@ -393,6 +393,17 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 Ok(())
             }
         }
+        PalwConsensusObjectV2::SeatReadinessProvedV2 { signature, proof, .. } => {
+            if signature.is_empty() {
+                Err("a possession proof must carry the seat's signature — unsigned, a relayer could volunteer another bond's collateral")
+            } else if proof.operand_bytes() > crate::palw_model_registry_v1::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
+                Err("a V2 possession proof opens the challenged leaves within the operand cap")
+            } else if proof.opened.is_empty() {
+                Err("a possession proof that opens nothing shows nothing")
+            } else {
+                Ok(())
+            }
+        }
         PalwConsensusObjectV2::ClassManifestV2 { signature, artifact_bytes, .. } => {
             if signature.is_empty() {
                 Err("a class manifest must carry the registrant's signature — unsigned, anyone could restate a class's bytes")
