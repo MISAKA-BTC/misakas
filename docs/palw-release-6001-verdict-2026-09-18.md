@@ -36,12 +36,13 @@ nobody has yet read adversarially.
   heartbeat included. A chain whose hash lane stops still beats, so its score would have frozen
   while blocks kept coming — every fence, deadline, retention and leak window with it. Found live:
   the registry drill sat at virtual DAA 20 with 183 blocks accepted.
-* **The heartbeat double-count.** Counting the heartbeat unconditionally is the opposite error and
-  was live, not hypothetical. `heartbeat_interval_ms` falls back to the 120-second recovery interval
-  whenever the selected parent is not a PALW-v2 block, and testnet-11's selected chain is 300 out of
-  300 algo-3 blocks, so every parent takes that branch. testnet-11 runs a heartbeat producer on
-  `.113` today. The shipped rule is per mergeset: a heartbeat gives back one exemption only where
-  nothing priced was merged.
+* **The heartbeat double-count.** Counting the heartbeat unconditionally is the opposite error: on a
+  chain whose priced lane runs, a beat beside every tick paces the clock twice as fast. The shipped
+  rule is per mergeset — a heartbeat gives back one exemption only where nothing priced was merged.
+  The justification first written for this bullet was itself wrong, and reading it again is what
+  uncovered §6: it argued that testnet-11's parents are algo-3 blocks and therefore take
+  `heartbeat_interval_ms`'s 120-second recovery branch. The chain says the opposite. The parents are
+  algo 6, the branch taken is the NOMINAL one hour, and the danger was never a fast clock.
 * **The DNS leak's units.** ADR-0128 decides the leak in DAA and walked its evidence in blue. Once
   the DAA clock slowed, the blue-bounded walk reached back fewer DAA than the leak is decided over,
   and no bond would ever have been leaked.
