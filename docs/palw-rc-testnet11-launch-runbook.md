@@ -611,6 +611,13 @@ So, before any build that arms a fence is rolled out:
 3. **The clock gate must pass.** The drill's step 1b requires the DAA to advance within a bounded
    wait from the first tip past the fence, and prints per-node lane counts when it does not.
 4. **Measurements come from the run's own logs**, never from the settings that produced it.
+5. **A fence whose activation rewrites existing rows carries a size question, and it is answered
+   from the chain.** ADR-0143's is the first: the block that crosses `palw_artifact_root_ownership`
+   builds the whole artifact-owner index in one transition, one delta entry per distinct root. The
+   count is bounded by the state rather than by a constant, so the roots on the TARGET network at
+   the arming height are read before a height is picked — a few hundred crosses in one ordinary
+   block, and a number far past that needs the question asked again. This is the same discipline as
+   item 2: the drill is held to what the target actually is, not to what it is assumed to be.
 
 ```bash
 # the target network's lane profile, from the chain
