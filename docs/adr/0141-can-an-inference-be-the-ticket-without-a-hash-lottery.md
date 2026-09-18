@@ -8,7 +8,13 @@ the first half of the argument.
 
 **Builds on:** ADR-0071 (the attempt lane's price and the ticket's bound), ADR-0072 (the ticket is
 the execution), ADR-0076 (the class target seed), ADR-0117 (one forward, one draw), ADR-0132 S (the
-single lottery), ADR-0137 (one work target `W`), ADR-0140 §3 (the inventory this follows from).
+single lottery), ADR-0137 (one work target `W`), ADR-0140 §6 (the inventory this follows from).
+
+**Why this one and not the heartbeat.** ADR-0140 keeps the heartbeat's hash: it prices a lane that
+should be idle almost always, and swapping it for a sequential-work primitive would buy a new
+cryptographic dependency for something that runs when the lights are out. The hashing that actually
+shapes *who produces blocks* is here, on the economic lane, and it is the only one of the three
+worth reopening.
 
 ## 1. The question
 
@@ -37,10 +43,10 @@ the question eligible producer → one inference → valid proof → block
 
 ## 2. Why this is the biggest of the three, and still not first
 
-ADR-0140 §3 inventories the three surviving uses of a hash: identity and commitments, the
+ADR-0140 §6 inventories the three surviving uses of a hash: identity and commitments, the
 heartbeat's spam price, and this. The first is not going anywhere and nothing proposes it should.
-The second prices a permissionless lane and cannot be removed without something else pricing elapsed
-time. This one prices nothing and secures nothing: it meters.
+The second is kept deliberately — it prices the emergency generator, which should be asleep. This
+one prices nothing and secures nothing: it meters, on the lane that decides who gets paid.
 
 It is nevertheless not the first thing to change, for a reason that has nothing to do with its
 difficulty. **Removing the lottery means answering "who produces slot N?", and that question has no
