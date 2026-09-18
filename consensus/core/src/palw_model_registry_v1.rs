@@ -1152,6 +1152,16 @@ pub fn palw_model_registry_read_v1(
 /// half the readiness age (so a proof lands before the old one goes stale), and never twice in
 /// one span. Pure, so the node's cadence is testable: a restart re-reads the chain's row and does
 /// not re-send what is fresh.
+/// **A class registered before the registry fence never gets a lifecycle row** (ADR-0135 with the
+/// 2026-09-18 audit's C-1: the fold's works come from the chain and the build, never from a node's
+/// own carriage store), so a node that would register a class on a chain whose registry fence is
+/// scheduled but not yet in force must WAIT for the fence — the object it would send is a class
+/// with a share and no row, which the work target then refuses for ever ("no row"). `true` while
+/// the registration must wait.
+pub fn palw_registration_waits_for_registry_v1(registry_fence: Option<crate::config::params::ForkActivation>, daa_score: u64) -> bool {
+    registry_fence.is_some_and(|fence| fence != crate::config::params::ForkActivation::never() && !fence.is_active(daa_score))
+}
+
 pub fn palw_readiness_duty_due_v1(
     row: Option<&PalwSeatReadinessRowV1>,
     now_daa: u64,
@@ -1191,6 +1201,16 @@ pub fn palw_readiness_duty_due_v2(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_registration_waits_for_a_scheduled_registry_fence_and_never_for_an_absent_one() {
+        use crate::config::params::ForkActivation;
+        assert!(!palw_registration_waits_for_registry_v1(None, 5), "no fence: nothing to wait for");
+        assert!(!palw_registration_waits_for_registry_v1(Some(ForkActivation::never()), 5), "never: nothing to wait for");
+        assert!(palw_registration_waits_for_registry_v1(Some(ForkActivation::new(20)), 19), "scheduled, not yet: wait");
+        assert!(!palw_registration_waits_for_registry_v1(Some(ForkActivation::new(20)), 20), "in force: go");
+        assert!(!palw_registration_waits_for_registry_v1(Some(ForkActivation::always()), 0), "always: go");
+    }
     use super::*;
     use crate::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_schedule_snapshot_v1};
     use crate::palw_state_v2::PalwBondKeyV2;

@@ -5047,7 +5047,29 @@ impl PalwPanelService {
                         Err(e) => warn!("[{PALW_PANEL}] cannot build a canonical claim: {e}"),
                     }
                 }
-                if self.config.register_class.is_some() && !class_registration_done && class_registration_inflight.is_none() {
+                // **ADR-0135 / audit C-1: a class registered before the registry fence never gets a
+                // row.** On a chain whose fence is scheduled but not yet in force, hold the
+                // registration until it is — the 2026-09-18 drill registered at boot, crossed the
+                // fence at 20, and left a class with a share and no row that the work target then
+                // refused for ever.
+                let registration_waits = kaspa_consensus_core::palw_model_registry_v1::palw_registration_waits_for_registry_v1(
+                    self.consensus_config.params.palw_model_registry,
+                    current_daa,
+                );
+                if registration_waits && self.config.register_class.is_some() && !class_registration_done {
+                    crate::palw_backends::note_throttled_v1("class-registration-waits-for-registry", || {
+                        format!(
+                            "[{PALW_PANEL}] holding the class registration at daa {current_daa}: the model registry's fence is \
+                             scheduled at daa {} and a class registered before it gets no lifecycle row",
+                            self.consensus_config.params.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0)
+                        )
+                    });
+                }
+                if !registration_waits
+                    && self.config.register_class.is_some()
+                    && !class_registration_done
+                    && class_registration_inflight.is_none()
+                {
                     // Built at the top of the tick (chain reads only); this block owns the SUBMIT
                     // because the fee UTXO lives here.
                     //
