@@ -8235,6 +8235,16 @@ impl<'a> TransitionBuilder<'a> {
             return Err(PalwStateV2Error::BondNotActive(*bond));
         }
         let class = self.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+        // The width the challenge names bounds the walk before the walk runs (the 2026-09-18 diff
+        // audit): the stateless ride list refuses a wider proof too, and this is the same rule where
+        // the state can be read.
+        if proof.opened.len() > registry::PALW_READINESS_V2_CHUNKS_V1 as usize {
+            return Err(PalwStateV2Error::ReadinessProofRefused(format!(
+                "the proof opens {} leaves; no challenge names more than {}",
+                proof.opened.len(),
+                registry::PALW_READINESS_V2_CHUNKS_V1
+            )));
+        }
         if proof.operand_bytes() > registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
             return Err(PalwStateV2Error::ReadinessProofRefused(format!(
                 "the proof carries {} bytes of operands, above the {} a proof may ride with",
@@ -18725,6 +18735,50 @@ pub(crate) mod tests {
                 matches!(&refused, Err(PalwStateV2Error::ClassNotAdmitting { class, state }) if *class == stranger && state.contains("Registered")),
                 "{refused:?}"
             );
+        }
+
+        #[test]
+        fn adr0133_a_possession_proof_wider_than_the_challenge_is_refused_before_it_is_walked() {
+            // **The 2026-09-18 diff audit.** The operand cap bounds BYTES and an empty operand costs
+            // none, so a proof could have asked for a million tree walks per object. The width the
+            // challenge names is the bound, refused in the transition and in the stateless ride list
+            // alike — before either walks anything.
+            use crate::palw_artifact::{PalwArtifactMultiproofV1, PalwArtifactOperandV1};
+            use crate::palw_model_registry_v1::PALW_READINESS_V2_CHUNKS_V1;
+            let p = params();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(h64(7)), None, Some(f.clone())).unwrap();
+            let empty =
+                |i: u32| (i, PalwArtifactOperandV1 { tensor_name: String::new(), layer: None, row_start: i, bytes: Vec::new() });
+            let wide = PalwArtifactMultiproofV1 {
+                leaf_count: u32::MAX,
+                opened: (0..PALW_READINESS_V2_CHUNKS_V1 + 1).map(empty).collect(),
+                siblings: Vec::new(),
+            };
+            let on = PalwTransitionExtrasV1 { readiness_v2_active: true, ..extras(Some(f.clone())) };
+            let object = PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                bond: bond_key(2),
+                class_id: kimi_id(),
+                span: 11,
+                proof: Box::new(wide.clone()),
+                signature: vec![1],
+            };
+            let refused =
+                apply_palw_transition_v2_with_extras(&s1, &p, &ctx(2, 110, 2), &[object], None, false, false, false, false, &on);
+            assert!(
+                matches!(&refused, Err(PalwStateV2Error::ReadinessProofRefused(why)) if why.contains("no challenge names more than")),
+                "{refused:?}"
+            );
+            // The stateless ride list says the same thing without any state at all.
+            let classified =
+                crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                    bond: bond_key(2),
+                    class_id: kimi_id(),
+                    span: 11,
+                    proof: Box::new(wide),
+                    signature: vec![1],
+                });
+            assert!(classified.is_err(), "the ride list refuses a wider proof too: {classified:?}");
         }
 
         #[test]

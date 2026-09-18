@@ -400,6 +400,19 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 Err("a V2 possession proof opens the challenged leaves within the operand cap")
             } else if proof.opened.is_empty() {
                 Err("a possession proof that opens nothing shows nothing")
+            } else if proof.opened.len() > crate::palw_model_registry_v1::PALW_READINESS_V2_CHUNKS_V1 as usize {
+                // **The width is the challenge's, so anything wider is malformed whatever the state
+                // says** (found by the 2026-09-18 diff audit). Without this the verifier walked an
+                // attacker's list before the transition compared it to the challenge: the operand cap
+                // bounds BYTES, and an entry whose operand carries none costs nothing, so a proof
+                // could ask for millions of `blake2b` walks per object. The challenge never names
+                // more than `PALW_READINESS_V2_CHUNKS_V1` leaves, and a malformed object is refused
+                // where every node can see it is malformed.
+                Err("a V2 possession proof opens more leaves than any challenge names")
+            } else if proof.siblings.len() > 64 * crate::palw_model_registry_v1::PALW_READINESS_V2_CHUNKS_V1 as usize {
+                // A tree of `u32` leaves is 32 levels, so one leaf needs at most 32 siblings and the
+                // whole challenge at most 32 × k. Sixty-four × k is twice that: generous, and finite.
+                Err("a V2 possession proof carries more siblings than a thirty-two-level tree can need")
             } else {
                 Ok(())
             }

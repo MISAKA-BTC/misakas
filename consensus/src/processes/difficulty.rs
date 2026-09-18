@@ -365,6 +365,10 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension fo
             .unordered_mergeset()
             .filter(|hash| !mergeset_non_daa.contains(hash))
             .filter(|hash| {
+                // One full-header read a mergeset block, the same read `is_round_block` has made
+                // since ADR-0125 (the compact header carries no algo id), and the mergeset is
+                // bounded by `mergeset_size_limit`. A header store hit is a cache hit on the hot
+                // path — the window walk has just read the same blocks.
                 self.headers_store
                     .get_header(*hash)
                     .is_ok_and(|header| !self.lane_advances_daa_at(header.pow_algo_id, header.daa_score))
