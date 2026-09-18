@@ -699,6 +699,25 @@ async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_tic
     assert_eq!(scores[2], scores[1], "a beat inside the open slot moves no clock");
     assert_eq!(cursor(beats[2]), Some(opened), "and moves no cursor either");
     assert!(opened.next_slot_ms > ctx.simulated_time, "the next slot is still ahead of the beat that was refused it");
+
+    // **Operator check 2: a competing branch drags nothing.** A block's cursor is a function of its
+    // OWN selected parent's row and its own mergeset, so a block on another branch cannot reach it.
+    // Here a fourth beat is minted as a sibling of the third — same parents, different block — and
+    // every cursor already written stays exactly as it was. A reorg onto it would read its chain and
+    // never the one it replaced, because there is no shared mutable cursor to drag.
+    let before_rows: Vec<_> = beats.iter().map(|h| cursor(*h)).collect();
+    ctx.simulated_time += 1_000;
+    let sibling = ctx.build_block_template(99, ctx.simulated_time);
+    let (sibling, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(sibling).expect("the lane adapts");
+    let sibling_hash = sibling.block.header.hash;
+    assert_ne!(sibling_hash, beats[2], "the sibling is a different block");
+    ctx.validate_and_insert_block(sibling.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let vp = ctx.consensus.virtual_processor();
+    let cursor = |h| vp.palw_clock_cursor_store.get_clock_cursor(h).expect("readable");
+    for (h, was) in beats.iter().zip(before_rows) {
+        assert_eq!(cursor(*h), was, "the sibling changed a cursor already written for {h}");
+    }
+    assert_eq!(cursor(sibling_hash), Some(opened), "and the sibling reads its own parent's row, which is the same one");
 }
 
 #[tokio::test]

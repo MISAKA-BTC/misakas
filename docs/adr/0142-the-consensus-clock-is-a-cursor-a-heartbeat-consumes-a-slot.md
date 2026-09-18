@@ -1,7 +1,8 @@
 # ADR-0142 — The consensus clock is a cursor: a heartbeat consumes a slot, and a block that does not advance the clock may not postpone it
 
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
-change, fenced.** It replaces the heartbeat lane's admissibility rule. It held the 6,301 rollout.
+change, built, and NOT ARMED on any preset — §6a check 3 is an open defect that must close first.**
+It replaces the heartbeat lane's admissibility rule. It held the 6,301 rollout.
 
 **Builds on:** ADR-0060 (the liveness doctrine), ADR-0064 (silence is not checkable), ADR-0066
 Decision 2 (the one-block-deep slot rule, which this supersedes), ADR-0105 (the miner's yield),
@@ -144,6 +145,50 @@ properties over generated sequences.
    the drift rule bounds how many.
 7. **One beat normalises a long outage**: after any silence, a single heartbeat leaves the cursor at
    the first boundary after it, with no backlog to consume.
+
+## 6a. The operator's four checks, answered
+
+Asked after the implementation passed, and worth recording as asked, because the fourth answer is a
+defect and not a property.
+
+**1. Several heartbeats in one mergeset — who consumed the slot?** The NEWEST by timestamp, and
+`max` is order-independent, so nodes walking an unordered mergeset in different orders land on the
+same cursor. Two beats sharing the newest timestamp give the same answer, which is why the rule is
+stated over a timestamp and not over a block identity that would need a tie-break. Newest and not
+oldest deliberately: a mergeset carrying a stale beat beside a current one must still grant, or a
+chain could be starved by merging an old beat. Pinned over 500 shuffles.
+
+**2. Does a reorg drag the old fork's value?** No, structurally. A block's cursor is a function of
+its own selected parent's row and its own mergeset; there is no shared mutable cursor to drag. The
+pipeline test mints a sibling of the last beat and asserts every cursor already written is
+unchanged, and that the sibling reads its own parent's row.
+
+**3. Does an IBD or pruned node rebuild the same values? NO, AND THIS IS A DEFECT.** The step reads
+the selected parent's cursor from a store and treats an absent row as "no cursor yet", which grants
+the exemption unconditionally. An archival node holding the row does not grant. **The two compute
+different DAA scores for the same block, so the node without the row rejects a header the network
+accepted.** Reachable two ways: the store is pruned nowhere today, so it also grows without bound,
+and adding pruning loses the row below the pruning point; and a node that IBDs from a pruning proof
+never had the row, because the cursor is derived data with no commitment and no carriage.
+
+This is **ADR-0066 finding 4 in a new place** — "an archival node never hit `Err(get_header)`, a
+pruned node hit it at its own pruning point, and the two computed different verdicts for one header".
+It is pinned by `a_missing_parent_cursor_answers_differently_from_a_present_one`, which asserts the
+divergence rather than the property.
+
+The fix must make the cursor either **carried and verifiable** (in the pruning proof, anchored by
+something a header commits) or **derivable from data every node has** (bounded by the DAA window
+rather than by the whole chain). Until it is one of those, the fence stays dormant on every preset,
+which is how it ships.
+
+**4. Can a producer send the clock into the future?** Only by a bounded, quantised amount. The cursor
+lands on a slot BOUNDARY, never at `beat + interval`, so a timestamp buys whole slots and nothing
+finer — 132 s of drift and 1 ms of drift cost the chain the same two slots. The beat's own timestamp
+is bounded by `check_block_timestamp_in_isolation` at `now + TIMESTAMP_DEVIATION_TOLERANCE`, so with
+the shipped constants the worst a beat buys is `1 + 132/120 = 2` slots: the clock can be slowed to
+about 2×, per slot, at the price of a beat's work every slot, and it can never be stopped or moved
+backwards. The arithmetic is pinned so a change to either constant is a decision rather than a
+side effect.
 
 ## 7. Scope, and what this does not touch
 

@@ -251,6 +251,117 @@ mod tests {
         assert_eq!(z.next_slot_ms, 11);
     }
 
+    /// **Operator check 1: several beats in one mergeset, and which consumes the slot.**
+    ///
+    /// The rule takes the NEWEST beat in the mergeset, and `max` is order-independent — so nodes
+    /// that walk an unordered mergeset in different orders land on the same cursor. Ties are not a
+    /// case: two beats with the same timestamp give the same answer, which is why the rule is
+    /// stated over a timestamp rather than over a block identity that would need tie-breaking.
+    ///
+    /// Newest and not oldest, deliberately: a mergeset carrying one stale beat and one current beat
+    /// must grant, or a chain could be starved by merging an old beat beside a good one.
+    #[test]
+    fn several_beats_in_one_mergeset_land_on_one_cursor_whatever_the_walk_order() {
+        let cursor = PalwClockCursorV1 { next_slot_ms: 1_000_000, slots_consumed: 4 };
+        let beats = [1_000_000u64, 1_000_001, 1_030_000, 999_999, 1_119_999];
+        let newest = *beats.iter().max().expect("non-empty");
+        let expected = palw_clock_cursor_advance_v1(&cursor, newest, I);
+
+        // Every permutation of the walk reduces to the same newest beat, so to the same cursor.
+        let mut seed = 0xC0FFEEu64;
+        for _ in 0..500 {
+            let mut order = beats;
+            for i in (1..order.len()).rev() {
+                let j = (lcg(&mut seed) as usize) % (i + 1);
+                order.swap(i, j);
+            }
+            let folded = order.iter().fold(None::<u64>, |acc, &t| Some(acc.map_or(t, |a: u64| a.max(t))));
+            assert_eq!(palw_clock_cursor_advance_v1(&cursor, folded.expect("some"), I), expected, "order {order:?}");
+        }
+        // And a stale beat beside a current one does not stop the current one being granted.
+        assert!(palw_clock_slot_admits_v1(&cursor, newest).is_ok());
+        assert!(palw_clock_slot_admits_v1(&cursor, 999_999).is_err(), "the stale one alone would not have been");
+    }
+
+    /// **Operator check 4: a producer cannot send the clock into the future.**
+    ///
+    /// The cursor lands at most one interval past the beat that consumed the slot, and a beat's own
+    /// timestamp is bounded by the header rule `check_block_timestamp_in_isolation` at
+    /// `now + TIMESTAMP_DEVIATION_TOLERANCE`. So the worst a producer can do, per slot and at the
+    /// price of one beat's work, is push the next opportunity to `now + tolerance + interval`.
+    ///
+    /// With the shipped constants that is 132 s + 120 s = 252 s against a nominal 120 s: the clock
+    /// can be slowed to about 2.1x, and it cannot be stopped, moved backwards, or moved once and
+    /// left there. This test pins the arithmetic so a change to either constant is a decision.
+    #[test]
+    fn a_future_timestamp_slows_the_clock_by_a_bounded_factor_and_can_do_nothing_else() {
+        const TOLERANCE_MS: u64 = crate::config::constants::consensus::TIMESTAMP_DEVIATION_TOLERANCE * 1_000;
+        let now = 1_700_000_000_000u64;
+        let cursor = PalwClockCursorV1 { next_slot_ms: now, slots_consumed: 9 };
+
+        // The furthest-future beat a header rule admits, and the answer it buys.
+        let worst = now + TOLERANCE_MS;
+        let after = palw_clock_cursor_advance_v1(&cursor, worst, I);
+
+        // **The slot granularity quantises the attack, which is the property worth having.** The
+        // cursor lands on a slot BOUNDARY, never at `beat + interval`, so a timestamp buys whole
+        // slots and nothing finer: 132 s of drift and 1 ms of drift cost the chain the same two
+        // slots, and a producer gains nothing by aiming carefully.
+        let slots = 1 + TOLERANCE_MS / I;
+        assert_eq!(after.next_slot_ms, now + slots * I, "the cursor lands on a boundary, not at beat + interval");
+        assert_eq!(slots, 2, "with the shipped constants the worst a beat can buy is two slots");
+        assert!(after.next_slot_ms - now < 3 * I, "so the clock can be slowed to about 2x and no further");
+
+        // It is bounded PER SLOT, not once and for ever: the next beat starts from the new cursor
+        // and is bounded the same way, so the attack costs a beat's work every slot to hold.
+        let again = palw_clock_cursor_advance_v1(&after, after.next_slot_ms + TOLERANCE_MS, I);
+        assert_eq!(again.next_slot_ms - after.next_slot_ms, slots * I, "the same bound again, not compounding");
+
+        // And it can never move the cursor BACK, which would be the serious failure: a cursor that
+        // moved backwards would reopen a slot already consumed and let the clock run free.
+        for beat in [0u64, 1, now - 1, now, now + 1] {
+            assert!(palw_clock_cursor_advance_v1(&cursor, beat, I).next_slot_ms > cursor.next_slot_ms, "beat {beat}");
+        }
+    }
+
+    /// **Operator check 3, and it FAILS: a node that cannot read the parent's cursor answers
+    /// differently from one that can.**
+    ///
+    /// This test exists to pin an open defect, not a property. `palw_clock_step_v1` reads the
+    /// cursor of the selected parent from a store, and treats an absent row as "no cursor yet",
+    /// which grants the exemption unconditionally. An archival node holding the row does not grant.
+    /// Two nodes therefore compute different DAA scores for the same block, and the one without the
+    /// row rejects a header the network accepted.
+    ///
+    /// It is reachable two ways. The store is pruned nowhere today, so it also grows without bound;
+    /// once pruning is added, the block below the pruning point loses its row. And a node that IBDs
+    /// from a pruning proof never had the row at all, because the cursor is derived data with no
+    /// commitment and no carriage.
+    ///
+    /// **This is ADR-0066 finding 4 in a new place** — "an archival node never hit `Err(get_header)`,
+    /// a pruned node hit it at its own pruning point, and the two computed different verdicts for
+    /// one header" — and it is why ADR-0142 is not armed on any preset. The fix has to make the
+    /// cursor either carried and verifiable, or derivable from data every node has: the fence stays
+    /// dormant until it is one of those.
+    #[test]
+    fn a_missing_parent_cursor_answers_differently_from_a_present_one() {
+        // The same mergeset, the same beat, two nodes. One has the parent's cursor; one does not.
+        let beat_ms = 1_000_000u64;
+        let parent_cursor = PalwClockCursorV1 { next_slot_ms: beat_ms + 60_000, slots_consumed: 3 };
+
+        // The node that has it refuses the slot: the beat is inside one already consumed.
+        assert!(palw_clock_slot_admits_v1(&parent_cursor, beat_ms).is_err(), "with the row, the slot is shut");
+
+        // The node that does not has nothing to compare against, so it opens the cursor and grants.
+        let granted_without = palw_clock_cursor_after_block_v1(None, true, beat_ms, I);
+        assert_eq!(granted_without, Some(palw_clock_cursor_open_v1(beat_ms, I)), "without the row, the beat is granted");
+
+        // The two answers differ, and the difference is a DAA score: one node counts the exemption
+        // and the other does not. That is a fork, not a discrepancy.
+        let with_row = palw_clock_cursor_after_block_v1(Some(parent_cursor), false, beat_ms, I);
+        assert_ne!(with_row, granted_without, "the same block, two cursors — and so two scores");
+    }
+
     /// The type is rooted state, so its encoding is a consensus fact: pin the byte layout.
     #[test]
     fn the_cursor_round_trips_and_its_bytes_are_pinned() {
