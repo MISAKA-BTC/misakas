@@ -119,13 +119,34 @@ orders the longer one first, which zero would not.
 win by minting one while the chain is healthy, which is what makes the permissionlessness of §3 safe
 rather than dangerous.
 
+### C5 — and in an emergency it must actually start
+
+The invariant has two halves, and C1–C4 are only the first. The generator also has to turn on.
+
+This half failed on the drill while this ADR was being written, and the failure was in the sleep/wake
+policy rather than in any rule. ADR-0105's yield exists so a beat does not bury an attempt block
+waiting to be merged. Past the anchor clock an attempt block carries its weight but advances no DAA,
+so standing aside for one waits on a block that will not move the clock — on a chain where nothing
+else will either. Worse, the economic lane produces continuously, so the yield target kept sliding
+forward and the lane stood aside from the very job it exists for, until its hour-long episode budget
+drained. Observed directly: the fence crossed, the DAA frozen at 20, the miner running and never
+minting.
+
+The fix is §3c's principle applied to the mergeset scan rather than the parent: **yield to whoever is
+pacing the clock, and to nobody else.** It is policy, not a rule, which is exactly where D4 says this
+decision belongs — and it is why D4 is a decision rather than an observation.
+
+The lesson generalises past this bug. C1–C4 are about the generator not running when the mains are
+on; C5 is about it starting when they go off, and the two are easy to trade against each other
+without noticing. A guard that only checks the first half would have passed this.
+
 ### What is NOT closed
 
-The four claims above are each enforced somewhere, but **no test asserts them as a group**, and
-nothing fails if a future change quietly breaks one. Every one of them was broken once already — C1
-in the first heartbeat implementation, C2 by ADR-0132 S leaving the DAA behind, and C2 again twice
-inside ADR-0138's own drafting. That is the work this ADR leaves behind: not a new primitive, a
-standing guard.
+The five claims above are each enforced somewhere, but **no test asserts them as a group**, and
+nothing fails if a future change quietly breaks one. Every one has been broken at least once — C1 in
+the first heartbeat implementation, C2 by ADR-0132 S leaving the DAA behind, C2 again twice inside
+ADR-0138's own drafting, and C5 by the yield policy above. That is the work this ADR leaves behind:
+not a new primitive, a standing guard.
 
 ## 5. Why not PoSW or a VDF
 
@@ -170,8 +191,8 @@ carries no clock role and no weight.
 
 **D1. The hash heartbeat stays.** It is the emergency generator's price. Replacing it is not a goal.
 
-**D2. The goal is non-interference while the chain is producing**, stated as C1–C4 and enforced by
-the mechanisms named there.
+**D2. The goal is non-interference while the chain is producing, and reliable starting when it is
+not**, stated as C1–C5 and enforced by the mechanisms named there.
 
 **D3. Consensus admissibility stays unconditional.** No bonded signature, and no rule keyed on
 whether PALW was producing. Safety comes from the lane being worth nothing, not from restricting when
@@ -180,8 +201,8 @@ it may exist.
 **D4. When to mine is policy and stays policy.** ADR-0105's hint is the mechanism; a miner sleeps
 while a bonded block is pacing the chain and wakes when none is. No consensus rule reads it.
 
-**D5. C1–C4 get one standing guard, and the lane gets counted.** A test that asserts the four claims
-together, so a future change that breaks one fails here rather than on a live network; and counters
+**D5. C1–C5 get one standing guard, and the lane gets counted.** A test that asserts the five claims
+together — including the second half, that the lane starts when nothing else is pacing the clock — so a future change that breaks one fails here rather than on a live network; and counters
 for what share of blocks the lane actually produces, how often it is the clock, how many transactions
 it carries and how long its episodes last. The counters are what close §5's question.
 
@@ -196,7 +217,7 @@ plus commitments is the existing doctrine and it suffices.
 * Whether any lifecycle deadline moves from DAA to elapsed time. That was explored while this ADR was
   drafted and is deliberately dropped: median time past is itself derived from timestamps a branch
   declares (ADR-0064 Fact A), so moving deadlines onto it would raise the stake on the clock lane's
-  price rather than lower it. If it is ever revisited it needs its own ADR and this one's C1–C4 in
+  price rather than lower it. If it is ever revisited it needs its own ADR and this one's C1–C5 in
   force first.
 * Whether the attempt lottery can go. ADR-0141.
 * Anything in the 6,301 bundle. This ADR is scheduled behind that rollout and behind arming ADR-0105:

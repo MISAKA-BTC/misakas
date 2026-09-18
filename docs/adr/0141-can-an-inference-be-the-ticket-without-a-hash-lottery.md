@@ -90,7 +90,7 @@ after.
 "a fresh randomness source" is proposing that retirement be reversed, and must say so.
 
 **M5. ADR-0140's four claims must be in force first.** Slot assignment is stated in time, and any
-scheme that changes who may produce also changes what the heartbeat lane sees. C1 to C4 hold the line
+scheme that changes who may produce also changes what the heartbeat lane sees. C1 to C5 hold the line
 between the two lanes; reopening this one while that line is only believed rather than guarded would
 mean debugging both at once.
 
