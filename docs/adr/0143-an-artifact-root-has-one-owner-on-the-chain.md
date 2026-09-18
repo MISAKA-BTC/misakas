@@ -1,0 +1,140 @@
+# ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
+
+**Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
+change behind its own fence, `palw_artifact_root_ownership`, dormant on every preset.** Not part of
+the 6,301 bundle and not released with it: a fence ships only after a drill has crossed it
+(the launch runbook's §5c gate).
+
+**Builds on:** ADR-0087 (a position is never money settled), ADR-0088 (model lines and versions),
+ADR-0091 (the reward buys the pair), ADR-0095 (a position is a membership).
+
+## 1. The defect
+
+Attribution asks "which line does this artifact root belong to", and the answer is decided by
+iteration order:
+
+```rust
+// model_version_of_root / model_line_of_root, today
+for (line_id, line) in self.model_lines.iter().filter(|(_, l)| l.class_id == *class_id) {
+    …
+    return Some(*line_id);   // ← the FIRST match, in BTreeMap id order
+}
+```
+
+Two things are wrong and each needs its own fix.
+
+**The chain admits duplicates.** Nothing stops a second line, founded by anyone, from publishing a
+version whose root is already another line's — including the class's own founding root.
+
+**The resolution is positional.** With duplicates admitted, which line collects depends on which
+`line_id` sorts first in a `BTreeMap`. That is a consensus-visible outcome decided by a hash's byte
+order, which is the kind of meaning no rule should carry.
+
+The founding fallback does not save it. It fires only when `model_lines` holds no row *keyed by the
+class id at all*, so a third party who founds a line first takes the class's own founding root, and
+the class's fallback is disabled from then on.
+
+Live on testnet-11: the Qwen2.5 class's founding root `1a7457f1…` is also carried by a copy line,
+and the copy resolves first.
+
+## 2. What this does NOT restrict
+
+ADR-0088's competition stays exactly as it is. **Different weights on the same graph remain
+permissionless**, by anyone, without the class registrant's permission:
+
+```
+Class A · graph Transformer-X · founding root R1 · registrant Alice
+
+  Line A   R1   ← Alice's founding line, canonical owner of R1
+  Line B   R2   ← Bob's fine-tune              ALLOWED
+  Line C   R3   ← Carol's independent weights  ALLOWED
+  Line D   R1   ← already owned by Line A      REFUSED
+```
+
+Only the *exact* root collides. A near-duplicate — a re-quantisation, a conversion, a one-byte
+change — is a different root and therefore a different artifact, and the chain does not look inside
+it. Judging semantic similarity would put a content opinion inside consensus, which this registry
+exists not to have. Near-duplicates are a marketplace and reputation problem, and §7 is where they
+are addressed.
+
+## 3. Decision
+
+**D1. An artifact root has one owner, and the chain stores it.** Rooted state gains
+
+```rust
+artifact_owners: BTreeMap<Hash64, PalwArtifactOwnerV1 { class_id, line_id, version }>
+```
+
+**D2. The positional lookups retire.** `model_version_of_root` and `model_line_of_root` stop walking
+lines and read the index. Past the fence there is no "first match" to be decided by id order.
+
+**D3. One source for every attribution.** Usage attribution, ADR-0091's buyback, the owner fee and
+version lookup all read the index and nothing else. A second way to answer the question is how the
+two answers come to differ.
+
+**D4. A founding root is reserved at registration, atomically.** `ClassRegistered` writes the class
+row and the ownership of its founding root in one transition. The fallback that depended on "no line
+row exists yet" is deleted with the window it opened: there is no moment when a class's root is
+registered and unowned.
+
+**D5. Every entrance refuses a duplicate.** `ModelLineFounded` and `ModelVersionPublished` both
+reject an owned root with `DuplicateArtifactRoot`, through one helper. Fixing a single call site
+leaves the other open, so the rule is written once and every path where a root enters state is
+audited against it.
+
+**D6. Activation canonicalizes what is already there, deterministically.** At the fence the index is
+built from existing state by a total order:
+
+1. a root equal to its class's registered founding root → the **founding line** wins, always;
+2. otherwise the **earliest accepted version** wins;
+3. a tie → deterministic id order.
+
+Rule 1 is the one that matters: it is what returns testnet-11's Qwen2.5 root to the class that
+registered it.
+
+**D7. Legacy duplicate rows stay.** They are historical record and the chain does not rewrite
+history. They simply stop being the answer: past activation they attract no usage, no buyback and no
+owner fee for a root they do not own.
+
+**D8. Nothing settled before the fence is recomputed.** Past payouts and buybacks are final, the
+12,816 MSK already attributed included. The fence changes attribution from the fence, and no earlier
+state root moves.
+
+**D9. Its own fence.** `palw_artifact_root_ownership`, independent of the 6,301 bundle, so a failure
+in either is one failure domain. It is dormant on every preset here.
+
+## 4. Why the index and not a rule against duplicates alone
+
+Refusing duplicates from the fence would leave the ones already on the chain resolved positionally
+for ever, and would leave two ways to answer the question — the index for new roots, the walk for old
+ones. D6 canonicalizes the existing rows *into* the index, so after activation there is exactly one
+mechanism and one answer.
+
+It also closes a race the announcement itself would otherwise open: between announcing a fence and
+reaching it, a squatter could take a root that has no line row yet. D4 removes the window and D6
+resolves anything already in it in the founding line's favour.
+
+## 5. What must be proved
+
+* the index answers before and after activation, and the answer never depends on id order;
+* the legacy migration is deterministic, and founding-root precedence beats an earlier third-party
+  version;
+* a duplicate is refused at `ModelLineFounded` **and** at `ModelVersionPublished`;
+* a class registration reserves its founding root in the same transition that writes the class;
+* a reorg restores the index exactly, and a delta revert equals a fresh walk;
+* a snapshot carries the index, and a node that loads one answers as a node that folded the chain;
+* usage attribution and buyback attribution both read it, asserted separately;
+* a different root on the same class is still accepted, from a bond that is not the registrant's —
+  ADR-0088's competition, pinned so this rule cannot quietly eat it.
+
+## 6. What this does not decide
+
+Whether the fence is armed, and at what height. That is the operator's, after a drill crosses it.
+
+## 7. The part that is not consensus
+
+Near-duplicate weights are a real problem and this ADR deliberately leaves them to the surface that
+can judge them. A model page can say which line is the class's founding one, which are independent
+weights, and which is a legacy duplicate row — `Registered by`, `Canonical founding artifact`, `This
+line owner`, `Artifact relationship`. **Attribution is never resolved there**: the chain answers it,
+and the page displays the chain's answer.
