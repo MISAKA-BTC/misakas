@@ -59,6 +59,9 @@ pub struct HeaderProcessingContext {
     pub block_window_for_difficulty: Option<Arc<BlockWindowHeap>>,
     pub block_window_for_past_median_time: Option<Arc<BlockWindowHeap>>,
     pub mergeset_non_daa: Option<BlockHashSet>,
+    /// ADR-0142: where the clock stands after this block, staged by `pre_pow_validation` and
+    /// written by `commit_header`. `None` below the fence.
+    pub palw_clock_cursor: Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>,
     pub merge_depth_root: Option<BlockHash>,
     pub finality_point: Option<BlockHash>,
 }
@@ -80,6 +83,7 @@ impl HeaderProcessingContext {
             ghostdag_data: None,
             block_window_for_difficulty: None,
             mergeset_non_daa: None,
+            palw_clock_cursor: None,
             block_window_for_past_median_time: None,
             merge_depth_root: None,
             finality_point: None,
@@ -134,6 +138,10 @@ pub struct HeaderProcessor {
     /// fence the interval follows whether the parent advances the DAA rather than whether it is
     /// bonded (`heartbeat_interval_ms_v2`).
     pub(super) palw_anchor_clock: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0142: past this fence the heartbeat's slot rule retires and the clock cursor governs.
+    pub(super) palw_clock_cursor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0142: where the cursor of every processed block is written.
+    pub(super) palw_clock_cursor_store: Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>,
     /// ADR-0083 Decision 1's fence, the third argument of `palw_lane_advances_daa_v1`.
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0125: the execution lane, mode folded in (`Params::palw_execution_lane_fence`) — its
@@ -254,6 +262,8 @@ impl HeaderProcessor {
             palw_block_commitment: params.palw_block_commitment,
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_anchor_clock: params.palw_anchor_clock,
+            palw_clock_cursor: params.palw_clock_cursor,
+            palw_clock_cursor_store: storage.palw_clock_cursor_store.clone(),
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
@@ -451,6 +461,8 @@ impl HeaderProcessor {
             self.block_window_cache_for_past_median_time.insert(ctx.hash, window);
         }
 
+        // ADR-0142: the cursor this block leaves behind, beside the DAA set it belongs with.
+        self.palw_clock_cursor_store.insert_batch(&mut batch, ctx.hash, ctx.palw_clock_cursor).unwrap();
         self.daa_excluded_store.insert_batch(&mut batch, ctx.hash, Arc::new(ctx.mergeset_non_daa.unwrap())).unwrap();
         self.headers_store.insert_batch(&mut batch, ctx.hash, ctx.header, ctx.block_level).unwrap();
         self.depth_store.insert_batch(&mut batch, ctx.hash, ctx.merge_depth_root.unwrap(), ctx.finality_point.unwrap()).unwrap();

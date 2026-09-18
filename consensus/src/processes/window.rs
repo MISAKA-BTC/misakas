@@ -37,11 +37,25 @@ pub struct DaaWindow {
     pub window: Arc<BlockWindowHeap>,
     pub daa_score: u64,
     pub mergeset_non_daa: BlockHashSet,
+    /// **ADR-0142: where the clock stands after this block.** Carried here rather than recomputed,
+    /// because it is the same decision that produced `daa_score` — one walk of the mergeset answers
+    /// both, and two walks are how the two answers would drift. `None` below the fence.
+    pub clock_cursor: Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>,
 }
 
 impl DaaWindow {
     pub fn new(window: Arc<BlockWindowHeap>, daa_score: u64, mergeset_non_daa: BlockHashSet) -> Self {
-        Self { window, daa_score, mergeset_non_daa }
+        Self { window, daa_score, mergeset_non_daa, clock_cursor: None }
+    }
+
+    /// ADR-0142: the same, with the cursor the DAA step decided.
+    pub fn with_clock_cursor(
+        window: Arc<BlockWindowHeap>,
+        daa_score: u64,
+        mergeset_non_daa: BlockHashSet,
+        clock_cursor: Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>,
+    ) -> Self {
+        Self { window, daa_score, mergeset_non_daa, clock_cursor }
     }
 }
 
@@ -111,6 +125,8 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         round_lane: Option<ForkActivation>,
         single_lottery: Option<ForkActivation>,
         anchor_clock: Option<ForkActivation>,
+        clock_cursor: Option<ForkActivation>,
+        clock_cursor_store: Option<Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>>,
     ) -> Self {
         let difficulty_manager = SampledDifficultyManager::new(
             headers_store.clone(),
@@ -127,6 +143,8 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
             round_lane,
             single_lottery,
             anchor_clock,
+            clock_cursor,
+            clock_cursor_store,
         );
         let past_median_time_manager = SampledPastMedianTimeManager::new(headers_store.clone(), genesis.timestamp);
         Self {
@@ -359,8 +377,13 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         let window = self.build_block_window(ghostdag_data, WindowType::DifficultyWindow, |hash| {
             mergeset_non_daa.insert(hash);
         })?;
-        let daa_score = self.difficulty_manager.calc_daa_score(ghostdag_data, &mergeset_non_daa);
-        Ok(DaaWindow::new(window, daa_score, mergeset_non_daa))
+        // ADR-0142 §5: one call answers both the exemption count the score is built from and the
+        // cursor the block leaves behind. Asking twice is how they would come to disagree.
+        let (exempt_free_score, clock_cursor) = {
+            let step = self.difficulty_manager.palw_clock_step_v1(ghostdag_data, &mergeset_non_daa);
+            (self.difficulty_manager.calc_daa_score(ghostdag_data, &mergeset_non_daa), step.1)
+        };
+        Ok(DaaWindow::with_clock_cursor(window, exempt_free_score, mergeset_non_daa, clock_cursor))
     }
 
     fn calculate_difficulty_bits(&self, ghostdag_data: &GhostdagData, daa_window: &DaaWindow) -> u32 {

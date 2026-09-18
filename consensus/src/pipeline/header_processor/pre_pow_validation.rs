@@ -50,7 +50,21 @@ impl HeaderProcessor {
         // ADR-0071 Decision 1 froze this for a `ConsensusV2` network and the ADR now records why
         // that was wrong: the window's answer IS the block interval, and nothing else sets it.
         let expected_bits = self.window_manager.calculate_difficulty_bits(ghostdag_data, &daa_window);
-        if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+        // **ADR-0142 retires the slot rule past `palw_clock_cursor`.**
+        //
+        // The slot rule existed to bound the lane's width. Past the cursor the clock is bounded
+        // instead, and by something the economic lane cannot move: the heartbeat exemption is
+        // granted at most once per interval of wall clock, so the DAA cannot run fast however many
+        // beats are minted. What is left for the slot rule to do is only harm — it is measured
+        // against the selected parent, the economic lane refreshes that parent, and a chain
+        // producing faster than the interval starved the lane completely. The width that remains is
+        // bounded where it always was: a fixed hash price, and at most four beats a mergeset.
+        //
+        // So past this fence a beat may be minted whenever its producer can pay for it, and earns
+        // the chain a DAA only when the cursor says a slot is open.
+        let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(header.daa_score));
+        if !clock_cursor_governs
+            && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
             && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
         {
             let parent = self
@@ -84,6 +98,8 @@ impl HeaderProcessor {
                 ));
             }
         }
+        // ADR-0142: the cursor this block leaves behind, decided by the same walk as its score.
+        ctx.palw_clock_cursor = daa_window.clock_cursor;
         ctx.mergeset_non_daa = Some(daa_window.mergeset_non_daa);
 
         if header.bits != expected_bits {

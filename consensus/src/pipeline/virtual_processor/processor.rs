@@ -10816,6 +10816,12 @@ impl VirtualStateProcessor {
         // by the node that built it: past the anchor clock validation grants the recovery cadence
         // where the parent paces no clock, while the old call still stamped the nominal hour, which
         // the future-drift rule then rejects outright.
+        // **ADR-0142: past `palw_clock_cursor` there is no slot to wait for.** The rule retires
+        // with the validator's — a beat may be minted whenever its producer can pay for it, and it
+        // earns the chain a DAA only where the cursor says a slot is open. Stamping a future
+        // timestamp here would be the template refusing itself, which is the drift ADR-0066
+        // Decision 2 named and ADR-0138 §3c reintroduced.
+        let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
             parent.pow_algo_id,
@@ -10824,15 +10830,21 @@ impl VirtualStateProcessor {
             self.palw_single_lottery,
             self.palw_receipt_rows_unpriced,
         );
-        let earliest = match hb::check_heartbeat_slot_v2(
-            parent.timestamp,
-            parent.pow_algo_id,
-            anchor_clock_active,
-            parent_advances_daa,
-            template.block.header.timestamp,
-        ) {
-            Ok(()) => template.block.header.timestamp,
-            Err(early) => early.last_heartbeat_timestamp.saturating_add(early.interval_ms),
+        let earliest = if clock_cursor_governs {
+            // Past the cursor there is nothing to wait for: the template stands as built, and the
+            // beat earns a DAA only where the cursor says a slot is open.
+            template.block.header.timestamp
+        } else {
+            match hb::check_heartbeat_slot_v2(
+                parent.timestamp,
+                parent.pow_algo_id,
+                anchor_clock_active,
+                parent_advances_daa,
+                template.block.header.timestamp,
+            ) {
+                Ok(()) => template.block.header.timestamp,
+                Err(early) => early.last_heartbeat_timestamp.saturating_add(early.interval_ms),
+            }
         };
         template.block.header.timestamp = template.block.header.timestamp.max(earliest);
         template.block.header.pow_algo_id = hb::PALW_HEARTBEAT_ALGO_ID;

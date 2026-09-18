@@ -22,6 +22,7 @@ use std::{
 };
 
 use super::ghostdag::ordering::SortableBlock;
+use crate::model::stores::palw_clock_cursor::PalwClockCursorStoreReader;
 use itertools::Itertools;
 
 trait DifficultyManagerExtension {
@@ -206,6 +207,14 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     single_lottery: Option<ForkActivation>,
     /// ADR-0138: past this fence only a `bits`-priced block advances the DAA score.
     anchor_clock: Option<ForkActivation>,
+    /// **ADR-0142: `Params::palw_clock_cursor`, and the cursor of every block already processed.**
+    ///
+    /// Past this fence the heartbeat lane earns its exemption only at or past the cursor, so the
+    /// DAA advances at most once per interval of WALL CLOCK rather than once per chain block —
+    /// which is what ADR-0138 needs and what the selected-parent slot rule could not give, because
+    /// a block that advances no clock was moving the next opportunity to advance it.
+    clock_cursor: Option<ForkActivation>,
+    clock_cursor_store: Option<Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>>,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
@@ -225,6 +234,8 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         round_lane: Option<ForkActivation>,
         single_lottery: Option<ForkActivation>,
         anchor_clock: Option<ForkActivation>,
+        clock_cursor: Option<ForkActivation>,
+        clock_cursor_store: Option<Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>>,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -242,6 +253,8 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             single_lottery,
             round_lane,
             anchor_clock,
+            clock_cursor,
+            clock_cursor_store,
         }
     }
 
@@ -354,16 +367,28 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
     }
 }
 
-impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension for SampledDifficultyManager<T, U> {
-    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64 {
+impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
+    /// **ADR-0142 §5: one function, and both readers ask it.** The DAA score's exemption count and
+    /// the cursor this block leaves behind are the same decision, so they are one answer: the header
+    /// processor stages `.1` for the block it is about to commit, and `daa_exempt_count` returns
+    /// `.0`. Two functions here is how construction and validation drifted apart twice already.
+    ///
+    /// Returns `(exempt_count, cursor_after_this_block)`. The cursor is `None` below the fence and
+    /// before the first beat past it, which is also what an absent store row means.
+    pub fn palw_clock_step_v1(
+        &self,
+        ghostdag_data: &GhostdagData,
+        mergeset_non_daa: &BlockHashSet,
+    ) -> (u64, Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>) {
         // The fence is read at each merged block's OWN DAA score, as `is_round_block` reads the round
         // lane's: a block minted under the rule is exempt wherever it is later merged.
         if self.anchor_clock.is_none() {
-            return 0;
+            return (0, None);
         }
         let mut exempt = 0u64;
         let mut priced = 0u64;
         let mut heartbeats = 0u64;
+        let mut newest_beat_ms: Option<u64> = None;
         for hash in ghostdag_data.unordered_mergeset() {
             if mergeset_non_daa.contains(&hash) {
                 continue;
@@ -389,6 +414,9 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension fo
                 exempt += 1;
                 if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
                     heartbeats += 1;
+                    // ADR-0142: the newest beat in the mergeset is the one that would consume the
+                    // slot, so it is the one the cursor is measured against and advanced from.
+                    newest_beat_ms = Some(newest_beat_ms.map_or(header.timestamp, |t: u64| t.max(header.timestamp)));
                 }
             }
         }
@@ -399,7 +427,42 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension fo
         // DAA window again; counting it never would let a chain whose hash lane stops keep producing
         // with a frozen clock. So: where the mergeset carries something `bits` priced, the beat adds
         // nothing; where it carries none, exactly one beat ticks in the anchor's place.
-        if priced == 0 && heartbeats > 0 { exempt.saturating_sub(1) } else { exempt }
+        //
+        // **ADR-0142 puts a clock on that stand-in.** Below the cursor's fence the rule above is the
+        // whole of it, and a chain producing faster than the interval starves the lane — measured
+        // on the drill as a DAA frozen at its own flag day. Past it the beat earns its exemption
+        // only at or past the cursor, and the cursor is moved by nothing else, so the score advances
+        // at most once per interval of WALL CLOCK however fast the chain produces.
+        let stand_in = priced == 0 && heartbeats > 0;
+        let parent_daa = self.headers_store.get_daa_score(ghostdag_data.selected_parent).unwrap_or(0);
+        if !self.clock_cursor.is_some_and(|fence| fence.is_active(parent_daa)) {
+            return (if stand_in { exempt.saturating_sub(1) } else { exempt }, None);
+        }
+        // The store is `Some` on every production path (`services.rs` builds it); a manager without
+        // one has no chain behind it, so "no cursor yet" is the only answer it can give.
+        let parent_cursor =
+            self.clock_cursor_store.as_ref().and_then(|store| store.get_clock_cursor(ghostdag_data.selected_parent).ok().flatten());
+        let beat_ms = newest_beat_ms.unwrap_or(0);
+        let granted = stand_in
+            && parent_cursor
+                .is_none_or(|cursor| kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_slot_admits_v1(&cursor, beat_ms).is_ok());
+        let cursor_after = if granted {
+            kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_cursor_after_block_v1(
+                parent_cursor,
+                true,
+                beat_ms,
+                kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
+            )
+        } else {
+            parent_cursor
+        };
+        (if granted { exempt.saturating_sub(1) } else { exempt }, cursor_after)
+    }
+}
+
+impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension for SampledDifficultyManager<T, U> {
+    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64 {
+        self.palw_clock_step_v1(ghostdag_data, mergeset_non_daa).0
     }
 
     fn headers_store(&self) -> &dyn HeaderStoreReader {

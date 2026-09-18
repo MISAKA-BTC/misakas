@@ -571,9 +571,14 @@ async fn adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock() {
                 max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
             });
             p.palw_anchor_clock = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+            // ADR-0142: the anchor clock may not be armed without the cursor — past it only a
+            // heartbeat advances the score, and without the cursor a busy economic lane starves the
+            // one lane that can. `validate_palw_v2` refuses the pair apart, which is what this
+            // fixture would otherwise trip on.
+            p.palw_clock_cursor = Some(kaspa_consensus_core::config::params::ForkActivation::always());
         })
         .build();
-    config.params.validate_palw_v2().expect("the clock alone is a runnable ruleset");
+    config.params.validate_palw_v2().expect("the clock and its cursor are a runnable ruleset");
     let mut ctx = TestContext::new(TestConsensus::new(&config));
     for _ in 0..2 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
