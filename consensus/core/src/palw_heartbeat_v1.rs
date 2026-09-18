@@ -265,6 +265,21 @@ pub fn heartbeat_yield_hint_v2(
     if heartbeat_parent_paces_the_clock_v1(selected_parent_algo_id, anchor_clock_active, parent_advances_daa) {
         return HeartbeatYieldHintV1::BondedSelectedParent;
     }
+    // **Yield only to a block that PACES THE CLOCK** — the same question the parent arm just asked,
+    // asked of the mergeset.
+    //
+    // The yield exists so a beat does not bury an attempt block that is waiting to be merged. Past
+    // the anchor clock an attempt block carries its weight but advances no DAA, so standing aside
+    // for one waits on a block that will not move the clock, on a chain where nothing else will
+    // either. Worse, the economic lane produces continuously, so the yield target keeps moving
+    // forward and the lane stands aside from the very job it exists for until its episode budget
+    // drains — measured on the drill as a frozen DAA with the miner never minting.
+    //
+    // Below the fence `anchor_clock_active` is false and this returns to the ADR-0105 behaviour
+    // unchanged. This is miner POLICY: no validation path reads it, and no fingerprint moves.
+    if anchor_clock_active && !attempt_advances_daa {
+        return HeartbeatYieldHintV1::NothingToYieldTo;
+    }
     merged
         .into_iter()
         .filter(|&(algo_id, _)| is_palw_attempt_algo_id(algo_id))
@@ -350,11 +365,17 @@ mod tests {
         // Past the fence on a chain with no priced lane: the attempt parent is no longer a reason
         // to sleep, and the wait a waiting attempt block buys is the RECOVERY interval the slot
         // rule would grant — not the nominal hour, which would stall the clock it now carries.
-        assert_eq!(
-            heartbeat_yield_hint_v2(attempt, true, false, false, [(attempt, t)]),
-            HeartbeatYieldHintV1::YieldUntil(t + HEARTBEAT_RECOVERY_INTERVAL_MS)
-        );
+        // Past the fence on a chain with no priced lane, a waiting attempt block is NOT something to
+        // yield to: it advances no clock, and the lane that must advance it would wait for ever
+        // behind a lane that produces continuously.
+        assert_eq!(heartbeat_yield_hint_v2(attempt, true, false, false, [(attempt, t)]), HeartbeatYieldHintV1::NothingToYieldTo);
         assert_eq!(heartbeat_yield_hint_v2(attempt, true, false, false, []), HeartbeatYieldHintV1::NothingToYieldTo);
+        // ...but where the attempt lane DOES still advance the clock — past the anchor clock and
+        // before the single lottery — the yield is the interval the slot rule would grant it.
+        assert_eq!(
+            heartbeat_yield_hint_v2(attempt, true, false, true, [(attempt, t)]),
+            HeartbeatYieldHintV1::YieldUntil(t + HEARTBEAT_NOMINAL_INTERVAL_MS)
+        );
     }
 
     #[test]
