@@ -207,7 +207,7 @@ mod tests {
         let mut t = 0u64;
         for _ in 0..20_000 {
             t += lcg(&mut seed) % 200_000;
-            let is_beat = lcg(&mut seed) % 8 == 0;
+            let is_beat = lcg(&mut seed).is_multiple_of(8);
             let before = cursor;
             cursor = palw_clock_cursor_after_block_v1(cursor, is_beat, t, I);
             if is_beat {

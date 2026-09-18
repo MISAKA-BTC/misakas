@@ -35088,7 +35088,7 @@ pub(crate) mod tests {
             };
             // Below the fence this founding is legal — that is the defect, and it is why the
             // ordering matters rather than being a detail.
-            assert!(try_lines(&s3, &p, &ctx(4, 252, 4), &[steal.clone()], None).is_ok(), "below the fence the root is still takeable");
+            assert!(try_lines(&s3, &p, &ctx(4, 252, 4), std::slice::from_ref(&steal), None).is_ok(), "below the fence the root is still takeable");
 
             let refusal = try_owned(&s3, &p, &ctx(4, 252, 4), &[steal], None).expect_err("refused");
             assert!(
