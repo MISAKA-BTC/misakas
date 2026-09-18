@@ -35066,6 +35066,42 @@ pub(crate) mod tests {
             );
         }
 
+        /// **The crossing block is the interesting one.** The migration runs BEFORE any object of
+        /// the block that crosses the fence, so a block that crosses it and founds a line in the
+        /// same breath sees the canonicalised index rather than the empty one it arrived at. Ordered
+        /// the other way, the last block below the fence and the first block above it would apply
+        /// different rules to the same object, and a squatter with a fast node would have one block
+        /// of warning to take a root the migration was about to return.
+        ///
+        /// The pre-object base (`palw_v2_pre_object_base_v1`, what the acceptance filter judges
+        /// against) runs the migration at the same point, so admission and the fold cannot disagree
+        /// about whether the index exists yet.
+        #[test]
+        fn the_block_that_crosses_the_fence_already_answers_by_the_index() {
+            let (p, s3, class, copy) = squatted_chain();
+            let steal = PalwConsensusObjectV2::ModelLineFounded {
+                class_id: class,
+                name: b"LAST-CHANCE".to_vec(),
+                founder: bond_key(2),
+                root: h64(0xA1),
+                signature: vec![1],
+            };
+            // Below the fence this founding is legal — that is the defect, and it is why the
+            // ordering matters rather than being a detail.
+            assert!(try_lines(&s3, &p, &ctx(4, 252, 4), &[steal.clone()], None).is_ok(), "below the fence the root is still takeable");
+
+            let refusal = try_owned(&s3, &p, &ctx(4, 252, 4), &[steal], None).expect_err("refused");
+            assert!(
+                matches!(refusal, PalwStateV2Error::DuplicateArtifactRoot { root, owner } if root == h64(0xA1) && owner == class),
+                "the crossing block already knows the founding line owns it: {refusal}"
+            );
+
+            // And the copy line founded BEFORE the fence keeps its rows; only the answer moved.
+            let (s4, _) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+            assert!(s4.model_line(&copy).is_some());
+            assert_eq!(s4.artifact_line_of_root(&class, &h64(0xA1), true), Some(class));
+        }
+
         /// **ADR-0143 Decision 5.** A duplicate is refused where a root ENTERS state — at both
         /// entrances, through one helper — and ADR-0088's competition is untouched: a DIFFERENT
         /// root on the same class, from a bond that is not the registrant's, is still anybody's.

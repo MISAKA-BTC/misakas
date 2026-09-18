@@ -54,7 +54,7 @@ Class A · graph Transformer-X · founding root R1 · registrant Alice
 Only the *exact* root collides. A near-duplicate — a re-quantisation, a conversion, a one-byte
 change — is a different root and therefore a different artifact, and the chain does not look inside
 it. Judging semantic similarity would put a content opinion inside consensus, which this registry
-exists not to have. Near-duplicates are a marketplace and reputation problem, and §7 is where they
+exists not to have. Near-duplicates are a marketplace and reputation problem, and §8 is where they
 are addressed.
 
 ## 3. Decision
@@ -156,11 +156,31 @@ resolves anything already in it in the founding line's favour.
 * a different root on the same class is still accepted, from a bond that is not the registrant's —
   ADR-0088's competition, pinned so this rule cannot quietly eat it.
 
-## 6. What this does not decide
+## 6. What the crossing block costs, and the one thing to measure before arming
+
+The migration runs **before any object of the block that crosses the fence**, in the fold and in the
+acceptance filter's pre-object base alike, so admission and the fold cannot disagree about whether
+the index exists yet — and a block that crosses the fence and founds a line in the same breath is
+judged by the canonicalised index rather than by the empty one it arrived at. Ordered the other way,
+a squatter with a fast node would have had one block of warning to take a root the migration was
+about to return.
+
+That block writes one delta entry per distinct root, and nothing else. The count is bounded by the
+state, not by a constant: at most one root per class plus one per version row, with
+`PALW_MODEL_LINES_PER_CLASS_V1` (64) lines a class and `PALW_MODEL_VERSION_HISTORY_V1` (64) versions
+kept per line. **The structural ceiling is therefore large enough to be worth measuring rather than
+assuming**, which is this ADR's own lesson from the DAA-clock audit.
+
+**The gate before arming is one number: the roots on the target network at the arming height.** It
+is read from the chain, it belongs beside the launch runbook's §5c drill gate, and it decides
+nothing else — a chain with a few hundred roots crosses in one ordinary block, and a chain with
+hundreds of thousands needs the question asked again before a height is picked.
+
+## 7. What this does not decide
 
 Whether the fence is armed, and at what height. That is the operator's, after a drill crosses it.
 
-## 7. The part that is not consensus
+## 8. The part that is not consensus
 
 Near-duplicate weights are a real problem and this ADR deliberately leaves them to the surface that
 can judge them. A model page can say which line is the class's founding one, which are independent
