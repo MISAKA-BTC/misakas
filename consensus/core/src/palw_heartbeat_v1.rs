@@ -183,6 +183,57 @@ pub fn check_heartbeat_slot_v2(
     }
 }
 
+// --- ADR-0140 D3: the lane's four jobs, named. ---
+//
+// The heartbeat answers four different questions in one place today, and they do not have to share
+// a primitive: it decides whether a header may exist here, how far it advances the clock, what it
+// may carry, and what it weighs in fork choice. Each is given a name below and each returns exactly
+// what the lane does now — the value of the split is that a later ADR replacing the PRICE of time
+// leaves the other three untouched, and can be shown to.
+
+/// **What a heartbeat may carry** (ADR-0060 Decision 1): ordinary transactions, so a bond
+/// registration or a funding split can ride the clock when no bonded lane is alive, and no subsidy
+/// — the lane is fee-only, which is what keeps a bondless block from being worth minting for its
+/// reward. Returned as a value rather than asserted in prose so that a change to it is a diff.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeartbeatCarrierPolicyV1 {
+    /// Ordinary transactions ride the lane.
+    pub carries_transactions: bool,
+    /// No block subsidy: fees only.
+    pub earns_subsidy: bool,
+    /// No PALW claim rides a heartbeat — the lane is claimless.
+    pub carries_palw_claim: bool,
+}
+
+/// The policy as it stands. A constant function, because the policy is a constant.
+#[inline]
+pub const fn heartbeat_carrier_policy_v1() -> HeartbeatCarrierPolicyV1 {
+    HeartbeatCarrierPolicyV1 { carries_transactions: true, earns_subsidy: false, carries_palw_claim: false }
+}
+
+/// **What a heartbeat weighs in fork choice** — ADR-0060 Decision 1.2's named exception to the
+/// DerivedV1 work equality. One unit: a bonded block outweighs a million beats, and among
+/// heartbeat-only branches `ε × n` still orders the longer one first.
+#[inline]
+pub const fn heartbeat_ordering_contribution_v1() -> u64 {
+    HEARTBEAT_BLUE_WORK_EPSILON
+}
+
+/// **What a heartbeat advances the clock by** — ADR-0138's per-mergeset stand-in, as one function
+/// instead of an arithmetic step buried in `daa_exempt_count`.
+///
+/// The arguments are counts over ONE mergeset, after `mergeset_non_daa` has been removed: how many
+/// of its blocks a `bits`-priced lane minted, and how many are beats. The answer is how many DAA
+/// the beats contribute.
+///
+/// Zero where something priced was merged — the beat must not pace a clock someone else is already
+/// pacing — and exactly one where nothing was, however many beats the mergeset carries. That second
+/// clause is the whole of testnet-11's clock past `palw_anchor_clock`, since no lane there is priced.
+#[inline]
+pub const fn heartbeat_clock_contribution_v1(priced_in_mergeset: u64, heartbeats_in_mergeset: u64) -> u64 {
+    if priced_in_mergeset == 0 && heartbeats_in_mergeset > 0 { 1 } else { 0 }
+}
+
 /// Why a heartbeat header was refused by the slot rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeartbeatTooEarly {

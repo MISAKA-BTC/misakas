@@ -185,6 +185,7 @@ pub mod palw_chain_weight;
 pub mod palw_checkpoint_court_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+pub mod palw_clock_telemetry_v1;
 pub mod palw_context_ladder;
 /// ADR-0077 SA-4: the court's turn deadline is a slashing rule, so it is DERIVED from what an
 /// honest responder needs — one interval of replay plus `2 x NETWORK_DELAY_BOUND` — and every
@@ -281,6 +282,7 @@ pub mod palw_producer_v2;
 /// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
 /// all of them. Dormant (`Params::palw_prompt_ids_merkle` is `None` on every preset).
 pub mod palw_prompt_ids_v1;
+pub mod palw_protocol_time_v1;
 pub mod palw_pwu;
 pub mod palw_qwen25_profile;
 pub mod palw_qwen36_ops;
