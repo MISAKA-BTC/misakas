@@ -540,12 +540,13 @@ mod tests {
                 crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
                 crate::config::params::PALW_RC_FLAG_DAY_6001_FENCE_DAA,
+                crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 // ADR-0120's 6,900, where the deployed release put it — now after the moved heights.
                 crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, and ADR-0134's 6,201), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, and ADR-0134's 6,201), and deriving the list must not widen it"
         );
     }
 
@@ -596,6 +597,7 @@ mod tests {
             "palw_work_target" => params.palw_work_target = Some(at),
             "palw_single_lottery" => params.palw_single_lottery = Some(at),
             "palw_short_challenge_window" => params.set_palw_short_challenge_window(Some(at)),
+            "palw_verification_v2" => params.palw_verification_v2 = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,
@@ -793,7 +795,7 @@ mod tests {
                 // **And 6900, ADR-0120's one-million-MSK least seed** (scheduled 2026-09-12 to ship with
                 // the 7,000 release at a height of its own, so the gate can see a build without it; it
                 // stays where the deployed release put it, so it now follows the moved heights).
-                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6201, 6900, 2_125_000]),
+                ("testnet-11", vec![1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900, 2_125_000]),
                 ("devnet", vec![]),
                 ("simnet", vec![]),
             ],
@@ -852,10 +854,11 @@ mod tests {
                         AUDIT_FENCE,
                         HELD_AND_AUDIT_DEEP,
                         FLAG_DAY_6001,
+                        6100,
                         RETIRED_6201,
                         ADR_0120
                     ],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, and ADR-0134's 6,201, and nothing else"
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0133's 6,100, and ADR-0134's 6,201, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -883,6 +886,7 @@ mod tests {
                 AUDIT_FENCE,
                 HELD_AND_AUDIT_DEEP,
                 FLAG_DAY_6001,
+                6100,
                 RETIRED_6201,
                 ADR_0120,
                 CRESCENDO_T11
@@ -1367,8 +1371,8 @@ mod tests {
         assert_eq!(release_7000.fence_schedule_v1(), vec![1150, 1900, 2150, 2400, 3500, 4000, 6900, 7000, CRESCENDO_T11]);
         assert_eq!(
             upgraded.fence_schedule_v1(),
-            vec![1150, 1900, 2150, 2400, 3500, 4000, HELD_AND_DEEP, FLAG_DAY_6001, RETIRED_6201, 6900, CRESCENDO_T11],
-            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0134 two hundred past, ADR-0120 where it was"
+            vec![1150, 1900, 2150, 2400, 3500, 4000, HELD_AND_DEEP, FLAG_DAY_6001, 6100, RETIRED_6201, 6900, CRESCENDO_T11],
+            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0134 two hundred past, ADR-0120 where it was"
         );
 
         // The tip when the heights moved (5,798) and the last score below the moved height.
@@ -1425,6 +1429,9 @@ mod tests {
         at_6000.palw_work_target = Some(six_thousand);
         at_6000.palw_single_lottery = Some(six_thousand);
         at_6000.set_palw_short_challenge_window(Some(six_thousand));
+        // ADR-0133 V2 has its own day (6,100); the counterfactual moves it with the rest so the
+        // schedule reads as a build without the whole upgrade.
+        at_6000.palw_verification_v2 = Some(six_thousand);
         assert_eq!(
             at_6000.fence_schedule_v1(),
             without_the_set.fence_schedule_v1(),

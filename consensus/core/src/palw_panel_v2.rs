@@ -93,6 +93,9 @@ pub struct PalwPanelDrawPolicyV1 {
 pub const PALW_RECEIPT_V2_DOMAIN_MESSAGE: &[u8] = b"misaka-palw/receipt-v2/message/v1";
 /// ML-DSA-87 signing context for a V2 seat receipt — its own family domain (audit P0-6).
 pub const PALW_RECEIPT_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/receipt-v2/mldsa87/v1";
+/// ADR-0133 Verification V2: a segment-scoped receipt signs the V2 message and the segment mask.
+pub const PALW_RECEIPT_V3_DOMAIN_MESSAGE: &[u8] = b"misaka-palw/receipt-v3/message/v1";
+pub const PALW_RECEIPT_V3_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/receipt-v3/mldsa87/v1";
 
 pub const PALW_PANEL_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_PANEL_V2_DOMAIN_SEAT_TICKET,
@@ -220,6 +223,8 @@ pub enum PalwPanelV2Error {
     UnmetObligationNotProven { seat: PalwBondKeyV2, why: &'static str },
     #[error("no quorum: {valid} valid and {unavailable} unavailable of {needed} needed")]
     NoQuorum { valid: u16, unavailable: u16, needed: u16 },
+    #[error("verification V2: segment {segment} has {have} valid attestation(s), {need} needed")]
+    CoverageShort { segment: u16, have: u16, need: u16 },
     #[error("claim {0} does not license by parts: its panel is not a declared plan's stratified shape")]
     NotLicensedByParts(Hash64),
     #[error("claim {0} licenses by parts; a whole-object licence or default does not apply to it")]
@@ -1020,6 +1025,15 @@ pub struct PalwSeatReceiptV2 {
     pub signature: Vec<u8>,
 }
 
+/// **ADR-0133 Verification V2: a receipt that names the segments it attests.** The V2 receipt as it
+/// is, plus the mask, signed together over `palw_receipt_message_v3` so a relayer cannot widen or
+/// narrow what a seat said it replayed. The full mask is a full attestation (V1's receipt).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwSeatReceiptV3 {
+    pub receipt: PalwSeatReceiptV2,
+    pub segments: crate::palw_verification_v2::PalwSegmentMaskV2,
+}
+
 /// `H(network_domain ‖ claim ‖ verdict)` — what a seat signs, in this family's own message
 /// domain (the signing CONTEXT is [`PALW_RECEIPT_V2_MLDSA87_CONTEXT`], applied by the verifier
 /// call, never caller-chosen).
@@ -1040,6 +1054,20 @@ pub fn palw_receipt_message_v2(network_domain: Hash64, claim: Hash64, verdict: P
         }
     };
     state.update(&signed_daa.to_le_bytes());
+    finish(state)
+}
+
+/// ADR-0133 Verification V2: the V2 message and the segment mask, under their own domain.
+pub fn palw_receipt_message_v3(
+    network_domain: Hash64,
+    claim: Hash64,
+    verdict: PalwReceiptVerdictV2,
+    signed_daa: u64,
+    segments: crate::palw_verification_v2::PalwSegmentMaskV2,
+) -> Hash64 {
+    let mut state = keyed(PALW_RECEIPT_V3_DOMAIN_MESSAGE);
+    state.update(palw_receipt_message_v2(network_domain, claim, verdict, signed_daa).as_byte_slice());
+    state.update(&segments.0.to_le_bytes());
     finish(state)
 }
 
@@ -1190,6 +1218,130 @@ where
 /// discharge the pool pays, and a seat that already counted is not counted again. The fold
 /// re-derives every structural fact from its own state (`credit_supplementary_receipts`), so the
 /// sync walk credits exactly what this layer admitted.
+/// **ADR-0133 Verification V2: the licence by coverage.** Every check the V1 quorum makes (the seat,
+/// the duplicate, the signature — over the V3 message, the window, the `Unavailable` obligations)
+/// and then two conditions: the V1 quorum of `Valid` receipts, and every segment of the anchor's cut
+/// attested `Valid` at least `PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT` times. A set of full
+/// masks is exactly V1. The assignment is not checked here: it is a seat's duty (what it must replay
+/// to be paid), not a cap on what it may attest.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_receipt_coverage_v2<V>(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    claim_id: &Hash64,
+    receipts: &[PalwSeatReceiptV3],
+    verify_mldsa87: V,
+    unavailable_abstains: bool,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    use crate::palw_verification_v2::{PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT, palw_coverage_v2, palw_segment_assignment_v2};
+    let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    let PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
+        return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptCoverageV2" });
+    };
+    let receipt_deadline = bound_daa
+        .checked_add(state_params.window_receipt())
+        .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
+    let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
+    if crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count()).is_some() {
+        return Err(PalwPanelV2Error::LicensedByParts(*claim_id));
+    }
+    let seats = panel.seats.clone();
+    let assignment = palw_segment_assignment_v2(panel.anchor, *claim_id, seats.len() as u16);
+
+    let mut answered: Vec<PalwBondKeyV2> = Vec::new();
+    let mut valid: u16 = 0;
+    let mut unavailable: u16 = 0;
+    let mut valid_masks = Vec::new();
+    for signed in receipts {
+        let receipt = &signed.receipt;
+        if receipt.claim != *claim_id {
+            return Err(PalwPanelV2Error::ReceiptClaimMismatch { got: receipt.claim, expected: *claim_id });
+        }
+        if !seats.iter().any(|seat| seat.bond == receipt.seat_bond) {
+            return Err(PalwPanelV2Error::NotASeat(receipt.seat_bond));
+        }
+        if answered.contains(&receipt.seat_bond) {
+            return Err(PalwPanelV2Error::DuplicateSeat(receipt.seat_bond));
+        }
+        let bond = state.bond(&receipt.seat_bond).ok_or(PalwPanelV2Error::SeatBondMissing(receipt.seat_bond))?;
+        let message = palw_receipt_message_v3(network_domain, *claim_id, receipt.verdict, receipt.signed_daa, signed.segments);
+        if !verify_mldsa87(&bond.pubkey, message.as_byte_slice(), &receipt.signature, PALW_RECEIPT_V3_MLDSA87_CONTEXT) {
+            return Err(PalwPanelV2Error::ReceiptSignatureInvalid);
+        }
+        if receipt.signed_daa < bound_daa {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed before the panel was bound" });
+        }
+        if receipt.signed_daa > receipt_deadline {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed past the receipt deadline" });
+        }
+        if receipt.signed_daa > ctx.daa_score {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed after the block carrying it" });
+        }
+        answered.push(receipt.seat_bond);
+        match receipt.verdict {
+            PalwReceiptVerdictV2::Valid => {
+                valid += 1;
+                valid_masks.push(signed.segments);
+            }
+            PalwReceiptVerdictV2::Incapable => {
+                if !crate::palw_state_v2::palw_seat_may_plead_incapable_v2(claim.class_id, state_params.base_class_id()) {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "no node may plead it cannot execute the liveness floor",
+                    });
+                }
+            }
+            PalwReceiptVerdictV2::Unavailable { .. } if unavailable_abstains => {
+                unavailable += 1;
+            }
+            PalwReceiptVerdictV2::Unavailable { chunk_index, requested_daa } => {
+                if chunk_index >= claim.trace_chunk_count {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the named chunk is not one the attempt committed to",
+                    });
+                }
+                if requested_daa < bound_daa {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the request predates the panel that was owed the data",
+                    });
+                }
+                if requested_daa > receipt.signed_daa {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the request had not happened when the seat signed about it",
+                    });
+                }
+                if requested_daa > claim.trace_retention_daa {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "the request falls past the producer's retention obligation",
+                    });
+                }
+                unavailable += 1
+            }
+        }
+    }
+    if valid >= params.quorum() {
+        let coverage = palw_coverage_v2(assignment.segments, &valid_masks);
+        if let Some((segment, have)) = coverage.short(PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT) {
+            return Err(PalwPanelV2Error::CoverageShort { segment, have, need: PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT });
+        }
+        return Ok(PalwReceiptQuorumV2::Licensed { valid });
+    }
+    if !unavailable_abstains && unavailable >= params.quorum() {
+        return Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable });
+    }
+    Err(PalwPanelV2Error::NoQuorum { valid, unavailable, needed: params.quorum() })
+}
+
 pub fn validate_supplementary_receipts_v1<V>(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
@@ -3124,6 +3276,79 @@ mod tests {
     /// What it removes is the CONTENTLESS accusation: the receipt must name a chunk the attempt
     /// committed to, a request made after the panel existed and before the seat signed about it,
     /// and one inside the retention window the producer actually owed.
+    #[test]
+    fn adr0133_v2_a_licence_by_coverage_is_v1_for_full_masks_and_needs_two_attestations_a_segment() {
+        use crate::palw_verification_v2::{PalwSegmentMaskV2, palw_segment_assignment_v2};
+        let (state, claim_id, sp, p, net, seats, _bound_daa) = licensed_fixture();
+        const SIGNED_DAA: u64 = 108;
+        let verify = |key: &[u8], _m: &[u8], sig: &[u8], _c: &[u8]| key == sig;
+        let here = ctx(9, 130, 9);
+        let k = (seats.len() as u16).saturating_sub(1).max(1);
+        let sign = |seat: &PalwPanelSeatV2, verdict: PalwReceiptVerdictV2, segments: PalwSegmentMaskV2| PalwSeatReceiptV3 {
+            receipt: PalwSeatReceiptV2 {
+                claim: claim_id,
+                verdict,
+                seat_bond: seat.bond,
+                signed_daa: SIGNED_DAA,
+                signature: state.bond(&seat.bond).unwrap().pubkey.clone(),
+            },
+            segments,
+        };
+        let check =
+            |r: Vec<PalwSeatReceiptV3>| validate_receipt_coverage_v2(&state, &p, &sp, &here, net, &claim_id, &r, verify, false);
+        let quorum = p.quorum() as usize;
+        assert!(quorum >= 2 && seats.len() > quorum, "the fixture's panel has room for a missing seat");
+
+        // Full masks: exactly V1 — the quorum licenses, one short of it does not.
+        let full: Vec<_> =
+            seats.iter().take(quorum).map(|s| sign(s, PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::full(k))).collect();
+        assert!(matches!(check(full.clone()), Ok(PalwReceiptQuorumV2::Licensed { .. })));
+        assert!(matches!(check(full[..quorum - 1].to_vec()), Err(PalwPanelV2Error::NoQuorum { .. })));
+
+        // The anchor's cut: the full seat plus every partial seat licenses; without the full seat the
+        // partial seats still cover every segment twice; the full seat and two partial seats leave a
+        // segment with one attestation, which is not a licence however many receipts there are.
+        let panel = state.panel(&claim_id).unwrap();
+        let a = palw_segment_assignment_v2(panel.anchor, claim_id, seats.len() as u16);
+        let by_duty: Vec<_> =
+            seats.iter().enumerate().map(|(i, s)| sign(s, PalwReceiptVerdictV2::Valid, a.mask_of(i as u16))).collect();
+        assert!(matches!(check(by_duty.clone()), Ok(PalwReceiptQuorumV2::Licensed { .. })), "{a:?}");
+        let partial_only: Vec<_> =
+            by_duty.iter().enumerate().filter(|(i, _)| *i as u16 != a.full_seat).map(|(_, r)| r.clone()).collect();
+        assert!(matches!(check(partial_only), Ok(PalwReceiptQuorumV2::Licensed { .. })), "{a:?}");
+        // A seat that finished only one of its segments attests only that one: with the full seat it
+        // still makes the quorum, and the segment it did not reach has one attestation — no licence.
+        let partial_index = (a.full_seat as usize + 1) % seats.len();
+        let narrow = sign(&seats[partial_index], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::single(0));
+        let few = vec![by_duty[a.full_seat as usize].clone(), narrow];
+        assert!(few.len() >= quorum);
+        assert!(matches!(check(few), Err(PalwPanelV2Error::CoverageShort { segment: 1, have: 1, need: 2 })), "{a:?}");
+
+        // A widened mask is refused with the signature: the mask is signed.
+        // The mask is signed: widening a receipt from one segment to all changes what the seat signed.
+        let m_narrow = palw_receipt_message_v3(net, claim_id, PalwReceiptVerdictV2::Valid, SIGNED_DAA, PalwSegmentMaskV2::single(0));
+        let m_wide = palw_receipt_message_v3(net, claim_id, PalwReceiptVerdictV2::Valid, SIGNED_DAA, PalwSegmentMaskV2::full(k));
+        assert_ne!(m_narrow, m_wide, "the signed message carries the mask");
+        assert_ne!(
+            m_wide,
+            palw_receipt_message_v2(net, claim_id, PalwReceiptVerdictV2::Valid, SIGNED_DAA),
+            "…and is not the V2 message"
+        );
+        // An outsider and a duplicate are refused as in V1.
+        let outsider = PalwSeatReceiptV3 {
+            receipt: PalwSeatReceiptV2 {
+                claim: claim_id,
+                verdict: PalwReceiptVerdictV2::Valid,
+                seat_bond: PalwBondKeyV2(bond_outpoint(1)),
+                signed_daa: SIGNED_DAA,
+                signature: vec![7; 4],
+            },
+            segments: PalwSegmentMaskV2::full(k),
+        };
+        assert!(matches!(check(vec![outsider]), Err(PalwPanelV2Error::NotASeat(_))));
+        assert!(matches!(check(vec![full[0].clone(), full[0].clone()]), Err(PalwPanelV2Error::DuplicateSeat(_))));
+    }
+
     #[test]
     fn an_unavailable_receipt_must_name_an_obligation_the_producer_had() {
         let (state, claim_id, sp, p, net, seats, bound_daa) = licensed_fixture();

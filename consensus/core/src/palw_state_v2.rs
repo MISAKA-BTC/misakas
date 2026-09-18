@@ -3437,6 +3437,15 @@ pub enum PalwConsensusObjectV2 {
         registrant_bond: PalwBondKeyV2,
         signature: Vec<u8>,
     },
+    /// **ADR-0133 Verification V2 (S1): a receipt set whose receipts name the segments they attest.**
+    /// Accepted only past `Params::palw_verification_v2`, by `validate_receipt_coverage_v2` (the V1
+    /// quorum AND every segment of the anchor's cut attested `Valid` twice); folded exactly as
+    /// `ReceiptLicensed` is. A set of full masks is V1's licence, so the V1 object keeps riding past
+    /// the fence and a fleet adopts segment replay seat by seat. Tag 49; appended last.
+    ReceiptLicensedV2 {
+        claim: Hash64,
+        receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4838,6 +4847,8 @@ pub enum PalwStateV2Error {
     ReadinessProofRefused(String),
     #[error("class manifest refused: {0}")]
     ClassManifestRefused(String),
+    #[error("verification V2 is not in force on this chain at this height (ADR-0133)")]
+    VerificationV2Dormant,
     #[error("class {class} is {state} under the model registry and admits no new claims")]
     ClassNotAdmitting { class: Hash64, state: String },
     #[error("class {class} has {inflight} claims in flight against the registry's cap of {cap}")]
@@ -14005,6 +14016,26 @@ fn apply_object(
         PalwConsensusObjectV2::ClassManifestV2 { class_id, artifact_bytes, registrant_bond, signature: _ } => {
             builder.apply_class_manifest(class_id, *artifact_bytes, registrant_bond)?;
         }
+        PalwConsensusObjectV2::ReceiptLicensedV2 { claim: claim_id, receipts } => {
+            // ADR-0133 Verification V2: the acceptance layer proved the coverage; the fold licenses
+            // exactly as it does for a V1 quorum, over the receipts inside the masks.
+            if !builder.extras.verification_v2_active {
+                return Err(PalwStateV2Error::VerificationV2Dormant);
+            }
+            let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
+            let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
+                return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptLicensedV2" });
+            };
+            if builder.claim_licenses_by_parts(claim_id) {
+                return Err(PalwStateV2Error::LicensedByParts(*claim_id));
+            }
+            let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
+            let verdicts = palw_seat_verdicts_of_v2(&inner);
+            builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
+            builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
+            builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
+            builder.license_claim(*claim_id, claim, ctx.daa_score)?;
+        }
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
             let mut group = builder
                 .state
@@ -14690,6 +14721,10 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0132 S: `Params::palw_single_lottery` resolved at the block's DAA. Past it the lottery
     /// reads `max(W₀, W)` — the chain's stepped work target — and the network draw is gone.
     pub single_lottery_active: bool,
+    /// ADR-0133 Verification V2: `Params::palw_verification_v2` resolved at the block's DAA. Below it
+    /// a segment-scoped receipt set is refused; past it, it licenses by coverage and the V1 object
+    /// still licenses by quorum.
+    pub verification_v2_active: bool,
     /// `Params::palw_model_lines` resolved at the block's DAA (ADR-0088 Decision 11). Below it
     /// the ten registry objects are refused and no claim is attributed.
     pub model_lines_active: bool,
@@ -18076,6 +18111,7 @@ pub(crate) mod tests {
         /// Measured: the number of `PalwConsensusObjectV2` variants before this one.
         const PALW_SEAT_READINESS_PROVED_DISCRIMINANT: u8 = 47;
         const PALW_CLASS_MANIFEST_V2_DISCRIMINANT: u8 = 48;
+        const PALW_RECEIPT_LICENSED_V2_DISCRIMINANT: u8 = 49;
         use crate::palw_artifact::{PalwArtifactInventoryV1, PalwArtifactOperandV1, open_artifact_leaf_v1};
         use crate::palw_execution_lane_v1::PalwExecLaneFoldV1;
         use crate::palw_model_registry_v1::{
@@ -18260,6 +18296,98 @@ pub(crate) mod tests {
             // Without the fold the fold is byte-identical to before: no rows, no reasons.
             let (plain, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, None).unwrap();
             assert!(plain.model_lifecycles_iter().next().is_none());
+        }
+
+        #[test]
+        fn adr0133_v2_a_segment_scoped_receipt_set_licenses_past_the_fence_and_is_refused_below_it() {
+            use crate::palw_panel_v2::PalwSeatReceiptV3;
+            use crate::palw_verification_v2::PalwSegmentMaskV2;
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let env = kimi_attempt(1, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s2, _) = step(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), None).unwrap();
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+            let (s3, _) = step(
+                &s2,
+                &p,
+                &ctx(3, 102, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+                None,
+            )
+            .unwrap();
+            let v2 = |segments: PalwSegmentMaskV2| PalwConsensusObjectV2::ReceiptLicensedV2 {
+                claim: claim_id,
+                receipts: seat_says(true).into_iter().map(|receipt| PalwSeatReceiptV3 { receipt, segments }).collect(),
+            };
+            assert_eq!(
+                borsh::to_vec(&v2(PalwSegmentMaskV2::full(1))).unwrap()[0],
+                PALW_RECEIPT_LICENSED_V2_DISCRIMINANT,
+                "appended last"
+            );
+            let off = extras(None);
+            let dormant = apply_palw_transition_v2_with_extras(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                &[v2(PalwSegmentMaskV2::full(1))],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &off,
+            );
+            assert!(matches!(dormant, Err(PalwStateV2Error::VerificationV2Dormant)), "{dormant:?}");
+            let on = PalwTransitionExtrasV1 { verification_v2_active: true, ..extras(None) };
+            let (s4, d4) = apply_palw_transition_v2_with_extras(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                &[v2(PalwSegmentMaskV2::full(1))],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            )
+            .expect("past the fence the set licenses");
+            assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+            // The V1 object keeps licensing past the fence: a full receipt is a full attestation.
+            let (s4_v1, _) = apply_palw_transition_v2_with_extras(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            )
+            .expect("V1 still rides");
+            assert_eq!(s4_v1.state_root(), s4.state_root(), "…and the two licences are the same state");
+            let back = revert_delta_v2(&s4, &d4, &p).expect("reverts");
+            assert_eq!(back.state_root(), s3.state_root());
+            // Licensed once, the V2 set is refused a second time like V1's.
+            let again = apply_palw_transition_v2_with_extras(
+                &s4,
+                &p,
+                &ctx(5, 104, 5),
+                &[v2(PalwSegmentMaskV2::full(1))],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            );
+            assert!(matches!(again, Err(PalwStateV2Error::WrongPhase { .. })), "{again:?}");
         }
 
         #[test]
@@ -33878,6 +34006,7 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 single_lottery_active: false,
+                verification_v2_active: false,
                 model_lines_active: true,
                 // ADR-0094's instalments ride ADR-0095's fence, and the EVM lane keeps the carrier
                 // lane's rule, so this fixture stands past it.
@@ -34107,6 +34236,7 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 single_lottery_active: false,
+                verification_v2_active: false,
                 model_lines_active: true,
                 model_benefits_active: false,
                 evm_market_active: false,

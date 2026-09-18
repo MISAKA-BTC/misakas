@@ -99,6 +99,7 @@ pub struct PalwLifecycleExtractionV2 {
 pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Result<(), &'static str> {
     match object {
         PalwConsensusObjectV2::ReceiptLicensed { .. }
+        | PalwConsensusObjectV2::ReceiptLicensedV2 { .. }
         | PalwConsensusObjectV2::ProducerDefaulted { .. }
         | PalwConsensusObjectV2::CourtOpened { .. }
         | PalwConsensusObjectV2::CourtClosed { .. }

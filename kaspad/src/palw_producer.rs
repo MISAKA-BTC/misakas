@@ -639,7 +639,9 @@ impl PalwProducerService {
                 Ok(Some((hash, claim))) => {
                     draws += 1;
                     produced += 1;
-                    info!("[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket + Layer-0 both under target)");
+                    info!(
+                        "[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket under target; Layer-0 as the fence reads it)"
+                    );
                     // ADR-0122 Decision 8: the work's own line, by the id every later stage of it
                     // carries — the claim id is the attempt id — beside the prose line above.
                     let id = claim.to_string();
@@ -999,7 +1001,12 @@ impl PalwProducerService {
                 header.palw_commitment =
                     PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: vec![0u8; sig_len] }.encode_wire();
                 let state = kaspa_pow::StateLayer0::new(&header, self.config.network_id.as_bytes());
-                if state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false) {
+                // ADR-0132 S: past the single lottery the chain admits an attempt header's digest
+                // unconditionally, so the producer must not throw the forward away on a network
+                // draw the chain no longer runs (the 2026-09-18 drill: every producer kept counting
+                // "won the class ticket and lost the network draw" past the fence).
+                let single_lottery = self.consensus_config.params.palw_single_lottery_at(header.daa_score);
+                if state.check_pow_layer0_v2(nonce, single_lottery).map(|(ok, _)| ok).unwrap_or(false) {
                     Some((nonce, attempt.clone()))
                 } else {
                     self.network_draw_lost.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

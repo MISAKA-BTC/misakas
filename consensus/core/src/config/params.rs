@@ -1202,6 +1202,14 @@ pub struct Params {
     /// [`Params::set_palw_short_challenge_window`], and `validate_palw_v2` refuses a bundle whose
     /// copy disagrees. Set it through the setter, never by assignment.
     pub palw_short_challenge_window: Option<ForkActivation>,
+    /// **ADR-0133 Verification V2 (S1, segmented replay) — the protocol.** Past this fence a
+    /// segment-scoped receipt set (`ReceiptLicensedV2`) licenses a claim by coverage: the V1 quorum
+    /// and every segment of the anchor's cut attested `Valid` twice; the V1 object keeps licensing
+    /// by quorum, since a full receipt is a full attestation. `Some(6,100)` on testnet-11, its own
+    /// height a hundred DAA past the 6,001 flag day; `None` elsewhere; hashed Some-only; refused
+    /// without `palw_model_registry` at or below it. Operator's order (2026-09-18): V1 → S1 → S3 if
+    /// needed → S2 if speed wins; no zero-knowledge proof.
+    pub palw_verification_v2: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2617,6 +2625,19 @@ impl Params {
                 ));
             }
         }
+        // ADR-0133 Verification V2 never precedes the registry: segment-scoped licensing is the
+        // model economy's capacity rule, and it has nothing to count before the registry seats a
+        // panel by evidence.
+        if let Some(v2) = self.palw_verification_v2.filter(|f| *f != ForkActivation::never()) {
+            let registry_below =
+                self.palw_model_registry.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= v2.daa_score());
+            if !registry_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_verification_v2 is armed without palw_model_registry armed at or below its height: coverage licensing \
+                     counts seats the registry seated",
+                ));
+            }
+        }
         // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
         // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
         // reach the fingerprint whether or not the height does.
@@ -3923,6 +3944,9 @@ impl Params {
         if self.palw_short_challenge_window == Some(ForkActivation::never()) {
             self.set_palw_short_challenge_window(None);
         }
+        if self.palw_verification_v2 == Some(ForkActivation::never()) {
+            self.palw_verification_v2 = None;
+        }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
         }
@@ -4237,6 +4261,11 @@ impl Params {
     /// ADR-0132 §7.6: whether the short challenge window is in force at `daa_score`.
     pub fn palw_short_challenge_window_at(&self, daa_score: u64) -> bool {
         self.palw_short_challenge_window.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0133 Verification V2: whether segment-scoped licensing is in force at `daa_score`.
+    pub fn palw_verification_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_verification_v2.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0132 §7.6: arms (or clears) the short challenge window's fence AND the V2 bundle's copy
@@ -4881,6 +4910,7 @@ impl Params {
             palw_work_target,
             palw_single_lottery,
             palw_short_challenge_window,
+            palw_verification_v2,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -4954,6 +4984,7 @@ impl Params {
             ("palw_work_target", *palw_work_target),
             ("palw_single_lottery", *palw_single_lottery),
             ("palw_short_challenge_window", *palw_short_challenge_window),
+            ("palw_verification_v2", *palw_verification_v2),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5439,6 +5470,7 @@ impl Params {
             palw_work_target,
             palw_single_lottery,
             palw_short_challenge_window,
+            palw_verification_v2,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5665,6 +5697,14 @@ impl Params {
         }
         // ADR-0132 §7.6, a bare fence: the same treatment again.
         match palw_short_challenge_window.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0133 Verification V2, a bare fence: the same treatment again.
+        match palw_verification_v2.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6132,6 +6172,7 @@ impl Params {
             palw_work_target,
             palw_single_lottery,
             palw_short_challenge_window,
+            palw_verification_v2,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6358,6 +6399,11 @@ impl Params {
         // ADR-0132 §7.6: the height only, Some-only.
         if let Some(activation) = palw_short_challenge_window {
             h.write(b"palw_short_challenge_window");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0133 Verification V2: the height only, Some-only.
+        if let Some(activation) = palw_verification_v2 {
+            h.write(b"palw_verification_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -7007,6 +7053,7 @@ impl Params {
             palw_work_target: self.palw_work_target,
             palw_single_lottery: self.palw_single_lottery,
             palw_short_challenge_window: self.palw_short_challenge_window,
+            palw_verification_v2: self.palw_verification_v2,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -7947,6 +7994,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_work_target: None,
     palw_single_lottery: None,
     palw_short_challenge_window: None,
+    palw_verification_v2: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8140,6 +8188,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_work_target: None,
     palw_single_lottery: None,
     palw_short_challenge_window: None,
+    palw_verification_v2: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8315,6 +8364,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_work_target: None,
     palw_single_lottery: None,
     palw_short_challenge_window: None,
+    palw_verification_v2: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -11999,6 +12049,14 @@ pub const PALW_RC_FLAG_DAY_6001_FENCE_DAA: u64 = 6_001;
 /// retirement is a different failure domain from the liveness and economics fences).
 pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 6_201;
 
+/// **ADR-0133 Verification V2 (S1) — testnet-11 arms it at DAA 6,100**, its own height a hundred DAA
+/// past the 6,001 flag day and a hundred before ADR-0134's retirement: the licence rule generalises
+/// (segment-scoped receipts count by coverage; a full receipt is V1's), so a build without it is
+/// refused there and a fleet that crossed 6,001 has its own day to cross this one. The operator's
+/// order (2026-09-18): V1 full replay → S1 segmented replay → S3 if needed → S2 if speed wins; no
+/// zero-knowledge proof is used or planned.
+pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 6_100;
+
 /// **The build before the 6,001 flag day**, for the tests that reconstruct an earlier release: the
 /// fences [`PALW_RC_FLAG_DAY_6001_FENCE_DAA`] schedules, cleared (the held regime and the deep audit
 /// stay at THIS build's 6,000; [`palw_rc_deployed_7000_release_for_tests`] is the fleet's build).
@@ -12013,10 +12071,12 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     params.dns_bft_gate = None;
     // ADR-0135 Upgrade A, ADR-0132 Upgrade C and ADR-0137 ride the same flag day.
     params.palw_model_registry = None;
+    params.palw_verification_v2 = None;
     params.palw_economic_payout = None;
     params.palw_work_target = None;
     params.palw_single_lottery = None;
     params.set_palw_short_challenge_window(None);
+    params.palw_verification_v2 = None;
 }
 
 /// **The fleet's release as deployed (`13520042`, fingerprint `ae1d6162…`)**: no flag-day set, no
@@ -12509,6 +12569,8 @@ pub fn palw_rc_base_params() -> Params {
     // ADR-0132 §7.6: the short challenge window, on the same day — explicit, in the schedule and
     // the fork id, mirrored into the bundle by the setter.
     params.set_palw_short_challenge_window(Some(flag_day_6001));
+    // ADR-0133 Verification V2: its own day, a hundred DAA past the flag day.
+    params.palw_verification_v2 = Some(ForkActivation::new(PALW_RC_VERIFICATION_V2_FENCE_DAA));
     params.dns_bft_gate =
         Some(DnsBftGateV1 { activation: flag_day_6001, t_leak_daa: 5_040, reentry_final_depth_daa: 200, min_retained_validators: 4 });
     // **ADR-0134 — the compute overlay's committee beacon retires at its own height** (2026-09-17):
@@ -12893,6 +12955,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_work_target: None,
     palw_single_lottery: None,
     palw_short_challenge_window: None,
+    palw_verification_v2: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -16992,7 +17055,7 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                "8af89f857aa1cb45fd5603c49cd90dbd84af44ec5bba8a8d3f077ec7203f13e1",
+                "a8f99dac4638a1fac9eef649dc9a23c7b12f6e62fa7920ac2e488eb0263717d9",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17775,6 +17838,8 @@ mod consensus_params_id_tests {
         // * `palw_work_target`, `palw_single_lottery` and `palw_short_challenge_window` (ADR-0137,
         //   ADR-0132 S and §7.6) ride the same day — the operator's rule of 2026-09-18 is that the
         //   PALW upgrade has one flag day — and a card states them with the payout's rate.
+        // * `palw_verification_v2` (ADR-0133 S1) rides testnet-11's own 6,100 day; a card states its
+        //   verification rule when it states the registry.
         assert_eq!(
             missing,
             vec![
@@ -17784,6 +17849,7 @@ mod consensus_params_id_tests {
                 "palw_work_target",
                 "palw_single_lottery",
                 "palw_short_challenge_window",
+                "palw_verification_v2",
                 "palw_execution_lane",
                 "palw_overlay_carve",
                 "palw_model_market",
@@ -18557,6 +18623,8 @@ mod consensus_params_id_tests {
                 PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One entry for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
                 PALW_RC_FLAG_DAY_6001_FENCE_DAA,
+                // ADR-0133 Verification V2's own day, a hundred past the flag day.
+                PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement, after the flag day.
                 PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 // ADR-0120's 6,900, where the deployed release put it — now after the moved heights.
@@ -18753,6 +18821,7 @@ mod consensus_params_id_tests {
             field(&mut scheduled, Some(ForkActivation::new(9_000_000)));
             // The registry and the payout ride the economy's height; a moved economy moves them off.
             scheduled.palw_model_registry = None;
+            scheduled.palw_verification_v2 = None;
             scheduled.palw_economic_payout = None;
             scheduled.palw_work_target = None;
             scheduled.palw_single_lottery = None;
@@ -18878,6 +18947,7 @@ mod consensus_params_id_tests {
         let mut dormant = armed(ForkActivation::never(), 0);
         dormant.palw_panel_economy = None;
         dormant.palw_model_registry = None;
+        dormant.palw_verification_v2 = None;
         dormant.palw_economic_payout = None;
         dormant.palw_work_target = None;
         dormant.palw_single_lottery = None;
@@ -20052,6 +20122,7 @@ mod palw_model_registry_fence_tests {
         );
         let mut rc = shipped.clone();
         rc.palw_model_registry = None;
+        rc.palw_verification_v2 = None;
         rc.palw_economic_payout = None;
         rc.palw_work_target = None;
         rc.palw_single_lottery = None;
@@ -20098,6 +20169,8 @@ mod palw_model_registry_fence_tests {
         assert_eq!(shipped.palw_single_lottery, Some(ForkActivation::new(PALW_RC_FLAG_DAY_6001_FENCE_DAA)));
         let mut rc = shipped.clone();
         rc.palw_single_lottery = None;
+        // Verification V2 (6,100) follows the registry; this test moves the registry past it.
+        rc.palw_verification_v2 = None;
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_single_lottery" && fence.is_none()));
         let mut never = rc.clone();
         never.palw_single_lottery = Some(ForkActivation::never());
@@ -20171,7 +20244,8 @@ mod palw_model_registry_fence_tests {
         ];
         const COMPATIBILITY_6000: &[&str] =
             &["palw_held_context", "palw_shard_court", "palw_fp_da_pins", "palw_audit_2026_09_11_deep"];
-        const LATER: &[(&str, u64)] = &[("palw_compute_overlay_retired", 6_201), ("palw_model_seed_v2", 6_900)];
+        const LATER: &[(&str, u64)] =
+            &[("palw_verification_v2", 6_100), ("palw_compute_overlay_retired", 6_201), ("palw_model_seed_v2", 6_900)];
         for name in UPGRADE_6001 {
             assert_eq!(by_name.get(name).copied().flatten(), Some(6_001), "{name}: on the flag day");
         }
@@ -20207,7 +20281,13 @@ mod palw_model_registry_fence_tests {
             UPGRADE_6001.iter().copied().collect::<BTreeSet<_>>(),
             "6,001 fires the whole upgrade at once"
         );
-        assert_eq!(at_6002, at_6001, "and nothing else fires until 6,201");
+        assert_eq!(at_6002, at_6001, "and nothing else fires until 6,100");
+        assert_eq!(
+            active_at(6_100).difference(&at_6001).copied().collect::<Vec<_>>(),
+            vec!["palw_verification_v2"],
+            "6,100 is Verification V2's own day"
+        );
+        assert!(!rc.palw_verification_v2_at(6_099) && rc.palw_verification_v2_at(6_100));
         for name in UPGRADE_6001 {
             assert!(!at_6000.contains(name), "{name} is not active at 6,000");
         }
@@ -20230,7 +20310,10 @@ mod palw_model_registry_fence_tests {
         // The schedule the fork id advertises: 6,000 and 6,001 as neighbours, then 6,201.
         let schedule = rc.fence_schedule_v1();
         assert!(schedule.windows(2).any(|w| w == [6_000, 6_001]), "{schedule:?}");
-        assert!(schedule.contains(&6_201) && !schedule.contains(&7_000), "{schedule:?}: 7,000 is nobody's height any more");
+        assert!(
+            schedule.contains(&6_100) && schedule.contains(&6_201) && !schedule.contains(&7_000),
+            "{schedule:?}: 7,000 is nobody's height any more"
+        );
         // No part of the bundle may fire without the rest: a preset with one member moved is refused
         // or, where the order rules allow it, visibly a different identity.
         let mut partial = rc.clone();
@@ -20271,6 +20354,7 @@ mod palw_model_registry_fence_tests {
         // registry nor the payout: with them at 6,001 every height above is "at or below" and the
         // refusals this test is about could not fire.
         rc.palw_model_registry = None;
+        rc.palw_verification_v2 = None;
         rc.palw_economic_payout = None;
         let mut never = rc.clone();
         never.palw_work_target = Some(ForkActivation::never());
@@ -20332,6 +20416,7 @@ mod palw_model_registry_fence_tests {
         shipped.validate_palw_v2().expect("the shipped card validates with both armed");
         let mut rc = shipped.clone();
         rc.palw_model_registry = None;
+        rc.palw_verification_v2 = None;
         rc.palw_economic_payout = None;
         rc.palw_work_target = None;
         rc.palw_single_lottery = None;

@@ -418,6 +418,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_work_target: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
+    pub(super) palw_verification_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 Upgrade C: `Params::palw_economic_payout` — past it a claim snapshots its economics
     /// at acceptance and is paid at the rate; the registry reads the cap ceiling.
     pub(super) palw_economic_payout: Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
@@ -914,6 +916,7 @@ impl VirtualStateProcessor {
             palw_model_registry: params.palw_model_registry,
             palw_work_target: params.palw_work_target,
             palw_single_lottery: params.palw_single_lottery,
+            palw_verification_v2: params.palw_verification_v2,
             palw_economic_payout: params.palw_economic_payout_fence(),
             palw_genesis_model_works: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
@@ -6606,6 +6609,35 @@ impl VirtualStateProcessor {
                         return Err(format!("bond {registrant_bond:?}'s manifest is not signed by the key it registered"));
                     }
                 }
+                Obj::ReceiptLicensedV2 { claim, receipts } => {
+                    if !self.palw_verification_v2_at(point.daa_score) {
+                        return Err(format!("claim {claim}: a segment-scoped receipt set below Verification V2's fence (ADR-0133)"));
+                    }
+                    let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        claim,
+                        receipts,
+                        Self::verify_mldsa87_with_context_bool,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("claim {claim}'s segment receipts do not license: {e}"))?;
+                    match quorum {
+                        kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. } => {}
+                        kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::ProducerUnavailable { .. } => {
+                            return Err(format!("claim {claim} is licensed by a quorum that says the producer withheld"));
+                        }
+                        kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Supplementary { .. } => {
+                            return Err(format!("claim {claim}: supplementary receipts ride the V1 object"));
+                        }
+                    }
+                }
                 Obj::DefaultAccused { claim, missing_event_index, accuser, signature } => {
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
@@ -7513,6 +7545,7 @@ impl VirtualStateProcessor {
             work_target: self.palw_work_target_fold_for(point),
             work_target_active: self.palw_work_target_at(daa_score),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
+            verification_v2_active: self.palw_verification_v2_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7591,6 +7624,10 @@ impl VirtualStateProcessor {
     }
 
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
+    pub(super) fn palw_verification_v2_at(&self, daa_score: u64) -> bool {
+        self.palw_verification_v2.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     pub(super) fn palw_single_lottery_at(&self, daa_score: u64) -> bool {
         self.palw_single_lottery.is_some_and(|fence| fence.is_active(daa_score))
     }
@@ -12414,6 +12451,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::BondRegistered { .. } => "BondRegistered",
         O::SeatReadinessProved { .. } => "SeatReadinessProved",
         O::ClassManifestV2 { .. } => "ClassManifestV2",
+        O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
