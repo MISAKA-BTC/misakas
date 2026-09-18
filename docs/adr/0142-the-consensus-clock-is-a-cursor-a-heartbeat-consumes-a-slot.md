@@ -63,10 +63,17 @@ picks where the next opportunity falls, bounded only by the future-drift rule. A
 heartbeat" is ancestor evidence: answering it needs a walk, which is what ADR-0066 Decision 2
 abandoned when a pruned node and an archival node computed different verdicts for one header.
 
-**C. A consensus clock cursor.** ADOPTED. The chain carries the next slot boundary as state.
-A heartbeat consumes a slot and advances the cursor; every other lane leaves it untouched. No walk,
-because the cursor is already at hand wherever the PALW state is; no timestamp on the clock, because
-the cursor advances in whole slots.
+**C. A consensus clock cursor.** ADOPTED. The chain carries the next slot boundary, per block, as
+derived data in the same sense as the DAA score beside it. A heartbeat consumes a slot and advances
+the cursor; every other lane leaves it untouched. No walk at read time, because the answer is stored;
+no timestamp on the clock, because the cursor advances in whole slots.
+
+It was first built in the rooted PALW state and moved, which is worth recording. The state is folded
+in the virtual processor, so a cursor living there can gate a heartbeat's CHAIN validity but not its
+contribution to the DAA score, which header processing decides. Gating only chain validity leaves the
+rate bounded by the chain-block rate rather than by time — the very thing ADR-0138 exists to bound.
+The move is also what opened §6a check 3: rooted state is carried and committed, and derived data is
+neither.
 
 C is also the only one of the three in which the invariant of §2 is *structural* rather than
 maintained. A and B both re-derive the deadline from a block; C's cursor is only writable by the one
@@ -124,9 +131,17 @@ So the rule is **one function**, and everything asks it:
 pub fn palw_clock_slot_admits_v1(cursor: &PalwClockCursorV1, proposed_ms: u64) -> Result<(), ClockSlotTooEarly>
 ```
 
-called by header validation, by `heartbeat_adapt_block_template`, by the miner's wait, and by the
-tests. A workspace guard already fails the build if the superseded entry points are called outside
-their module (`only_this_module_may_ask_the_pre_fence_slot_rule`); it gains the v1 slot rule.
+and the decision that grants the DAA exemption and the decision that moves the cursor are one call,
+`palw_clock_step_v1`: the DAA window carries both, the header processor stages what it commits, and
+`daa_exempt_count` returns the other half. A workspace guard fails the build if the superseded entry
+points are called outside their module (`only_this_module_may_ask_the_pre_fence_slot_rule`).
+
+**And the slot rule itself retires behind this fence.** It existed to bound the lane's width; past
+the cursor the clock is bounded instead, by something the economic lane cannot move. What was left
+for the slot rule to do was only harm. Width stays bounded where it always was — a fixed hash price
+and at most four beats a mergeset — so a beat may be minted whenever its producer can pay for it, and
+earns a DAA only where a slot is open. The template retires the same rule on the same fence, so the
+two sides cannot disagree about a wait that no longer exists.
 
 ## 6. What must be proved, as properties and not as examples
 
@@ -139,8 +154,8 @@ properties over generated sequences.
    and "a beat may be built".
 3. **Validation and the template builder agree** on every input. Same function, asserted anyway.
 4. **Only a heartbeat advances the cursor**, over every lane and every fence combination.
-5. **A reorg restores the cursor exactly**, and a delta revert equals a fresh walk of the winning
-   branch — the equality every other rooted field is already held to.
+5. **A reorg drags nothing**: a block's cursor is a function of its own selected parent's row and
+   its own mergeset, so a competing branch cannot reach a cursor already written.
 6. **A producer cannot lock the clock with a future timestamp**: the cursor moves by whole slots and
    the drift rule bounds how many.
 7. **One beat normalises a long outage**: after any silence, a single heartbeat leaves the cursor at
