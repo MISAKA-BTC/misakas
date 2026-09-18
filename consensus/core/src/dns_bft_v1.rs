@@ -111,6 +111,26 @@ impl DnsBftRulesV1 {
         epoch.anchor_blue_score.saturating_sub(self.evidence_window_blue_score)
     }
 
+    /// **The evidence window's DAA edge** (ADR-0138's correction to ADR-0128 Decision 3). The leak
+    /// is decided in DAA — `anchor_daa − last_attested_daa ≥ t_leak_daa` — so the window that looks
+    /// for `last_attested_daa` must cover `t_leak_daa + reentry_final_depth_daa` **of DAA**. It used
+    /// to be covered only by walking that many of BLUE score, which was the same thing while every
+    /// lane ticked both clocks; past `palw_anchor_clock` the attempt lane adds blue and no DAA, so a
+    /// walk bounded in blue alone reaches back fewer DAA than the leak asks for, the lower-edge
+    /// fallback under-states every silence, and **no bond is ever leaked**.
+    pub fn evidence_floor_daa_score(&self, epoch: &DnsBftEpochV1) -> u64 {
+        epoch.anchor_daa_score.saturating_sub(self.t_leak_daa.saturating_add(self.reentry_final_depth_daa))
+    }
+
+    /// **Is this chain block inside the evidence window?** Both clocks decrease as the walk goes
+    /// back, so the window is the union of the two spans and its start is the deeper of them: a
+    /// block is in it while EITHER the blue span or the DAA span still holds it. Where the two
+    /// clocks agree — every height below `palw_anchor_clock` — this is the blue-only window ADR-0128
+    /// shipped, block for block.
+    pub fn in_evidence_window(&self, epoch: &DnsBftEpochV1, blue_score: u64, daa_score: u64) -> bool {
+        blue_score >= self.evidence_floor_blue_score(epoch) || daa_score >= self.evidence_floor_daa_score(epoch)
+    }
+
     fn cutoff_blue_score(&self, epoch: u64) -> u64 {
         anchor_cutoff_blue_score(epoch, self.epoch_length_blue_score, self.anchor_backoff_blue_score)
     }
@@ -250,10 +270,9 @@ pub fn dns_bft_window_epochs_v1(
 /// below the anchor whose blue score is inside the window. On a chain younger than the window that
 /// is genesis, which makes an absent bond's fallback its own activation.
 pub fn dns_bft_window_lower_edge_daa_v1(chain: &[DnsBftChainBlockV1], epoch: &DnsBftEpochV1, rules: &DnsBftRulesV1) -> u64 {
-    let floor = rules.evidence_floor_blue_score(epoch);
     chain
         .iter()
-        .filter(|b| b.daa_score <= epoch.anchor_daa_score && b.blue_score >= floor)
+        .filter(|b| b.daa_score <= epoch.anchor_daa_score && rules.in_evidence_window(epoch, b.blue_score, b.daa_score))
         .map(|b| b.daa_score)
         .min()
         .unwrap_or(epoch.anchor_daa_score)
@@ -272,7 +291,7 @@ pub fn dns_bft_window_lower_edge_daa_v1(chain: &[DnsBftChainBlockV1], epoch: &Dn
 pub fn dns_bft_is_final_evidence_v1(attestation: &DnsBftAttestationV1, epoch: &DnsBftEpochV1, rules: &DnsBftRulesV1) -> bool {
     let a = attestation;
     let accepted_in_prefix =
-        a.accepted_daa_score <= epoch.anchor_daa_score && a.accepted_blue_score >= rules.evidence_floor_blue_score(epoch);
+        a.accepted_daa_score <= epoch.anchor_daa_score && rules.in_evidence_window(epoch, a.accepted_blue_score, a.accepted_daa_score);
     let buried = a.anchor_daa_score < epoch.anchor_daa_score
         && a.anchor_daa_score.saturating_add(rules.reentry_final_depth_daa) <= epoch.anchor_daa_score;
     accepted_in_prefix && buried && rules.anchor_decidable_within(a.epoch, epoch)
@@ -1130,6 +1149,58 @@ mod tests {
     ) -> DnsBftCountedSetV1 {
         let edge = dns_bft_window_lower_edge_daa_v1(chain, e, rules);
         dns_bft_counted_set_v1(bonds, e.anchor_daa_score, edge, &dns_bft_last_final_attestation_daa_v1(e, atts, rules), rules)
+    }
+
+    /// **ADR-0138's correction (the 2026-09-18 re-audit, §8).** Past `palw_anchor_clock` the attempt
+    /// lane adds blue score and no DAA, so the same chain slice spans FEWER DAA than blue. A window
+    /// bounded in blue alone then reaches back less than `t_leak_daa` of DAA, the lower-edge fallback
+    /// under-states every silence, and the leak never fires. The window covers both spans now, so a
+    /// silent bond is leaked at the same DAA distance whatever the blue clock is doing.
+    #[test]
+    fn a_silent_bond_is_leaked_whether_blue_runs_with_the_daa_clock_or_twice_as_fast() {
+        let r = rules();
+        // A chain where blue advances `ratio` times for every DAA — the shape a busy attempt lane
+        // gives past the anchor clock. The epoch's anchor sits at the tip of that chain.
+        let chain_at = |ratio: u64, blue_tip: u64| -> (DnsBftEpochV1, Vec<DnsBftChainBlockV1>) {
+            let chain: Vec<DnsBftChainBlockV1> = (0..=blue_tip)
+                .rev()
+                .map(|n| DnsBftChainBlockV1 { hash: block_hash(n), blue_score: n, daa_score: n / ratio })
+                .collect();
+            let tip = chain.first().copied().expect("a chain");
+            (
+                DnsBftEpochV1 {
+                    epoch: 200,
+                    anchor_hash: tip.hash,
+                    anchor_blue_score: tip.blue_score,
+                    anchor_daa_score: tip.daa_score,
+                },
+                chain,
+            )
+        };
+        for ratio in [1u64, 2, 4] {
+            // Deep enough that both spans are inside the chain at every ratio.
+            let blue_tip = (r.t_leak_daa + r.reentry_final_depth_daa + r.evidence_window_blue_score) * ratio + 1_000;
+            let (e, chain) = chain_at(ratio, blue_tip);
+            let edge = dns_bft_window_lower_edge_daa_v1(&chain, &e, &r);
+            assert!(
+                e.anchor_daa_score.saturating_sub(edge) >= r.t_leak_daa,
+                "ratio {ratio}: the window reaches back at least the leak period in DAA \
+                 (anchor {} − edge {edge} = {})",
+                e.anchor_daa_score,
+                e.anchor_daa_score - edge
+            );
+            // A bond that never attested is leaked at every ratio — the property ADR-0128 states.
+            let silent = bond(11, 100, 100);
+            let outpoint = silent.bond_outpoint;
+            let set = dns_bft_counted_set_v1(
+                &[silent],
+                e.anchor_daa_score,
+                edge,
+                &std::collections::HashMap::new(),
+                &DnsBftRulesV1 { min_retained_validators: 0, ..r },
+            );
+            assert_eq!(set.leaked, vec![outpoint], "ratio {ratio}: silence is leaked");
+        }
     }
 
     #[test]

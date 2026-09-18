@@ -60,6 +60,34 @@ flag-day table pins both at 6,001.
   drill scripts' `ANCHOR_CLOCK_AT` arm it on a private chain; the drill's release report states
   anchor DAA/s, attempt DAA/s and receipt DAA/s from the logs.
 
+## 3b. What the fix itself broke, and closed (the 2026-09-18 re-audit)
+
+Two holes of its own, both found by re-auditing the fix rather than the bundle:
+
+* **The freeze.** The first cut exempted every lane `bits` does not price, the heartbeat among them
+  — and the heartbeat is the chain's liveness tick (ADR-0066 took it out of `bits` so a stock of
+  certified quanta could not tighten the attempt lane's target, not because the chain does not need
+  it). A chain whose hash lane stopped would have kept producing while its DAA score froze, taking
+  every fence, deadline, retention and leak window with it. The heartbeat is in the clock: one an
+  hour nominally, one per recovery interval (120 s) where nothing else produces, at most four a
+  mergeset, on a constant target no producer moves — so it cannot pace the clock where the hash lane
+  runs, and it cannot let the clock stop where it does not.
+* **The DNS leak's units.** ADR-0128 Decision 3 walks the evidence window in BLUE score and adds
+  `t_leak_daa` into that blue total, which was the same thing while every lane ticked both clocks.
+  With the DAA clock slower than the blue clock, a blue-bounded walk reaches back fewer DAA than the
+  leak is decided over (5,244 blue ≈ 2,760 DAA at the work target's steady state), the lower-edge
+  fallback under-states every silence, and **no bond would ever have been leaked**. The window now
+  covers both spans — `DnsBftRulesV1::in_evidence_window`, the union of the blue span and the DAA
+  span, whose start is the deeper of the two — and the runtime walk ends only where both are behind
+  it. Where the clocks agree the window is the one ADR-0128 shipped, block for block. Pinned by
+  `a_silent_bond_is_leaked_whether_blue_runs_with_the_daa_clock_or_twice_as_fast` (ratios 1, 2, 4).
+
+**The blue axis this fence does NOT close**, and the operator accepted with the numbers in
+`docs/palw-daa-clock-audit-2026-09-18.md` §9: finality (360 blue), merge depth (30), pruning (~900)
+and the DNS attestation epoch (100) are counted in blue score, which the attempt lane still paces.
+None is a split risk — blue score is a deterministic function of the DAG — and the effects are
+liveness and availability, with finality moving in the safe direction.
+
 ## 4. Fingerprint
 
 `c472a17b…` → `3d150afd…` on testnet-11 (the fence is hashed Some-only). The schedule is unchanged:

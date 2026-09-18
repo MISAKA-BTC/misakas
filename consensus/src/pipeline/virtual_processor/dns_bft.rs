@@ -181,7 +181,8 @@ impl VirtualStateProcessor {
         let mut accepted: Vec<Arc<AcceptedVotesV1>> = Vec::new();
         let mut read = 0usize;
         let mut epochs: Option<Vec<DnsBftEpochV1>> = None;
-        let mut floor: Option<u64> = None;
+        // ADR-0138: two floors — the blue span and the DAA span (`in_evidence_window`).
+        let mut floor: Option<(u64, u64)> = None;
         let mut covered = false;
         for block in self.reachability_service.default_backward_chain_iterator(sink) {
             let compact = self
@@ -190,17 +191,21 @@ impl VirtualStateProcessor {
                 .map_err(|e| format!("chain block {block}'s header does not read before the walk's bound ({e})"))?;
             if epochs.is_none() && sink_blue.saturating_sub(compact.blue_score) > window {
                 let evaluated = dns_bft_window_epochs_v1(&chain, sink_blue, window, epoch_len, lag, backoff);
-                floor = Some(
+                floor = Some((
                     evaluated
                         .iter()
                         .map(|e| rules.evidence_floor_blue_score(e))
                         .min()
                         .unwrap_or_else(|| sink_blue.saturating_sub(window)),
-                );
+                    evaluated.iter().map(|e| rules.evidence_floor_daa_score(e)).min().unwrap_or(0),
+                ));
                 epochs = Some(evaluated);
             }
             let block_point = DnsBftChainBlockV1 { hash: block, blue_score: compact.blue_score, daa_score: compact.daa_score };
-            if floor.is_some_and(|floor| compact.blue_score < floor) {
+            // The walk ends only where BOTH spans are behind it: a blue-only bound reaches back
+            // fewer DAA than the leak is decided over, once the attempt lane stops ticking the DAA
+            // clock (ADR-0138), and the leak would then never fire.
+            if floor.is_some_and(|(blue_floor, daa_floor)| compact.blue_score < blue_floor && compact.daa_score < daa_floor) {
                 // Read for the anchors it decides, never for what it accepted.
                 chain.push(block_point);
                 covered = true;

@@ -165,7 +165,7 @@ computes the same number by construction; the rooted PALW state's delta revert i
 (`revert_delta_v2` equality in each of the 6,001 tests). No wall clock, no local storage, no
 iteration order enters either.
 
-## 8. RELEASE BLOCKER (blue axis) — the DNS leak's evidence window is walked in blue score while the leak is decided in DAA
+## 8. RELEASE BLOCKER, NOW CLOSED (blue axis) — the DNS leak's evidence window is walked in blue score while the leak is decided in DAA
 
 ADR-0138 made the DAA score slower than the blue score, and one rule reads both.
 
@@ -192,8 +192,17 @@ BFT quorum can be held below threshold by bonds that never speak, the DNS-final 
 advancing, and the stake reorg gate freezes at its last confirmation. ADR-0128's stated purpose —
 "inactivity leak は再実装して … 正しく有効化できるようにして" — is defeated on the flag day, silently.
 
-**Minimal fix (not applied — it changes a walk bound and its pruning-depth derivation, the
-operator's call):** walk until BOTH spans are covered — the blue terms (`stake_score_window`,
+**Fixed (2026-09-18, same session).** The window covers both spans:
+`DnsBftRulesV1::evidence_floor_daa_score` is the DAA edge (`anchor_daa − (t_leak + reentry)`),
+`in_evidence_window` is the union of the two spans — both clocks fall as the walk goes back, so the
+union's start is the deeper of them and the slice stays contiguous — and the runtime loop ends only
+where both are behind it. `dns_bft_window_lower_edge_daa_v1` and `dns_bft_is_final_evidence_v1` read
+the same predicate. Where the two clocks agree, which is every height below `palw_anchor_clock`, the
+window is the blue-only one ADR-0128 shipped, block for block; and the DNS gate and the leak both
+arm at 6,001, so nothing below the flag day changes. Pinned by
+`a_silent_bond_is_leaked_whether_blue_runs_with_the_daa_clock_or_twice_as_fast`: at blue-to-DAA
+ratios of 1, 2 and 4 the window still reaches back at least `t_leak_daa` of DAA and a silent bond is
+still leaked. Cost, as predicted: walk until BOTH spans are covered — the blue terms (`stake_score_window`,
 `epoch_length`, `lag`) in blue score as today, AND the DAA terms (`t_leak_daa +
 reentry_final_depth_daa`) in DAA score — stopping only when each is satisfied. Deterministic, and it
 restores the ADR's sentence exactly. Cost: the walk reads ~1.9× the blocks in steady state, and
