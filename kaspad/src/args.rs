@@ -339,6 +339,7 @@ pub struct Args {
     /// ADR-0132 S on a private devnet: arm the single lottery at this DAA score. Needs the work
     /// target at or below it.
     pub palw_single_lottery_devnet_daa: Option<u64>,
+    pub palw_verification_v2_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -467,6 +468,7 @@ impl Default for Args {
             palw_economic_payout_devnet_daa: None,
             palw_work_target_devnet_daa: None,
             palw_single_lottery_devnet_daa: None,
+            palw_verification_v2_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -769,6 +771,26 @@ impl Args {
             config.params.palw_single_lottery = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-single-lottery-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_verification_v2_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-verification-v2-devnet is devnet/simnet only (got {net:?}). Arming Verification V2 is a consensus \
+                     change and ships in a release, not a command line."
+                );
+            }
+            if config.params.palw_model_registry.is_none() {
+                panic!(
+                    "--palw-verification-v2-devnet={daa} needs --palw-model-registry-devnet at or below it: coverage licensing \
+                     counts seats the registry seated"
+                );
+            }
+            config.params.palw_verification_v2 = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-verification-v2-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1409,6 +1431,19 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_SINGLE_LOTTERY_DEVNET"),
         )
         .arg(
+            Arg::new("palw-verification-v2-devnet")
+                .long("palw-verification-v2-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0133 Verification V2 (S1) on a PRIVATE devnet: arm segment-scoped licensing at this DAA score — a \
+                     ReceiptLicensedV2 set licenses by coverage (the V1 quorum and every segment attested twice); a full mask \
+                     is V1's receipt. Needs --palw-model-registry-devnet at or below it. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_VERIFICATION_V2_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-work-target-devnet")
                 .long("palw-work-target-devnet")
                 .value_name("daa-score")
@@ -1826,6 +1861,10 @@ impl Args {
                 .get_one::<u64>("palw-single-lottery-devnet")
                 .copied()
                 .or(defaults.palw_single_lottery_devnet_daa),
+            palw_verification_v2_devnet_daa: m
+                .get_one::<u64>("palw-verification-v2-devnet")
+                .copied()
+                .or(defaults.palw_verification_v2_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
