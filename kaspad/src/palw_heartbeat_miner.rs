@@ -139,6 +139,16 @@ pub struct PalwHeartbeatMinerService {
     shutdown: kaspa_utils::triggers::SingleTrigger,
     /// ADR-0105 Decision 2: how long this miner may still stand aside in the current episode.
     yield_budget: std::sync::Mutex<HeartbeatYieldBudget>,
+    /// **Why this lane is not minting, said out loud.** The reason last printed and when.
+    ///
+    /// Every wait in `mine_one` was a `trace!`, so a miner that could not mint said nothing at the
+    /// level anyone runs. Both of 2026-09-18's liveness bugs left this lane running and silent —
+    /// one because it yielded to blocks that no longer paced the clock, one because the template
+    /// stamped a slot an hour out — and on both a single line here would have named the cause in
+    /// seconds instead of a drill. Same discipline as the producer's holds: print on a CHANGE of
+    /// reason, then at most every five minutes, so an unchanging cause cannot bury the line that
+    /// explains it.
+    last_hold: std::sync::Mutex<Option<(String, std::time::Instant)>>,
 }
 
 impl PalwHeartbeatMinerService {
@@ -176,6 +186,28 @@ impl PalwHeartbeatMinerService {
             miner_data,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
             yield_budget: std::sync::Mutex::new(HeartbeatYieldBudget::new()),
+            last_hold: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Print `reason` if it differs from the last one, or if five minutes have passed since it was
+    /// last printed. `None` clears the memory, so the next hold prints at once rather than being
+    /// suppressed as a repeat of one the lane has since left.
+    fn say_hold(&self, reason: Option<String>) {
+        const REPEAT_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+        let Ok(mut last) = self.last_hold.lock() else { return };
+        match reason {
+            None => *last = None,
+            Some(reason) => {
+                let due = match last.as_ref() {
+                    Some((prev, at)) => prev != &reason || at.elapsed() >= REPEAT_AFTER,
+                    None => true,
+                };
+                if due {
+                    info!("[{PALW_HEARTBEAT}] {reason}");
+                    *last = Some((reason, std::time::Instant::now()));
+                }
+            }
         }
     }
 
@@ -230,6 +262,7 @@ impl PalwHeartbeatMinerService {
             match self.mine_one(&session, miner_data.clone()).await {
                 Ok(Some(hash)) => {
                     mined += 1;
+                    self.say_hold(None);
                     info!("[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — the clock ticked");
                 }
                 Ok(None) => {}
@@ -276,6 +309,13 @@ impl PalwHeartbeatMinerService {
             // Inside the slot. Sleep up to the boundary (capped so a ladder change mid-wait is
             // picked up by a fresh template) and try again with fresh facts.
             let wait = (earliest - now).min(60_000u64);
+            self.say_hold(Some(format!(
+                "the slot rule holds this beat for {} s more (earliest {earliest}, now {now}): the lane's interval \
+                 from the selected parent has not elapsed. If this line repeats while the chain keeps producing, the \
+                 parent is being refreshed faster than the interval and the lane cannot mint at all — the state \
+                 ADR-0138 §3c and its template half exist to prevent",
+                (earliest - now) / 1000
+            )));
             trace!("[{PALW_HEARTBEAT}] slot in {} s", wait / 1000);
             // A slot wait can be a full minute — long enough to be the wait a SIGTERM lands in
             // (finding F1), so it is a tick like every other: on shutdown, hand back to the

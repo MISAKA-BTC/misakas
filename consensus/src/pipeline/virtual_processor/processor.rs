@@ -10806,8 +10806,27 @@ impl VirtualStateProcessor {
             .headers_store
             .get_header(virtual_state.ghostdag_data.selected_parent)
             .map_err(|_| RuleError::MissingParents(vec![virtual_state.ghostdag_data.selected_parent]))?;
-        // The slot: at or after the selected parent's timestamp plus the interval its lane sets.
-        let earliest = match hb::check_heartbeat_slot(parent.timestamp, parent.pow_algo_id, template.block.header.timestamp) {
+        // The slot: at or after the selected parent's timestamp plus the interval its lane sets —
+        // through the SAME function `pre_pow_validation` calls, with the same two fence answers.
+        // ADR-0138 §3c changed that interval, and a template built on the old one would be refused
+        // by the node that built it: past the anchor clock validation grants the recovery cadence
+        // where the parent paces no clock, while the old call still stamped the nominal hour, which
+        // the future-drift rule then rejects outright.
+        let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
+            parent.pow_algo_id,
+            parent.daa_score,
+            self.palw_anchor_clock,
+            self.palw_single_lottery,
+            self.palw_receipt_rows_unpriced,
+        );
+        let earliest = match hb::check_heartbeat_slot_v2(
+            parent.timestamp,
+            parent.pow_algo_id,
+            anchor_clock_active,
+            parent_advances_daa,
+            template.block.header.timestamp,
+        ) {
             Ok(()) => template.block.header.timestamp,
             Err(early) => early.last_heartbeat_timestamp.saturating_add(early.interval_ms),
         };

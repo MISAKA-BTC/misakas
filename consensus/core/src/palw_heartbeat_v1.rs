@@ -309,6 +309,63 @@ mod tests {
     /// 4: an archival node never hit `Err(get_header)`, a pruned node hit it at its own pruning
     /// point, and the two computed different verdicts for one header). One block deep admits two
     /// states because that is how many a single parent can distinguish.
+    /// **Construction and validation must read ONE answer, and this is the guard that says so.**
+    ///
+    /// The slot rule is asked twice: once by `pre_pow_validation` to admit a header, and once by
+    /// `heartbeat_adapt_block_template` to stamp one. ADR-0066 Decision 2 already required the two
+    /// to agree, and ADR-0138 §3c broke it for a while by changing the interval on the validating
+    /// side only — a node would then have stamped the nominal hour onto a template its own
+    /// validator granted the recovery cadence, putting the timestamp an hour into the future where
+    /// the drift rule refuses it outright. The lane simply stops, on a chain that has nothing else
+    /// to advance the clock.
+    ///
+    /// So: outside this module, nothing may call the v1 entry points. A new call site is how the
+    /// two sides drift apart, and a grep is the only thing that sees it before a network does.
+    #[test]
+    fn only_this_module_may_ask_the_pre_fence_slot_rule() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+        let mut offenders = Vec::new();
+        let mut walked = 0usize;
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if path.is_dir() {
+                    // Build outputs and vendored sources are not this workspace's call sites.
+                    if !matches!(name.as_str(), "target" | ".git" | "node_modules" | "vendor") {
+                        stack.push(path);
+                    }
+                    continue;
+                }
+                if !name.ends_with(".rs") || path.ends_with("palw_heartbeat_v1.rs") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                walked += 1;
+                for (n, line) in text.lines().enumerate() {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("//") || trimmed.starts_with("///") {
+                        continue;
+                    }
+                    for call in ["check_heartbeat_slot(", "heartbeat_interval_ms(", "heartbeat_yield_hint_v1("] {
+                        if line.contains(call) {
+                            offenders.push(format!("{}:{}: {}", path.display(), n + 1, trimmed.trim_end()));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(walked > 200, "the walk found only {walked} source files — it is not looking at the workspace");
+        assert!(
+            offenders.is_empty(),
+            "the pre-fence slot rule is asked outside its module, so construction and validation can disagree \
+             (ADR-0138 §3c): call the `_v2` form with the fence answers instead.\n  {}",
+            offenders.join("\n  ")
+        );
+    }
+
     /// **ADR-0138 §3c.** Below the fence the v2 rule is the v1 rule, byte for byte, so no history
     /// moves. Past it the question changes from "is the parent bonded" to "does the parent advance
     /// the clock", which is the only thing the hour of back-off was ever for.

@@ -1152,7 +1152,10 @@ async fn run_the_slow_producer_trap(transparent: bool, draws: usize) -> Heartbea
         draws: out,
         work_depth,
         sink_is_heartbeat: sink_header.pow_algo_id == hb::PALW_HEARTBEAT_ALGO_ID,
-        next_heartbeat_interval: hb::heartbeat_interval_ms(sink_header.pow_algo_id),
+        // The v2 form with the pre-fence answers, which is byte-identical to v1 — the fixture is
+        // below `palw_anchor_clock`. Spelled this way because the v1 entry points have exactly one
+        // module allowed to ask them (`only_this_module_may_ask_the_pre_fence_slot_rule`).
+        next_heartbeat_interval: hb::heartbeat_interval_ms_v2(sink_header.pow_algo_id, false, true),
         a_draw_was_selected,
     }
 }
