@@ -584,6 +584,45 @@ its licensed quanta cannot be spent.
 
 ---
 
+## 5c. The release gate: no fence is armed without a drill that crosses it
+
+**Standing rule, added 2026-09-18 after two liveness bugs at the same height, both with a fully
+green test suite.**
+
+A fence that retires whatever was pacing the chain can leave nothing pacing it, and no unit test
+sees that. The rule is right per block. The chain keeps producing. Only the score stops. Both of
+these got through every suite in the tree and were caught by a running network:
+
+| what | how it showed |
+|---|---|
+| ADR-0138's first draft exempted the heartbeat from the DAA score | DAA frozen at 20 with 183 blocks accepted |
+| ADR-0105's yield made the miner stand aside for blocks that no longer paced the clock | DAA frozen at 20, miner running, nothing minted |
+
+So, before any build that arms a fence is rolled out:
+
+1. **The drill must cross that fence**, on the devnet, with the fence armed at a low height. Crossing
+   it is the test; reaching it is not.
+2. **The drill's lanes must be the target network's lanes.** The first bug above was masked once by
+   a drill carrying a Layer-0 hash miner that testnet-11 does not have — a devnet with an anchor lane
+   never reaches the state a PALW-only chain reaches at the same fence. Read the target's profile
+   from the chain with `scripts/misaka-t11-lane-walk.py`, which walks the selected parent back from
+   the sink and counts `powAlgoId`, and pass it to the drill as `LANE_PROFILE`; a mismatch is a
+   refusal, not a note in a log.
+3. **The clock gate must pass.** The drill's step 1b requires the DAA to advance within a bounded
+   wait from the first tip past the fence, and prints per-node lane counts when it does not.
+4. **Measurements come from the run's own logs**, never from the settings that produced it.
+
+```bash
+# the target network's lane profile, from the chain
+python3 scripts/misaka-t11-lane-walk.py 300 26314
+
+# the drill, held to it
+LANE_PROFILE=palw+heartbeat ANCHOR_CLOCK_AT=20 bash scripts/misaka-palw-model-registry-devnet-drill.sh
+```
+
+A green suite is evidence that each rule is right on its own. It is not evidence that the chain
+still has a clock.
+
 ## 6. What is NOT in place, and should be said out loud
 
 > **The complete, evidenced list is

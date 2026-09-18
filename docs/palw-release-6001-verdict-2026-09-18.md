@@ -219,7 +219,18 @@ stands. It is not the ADR-0140 line of work.
 
 ## 10. The drill on this build
 
-## 11. The lesson worth keeping
+## 11. The gate this run adds to every future release
+
+Two liveness bugs landed at the same fence in one day, and the full suite was green through both.
+That is not a testing gap that more unit tests close: each rule was right per block, and what broke
+was what happened to the chain when a fence retired the thing that had been pacing it.
+
+The gate is now written into the launch runbook §5c and enforced by the drill itself. No build that
+arms a fence is rolled out until a drill has **crossed** that fence, with the **target network's lane
+composition**, and the drill's own clock gate has passed. The lane composition is read from the live
+chain rather than assumed, and a mismatch stops the run.
+
+## 12. The lesson worth keeping
 
 Every finding in this report and the two before it came from checking a claim against the thing it
 describes — the code, then the running chain. This one was different in kind: the false claim was
