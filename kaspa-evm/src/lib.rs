@@ -206,6 +206,128 @@ mod tests {
         assert_eq!(r1, state::state_root(&db), "state root is deterministic");
     }
 
+    /// **O13 benchmark (2026-09-18): what one second of execution buys on this host.** Run with
+    /// `cargo test -p kaspa-evm --release -- --ignored --nocapture o13_bench`. Two workloads: plain
+    /// transfers (the cheapest gas — the most transactions a second can carry) and a storage-writing
+    /// contract (the dearest gas — every SSTORE grows the state). The per-round budget is set from
+    /// the SLOWER gas/s with a safety factor, and the bytes/gas of each tells the propagation cost.
+    #[test]
+    #[ignore]
+    fn o13_bench_execution_gas_per_second() {
+        use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+        use revm::primitives::{B256, Bytes};
+        let chain_id = kaspa_consensus_core::evm::EVM_CHAIN_ID;
+        let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
+        let from = signer.address();
+        let funded = [(from, AccountInfo { balance: U256::from(u64::MAX), nonce: 0, code_hash: KECCAK_EMPTY, code: None })];
+        let sign = |tx: TxEip1559| -> Vec<u8> {
+            let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+            TxEnvelope::from(tx.into_signed(sig)).encoded_2718()
+        };
+        // Workload A: 1,000 transfers.
+        let transfers: Vec<Vec<u8>> = (0..1_000u64)
+            .map(|n| {
+                sign(TxEip1559 {
+                    chain_id,
+                    nonce: n,
+                    gas_limit: 21_000,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
+                    to: TxKind::Call(Address::with_last_byte((n % 200) as u8 + 1)),
+                    value: U256::from(1u64),
+                    access_list: Default::default(),
+                    input: Bytes::new(),
+                })
+            })
+            .collect();
+        let bytes_a: usize = transfers.iter().map(|t| t.len()).sum();
+        let t0 = std::time::Instant::now();
+        let (_, gas_a, _) = execute_block_simple(&funded, &transfers, chain_id, 30_000_000, 0).unwrap();
+        let dt_a = t0.elapsed().as_secs_f64();
+        // Workload B: a contract whose code loops SSTORE over fresh slots — init code that, on every
+        // call, writes `n` slots: PUSH loop. Deploy once, then 200 calls of ~40 SSTOREs each.
+        // Runtime: for i in 0..40 { sstore(i + calldata_word, 1) }  — assembled by hand below.
+        let runtime: Vec<u8> = {
+            let mut c = Vec::new();
+            // counter := 0 (kept on stack)
+            c.extend([0x60, 0x00]); // PUSH1 0
+            // loop: JUMPDEST
+            let loop_start = c.len() as u8;
+            c.push(0x5b);
+            // dup counter; calldataload(0) add -> slot ; push 1 ; swap ; sstore
+            c.extend([0x80, 0x60, 0x00, 0x35, 0x01, 0x60, 0x01, 0x90, 0x55]);
+            // counter += 1 ; dup ; push 40 ; gt (40 > counter) ; push loop ; jumpi
+            c.extend([0x60, 0x01, 0x01, 0x80, 0x60, 0x28, 0x11, 0x60, loop_start, 0x57]);
+            c.push(0x00); // STOP
+            c
+        };
+        let init: Vec<u8> = {
+            // CODECOPY the runtime to memory and RETURN it.
+            let len = runtime.len() as u8;
+            let mut i = vec![0x60, len, 0x60, 0x0c, 0x60, 0x00, 0x39, 0x60, len, 0x60, 0x00, 0xf3];
+            i.extend(&runtime);
+            i
+        };
+        let deploy = sign(TxEip1559 {
+            chain_id,
+            nonce: 1_000,
+            gas_limit: 300_000,
+            max_fee_per_gas: 0,
+            max_priority_fee_per_gas: 0,
+            to: TxKind::Create,
+            value: U256::ZERO,
+            access_list: Default::default(),
+            input: Bytes::from(init),
+        });
+        let contract = from.create(1_000);
+        let calls: Vec<Vec<u8>> = (0..200u64)
+            .map(|n| {
+                let mut data = [0u8; 32];
+                data[24..].copy_from_slice(&(n * 64).to_be_bytes());
+                sign(TxEip1559 {
+                    chain_id,
+                    nonce: 1_001 + n,
+                    gas_limit: 1_500_000,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
+                    to: TxKind::Call(contract),
+                    value: U256::ZERO,
+                    access_list: Default::default(),
+                    input: Bytes::from(data.to_vec()),
+                })
+            })
+            .collect();
+        let mut txs_b = vec![deploy];
+        txs_b.extend(calls);
+        let bytes_b: usize = txs_b.iter().map(|t| t.len()).sum();
+        let funded_b = [(from, AccountInfo { balance: U256::from(u64::MAX), nonce: 1_000, code_hash: KECCAK_EMPTY, code: None })];
+        let t1 = std::time::Instant::now();
+        let (_, gas_b, _) = execute_block_simple(&funded_b, &txs_b, chain_id, 300_000_000, 0).unwrap();
+        let dt_b = t1.elapsed().as_secs_f64();
+        println!(
+            "O13 BENCH transfers: {} txs, {} gas, {:.3} s -> {:.0} gas/s, {} bytes -> {:.4} bytes/gas",
+            transfers.len(),
+            gas_a,
+            dt_a,
+            gas_a as f64 / dt_a,
+            bytes_a,
+            bytes_a as f64 / gas_a as f64
+        );
+        println!(
+            "O13 BENCH sstore-heavy: {} txs, {} gas, {:.3} s -> {:.0} gas/s, {} bytes -> {:.4} bytes/gas",
+            txs_b.len(),
+            gas_b,
+            dt_b,
+            gas_b as f64 / dt_b,
+            bytes_b,
+            bytes_b as f64 / gas_b as f64
+        );
+        assert!(gas_b > 1_000_000, "the storage workload executed ({gas_b} gas): the hand-assembled loop ran");
+    }
+
     #[test]
     fn execute_signed_1559_transfer() {
         use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};

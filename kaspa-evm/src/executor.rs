@@ -115,6 +115,9 @@ pub struct EvmBlockInput<'a> {
     /// **ADR-0089: the fold's window and the settlements the block must carry.** `Default`
     /// (no view, every fence dormant, no expected settlements) is byte-identical to the executor
     /// before the field existed: nothing is registered and no op is validated.
+    /// ADR-0139: the accepted-user-gas cap of THIS chain block — the base plus one round budget per
+    /// distinct permitted round it merges (`evm_user_gas_cap_v1`); the base where no lane is in force.
+    pub user_gas_cap: u64,
     pub market: EvmMarketInput<'a>,
 }
 
@@ -182,6 +185,10 @@ pub fn execute_block_evm(
         input.daa_score,
         coinbase,
     );
+    // ADR-0139: the block's accepted-user-gas cap is committed as the EVM header's `gas_limit` —
+    // the commitment root covers it, so a re-execution from the stores runs under the cap the
+    // block was validated with, and a block that claims another cap does not reconstruct.
+    let derived = env::EvmDerivedEnv { gas_limit: input.user_gas_cap.max(MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK), ..derived };
 
     let mut gas_used: u64 = 0;
     let mut applied_claims: Vec<DepositClaim> = Vec::new();
@@ -276,11 +283,12 @@ pub fn execute_block_evm(
     // block's base-fee update. Cap the USER cumulative at (block cap − system gas)
     // so total committed gas_used ≤ gas_limit always holds.
     let system_gas = gas_used;
-    let user_gas_budget = MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK.checked_sub(system_gas).ok_or_else(|| {
-        EvmExecError::InvariantViolation(format!(
-            "system gas {system_gas} exceeds block gas cap {MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK}"
-        ))
-    })?;
+    // ADR-0139: the cap is the block's own (base + round budgets), never below the base a chain
+    // block always had, so the system ops that fit before still fit.
+    let user_gas_cap = input.user_gas_cap.max(MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK);
+    let user_gas_budget = user_gas_cap
+        .checked_sub(system_gas)
+        .ok_or_else(|| EvmExecError::InvariantViolation(format!("system gas {system_gas} exceeds block gas cap {user_gas_cap}")))?;
 
     // 2. Class-5 prefix-take (design §7, D4): walk `AcceptedEvmTxs(B)` in
     //    canonical order accumulating DECLARED gas limits; the first tx whose
@@ -964,6 +972,7 @@ mod tests {
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
             typed_receipt_root_activation_daa_score: u64::MAX,
+            user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
         }
     }
 
@@ -1145,6 +1154,7 @@ mod tests {
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
             typed_receipt_root_activation_daa_score: u64::MAX,
+            user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
         };
         // FULL path: seed the parent state, execute, extract.
         let (full_child, full_child_db) = execute_block_evm(seed_cachedb(&parent_snapshot).unwrap(), &child_input).unwrap();

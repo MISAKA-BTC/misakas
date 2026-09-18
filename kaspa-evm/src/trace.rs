@@ -248,6 +248,9 @@ pub fn trace_accepted_tx(
         // above compares candidate OUTCOMES only). So replay with the v1 root (inert)
         // — the call tree + pre/post state are identical either way.
         typed_receipt_root_activation_daa_score: u64::MAX,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+        // ADR-0139: a trace replays a prefix of one block's transactions for inspection; the cap
+        // the block ran under is its committed header's `gas_limit`, and a prefix never exceeds it.
     };
     let seed = seed_cachedb(parent_snapshot).map_err(TraceError::Exec)?;
     let (prefix_result, mut pre_state) = execute_block_evm(seed, &input_prefix).map_err(TraceError::Exec)?;
@@ -831,6 +834,9 @@ mod tests {
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
             typed_receipt_root_activation_daa_score: u64::MAX,
+            // ADR-0139: a trace replays a prefix of one block's transactions for inspection; the cap
+            // the block ran under is its committed header's `gas_limit`, and a prefix never exceeds it.
+            user_gas_cap: kaspa_consensus_core::evm::EVM_CHAIN_BLOCK_GAS_CEILING_V1,
         };
         let (result, _state) = execute_block_evm(seed_cachedb(parent_snapshot).unwrap(), &input).unwrap();
         assert_eq!(result.candidate_outcomes[0], EvmCandidateOutcome::Accepted { receipt_index: 0 }, "the tx must be accepted");
@@ -1015,6 +1021,9 @@ mod tests {
             f002_withdraw_cap_activation_daa_score: u64::MAX,
             f003_mldsa_verify_activation_daa_score: u64::MAX,
             typed_receipt_root_activation_daa_score: u64::MAX,
+            // ADR-0139: a trace replays a prefix of one block's transactions for inspection; the cap
+            // the block ran under is its committed header's `gas_limit`, and a prefix never exceeds it.
+            user_gas_cap: kaspa_consensus_core::evm::EVM_CHAIN_BLOCK_GAS_CEILING_V1,
         };
         let (result, _) = execute_block_evm(seed_cachedb(&snap).unwrap(), &input).unwrap();
         assert_eq!(result.candidate_outcomes[0], EvmCandidateOutcome::Accepted { receipt_index: 0 });

@@ -1895,6 +1895,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        user_gas_cap: u64,
         market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         // No-replay: this block's EVM result was computed when it first joined the
@@ -1916,6 +1917,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            user_gas_cap,
             market,
         )?;
 
@@ -1951,6 +1953,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        user_gas_cap: u64,
         market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<Option<super::EvmStaged>, EvmValidateError> {
         if header_store.has(block).map_err(EvmValidateError::Store)? {
@@ -1969,6 +1972,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            user_gas_cap,
             market,
         )?;
         if result.header.commitment_root() != l1_header.evm_commitment_root {
@@ -2000,6 +2004,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        user_gas_cap: u64,
         market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<
         (
@@ -2027,6 +2032,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            user_gas_cap,
             market,
         )
     }
@@ -2052,6 +2058,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        user_gas_cap: u64,
         market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<
         (
@@ -2121,6 +2128,7 @@ mod driver {
         };
 
         let input = super::EvmBlockInput {
+            user_gas_cap,
             market,
             parent: parent_header.as_ref(),
             header_timestamp_ms: l1_header.timestamp,
@@ -2206,6 +2214,7 @@ mod driver {
         f002_withdraw_cap_activation_daa_score: u64,
         f003_mldsa_verify_activation_daa_score: u64,
         typed_receipt_root_activation_daa_score: u64,
+        user_gas_cap: u64,
         market: kaspa_evm::EvmMarketInput<'_>,
     ) -> Result<(), EvmValidateError> {
         let Some(staged) = evm_validate(
@@ -2221,6 +2230,7 @@ mod driver {
             f002_withdraw_cap_activation_daa_score,
             f003_mldsa_verify_activation_daa_score,
             typed_receipt_root_activation_daa_score,
+            user_gas_cap,
             market,
         )?
         else {
@@ -2670,6 +2680,16 @@ impl EvmPipeline {
                             Err(StoreError::KeyNotFound(_)) => Default::default(),
                             Err(e) => return Err(driver::EvmValidateError::Store(e)),
                         };
+                        // ADR-0139: a block re-executed from its stores runs under the cap it was
+                        // validated with — the derived EVM header commits it as `gas_limit`.
+                        let user_gas_cap = {
+                            use crate::model::stores::evm::EvmHeaderStoreReader;
+                            evm_header_store
+                                .get(item.block)
+                                .ok()
+                                .map(|h| h.gas_limit)
+                                .unwrap_or(kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK)
+                        };
                         let staged = driver::evm_validate_chained(
                             &evm_header_store,
                             &evm_state_store,
@@ -2684,6 +2704,7 @@ impl EvmPipeline {
                             f002_withdraw_cap_activation_daa_score,
                             f003_mldsa_verify_activation_daa_score,
                             typed_receipt_root_activation_daa_score,
+                            user_gas_cap,
                             // ADR-0089: the pipeline pre-executes without the market's window; its
                             // result is discarded by the walk when the fence is active.
                             Default::default(),
@@ -2971,6 +2992,7 @@ mod tests {
             vec![AcceptedTxCandidate { raw: vec![0xde, 0xad, 0xbe, 0xef], payload_coinbase: merged_payload.evm_coinbase }];
         let input = EvmBlockInput {
             market: Default::default(),
+            user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
             parent: None,
             header_timestamp_ms: l1.timestamp,
             selected_parent_hash: selected_parent.as_bytes(),
@@ -3012,6 +3034,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
             Default::default(),
         )
         .unwrap();
@@ -3096,6 +3119,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
             Default::default(),
         )
         .unwrap();
@@ -3126,6 +3150,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
             Default::default(),
         );
         assert!(matches!(err, Err(EvmValidateError::CommitmentMismatch { .. })));
@@ -3156,6 +3181,7 @@ mod tests {
             u64::MAX,
             u64::MAX,
             u64::MAX,
+            kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
             Default::default(),
         );
         assert!(

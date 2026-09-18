@@ -169,6 +169,35 @@ pub const MAX_EVM_PAYLOAD_BYTES_PER_DAG_BLOCK: usize = 128 * 1024;
 /// (design §5.1: kept equal to the EVM block gas limit, audit AH-2).
 pub const MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK: u64 = EVM_GAS_LIMIT;
 
+/// **ADR-0139 (O13 decided): the execution lane's gas throughput scales with the lane, one budget a
+/// round.** Every permitted round block a chain block merges buys this much more accepted user gas
+/// for that chain block, on top of `MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK` (the base a chain block
+/// had before the lane). Sized from the 2026-09-18 benchmark (`o13_bench_execution_gas_per_second`):
+/// execution is not the bound (174 M gas/s of signed transfers, 6 G gas/s of storage writes in
+/// memory on the build host), propagation is not (0.005 bytes of transaction per gas — 15 KB/s at
+/// this rate); **state growth is** — a fresh account or slot costs ~20 k gas and writes ~100 bytes,
+/// so 3 M gas a second is ≤ 15 KB/s of new state, ~1.3 GB a day at full load, the growth a
+/// testnet host absorbs. Derived from the round INDEX the round block carries (consensus data),
+/// never from a clock.
+pub const EVM_ROUND_GAS_BUDGET_V1: u64 = 3_000_000;
+/// **The ceiling on one chain block's accepted user gas, whatever it merges.** 120 rounds of one
+/// anchor (120 s) at the round budget, plus the base: 390 M gas is ~2 MB of transactions to
+/// propagate at the anchor cadence and ~10 s of execution on a slow host at 35 M gas/s.
+pub const EVM_CHAIN_BLOCK_GAS_CEILING_V1: u64 = MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK + 120 * EVM_ROUND_GAS_BUDGET_V1;
+
+/// **The accepted-user-gas cap of one chain block** (ADR-0139). `None` where the execution lane is
+/// not in force at the block's DAA — the cap a chain block always had. `Some(rounds)` — the number
+/// of DISTINCT permitted rounds among the round blocks it merges — buys one round budget each,
+/// under the ceiling. Deterministic in the round indices the merged envelopes carry.
+pub fn evm_user_gas_cap_v1(permitted_rounds: Option<u64>) -> u64 {
+    match permitted_rounds {
+        None => MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
+        Some(rounds) => MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK
+            .saturating_add(rounds.saturating_mul(EVM_ROUND_GAS_BUDGET_V1))
+            .min(EVM_CHAIN_BLOCK_GAS_CEILING_V1),
+    }
+}
+
 // --- F002 withdraw precompile (design §9.3). ---
 
 /// Fixed gas charged by a successful (or user-fault-reverted) `F002` withdraw
@@ -1465,6 +1494,22 @@ pub struct CanonicalEvmHeads {
 impl MemSizeEstimator for CanonicalEvmHeads {
     fn estimate_mem_bytes(&self) -> usize {
         size_of::<Self>()
+    }
+}
+
+#[cfg(test)]
+mod adr0139_gas_cap_tests {
+    use super::*;
+
+    #[test]
+    fn the_cap_is_the_base_below_the_lane_and_one_budget_a_permitted_round_under_the_ceiling() {
+        assert_eq!(evm_user_gas_cap_v1(None), MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, "no lane: the cap a chain block always had");
+        assert_eq!(evm_user_gas_cap_v1(Some(0)), MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, "a lane that merged no round: the base");
+        assert_eq!(evm_user_gas_cap_v1(Some(1)), MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK + EVM_ROUND_GAS_BUDGET_V1);
+        assert_eq!(evm_user_gas_cap_v1(Some(120)), EVM_CHAIN_BLOCK_GAS_CEILING_V1, "one anchor of rounds reaches the ceiling exactly");
+        assert_eq!(evm_user_gas_cap_v1(Some(121)), EVM_CHAIN_BLOCK_GAS_CEILING_V1, "…and nothing buys past it");
+        assert_eq!(evm_user_gas_cap_v1(Some(u64::MAX)), EVM_CHAIN_BLOCK_GAS_CEILING_V1, "saturating, never wrapping");
+        assert!(EVM_ROUND_GAS_BUDGET_V1 * 10 <= MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK, "a round is a tenth of a base block or less");
     }
 }
 

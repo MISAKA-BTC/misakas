@@ -8480,6 +8480,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
         f002_withdraw_cap_activation_daa_score: u64::MAX,
         f003_mldsa_verify_activation_daa_score: u64::MAX,
         typed_receipt_root_activation_daa_score: u64::MAX,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let (exp1, snap1) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input1).unwrap();
     b1.header.evm_commitment_root = exp1.header.commitment_root();
@@ -8516,6 +8517,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
         f002_withdraw_cap_activation_daa_score: u64::MAX,
         f003_mldsa_verify_activation_daa_score: u64::MAX,
         typed_receipt_root_activation_daa_score: u64::MAX,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let (exp2, _snap2) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
     b2.header.evm_commitment_root = exp2.header.commitment_root();
@@ -8584,6 +8586,7 @@ async fn evm_active_chain_executes_persists_and_moves_heads() {
         f002_withdraw_cap_activation_daa_score: u64::MAX,
         f003_mldsa_verify_activation_daa_score: u64::MAX,
         typed_receipt_root_activation_daa_score: u64::MAX,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let snap2 = {
         // Recompute b2's child snapshot the same way the node stored it.
@@ -8755,6 +8758,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
         f002_withdraw_cap_activation_daa_score: inert,
         f003_mldsa_verify_activation_daa_score: inert,
         typed_receipt_root_activation_daa_score: inert,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let (exp1, snap1) = kaspa_evm::snapshot::execute_block_from_snapshot(&EvmStateSnapshot::default(), &input1).unwrap();
     b1.header.evm_commitment_root = exp1.header.commitment_root();
@@ -8779,6 +8783,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
         f002_withdraw_cap_activation_daa_score: inert,
         f003_mldsa_verify_activation_daa_score: inert,
         typed_receipt_root_activation_daa_score: inert,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let (exp2, snap2) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap1, &input2).unwrap();
     b2.header.evm_commitment_root = exp2.header.commitment_root();
@@ -8805,6 +8810,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
         f002_withdraw_cap_activation_daa_score: inert,
         f003_mldsa_verify_activation_daa_score: inert,
         typed_receipt_root_activation_daa_score: inert,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let (expx, _snapx) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap2, &inputx).unwrap();
     assert_eq!(expx.header.evm_number, 3);
@@ -8833,6 +8839,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
         f002_withdraw_cap_activation_daa_score: inert,
         f003_mldsa_verify_activation_daa_score: inert,
         typed_receipt_root_activation_daa_score: inert,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let (expy3, snapy3) = kaspa_evm::snapshot::execute_block_from_snapshot(&snap2, &inputy3).unwrap();
     y3.header.evm_commitment_root = expy3.header.commitment_root();
@@ -8859,6 +8866,7 @@ async fn evm_active_canonical_number_map_follows_reorg() {
         f002_withdraw_cap_activation_daa_score: inert,
         f003_mldsa_verify_activation_daa_score: inert,
         typed_receipt_root_activation_daa_score: inert,
+        user_gas_cap: kaspa_consensus_core::evm::MAX_EVM_ACCEPTED_GAS_PER_CHAIN_BLOCK,
     };
     let (expy4, _snapy4) = kaspa_evm::snapshot::execute_block_from_snapshot(&snapy3, &inputy4).unwrap();
     assert_eq!(expy4.header.evm_number, 4);

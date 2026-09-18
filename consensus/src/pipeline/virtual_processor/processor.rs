@@ -2142,6 +2142,16 @@ impl VirtualStateProcessor {
                 // parent first, then ascending blue work — §3.1 canonical order).
                 let sorted_mergeset: Vec<BlockHash> =
                     ctx.ghostdag_data.consensus_ordered_mergeset(self.ghostdag_store.as_ref()).collect();
+                // ADR-0139: this chain block's accepted-user-gas cap — one round budget per DISTINCT
+                // permitted round among the round blocks it merges, from the round indices their
+                // envelopes carry; the base where the execution lane is not in force.
+                let user_gas_cap =
+                    kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
+                        ctx.palw_round_verdicts
+                            .as_ref()
+                            .map(|v| v.uses.iter().map(|u| u.round).collect::<std::collections::BTreeSet<_>>().len() as u64)
+                            .unwrap_or(0)
+                    }));
                 let map_err = |e| match e {
                     EvmValidateError::CommitmentMismatch { .. } => {
                         "evm_commitment_root mismatch (mergeset acceptance re-execution)".to_string()
@@ -2168,6 +2178,7 @@ impl VirtualStateProcessor {
                             self.evm_f002_withdraw_cap_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
+                            user_gas_cap,
                             market.clone(),
                         )
                         .map_err(map_err)?
@@ -2215,6 +2226,7 @@ impl VirtualStateProcessor {
                             self.evm_f002_withdraw_cap_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
+                            user_gas_cap,
                             market.clone(),
                         )
                         .map_err(map_err)?
@@ -2619,6 +2631,16 @@ impl VirtualStateProcessor {
             .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
             .filter(|(block, _)| *block == template_selected_parent)
             .map(|(_, state)| state);
+        // ADR-0139: the template's accepted-user-gas cap is what validation will compute for it —
+        // one round budget per DISTINCT permitted round among the round blocks the template merges.
+        let user_gas_cap = kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
+            template_palw_state
+                .as_ref()
+                .and_then(|state| self.palw_round_verdicts_v1(state, &virtual_state.ghostdag_data, header.daa_score))
+                .map(|v| v.uses.iter().map(|u| u.round).collect::<std::collections::BTreeSet<_>>().len() as u64)
+                .unwrap_or(0)
+        }));
+
         let expected_settlements: Vec<kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1> =
             template_palw_state.as_ref().map(|s| s.evm_settlements()).unwrap_or_default();
         let market_view = match (&template_palw_state, self.palw_state_params_v2.as_ref()) {
@@ -2728,6 +2750,7 @@ impl VirtualStateProcessor {
                     self.evm_f002_withdraw_cap_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
+                    user_gas_cap,
                     market.clone(),
                 )
                 .map_err(mapper)?
@@ -2770,6 +2793,7 @@ impl VirtualStateProcessor {
                     self.evm_f002_withdraw_cap_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
+                    user_gas_cap,
                     market.clone(),
                 )
                 .map_err(mapper)?
