@@ -100,11 +100,17 @@ to nothing across a stretch like the most recent 4.58 hours, which carried no be
 on one unbonded producer on one host. The arithmetic and its consequences are in §2 of
 [the clock audit](../palw-daa-clock-audit-2026-09-18.md).
 
+**The params in this tree still arm it.** `Params::set_palw_single_lottery` arms the lottery and the
+clock together at 6,001, and `validate_palw_v2` refuses the pair at two heights, so the clock cannot
+simply be dropped from the preset — disarming it disarms ADR-0132 S with it. That coupling is why
+this is a decision and not an edit: **no build carrying this preset may be rolled out to testnet-11**
+until the operator picks one of the two paths below and the flag day is moved above the tip.
+
 The decision this ADR still needs is where a PALW-only network's clock comes from. Two candidates:
 give such a network a priced lane, which is a params change because ConsensusV2 templates always
 name the attempt id; or make the heartbeat the designed clock by setting `HEARTBEAT_NOMINAL_INTERVAL_MS`
 to the target block time behind its own fence, which is one constant but puts the chain's clock on an
-unbonded lane. Neither is decided here, and the fence stays unarmed until one is.
+unbonded lane. Neither is decided here.
 * **The DNS leak's units.** ADR-0128 Decision 3 walks the evidence window in BLUE score and adds
   `t_leak_daa` into that blue total, which was the same thing while every lane ticked both clocks.
   With the DAA clock slower than the blue clock, a blue-bounded walk reaches back fewer DAA than the

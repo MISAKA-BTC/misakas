@@ -107,10 +107,78 @@ which is 1.23 GB a day at one ceiling block a slot: ADR-0139 §3's estimate, mea
 multiplied. State growth remains the binding cost and is the line to re-measure before the budget
 moves.
 
-## 5. The drill
+## 5. The drill, and what it uncovered
 
-_(filled from the run's own logs; see §6)_
+The registry drill on this candidate did not reach its first step. It failed the way a good drill
+should: by being a network shaped like the one it rehearses for.
 
-## 6. Verdict
+Past `palw_anchor_clock` a devnet whose only producers are PALW lanes has no clock at all, so the
+first run froze at virtual DAA 20 with 183 blocks accepted. The fix for the drill was to give it a
+hash miner, so that something `bits` prices exists — and the miner refused to start:
 
-_(pending the drill)_
+> this network mines with PoW algo 6 (a ConsensusV2 inference lane) and this miner cannot search it
+> — a nonce there is won by running the class's pinned model … Stopping rather than searching a hash
+> target no header of this algo is graded by.
+
+That refusal is not a devnet quirk. The template declares `bundle.algorithm_id`, and
+`PalwRulesetV2::validate` requires that to be the committed attempt id on **every** ConsensusV2
+network. testnet-11 is one.
+
+## 6. The blocker: testnet-11 has no `bits`-priced producer
+
+Measured from the chain with `scripts/misaka-t11-lane-walk.py`, which walks the selected parent back
+from the sink over the node's JSON wRPC and counts `powAlgoId`:
+
+| window | algo 6 (PALW attempt) | algo 8 (heartbeat) | algo 3 (hash anchor) |
+|---|---|---|---|
+| last 60 selected-chain blocks (4.58 h) | 60 — **100 %** | 0 | **0** |
+| last 300 selected-chain blocks (41.5 h) | 261 — 87 % | 39 — 13 % | **0** |
+
+The DAA-clock audit's first version recorded the exact opposite — "300 / 300 are algo 3" — and this
+ADR bundle was built on top of that. The claim was never checked against the chain until now. It is
+corrected in §2 of that audit, with the script that produced the correction.
+
+**Severity: Critical.** Past the fence `palw_lane_advances_daa_v1` is true only for a `bits`-priced
+lane, and on testnet-11 that set is empty. The only remaining tick is the heartbeat stand-in, and
+`heartbeat_interval_ms` answers the NOMINAL one-hour interval whenever the selected parent is a
+PALW-v2 block, which on this chain it always is.
+
+| | today | after arming |
+|---|---|---|
+| DAA cadence | 275 s | 3,600 s at best; **none** across a stretch like the last 4.58 h |
+| fence 6,100 | — | ~100 h instead of 3.3 |
+| fence 6,900 | — | ~37 days |
+| challenge window, 120 DAA | 4 h nominal | ~5 days |
+| `T_leak`, 5,040 DAA | 7 days nominal | ~7 months |
+
+And the chain's whole clock would rest on one unbonded heartbeat producer on one host. The
+per-mergeset stand-in rule is still correct and still strictly safer than either alternative, but it
+does not rescue this: a one-hour beat gives a one-hour DAA.
+
+## 7. Verdict
+
+**NOT SAFE TO ARM AT 6001.**
+
+One new Critical, found by measuring the live chain rather than reading the design. Nothing else in
+the bundle is implicated: 2,604 consensus tests pass, the one red is the dependency-boundary test
+that is red on `main` too, and the 390 M ceiling measures comfortably inside a slot. The blocker is
+`palw_anchor_clock` alone — and because `Params::set_palw_single_lottery` arms the lottery and the
+clock together, the preset cannot be shipped with one and not the other.
+
+**No push, no merge, no fleet roll.** The 6,000 flag day passed on the deployed build while this was
+being resolved, which damages nothing — the chain continues under today's rules and the fence is
+documented as provisional, to be set with deployment margin over the tip — but it does mean every
+height in this bundle must be re-pinned before anything ships.
+
+The decision the operator owns: where a PALW-only network's clock comes from. Give such a network a
+priced lane, which is a params change because ConsensusV2 templates always name the attempt id; or
+make the heartbeat the designed clock by setting its nominal interval to the target block time behind
+its own fence, which is one constant but puts the clock on an unbonded lane.
+
+## 8. The lesson worth keeping
+
+Every finding in this report and the two before it came from checking a claim against the thing it
+describes — the code, then the running chain. This one was different in kind: the false claim was
+**mine**, written into an audit four hours earlier, and every later document inherited it without
+anyone re-reading the chain. A measurement recorded in prose stops being a measurement. The script
+is now in the repository so the next reader runs it instead of quoting it.

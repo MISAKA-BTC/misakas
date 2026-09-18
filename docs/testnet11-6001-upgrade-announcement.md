@@ -1,5 +1,14 @@
 # Testnet-11: the DAA 6,001 PALW upgrade, and Verification V2 at 6,100
 
+> **THIS RELEASE IS ON HOLD AND THE HEIGHTS BELOW ARE STALE (2026-09-18).** A pre-rollout
+> measurement of the live chain found that testnet-11 has **no `bits`-priced producer**: of the last
+> 60 selected-chain blocks, 60 are algo 6 and none is the hash anchor ADR-0138 assumes. Arming the
+> anchor clock at 6,001 would leave the DAA with no source but the heartbeat's nominal one-hour beat.
+> The 6,000 flag day passed on the deployed build while this was being resolved, so every height in
+> this page must be re-pinned above the tip before it is announced. See
+> [the clock audit §2](palw-daa-clock-audit-2026-09-18.md) and
+> [the release report](palw-release-6001-verdict-2026-09-18.md).
+
 **Fingerprint of the release: `3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1`.**
 Every node on testnet-11 must run this build **before DAA 6,000**. The build currently deployed prints
 `ae1d6162…` and is refused from 6,000 — it schedules the held regime and the audit's deep fixes at 7,000,
