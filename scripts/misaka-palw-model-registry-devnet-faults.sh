@@ -15,6 +15,9 @@ WORK_DIR="${WORK_DIR:-.drill-adr0135}"
 NODES="${NODES:-7}"
 LANE="${LANE:-0,2,2}"
 REGISTRY_AT="${REGISTRY_AT:-20}"
+# ADR-0132 Upgrade C and ADR-0137: the payout and the work target, armed at a DAA or left dormant.
+PAYOUT_AT="${PAYOUT_AT:-}"
+WORK_TARGET_AT="${WORK_TARGET_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-1800}"
@@ -59,6 +62,8 @@ start_node() {
         --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
         --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   [ "$FLOOR_ONLY" = 1 ] && args+=(--palw-devnet-floor-only)
+  [ -n "$PAYOUT_AT" ] && args+=(--palw-economic-payout-devnet="$PAYOUT_AT")
+  [ -n "$WORK_TARGET_AT" ] && args+=(--palw-work-target-devnet="$WORK_TARGET_AT")
   [ "$with_artifact" = 1 ] && args+=(--palw-class-artifact="$CLASS_ARTIFACT")
   args+=(--connect="127.0.0.1:$P2P_BASE")
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &

@@ -19,6 +19,9 @@ WORK_DIR="${WORK_DIR:-.drill-adr0135}"
 NODES="${NODES:-8}"
 LANE="${LANE:-0,2,2}"
 REGISTRY_AT="${REGISTRY_AT:-20}"
+# ADR-0132 Upgrade C and ADR-0137: the payout and the work target, armed at a DAA or left dormant.
+PAYOUT_AT="${PAYOUT_AT:-}"
+WORK_TARGET_AT="${WORK_TARGET_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 PRODUCER_NODE="${PRODUCER_NODE:-3}"
 STEP_WAIT="${STEP_WAIT:-14400}"
@@ -76,6 +79,8 @@ start_node() {
         --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
         --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   [ "$FLOOR_ONLY" = 1 ] && args+=(--palw-devnet-floor-only)
+  [ -n "$PAYOUT_AT" ] && args+=(--palw-economic-payout-devnet="$PAYOUT_AT")
+  [ -n "$WORK_TARGET_AT" ] && args+=(--palw-work-target-devnet="$WORK_TARGET_AT")
   [ -n "$extra" ] && args+=("$extra")
   [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
@@ -124,6 +129,7 @@ rm -rf "$WORK_DIR/node-$f"
 MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-$f" --listen="127.0.0.1:$((P2P_BASE + f))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + f))" \
   --utxoindex --nodnsseed --disable-upnp --nogrpc \
   --palw-execution-lane-devnet="$LANE" --palw-model-registry-devnet="$REGISTRY_AT" --palw-panel --palw-class-artifact="$CLASS_ARTIFACT" \
+  ${PAYOUT_AT:+--palw-economic-payout-devnet=$PAYOUT_AT} ${WORK_TARGET_AT:+--palw-work-target-devnet=$WORK_TARGET_AT} \
   --palw-producer-key="$WORK_DIR/keys/bond-$f.seed" --palw-producer-bond="$PREMINE_TXID:$f" --palw-producer-pay-address="$addr" \
   --connect="127.0.0.1:$P2P_BASE" >>"$WORK_DIR/node-$f.log" 2>&1 &
 pids+=("$!")
