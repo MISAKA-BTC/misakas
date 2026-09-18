@@ -312,6 +312,12 @@ pub enum DatabaseStorePrefixes {
     /// the iterator, so without this a layout change reads as an empty store, which is a wrong
     /// answer that looks like a valid one.
     PalwCarriagesSchema = 253,
+
+    /// ADR-0142: where the consensus clock stands, per block. Derived data like the DAA score
+    /// beside it — every node computes the same value for the same block from the same headers —
+    /// and stored because the answer at a block is a function of its whole chain back to the fence.
+    /// Empty on every chain that has not armed `palw_clock_cursor`.
+    PalwClockCursor = 254,
     /// ADR-0109 Decision 1: the node-local deposit-lock index — every `EVM_DEPOSIT_LOCK` output in
     /// the virtual UTXO set, keyed like the set itself (txid ‖ index), valued by what a claim needs
     /// (`EvmDepositLockRecord`). Staged from the same UTXO diff the set is written from.

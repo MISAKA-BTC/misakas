@@ -242,6 +242,13 @@ impl PalwStateSyncV2 {
                 // differently from the fold would write a different state root for the same block,
                 // which is the disagreement this face exists to prevent. Arming ADR-0071 means
                 // threading the fence onto this walker first.
+                //
+                // **The same is now true of ADR-0142's `palw_clock_cursor`**, and of the per-block
+                // clock facts the cursor is written from — this walker has neither, so its
+                // `clock_cursor_active` is `false` and its cursor never advances. Dormant on every
+                // preset, so no chain is affected today; arming it means threading the fence AND
+                // `(header.timestamp, header.pow_algo_id == heartbeat)` onto `PalwChainStepV2`
+                // first, because the fold reads both.
                 false,
                 self.uncertified_weightless.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                 self.da_court.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),

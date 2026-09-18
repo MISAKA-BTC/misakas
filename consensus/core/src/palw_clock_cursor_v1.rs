@@ -33,6 +33,14 @@ pub struct PalwClockCursorV1 {
     pub slots_consumed: u64,
 }
 
+impl kaspa_utils::mem_size::MemSizeEstimator for PalwClockCursorV1 {
+    /// Two `u64`s and nothing behind them, so the estimate is exact. Implemented rather than left
+    /// to the panicking default because the cursor is cached per block by the store layer.
+    fn estimate_mem_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+    }
+}
+
 /// Why a heartbeat was refused by the slot rule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ClockSlotTooEarly {
