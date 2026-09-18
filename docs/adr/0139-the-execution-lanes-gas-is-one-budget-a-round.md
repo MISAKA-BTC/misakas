@@ -58,6 +58,39 @@ top of the base, under a ceiling of `EVM_CHAIN_BLOCK_GAS_CEILING_V1 = 30 M + 120
   this worst case. Raising the budget is a number, not a rule; the state-growth line is the one to
   re-measure first.
 
+## 3a. What a block at the ceiling actually costs
+
+Sizing the budget from gas/s says the ceiling is affordable. It does not say what one block AT the
+ceiling costs, and the ceiling is the number to be wary of, so it was measured directly rather than
+extrapolated. `o13_bench_ceiling_block_apply_and_reorg` (`kaspa-evm`, `--ignored --release`), same
+host, 2026-09-18: one chain block filled to 389,991,000 gas with 18,571 transfers to fresh addresses
+— the cheapest gas per transaction, so the most transactions the ceiling admits, and the worst case
+for state growth. n = 30.
+
+| phase | min | p50 | p95 | max |
+|---|---|---|---|---|
+| execute the 390 M gas | 2,166 ms | 2,205 ms | 3,635 ms | 3,680 ms |
+| commit (`state_root` + snapshot) | 13.5 ms | 14.3 ms | 25.4 ms | 28.2 ms |
+| **apply (seed + execute + commit)** | **2,180 ms** | **2,219 ms** | **3,653 ms** | **3,701 ms** |
+| reseed a CacheDB from the 18,572-account post-state | 1.3 ms | 1.6 ms | 2.5 ms | 6.4 ms |
+
+The p95 and max columns are from a host that was compiling at the same time; the p50 is the quiet
+figure. Percentiles over a deterministic workload measure host noise, not tail behaviour of the
+rule, so the spread between p50 and max IS the load sensitivity, and it is 1.7×.
+
+* **Against the slot.** The anchor cadence is 120 s. A block at the absolute ceiling takes 1.8 % of
+  one slot quiet, 3.1 % under load. A host ten times slower still spends under a third of a slot.
+* **Against a reorg.** A reorg re-seeds from the pre-block snapshot and re-executes the replacement:
+  about `D × (apply + reseed)` for D blocks. The reseed is 1.6 ms at this state size and is O(N) in
+  the whole account set, not in the block — the `state_cost` bench is the one that tracks it as N
+  grows. At the 30-block merge depth, thirty CEILING blocks re-execute in ~67 s, inside one slot.
+* **Against propagation.** A ceiling block carries 1.97 MB of transactions, 0.0050 bytes/gas.
+* **Against the disk.** It leaves 18,572 new accounts and 1.71 MB of new state, 0.0044 bytes/gas.
+  One ceiling block every 120 s is **1.23 GB a day**, which is §3's estimate measured rather than
+  derived. This remains the binding cost, and it is the line to re-measure before the budget moves.
+* **Against memory.** Peak RSS of the whole test process, holding all 18,571 signed transactions and
+  the executor at once, was 944 MB. The state itself is small: the post-block snapshot is 1.71 MB.
+
 ## 4. Pinned
 
 `the_cap_is_the_base_below_the_lane_and_one_budget_a_permitted_round_under_the_ceiling`
@@ -65,3 +98,7 @@ top of the base, under a ceiling of `EVM_CHAIN_BLOCK_GAS_CEILING_V1 = 30 M + 120
 ceiling at 120 rounds and beyond, saturating. The executor's own suites (77) and the consensus EVM
 suites (43) run under the threaded cap. No fingerprint moves: the cap rides the lane's fence and
 the EVM header's commitment.
+
+`o13_bench_ceiling_block_apply_and_reorg` also asserts the two things §3a's numbers rest on: that the
+block really filled the ceiling, and that every transfer created a fresh account, so the state-growth
+figure is the worst case and not an average.

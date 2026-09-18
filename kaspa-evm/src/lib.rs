@@ -328,6 +328,172 @@ mod tests {
         assert!(gas_b > 1_000_000, "the storage workload executed ({gas_b} gas): the hand-assembled loop ran");
     }
 
+    /// **O13 burst gate (2026-09-18): one chain block at the 390 M ceiling.** ADR-0139 lets a chain
+    /// block that merges 120 permitted rounds accept `EVM_CHAIN_BLOCK_GAS_CEILING_V1` of user gas.
+    /// The unit tests pin the RULE (one budget a distinct round, duplicates and gaps bought once,
+    /// saturating at the ceiling); this measures what the rule COSTS when a block actually fills it.
+    ///
+    /// Three phases are timed separately because a reorg pays different ones than an apply:
+    ///   * `seed`    — building the executor's parent CacheDB from the snapshot (paid by both),
+    ///   * `execute` — the 390 M gas itself (paid by both; a reorg re-executes the replacement),
+    ///   * `commit`  — `state_root` + `snapshot_from_cachedb`, the two O(state) passes.
+    /// An apply is seed+execute+commit. A reorg is the same work again for the replacement block,
+    /// plus re-seeding from the pre-block snapshot, which `seed` measures.
+    ///
+    /// The workload is transfers to FRESH addresses: the cheapest gas per transaction, so the most
+    /// transactions a ceiling block can carry, and the worst case for state growth (a new account
+    /// per transaction). Run with
+    /// `cargo test -p kaspa-evm --release -- --ignored --nocapture o13_bench_ceiling_block`.
+    #[test]
+    #[ignore]
+    fn o13_bench_ceiling_block_apply_and_reorg() {
+        use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
+        use alloy_eips::eip2718::Encodable2718;
+        use alloy_signer::SignerSync;
+        use alloy_signer_local::PrivateKeySigner;
+        use revm::primitives::{B256, Bytes};
+
+        const RUNS: usize = 30;
+        let ceiling = kaspa_consensus_core::evm::EVM_CHAIN_BLOCK_GAS_CEILING_V1;
+        let chain_id = kaspa_consensus_core::evm::EVM_CHAIN_ID;
+        let signer = PrivateKeySigner::from_bytes(&B256::from([0x11u8; 32])).unwrap();
+        let from = signer.address();
+        let sign = |tx: TxEip1559| -> Vec<u8> {
+            let sig = signer.sign_hash_sync(&tx.signature_hash()).unwrap();
+            TxEnvelope::from(tx.into_signed(sig)).encoded_2718()
+        };
+
+        // Exactly as many 21,000-gas transfers as the ceiling admits, each to an address no block
+        // before it touched: the state-growth worst case ADR-0139 §3 names as the binding cost.
+        let count = (ceiling / 21_000) as usize;
+        let txs: Vec<Vec<u8>> = (0..count as u64)
+            .map(|n| {
+                // Offset clear of the zero address and the precompiles at 0x01..0x09: those are not
+                // fresh accounts, and an empty one is dropped from the snapshot, which would make
+                // the state-growth count report less than the block actually created.
+                let mut to = [0u8; 20];
+                to[12..20].copy_from_slice(&(n + 0x1_0000).to_be_bytes());
+                sign(TxEip1559 {
+                    chain_id,
+                    nonce: n,
+                    gas_limit: 21_000,
+                    max_fee_per_gas: 0,
+                    max_priority_fee_per_gas: 0,
+                    to: TxKind::Call(Address::from(to)),
+                    value: U256::from(1u64),
+                    access_list: Default::default(),
+                    input: Bytes::new(),
+                })
+            })
+            .collect();
+        let block_bytes: usize = txs.iter().map(|t| t.len()).sum();
+
+        // The parent state this block is applied on top of: the funded sender, nothing else. Built
+        // through the same extraction the chain uses, so the seed under test is a real snapshot.
+        let parent = {
+            let mut pre = CacheDB::new(EmptyDB::default());
+            pre.insert_account_info(
+                from,
+                AccountInfo { balance: U256::from(u64::MAX), nonce: 0, code_hash: KECCAK_EMPTY, code: None },
+            );
+            crate::snapshot::snapshot_from_cachedb(&pre)
+        };
+
+        let mut seed_ms = Vec::with_capacity(RUNS);
+        let mut exec_ms = Vec::with_capacity(RUNS);
+        let mut commit_ms = Vec::with_capacity(RUNS);
+        let mut apply_ms = Vec::with_capacity(RUNS);
+        let mut reseed_ms = Vec::with_capacity(RUNS);
+        let (mut gas_total, mut accounts_after, mut slots_after, mut snap_bytes) = (0u64, 0usize, 0usize, 0usize);
+
+        for _ in 0..RUNS {
+            let t_apply = std::time::Instant::now();
+
+            let t0 = std::time::Instant::now();
+            let mut db = crate::snapshot::seed_cachedb(&parent).expect("the parent seed is well formed");
+            seed_ms.push(t0.elapsed().as_secs_f64() * 1000.0);
+
+            let t1 = std::time::Instant::now();
+            let mut gas = 0u64;
+            for raw in &txs {
+                let txenv = crate::tx::decode_tx_to_env(raw).expect("the bench signs its own transactions");
+                let mut evm = Evm::builder()
+                    .with_db(&mut db)
+                    .with_spec_id(EVM_SPEC_ID)
+                    .modify_cfg_env(|c| c.chain_id = chain_id)
+                    .modify_block_env(|b| {
+                        b.number = U256::from(1u64);
+                        b.gas_limit = U256::from(ceiling);
+                        b.basefee = U256::from(0u64);
+                    })
+                    .modify_tx_env(move |t| *t = txenv)
+                    .build();
+                gas += evm.transact_commit().expect("a funded transfer executes").gas_used();
+            }
+            exec_ms.push(t1.elapsed().as_secs_f64() * 1000.0);
+
+            let t2 = std::time::Instant::now();
+            let _root = crate::state::state_root(&db);
+            let snap = crate::snapshot::snapshot_from_cachedb(&db);
+            commit_ms.push(t2.elapsed().as_secs_f64() * 1000.0);
+
+            apply_ms.push(t_apply.elapsed().as_secs_f64() * 1000.0);
+
+            // The seed above came from a one-account parent, which measures nothing. A REORG
+            // re-seeds from a snapshot of the whole state, so time that against the state this
+            // block just produced — the honest lower bound for a chain that has run a while.
+            let t3 = std::time::Instant::now();
+            let reseeded = crate::snapshot::seed_cachedb(&snap).expect("the post-state seeds back");
+            reseed_ms.push(t3.elapsed().as_secs_f64() * 1000.0);
+            debug_assert_eq!(reseeded.accounts.len(), snap.accounts.len());
+
+            gas_total = gas;
+            accounts_after = snap.accounts.len();
+            slots_after = snap.accounts.iter().map(|a| a.storage.len()).sum();
+            snap_bytes = snap.accounts.iter().map(|a| 20 + 8 + 32 + 32 + a.code.len() + a.storage.len() * 64).sum();
+        }
+
+        // Percentiles over a DETERMINISTIC workload measure this host's noise, not tail behaviour of
+        // the rule. p50 and p95 are reported because they were asked for; `max` is the number that
+        // actually bounds a slot, and at n=30 it is also the only honest answer above p95.
+        let pct = |v: &mut Vec<f64>, p: f64| -> f64 {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            let i = (((v.len() - 1) as f64) * p).round() as usize;
+            v[i]
+        };
+        let line = |name: &str, v: &mut Vec<f64>| {
+            let (lo, p50, p95, hi) = (pct(v, 0.0), pct(v, 0.50), pct(v, 0.95), pct(v, 1.0));
+            println!("O13 CEILING {name:8} min {lo:8.1} ms · p50 {p50:8.1} ms · p95 {p95:8.1} ms · max {hi:8.1} ms  (n={RUNS})");
+        };
+
+        println!(
+            "O13 CEILING block: {} transfers, {} gas of a {} ceiling, {} bytes -> {:.4} bytes/gas",
+            txs.len(),
+            gas_total,
+            ceiling,
+            block_bytes,
+            block_bytes as f64 / gas_total as f64
+        );
+        line("seed", &mut seed_ms);
+        line("execute", &mut exec_ms);
+        line("commit", &mut commit_ms);
+        line("APPLY", &mut apply_ms);
+        line("reseed", &mut reseed_ms);
+        println!(
+            "O13 CEILING state after one block: {accounts_after} accounts, {slots_after} storage slots, \
+             {snap_bytes} snapshot bytes -> {:.4} bytes/gas of NEW state",
+            snap_bytes as f64 / gas_total.max(1) as f64
+        );
+        println!(
+            "O13 CEILING reorg = reseed from the pre-block snapshot + the replacement block's own apply. \
+             The `reseed` line times that seed against {accounts_after} accounts, so a reorg of D ceiling \
+             blocks costs about D x (APPLY + reseed)."
+        );
+
+        assert!(gas_total > ceiling - 21_000, "the block filled the ceiling ({gas_total} of {ceiling})");
+        assert_eq!(accounts_after, txs.len() + 1, "one fresh account a transfer, plus the sender: the state-growth worst case");
+    }
+
     #[test]
     fn execute_signed_1559_transfer() {
         use alloy_consensus::{SignableTransaction, TxEip1559, TxEnvelope};
