@@ -283,6 +283,35 @@ Nothing consensus reads; the fingerprint does not move.
   calibrated from the shadow so the heaviest live class sits under the 80 % ceiling (a class paid its escrow
   whole reads as saturated and would not activate).
 
+### 7.5 S — the single lottery, built dormant (2026-09-18, commit 7c4f350e)
+
+`Params::palw_single_lottery: Option<ForkActivation>` — None on every preset, `--palw-single-lottery-devnet`
+arms it by height on devnet, `validate` refuses it below `palw_work_target`, and the fork-id arms it by
+name. Past the fence:
+
+* **Layer 0.** A PALW attempt header (`POW_ALGO_ID_PALW_COMMITTED_V2`, `POW_ALGO_ID_PALW_EXEC_V3`) passes
+  `check_pow_layer0_v2` unconditionally, as the receipt lane does, and `calc_block_level_check_pow_layer0_v2`
+  gives it block level 0 (`consensus/pow`; pre-ghostdag validation resolves the fence from `header.daa_score`,
+  the `check_pow_algo_id` pattern).
+* **Difficulty.** An attempt row is unpriced in the window (`DifficultyBlock.attempt`, `attempt_rows_unpriced`
+  through `calculate_difficulty_bits` / `retarget_bits` / `retarget_bits_from_rows`), so `bits` no longer chases
+  a cadence the class tickets set against a target no block pays; `algo_id_is_priced_by_bits_v3` says the same
+  to the readers.
+* **The one lottery.** The class lottery's floor becomes `max(W₀, W)` (`palw_work_lottery_floor_v1`): `W₀` is the
+  block's own escrow over the rate (stateless, ADR-0137 §22.1) and `W` is the chain's rooted work target —
+  `PalwChainStateV2::work_target` (`PalwWorkTargetV2`, carriage tail 0xAD, delta 56, `work_target/v1` in the
+  root), stepped at each epoch boundary from the closed epoch's model blocks against `epoch × fp_attempt_share‰`,
+  clamped by `class_daa_max_factor`, never below the floor; a quiet epoch returns it to the floor. Below S the
+  rooted W exists (once `palw_work_target` is active) but the ticket reads `W₀` alone — the reason the two
+  fences are separate heights.
+* **Untouched, deliberately.** Blue work, fork choice, the execution block finality boundary, BPS.
+
+Pinned by `adr0132_the_single_lottery_fence_is_dormant_everywhere_arms_by_height_and_needs_the_work_target`
+(params), `the_single_lottery_admits_the_attempt_digest_unconditionally_and_buys_no_level` (pow), the
+difficulty window test (`no row prices the window past the single lottery`) and
+`adr0137_past_the_fence_the_chain_holds_a_rooted_work_target_that_the_single_lottery_reads` (state).
+Activation: **None** in the 6,001 release; it follows a drill under `--palw-single-lottery-devnet`.
+
 ## 8. Number hygiene
 
 0132 was free when written; the next free number is 0133.

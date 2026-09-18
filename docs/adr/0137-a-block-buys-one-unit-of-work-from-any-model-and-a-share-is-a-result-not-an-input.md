@@ -640,6 +640,18 @@ seven seats at 4 M MAC-eq a span holds exactly its budget of claims (nine, where
 is 4.7 M), the tenth is `PanelRoomExhausted`, the reverted ninth gives its room back, and folded
 twice the fenced boundary has one root.
 
+
+### 22.2 The rooted work target, built for S (2026-09-18, commit 7c4f350e)
+
+§22.1 read `W₀` statelessly because under the double draw `bits` is the controller. ADR-0132 S removes the
+second draw, and then W has to move: past `palw_work_target` the chain now holds `PalwChainStateV2::work_target`
+(`PalwWorkTargetV2` — work, floor, epoch index, the closed epoch's model blocks against its expected blocks;
+carriage tail 0xAD, delta 56, `work_target/v1` in the root). It steps at every epoch boundary the way `bits`
+does — closed model blocks over `epoch × fp_attempt_share‰`, clamped by `class_daa_max_factor`, never below
+`W₀` — and the single lottery's floor is `max(W₀, W)` (`palw_work_lottery_floor_v1`). Below S nothing reads it
+but the reader (op 186 / `misaka palw economics`); the pin is the shadow's: the root moves only past the fence,
+the delta reverts, and a quiet epoch returns W to the floor.
+
 ## 21. Number hygiene
 
 Written 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement` as 0137, the next free

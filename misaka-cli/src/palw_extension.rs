@@ -507,7 +507,74 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
                 );
                 println!("  the signature verifies on chain only if this key is the bond's registered key (ADR-0049 Decision H)");
             }
-            crate::palw_fp::submit_objects(ctx, ks, &[out], yes).await
+            // ADR-0135 manifest V2: the artifact's real byte count, committed by the registrant when
+            // this machine can state it — `artifact.bytes` as declared, else the file `artifact.path`
+            // names, measured here. Without either the chain keeps the graph's estimate (V1). The
+            // object is refused below the registry's fence, so it is written but not carried there.
+            let measured = mf.parsed.manifest.artifact.as_ref().and_then(|artifact| {
+                artifact.bytes.filter(|bytes| *bytes > 0).or_else(|| {
+                    artifact
+                        .path
+                        .as_ref()
+                        .and_then(|path| std::fs::metadata(mf.dir.join(path)).ok())
+                        .map(|meta| meta.len())
+                        .filter(|bytes| *bytes > 0)
+                })
+            });
+            let mut carriers = vec![out];
+            match measured {
+                Some(artifact_bytes) => {
+                    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        params.net.to_string().as_bytes(),
+                        Some(params.genesis.hash),
+                    );
+                    let message = kaspa_consensus_core::palw_model_registry_v1::palw_class_manifest_message_v2(
+                        network_domain,
+                        &borsh::to_vec(&bond_key).map_err(|e| CliError::generic(format!("the bond key does not serialize: {e}")))?,
+                        class_id,
+                        artifact_bytes,
+                    );
+                    let signature = key.sign_with_context(
+                        message.as_byte_slice(),
+                        kaspa_consensus_core::palw_model_registry_v1::PALW_CLASS_MANIFEST_V2_MLDSA87_CONTEXT,
+                    );
+                    let manifest = kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassManifestV2 {
+                        class_id: *class_id,
+                        artifact_bytes,
+                        registrant_bond: bond_key,
+                        signature: signature.to_vec(),
+                    };
+                    let manifest_out = mf.path.with_extension("class-manifest.borsh");
+                    std::fs::write(
+                        &manifest_out,
+                        borsh::to_vec(&manifest).map_err(|e| CliError::generic(format!("the manifest does not serialize: {e}")))?,
+                    )
+                    .map_err(|e| CliError::generic(format!("{}: {e}", manifest_out.display())))?;
+                    let registry_open = params.palw_model_registry.is_some_and(|fence| fence.is_active(daa));
+                    if !json_mode(ctx, json) {
+                        println!(
+                            "built ClassManifestV2: class {class_id}, {artifact_bytes} bytes of artifact, signed by this key for the same bond — written to {} (ADR-0135 manifest V2: the registry's row reads the file, not the graph's estimate)",
+                            manifest_out.display()
+                        );
+                        if !registry_open {
+                            println!(
+                                "  the model registry is not armed at DAA {daa} on {net}, so the manifest is not submitted now: carry it once the fence is active (the class keeps the estimate until then)"
+                            );
+                        }
+                    }
+                    if registry_open {
+                        carriers.push(manifest_out);
+                    }
+                }
+                None => {
+                    if !json_mode(ctx, json) {
+                        println!(
+                            "no ClassManifestV2: the extension manifest names neither artifact.bytes nor a readable artifact.path, so the chain keeps the graph's estimate of the artifact (ADR-0135 V1)"
+                        );
+                    }
+                }
+            }
+            crate::palw_fp::submit_objects(ctx, ks, &carriers, yes).await
         }
     }
 }

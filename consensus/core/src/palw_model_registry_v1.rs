@@ -649,6 +649,25 @@ pub fn palw_seat_readiness_message_v1(network_domain: Hash64, bond: &[u8], class
     finish64(state)
 }
 
+/// ADR-0135 manifest V2: the domain of the registrant's byte-count commitment.
+pub const PALW_CLASS_MANIFEST_V2_DOMAIN: &[u8] = b"misaka-palw/class-manifest-v2/message/v1";
+/// ADR-0135 manifest V2: the ML-DSA-87 context the registrant signs the commitment under.
+pub const PALW_CLASS_MANIFEST_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/class-manifest-v2/mldsa87/v1";
+
+/// **ADR-0135 manifest V2: what the registrant signs when it commits the artifact's byte count.**
+/// The network domain, the registrant bond, the class and the count — nothing else, so a
+/// signature is good for exactly one (class, count) on one chain, and a re-measured file is a new
+/// signature rather than a replay.
+pub fn palw_class_manifest_message_v2(network_domain: Hash64, bond: &[u8], class_id: &Hash64, artifact_bytes: u64) -> Hash64 {
+    let mut state = keyed64(PALW_CLASS_MANIFEST_V2_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(&(bond.len() as u64).to_le_bytes());
+    state.update(bond);
+    state.update(class_id.as_byte_slice());
+    state.update(&artifact_bytes.to_le_bytes());
+    finish64(state)
+}
+
 /// **The shares the registry writes** (ADR-0135 Decision 5): each class's admission over every
 /// class's, in permille, with the base class holding the remainder and never less than its floor.
 /// A class with zero admission holds zero; the table always sums to 1,000.

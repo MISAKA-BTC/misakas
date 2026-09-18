@@ -3392,6 +3392,16 @@ pub enum PalwConsensusObjectV2 {
         opening: crate::palw_artifact::PalwArtifactOpeningV1,
         signature: Vec<u8>,
     },
+    /// **ADR-0135 manifest V2: the registrant commits the artifact's real byte count.** V1 derived
+    /// `artifact_bytes` from the graph's dense weights, an estimate only the prefetch allowance
+    /// reads; this object carries the count the registrant measured on the file, signed by the
+    /// class's registrant bond over `palw_class_manifest_message_v2` (checked at acceptance like a
+    /// readiness proof). It lands on the class's registry row — `work.artifact_bytes`, and the
+    /// working set where it equalled the estimate — so the prefetch allowance reads the file and
+    /// not the graph. Refused while the registry is dormant, for a class without a row, from any
+    /// bond but the registrant's, and for zero bytes; a genesis class has no registrant and keeps
+    /// the catalog's estimate. Tag 48; appended last.
+    ClassManifestV2 { class_id: Hash64, artifact_bytes: u64, registrant_bond: PalwBondKeyV2, signature: Vec<u8> },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4791,6 +4801,8 @@ pub enum PalwStateV2Error {
     ModelRegistryDormant,
     #[error("readiness proof refused: {0}")]
     ReadinessProofRefused(String),
+    #[error("class manifest refused: {0}")]
+    ClassManifestRefused(String),
     #[error("class {class} is {state} under the model registry and admits no new claims")]
     ClassNotAdmitting { class: Hash64, state: String },
     #[error("class {class} has {inflight} claims in flight against the registry's cap of {cap}")]
@@ -8079,6 +8091,59 @@ impl<'a> TransitionBuilder<'a> {
     /// **A registered class's row, opened from its carriage** (ADR-0135 Decisions 2 and 3): the
     /// work is read off the graph, the profile derived from it, and the class starts PREFETCHING
     /// (or REGISTERED, never admitting, where the graph derives no work — the VM boundary).
+    /// ADR-0135 manifest V2: the registrant's byte count lands on the class's registry row. The
+    /// signature is the acceptance layer's (like a readiness proof's); here the rule is who may
+    /// speak for the class and what the row does with the number.
+    fn apply_class_manifest(
+        &mut self,
+        class_id: &Hash64,
+        artifact_bytes: u64,
+        registrant_bond: &PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_model_registry_v1 as registry;
+        let Some(fold) = self.model_registry_fold().cloned() else { return Err(PalwStateV2Error::ModelRegistryDormant) };
+        if artifact_bytes == 0 {
+            return Err(PalwStateV2Error::ClassManifestRefused(format!(
+                "class {class_id}: an artifact of zero bytes is not a thing anyone keeps"
+            )));
+        }
+        let class = self.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+        match class.registrant_bond {
+            None => {
+                return Err(PalwStateV2Error::ClassManifestRefused(format!(
+                    "class {class_id} is a genesis class: its bytes are the catalog's, and no bond registered it"
+                )));
+            }
+            Some(registrant) if registrant != *registrant_bond => {
+                return Err(PalwStateV2Error::ClassManifestRefused(format!(
+                    "class {class_id} was registered by bond {registrant:?}, not by {registrant_bond:?}"
+                )));
+            }
+            Some(_) => {}
+        }
+        let record = self.state.bonds.get(registrant_bond).ok_or(PalwStateV2Error::MissingBond(*registrant_bond))?;
+        if !matches!(record.status, PalwBondStatusV2::Active) {
+            return Err(PalwStateV2Error::BondNotActive(*registrant_bond));
+        }
+        let Some(mut row) = self.state.model_lifecycles.get(class_id).cloned() else {
+            return Err(PalwStateV2Error::ClassManifestRefused(format!(
+                "class {class_id} has no registry row yet (rows open at a span boundary): nothing to commit the bytes to"
+            )));
+        };
+        // The working set equalled the estimate for every graph the estimate prices today (the
+        // artifact whole): it follows the file where it did, and keeps its own value where not.
+        let working_set_followed = row.work.working_set_bytes == row.work.artifact_bytes;
+        row.work.artifact_bytes = artifact_bytes;
+        if working_set_followed {
+            row.work.working_set_bytes = artifact_bytes;
+        }
+        let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
+        let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
+        row.profile = registry::palw_lifecycle_profile_v1(&row.work, expected, &fold.globals);
+        self.write_model_lifecycle(*class_id, Some(row));
+        Ok(())
+    }
+
     fn open_model_lifecycle(
         &mut self,
         ctx: &PalwBlockContextV2,
@@ -13902,6 +13967,9 @@ fn apply_object(
         PalwConsensusObjectV2::SeatReadinessProved { bond, class_id, span, opening, signature: _ } => {
             builder.apply_seat_readiness(ctx, bond, class_id, *span, opening)?;
         }
+        PalwConsensusObjectV2::ClassManifestV2 { class_id, artifact_bytes, registrant_bond, signature: _ } => {
+            builder.apply_class_manifest(class_id, *artifact_bytes, registrant_bond)?;
+        }
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
             let mut group = builder
                 .state
@@ -17939,6 +18007,7 @@ pub(crate) mod tests {
         use super::*;
         /// Measured: the number of `PalwConsensusObjectV2` variants before this one.
         const PALW_SEAT_READINESS_PROVED_DISCRIMINANT: u8 = 47;
+        const PALW_CLASS_MANIFEST_V2_DISCRIMINANT: u8 = 48;
         use crate::palw_artifact::{PalwArtifactInventoryV1, PalwArtifactOperandV1, open_artifact_leaf_v1};
         use crate::palw_execution_lane_v1::PalwExecLaneFoldV1;
         use crate::palw_model_registry_v1::{
@@ -18123,6 +18192,81 @@ pub(crate) mod tests {
             // Without the fold the fold is byte-identical to before: no rows, no reasons.
             let (plain, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, None).unwrap();
             assert!(plain.model_lifecycles_iter().next().is_none());
+        }
+
+        #[test]
+        fn adr0135_manifest_v2_the_registrant_commits_the_artifact_bytes_and_the_row_reads_the_file() {
+            use crate::palw_model_registry_v1::palw_artifact_prefetch_spans_v1;
+            const FILE: u64 = 1 << 40;
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let (s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            let estimate = s2.model_lifecycle(&kimi_id()).expect("Kimi has a row").clone();
+            assert_eq!(estimate.work.artifact_bytes, 1 << 30, "the premise: the row holds the graph's estimate");
+            let manifest = |bond: PalwBondKeyV2, bytes: u64| PalwConsensusObjectV2::ClassManifestV2 {
+                class_id: kimi_id(),
+                artifact_bytes: bytes,
+                registrant_bond: bond,
+                signature: vec![1],
+            };
+            assert_eq!(
+                borsh::to_vec(&manifest(bond_key(2), 1)).unwrap()[0],
+                PALW_CLASS_MANIFEST_V2_DISCRIMINANT,
+                "appended last: a node without it refuses the block rather than misreading it"
+            );
+
+            let dormant = step(&s2, &p, &ctx(3, 111, 3), &[manifest(bond_key(2), FILE)], None, None);
+            assert!(matches!(dormant, Err(PalwStateV2Error::ModelRegistryDormant)), "{dormant:?}");
+            let genesis_class = step(&s2, &p, &ctx(3, 111, 3), &[manifest(bond_key(2), FILE)], None, Some(f.clone()));
+            assert!(
+                matches!(&genesis_class, Err(PalwStateV2Error::ClassManifestRefused(why)) if why.contains("genesis class")),
+                "a class nobody registered has no registrant to restate its bytes: {genesis_class:?}"
+            );
+
+            // A chain that registered Kimi through a carriage holds its registrant; this fixture
+            // registered it as a genesis class, so the registrant is set here and the rules below
+            // are the ones the carriage path reaches.
+            let mut registered = s2.clone();
+            registered.classes.get_mut(&kimi_id()).expect("Kimi is a class").registrant_bond = Some(bond_key(2));
+            let stranger = step(&registered, &p, &ctx(3, 111, 3), &[manifest(bond_key(3), FILE)], None, Some(f.clone()));
+            assert!(
+                matches!(&stranger, Err(PalwStateV2Error::ClassManifestRefused(why)) if why.contains("not by")),
+                "only the registrant speaks for the class: {stranger:?}"
+            );
+            let empty = step(&registered, &p, &ctx(3, 111, 3), &[manifest(bond_key(2), 0)], None, Some(f.clone()));
+            assert!(matches!(&empty, Err(PalwStateV2Error::ClassManifestRefused(why)) if why.contains("zero bytes")), "{empty:?}");
+
+            let (s3, d3) = step(&registered, &p, &ctx(3, 111, 3), &[manifest(bond_key(2), FILE)], None, Some(f.clone())).unwrap();
+            let row = s3.model_lifecycle(&kimi_id()).expect("the row survives").clone();
+            assert_eq!(row.work.artifact_bytes, FILE, "the row reads the file's bytes");
+            assert_eq!(row.work.working_set_bytes, FILE, "…and the working set that equalled the estimate follows it");
+            assert_eq!(
+                (row.work.verification_ccu, row.work.economic_ccu_per_claim),
+                (1_000_000, 800_000),
+                "the compute stays the graph's"
+            );
+            assert_eq!(row.profile.artifact_prefetch_spans, palw_artifact_prefetch_spans_v1(&row.work, &PALW_REGISTRY_GLOBALS_V1));
+            assert!(
+                row.profile.artifact_prefetch_spans > estimate.profile.artifact_prefetch_spans,
+                "the prefetch allowance grew with the file: {} > {}",
+                row.profile.artifact_prefetch_spans,
+                estimate.profile.artifact_prefetch_spans
+            );
+            assert_eq!(row.state, estimate.state, "the lifecycle state is not the manifest's to move");
+            assert_ne!(s3.state_root(), registered.state_root(), "the committed bytes are rooted");
+            assert!(d3.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ModelLifecycle { .. })), "…through the row's own delta");
+            let back = revert_delta_v2(&s3, &d3, &p).expect("reverts");
+            assert_eq!(back.state_root(), registered.state_root());
+            assert_eq!(apply_delta_v2(&registered, &d3, &p).expect("re-applies").state_root(), s3.state_root());
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).unwrap();
+            let carriage: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(carriage.model_lifecycles.get(&kimi_id()).map(|r| r.work.artifact_bytes), Some(FILE), "…and carried");
+
+            // A re-measured file is a new commitment from the same registrant, not a duplicate.
+            let (s4, _) = step(&s3, &p, &ctx(4, 112, 4), &[manifest(bond_key(2), FILE + 1)], None, Some(f.clone())).unwrap();
+            assert_eq!(s4.model_lifecycle(&kimi_id()).unwrap().work.artifact_bytes, FILE + 1);
         }
 
         #[test]

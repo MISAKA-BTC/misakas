@@ -392,6 +392,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 Ok(())
             }
         }
+        PalwConsensusObjectV2::ClassManifestV2 { signature, artifact_bytes, .. } => {
+            if signature.is_empty() {
+                Err("a class manifest must carry the registrant's signature — unsigned, anyone could restate a class's bytes")
+            } else if *artifact_bytes == 0 {
+                Err("a class manifest names the artifact's bytes; zero is not a thing anyone keeps")
+            } else {
+                Ok(())
+            }
+        }
         PalwConsensusObjectV2::MaterialDisclosed { .. } => Err(
             "a data-availability disclosure must carry the producer's signature — unsigned, a third party could bind a producer to material it never published",
         ),

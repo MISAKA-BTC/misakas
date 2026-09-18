@@ -358,14 +358,26 @@ with a `Final`, PREFETCHING without) and are governed from the grace's end. A te
   the reason it does not count (`stale`, `bond inactive`, `below floor`, `collateral short`) — so
   a HELD by the rule and a stop by a fault read differently.
 
-**`artifact_bytes` is not consensus-critical.** It is an estimate from the graph's dense weights and
-feeds the prefetch allowance only; admission, the bond, the window and the inflight cap read the
-compute. No rule may start reading it before a manifest carries the value (V2).
+**`artifact_bytes` is not consensus-critical, and V2 lets the registrant state it (built
+2026-09-18).** V1 estimates it from the graph's dense weights, and only the prefetch allowance reads
+it; admission, the bond, the window and the inflight cap read the compute. **Manifest V2** is the
+object `PalwConsensusObjectV2::ClassManifestV2 { class_id, artifact_bytes, registrant_bond,
+signature }` (tag 48, appended last): the class's registrant bond signs
+`palw_class_manifest_message_v2` over the count, the acceptance layer checks the signature as it
+does a readiness proof's, and the transition puts the count on the class's registry row
+(`work.artifact_bytes`, and the working set where it equalled the estimate), re-deriving the profile
+so `artifact_prefetch_spans` reads the file rather than the graph. Refused while the registry is
+dormant, for a class without a row, from any bond but the registrant's, and for zero bytes; a
+genesis class has no registrant and keeps the catalog's estimate; a re-measured file is a new
+commitment. The CLI's `model-class` extension route builds and carries it beside the registration
+when the extension manifest names `artifact.bytes` or a readable `artifact.path` (the file's length,
+the meaning `artifact.bytes` already had), and withholds it below the fence. Not built: the node's
+own `--palw-register-class` route does not yet follow its registration with a manifest (the operator
+carries `<name>.class-manifest.borsh`).
 
-**Not built, stated.** The manifest's own `artifact_bytes` and a manifest transaction distinct from
-today's `ClassRegistered`; the possession proof's width (one leaf a proof, V1); a held class's
-existing claims run to their end untouched. The PALW state sync path (`PalwStateSyncV2`, unused by
-the live node) carries no lane and no registry.
+**Not built, stated.** The possession proof's width (one leaf a proof, V1); a held class's existing
+claims run to their end untouched. The PALW state sync path (`PalwStateSyncV2`, unused by the live
+node) carries no lane and no registry.
 
 ## 8. Number hygiene
 

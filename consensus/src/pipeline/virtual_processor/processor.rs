@@ -6581,6 +6581,31 @@ impl VirtualStateProcessor {
                         return Err(format!("bond {bond:?}'s readiness proof is not signed by the key it registered"));
                     }
                 }
+                Obj::ClassManifestV2 { class_id, artifact_bytes, registrant_bond, signature } => {
+                    if !self.palw_model_registry_at(point.daa_score) {
+                        return Err(format!("a manifest for class {class_id} below the model registry's fence"));
+                    }
+                    let record = state
+                        .bond(registrant_bond)
+                        .ok_or_else(|| format!("a manifest names bond {registrant_bond:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_model_registry_v1::palw_class_manifest_message_v2(
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        &borsh::to_vec(registrant_bond).expect("a bond key is borsh-serializable"),
+                        class_id,
+                        *artifact_bytes,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_model_registry_v1::PALW_CLASS_MANIFEST_V2_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("bond {registrant_bond:?}'s manifest is not signed by the key it registered"));
+                    }
+                }
                 Obj::DefaultAccused { claim, missing_event_index, accuser, signature } => {
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
@@ -12388,6 +12413,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
     match object {
         O::BondRegistered { .. } => "BondRegistered",
         O::SeatReadinessProved { .. } => "SeatReadinessProved",
+        O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
