@@ -5654,6 +5654,68 @@ impl PalwChainStateV2 {
         roots
     }
 
+    /// **ADR-0101: everything a client needs to check a provider's service descriptor**, assembled
+    /// from one state at one height. Until this existed, `PalwLineServiceFactsV1` was built only by
+    /// test fixtures — the check ADR-0101 specifies had no node that could answer it, so "any
+    /// provider may serve, and a client can check rather than trust" was true of the design and not
+    /// of the software.
+    ///
+    /// `ownership_active` is `Params::palw_artifact_root_ownership` at `daa`: past it the roots are
+    /// the ones this line OWNS (ADR-0143), which is what stops a copy line offering the class's own
+    /// founding artifact as its own.
+    pub fn line_service_facts_v1(
+        &self,
+        class_id: &Hash64,
+        line_id: &Hash64,
+        daa: u64,
+        ownership_active: bool,
+    ) -> crate::palw_service_descriptor_v1::PalwLineServiceFactsV1 {
+        let declared_grants = self
+            .model_benefit_tiers_in_effect(line_id, daa)
+            .iter()
+            .fold(0u32, |bits, tier| bits | tier.grants);
+        crate::palw_service_descriptor_v1::PalwLineServiceFactsV1 {
+            line_id: *line_id,
+            declared_grants,
+            roots: self.line_service_roots_v1(class_id, line_id, daa, ownership_active),
+            origin_pubkeys: self.line_origin_pubkeys_v1(line_id),
+            now_daa: daa,
+        }
+    }
+
+    /// **ADR-0101: the keys the line's own people sign with** — the `origin_pubkeys` half of
+    /// [`crate::palw_service_descriptor_v1::PalwLineServiceFactsV1`]. The registered pubkeys of the
+    /// line's owner, developer and maintainer bonds, deduplicated and sorted so two nodes answer
+    /// one list. A grant only the line's origin may provide (its developer room, its support desk)
+    /// is checked against this, so a descriptor claiming one under a stranger's key is refused.
+    pub fn line_origin_pubkeys_v1(&self, line_id: &Hash64) -> Vec<Vec<u8>> {
+        let Some(line) = self.model_line_or_founding(line_id) else { return Vec::new() };
+        let mut keys: Vec<Vec<u8>> = [line.owner, line.developer, line.maintainer]
+            .into_iter()
+            .flatten()
+            .filter_map(|bond| self.bonds.get(&bond).map(|state| state.pubkey.clone()))
+            .collect();
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    /// **ADR-0101: the roots a provider may serve FOR ONE LINE** — the `roots` half of
+    /// [`crate::palw_service_descriptor_v1::PalwLineServiceFactsV1`], which until now nothing
+    /// outside a test fixture produced.
+    ///
+    /// ADR-0101 wrote this as "the class's registered artifact root and every version root the
+    /// line published", and the first clause is a hole ADR-0143 closes: the class's founding root
+    /// is the FOUNDING line's, so a stranger's line offering it is offering somebody else's
+    /// artifact. This takes the class's roots in force and keeps the ones this line owns, so past
+    /// the fence a copy line is left with exactly the roots it published itself.
+    pub fn line_service_roots_v1(&self, class_id: &Hash64, line_id: &Hash64, daa: u64, ownership_active: bool) -> Vec<Hash64> {
+        self.class_roots_in_force(class_id, daa)
+            .into_iter()
+            .filter(|root| self.artifact_line_of_root(class_id, root, ownership_active) == Some(*line_id))
+            .collect()
+    }
+
     /// **ADR-0143 Decisions 2 and 3: the ONE answer to "which line owns this artifact root".**
     ///
     /// Past `Params::palw_artifact_root_ownership` this is the rooted index and nothing else, so
@@ -35123,6 +35185,50 @@ pub(crate) mod tests {
                 decoded.artifact_owners.is_empty()
             });
             assert!(borsh::from_slice::<PalwStateCarriageV2>(&pre).unwrap().artifact_owners.is_empty());
+        }
+
+        /// **ADR-0101, made answerable by ADR-0143.** ADR-0101 says a membership may be served by
+        /// ANYONE and that a client checks the provider's descriptor against chain facts rather
+        /// than trusting it — but `PalwLineServiceFactsV1` was built only by test fixtures, so no
+        /// node could answer the check. It can now, and the roots half is exactly the question this
+        /// ADR closes: ADR-0101 wrote the facts as "the class's registered artifact root and every
+        /// version root the line published", and the first clause would hand a copy line the class's
+        /// own founding artifact to offer as its own.
+        #[test]
+        fn a_node_can_answer_the_service_facts_and_a_copy_line_may_not_offer_the_classs_artifact() {
+            let (p, s3, class, copy) = squatted_chain();
+            let (s4, _) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+
+            // Below the fence the copy owns the founding root, so it could offer it.
+            assert_eq!(s3.line_service_facts_v1(&class, &copy, 251, false).roots, vec![h64(0xA1)]);
+            assert!(s3.line_service_facts_v1(&class, &class, 251, false).roots.is_empty(), "…and the founding line has none");
+
+            // Past it the ownership is back where registration put it, and the copy is left with
+            // exactly what it published itself — nothing.
+            assert_eq!(s4.line_service_facts_v1(&class, &class, 252, true).roots, vec![h64(0xA1)], "the founding line's own artifact");
+            assert!(s4.line_service_facts_v1(&class, &copy, 252, true).roots.is_empty(), "a copy may offer what it published: nothing");
+
+            // A line that publishes its own root may offer that, and only that.
+            let rival_object = PalwConsensusObjectV2::ModelLineFounded {
+                class_id: class,
+                name: b"RIVAL".to_vec(),
+                founder: bond_key(2),
+                root: h64(0xD1),
+                signature: vec![1],
+            };
+            let (s5, _) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[rival_object], None);
+            let rival = model_line_id_v1(&class, &bond_key(2), b"RIVAL");
+            let facts = s5.line_service_facts_v1(&class, &rival, 253, true);
+            assert_eq!(facts.roots, vec![h64(0xD1)], "its own, and not the class's");
+            assert_eq!(facts.line_id, rival);
+            assert_eq!(facts.now_daa, 253);
+            assert_eq!(facts.declared_grants, 0, "nothing declared, nothing to serve");
+            assert_eq!(
+                facts.origin_pubkeys,
+                vec![vec![8u8; 4]],
+                "the registered key of bond 2, the line's own founder — what an origin-only grant is checked against, \
+                 and not the registrant's: a line's people are ITS people"
+            );
         }
 
         /// **ADR-0143 Decision 3: one source for every attribution.** Usage counting and the

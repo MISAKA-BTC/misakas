@@ -71,6 +71,16 @@ pub struct PalwModelLineReadV1 {
     /// Decision 3's set for the line's CLASS at `tip_daa`.
     pub roots_in_force: Vec<kaspa_hashes::Hash64>,
     pub tip_daa: u64,
+    /// **ADR-0101: what a client checks a provider's service descriptor against.** Assembled at
+    /// `tip_daa` from this line alone — the grants its declaration has IN EFFECT, the roots it
+    /// OWNS (ADR-0143 past its fence, so a copy line cannot offer the class's own artifact), and
+    /// the registered keys of its own owner, developer and maintainer bonds.
+    ///
+    /// The check itself is `palw_service_descriptor_check_v1` and runs in the client, not here: a
+    /// descriptor is a statement to a client, no consensus rule reads one, and the chain holds no
+    /// URL. What was missing was a node that could answer the FACTS, without which "any provider
+    /// may serve and a client can check" was true of the design and not of the software.
+    pub service_facts: crate::palw_service_descriptor_v1::PalwLineServiceFactsV1,
     /// ADR-0095: the declaration as stored, plus what it means at `tip_daa` — the tiers actually
     /// governing, any pending weakening, the lapse, and the lead the fold is enforcing.
     pub benefits: Option<PalwModelBenefitsReadV1>,

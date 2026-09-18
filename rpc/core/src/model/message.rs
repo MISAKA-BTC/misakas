@@ -3375,6 +3375,44 @@ impl Deserializer for GetPalwModelLineRequest {
     }
 }
 
+/// **ADR-0101: what a client checks a provider's service descriptor against**, as one line's
+/// facts at one height. The check itself (`palw_service_descriptor_check_v1`) runs in the client:
+/// no consensus rule reads a descriptor and the chain holds no URL — what was missing was a node
+/// that could answer the facts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwLineServiceFacts {
+    /// The union of the grants this line's declaration has IN EFFECT at `tip_daa`: a lapsed
+    /// promise offers nothing to serve.
+    pub declared_grants: u32,
+    /// The roots this line OWNS and that are in force — past ADR-0143's fence the index's answer,
+    /// so a copy line cannot offer the class's own founding artifact as its own.
+    pub roots: Vec<String>,
+    /// The registered keys of the line's own owner, developer and maintainer bonds. A grant only
+    /// the line's origin may provide is checked against these.
+    pub origin_pubkeys: Vec<String>,
+}
+
+impl Serializer for RpcPalwLineServiceFacts {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(u32, &self.declared_grants, writer)?;
+        store!(Vec<String>, &self.roots, writer)?;
+        store!(Vec<String>, &self.origin_pubkeys, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwLineServiceFacts {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let declared_grants = load!(u32, reader)?;
+        let roots = load!(Vec<String>, reader)?;
+        let origin_pubkeys = load!(Vec<String>, reader)?;
+        Ok(Self { declared_grants, roots, origin_pubkeys })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwModelLineResponse {
@@ -3391,11 +3429,13 @@ pub struct GetPalwModelLineResponse {
     /// ADR-0095: what this line's positions grant, `None` where nothing was declared or the
     /// membership is not in force.
     pub benefits: Option<RpcPalwModelBenefits>,
+    /// ADR-0101: the facts a client checks a provider's service descriptor against.
+    pub service_facts: RpcPalwLineServiceFacts,
 }
 
 impl Serializer for GetPalwModelLineResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(bool, &self.exists, writer)?;
         store!(String, &self.line_id, writer)?;
         serialize!(Option<RpcPalwModelLine>, &self.line, writer)?;
@@ -3403,6 +3443,7 @@ impl Serializer for GetPalwModelLineResponse {
         store!(Vec<String>, &self.roots_in_force, writer)?;
         store!(u64, &self.tip_daa, writer)?;
         serialize!(Option<RpcPalwModelBenefits>, &self.benefits, writer)?;
+        serialize!(RpcPalwLineServiceFacts, &self.service_facts, writer)?;
         Ok(())
     }
 }
@@ -3419,7 +3460,12 @@ impl Deserializer for GetPalwModelLineResponse {
         // A version-1 peer wrote nothing here; a membership it never knew about is `None`, not a
         // read past the end of the frame.
         let benefits = if version >= 2 { deserialize!(Option<RpcPalwModelBenefits>, reader)? } else { None };
-        Ok(Self { exists, line_id, line, current_root, roots_in_force, tip_daa, benefits })
+        // Likewise for a version-2 peer: a node that never answered the service facts reads as
+        // empty ones, which a client correctly treats as "this node cannot tell me", not as "this
+        // line declares nothing" — the two differ, and `exists` plus `benefits` say which.
+        let service_facts =
+            if version >= 3 { deserialize!(RpcPalwLineServiceFacts, reader)? } else { RpcPalwLineServiceFacts::default() };
+        Ok(Self { exists, line_id, line, current_root, roots_in_force, tip_daa, benefits, service_facts })
     }
 }
 

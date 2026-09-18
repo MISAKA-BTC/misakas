@@ -222,6 +222,12 @@ pub async fn line_show(ctx: &Ctx, line_id: &str, json: bool) -> CliResult {
                 "current_root": r.current_root,
                 "roots_in_force": r.roots_in_force,
                 "tip_daa": r.tip_daa,
+                // ADR-0101: what a client checks a provider's service descriptor against.
+                "service_facts": {
+                    "declared_grants": r.service_facts.declared_grants,
+                    "roots": r.service_facts.roots,
+                    "origin_pubkeys": r.service_facts.origin_pubkeys,
+                },
             }))
             .expect("serializable")
         );
@@ -233,6 +239,22 @@ pub async fn line_show(ctx: &Ctx, line_id: &str, json: bool) -> CliResult {
             println!("                 {root}");
         }
         print_benefits(r.benefits.as_ref(), r.tip_daa);
+        // ADR-0101: serving is open to anyone, and these are the facts that make "anyone" checkable
+        // rather than trusted. `in force` above is the whole CLASS's set — every line's — while
+        // these are the roots THIS line owns, which is the set a provider may offer for it.
+        let f = &r.service_facts;
+        println!("  serves         {} root(s) this line owns", f.roots.len());
+        for root in &f.roots {
+            println!("                 {root}");
+        }
+        println!(
+            "  origin keys    {}",
+            if f.origin_pubkeys.is_empty() {
+                "(none: no bond of this line is registered here)".to_string()
+            } else {
+                f.origin_pubkeys.iter().map(|k| k[..k.len().min(16)].to_string()).collect::<Vec<_>>().join(" ")
+            }
+        );
     } else {
         println!("this chain holds no line {line} (and no class of that id)");
     }

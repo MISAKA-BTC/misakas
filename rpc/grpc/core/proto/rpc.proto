@@ -1625,7 +1625,22 @@ message GetPalwModelLineResponseMessage {
   uint64 tipDaa = 6;
   // ADR-0095: what this line's positions grant. Absent where nothing is declared.
   optional RpcPalwModelBenefits benefits = 7;
+  // ADR-0101: the facts a client checks a provider's service descriptor against. Always present;
+  // empty from a node that cannot answer them, which is not the same as a line that declares
+  // nothing — `exists` and `benefits` say which.
+  RpcPalwLineServiceFacts serviceFacts = 8;
   RPCError error = 1000;
+}
+
+// ADR-0101: what a client checks a provider's service descriptor against, for one line at one
+// height. The check runs in the client: no consensus rule reads a descriptor.
+message RpcPalwLineServiceFacts {
+  // The union of the grants this line's declaration has IN EFFECT at tipDaa.
+  uint32 declaredGrants = 1;
+  // The roots this line OWNS and that are in force (ADR-0143 past its fence).
+  repeated string roots = 2;
+  // The registered keys of the line's own owner, developer and maintainer bonds, hex.
+  repeated string originPubkeys = 3;
 }
 
 // ADR-0095 §4.1: one tier of a line's membership declaration.

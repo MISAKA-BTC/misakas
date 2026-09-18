@@ -629,8 +629,13 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelLineResponse>, protowire::Get
         roots_in_force: item.roots_in_force.clone(),
         tip_daa: item.tip_daa,
         benefits: item.benefits.as_ref().map(protowire::RpcPalwModelBenefits::from),
+        service_facts: Some((&item.service_facts).into()),
         error: None,
     }
+});
+
+from!(item: &kaspa_rpc_core::RpcPalwLineServiceFacts, protowire::RpcPalwLineServiceFacts, {
+    Self { declared_grants: item.declared_grants, roots: item.roots.clone(), origin_pubkeys: item.origin_pubkeys.clone() }
 });
 
 from!(item: &kaspa_rpc_core::RpcPalwModelBenefitTier, protowire::RpcPalwModelBenefitTier, {
@@ -2031,8 +2036,18 @@ try_from!(item: &protowire::GetPalwModelLineResponseMessage, RpcResult<kaspa_rpc
         roots_in_force: item.roots_in_force.clone(),
         tip_daa: item.tip_daa,
         benefits: item.benefits.as_ref().map(kaspa_rpc_core::RpcPalwModelBenefits::try_from).transpose()?,
+        // A peer that predates ADR-0101's facts sends none, and empty is the honest reading: a
+        // client that needs them asks a node that has them rather than treating silence as a
+        // declaration.
+        service_facts: item.service_facts.as_ref().map(kaspa_rpc_core::RpcPalwLineServiceFacts::from).unwrap_or_default(),
     }
 });
+
+impl From<&protowire::RpcPalwLineServiceFacts> for kaspa_rpc_core::RpcPalwLineServiceFacts {
+    fn from(item: &protowire::RpcPalwLineServiceFacts) -> Self {
+        Self { declared_grants: item.declared_grants, roots: item.roots.clone(), origin_pubkeys: item.origin_pubkeys.clone() }
+    }
+}
 
 try_from!(item: &protowire::RpcPalwModelBenefitTier, kaspa_rpc_core::RpcPalwModelBenefitTier, {
     Self {

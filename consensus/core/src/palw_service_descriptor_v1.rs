@@ -106,7 +106,7 @@ pub fn palw_service_descriptor_id_v1(network_domain: Hash64, d: &PalwServiceDesc
 
 /// What the chain says about a line, as a client read it (RPC: the line, its versions, its
 /// benefits row, the bonds its roles name).
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PalwLineServiceFactsV1 {
     pub line_id: Hash64,
     /// The union of every tier's grants in the line's benefits row IN EFFECT at `now_daa`

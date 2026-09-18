@@ -1205,6 +1205,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             roots_in_force: read.roots_in_force.iter().map(|h| h.to_string()).collect(),
             tip_daa: read.tip_daa,
             benefits: read.benefits.as_ref().map(rpc_palw_model_benefits),
+            // ADR-0101: the facts, not a verdict. The node states what the chain says about the
+            // line; `palw_service_descriptor_check_v1` runs in the client that holds the
+            // descriptor, because a descriptor is a statement to a client and no rule reads one.
+            service_facts: RpcPalwLineServiceFacts {
+                declared_grants: read.service_facts.declared_grants,
+                roots: read.service_facts.roots.iter().map(|h| h.to_string()).collect(),
+                origin_pubkeys: read.service_facts.origin_pubkeys.iter().map(|k| faster_hex::hex_string(k)).collect(),
+            },
         })
     }
 

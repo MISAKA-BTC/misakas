@@ -1351,7 +1351,15 @@ impl ConsensusApi for Consensus {
             lapse: state.model_benefit_lapse(&line_id, tip_daa),
             enforced_lead_daa: state.model_benefit_enforced_lead(&line_id, tip_daa),
         });
-        Some(kaspa_consensus_core::api::PalwModelLineReadV1 { row, current_root, roots_in_force, tip_daa, benefits })
+        // ADR-0101 / ADR-0143: the facts a client checks a provider's descriptor against, read at
+        // the same tip as everything above so one answer describes one height.
+        let service_facts = state.line_service_facts_v1(
+            &row.line.class_id,
+            &line_id,
+            tip_daa,
+            self.config.params.palw_artifact_root_ownership_at(tip_daa),
+        );
+        Some(kaspa_consensus_core::api::PalwModelLineReadV1 { row, current_root, roots_in_force, tip_daa, benefits, service_facts })
     }
 
     fn palw_model_version_v1(
