@@ -32,6 +32,13 @@ STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-1800}"
 P2P_BASE="${P2P_BASE:-16710}"
 RPC_BASE="${RPC_BASE:-18010}"
+# ADR-0138: past `palw_anchor_clock` only a block `bits` priced advances the DAA score, so a devnet
+# whose only producers are PALW lanes has no clock at all. MINER_BIN points at a Layer-0 hash miner
+# (`target/release/misaminer`); it mines against node MINER_NODE's gRPC, which is opened only for it.
+MINER_BIN="${MINER_BIN:-}"
+MINER_NODE="${MINER_NODE:-0}"
+GRPC_PORT="${GRPC_PORT:-16610}"
+MINER_INTERVAL_MS="${MINER_INTERVAL_MS:-5000}"
 # FLOOR_ONLY=1 when the first phase ran on the floor-only ruleset (the class registered by node-1): the
 # restarted nodes must name the same ruleset their datadirs hold.
 FLOOR_ONLY="${FLOOR_ONLY:-0}"
@@ -77,7 +84,7 @@ start_node() {
   local i="$1" extra="$2"
   local addr; addr="$(cat "$WORK_DIR/keys/bond-$i.address")"
   local args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$((P2P_BASE + i))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + i))"
-        --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
+        --utxoindex --nodnsseed --disable-upnp --enable-unsynced-mining
         --palw-execution-lane-devnet="$LANE" --palw-model-registry-devnet="$REGISTRY_AT"
         --palw-produce --palw-panel --palw-round-lane --palw-class-artifact="$CLASS_ARTIFACT"
         --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
@@ -91,14 +98,32 @@ start_node() {
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ -n "$extra" ] && args+=("$extra")
   [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
+  if [ -n "$MINER_BIN" ] && [ "$i" -eq "$MINER_NODE" ]; then args+=(--rpclisten="127.0.0.1:$GRPC_PORT"); else args+=(--nogrpc); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
   echo $!
+}
+start_miner() {
+  [ -n "$MINER_BIN" ] || return 0
+  [ -x "$MINER_BIN" ] || die "MINER_BIN=$MINER_BIN is not executable"
+  pgrep -f "misaminer .*127.0.0.1:$GRPC_PORT" >/dev/null 2>&1 && { log "a hash miner is already mining node-$MINER_NODE"; return 0; }
+  local addr; addr="$(cat "$WORK_DIR/keys/bond-$MINER_NODE.address")"
+  local waited=0
+  while ! lsof -nP -iTCP:"$GRPC_PORT" -sTCP:LISTEN >/dev/null 2>&1; do
+    waited=$((waited + 2)); [ "$waited" -gt 120 ] && die "node-$MINER_NODE never opened gRPC on $GRPC_PORT for the hash miner"
+    sleep 2
+  done
+  "$MINER_BIN" --pool "127.0.0.1:$GRPC_PORT" --wallet "$addr" --network-id devnet --threads 1 \
+    --min-block-interval-ms "$MINER_INTERVAL_MS" --mine-when-not-synced >>"$WORK_DIR/miner.log" 2>&1 &
+  local mp=$!
+  pids+=("$mp")
+  log "hash miner pid $mp on node-$MINER_NODE gRPC $GRPC_PORT, one block per ${MINER_INTERVAL_MS} ms — the anchor lane the DAA clock counts"
 }
 log "1/4 the nodes restart from their datadirs; node-$PRODUCER_NODE as a producer for the class"
 for ((i=0; i<NODES; i++)); do
   [ "$i" -eq "$PRODUCER_NODE" ] && continue
   pids+=("$(start_node "$i" "")")
 done
+start_miner
 sleep 15
 step_start
 while ! step_expired; do

@@ -47,6 +47,13 @@ STALL_WAIT="${STALL_WAIT:-900}"
 ATTACH="${ATTACH:-0}"
 P2P_BASE="${P2P_BASE:-16710}"
 RPC_BASE="${RPC_BASE:-18010}"
+# ADR-0138: past `palw_anchor_clock` only a block `bits` priced advances the DAA score, so a devnet
+# whose only producers are PALW lanes has no clock at all. MINER_BIN points at a Layer-0 hash miner
+# (`target/release/misaminer`); it mines against node MINER_NODE's gRPC, which is opened only for it.
+MINER_BIN="${MINER_BIN:-}"
+MINER_NODE="${MINER_NODE:-0}"
+GRPC_PORT="${GRPC_PORT:-16610}"
+MINER_INTERVAL_MS="${MINER_INTERVAL_MS:-5000}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"
 MAIN_PREMINE_INDEX=40
 
@@ -72,7 +79,7 @@ cleanup() { for p in "${pids[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null || 
 node_args() {
   local i="$1" addr="$2"
   local args=(--devnet --appdir="$WORK_DIR/node-$i" --listen="127.0.0.1:$((P2P_BASE + i))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + i))"
-        --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining
+        --utxoindex --nodnsseed --disable-upnp --enable-unsynced-mining
         --palw-execution-lane-devnet="$LANE" --palw-model-registry-devnet="$REGISTRY_AT"
         --palw-produce --palw-panel --palw-round-lane
         --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
@@ -91,6 +98,7 @@ node_args() {
     fi
   fi
   [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
+  if [ -n "$MINER_BIN" ] && [ "$i" -eq "$MINER_NODE" ]; then args+=(--rpclisten="127.0.0.1:$GRPC_PORT"); else args+=(--nogrpc); fi
   printf '%s\n' "${args[@]}"
 }
 
@@ -134,7 +142,24 @@ PY
   done
 }
 
+start_miner() {
+  [ -n "$MINER_BIN" ] || return 0
+  [ -x "$MINER_BIN" ] || die "MINER_BIN=$MINER_BIN is not executable"
+  pgrep -f "misaminer .*127.0.0.1:$GRPC_PORT" >/dev/null 2>&1 && { log "a hash miner is already mining node-$MINER_NODE"; return 0; }
+  local addr; addr="$(cat "$WORK_DIR/keys/bond-$MINER_NODE.address")"
+  local waited=0
+  while ! lsof -nP -iTCP:"$GRPC_PORT" -sTCP:LISTEN >/dev/null 2>&1; do
+    waited=$((waited + 2)); [ "$waited" -gt 120 ] && die "node-$MINER_NODE never opened gRPC on $GRPC_PORT for the hash miner"
+    sleep 2
+  done
+  "$MINER_BIN" --pool "127.0.0.1:$GRPC_PORT" --wallet "$addr" --network-id devnet --threads 1 \
+    --min-block-interval-ms "$MINER_INTERVAL_MS" --mine-when-not-synced >>"$WORK_DIR/miner.log" 2>&1 &
+  local mp=$!
+  pids+=("$mp")
+  log "hash miner pid $mp on node-$MINER_NODE gRPC $GRPC_PORT, one block per ${MINER_INTERVAL_MS} ms — the anchor lane the DAA clock counts"
+}
 if [ "$ATTACH" = 1 ]; then attach_nodes; else start_nodes; fi
+start_miner
 
 alive() { for p in "${pids[@]}"; do [ -z "$p" ] || kill -0 "$p" 2>/dev/null || die "a node exited (see $WORK_DIR/node-*.log)"; done; }
 step_start() { step_began=$SECONDS; last_daa=""; last_move=$SECONDS; }
