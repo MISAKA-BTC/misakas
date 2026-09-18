@@ -46,6 +46,7 @@ mod palw_fp;
 mod palw_line;
 mod palw_model;
 mod palw_registry;
+mod palw_service;
 mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
@@ -1465,6 +1466,39 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// **ADR-0101: sign a service descriptor** — a provider's statement that it serves this line.
+    /// Checked against the node's answer BEFORE it is signed, so a descriptor that any client would
+    /// refuse is never published. Builds no object, pays no fee, sends nothing.
+    ServiceDescribe {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// 128-hex line id.
+        #[arg(long)]
+        line: String,
+        /// Comma-separated grant names, e.g. `PRIORITY_INFERENCE,INFERENCE_QUOTA`.
+        #[arg(long)]
+        grants: String,
+        /// 128-hex artifact roots this provider serves. Omit to take every root the chain says the
+        /// line owns.
+        #[arg(long = "root")]
+        roots: Vec<String>,
+        /// Where a client reaches this provider. At least one.
+        #[arg(long = "endpoint")]
+        endpoints: Vec<String>,
+        /// The height the statement starts. Defaults to the node's tip.
+        #[arg(long)]
+        valid_from_daa: Option<u64>,
+        /// The height the statement stops. Must be past the tip.
+        #[arg(long)]
+        expires_daa: u64,
+    },
+    /// **ADR-0101: check somebody's service descriptor** against what the chain says about the line
+    /// it names. Prints the provider kind, or the refusal by name.
+    ServiceCheck {
+        /// The descriptor JSON, or `-` for stdin.
+        #[arg(long)]
+        descriptor: String,
+    },
     LineRoles {
         #[command(flatten)]
         key: KeyArgs,
@@ -2472,6 +2506,10 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::LineBenefits { key, line, tiers, cadence_daa, expires_daa, yes }) => {
             palw_line::line_benefits(&ctx, &key.source(), &line, tiers, cadence_daa, expires_daa, yes).await
         }
+        Command::Palw(PalwCmd::ServiceDescribe { key, line, grants, roots, endpoints, valid_from_daa, expires_daa }) => {
+            palw_service::service_describe(&ctx, &key.source(), &line, &grants, roots, endpoints, valid_from_daa, expires_daa).await
+        }
+        Command::Palw(PalwCmd::ServiceCheck { descriptor }) => palw_service::service_check(&ctx, &descriptor).await,
         Command::Palw(PalwCmd::LineRoles { key, line, developer, maintainer, contributor_permille, yes }) => {
             palw_line::line_roles(&ctx, &key.source(), &line, developer, maintainer, contributor_permille, yes).await
         }

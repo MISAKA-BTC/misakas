@@ -5670,10 +5670,7 @@ impl PalwChainStateV2 {
         daa: u64,
         ownership_active: bool,
     ) -> crate::palw_service_descriptor_v1::PalwLineServiceFactsV1 {
-        let declared_grants = self
-            .model_benefit_tiers_in_effect(line_id, daa)
-            .iter()
-            .fold(0u32, |bits, tier| bits | tier.grants);
+        let declared_grants = self.model_benefit_tiers_in_effect(line_id, daa).iter().fold(0u32, |bits, tier| bits | tier.grants);
         crate::palw_service_descriptor_v1::PalwLineServiceFactsV1 {
             line_id: *line_id,
             declared_grants,
@@ -5755,9 +5752,11 @@ impl PalwChainStateV2 {
                 .map(|((_, n), _)| *n);
             // A line with no version rows is a founding line the fold synthesises, and the index
             // recorded its version at the reservation. Anything else in force wins over it.
-            return in_force.or_else(|| {
-                self.model_versions.range((owner.line_id, 0)..=(owner.line_id, u32::MAX)).next().is_none().then_some(owner.version)
-            }).map(|n| (owner.line_id, n));
+            return in_force
+                .or_else(|| {
+                    self.model_versions.range((owner.line_id, 0)..=(owner.line_id, u32::MAX)).next().is_none().then_some(owner.version)
+                })
+                .map(|n| (owner.line_id, n));
         }
         for (line_id, line) in self.model_lines.iter().filter(|(_, l)| l.class_id == *class_id) {
             if line.retired_daa.is_some_and(|d| daa >= d) {
@@ -35175,15 +35174,21 @@ pub(crate) mod tests {
             let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).expect("the carriage encodes");
             let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("and decodes");
             assert_eq!(decoded.artifact_owners, s4.artifact_owners, "the tail carries every row");
-            assert_eq!(decoded.into_state(&p, Some(s4.state_root())).expect("a loaded snapshot").state_root(), s4.state_root(), "loaded == folded");
+            assert_eq!(
+                decoded.into_state(&p, Some(s4.state_root())).expect("a loaded snapshot").state_root(),
+                s4.state_root(),
+                "loaded == folded"
+            );
 
             // Below the fence the tail is absent, so a chain that has not armed it carries exactly
             // the bytes it always carried.
             let pre = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).expect("the carriage encodes");
-            assert!(!pre.contains(&PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1) || {
-                let decoded: PalwStateCarriageV2 = borsh::from_slice(&pre).unwrap();
-                decoded.artifact_owners.is_empty()
-            });
+            assert!(
+                !pre.contains(&PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1) || {
+                    let decoded: PalwStateCarriageV2 = borsh::from_slice(&pre).unwrap();
+                    decoded.artifact_owners.is_empty()
+                }
+            );
             assert!(borsh::from_slice::<PalwStateCarriageV2>(&pre).unwrap().artifact_owners.is_empty());
         }
 
@@ -35206,7 +35211,10 @@ pub(crate) mod tests {
             // Past it the ownership is back where registration put it, and the copy is left with
             // exactly what it published itself — nothing.
             assert_eq!(s4.line_service_facts_v1(&class, &class, 252, true).roots, vec![h64(0xA1)], "the founding line's own artifact");
-            assert!(s4.line_service_facts_v1(&class, &copy, 252, true).roots.is_empty(), "a copy may offer what it published: nothing");
+            assert!(
+                s4.line_service_facts_v1(&class, &copy, 252, true).roots.is_empty(),
+                "a copy may offer what it published: nothing"
+            );
 
             // A line that publishes its own root may offer that, and only that.
             let rival_object = PalwConsensusObjectV2::ModelLineFounded {
@@ -35261,7 +35269,18 @@ pub(crate) mod tests {
 
             // The buyback follows the same answer, and the proof is that the pair it would buy from
             // is the founding line's: a market seeded on the COPY is not reachable from this root.
-            let (seeded, _) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[PalwConsensusObjectV2::ModelSeed { line_id: copy, seeder: Hash64::from_u64_word(0xB0_0009), msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1, sink_index: 1 }], None);
+            let (seeded, _) = apply_owned(
+                &s4,
+                &p,
+                &ctx(5, 253, 5),
+                &[PalwConsensusObjectV2::ModelSeed {
+                    line_id: copy,
+                    seeder: Hash64::from_u64_word(0xB0_0009),
+                    msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                    sink_index: 1,
+                }],
+                None,
+            );
             assert!(seeded.model_market(&copy).is_some(), "the copy has a pair");
             assert_eq!(
                 seeded.artifact_line_of_root(&class, &h64(0xA1), true).and_then(|line| seeded.model_market(&line)),

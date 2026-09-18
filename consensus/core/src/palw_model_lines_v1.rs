@@ -432,8 +432,19 @@ pub fn palw_model_evaluation_message_v1(
 
 /// **Who owns an artifact root**, as the chain records it. One row per root, so attribution never
 /// depends on which `line_id` happens to sort first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+    borsh::BorshSerialize,
+    borsh::BorshDeserialize,
+)]
 pub struct PalwArtifactOwnerV1 {
     pub class_id: Hash64,
     pub line_id: Hash64,
@@ -464,13 +475,12 @@ pub struct PalwArtifactClaimantV1 {
 ///
 /// Total and deterministic: no iteration order of the caller can change the answer, which is the
 /// whole defect this ADR exists to close.
-pub fn palw_canonical_artifact_owner_v1(
-    claimants: impl IntoIterator<Item = PalwArtifactClaimantV1>,
-) -> Option<PalwArtifactOwnerV1> {
-    claimants
-        .into_iter()
-        .min_by_key(|c| (!c.is_founding_root, c.published_daa, c.line_id, c.version))
-        .map(|c| PalwArtifactOwnerV1 { class_id: c.class_id, line_id: c.line_id, version: c.version })
+pub fn palw_canonical_artifact_owner_v1(claimants: impl IntoIterator<Item = PalwArtifactClaimantV1>) -> Option<PalwArtifactOwnerV1> {
+    claimants.into_iter().min_by_key(|c| (!c.is_founding_root, c.published_daa, c.line_id, c.version)).map(|c| PalwArtifactOwnerV1 {
+        class_id: c.class_id,
+        line_id: c.line_id,
+        version: c.version,
+    })
 }
 
 #[cfg(test)]
@@ -502,7 +512,11 @@ mod tests {
         let founding = claimant(9, 1, 500, true);
         let owner = palw_canonical_artifact_owner_v1([squatter, founding]).expect("an owner");
         assert_eq!(owner.line_id, founding.line_id, "the founding line wins however late and however high its id");
-        assert_eq!(palw_canonical_artifact_owner_v1([founding, squatter]).expect("an owner"), owner, "and the input order is irrelevant");
+        assert_eq!(
+            palw_canonical_artifact_owner_v1([founding, squatter]).expect("an owner"),
+            owner,
+            "and the input order is irrelevant"
+        );
 
         // With no founding claimant, the earliest ACCEPTED version wins — attribution was a fact of
         // the accepting block.
