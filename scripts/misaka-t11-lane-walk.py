@@ -1,9 +1,25 @@
 #!/usr/bin/env python3
-"""Walk the selected chain back N blocks and count the PoW lane of each — the measurement the
-6,001 verdict needs: which lanes actually pace this chain, read from the chain itself."""
-import sys, json, collections, time
-sys.path.insert(0, "/opt/misaka-minerpool")
-from wrpc import WsRpc
+"""Walk the selected chain back N blocks and count the PoW lane of each.
+
+**Which lanes actually pace this chain, read from the chain and not from the design.** The 2026-09-18
+release was held because a document claimed testnet-11's selected chain was 300/300 hash-anchor
+blocks and the chain said 300/300 were the model lane — a claim nobody had checked against the thing
+it described. The launch runbook's §5c release gate reads a network's lane profile with this script
+and holds the drill to it.
+
+Run it ON a node (the JSON wRPC listener binds to loopback), with that listener's port:
+
+    python3 scripts/misaka-t11-lane-walk.py [blocks] [json-wrpc-port]
+
+A node exposes it with `--rpclisten-json=127.0.0.1:<port>`; without that flag there is nothing here
+to talk to, whatever else the node is listening on.
+"""
+import collections
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from misaka_wrpc_json import WsRpc  # noqa: E402  (a sibling file, not a package)
 
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 300
 PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 26314
