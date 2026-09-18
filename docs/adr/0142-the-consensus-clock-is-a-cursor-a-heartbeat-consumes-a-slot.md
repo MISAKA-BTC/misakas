@@ -1,7 +1,8 @@
 # ADR-0142 — The consensus clock is a cursor: a heartbeat consumes a slot, and a block that does not advance the clock may not postpone it
 
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
-change, built, and NOT ARMED on any preset — §6a check 3 is an open defect that must close first.**
+change, built and drilled, NOT ARMED on any preset.** The four checks of §6a all pass; arming is the
+operator's call and wants a reorg drill and a target-cadence drill first (§8).
 It replaces the heartbeat lane's admissibility rule. It held the 6,301 rollout.
 
 **Builds on:** ADR-0060 (the liveness doctrine), ADR-0064 (silence is not checkable), ADR-0066
@@ -178,48 +179,35 @@ its own selected parent's row and its own mergeset; there is no shared mutable c
 pipeline test mints a sibling of the last beat and asserts every cursor already written is
 unchanged, and that the sibling reads its own parent's row.
 
-**3. Does an IBD or pruned node rebuild the same values? NO, AND THIS IS A DEFECT.** The step reads
-the selected parent's cursor from a store and treats an absent row as "no cursor yet", which grants
-the exemption unconditionally. An archival node holding the row does not grant. **The two compute
-different DAA scores for the same block, so the node without the row rejects a header the network
-accepted.** Reachable two ways: the store is pruned nowhere today, so it also grows without bound,
-and adding pruning loses the row below the pruning point; and a node that IBDs from a pruning proof
-never had the row, because the cursor is derived data with no commitment and no carriage.
+**3. Does an IBD or pruned node rebuild the same values? YES — after the fix this check forced.**
 
-This is **ADR-0066 finding 4 in a new place** — "an archival node never hit `Err(get_header)`, a
-pruned node hit it at its own pruning point, and the two computed different verdicts for one header".
-It is pinned by `a_missing_parent_cursor_answers_differently_from_a_present_one`, which asserts the
-divergence rather than the property.
+It did not, at first. The cursor was stored per block, and an absent row read as "no cursor yet",
+which granted the exemption unconditionally; an archival node holding the row did not grant. The two
+computed different DAA scores for one block, so the node without the row would reject a header the
+network accepted. **That is ADR-0066 finding 4 in a new place**, and this check is what found it.
 
-**How urgent.** Latent, not live, and only because the chain is young. testnet-11 nodes do not run
-`--archival`, so they prune; the chain has simply not reached the pruning depth yet. It becomes live
-the moment it does, and immediately for any node that joins by pruning proof after that. So it must
-close before the fence is armed, and it does not block the 6,301 bundle, which carries neither this
-fence nor the anchor clock.
+The fix removed the store. What the cursor held was never private: the DAA score is in every header,
+so the block that took the score to its current value is **the one at the selected parent's score
+with the lowest blue score**, and the DAA window already in hand holds it. Every node that can
+process the block at all has that window, so a pruned node, a node that joined by pruning proof and
+an archival node compute the same answer. No carriage to add, no commitment to verify, no column
+family to grow.
 
-### The two candidate fixes, and what each costs
+Selected by blue score and not by timestamp, deliberately: timestamps are not monotonic across a
+DAG, so a minimum over them could be pulled backwards by a merged block carrying an old but
+admissible timestamp, and an early reference opens a slot early. Blue score is monotonic along the
+chain, so the minimum picks the block that actually advanced the score and nothing can impersonate
+it. `the_reference_is_the_block_that_advanced_the_score_and_nothing_else_moves_it` asserts both,
+including that a timestamp minimum would have taken the bait.
 
-**(i) Commit the cursor.** Put it back in the rooted PALW state, where the pruning proof carries it
-and `palw_state_root` commits it — the reason rooted state was the first instinct. The obstacle is
-the one that moved it out: the DAA score is decided in header processing and the PALW state is
-folded in the virtual processor, so the exemption cannot read it. Closing that means either moving
-the exemption decision out of header processing, which is large and touches the header's own
-committed `daa_score`, or keeping a second copy where header processing can see it, which is two
-sources of one truth and exactly the drift this ADR §5 exists to prevent.
+`validate_palw_v2` refuses the fence on a network whose difficulty window is sampled, since a
+sampled window can omit the block that advanced the score. The rule names its own precondition
+rather than assuming it.
 
-**(ii) Derive it from bounded data.** What the cursor stands for is *the timestamp of the block at
-which the DAA score last advanced*, and that is visible without a store: among the blocks of this
-block's DAA window, the earliest carrying `daa_score == selected_parent.daa_score`. The invariant
-survives, because an attempt block and a refused beat both carry that same score and a later
-timestamp, so neither moves the reference — only an advance does. Bounded, available to every node
-that can process the block at all, and no new carriage.
-
-Its obstacle is sampling. The difficulty window is sampled at `difficulty_sample_rate`, so the block
-that actually set the current score may not be in it; the reference would then be later than the
-truth, which refuses slots that should open — starvation again, in a smaller form. Making it exact
-needs an unsampled bounded source, and whether one exists here is the open question.
-
-Neither is chosen. Until one is, the fence stays dormant on every preset, which is how it ships.
+**One behaviour follows and is worth stating.** A beat cannot cause an advance and then consume the
+slot that advance opened. Where a beat's own score came from a priced block it merged, that beat IS
+the reference, so a block merging only it does not tick again. Before the cursor it did,
+unconditionally, which is the clock running free.
 
 **4. Can a producer send the clock into the future?** Only by a bounded, quantised amount. The cursor
 lands on a slot BOUNDARY, never at `beat + interval`, so a timestamp buys whole slots and nothing
