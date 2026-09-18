@@ -416,6 +416,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_registry: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0137: `Params::palw_work_target` — dormant everywhere; past it the lottery reads `W₀`.
     pub(super) palw_work_target: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
+    pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 Upgrade C: `Params::palw_economic_payout` — past it a claim snapshots its economics
     /// at acceptance and is paid at the rate; the registry reads the cap ceiling.
     pub(super) palw_economic_payout: Option<kaspa_consensus_core::config::params::PalwEconomicPayoutV1>,
@@ -911,6 +913,7 @@ impl VirtualStateProcessor {
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
             palw_work_target: params.palw_work_target,
+            palw_single_lottery: params.palw_single_lottery,
             palw_economic_payout: params.palw_economic_payout_fence(),
             palw_genesis_model_works: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
@@ -4101,7 +4104,11 @@ impl VirtualStateProcessor {
             candidate_daa,
             class_id,
             bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
-            budget_fences.work_target_floor,
+            kaspa_consensus_core::palw_admission_v2::palw_work_lottery_floor_v1(
+                &state,
+                budget_fences.work_target_floor,
+                budget_fences.single_lottery,
+            ),
         )?;
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
@@ -7480,6 +7487,7 @@ impl VirtualStateProcessor {
             // class's work — on every ConsensusV2 network, so every node prints the same `W`.
             work_target: self.palw_work_target_fold_for(point),
             work_target_active: self.palw_work_target_at(daa_score),
+            single_lottery_active: self.palw_single_lottery_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
@@ -7553,7 +7561,13 @@ impl VirtualStateProcessor {
             // ADR-0137: the block's W₀ where the work target is in force; the block's subsidy is
             // `calc_block_subsidy` at its DAA, the same reading every attempt block's context takes.
             work_target_floor: self.palw_work_target_floor_for(daa_score, self.coinbase_manager.calc_block_subsidy(daa_score)),
+            single_lottery: self.palw_single_lottery_at(daa_score),
         }
+    }
+
+    /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
+    pub(super) fn palw_single_lottery_at(&self, daa_score: u64) -> bool {
+        self.palw_single_lottery.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **The fused terminal's responder-coverage rule, resolved in exactly one place** — the reason

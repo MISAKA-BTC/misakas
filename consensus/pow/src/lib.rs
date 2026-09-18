@@ -112,6 +112,27 @@ pub fn calc_level_from_pow_512(pow_512: Uint512, max_block_level: BlockLevel) ->
 /// `network_id` is the per-network domain-separation tag fed to the
 /// Layer 0 finalizer (see [`StateLayer0::new`]).
 pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max_block_level: BlockLevel) -> (BlockLevel, bool) {
+    calc_block_level_check_pow_layer0_v2(header, network_id, max_block_level, false)
+}
+
+/// **ADR-0132 S: the same call, told whether the single lottery is in force at this header.**
+///
+/// `single_lottery` is `Params::palw_single_lottery` resolved at the header's DAA — the caller's
+/// reading, as every other lane fence in `check_pow_algo_id` is read. With it set, a PALW attempt
+/// header's digest is admitted unconditionally (the class ticket is the lottery, and the producer
+/// cannot re-roll it without running another forward: the challenge binds the nonce) and it derives
+/// NO block level, exactly as the receipt lane's digest does not — a level is a position in the
+/// pruning proof, and the proof's hierarchy is calibrated to hash work this digest no longer pays.
+///
+/// Blue work is deliberately NOT touched here: fork choice is `algo_id_carries_no_chain_position`'s
+/// question, an attempt block's weight is what its execution certifies (ADR-0069), and this fence
+/// is about which lottery admits a block, not about what the block weighs.
+pub fn calc_block_level_check_pow_layer0_v2(
+    header: &Header,
+    network_id: &[u8],
+    max_block_level: BlockLevel,
+    single_lottery: bool,
+) -> (BlockLevel, bool) {
     // Through the SHARED predicate, so that any gate which must run before this function can ask the
     // same question and cannot drift from it. Inlining `parents_by_level.is_empty()` here is what let
     // the pruning-proof gate exempt a header shape whose PoW still ran (see the predicate's docs).
@@ -120,12 +141,15 @@ pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max
     }
 
     let state = StateLayer0::new(header, network_id);
-    match state.check_pow_layer0(header.nonce) {
+    let single_lottery = single_lottery && kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id);
+    match state.check_pow_layer0_v2(header.nonce, single_lottery) {
         // ADR-0044 Decision 6: a receipt header's digest is free to re-roll, so deriving a BLOCK
         // LEVEL from it would sell hierarchy position — the pruning-proof structure — for the
         // price of one signature. Receipt blocks sit at the base level; the level hierarchy is
         // built by the attempt lane, whose digests are inference-priced. (This is the same
         // reasoning as the `passed` arm above, applied to the other thing a digest buys.)
+        // ADR-0132 S: past the fence an attempt header buys no hierarchy position either.
+        Ok((passed, _)) if single_lottery => (0, passed),
         Ok((passed, _)) if kaspa_consensus_core::pow_layer0::algo_id_derives_no_block_level(header.pow_algo_id) => (0, passed),
         Ok((passed, pow_512)) => (calc_level_from_pow_512(pow_512, max_block_level), passed),
         // `PalwWorkerFailed` is a statement about THIS node: it has a registered model runtime
@@ -552,8 +576,24 @@ impl StateLayer0 {
     /// number of leading zero bits.
     #[inline]
     pub fn check_pow_layer0(&self, nonce: u64) -> Result<(bool, Uint512), PowLayer0Error> {
+        self.check_pow_layer0_v2(nonce, false)
+    }
+
+    /// **ADR-0132 S: the same check, told whether the single lottery is in force.**
+    ///
+    /// One forward runs two draws today — the class ticket against the class target, and this
+    /// digest against `bits` — and only the first is credited, so on testnet-11 the measured
+    /// producer threw away 79 % of the forwards it had already paid for (ADR-0132 §1.1: 979 draws,
+    /// 202 blocks, 777 lost to the network draw). With `single_lottery` the second draw is gone and
+    /// the attempt's own ticket decides, for the receipt lane's reason: the ticket is bound to the
+    /// execution (the challenge derives from the nonce, so a fresh draw is a fresh forward), which
+    /// is the work this chain is made of.
+    pub fn check_pow_layer0_v2(&self, nonce: u64, single_lottery: bool) -> Result<(bool, Uint512), PowLayer0Error> {
         let digest = self.calculate_pow_layer0(nonce)?;
         let pow_512 = Uint512::from_le_bytes(digest);
+        if single_lottery && kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(self.pow_algo_id) {
+            return Ok((true, pow_512));
+        }
         if self.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
             // ADR-0044 Decision 6: a receipt block's work is a CERTIFIED QUANTUM, already audited
             // and already paid for; this digest exists to bind the header to that spend, not to
@@ -712,9 +752,10 @@ mod tests_pq {
         // `9` used to be in this sweep and is not any more: ADR-0072 SA-4 gave it the
         // execution-priced attempt lane, so it is now a KNOWN id with a finalizer arm. The sweep
         // still has to hold — it is about ids this binary cannot verify — so it samples ids that
-        // are still unassigned. `both_attempt_lanes_are_verifiable_by_this_binary` is the other
+        // are still unassigned. (10 left the sweep with ADR-0130 M1: the operator round lane
+        // owns it now.) `both_attempt_lanes_are_verifiable_by_this_binary` is the other
         // half: it asserts 9 is known, so the two cannot both be true of one id by accident.
-        for algo_id in [0u8, 10, 11, 42, 200, u8::MAX] {
+        for algo_id in [0u8, 11, 12, 42, 200, u8::MAX] {
             let header = dummy_header_algo(0x207fffff, 1, 1_000_000, algo_id);
 
             let (level, passes) = calc_block_level_check_pow_layer0(&header, b"mainnet", 255);
@@ -956,7 +997,8 @@ mod tests_pq {
         // property this test actually exists for: a peer-controlled header must never panic the
         // finalizer, whatever it declares.
         // 9 left this list when ADR-0072 SA-4 assigned it — see the note on the sweep above.
-        for bad in [0u8, 10, 42, 128, 200, 255] {
+        // 10 left it too: ADR-0130 M1 gave it the operator round lane (`POW_ALGO_ID_PALW_ROUND_V1`).
+        for bad in [0u8, 11, 42, 128, 200, 255] {
             let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, bad);
             // Build the verifier on a hash-only network to prove no PALW machinery is needed to
             // trigger (or to survive) the crash.

@@ -518,7 +518,12 @@ impl HeaderProcessor {
         // The shared function's parentless-root short-circuit is unreachable from here:
         // `check_parents_limit` rejects an empty parent set and runs before this on both callers
         // (`validate_header_in_isolation` and the ordinary `validate_header`).
-        let (level, passed) = kaspa_pow::calc_block_level_check_pow_layer0(header, &self.network_id, self.max_block_level);
+        // ADR-0132 S: the fence is read from the header's own DAA, as every lane fence in
+        // `check_pow_algo_id` is — and a header that lies about its score to reach this arm is
+        // refused by `check_daa_score` on the same block.
+        let single_lottery = self.palw_single_lottery.is_some_and(|fence| fence.is_active(header.daa_score));
+        let (level, passed) =
+            kaspa_pow::calc_block_level_check_pow_layer0_v2(header, &self.network_id, self.max_block_level, single_lottery);
         if passed || self.skip_proof_of_work { Ok(level) } else { Err(RuleError::InvalidPoW) }
     }
 }

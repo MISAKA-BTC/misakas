@@ -1181,6 +1181,15 @@ pub struct Params {
     /// hashed Some-only; refused without `palw_model_registry` and `palw_economic_payout` at or
     /// below its height. Never set an activation height before the devnet drill has passed.
     pub palw_work_target: Option<ForkActivation>,
+    /// **ADR-0132 S — the single lottery.** One forward runs two draws today, the class ticket and
+    /// the Layer-0 digest against `bits`, and only the first is credited: testnet-11's measured
+    /// producer threw away 79 % of the forwards it had already run. Past this fence a PALW attempt
+    /// header's digest is admitted unconditionally, the class ticket is the whole lottery, the
+    /// header derives no block level, and its row does not price the difficulty window. `None` on
+    /// every shipped preset; hashed `Some`-only; refused without `palw_work_target` at or below its
+    /// height — with the network draw gone the work target is the only thing left holding the
+    /// cadence (ADR-0137 §22 finding 1).
+    pub palw_single_lottery: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2571,6 +2580,19 @@ impl Params {
                 ));
             }
         }
+        // ADR-0132 S: with the network draw gone, the work target is what holds the cadence.
+        if let Some(single) = self.palw_single_lottery
+            && single != ForkActivation::never()
+        {
+            let work_below =
+                self.palw_work_target.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= single.daa_score());
+            if !work_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_single_lottery is armed without palw_work_target armed at or below its height: with the network draw \
+                     gone the work target is the only rule left holding the cadence",
+                ));
+            }
+        }
         // **ADR-0128 Decision 8: the BFT gate's refusals**, ahead of the V2 gate below because the
         // overlay is any lineage's. Every `Some` is judged, a `never()` height included: the values
         // reach the fingerprint whether or not the height does.
@@ -3871,6 +3893,9 @@ impl Params {
         if self.palw_work_target == Some(ForkActivation::never()) {
             self.palw_work_target = None;
         }
+        if self.palw_single_lottery == Some(ForkActivation::never()) {
+            self.palw_single_lottery = None;
+        }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
         }
@@ -4175,6 +4200,11 @@ impl Params {
     /// ADR-0137: whether the work target is in force at `daa_score`.
     pub fn palw_work_target_at(&self, daa_score: u64) -> bool {
         self.palw_work_target.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
+    pub fn palw_single_lottery_at(&self, daa_score: u64) -> bool {
+        self.palw_single_lottery.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0132 Upgrade C: the economic payout where it can mean something — a `ConsensusV2`
@@ -4801,6 +4831,7 @@ impl Params {
             palw_model_registry,
             palw_economic_payout,
             palw_work_target,
+            palw_single_lottery,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -4872,6 +4903,7 @@ impl Params {
             ("palw_model_registry", *palw_model_registry),
             ("palw_economic_payout", palw_economic_payout.map(|payout| payout.activation)),
             ("palw_work_target", *palw_work_target),
+            ("palw_single_lottery", *palw_single_lottery),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5355,6 +5387,7 @@ impl Params {
             palw_model_registry,
             palw_economic_payout,
             palw_work_target,
+            palw_single_lottery,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5565,6 +5598,14 @@ impl Params {
         }
         // ADR-0137, a bare fence: the same treatment as the registry's.
         match palw_work_target.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0132 S, a bare fence: the same treatment again.
+        match palw_single_lottery.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6030,6 +6071,7 @@ impl Params {
             palw_model_registry,
             palw_economic_payout,
             palw_work_target,
+            palw_single_lottery,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6246,6 +6288,11 @@ impl Params {
         // ADR-0137: the height only, Some-only.
         if let Some(activation) = palw_work_target {
             h.write(b"palw_work_target");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0132 S: the height only, Some-only.
+        if let Some(activation) = palw_single_lottery {
+            h.write(b"palw_single_lottery");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -6893,6 +6940,7 @@ impl Params {
             palw_model_registry: self.palw_model_registry,
             palw_economic_payout: self.palw_economic_payout,
             palw_work_target: self.palw_work_target,
+            palw_single_lottery: self.palw_single_lottery,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -7831,6 +7879,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_model_registry: None,
     palw_economic_payout: None,
     palw_work_target: None,
+    palw_single_lottery: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8022,6 +8071,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_model_registry: None,
     palw_economic_payout: None,
     palw_work_target: None,
+    palw_single_lottery: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8195,6 +8245,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_model_registry: None,
     palw_economic_payout: None,
     palw_work_target: None,
+    palw_single_lottery: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -12726,6 +12777,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_model_registry: None,
     palw_economic_payout: None,
     palw_work_target: None,
+    palw_single_lottery: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -19879,6 +19931,53 @@ mod palw_model_registry_fence_tests {
         early.palw_model_registry = Some(ForkActivation::new(PALW_RC_FLAG_DAY_6001_FENCE_DAA - 1));
         let refusal = early.validate_palw_v2().expect_err("the registry cannot precede the panel economy");
         assert!(format!("{refusal:?}").contains("palw_model_registry"), "{refusal:?}");
+    }
+
+    /// **ADR-0132 S: the single lottery is dormant on every shipped preset; armed at or above the
+    /// work target it moves the identity and the schedule; without the work target at or below it
+    /// is refused — with the network draw gone, `W` is the only rule left holding the cadence.**
+    #[test]
+    fn adr0132_the_single_lottery_fence_is_dormant_everywhere_arms_by_height_and_needs_the_work_target() {
+        use crate::palw_economic_payout_v1::PALW_ECONOMIC_PAYOUT_DEVNET_V1;
+        for (name, preset) in
+            [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", MAINNET_PARAMS.clone())]
+        {
+            assert!(preset.palw_single_lottery.is_none(), "{name}: the single lottery is not scheduled");
+            assert!(!preset.palw_single_lottery_at(u64::MAX - 1), "{name}: never active while dormant");
+        }
+        let rc = palw_rc_shipped_params();
+        assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_single_lottery" && fence.is_none()));
+        let mut never = rc.clone();
+        never.palw_single_lottery = Some(ForkActivation::never());
+        assert!(!never.palw_single_lottery_at(u64::MAX - 1), "never is never active");
+        assert_eq!(
+            never.consensus_identity_id(),
+            rc.consensus_identity_id(),
+            "a never-armed single lottery is one identity with dormant"
+        );
+
+        let height = PALW_RC_FLAG_DAY_6001_FENCE_DAA + 1_000;
+        let mut armed = rc.clone();
+        armed.palw_model_registry = Some(ForkActivation::new(height));
+        armed.palw_economic_payout =
+            Some(PalwEconomicPayoutV1 { activation: ForkActivation::new(height), ..PALW_ECONOMIC_PAYOUT_DEVNET_V1 });
+        armed.palw_work_target = Some(ForkActivation::new(height));
+        armed.palw_single_lottery = Some(ForkActivation::new(height + 100));
+        armed.validate_palw_v2().expect("armed above the work target");
+        assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming moves the identity");
+        assert!(armed.fence_schedule_v1().contains(&(height + 100)), "and the schedule names the height");
+        assert!(!armed.palw_single_lottery_at(height + 99) && armed.palw_single_lottery_at(height + 100));
+        let mut same = armed.clone();
+        same.palw_single_lottery = Some(ForkActivation::new(height));
+        same.validate_palw_v2().expect("the work target's own height is at or below");
+
+        let mut alone = rc.clone();
+        alone.palw_single_lottery = Some(ForkActivation::new(height));
+        let refusal = alone.validate_palw_v2().expect_err("the single lottery cannot precede the work target");
+        assert!(format!("{refusal:?}").contains("palw_single_lottery"), "{refusal:?}");
+        let mut early = armed.clone();
+        early.palw_single_lottery = Some(ForkActivation::new(height - 1));
+        assert!(early.validate_palw_v2().is_err(), "below the work target it is refused");
     }
 
     /// **ADR-0137: the work target is dormant on every shipped preset; armed beside the registry

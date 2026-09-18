@@ -336,6 +336,9 @@ pub struct Args {
     /// ADR-0137 on a private devnet: arm the work target at this DAA score. Needs the registry and
     /// the payout at or below it.
     pub palw_work_target_devnet_daa: Option<u64>,
+    /// ADR-0132 S on a private devnet: arm the single lottery at this DAA score. Needs the work
+    /// target at or below it.
+    pub palw_single_lottery_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -463,6 +466,7 @@ impl Default for Args {
             palw_model_registry_devnet_daa: None,
             palw_economic_payout_devnet_daa: None,
             palw_work_target_devnet_daa: None,
+            palw_single_lottery_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -745,6 +749,26 @@ impl Args {
             config.params.palw_work_target = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-work-target-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_single_lottery_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-single-lottery-devnet is devnet/simnet only (got {net:?}). Arming the single lottery is a consensus \
+                     change and ships in a release, not a command line."
+                );
+            }
+            if config.params.palw_work_target.is_none() {
+                panic!(
+                    "--palw-single-lottery-devnet={daa} needs --palw-work-target-devnet at or below it: with the network draw gone \
+                     the work target holds the cadence"
+                );
+            }
+            config.params.palw_single_lottery = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-single-lottery-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1372,6 +1396,19 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_EXECUTION_LANE_DEVNET"),
         )
         .arg(
+            Arg::new("palw-single-lottery-devnet")
+                .long("palw-single-lottery-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0132 S on a PRIVATE devnet: arm the single lottery at this DAA score — an attempt block's Layer-0 \
+                     digest is no longer compared to bits, the class ticket is the whole lottery, and the work target's epoch \
+                     step holds the cadence. Needs --palw-work-target-devnet at or below it. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_SINGLE_LOTTERY_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-work-target-devnet")
                 .long("palw-work-target-devnet")
                 .value_name("daa-score")
@@ -1785,6 +1822,10 @@ impl Args {
                 .copied()
                 .or(defaults.palw_economic_payout_devnet_daa),
             palw_work_target_devnet_daa: m.get_one::<u64>("palw-work-target-devnet").copied().or(defaults.palw_work_target_devnet_daa),
+            palw_single_lottery_devnet_daa: m
+                .get_one::<u64>("palw-single-lottery-devnet")
+                .copied()
+                .or(defaults.palw_single_lottery_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),

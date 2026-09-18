@@ -415,6 +415,20 @@ pub fn algo_id_is_priced_by_bits_v2(algo_id: u8) -> bool {
     algo_id != POW_ALGO_ID_HEARTBEAT_V1 && algo_id != POW_ALGO_ID_PALW_RECEIPT_V3 && algo_id != POW_ALGO_ID_PALW_ROUND_V1
 }
 
+/// **Is a header of this algorithm priced by `header.bits` past the single lottery?** (ADR-0132 S,
+/// `Params::palw_single_lottery`.)
+///
+/// Past that fence an attempt header's Layer-0 digest is not compared to `bits` at all — the class
+/// ticket is the whole lottery, and the digest exists to bind the header to the execution that won
+/// it. A row nothing prices may not price the window: counting it would measure a cadence the
+/// class tickets set against a target no block pays, and the retarget would walk `bits` without
+/// bound in whichever direction the models happened to produce. The receipt lane's own arm
+/// ([`algo_id_is_priced_by_bits_v2`]) is the same rule for the same reason, one fence earlier.
+#[inline]
+pub fn algo_id_is_priced_by_bits_v3(algo_id: u8) -> bool {
+    algo_id_is_priced_by_bits_v2(algo_id) && !is_palw_attempt_algo_id(algo_id)
+}
+
 /// Output width of the `algo_id = 5` tag:
 /// `response_digest (64) ∥ prompt_eval_count (4, LE) ∥ eval_count (4, LE)` = 72 bytes.
 pub const POW_L1_PALW_OLLAMA_OUT_BYTES: usize = 72;

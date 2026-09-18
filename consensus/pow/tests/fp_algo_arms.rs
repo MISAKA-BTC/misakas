@@ -202,6 +202,47 @@ fn the_attempt_lane_prices_its_digest_and_binds_every_priced_field() {
 /// **Unit B, the load-bearing difference**: the receipt lane's digest is identity binding. It
 /// passes whatever the target says (its lottery is admission), it buys NO block level, and it
 /// still moves with every field of the spend — so one signature cannot mint two identities.
+/// **ADR-0132 S: past the single lottery the attempt lane's digest is not compared to `bits` and
+/// derives no block level; below it nothing changes; the receipt lane and an unknown lane are not
+/// its business.** The same impossible target the lane fails at today passes with the fence read,
+/// and the level is zero — a level is hierarchy position, priced in hash work this digest no
+/// longer pays.
+#[test]
+fn the_single_lottery_admits_the_attempt_digest_unconditionally_and_buys_no_level() {
+    let mut impossible = header_with(POW_ALGO_ID_PALW_COMMITTED_V2, Vec::new());
+    impossible.bits = 0x03000001;
+    impossible.palw_commitment = attempt_carriage(&impossible);
+    let state = kaspa_pow::StateLayer0::new(&impossible, NETWORK);
+    let (below, digest_below) = state.check_pow_layer0_v2(impossible.nonce, false).expect("tags");
+    let (past, digest_past) = state.check_pow_layer0_v2(impossible.nonce, true).expect("tags");
+    assert!(!below, "below the fence the attempt lane is priced by bits: an impossible target fails");
+    assert!(past, "past the fence the class ticket is the lottery: the digest binds, and passes");
+    assert_eq!(digest_below, digest_past, "the same digest — the fence changes the verdict, not the binding");
+    let (level_below, passed_below) = kaspa_pow::calc_block_level_check_pow_layer0_v2(&impossible, NETWORK, 255, false);
+    let (level_past, passed_past) = kaspa_pow::calc_block_level_check_pow_layer0_v2(&impossible, NETWORK, 255, true);
+    assert!(!passed_below && level_below == 0);
+    assert!(passed_past && level_past == 0, "admitted, and no level: {level_past}");
+    // A solvable attempt header keeps whatever level its digest earns below the fence, and none past it.
+    let base = header_with(POW_ALGO_ID_PALW_COMMITTED_V2, Vec::new());
+    let solved = header_with(POW_ALGO_ID_PALW_COMMITTED_V2, attempt_carriage(&base));
+    let (level_solved_past, passed_solved_past) = kaspa_pow::calc_block_level_check_pow_layer0_v2(&solved, NETWORK, 255, true);
+    assert!(passed_solved_past && level_solved_past == 0, "past the fence: admitted, level zero, whatever its digest");
+    // The receipt lane is unchanged either way, and an unknown lane still answers an error.
+    let mut receipt = header_with(POW_ALGO_ID_PALW_RECEIPT_V3, Vec::new());
+    receipt.bits = 0x03000001;
+    receipt.palw_commitment = spend_carriage(&receipt, 0);
+    let receipt_state = kaspa_pow::StateLayer0::new(&receipt, NETWORK);
+    assert_eq!(
+        receipt_state.check_pow_layer0_v2(receipt.nonce, true).expect("tags").0,
+        receipt_state.check_pow_layer0_v2(receipt.nonce, false).expect("tags").0
+    );
+    let unknown = header_with(200, Vec::new());
+    assert!(!kaspa_pow::calc_block_level_check_pow_layer0_v2(&unknown, NETWORK, 255, true).1, "an unknown lane is not the fence's");
+    // The compatibility shims are the fence off.
+    assert_eq!(state.check_pow_layer0(impossible.nonce).expect("tags").0, below);
+    assert_eq!(kaspa_pow::calc_block_level_check_pow_layer0(&impossible, NETWORK, 255), (level_below, passed_below));
+}
+
 #[test]
 fn the_receipt_lane_binds_identity_without_pricing_or_buying_level() {
     let base = header_with(POW_ALGO_ID_PALW_RECEIPT_V3, Vec::new());

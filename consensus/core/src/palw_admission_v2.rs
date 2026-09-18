@@ -76,6 +76,10 @@ pub struct PalwEpochBudgetFencesV1 {
     /// class's row instead of its class target, and stops the epoch budget being read for model
     /// classes; `None` is the shipped rule.
     pub work_target_floor: Option<u128>,
+    /// ADR-0132 S: `Params::palw_single_lottery` at the candidate block's DAA. With it the lottery's
+    /// floor is `max(W₀, W)` where `W` is the chain's stepped work target — the controller that holds
+    /// the cadence once the network draw is gone.
+    pub single_lottery: bool,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -724,8 +728,25 @@ where
         &envelope.attempt.executor_bond,
         nonce,
     );
-    check_palw_class_lottery_v4(state, state_params, &envelope.attempt, execution_anchor, budget_fences.work_target_floor)?;
+    check_palw_class_lottery_v4(
+        state,
+        state_params,
+        &envelope.attempt,
+        execution_anchor,
+        palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery),
+    )?;
     Ok(attempt_id)
+}
+
+/// **ADR-0132 S: the floor the lottery reads** — `W₀` alone under the double draw, `max(W₀, W)`
+/// past the single lottery, with `W` the chain's stepped work target (`None` where no fence prices
+/// the block at all).
+pub fn palw_work_lottery_floor_v1(state: &PalwChainStateV2, work_target_floor: Option<u128>, single_lottery: bool) -> Option<u128> {
+    let floor = work_target_floor?;
+    if single_lottery {
+        return Some(floor.max(state.work_target().map(|target| target.work).unwrap_or(0)));
+    }
+    Some(floor)
 }
 
 /// **ADR-0137: the lottery past the work target.** A model class's ticket target is

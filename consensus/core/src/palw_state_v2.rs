@@ -4974,6 +4974,13 @@ pub struct PalwChainStateV2 {
     /// share's input (`palw_final_work_shares_v1`), kept `PALW_FINAL_WORK_EPOCHS_KEPT_V1` epochs.
     /// Never in the root: a share is a result, not an input.
     final_work: BTreeMap<u64, BTreeMap<Hash64, u128>>,
+    /// **ADR-0137 / ADR-0132 S: the work target the chain holds** — written past
+    /// `Params::palw_work_target` at every epoch boundary from the closed epoch's model blocks
+    /// against the cadence, floored at the boundary block's `W₀`, and READ by the lottery past
+    /// `Params::palw_single_lottery` (`max(W₀, W)`): with the network draw gone the epoch step is
+    /// the controller that holds the cadence. Rooted (`work_target/v1`) and carried in its own tail
+    /// once it exists; a state without it is byte-identical to a state before the field.
+    work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5114,6 +5121,7 @@ impl PalwChainStateV2 {
             claim_economics: BTreeMap::new(),
             work_target_shadow: None,
             final_work: BTreeMap::new(),
+            work_target: None,
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5745,6 +5753,11 @@ impl PalwChainStateV2 {
         self.work_target_shadow.as_ref()
     }
 
+    /// ADR-0137 / ADR-0132 S: the work target the chain holds (past `Params::palw_work_target`).
+    pub fn work_target(&self) -> Option<&crate::palw_work_target_v1::PalwWorkTargetV2> {
+        self.work_target.as_ref()
+    }
+
     /// ADR-0137 (shadow): finalized economic work by closed epoch and class.
     pub fn final_work_iter(&self) -> impl Iterator<Item = (&u64, &BTreeMap<Hash64, u128>)> {
         self.final_work.iter()
@@ -6205,6 +6218,11 @@ impl PalwChainStateV2 {
         if !self.claim_economics.is_empty() {
             state.update(b"claim_economics/v1");
             state.update(collection_root(b"claim_economics", &self.claim_economics).as_byte_slice());
+        }
+        // ADR-0137 / ADR-0132 S: the work target, named, once it exists (past its fence).
+        if let Some(target) = &self.work_target {
+            state.update(b"work_target/v1");
+            state.update(&borsh::to_vec(target).expect("PalwWorkTargetV2 is borsh-serializable"));
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -7167,11 +7185,15 @@ pub enum PalwDeltaEntryV2 {
         new: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     },
     /// ADR-0137 (shadow): a class's finalized work in a closed epoch was written or dropped (55).
-    /// Appended last.
     FinalWork {
         key: (u64, Hash64),
         old: Option<u128>,
         new: Option<u128>,
+    },
+    /// ADR-0137 / ADR-0132 S: the chain's work target stepped at an epoch boundary (56). Appended last.
+    WorkTarget {
+        old: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
+        new: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     },
 }
 
@@ -7893,6 +7915,13 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    fn write_work_target(&mut self, new: Option<crate::palw_work_target_v1::PalwWorkTargetV2>) {
+        let old = std::mem::replace(&mut self.state.work_target, new);
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::WorkTarget { old, new });
+        }
+    }
+
     fn write_final_work(&mut self, key: (u64, Hash64), new: Option<u128>) {
         let old = self.state.final_work.get(&key.0).and_then(|classes| classes.get(&key.1)).copied();
         match new {
@@ -8152,7 +8181,13 @@ impl<'a> TransitionBuilder<'a> {
             .map(|fold| fold.rate_sompi_per_giga)
             .or_else(|| self.extras.work_target.as_ref().map(|fold| fold.rate_sompi_per_giga))
             .unwrap_or(crate::palw_work_target_v1::PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1);
-        Some(palw_work_floor_for_block_v1(self.params, ctx.subsidy, self.extras.escrow_carve, rate))
+        let floor = palw_work_floor_for_block_v1(self.params, ctx.subsidy, self.extras.escrow_carve, rate);
+        // ADR-0132 S: with the network draw gone the stepped `W` is what holds the cadence, and it
+        // is never below the block's `W₀`.
+        if self.extras.single_lottery_active {
+            return Some(floor.max(self.state.work_target.map(|target| target.work).unwrap_or(0)));
+        }
+        Some(floor)
     }
 
     /// **ADR-0137 D5: the verification budget in one class's claims** — this class's ready seats'
@@ -10007,6 +10042,7 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_court_deadlines(&mut builder, ctx)?;
     apply_class_retargets(&mut builder, parent, ctx)?;
     apply_work_target_shadow(&mut builder, parent, ctx);
+    apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
     apply_class_reclamation(&mut builder, parent, ctx)?;
     Ok(builder.checkpoint().0)
@@ -10126,6 +10162,8 @@ pub fn apply_palw_transition_v7(
     apply_class_retargets(&mut builder, parent, ctx)?;
     // ADR-0137 (shadow): the work target's step, beside the class DAA's, off the same closed epoch.
     apply_work_target_shadow(&mut builder, parent, ctx);
+    // ADR-0137 / ADR-0132 S: the chain's own work target, past its fence.
+    apply_work_target(&mut builder, parent, ctx);
 
     // 2c. ADR-0054's share-raise path, on the same closed span the retarget just measured: a class
     //     that produced every block its budget allowed takes a step of cadence from the floor, and
@@ -11703,6 +11741,54 @@ fn apply_work_target_shadow(builder: &mut TransitionBuilder<'_>, parent: &PalwCh
         floor,
         network_draws_q32,
         effective_work: crate::palw_work_target_v1::palw_effective_work_v1(work, network_draws_q32),
+        epoch_index,
+        closed_model_blocks: model_blocks,
+        closed_expected_blocks: expected,
+    }));
+}
+
+/// **ADR-0137 / ADR-0132 S: the chain's work target, stepped at the epoch boundary.** The same
+/// arithmetic as the shadow's, from consensus inputs only — the closed epoch's model blocks against
+/// the cadence's attempt-lane slice, the class DAA's clamp, the boundary block's `W₀` at the payout
+/// fence's rate — written past `Params::palw_work_target` and rooted, so every node holds one `W`.
+/// Under the double draw it sits at `W₀` (a model block count never exceeds the cadence); past the
+/// single lottery it is the controller: the lottery reads `max(W₀, W)`.
+fn apply_work_target(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+    use crate::palw_work_target_v1::{PalwWorkTargetV2, palw_work_target_step_v1};
+    if !builder.extras.work_target_active {
+        return;
+    }
+    let Some(last) = &parent.last_point else { return };
+    let epoch_length = builder.params.epoch_length.max(1);
+    let closed_epoch = last.daa_score / epoch_length;
+    let epoch_index = ctx.daa_score / epoch_length;
+    if epoch_index <= closed_epoch {
+        return;
+    }
+    let base = builder.params.base_class_id();
+    let model_blocks: u64 = builder
+        .state
+        .epoch_counters
+        .iter()
+        .filter(|(id, counter)| counter.epoch_index == closed_epoch && **id != base)
+        .map(|(_, counter)| counter.produced_blocks)
+        .fold(0u64, u64::saturating_add);
+    let expected = (epoch_length as u128 * builder.params.fp_attempt_share_permille as u128 / 1_000).min(u64::MAX as u128) as u64;
+    let rate = builder
+        .extras
+        .economic_payout
+        .map(|fold| fold.rate_sompi_per_giga)
+        .unwrap_or(crate::palw_work_target_v1::PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1);
+    let floor = palw_work_floor_for_block_v1(builder.params, ctx.subsidy, builder.extras.escrow_carve, rate);
+    let previous = builder.state.work_target;
+    let current = previous.map(|target| target.work).unwrap_or(floor);
+    let work = palw_work_target_step_v1(current, floor, model_blocks, expected, builder.params.class_daa_max_factor());
+    let one = crate::palw_economic_compute_v1::PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1;
+    builder.write_work_target(Some(PalwWorkTargetV2 {
+        work,
+        floor,
+        network_draws_q32: one,
+        effective_work: work,
         epoch_index,
         closed_model_blocks: model_blocks,
         closed_expected_blocks: expected,
@@ -14498,6 +14584,9 @@ pub struct PalwTransitionExtrasV1 {
     /// derives no share and seats no price, Fence 3's cap rule is off, an unrowed class is refused,
     /// and one network-wide verification budget replaces the per-class in-flight cap.
     pub work_target_active: bool,
+    /// ADR-0132 S: `Params::palw_single_lottery` resolved at the block's DAA. Past it the lottery
+    /// reads `max(W₀, W)` — the chain's stepped work target — and the network draw is gone.
+    pub single_lottery_active: bool,
     /// `Params::palw_model_lines` resolved at the block's DAA (ADR-0088 Decision 11). Below it
     /// the ten registry objects are refused and no claim is attributed.
     pub model_lines_active: bool,
@@ -15843,6 +15932,11 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             expect_matches(&state.work_target_shadow, expected)?;
             state.work_target_shadow = *install;
         }
+        PalwDeltaEntryV2::WorkTarget { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            expect_matches(&state.work_target, expected)?;
+            state.work_target = *install;
+        }
         PalwDeltaEntryV2::FinalWork { key, old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             let current = state.final_work.get(&key.0).and_then(|classes| classes.get(&key.1)).copied();
@@ -16081,6 +16175,8 @@ pub struct PalwStateCarriageV2 {
     /// carried, never rooted.
     pub work_target_shadow: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     pub final_work: BTreeMap<u64, BTreeMap<Hash64, u128>>,
+    /// ADR-0137 / ADR-0132 S. A sixteenth tagged tail (`0xAD`), encoded only when it exists; rooted.
+    pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -16156,6 +16252,8 @@ const PALW_CARRIAGE_CLAIM_ECONOMICS_TAIL_V1: u8 = 0xAB;
 /// ADR-0137 (shadow): the work target and the finalized-work ledger, once either exists. Carried,
 /// never rooted.
 const PALW_CARRIAGE_WORK_TARGET_SHADOW_TAIL_V1: u8 = 0xAC;
+/// ADR-0137 / ADR-0132 S: the chain's work target, once it exists (past its fence). Rooted.
+const PALW_CARRIAGE_WORK_TARGET_TAIL_V1: u8 = 0xAD;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -16271,6 +16369,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.work_target_shadow.serialize(writer)?;
             self.final_work.serialize(writer)?;
         }
+        if self.work_target.is_some() {
+            PALW_CARRIAGE_WORK_TARGET_TAIL_V1.serialize(writer)?;
+            self.work_target.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -16331,9 +16433,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut claim_economics = BTreeMap::new();
         let mut work_target_shadow = None;
         let mut final_work = BTreeMap::new();
+        let mut work_target = None;
         let mut seen_model_registry = false;
         let mut seen_claim_economics = false;
         let mut seen_work_target_shadow = false;
+        let mut seen_work_target = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -16412,6 +16516,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     work_target_shadow = Option::deserialize_reader(reader)?;
                     final_work = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_WORK_TARGET_TAIL_V1 if !seen_work_target => {
+                    seen_work_target = true;
+                    work_target = Option::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
                     class_shard_plans = BTreeMap::deserialize_reader(reader)?;
@@ -16481,6 +16589,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             claim_economics,
             work_target_shadow,
             final_work,
+            work_target,
         })
     }
 }
@@ -16536,6 +16645,7 @@ impl PalwStateCarriageV2 {
             claim_economics: state.claim_economics.clone(),
             work_target_shadow: state.work_target_shadow,
             final_work: state.final_work.clone(),
+            work_target: state.work_target,
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -16639,6 +16749,7 @@ impl PalwStateCarriageV2 {
             claim_economics: self.claim_economics,
             work_target_shadow: self.work_target_shadow,
             final_work: self.final_work,
+            work_target: self.work_target,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -19164,6 +19275,78 @@ pub(crate) mod tests {
                 &fenced,
             )
             .expect("the reverted block's claim gave its room back");
+        }
+
+        /// **The chain's work target (ADR-0137 / ADR-0132 S): past the fence it opens at the boundary
+        /// block's `W₀`, is rooted, steps by the closed epoch's model blocks against the cadence's
+        /// attempt-lane slice (up, where the models out-produce it — the single lottery's case), and
+        /// reverts with its block; the single lottery's floor is `max(W₀, W)`, harder than `W₀`.**
+        #[test]
+        fn adr0137_past_the_fence_the_chain_holds_a_rooted_work_target_that_the_single_lottery_reads() {
+            use crate::palw_admission_v2::{check_palw_class_lottery_v4, palw_work_lottery_floor_v1};
+            use crate::palw_work_target_v1::{PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1, palw_work_ticket_target_v1};
+            // A five-DAA epoch whose attempt lane is half the cadence: two model blocks expected an epoch.
+            let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 5, h64(1), 4, 1_000, 100, 500, 0)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_worker_carve_permille(620)
+                .expect("a legal carve");
+            let (_, root) = inventory();
+            let fenced = PalwTransitionExtrasV1 {
+                work_target_active: true,
+                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN }),
+                ..Default::default()
+            };
+            let (s1, _) = step_with(&PalwChainStateV2::genesis(), &p, &funded(1, 100, 1), &network(root), None, &fenced);
+            assert!(s1.work_target().is_none(), "no boundary crossed yet");
+            let mut s = s1;
+            for (word, daa, nonce) in [(2u64, 101u64, 11u64), (3, 102, 12), (4, 103, 13), (5, 104, 14)] {
+                let env = kimi_attempt(nonce, root);
+                s = step_with(&s, &p, &funded(word, daa, word), &[], Some(&env), &fenced).0;
+            }
+            assert!(s.work_target().is_none(), "mid-epoch blocks open nothing");
+            let (s6, d6) = step_with(&s, &p, &funded(6, 105, 6), &[], None, &fenced);
+            let floor = palw_work_floor_for_block_v1(&p, 1_000_000, None, PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1);
+            assert_eq!(floor, 688_888, "620 000 sompi at 9 MSK a G MAC-eq");
+            let target = s6.work_target().copied().expect("the boundary opens the chain's work target");
+            assert_eq!(
+                (target.floor, target.work, target.epoch_index, target.closed_model_blocks, target.closed_expected_blocks),
+                (floor, 2 * floor, 21, 4, 2),
+                "opened at W₀ and stepped by 4 / 2 in the same boundary: the models out-produced the cadence"
+            );
+            let mut bare = s6.clone();
+            bare.work_target = None;
+            assert_ne!(bare.state_root(), s6.state_root(), "the work target is in the root");
+            assert!(d6.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::WorkTarget { old: None, new: Some(_) })));
+            let reverted = revert_delta_v2(&s6, &d6, &p).unwrap();
+            assert!(reverted.work_target().is_none() && reverted.state_root() == s.state_root(), "reverts with its block");
+            let (again, _) = step_with(&s, &p, &funded(6, 105, 6), &[], None, &fenced);
+            assert_eq!(again.state_root(), s6.state_root(), "folded twice, one root");
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s6)).unwrap();
+            assert_eq!(borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().work_target, Some(target));
+            let (s7, _) = step_with(&s6, &p, &funded(7, 110, 7), &[], None, &fenced);
+            assert_eq!(s7.work_target().unwrap().work, floor, "a quiet epoch: 4× down would be half of W₀, the floor holds it");
+            assert_eq!(palw_work_lottery_floor_v1(&s6, Some(floor), false), Some(floor));
+            assert_eq!(palw_work_lottery_floor_v1(&s6, Some(floor), true), Some(2 * floor));
+            assert_eq!(palw_work_lottery_floor_v1(&s6, None, true), None, "nothing priced: nothing read");
+            assert_eq!(palw_work_ticket_target_v1(800_000, floor), u128::MAX, "heavier than W₀: the whole ticket");
+            let harder = palw_work_ticket_target_v1(800_000, 2 * floor);
+            assert!(harder > u128::MAX / 2 && harder < u128::MAX / 2 + u128::MAX / 8, "0.58 of the space: {harder:e}");
+            let priced = PalwTransitionExtrasV1 { model_registry: Some(fold(kimi_work())), ..fenced.clone() };
+            let (s8, _) = step_with(&s7, &p, &funded(8, 120, 8), &[], None, &priced);
+            assert!(s8.model_lifecycle(&kimi_id()).is_some(), "rowed");
+            let env = kimi_attempt(2, root);
+            let anchor = (1..5_000u64)
+                .map(h64)
+                .find(|anchor| crate::palw_attempt_v2::class_ticket_v3(&env.attempt, *anchor) > harder)
+                .expect("some anchor draws above 0.58 of the space");
+            check_palw_class_lottery_v4(&s8, &p, &env.attempt, anchor, Some(floor))
+                .expect("under the double draw's floor the whole ticket wins");
+            assert!(
+                check_palw_class_lottery_v4(&s8, &p, &env.attempt, anchor, Some(2 * floor)).is_err(),
+                "under the single lottery's W it loses"
+            );
         }
     }
 
@@ -27232,6 +27415,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ClaimEconomics { .. } => "claim_economics",
                     PalwDeltaEntryV2::WorkTargetShadow { .. } => "work_target_shadow",
                     PalwDeltaEntryV2::FinalWork { .. } => "final_work",
+                    PalwDeltaEntryV2::WorkTarget { .. } => "work_target",
                 });
             }
         }
@@ -27289,6 +27473,7 @@ pub(crate) mod tests {
             (53, PalwDeltaEntryV2::ClaimEconomics { key, old: None, new: None }),
             (54, PalwDeltaEntryV2::WorkTargetShadow { old: None, new: None }),
             (55, PalwDeltaEntryV2::FinalWork { key: (1, key), old: None, new: None }),
+            (56, PalwDeltaEntryV2::WorkTarget { old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -27831,6 +28016,8 @@ pub(crate) mod tests {
             // ADR-0137 (shadow): carried, never rooted.
             work_target_shadow: _,
             final_work: _,
+            // ADR-0137 / ADR-0132 S: rooted in its own guarded block once it exists.
+            work_target: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,
@@ -33478,6 +33665,7 @@ pub(crate) mod tests {
             PalwTransitionExtrasV1 {
                 work_target: None,
                 work_target_active: false,
+                single_lottery_active: false,
                 model_lines_active: true,
                 // ADR-0094's instalments ride ADR-0095's fence, and the EVM lane keeps the carrier
                 // lane's rule, so this fixture stands past it.
@@ -33706,6 +33894,7 @@ pub(crate) mod tests {
             let dormant = PalwTransitionExtrasV1 {
                 work_target: None,
                 work_target_active: false,
+                single_lottery_active: false,
                 model_lines_active: true,
                 model_benefits_active: false,
                 evm_market_active: false,

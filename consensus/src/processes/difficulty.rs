@@ -8,7 +8,7 @@ use kaspa_consensus_core::{
     BlockHashSet, BlueWorkType, MAX_WORK_LEVEL,
     config::params::{ForkActivation, MAX_DIFFICULTY_TARGET_AS_F64},
     errors::difficulty::{DifficultyError, DifficultyResult},
-    pow_layer0::{POW_ALGO_ID_PALW_RECEIPT_V3, algo_id_is_priced_by_bits},
+    pow_layer0::{POW_ALGO_ID_PALW_RECEIPT_V3, algo_id_is_priced_by_bits, is_palw_attempt_algo_id},
 };
 use kaspa_core::{info, log::CRESCENDO_KEYWORD};
 use kaspa_math::{Uint256, Uint320};
@@ -45,6 +45,7 @@ trait DifficultyManagerExtension {
                     sortable_block: item.0.clone(),
                     priced: true,
                     receipt: false,
+                    attempt: false,
                 }
             })
             .collect()
@@ -64,6 +65,7 @@ trait DifficultyManagerExtension {
                     sortable_block: item.0.clone(),
                     priced: algo_id_is_priced_by_bits(header.pow_algo_id),
                     receipt: header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3,
+                    attempt: is_palw_attempt_algo_id(header.pow_algo_id),
                 }
             })
             .collect()
@@ -191,6 +193,8 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     /// window — so the chain's DAA score, difficulty and median time are what they would be
     /// without the lane.
     round_lane: Option<ForkActivation>,
+    /// ADR-0132 S: past it an attempt row prices nothing (its digest is admitted unconditionally).
+    single_lottery: Option<ForkActivation>,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
@@ -208,6 +212,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         priced_rows_activation: ForkActivation,
         receipt_rows_activation: ForkActivation,
         round_lane: Option<ForkActivation>,
+        single_lottery: Option<ForkActivation>,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -222,6 +227,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             target_time_per_block,
             priced_rows_activation,
             receipt_rows_activation,
+            single_lottery,
             round_lane,
         }
     }
@@ -274,7 +280,11 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
     pub fn calculate_difficulty_bits(&self, window: &BlockWindowHeap, ghostdag_data: &GhostdagData, daa_score: u64) -> u32 {
         let priced_rows_only = self.priced_rows_activation.is_active(daa_score);
         let receipt_rows_unpriced = self.receipt_rows_activation.is_active(daa_score);
-        let difficulty_blocks = if priced_rows_only || receipt_rows_unpriced {
+        // ADR-0132 S: past the single lottery an attempt row's `bits` priced nothing, so it may not
+        // price the window either — the retarget would otherwise chase a cadence the class tickets
+        // set against a target no block pays.
+        let attempt_rows_unpriced = self.single_lottery.is_some_and(|fence| fence.is_active(daa_score));
+        let difficulty_blocks = if priced_rows_only || receipt_rows_unpriced || attempt_rows_unpriced {
             self.get_difficulty_blocks_with_lane(window)
         } else {
             self.get_difficulty_blocks(window)
@@ -298,6 +308,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             self.max_difficulty_target,
             priced_rows_only,
             receipt_rows_unpriced,
+            attempt_rows_unpriced,
         )
     }
 
@@ -332,6 +343,7 @@ fn retarget_bits(
     max_difficulty_target: Uint320,
     priced_rows_only: bool,
     receipt_rows_unpriced: bool,
+    attempt_rows_unpriced: bool,
 ) -> u32 {
     let (min_ts_index, max_ts_index) = difficulty_blocks.iter().position_minmax().into_option().unwrap();
 
@@ -347,9 +359,13 @@ fn retarget_bits(
     // Decision 1). Before the first fence every row counts; past it the heartbeat lane does not;
     // past the second the receipt lane does not either — its digest is admitted unconditionally,
     // so counting it measured quanta being spent rather than work (mainnet audit, 2026-09-05).
-    let counts =
-        |diff_block: &DifficultyBlock| (!priced_rows_only || diff_block.priced) && !(receipt_rows_unpriced && diff_block.receipt);
-    let counted_rows = if priced_rows_only || receipt_rows_unpriced {
+    let counts = |diff_block: &DifficultyBlock| {
+        let unpriced_lane = (priced_rows_only && !diff_block.priced)
+            || (receipt_rows_unpriced && diff_block.receipt)
+            || (attempt_rows_unpriced && diff_block.attempt);
+        !unpriced_lane
+    };
+    let counted_rows = if priced_rows_only || receipt_rows_unpriced || attempt_rows_unpriced {
         difficulty_blocks.iter().filter(|diff_block| counts(diff_block)).count() as u64
     } else {
         difficulty_blocks_len
@@ -389,6 +405,7 @@ pub fn retarget_bits_from_rows(
     max_difficulty_target: Uint256,
     priced_rows_only: bool,
     receipt_rows_unpriced: bool,
+    attempt_rows_unpriced: bool,
 ) -> Option<u32> {
     if rows.len() < 2 {
         return None;
@@ -401,6 +418,7 @@ pub fn retarget_bits_from_rows(
             sortable_block: SortableBlock::new(row.hash, row.blue_work),
             priced: algo_id_is_priced_by_bits(row.pow_algo_id),
             receipt: row.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3,
+            attempt: is_palw_attempt_algo_id(row.pow_algo_id),
         })
         .collect();
     Some(retarget_bits(
@@ -410,6 +428,7 @@ pub fn retarget_bits_from_rows(
         max_difficulty_target.into(),
         priced_rows_only,
         receipt_rows_unpriced,
+        attempt_rows_unpriced,
     ))
 }
 
@@ -445,6 +464,9 @@ struct DifficultyBlock {
     /// Whether this row is a receipt-lane row — unpriced past `Params::palw_receipt_rows_unpriced`
     /// (`false` on the legacy path, which never reads the lane).
     receipt: bool,
+    /// ADR-0132 S: whether this row is a PALW attempt row — unpriced past
+    /// `Params::palw_single_lottery`, where its digest stopped being compared to `bits` at all.
+    attempt: bool,
 }
 
 impl PartialEq for DifficultyBlock {
@@ -547,8 +569,8 @@ mod tests {
             slot += 1;
         }
         rows.truncate(264);
-        let legacy = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, false, false).unwrap();
-        let fenced = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false).unwrap();
+        let legacy = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, false, false, false).unwrap();
+        let fenced = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, false).unwrap();
         let target = |bits: u32| Uint256::from_compact_target_bits(bits);
         assert!(
             target(legacy) < target(bits_now),
@@ -562,12 +584,17 @@ mod tests {
         assert!(target(fenced) > target(bits_now), "past the fence the priced rate is one per six minutes: it eases ({fenced:#010x})");
         assert!((2.5..3.5).contains(&ratio), "eases by the priced-rate ratio, ~2.95, got {ratio:.3}");
 
+        // ADR-0132 S: past the single lottery the attempt rows price nothing either — the same
+        // window that eased by the priced-rate ratio reads as a window with no priced row.
+        let single = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, true).unwrap();
+        assert_eq!(single, MAX_DIFFICULTY_TARGET.compact_target_bits(), "no row prices the window past the single lottery");
+        assert_ne!(single, fenced, "and that is not the receipt fence's verdict on the same rows");
         // No priced row at all: MAX, not the previous bits — the recovery ADR-0083 §3 needs.
         for row in rows.iter_mut() {
             row.pow_algo_id = POW_ALGO_ID_HEARTBEAT_V1;
         }
         assert_eq!(
-            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false).unwrap(),
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, false).unwrap(),
             MAX_DIFFICULTY_TARGET.compact_target_bits()
         );
 
@@ -583,7 +610,7 @@ mod tests {
             };
         }
         assert_eq!(
-            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false).unwrap(),
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, false).unwrap(),
             MAX_DIFFICULTY_TARGET.compact_target_bits(),
             "at MAX with sparse attempts the window stays at MAX"
         );
@@ -594,8 +621,8 @@ mod tests {
             row.pow_algo_id = POW_ALGO_ID_PALW_COMMITTED_V2;
         }
         assert_eq!(
-            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false),
-            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, false, false),
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, false),
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, false, false, false),
             "with every row priced the two rules are one arithmetic"
         );
 
@@ -610,9 +637,9 @@ mod tests {
                 pow_algo_id: POW_ALGO_ID_PALW_COMMITTED_V2,
             })
             .collect();
-        let tightened = retarget_bits_from_rows(&dense, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false).unwrap();
+        let tightened = retarget_bits_from_rows(&dense, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, false).unwrap();
         assert!(target(tightened) < MAX_DIFFICULTY_TARGET, "attempts every 30 s against a 120 s cadence tighten");
-        assert!(retarget_bits_from_rows(&dense[..1], cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false).is_none());
+        assert!(retarget_bits_from_rows(&dense[..1], cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, false).is_none());
     }
 
     /// **A receipt row is not a priced row** (mainnet audit, 2026-09-05). `check_pow_layer0`
@@ -648,17 +675,17 @@ mod tests {
         rows.truncate(264);
         let target = |bits: u32| Uint256::from_compact_target_bits(bits);
         // Under the first fence alone the receipt rows still count: three rows a slot tightens.
-        let first = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false).unwrap();
+        let first = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, false, false).unwrap();
         assert!(target(first) < target(bits_now), "receipt rows counted as priced tighten the attempt lanes ({first:#010x})");
         // Past the second fence only the attempt rows count: one per six minutes, it eases.
-        let second = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, true).unwrap();
+        let second = retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, true, false).unwrap();
         assert!(target(second) > target(bits_now), "with receipts unpriced the chain reads as slow and eases ({second:#010x})");
         // Nothing but receipts: MAX, the recovery answer, not the bits that killed the lanes.
         for row in rows.iter_mut() {
             row.pow_algo_id = POW_ALGO_ID_PALW_RECEIPT_V3;
         }
         assert_eq!(
-            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, true).unwrap(),
+            retarget_bits_from_rows(&rows, cadence_ms, 1, MAX_DIFFICULTY_TARGET, true, true, false).unwrap(),
             MAX_DIFFICULTY_TARGET.compact_target_bits(),
             "a window of receipt rows alone holds no priced row"
         );

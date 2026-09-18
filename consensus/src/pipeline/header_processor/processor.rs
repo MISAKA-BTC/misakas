@@ -136,6 +136,9 @@ pub struct HeaderProcessor {
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset,
     /// which resolves to `PalwAttemptLaneV1::Unfenced` and leaves this gate exactly as it was.
     pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0132 S: the single lottery (`Params::palw_single_lottery`) — past it an attempt header's
+    /// digest is not compared to `bits` and derives no block level.
+    pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// **ADR-0072 Decision 8 at the header stage** (mainnet audit, 2026-09-06 — C-1): the fence and
     /// the state params it needs, resolved TOGETHER at construction so neither can be present
     /// without the other, and so the header path holds one value rather than re-deriving it per
@@ -246,6 +249,7 @@ impl HeaderProcessor {
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_execution_lane: params.palw_execution_lane_fence(),
             palw_attempt_activation: params.palw_attempt_activation,
+            palw_single_lottery: params.palw_single_lottery,
             palw_attempt_header_pins: params.palw_attempt_header_pins.and_then(|fence| match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some((fence, bundle.state.clone())),
                 _ => None,

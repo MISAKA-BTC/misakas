@@ -107,6 +107,7 @@ impl ConsensusServices {
             params.palw_receipt_rows_unpriced.unwrap_or(ForkActivation::never()),
             // ADR-0125: round blocks are outside every block's DAA set past the lane's fence.
             params.palw_execution_lane_fence().map(|lane| lane.activation),
+            params.palw_single_lottery,
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),
