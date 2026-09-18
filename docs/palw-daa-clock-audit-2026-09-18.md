@@ -144,14 +144,26 @@ receipt_rows)` — no store, no clock, no host state. Pinned by
 fence combination, including the heights where the attempt and receipt lanes are still priced and
 therefore still tick) and `the_classification_is_a_pure_function_every_node_computes_alike`.
 
-**The freeze the first version created, and its fix.** ADR-0066 took the heartbeat out of `bits`, so
-the first cut of ADR-0138 exempted it too — and a chain whose hash lane stops still beats, which
-means its DAA score would have **frozen** while blocks kept coming: every fence, deadline, retention
-and leak window stopped with it. The heartbeat is now inside the clock: one an hour on a constant
-target, at most four a mergeset, so it cannot pace the clock where the hash lane runs (one tick an
-hour against thirty) and it cannot let the clock stop where it does not. Pinned by
-`adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock` (the merging anchor counts the
-beat) and by the table above.
+**The freeze the first version created, and the double-count the obvious fix would have created.**
+ADR-0066 took the heartbeat out of `bits`, so the first cut of ADR-0138 exempted it too — and a chain
+whose hash lane stops still beats, which means its DAA score would have **frozen** while blocks kept
+coming: every fence, deadline, retention and leak window stopped with it. The registry drill showed
+this on a running chain: virtual DAA 20, unmoved, with 183 blocks accepted.
+
+Counting the heartbeat unconditionally would have been the opposite error, and a live one.
+`heartbeat_interval_ms` falls back to the 120-second RECOVERY interval whenever the selected parent
+is not a PALW-v2 block, and testnet-11's selected chain is 300 out of 300 algo-3 blocks — so every
+parent takes that branch. A heartbeat producer would have added a tick beside every anchor tick and
+run the clock at about twice its nominal rate. testnet-11 runs one such producer today, on the .113
+host, so this was not hypothetical.
+
+The rule is therefore per MERGESET. `palw_lane_advances_daa_v1` answers `false` for the heartbeat
+lane, and `daa_exempt_count` gives back exactly one exemption when the mergeset carries no priced
+block and at least one heartbeat. Where the hash lane runs the heartbeat adds nothing to the clock;
+where it stops, one heartbeat a mergeset keeps the clock alive. Pinned by
+`the_clock_is_the_anchor_and_the_heartbeat_and_nothing_else_past_the_fence` in both directions, and
+rehearsed on a running chain by the drill's fault phase, which stops the hash miner and requires the
+DAA to keep moving.
 
 **Exempt is not excluded.** The exemption is arithmetic on the score only. A merged attempt block
 stays blue, stays out of `mergeset_non_daa` — the set the coinbase skips (`coinbase.rs:233`) and the

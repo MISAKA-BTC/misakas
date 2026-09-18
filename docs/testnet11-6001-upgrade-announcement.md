@@ -30,7 +30,7 @@ of it fires without the rest:
 | one work target `W` — a block draws against `CCU / W`; no class share, class DAA, epoch budget or seat price is read | 0137 |
 | the single lottery — an attempt block's Layer-0 digest is no longer compared to `bits`, the class ticket is the whole lottery | 0132 S |
 | the short challenge window: a claim licensed past 6,001 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
-| the anchor clock: a block advances the DAA score iff `bits` priced it, or it is a heartbeat — the attempt and receipt lanes stop pacing the DAA-counted windows | 0138 |
+| the anchor clock: a block advances the DAA score only if `bits` priced it; a heartbeat stands in where a mergeset carries no priced block at all. The attempt and receipt lanes stop pacing the DAA-counted windows | 0138 |
 | the execution lane's gas: one 3 M budget per permitted round a chain block merges, under a 390 M ceiling (O13 decided) | 0139 |
 
 **DAA 6,100 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it

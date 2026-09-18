@@ -68,10 +68,22 @@ Two holes of its own, both found by re-auditing the fix rather than the bundle:
   — and the heartbeat is the chain's liveness tick (ADR-0066 took it out of `bits` so a stock of
   certified quanta could not tighten the attempt lane's target, not because the chain does not need
   it). A chain whose hash lane stopped would have kept producing while its DAA score froze, taking
-  every fence, deadline, retention and leak window with it. The heartbeat is in the clock: one an
-  hour nominally, one per recovery interval (120 s) where nothing else produces, at most four a
-  mergeset, on a constant target no producer moves — so it cannot pace the clock where the hash lane
-  runs, and it cannot let the clock stop where it does not.
+  every fence, deadline, retention and leak window with it. This was not a thought experiment: the
+  registry drill froze at virtual DAA 20 with 183 blocks accepted, on a devnet whose only producers
+  are PALW lanes.
+* **The heartbeat as a stand-in, not a second clock.** Counting the heartbeat unconditionally would
+  have been the opposite error. `heartbeat_interval_ms` falls back to the 120-second RECOVERY
+  interval whenever the selected parent is not a PALW-v2 block, and on testnet-11 — whose selected
+  chain is 300/300 algo-3 blocks — that is every block. A heartbeat miner would then have added a
+  second tick beside every anchor tick and run the clock at roughly twice its nominal rate, which is
+  the very error this ADR exists to remove. testnet-11 runs such a miner today, so this was live, not
+  hypothetical. The rule is therefore per MERGESET, not per block: `palw_lane_advances_daa_v1`
+  answers `false` for the heartbeat lane, and `daa_exempt_count` returns one fewer exemption only
+  when the mergeset carries no priced block and at least one heartbeat. Where the hash lane runs the
+  heartbeat adds nothing; where it stops, exactly one heartbeat a mergeset keeps the clock alive.
+  `the_clock_is_the_anchor_and_the_heartbeat_and_nothing_else_past_the_fence` pins both directions,
+  and the drill's fault phase stops the hash miner on a running chain and requires the DAA to keep
+  moving.
 * **The DNS leak's units.** ADR-0128 Decision 3 walks the evidence window in BLUE score and adds
   `t_leak_daa` into that blue total, which was the same thing while every lane ticked both clocks.
   With the DAA clock slower than the blue clock, a blue-bounded walk reaches back fewer DAA than the
