@@ -34901,6 +34901,268 @@ pub(crate) mod tests {
             assert_eq!(replayed.state_root(), s3.state_root(), "the delta replays to the same root");
             assert_eq!(revert_delta_v2(&replayed, &d3, &p).unwrap().state_root(), s.state_root(), "…and reverts");
         }
+
+        // ---- ADR-0143 — an artifact root has one owner --------------------------------------
+        //
+        // The defect these close, in the words of the live chain that had it: the Qwen2.5 class's
+        // founding root is also carried by a copy line, and the copy resolves first — because
+        // `model_version_of_root` returned the FIRST match in `BTreeMap` id order, which made a
+        // hash's byte order a consensus-visible outcome.
+
+        fn owned_extras() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { model_lines_active: true, artifact_root_ownership_active: true, ..Default::default() }
+        }
+
+        fn try_owned(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+            apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &owned_extras())
+        }
+
+        fn apply_owned(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            c: &PalwBlockContextV2,
+            objects: &[PalwConsensusObjectV2],
+            att: Option<&PalwAttemptEnvelopeV2>,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            let (state, delta) = try_owned(parent, p, c, objects, att).expect("transition applies");
+            state.assert_internal_consistency(p).expect("internal consistency after apply");
+            state.assert_deadline_consistency(p).expect("deadline consistency after apply");
+            (state, delta)
+        }
+
+        /// The squat, built below the fence exactly as testnet-11's was: a second line, founded by
+        /// a bond that is not the registrant's, carrying the class's OWN registered founding root.
+        fn squatted_chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Hash64) {
+            let (p, s, class) = owned_class_chain();
+            let squat = PalwConsensusObjectV2::ModelLineFounded {
+                class_id: class,
+                name: b"COPY".to_vec(),
+                founder: bond_key(2),
+                root: h64(0xA1),
+                signature: vec![1],
+            };
+            let (s3, _) = apply_lines(&s, &p, &ctx(3, 251, 3), &[squat], None);
+            let copy = model_line_id_v1(&class, &bond_key(2), b"COPY");
+            assert_eq!(
+                s3.artifact_line_of_root(&class, &h64(0xA1), false),
+                Some(copy),
+                "the defect, reproduced: below the fence the copy resolves first because it is the only line with a ROW"
+            );
+            assert_eq!(s3.model_version_of_root(&class, &h64(0xA1), 251, false), Some((copy, 1)));
+            assert!(!s3.artifact_owners_are_written(), "and nothing records who owns it");
+            (p, s3, class, copy)
+        }
+
+        /// **ADR-0143 Decisions 6 and 7.** The activation canonicalizes what is already on the
+        /// chain: the founding line takes back its own registered root however late it published
+        /// and however its id sorts, and the squatter's rows stay as record while ceasing to be
+        /// the answer.
+        #[test]
+        fn activation_returns_a_squatted_root_to_the_class_that_registered_it() {
+            let (p, s3, class, copy) = squatted_chain();
+            let (s4, d4) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+
+            assert_eq!(
+                s4.artifact_owner_of(&h64(0xA1)).copied(),
+                Some(PalwArtifactOwnerV1 { class_id: class, line_id: class, version: 1 }),
+                "D6 rule 1: the founding line, always — registration is what created the root's meaning"
+            );
+            assert_eq!(s4.artifact_line_of_root(&class, &h64(0xA1), true), Some(class));
+            assert_eq!(s4.model_version_of_root(&class, &h64(0xA1), 252, true), Some((class, 1)));
+            assert_eq!(
+                s4.artifact_owner_of(&h64(11)).copied(),
+                Some(PalwArtifactOwnerV1 { class_id: h64(1), line_id: h64(1), version: 1 }),
+                "every class's founding root is reserved, not only the disputed one"
+            );
+
+            // D7: the legacy row is historical record. The chain does not rewrite history; the row
+            // simply stops being the answer.
+            assert!(s4.model_line(&copy).is_some(), "the copy line survives");
+            assert_eq!(s4.model_version(&copy, 1).map(|v| v.root), Some(h64(0xA1)), "carrying the root it always carried");
+
+            // Crossing the fence writes ownership and NOTHING else: no payout moves, no version is
+            // rewritten, no market is touched (D8 — nothing settled before the fence is recomputed).
+            let beyond_the_index: Vec<_> = d4
+                .entries
+                .iter()
+                .filter(|e| !matches!(e, PalwDeltaEntryV2::ArtifactOwner { .. } | PalwDeltaEntryV2::LastPoint { .. }))
+                .collect();
+            assert!(beyond_the_index.is_empty(), "the crossing block's whole effect is the index: {beyond_the_index:?}");
+
+            // …and it runs ONCE. The next block finds the index non-empty and writes nothing.
+            let (s5, d5) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[], None);
+            assert!(!d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ArtifactOwner { .. })), "the migration is not re-run");
+            assert_eq!(
+                s5.artifact_owners_iter().collect::<Vec<_>>(),
+                s4.artifact_owners_iter().collect::<Vec<_>>(),
+                "not one row moves"
+            );
+        }
+
+        /// **ADR-0143 Decision 5.** A duplicate is refused where a root ENTERS state — at both
+        /// entrances, through one helper — and ADR-0088's competition is untouched: a DIFFERENT
+        /// root on the same class, from a bond that is not the registrant's, is still anybody's.
+        #[test]
+        fn a_duplicate_root_is_refused_at_both_entrances_and_a_different_one_is_not() {
+            let (p, s3, class, copy) = squatted_chain();
+            let (s4, _) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+
+            let found = |name: &[u8], root: Hash64| PalwConsensusObjectV2::ModelLineFounded {
+                class_id: class,
+                name: name.to_vec(),
+                founder: bond_key(2),
+                root,
+                signature: vec![1],
+            };
+            assert!(
+                matches!(
+                    try_owned(&s4, &p, &ctx(5, 253, 5), &[found(b"COPY-2", h64(0xA1))], None),
+                    Err(PalwStateV2Error::DuplicateArtifactRoot { root, owner }) if root == h64(0xA1) && owner == class
+                ),
+                "entrance 1: a line founded on an owned root is refused, and the refusal names the owner"
+            );
+
+            // The competition ADR-0088 sells, pinned so this rule cannot quietly eat it.
+            let (s5, _) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[found(b"RIVAL", h64(0xD1))], None);
+            let rival = model_line_id_v1(&class, &bond_key(2), b"RIVAL");
+            assert_eq!(s5.model_line(&rival).map(|l| l.owner), Some(Some(bond_key(2))), "a different root, a different bond, allowed");
+            assert_eq!(
+                s5.artifact_owner_of(&h64(0xD1)).copied(),
+                Some(PalwArtifactOwnerV1 { class_id: class, line_id: rival, version: 1 })
+            );
+
+            assert!(
+                matches!(
+                    try_owned(&s5, &p, &ctx(6, 254, 6), &[publish(copy, 2, h64(0xD1), false)], None),
+                    Err(PalwStateV2Error::DuplicateArtifactRoot { root, owner }) if root == h64(0xD1) && owner == rival
+                ),
+                "entrance 2: a version published on a root another line owns is refused too"
+            );
+            let (s6, _) = apply_owned(&s5, &p, &ctx(6, 254, 6), &[publish(copy, 2, h64(0xB2), false)], None);
+            assert_eq!(
+                s6.artifact_owner_of(&h64(0xB2)).copied(),
+                Some(PalwArtifactOwnerV1 { class_id: class, line_id: copy, version: 2 }),
+                "a fresh root is claimed by the line that published it"
+            );
+        }
+
+        /// **ADR-0143 Decision 4.** The founding root is reserved in the SAME transition that
+        /// writes the class, so there is no moment when a class's root is registered and unowned —
+        /// which is the window between announcing this fence and reaching it.
+        #[test]
+        fn a_class_registration_reserves_its_founding_root_atomically() {
+            let (p, s3, class, _) = squatted_chain();
+            let (s4, _) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+
+            let register = |id: Hash64, root: Hash64| {
+                let mut object = registration(id, 0, Some(bond_key(2)));
+                if let PalwConsensusObjectV2::ClassRegistered { artifact_root, slash_value_per_pwu, activation_daa, .. } = &mut object
+                {
+                    *artifact_root = root;
+                    *slash_value_per_pwu = 5;
+                    *activation_daa = 253;
+                }
+                object
+            };
+
+            let refusal = try_owned(&s4, &p, &ctx(5, 253, 5), &[register(h64(3), h64(0xA1))], None).expect_err("refused");
+            assert!(
+                matches!(refusal, PalwStateV2Error::DuplicateArtifactRoot { root, owner } if root == h64(0xA1) && owner == class),
+                "a class cannot be registered holding a root another line owns: {refusal}"
+            );
+            assert!(s4.class(&h64(3)).is_none(), "and the refusal leaves no class row behind");
+
+            let (s5, d5) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[register(h64(3), h64(0xC3))], None);
+            assert!(s5.class(&h64(3)).is_some(), "the class exists");
+            assert_eq!(
+                s5.artifact_owner_of(&h64(0xC3)).copied(),
+                Some(PalwArtifactOwnerV1 { class_id: h64(3), line_id: h64(3), version: 1 }),
+                "…and owns its founding root, written by the same block"
+            );
+            let wrote_class = d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::Class { key, .. } if *key == h64(3)));
+            let wrote_owner = d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ArtifactOwner { key, .. } if *key == h64(0xC3)));
+            assert!(wrote_class && wrote_owner, "one transition, both writes");
+        }
+
+        /// **ADR-0143 §5.** The index is ordinary rooted state: a reorg reverts it row by row, a
+        /// delta replays to the same root, and a snapshot carries it so a node that loaded one
+        /// answers as a node that folded the chain.
+        #[test]
+        fn the_index_reverts_replays_and_rides_the_carriage() {
+            let (p, s3, class, copy) = squatted_chain();
+            let (s4, d4) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+            assert_ne!(s4.state_root(), s3.state_root(), "the index is IN the root, so the crossing moves it");
+
+            let replayed = apply_delta_v2(&s3, &d4, &p).expect("the crossing replays");
+            assert_eq!(replayed.state_root(), s4.state_root(), "the delta is the transition");
+            let back = revert_delta_v2(&s4, &d4, &p).expect("the crossing reverts");
+            assert_eq!(back.state_root(), s3.state_root(), "a reorg across the fence leaves no row behind");
+            assert!(!back.artifact_owners_are_written(), "not one");
+            assert_eq!(
+                back.artifact_line_of_root(&class, &h64(0xA1), false),
+                Some(copy),
+                "and the pre-fence chain answers exactly as it did"
+            );
+
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).expect("the carriage encodes");
+            let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("and decodes");
+            assert_eq!(decoded.artifact_owners, s4.artifact_owners, "the tail carries every row");
+            assert_eq!(decoded.into_state(&p, Some(s4.state_root())).expect("a loaded snapshot").state_root(), s4.state_root(), "loaded == folded");
+
+            // Below the fence the tail is absent, so a chain that has not armed it carries exactly
+            // the bytes it always carried.
+            let pre = borsh::to_vec(&PalwStateCarriageV2::from_state(&s3)).expect("the carriage encodes");
+            assert!(!pre.contains(&PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1) || {
+                let decoded: PalwStateCarriageV2 = borsh::from_slice(&pre).unwrap();
+                decoded.artifact_owners.is_empty()
+            });
+            assert!(borsh::from_slice::<PalwStateCarriageV2>(&pre).unwrap().artifact_owners.is_empty());
+        }
+
+        /// **ADR-0143 Decision 3: one source for every attribution.** Usage counting and the
+        /// reward's buyback are separate call paths that used to walk the lines separately; both
+        /// now read the index, and the difference is visible on the squat — before the fence the
+        /// copy line harvested the founding root's claims, after it the copy earns nothing from a
+        /// root it does not own.
+        #[test]
+        fn usage_and_buyback_both_read_the_index() {
+            let (p, s3, class, copy) = squatted_chain();
+            let env = attempt_for_class(10, 1, class, bond_key(1), vec![7; 4], op_id(21), h64(0xA1));
+
+            // Below the fence: the squatter is paid the attention.
+            let (below, _) = apply_lines(&s3, &p, &ctx(4, 252, 4), &[], Some(&env));
+            assert_eq!(
+                below.model_version(&copy, 1).map(|v| v.usage.attempt_claims),
+                Some(1),
+                "the defect: usage counted on the line that merely sorted first"
+            );
+
+            // Past it: the same block, the same attempt, and the copy earns nothing.
+            let (s4, _) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+            let (above, _) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[], Some(&env));
+            assert_eq!(above.model_version(&copy, 1).map(|v| v.usage.attempt_claims), Some(0), "not one claim");
+            assert_eq!(
+                above.artifact_line_of_root(&class, &h64(0xA1), true),
+                Some(class),
+                "the buyback's own question — `model_buyback_at_final`'s first line — answers the founding line"
+            );
+
+            // The buyback follows the same answer, and the proof is that the pair it would buy from
+            // is the founding line's: a market seeded on the COPY is not reachable from this root.
+            let (seeded, _) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[PalwConsensusObjectV2::ModelSeed { line_id: copy, seeder: Hash64::from_u64_word(0xB0_0009), msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1, sink_index: 1 }], None);
+            assert!(seeded.model_market(&copy).is_some(), "the copy has a pair");
+            assert_eq!(
+                seeded.artifact_line_of_root(&class, &h64(0xA1), true).and_then(|line| seeded.model_market(&line)),
+                None,
+                "and a claim on the founding root cannot reach it: the buyback pays no pair rather than the wrong one"
+            );
+        }
     }
 
     // ---- ADR-0089 — the EVM's actions at the fold ---------------------------------------------
