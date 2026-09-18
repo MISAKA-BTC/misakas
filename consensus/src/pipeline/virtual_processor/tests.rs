@@ -599,10 +599,14 @@ async fn adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock() {
     // Two blocks were added on top of `sink_before` — the heartbeat and the anchor that merged it —
     // and the clock moved by exactly one: the anchor's.
     assert_eq!(daa_hb, daa_before + 1, "the heartbeat's own score counts the anchor it built on");
+    // The mergeset of `next` carries the heartbeat and the anchor `next` builds on. Something in it
+    // is priced, so the beat adds nothing: one anchor, one tick. (Where NOTHING priced is merged —
+    // a chain whose hash lane has stopped — one beat ticks in the anchor's place, which is what
+    // keeps the clock from freezing; `daa_exempt_count` is where that lives.)
     assert_eq!(
         daa_next,
         daa_hb + 1,
-        "…and the anchor that merges the heartbeat counts it: the beat is a tick, so a chain whose hash lane stops still has a clock"
+        "the anchor ticks and the beat beside it adds nothing: the clock runs at the cadence, not at twice it"
     );
     let ghostdag = vp.ghostdag_store.get_data(next_hash).unwrap();
     assert!(

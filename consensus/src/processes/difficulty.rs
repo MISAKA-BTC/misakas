@@ -361,19 +361,35 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension fo
         if self.anchor_clock.is_none() {
             return 0;
         }
-        ghostdag_data
-            .unordered_mergeset()
-            .filter(|hash| !mergeset_non_daa.contains(hash))
-            .filter(|hash| {
-                // One full-header read a mergeset block, the same read `is_round_block` has made
-                // since ADR-0125 (the compact header carries no algo id), and the mergeset is
-                // bounded by `mergeset_size_limit`. A header store hit is a cache hit on the hot
-                // path — the window walk has just read the same blocks.
-                self.headers_store
-                    .get_header(*hash)
-                    .is_ok_and(|header| !self.lane_advances_daa_at(header.pow_algo_id, header.daa_score))
-            })
-            .count() as u64
+        let mut exempt = 0u64;
+        let mut priced = 0u64;
+        let mut heartbeats = 0u64;
+        for hash in ghostdag_data.unordered_mergeset() {
+            if mergeset_non_daa.contains(&hash) {
+                continue;
+            }
+            // One full-header read a mergeset block, the same read `is_round_block` has made since
+            // ADR-0125 (the compact header carries no algo id), and the mergeset is bounded by
+            // `mergeset_size_limit`. A header store hit is a cache hit on the hot path — the window
+            // walk has just read the same blocks.
+            let Ok(header) = self.headers_store.get_header(hash) else { continue };
+            if self.lane_advances_daa_at(header.pow_algo_id, header.daa_score) {
+                priced += 1;
+            } else {
+                exempt += 1;
+                if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
+                    heartbeats += 1;
+                }
+            }
+        }
+        // **The heartbeat stands in for a missing anchor, and only then** (ADR-0138 §3b). ADR-0066
+        // took the beat out of `bits`, and its slot rule gives it the RECOVERY interval — one every
+        // 120 s — whenever its selected parent is not a PALW-v2 block, which on a hash-lane chain is
+        // every block. Counting it always would run the clock at twice the cadence and halve every
+        // DAA window again; counting it never would let a chain whose hash lane stops keep producing
+        // with a frozen clock. So: where the mergeset carries something `bits` priced, the beat adds
+        // nothing; where it carries none, exactly one beat ticks in the anchor's place.
+        if priced == 0 && heartbeats > 0 { exempt.saturating_sub(1) } else { exempt }
     }
 
     fn headers_store(&self) -> &dyn HeaderStoreReader {
@@ -547,7 +563,9 @@ impl Ord for DifficultyBlock {
 }
 
 /// **ADR-0138's rule, as a function of the fences alone** — so it can be read and tested without a
-/// store. See [`SampledDifficultyManager::lane_advances_daa_at`] for what it means.
+/// store: does a block of this lane, minted at this height, advance the DAA score on its own?
+/// The heartbeat's stand-in tick is decided per MERGESET, not per lane, so it lives in
+/// [`DifficultyManagerExtension::daa_exempt_count`] rather than here.
 pub fn palw_lane_advances_daa_v1(
     pow_algo_id: u8,
     daa_score: u64,
@@ -556,9 +574,6 @@ pub fn palw_lane_advances_daa_v1(
     receipt_rows_activation: ForkActivation,
 ) -> bool {
     if !anchor_clock.is_some_and(|fence| fence.is_active(daa_score)) {
-        return true;
-    }
-    if pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
         return true;
     }
     if single_lottery.is_some_and(|fence| fence.is_active(daa_score)) {
@@ -808,7 +823,11 @@ mod adr0138_clock_tests {
         // Past the fence, with the single lottery in force (the 6,001 shape).
         let armed = Some(always);
         assert!(ticks(ANCHOR, 100, armed, armed, always), "the anchor ticks: `bits` prices it");
-        assert!(ticks(POW_ALGO_ID_HEARTBEAT_V1, 100, armed, armed, always), "the heartbeat ticks: the chain sets its rate");
+        assert!(
+            !ticks(POW_ALGO_ID_HEARTBEAT_V1, 100, armed, armed, always),
+            "the heartbeat does not tick ON ITS OWN — it stands in for a missing anchor, which is a fact about the \
+             MERGESET and lives in `daa_exempt_count`"
+        );
         for (name, algo) in [("attempt-committed", POW_ALGO_ID_PALW_COMMITTED_V2), ("attempt-exec", POW_ALGO_ID_PALW_EXEC_V3)] {
             assert!(!ticks(algo, 100, armed, armed, always), "{name}: unpriced past the single lottery, out of the clock");
         }
