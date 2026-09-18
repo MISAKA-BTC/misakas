@@ -241,9 +241,14 @@ if [ -z "$gate_now" ] || [ "$gate_now" -lt $((gate_began + CLOCK_GATE_DAA)) ]; t
   die "THE CLOCK STOPPED AT ITS OWN FLAG DAY: DAA $gate_began -> ${gate_now:-?} in ${CLOCK_GATE_WAIT}s. \
 The chain is producing and the score is not moving — the fence retired whatever was pacing it and nothing took over."
 fi
+# `grep -c` PRINTS a count and then exits 1 when it is zero, so `|| echo 0` appended a SECOND line
+# and the arithmetic saw "0\n0" — a syntax error that made the evidence line claim zero beats on a
+# run the watcher could see minting them. The count is the command's output; the exit status is not
+# a failure to read.
 beats_total=0
 for i in $(seq 0 $((NODES - 1))); do
-  beats_total=$((beats_total + $(grep -c 'the clock ticked' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)))
+  beats="$(grep -c 'the clock ticked' "$WORK_DIR/node-$i.log" 2>/dev/null | head -1)"
+  beats_total=$((beats_total + ${beats:-0}))
 done
 log "    DAA $gate_began -> $gate_now past the fence in $((SECONDS - gate_t0))s, with $beats_total heartbeat(s) minted across the fleet"
 

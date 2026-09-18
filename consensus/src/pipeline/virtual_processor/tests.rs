@@ -635,7 +635,6 @@ async fn adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock() {
 /// same slot, both accepted as BLOCKS — and exactly one of them moves the clock.
 #[tokio::test]
 async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_ticks_once_a_slot() {
-    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     kaspa_core::log::try_init_logger("info");
     let catalog = palw_v2_test_catalog();
@@ -680,7 +679,6 @@ async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_tic
         beats.push(hash);
     }
 
-    let vp = ctx.consensus.virtual_processor();
     // **The clock ticks once a slot, and the slot is measured from the last ADVANCE — whoever made
     // it.** Three beats 120 s, 120 s and 1 s apart produce two ticks over 240 s, which is the
     // cadence. Which of them ticks is worth spelling out, because it is one merge later than the

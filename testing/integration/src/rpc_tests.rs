@@ -924,6 +924,20 @@ async fn sanity_test() {
                     );
                 })
             }
+            // ADR-0135: the registry reader answers on EVERY network, including one that never
+            // arms it — a fence nobody scheduled must read as `scheduled: false`, not as an error,
+            // because "this chain does not run the registry" is an answer an operator needs and a
+            // failed call is not one. The daemon under test is hash-only, so this is that case.
+            KaspadPayloadOps::GetPalwModelRegistry => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client.get_palw_model_registry_call(None, GetPalwModelRegistryRequest {}).await.unwrap();
+                    assert!(!response.available, "a chain without ConsensusV2 has no registry to describe");
+                    assert!(!response.scheduled, "and schedules no fence");
+                    assert!(!response.active, "so it is not governed by one either");
+                    assert_eq!(response.seat_count, 0, "and seats nobody");
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {
