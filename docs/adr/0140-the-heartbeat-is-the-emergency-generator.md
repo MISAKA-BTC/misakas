@@ -2,7 +2,7 @@
 
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Changes no
 consensus rule and arms no fence.** It settles what the goal is, keeps the hash puzzle, states the
-non-interference invariant as four separate claims, and says which of them the code already
+non-interference invariant as five separate claims, and says which of them the code already
 guarantees and which are only believed.
 
 **Builds on:** ADR-0060 (the liveness doctrine), ADR-0064 (trustless recovery from a total stop),
@@ -82,10 +82,10 @@ So, in consensus, a heartbeat is **always admissible under the same fixed condit
 safety comes not from restricting *when* it may exist but from making it *worth nothing* while the
 chain is producing. That is §4.
 
-## 4. The non-interference invariant, as four separate claims
+## 4. The invariant, as five separate claims
 
-This is the substance of the ADR. Each claim is separate, each has its own mechanism, and three of
-the four are already closed by earlier ADRs — which is worth writing down, because "we believe the
+This is the substance of the ADR. Each claim is separate, each has its own mechanism, and four of
+the five are already closed by earlier ADRs — which is worth writing down, because "we believe the
 heartbeat is harmless" is not the same as "here is the rule that makes it harmless".
 
 ### C1 — It must not tighten the difficulty
