@@ -1,6 +1,6 @@
 # DNS-finality validator runbook
 
-Verified against current `main` / Testnet-11 Relaunch 5f on 2026-09-13. The precommit section describes the build that schedules Testnet-11's DAA 6,001 flag day (ADR-0128).
+Verified against current `main` / Testnet-11 Relaunch 5f on 2026-09-13. The precommit section describes the build that schedules Testnet-11's DAA 6,301 flag day (ADR-0128).
 
 This validator is separate from a PALW producer/panel Bond. It signs DNS-finality attestations through `kaspa-pq-validator`.
 
@@ -73,7 +73,7 @@ Testnet-11 has a 120-second PALW block cadence and a DNS attestation epoch of 2 
 
 ## Precommits (round two, ADR-0128)
 
-From the height a network schedules ADR-0128's BFT gate (Testnet-11: **DAA 6,001**), an epoch's anchor is DNS-final only when validators holding more than two thirds of the counted bonded stake have both **attested** to it and **precommitted** to it, and the DNS stake reorg gate then refuses any chain that abandons that anchor until it goes stale. Voting power is the bond amount.
+From the height a network schedules ADR-0128's BFT gate (Testnet-11: **DAA 6,301**), an epoch's anchor is DNS-final only when validators holding more than two thirds of the counted bonded stake have both **attested** to it and **precommitted** to it, and the DNS stake reorg gate then refuses any chain that abandons that anchor until it goes stale. Voting power is the bond amount.
 
 - `kaspa-pq-validator run` precommits by itself on such a network, after each poll's attestations; the in-node validator does the same. Neither needs a flag. Both read what to sign from the node (`getPrecommitDuty`), so the node must be a build that has it; against an older node the sidecar logs a warning and asks again every 10 minutes.
 - Each precommit declares the lock the chain shows for your bond and is signed only after it is written to the **precommit safety log**, `<signed-epoch-db>.precommits.json` beside the attestation log (`validator.state` → `validator.precommits.json`). The in-node validator uses the same name next to its state file, so moving a validator between the two keeps it.
@@ -87,6 +87,6 @@ Stopping the process does not unbond. Unbonding has a waiting/evidence period du
 
 ## Relationship to PALW
 
-Validators attest and precommit for the DNS stake reorg gate and are paid 20 % of the block subsidy from the height the network schedules (ADR-0126, revised; Testnet-11: DAA 6,001, previously 30 %). PALW block production and settlement do not depend on validators: a PALW payment's confirmations are settled PALW anchors (`misaka palw settlement`, ADR-0127/0129), and the gate is a veto layered on top.
+Validators attest and precommit for the DNS stake reorg gate and are paid 20 % of the block subsidy from the height the network schedules (ADR-0126, revised; Testnet-11: DAA 6,301, previously 30 %). PALW block production and settlement do not depend on validators: a PALW payment's confirmations are settled PALW anchors (`misaka palw settlement`, ADR-0127/0129), and the gate is a veto layered on top.
 
 Validator downtime affects DNS confirmation and its consumers such as the EVM bridge. It is not the same service as `misaka mining` or `misaka verifier`, and its Bond outpoint cannot substitute for a PALW producer Bond.
