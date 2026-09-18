@@ -1238,6 +1238,19 @@ pub struct Params {
     /// its own flag day with zero beats minted. Arming one without the other is that failure.
     /// `None` on every shipped preset; hashed Some-only.
     pub palw_clock_cursor: Option<ForkActivation>,
+    /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
+    /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
+    /// state refuses one that is already owned, and the positional lookups that answered "which
+    /// line does this root belong to" by whichever `line_id` sorted first in a `BTreeMap` retire.
+    ///
+    /// ADR-0088's competition is NOT restricted: a different root on the same class, from any bond,
+    /// stays permissionless. Only the exact root collides, and the chain never looks inside an
+    /// artifact to judge similarity.
+    ///
+    /// Independent of the 6,301 bundle on purpose — one failure domain each. `None` on every
+    /// shipped preset; hashed Some-only, so a build with it unset fingerprints byte-identically to
+    /// a build without the field.
+    pub palw_artifact_root_ownership: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -5028,6 +5041,7 @@ impl Params {
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
+            palw_artifact_root_ownership,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5105,6 +5119,7 @@ impl Params {
             ("palw_readiness_v2", *palw_readiness_v2),
             ("palw_anchor_clock", *palw_anchor_clock),
             ("palw_clock_cursor", *palw_clock_cursor),
+            ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5594,6 +5609,7 @@ impl Params {
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
+            palw_artifact_root_ownership,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5852,6 +5868,14 @@ impl Params {
         }
         // ADR-0142 the clock cursor, the fence the anchor clock may not be armed without.
         match palw_clock_cursor.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0143 the artifact-root ownership fence.
+        match palw_artifact_root_ownership.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6323,6 +6347,7 @@ impl Params {
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
+            palw_artifact_root_ownership,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6570,6 +6595,11 @@ impl Params {
         // leaves it unset — fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_clock_cursor {
             h.write(b"palw_clock_cursor");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
+        if let Some(activation) = palw_artifact_root_ownership {
+            h.write(b"palw_artifact_root_ownership");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -7223,6 +7253,7 @@ impl Params {
             palw_readiness_v2: self.palw_readiness_v2,
             palw_anchor_clock: self.palw_anchor_clock,
             palw_clock_cursor: None,
+            palw_artifact_root_ownership: None,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -8167,6 +8198,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_artifact_root_ownership: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8364,6 +8396,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_artifact_root_ownership: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8543,6 +8576,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_artifact_root_ownership: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -13157,6 +13191,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_artifact_root_ownership: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).

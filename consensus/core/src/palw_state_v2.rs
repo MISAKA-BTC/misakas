@@ -5058,6 +5058,15 @@ pub struct PalwChainStateV2 {
     /// the controller that holds the cadence. Rooted (`work_target/v1`) and carried in its own tail
     /// once it exists; a state without it is byte-identical to a state before the field.
     work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
+    /// **ADR-0143 Decision 1: who owns an artifact root** — one row per root, keyed by the root
+    /// itself rather than by a line, so "which line does this artifact belong to" has exactly one
+    /// answer and it is not the one whose `line_id` happens to sort first in a `BTreeMap`.
+    ///
+    /// Written past `Params::palw_artifact_root_ownership` and never before: a chain with the fence
+    /// dormant leaves this empty, and an empty map is rooted and carried as nothing at all, so the
+    /// state root is byte-identical to a state before the field. Decision 6's migration fills it
+    /// once, at the fence, from the rows already on the chain.
+    artifact_owners: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5199,6 +5208,7 @@ impl PalwChainStateV2 {
             work_target_shadow: None,
             final_work: BTreeMap::new(),
             work_target: None,
+            artifact_owners: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5831,6 +5841,23 @@ impl PalwChainStateV2 {
     }
 
     /// ADR-0137 / ADR-0132 S: the work target the chain holds (past `Params::palw_work_target`).
+    /// ADR-0143 Decision 1: the one owner of an artifact root, or `None` where the index has not
+    /// been built (the fence is dormant) or the root is unclaimed. A caller that must distinguish
+    /// "no owner" from "no index" asks [`Self::artifact_owners_are_written`].
+    pub fn artifact_owner_of(&self, root: &Hash64) -> Option<&crate::palw_model_lines_v1::PalwArtifactOwnerV1> {
+        self.artifact_owners.get(root)
+    }
+
+    /// Whether the ownership index exists at all. Empty means the fence has not fired — past it the
+    /// migration has written at least the base class's founding root.
+    pub fn artifact_owners_are_written(&self) -> bool {
+        !self.artifact_owners.is_empty()
+    }
+
+    pub fn artifact_owners_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_model_lines_v1::PalwArtifactOwnerV1)> {
+        self.artifact_owners.iter()
+    }
+
     pub fn work_target(&self) -> Option<&crate::palw_work_target_v1::PalwWorkTargetV2> {
         self.work_target.as_ref()
     }
@@ -6300,6 +6327,12 @@ impl PalwChainStateV2 {
         if let Some(target) = &self.work_target {
             state.update(b"work_target/v1");
             state.update(&borsh::to_vec(target).expect("PalwWorkTargetV2 is borsh-serializable"));
+        }
+        // ADR-0143: the artifact-root owners, named, once the index exists (past its fence). Empty
+        // hashes as nothing, so a chain with the fence dormant commits the root it always did.
+        if !self.artifact_owners.is_empty() {
+            state.update(b"artifact_owners/v1");
+            state.update(collection_root(b"artifact_owners", &self.artifact_owners).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -7267,10 +7300,16 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u128>,
         new: Option<u128>,
     },
-    /// ADR-0137 / ADR-0132 S: the chain's work target stepped at an epoch boundary (56). Appended last.
+    /// ADR-0137 / ADR-0132 S: the chain's work target stepped at an epoch boundary (56).
     WorkTarget {
         old: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
         new: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
+    },
+    /// ADR-0143: an artifact root's owner was written or dropped (57). Appended last.
+    ArtifactOwner {
+        key: Hash64,
+        old: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
+        new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
     },
 }
 
@@ -7997,6 +8036,25 @@ impl<'a> TransitionBuilder<'a> {
         if old != new {
             self.entries.push(PalwDeltaEntryV2::WorkTarget { old, new });
         }
+    }
+
+    /// ADR-0143 Decision 3: the ONE place a root's owner is written. Every entrance — the founding
+    /// reservation, a line founding, a version publication and the activation migration — goes
+    /// through here, so "who owns this root" has one writer as well as one reader.
+    fn write_artifact_owner(&mut self, key: Hash64, new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>) {
+        let old = self.state.artifact_owners.get(&key).copied();
+        if old == new {
+            return;
+        }
+        match new {
+            Some(owner) => {
+                self.state.artifact_owners.insert(key, owner);
+            }
+            None => {
+                self.state.artifact_owners.remove(&key);
+            }
+        }
+        self.entries.push(PalwDeltaEntryV2::ArtifactOwner { key, old, new });
     }
 
     fn write_final_work(&mut self, key: (u64, Hash64), new: Option<u128>) {
@@ -16248,6 +16306,7 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             expect_matches(&state.work_target, expected)?;
             state.work_target = *install;
         }
+        PalwDeltaEntryV2::ArtifactOwner { key, old, new } => swap_write!(state.artifact_owners, key, old, new),
         PalwDeltaEntryV2::FinalWork { key, old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             let current = state.final_work.get(&key.0).and_then(|classes| classes.get(&key.1)).copied();
@@ -16488,6 +16547,8 @@ pub struct PalwStateCarriageV2 {
     pub final_work: BTreeMap<u64, BTreeMap<Hash64, u128>>,
     /// ADR-0137 / ADR-0132 S. A sixteenth tagged tail (`0xAD`), encoded only when it exists; rooted.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
+    /// ADR-0143. A seventeenth tagged tail (`0xAE`), encoded only when non-empty; rooted.
+    pub artifact_owners: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -16565,6 +16626,8 @@ const PALW_CARRIAGE_CLAIM_ECONOMICS_TAIL_V1: u8 = 0xAB;
 const PALW_CARRIAGE_WORK_TARGET_SHADOW_TAIL_V1: u8 = 0xAC;
 /// ADR-0137 / ADR-0132 S: the chain's work target, once it exists (past its fence). Rooted.
 const PALW_CARRIAGE_WORK_TARGET_TAIL_V1: u8 = 0xAD;
+/// ADR-0143: the artifact-root owners, once the index exists (past its fence). Rooted.
+const PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1: u8 = 0xAE;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -16684,6 +16747,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_WORK_TARGET_TAIL_V1.serialize(writer)?;
             self.work_target.serialize(writer)?;
         }
+        if !self.artifact_owners.is_empty() {
+            PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1.serialize(writer)?;
+            self.artifact_owners.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -16749,6 +16816,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_claim_economics = false;
         let mut seen_work_target_shadow = false;
         let mut seen_work_target = false;
+        let mut artifact_owners = BTreeMap::new();
+        let mut seen_artifact_owners = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -16831,6 +16900,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_work_target = true;
                     work_target = Option::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1 if !seen_artifact_owners => {
+                    seen_artifact_owners = true;
+                    artifact_owners = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
                     class_shard_plans = BTreeMap::deserialize_reader(reader)?;
@@ -16901,6 +16974,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             work_target_shadow,
             final_work,
             work_target,
+            artifact_owners,
         })
     }
 }
@@ -16957,6 +17031,7 @@ impl PalwStateCarriageV2 {
             work_target_shadow: state.work_target_shadow,
             final_work: state.final_work.clone(),
             work_target: state.work_target,
+            artifact_owners: state.artifact_owners.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -17061,6 +17136,7 @@ impl PalwStateCarriageV2 {
             work_target_shadow: self.work_target_shadow,
             final_work: self.final_work,
             work_target: self.work_target,
+            artifact_owners: self.artifact_owners,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -28405,6 +28481,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::WorkTargetShadow { .. } => "work_target_shadow",
                     PalwDeltaEntryV2::FinalWork { .. } => "final_work",
                     PalwDeltaEntryV2::WorkTarget { .. } => "work_target",
+                    PalwDeltaEntryV2::ArtifactOwner { .. } => "artifact_owner",
                 });
             }
         }
@@ -28463,6 +28540,8 @@ pub(crate) mod tests {
             (54, PalwDeltaEntryV2::WorkTargetShadow { old: None, new: None }),
             (55, PalwDeltaEntryV2::FinalWork { key: (1, key), old: None, new: None }),
             (56, PalwDeltaEntryV2::WorkTarget { old: None, new: None }),
+            // ADR-0143, appended last.
+            (57, PalwDeltaEntryV2::ArtifactOwner { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -29007,6 +29086,7 @@ pub(crate) mod tests {
             final_work: _,
             // ADR-0137 / ADR-0132 S: rooted in its own guarded block once it exists.
             work_target: _,
+            artifact_owners: _,
             safe_weight: _,
             retired_safe_weight: _,
             bounded_immature: _,

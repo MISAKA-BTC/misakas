@@ -604,6 +604,7 @@ mod tests {
             // the probe sets the cursor wherever it sets the clock; setting the cursor alone is
             // legal on its own.
             "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
+            "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,
