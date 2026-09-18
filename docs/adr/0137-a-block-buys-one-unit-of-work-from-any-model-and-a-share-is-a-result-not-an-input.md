@@ -667,6 +667,18 @@ but the reader (op 186 / `misaka palw economics`); the pin is the shadow's: the 
 the delta reverts, and a quiet epoch returns W to the floor. testnet-11 arms S with the work target at 6,001
 (2026-09-18), so the lottery reads the rooted W from the flag day.
 
+
+### 22.3 Drill finding (2026-09-18): the producer's pre-check read the budget past the fence
+
+The devnet drill with the registry, the payout and the work target armed at 20 passed its first phase
+(rows opened, proofs landed, the grace passed, a restarted node held the rows) and then stalled at the
+class's first claim: node-3 held `this class's epoch budget is already spent` for an hour while admission
+past the fence prices a claim against `CCU / W` and reads no class budget at all — the pre-check was
+holding on a rule the chain had stopped reading. `PalwProducerFactsV2::epoch_budget_read` (false past
+the fence) makes `has_epoch_room` true where nothing is read; pinned in the producer's own test. The
+same drill, re-run on the fixed build with all four fences at 20, is the release's evidence (§7.5 of
+ADR-0132 for the fourth).
+
 ## 21. Number hygiene
 
 Written 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement` as 0137, the next free
