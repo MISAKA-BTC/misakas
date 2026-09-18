@@ -387,6 +387,16 @@ the meaning `artifact.bytes` already had), and withholds it below the fence. Not
 own `--palw-register-class` route does not yet follow its registration with a manifest (the operator
 carries `<name>.class-manifest.borsh`).
 
+**Audit corrections (2026-09-18, `docs/palw-audit-2026-09-18-6001.md`).** The pre-arming audit
+refused the bundle as it stood and four of its seven blockers were this ADR's: the registry fold's
+work map read the node's own carriage store, so a class without a lifecycle row could be rowed on one
+node and not on another (a rooted divergence — the map is now the chain and the build alone); the
+panel-room check went live with the work target while a readiness proof is refused below the same
+height, so every class refused claims on the flag day (it now waits for `grace_until_daa`); the
+ready-seat counter used the network collateral floor while the panel draw demands ten times it; and
+the node's replay memory need was the largest artifact it held rather than the class it was proving.
+The possession proof's width is unchanged and remains this ADR's V1 limitation — the audit's H-6.
+
 **Not built, stated.** The possession proof's width (one leaf a proof, V1); a held class's existing
 claims run to their end untouched. The PALW state sync path (`PalwStateSyncV2`, unused by the live
 node) carries no lane and no registry.

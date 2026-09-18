@@ -7,6 +7,7 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 - [Join as a PALW producer](testnet11-join-mining.md)
 - [Run a full node](testnet11-node-operator.md)
 - [The DAA 6,001 PALW upgrade and Verification V2 at 6,100](testnet11-6001-upgrade-announcement.md) — what fires at 6,000, 6,001, 6,100, 6,201 and 6,900, and what an operator must do before 6,000
+- [Pre-arming security audit of the DAA 6,001 bundle (2026-09-18)](palw-audit-2026-09-18-6001.md) — two Critical and six High findings, the seven release blockers and their fixes, and what is left as residual risk
 - [Run a DNS-finality validator](validator-runbook.md)
 - [Operate model classes](palw-public-testnet-classes-runbook.md)
 - [Add a model through the SDK](palw-model-onboarding-sdk.md)

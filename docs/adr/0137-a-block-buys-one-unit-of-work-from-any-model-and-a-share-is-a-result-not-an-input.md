@@ -668,6 +668,23 @@ the delta reverts, and a quiet epoch returns W to the floor. testnet-11 arms S w
 (2026-09-18), so the lottery reads the rooted W from the flag day.
 
 
+### 22.4 Audit finding (2026-09-18): the class target the fence retires still priced `pwu`
+
+The pre-arming audit (`docs/palw-audit-2026-09-18-6001.md`, finding C-2) found the rule this ADR
+retires still read one line away from the lottery it replaced. `check_palw_class_lottery_v4` priced
+the draw at `MAX · min(1, CCU/W)`, but the admission's `DerivedV1` arm still demanded
+`attempt.pwu == palw_pwu_v1(state.class_target, pwu_per_inference)` — a registrant-declared value no
+rule re-prices past the fence. Two consequences, both live at 6,001: every honest model block was
+disqualified, because the producer's facts derived pwu from the new ticket (an eight-node devnet
+drill logged `PwuClaimNotDerived` fifteen times on each node while the class never opened a claim);
+and an attacker registering with `initial_target = 1` could claim `pwu = u64::MAX`, which the chain
+then demanded, and buy `safe_weight` and `bounded_immature` — fork choice — for a collateral that
+does not scale with it (`palw_exposure_pwu_v1` reserves `pwu_per_inference`).
+
+`palw_effective_class_target_v1` is now the one spelling of "the target that governs this class at
+this block", read by the lottery, by the pwu derivation and by the producer's facts. A rule that
+reads a class's target and does not read it there is a bug by construction.
+
 ### 22.3 Drill finding (2026-09-18): the producer's pre-check read the budget past the fence
 
 The devnet drill with the registry, the payout and the work target armed at 20 passed its first phase
