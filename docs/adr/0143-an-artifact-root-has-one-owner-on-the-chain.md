@@ -9,14 +9,21 @@ height the schedule already names is invisible to the handshake, and two builds 
 who owns an artifact from 6,700 would peer as if they agreed. Two DAA of separation is what makes it
 a named refusal instead of a silent fork.
 
-**What is drilled and what is not, stated plainly.** The release drill crosses the 6,700/6,701 fences
-and its clock gate passed; it does **not** cross this one. The launch runbook's §5c gate asks for a
-drill that crosses each armed fence, and this fence is shipping without its own crossing — an
-operator decision taken against a deadline (the tip was ~170 DAA from 6,700 at 42 DAA/h). What
-carries the risk instead: the crossing block's whole effect is ownership rows and nothing else,
-asserted; the migration is deterministic and reverts exactly, asserted; and below the fence every
-answer is byte-identical to the chain that has been running. §6 states the one quantity that is
-bounded by the state rather than by a constant.
+**Drilled, on a running chain.** The release drill arms this fence on its devnet
+(`--palw-artifact-root-ownership-devnet`, refused outright on a public network) and crosses it, two
+DAA past the flag day exactly as 6,702 sits past 6,700. Phase 1 step 1c waits for the chain to pass
+the height — a fence that stops the chain is the failure the drill exists to catch — and then asks
+the index the one question only the index can answer:
+
+```
+1b/6  DAA 20 -> 23 past the fence in 543s, with 13 heartbeat(s) minted across the fleet
+1c/6  daa 23 past 22; the base class's founding line owns 1 root(s) by the index
+```
+
+A class's own registered root belongs to its founding line, so an empty answer there would mean the
+migration did not run in the crossing block, or that the reader is not reading the index. It is not
+empty. The lane profile is testnet-11's — `palw+heartbeat`, no hash lane — because a devnet with an
+anchor lane never reaches the state a PALW-only chain reaches at the same fence.
 
 **Builds on:** ADR-0087 (a position is never money settled), ADR-0088 (model lines and versions),
 ADR-0091 (the reward buys the pair), ADR-0095 (a position is a membership).
