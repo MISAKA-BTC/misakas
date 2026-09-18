@@ -743,7 +743,7 @@ impl PalwPanelService {
     ) -> Vec<PalwConsensusObjectV2> {
         use kaspa_consensus_core::palw_model_registry_v1::{
             PALW_READINESS_OPENING_MAX_BYTES_V1, PALW_SEAT_READINESS_V1_MLDSA87_CONTEXT, palw_readiness_challenge_seed_v1,
-            palw_readiness_duty_due_v1, palw_readiness_window_v1, palw_seat_readiness_message_v1,
+            palw_readiness_window_v1, palw_seat_readiness_message_v1,
         };
         let Some(bond) = self.bond else { return Vec::new() };
         if self.keypair.is_none() {
@@ -811,7 +811,15 @@ impl PalwPanelService {
             }
             let row = read.readiness.iter().find(|r| r.bond == bond_key && r.class_id == class.class_id).map(|r| r.row);
             let last = self.readiness_submitted.lock().unwrap().get(&class.class_id).copied();
-            if !palw_readiness_duty_due_v1(row.as_ref(), current_daa, span_now, last, read.span_daa, &globals) {
+            if !kaspa_consensus_core::palw_model_registry_v1::palw_readiness_duty_due_v2(
+                row.as_ref(),
+                current_daa,
+                span_now,
+                last,
+                read.span_daa,
+                &globals,
+                self.consensus_config.params.palw_readiness_v2_at(current_daa),
+            ) {
                 continue;
             }
             let backend = match backends.resolve(class.class_id, class.artifact_root) {

@@ -1152,12 +1152,31 @@ pub fn palw_readiness_duty_due_v1(
     span_daa: u64,
     g: &PalwRegistryGlobalsV1,
 ) -> bool {
+    palw_readiness_duty_due_v2(row, now_daa, span_now, last_submitted_span, span_daa, g, false)
+}
+
+/// **ADR-0133 §11.2: the same question past readiness V2.** The chain stops counting a V1 row the
+/// moment the fence bites and gives a V2 row eight spans instead of thirty — so a seat that asked
+/// the old question would sit on a fresh-looking V1 row while the registry counted it out, lose its
+/// seat, and take the class's panel with it. Past the fence a V1 row is always due, and a V2 row is
+/// due at half the V2 window.
+pub fn palw_readiness_duty_due_v2(
+    row: Option<&PalwSeatReadinessRowV1>,
+    now_daa: u64,
+    span_now: u64,
+    last_submitted_span: Option<u64>,
+    span_daa: u64,
+    g: &PalwRegistryGlobalsV1,
+    readiness_v2: bool,
+) -> bool {
     if last_submitted_span == Some(span_now) {
         return false;
     }
-    let age_daa = (g.readiness_probe_max_age_spans as u64).saturating_mul(span_daa.max(1));
+    let spans = if readiness_v2 { PALW_READINESS_V2_MAX_AGE_SPANS_V1 } else { g.readiness_probe_max_age_spans };
+    let age_daa = (spans as u64).saturating_mul(span_daa.max(1));
     match row {
         None => true,
+        Some(row) if readiness_v2 && row.proof_version < 2 => true, // a one-leaf row counts for nothing now
         Some(row) => now_daa.saturating_sub(row.proved_daa) > age_daa / 2,
     }
 }
