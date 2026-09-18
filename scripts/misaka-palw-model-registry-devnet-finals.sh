@@ -124,9 +124,32 @@ start_miner() {
   pids+=("$mp")
   log "hash miner pid $mp on node-$MINER_NODE gRPC $GRPC_PORT, one block per ${MINER_INTERVAL_MS} ms — the anchor lane the DAA clock counts"
 }
+# **A datadir one process still holds is not a datadir this phase can restart from** (2026-09-19).
+#
+# Phase 1's nodes outlived its script, so starting node-1 here panicked on
+# `meta/LOCK: Resource temporarily unavailable` — and the phase then spent its whole 30-minute
+# budget reporting that op 186 listed no class, which is true of a node that never came up and says
+# nothing about the chain. A drill that cannot tell its own fault from the chain's is worse than no
+# drill, so the lock is now waited for and named.
+wait_for_free_datadir() {
+  local i="$1" lock="$WORK_DIR/node-$i/misaka-devnet/datadir/meta/LOCK" waited=0
+  [ -e "$lock" ] || return 0
+  while lsof -nP -- "$lock" >/dev/null 2>&1; do
+    waited=$((waited + 2))
+    if [ "$waited" -gt 60 ]; then
+      log "    node-$i's datadir is still held by: $(lsof -nP -t -- "$lock" 2>/dev/null | tr '\n' ' ')"
+      die "node-$i's datadir lock is held after ${waited}s — a previous phase's node is still running. \
+Stop it before this phase starts, or its node panics on the lock and every later check reports the \
+absence that causes."
+    fi
+    sleep 2
+  done
+}
+
 log "1/4 the nodes restart from their datadirs; node-$PRODUCER_NODE as a producer for the class"
 for ((i=0; i<NODES; i++)); do
   [ "$i" -eq "$PRODUCER_NODE" ] && continue
+  wait_for_free_datadir "$i"
   pids+=("$(start_node "$i" "")")
 done
 start_miner
@@ -139,6 +162,7 @@ while ! step_expired; do
 done
 [ -n "$CLASS_ID" ] || die "op 186 lists no non-base class with a row on node-1 after the restart"
 log "    class $CLASS_ID · $(reg 1 "[(c['state'], c['readySeatsNow'], c['requiredReadySeats'], c['inflightNow'], c['maxInflightClaims'], c['sharePermille']) for c in v['classes'] if c['classId']=='$CLASS_ID'][0]")"
+wait_for_free_datadir "$PRODUCER_NODE"
 pids+=("$(start_node "$PRODUCER_NODE" "--palw-producer-class=$CLASS_ID")")
 log "    node-$PRODUCER_NODE pid ${pids[-1]} producing for the class"
 
