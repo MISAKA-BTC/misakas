@@ -1,5 +1,11 @@
 # ADR-0073: Real-demand work bears the weight
 
+> **Status amendment (2026-09-18, ADR-0137):** past `Params::palw_work_target` — testnet-11's DAA 6,001 flag day —
+> a class's *share* is a **result**, not a lottery input. The class target, the class DAA, the epoch budget, the
+> admission-derived share and the seat price this ADR specifies are **not read** past the fence: a block draws
+> against `CCU / W` (one network-wide work target) and the readers report the rolling share of finalized work.
+> Below the fence the text stands as the rule it was; see ADR-0137 §3–§5 and §22.
+
 **Status:** PROPOSED (2026-09-02). Decision 2 is DECIDED; its activation is gated by Decisions 1 and 3.
 **Builds on:** ADR-0044 (the free-prompt lane), ADR-0066 (heartbeat out of `bits`), ADR-0068 (the LLM-primary
 economy), ADR-0069 (adjudicability is the price of weight), ADR-0070 (the model tiers' step spaces),

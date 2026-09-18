@@ -1,5 +1,11 @@
 # ADR-0074: The attempt is a claim, drawn by the chain
 
+> **Status amendment (2026-09-18, ADR-0137):** past `Params::palw_work_target` — testnet-11's DAA 6,001 flag day —
+> a class's *share* is a **result**, not a lottery input. The class target, the class DAA, the epoch budget, the
+> admission-derived share and the seat price this ADR specifies are **not read** past the fence: a block draws
+> against `CCU / W` (one network-wide work target) and the readers report the rolling share of finalized work.
+> Below the fence the text stands as the rule it was; see ADR-0137 §3–§5 and §22.
+
 **Status:** PROPOSED (2026-09-02), decided by the user on two points that this ADR only spells
 out: (1) the attempt lane adopts the beacon draw (ADR-0073 Decision 3c's open option), and
 (2) **the beacon is a fact derived from the chain a node already holds — never an attestation, a

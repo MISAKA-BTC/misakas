@@ -1,5 +1,11 @@
 # ADR-0054: A class's cadence share follows its own production
 
+> **Status amendment (2026-09-18, ADR-0137):** past `Params::palw_work_target` — testnet-11's DAA 6,001 flag day —
+> a class's *share* is a **result**, not a lottery input. The class target, the class DAA, the epoch budget, the
+> admission-derived share and the seat price this ADR specifies are **not read** past the fence: a block draws
+> against `CCU / W` (one network-wide work target) and the readers report the rolling share of finalized work.
+> Below the fence the text stands as the rule it was; see ADR-0137 §3–§5 and §22.
+
 Status: **Accepted.** Adds the share-raise path ADR-0045 deferred ("automatic share re-allocation
 from class health") and closes the half of ADR-0045 Decision 3 that had no writer. Moves
 `palw_ruleset_id_v2` (two new `PalwStateParamsV2` fields), so every network re-mints.

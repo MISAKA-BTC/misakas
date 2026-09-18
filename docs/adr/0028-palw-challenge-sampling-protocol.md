@@ -1,5 +1,12 @@
 # ADR-0028: PALW challenge sampling — a scheduler for re-execution, never a verdict
 
+> **Status amendment (2026-09-18, ADR-0133):** the windows below are stated against the 120 s block cadence of the
+> day, and the scheduling fabric they describe is not the V2 lineage's. On V2 verification is its own clock —
+> the receipt window (600 DAA), a class's verification window in spans, the class-local gate and the registry's
+> capacity rule (ADR-0133, ADR-0135) — and **no claim has to verify inside a block interval**. Verification V2
+> (S1, segmented replay) is fenced at testnet-11's DAA 6,100 (ADR-0133 §11.1). The 120 s figure that survives is
+> the PALW anchor cadence (ADR-0021), not a claim's deadline.
+
 Status: **Accepted (architecture), with the §4e remedy set SUPERSEDED on the V2 lineage.**
 Activates nothing; devnet / shadow / zero-credit envelope
 unchanged. This ADR fixes the scheduling fabric that ADR-0027 left open: who re-executes which

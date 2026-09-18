@@ -1,5 +1,11 @@
 # ADR-0076: The attempt lane's seed is the retarget's own equilibrium
 
+> **Status amendment (2026-09-18, ADR-0137):** past `Params::palw_work_target` — testnet-11's DAA 6,001 flag day —
+> a class's *share* is a **result**, not a lottery input. The class target, the class DAA, the epoch budget, the
+> admission-derived share and the seat price this ADR specifies are **not read** past the fence: a block draws
+> against `CCU / W` (one network-wide work target) and the readers report the rolling share of finalized work.
+> Below the fence the text stands as the rule it was; see ADR-0137 §3–§5 and §22.
+
 **Status:** ACCEPTED (2026-09-02), implemented for the Relaunch 5e re-genesis (every preset's
 fingerprint moves). Written against a measurement, not a design review: testnet-11 Relaunch 5d ran
 its first hour with the liveness floor at 249 blocks and both model tiers at **zero**, against a
