@@ -283,6 +283,18 @@ Nothing consensus reads; the fingerprint does not move.
   calibrated from the shadow so the heaviest live class sits under the 80 % ceiling (a class paid its escrow
   whole reads as saturated and would not activate).
 
+* **Armed for testnet-11 (prepared 2026-09-17 night on `wip/arm-6001-registry-payout`, merged 2026-09-18 on the
+  operator's go, after the devnet drill with the three fences armed passed its first phase):** `palw_economic_payout` at the 6,001 flag day beside the registry, with
+  `rate = 900,000,000 sompi per 10⁹ MAC-eq` (9 MSK per G MAC-eq), `α = 100 ‰`, the panel share between
+  100 ‰ and 300 ‰, the cap ceiling 800 ‰. Calibration from the shadow's numbers at DAA ~5,780 (§1–2,
+  ADR-0131): the dense A16 row's attempted compute is 1.495 class draws × 2.0 network draws (the difficulty
+  floor's `bits`) × 83.1 G MAC-eq ≈ 248.5 G a claim — the heaviest live class — priced at 2,237 MSK of the
+  3,200.85 MSK escrow (69.9 %, under the ceiling with room for a retarget to ~1.7 draws); the hybrid's
+  36.2 G a claim at 326 MSK (10.2 %). At `α = 0.1` a five-seat full replay gives the panel 14 % (dense:
+  `C_V = 5 × 83.1 G`) and 20 % (hybrid: `5 × 18.1 G`) — the operator's "light verification ~10 %, heavy
+  20–30 %" band. What the price leaves (30 % of the dense escrow, 90 % of the hybrid's) is never minted.
+  The fingerprint moves to `32c2e8e3…`; the fork id does not.
+
 ### 7.5 S — the single lottery, built dormant (2026-09-18, commit 7c4f350e)
 
 `Params::palw_single_lottery: Option<ForkActivation>` — None on every preset, `--palw-single-lottery-devnet`

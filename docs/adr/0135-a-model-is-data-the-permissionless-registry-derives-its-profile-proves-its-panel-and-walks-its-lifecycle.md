@@ -156,6 +156,16 @@ after    Kimi, Llama, a new mixture, a 100B model: a manifest and a bond, no for
 
 ## 7. What is built — Protocol Upgrade A, behind a dormant fence (2026-09-17)
 
+**Armed for testnet-11 (prepared 2026-09-17 night, on `wip/arm-6001-registry-payout`, merged only on the
+operator's go after the devnet drill):** `palw_model_registry` at the 6,001 flag day, beside ADR-0132 Upgrade
+C (`palw_economic_payout`, ADR-0132 §7) and ADR-0137's work target (`palw_work_target`, which stops
+Decision 5's shares being read at the same height they would first be written — ADR-0137 §3.5 is why the
+two may not be a height apart). The fingerprint moves from `135b6ee0…` to `32c2e8e3…`; the fork id's
+height set does not (6,001 was already scheduled), so the two builds are told apart by the fingerprint alone.
+Rows open at the first span boundary past 6,001 for every class the node can describe (the amendment
+below), the seats' proofs count after one readiness age (30 spans × 5 DAA = 150 DAA, ~30 h), and the classes
+walk the lifecycle from there.
+
 **Amended 2026-09-17 (evening), found by the devnet drill:** the fold's registry input named "the genesis
 classes' work, from the registrations the bundle carries" — but no shipped bundle registration carries an
 admission carriage (a genesis class's profile is the catalog's, of which the bundle holds only a root), so no
