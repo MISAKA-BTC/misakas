@@ -4361,6 +4361,11 @@ impl Params {
         self.palw_work_target.is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0143: whether an artifact root has one recorded owner at `daa_score`.
+    pub fn palw_artifact_root_ownership_at(&self, daa_score: u64) -> bool {
+        self.palw_artifact_root_ownership.is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
     pub fn palw_single_lottery_at(&self, daa_score: u64) -> bool {
         self.palw_single_lottery.is_some_and(|f| f.is_active(daa_score))

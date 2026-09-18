@@ -416,6 +416,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_registry: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0137: `Params::palw_work_target` — dormant everywhere; past it the lottery reads `W₀`.
     pub(super) palw_work_target: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0143: `Params::palw_artifact_root_ownership` — dormant everywhere; past it an artifact
+    /// root has one owner and a duplicate is refused where it enters state.
+    pub(super) palw_artifact_root_ownership: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
@@ -930,6 +933,7 @@ impl VirtualStateProcessor {
             palw_compute_overlay_retired: params.palw_compute_overlay_retired,
             palw_model_registry: params.palw_model_registry,
             palw_work_target: params.palw_work_target,
+            palw_artifact_root_ownership: params.palw_artifact_root_ownership,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
             palw_readiness_v2: params.palw_readiness_v2,
@@ -7617,6 +7621,7 @@ impl VirtualStateProcessor {
             // class's work — on every ConsensusV2 network, so every node prints the same `W`.
             work_target: self.palw_work_target_fold_for(point),
             work_target_active: self.palw_work_target_at(daa_score),
+            artifact_root_ownership_active: self.palw_artifact_root_ownership_at(daa_score),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
@@ -7905,6 +7910,11 @@ impl VirtualStateProcessor {
     /// ADR-0137: whether the work target is in force at `daa_score`.
     pub(super) fn palw_work_target_at(&self, daa_score: u64) -> bool {
         self.palw_work_target.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0143: whether an artifact root has one recorded owner at `daa_score`.
+    pub(super) fn palw_artifact_root_ownership_at(&self, daa_score: u64) -> bool {
+        self.palw_artifact_root_ownership.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// ADR-0137: `W₀` for a block of `daa_score` paying `subsidy`, where the work target is in
