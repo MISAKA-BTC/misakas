@@ -87,6 +87,12 @@ pub struct PalwProducerFactsV2 {
     /// read — so it is `false` here and set by the consensus API that answers the question, which is
     /// the one path every producer and the RPC take.
     pub epoch_budget_release_armed: bool,
+    /// ADR-0137: whether the chain still reads the epoch budget at this point. Past
+    /// `Params::palw_work_target` admission prices a claim against `CCU / W` and reads no class
+    /// budget, so the producer must not hold on one either — the devnet drill of 2026-09-18 found
+    /// the producer holding "epoch budget spent" past the fence while admission would have
+    /// accepted, and the class never produced a claim.
+    pub epoch_budget_read: bool,
     /// Is this the liveness floor? **The floor is EXEMPT from the epoch budget** — admission says so
     /// at `palw_admission_v2.rs:234`, and the exemption is what makes ADR-0039 W6′'s deadlock
     /// unrepresentable: DAA only advances when blocks are produced, so a floor that could be capped
@@ -143,6 +149,10 @@ impl PalwProducerFactsV2 {
     /// Is the epoch budget spent? A producer that keeps mining past it produces blocks admission
     /// refuses — burning an inference each time and learning nothing.
     pub fn has_epoch_room(&self) -> bool {
+        // Past the work target no budget is read at all (ADR-0137): room is not a question.
+        if !self.epoch_budget_read {
+            return true;
+        }
         // The floor is exempt, exactly as admission exempts it. See `is_base_class`.
         let released = if self.epoch_budget_release_armed { self.epoch_budget_released } else { 0 };
         self.is_base_class || self.epoch_produced_blocks < self.epoch_budget_blocks.saturating_add(released)
@@ -293,6 +303,7 @@ pub fn palw_producer_facts_v2(
         epoch_produced_blocks,
         epoch_budget_released,
         epoch_budget_release_armed: false,
+        epoch_budget_read: work_target_floor.is_none(),
         bond,
         safe_weight: state.safe_weight(),
         live_total: state.safe_weight().saturating_add(state.bounded_immature()),
@@ -610,6 +621,29 @@ mod tests {
         facts.epoch_budget_blocks = 0;
         assert_eq!(facts.ready_to_produce(&[7; 4]), Err("this class's epoch budget is already spent"));
         assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Ok(()), "a receipt draws on no attempt budget");
+        // ADR-0137: past the work target the chain reads no budget, so neither does the producer —
+        // the same spent budget is not a hold (the 2026-09-18 drill's stall).
+        facts.epoch_budget_read = false;
+        assert_eq!(
+            facts.ready_to_produce(&[7; 4]),
+            Err("the bond's exposure ceiling leaves no room for another claim"),
+            "no budget is read past the work target: the full ceiling set above is what holds now"
+        );
+        assert!(facts.has_epoch_room(), "a spent budget is not a hold past the work target");
+        facts.epoch_budget_read = true;
+        let past_the_target = palw_producer_facts_v2(
+            &state,
+            &params,
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&bond_key),
+            Some(1),
+        )
+        .unwrap();
+        assert!(!past_the_target.epoch_budget_read, "the facts built past the fence say so themselves");
+        assert!(past_the_target.has_epoch_room());
 
         // The key still matters to both lanes.
         assert_eq!(facts.ready_to_spend_receipts(&[9; 4]), Err("the local signing key is not the one this bond registered"));
