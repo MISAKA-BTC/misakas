@@ -31,6 +31,7 @@ REGISTRY_AT="${REGISTRY_AT:-20}"
 # draws against CCU / W0 and no share, budget or class target is read.
 PAYOUT_AT="${PAYOUT_AT:-}"
 WORK_TARGET_AT="${WORK_TARGET_AT:-}"
+SINGLE_LOTTERY_AT="${SINGLE_LOTTERY_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 MODEL_ID="${MODEL_ID:-}"
 # With an artifact the shipped devnet class set is used (the artifact's class is a genesis class the
@@ -76,6 +77,7 @@ node_args() {
   [ "$FLOOR_ONLY" = 1 ] && args+=(--palw-devnet-floor-only)
   [ -n "$PAYOUT_AT" ] && args+=(--palw-economic-payout-devnet="$PAYOUT_AT")
   [ -n "$WORK_TARGET_AT" ] && args+=(--palw-work-target-devnet="$WORK_TARGET_AT")
+  [ -n "$SINGLE_LOTTERY_AT" ] && args+=(--palw-single-lottery-devnet="$SINGLE_LOTTERY_AT")
   if [ -n "$CLASS_ARTIFACT" ]; then
     args+=(--palw-class-artifact="$CLASS_ARTIFACT")
     if [ "$i" -eq 1 ] && [ "$REGISTER_CLASS" = 1 ]; then

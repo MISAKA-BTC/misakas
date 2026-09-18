@@ -595,6 +595,7 @@ mod tests {
             "palw_model_registry" => params.palw_model_registry = Some(at),
             "palw_work_target" => params.palw_work_target = Some(at),
             "palw_single_lottery" => params.palw_single_lottery = Some(at),
+            "palw_short_challenge_window" => params.set_palw_short_challenge_window(Some(at)),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,
@@ -1422,6 +1423,8 @@ mod tests {
         // ADR-0137's work target rides it too — and it has to, or the registry's shares would be the
         // only rule in force for the gap (ADR-0137 §3.5).
         at_6000.palw_work_target = Some(six_thousand);
+        at_6000.palw_single_lottery = Some(six_thousand);
+        at_6000.set_palw_short_challenge_window(Some(six_thousand));
         assert_eq!(
             at_6000.fence_schedule_v1(),
             without_the_set.fence_schedule_v1(),

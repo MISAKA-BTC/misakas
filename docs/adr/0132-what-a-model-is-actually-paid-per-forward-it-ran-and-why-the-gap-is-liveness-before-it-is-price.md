@@ -293,7 +293,8 @@ Nothing consensus reads; the fingerprint does not move.
   36.2 G a claim at 326 MSK (10.2 %). At `α = 0.1` a five-seat full replay gives the panel 14 % (dense:
   `C_V = 5 × 83.1 G`) and 20 % (hybrid: `5 × 18.1 G`) — the operator's "light verification ~10 %, heavy
   20–30 %" band. What the price leaves (30 % of the dense escrow, 90 % of the hybrid's) is never minted.
-  The fingerprint moves to `32c2e8e3…`; the fork id does not.
+  The fingerprint moved to `32c2e8e3…` with the registry, the payout and the work target, and to `8af89f85…` once S and the
+  short challenge window (§7.6) joined the same day (2026-09-18); the fork id's height set does not move.
 
 ### 7.5 S — the single lottery, built dormant (2026-09-18, commit 7c4f350e)
 
@@ -322,7 +323,27 @@ Pinned by `adr0132_the_single_lottery_fence_is_dormant_everywhere_arms_by_height
 (params), `the_single_lottery_admits_the_attempt_digest_unconditionally_and_buys_no_level` (pow), the
 difficulty window test (`no row prices the window past the single lottery`) and
 `adr0137_past_the_fence_the_chain_holds_a_rooted_work_target_that_the_single_lottery_reads` (state).
-Activation: **None** in the 6,001 release; it follows a drill under `--palw-single-lottery-devnet`.
+Activation: **testnet-11 DAA 6,001**, the same day as the registry, the payout and the work target — the operator's
+rule of 2026-09-18 that the PALW upgrade has one flag day and no part of it fires without the rest, pinned by
+`t11_daa_6000_is_the_compatibility_boundary_and_6001_the_one_palw_upgrade_flag_day`; the devnet drill arms all
+four at 20 (`SINGLE_LOTTERY_AT`).
+
+### 7.6 The short challenge window, made a fence (2026-09-18)
+
+`6fdf6ba7` (origin/main, 2026-09-14) shortened a licensed claim's challenge window from `window_challenge`
+(1,200 DAA) to 120 DAA past a bare `daa_score >= 7_000` in `PalwStateParamsV2::window_challenge_at`, "kept
+outside the serialized ruleset so the existing fingerprint remains unchanged"; the 2026-09-17 flag-day move
+carried the constant to 6,000. A consensus rule at a height no fingerprint or fork id can see is the
+silent-fork shape this repository refuses elsewhere, and the operator's rule of 2026-09-18 is that nothing
+rides the 6,001 bundle implicitly. It is now `Params::palw_short_challenge_window`: `Some(6,001)` on
+testnet-11 — explicit, beside the model economy it exists for, since at testnet-11's pace (1–5 DAA an hour)
+1,200 DAA to a Final is weeks — and `None` elsewhere; hashed Some-only, in the schedule and the fork id like
+every fence; mirrored into the V2 bundle's `PalwStateParamsV2::short_challenge_window_from_daa` by
+`Params::set_palw_short_challenge_window` (borsh-skipped, so no dormant preset's ruleset id moves), and
+`validate_palw_v2` refuses a bundle whose copy disagrees with the fence. The window past it is
+`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1 = 120`. Pinned by `the_short_challenge_window_is_a_fence_not_a_constant`
+(state) and the flag-day table test (params); DAA 6,000 keeps the long window — it is the compatibility
+boundary, not a rule change.
 
 ## 8. Number hygiene
 

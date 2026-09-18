@@ -99,6 +99,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         }
         "palw_work_target" => params.palw_work_target = Some(at),
         "palw_single_lottery" => params.palw_single_lottery = Some(at),
+        "palw_short_challenge_window" => params.set_palw_short_challenge_window(Some(at)),
         "palw_panel_economy" => params.palw_panel_economy = Some(at),
         "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
         "palw_overlay_carve" => {

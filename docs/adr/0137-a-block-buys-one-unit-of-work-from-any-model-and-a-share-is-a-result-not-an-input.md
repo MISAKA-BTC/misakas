@@ -34,7 +34,7 @@ class draws against `MAX · min(1, CCU / W₀)` with `W₀ = escrow / rate` off 
 (306.25 G MAC-eq at the payout's 9 MSK a G MAC-eq, against forwards of 21–199 G), no share, model
 class target or epoch budget is read, the registry keeps its rows, proofs and lifecycle gate, and one
 network-wide verification budget replaces the per-class in-flight cap. The fingerprint moves from
-`135b6ee0…` to `32c2e8e3…`; the fork id's height set does not (6,001 was already scheduled), so the
+`135b6ee0…` to `32c2e8e3…`, and on 2026-09-18 to `8af89f85…` when the single lottery and the short challenge window (ADR-0132 S, §7.6) joined the same day; the fork id's height set does not (6,001 was already scheduled), so the
 two builds are told apart by the fingerprint alone — and the fleet is refused from 6,000 by the held
 and deep fences the same release moves there.
 
@@ -664,7 +664,8 @@ carriage tail 0xAD, delta 56, `work_target/v1` in the root). It steps at every e
 does — closed model blocks over `epoch × fp_attempt_share‰`, clamped by `class_daa_max_factor`, never below
 `W₀` — and the single lottery's floor is `max(W₀, W)` (`palw_work_lottery_floor_v1`). Below S nothing reads it
 but the reader (op 186 / `misaka palw economics`); the pin is the shadow's: the root moves only past the fence,
-the delta reverts, and a quiet epoch returns W to the floor.
+the delta reverts, and a quiet epoch returns W to the floor. testnet-11 arms S with the work target at 6,001
+(2026-09-18), so the lottery reads the rooted W from the flag day.
 
 ## 21. Number hygiene
 

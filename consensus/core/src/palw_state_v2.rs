@@ -855,15 +855,32 @@ pub struct PalwStateParamsV2 {
     ///
     /// `None` is byte-identical to the transition before the field existed.
     fp_decode_rules_daa: Option<u64>,
+    /// **The short challenge window's fence height** (`Params::palw_short_challenge_window`,
+    /// ADR-0132 §7.6). A claim licensed at or past it is challengeable for
+    /// [`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`] DAA instead of `window_challenge`; `None` is the rule
+    /// as it stood before the fence existed. Skipped by borsh: the bundle's ruleset id, and with it
+    /// every dormant preset's fingerprint, does not move for a field that is `None` — the fence
+    /// itself is what `Params::consensus_params_id` hashes (Some-only), and `validate_palw_v2`
+    /// refuses a bundle whose copy disagrees with the fence, so a copy that lost the height (a
+    /// deserialised bundle, say) is refused rather than quietly long.
+    #[borsh(skip)]
+    short_challenge_window_from_daa: Option<u64>,
 }
 
+/// ADR-0132 §7.6: the challenge window, in DAA, for a claim licensed past
+/// `Params::palw_short_challenge_window` (`6fdf6ba7`'s 120, as a fence).
+pub const PALW_SHORT_CHALLENGE_WINDOW_DAA_V1: u64 = 120;
+
 impl PalwStateParamsV2 {
-    /// DAA-fenced rollout kept outside the serialized ruleset so the existing fingerprint remains
-    /// unchanged. Claims licensed before DAA 6,000 (7,000 until the operator moved the height on
-    /// 2026-09-17; never reached) retain the 1,200-DAA window; later claims use
-    /// 120 DAA.
+    /// The challenge window for a claim licensed at `daa_score`: `window_challenge`, or
+    /// [`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`] once `Params::palw_short_challenge_window` is in force
+    /// (ADR-0132 §7.6 — the rule `6fdf6ba7` kept as a bare constant outside every fingerprint, made
+    /// a fence). `None` never shortens.
     pub fn window_challenge_at(&self, daa_score: u64) -> u64 {
-        if daa_score >= 6_000 { 120 } else { self.window_challenge }
+        match self.short_challenge_window_from_daa {
+            Some(from) if daa_score >= from => PALW_SHORT_CHALLENGE_WINDOW_DAA_V1,
+            _ => self.window_challenge,
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -946,6 +963,7 @@ impl PalwStateParamsV2 {
             // This name is the audit's, because its version landed first and closes a measured
             // critical; every path that can move a permille now checks it.
             min_base_class_share_permille: 100,
+            short_challenge_window_from_daa: None,
             // The whole session as one rung: the identity that leaves the backstop as the only
             // clock. See the field doc.
             turn_deadline_daa: window_court,
@@ -1220,6 +1238,18 @@ impl PalwStateParamsV2 {
     /// when a claim is still challengeable.
     pub fn window_challenge(&self) -> u64 {
         self.window_challenge
+    }
+
+    /// ADR-0132 §7.6: the short challenge window's fence height, if the network schedules one.
+    pub fn short_challenge_window_from_daa(&self) -> Option<u64> {
+        self.short_challenge_window_from_daa
+    }
+
+    /// ADR-0132 §7.6: sets the short challenge window's fence height — the V2 bundle's copy of
+    /// `Params::palw_short_challenge_window`, written by `Params::set_palw_short_challenge_window`.
+    pub fn with_short_challenge_window_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.short_challenge_window_from_daa = from_daa;
+        self
     }
 
     /// The per-session court budget (see the field's doc).
@@ -18007,6 +18037,39 @@ pub(crate) mod tests {
     }
 
     // ---- ADR-0135: the model registry in the fold --------------------------------------------
+
+    mod adr0132_short_challenge_window {
+        use super::*;
+
+        #[test]
+        fn the_short_challenge_window_is_a_fence_not_a_constant() {
+            use crate::palw_mode_v2::PalwConsensusMode;
+            let rc = crate::config::params::palw_rc_shipped_params();
+            let PalwConsensusMode::ConsensusV2(bundle) = &rc.palw_consensus_mode else { panic!("testnet-11 runs V2") };
+            let armed = bundle.state.clone();
+            let long = armed.window_challenge();
+            assert_ne!(long, PALW_SHORT_CHALLENGE_WINDOW_DAA_V1, "the premise: the shipped window is not the short one");
+            assert_eq!(armed.short_challenge_window_from_daa(), Some(6_001), "testnet-11 mirrors its 6,001 fence into the bundle");
+            assert_eq!(armed.window_challenge_at(5_999), long);
+            assert_eq!(armed.window_challenge_at(6_000), long, "6,000 is the compatibility boundary, not a rule change");
+            assert_eq!(armed.window_challenge_at(6_001), PALW_SHORT_CHALLENGE_WINDOW_DAA_V1, "the flag day shortens it");
+            assert_eq!(armed.window_challenge_at(u64::MAX), PALW_SHORT_CHALLENGE_WINDOW_DAA_V1);
+            let dormant = armed.clone().with_short_challenge_window_from_daa(None);
+            for daa in [0, 5_999, 6_000, 6_001, 7_000, u64::MAX] {
+                assert_eq!(dormant.window_challenge_at(daa), long, "no fence: the window never shortens ({daa})");
+            }
+            let seven = armed.clone().with_short_challenge_window_from_daa(Some(7_000));
+            assert_eq!(
+                (seven.window_challenge_at(6_999), seven.window_challenge_at(7_000)),
+                (long, PALW_SHORT_CHALLENGE_WINDOW_DAA_V1)
+            );
+            assert_eq!(
+                borsh::to_vec(&armed).unwrap(),
+                borsh::to_vec(&dormant).unwrap(),
+                "the height rides outside the bundle's bytes: the fence is what the fingerprint hashes, Some-only"
+            );
+        }
+    }
 
     mod adr0135 {
         use super::*;

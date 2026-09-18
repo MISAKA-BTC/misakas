@@ -160,7 +160,7 @@ after    Kimi, Llama, a new mixture, a 100B model: a manifest and a bond, no for
 operator's go after the devnet drill):** `palw_model_registry` at the 6,001 flag day, beside ADR-0132 Upgrade
 C (`palw_economic_payout`, ADR-0132 §7) and ADR-0137's work target (`palw_work_target`, which stops
 Decision 5's shares being read at the same height they would first be written — ADR-0137 §3.5 is why the
-two may not be a height apart). The fingerprint moves from `135b6ee0…` to `32c2e8e3…`; the fork id's
+two may not be a height apart). The fingerprint moves from `135b6ee0…` to `32c2e8e3… (`8af89f85…` since 2026-09-18, when the single lottery and the short challenge window joined the same day)`; the fork id's
 height set does not (6,001 was already scheduled), so the two builds are told apart by the fingerprint alone.
 Rows open at the first span boundary past 6,001 for every class the node can describe (the amendment
 below), the seats' proofs count after one readiness age (30 spans × 5 DAA = 150 DAA, ~30 h), and the classes
@@ -379,7 +379,9 @@ does a readiness proof's, and the transition puts the count on the class's regis
 so `artifact_prefetch_spans` reads the file rather than the graph. Refused while the registry is
 dormant, for a class without a row, from any bond but the registrant's, and for zero bytes; a
 genesis class has no registrant and keeps the catalog's estimate; a re-measured file is a new
-commitment. The CLI's `model-class` extension route builds and carries it beside the registration
+commitment. It is consensus-critical — the row it writes is rooted and its profile moves the
+lifecycle — and it is in the 6,001 bundle by construction: accepted only past `palw_model_registry`, the
+flag day. The CLI's `model-class` extension route builds and carries it beside the registration
 when the extension manifest names `artifact.bytes` or a readable `artifact.path` (the file's length,
 the meaning `artifact.bytes` already had), and withholds it below the fence. Not built: the node's
 own `--palw-register-class` route does not yet follow its registration with a manifest (the operator

@@ -51,7 +51,7 @@ wRPC is disabled until its listener flag is supplied. Keep RPC on loopback unles
 The current Testnet-11 fingerprint is (the build that schedules the DAA 6,001 flag day; the 7,000 release printed `ae1d6162…` and is refused from 6,000, the moved height it does not schedule):
 
 ```text
-32c2e8e3e5c8296e985e0fbbe4cdf382191782b52a9a328c72f91b3183a87932
+8af89f857aa1cb45fd5603c49cd90dbd84af44ec5bba8a8d3f077ec7203f13e1
 ```
 
 A different fingerprint or fork-id schedule is a ruleset mismatch, not an ordinary connectivity problem. Testnet-11 Relaunch 5f uses a different genesis from prior relaunches; old datadirs cannot be continued.
