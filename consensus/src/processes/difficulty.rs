@@ -372,7 +372,17 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension fo
             // ADR-0125 (the compact header carries no algo id), and the mergeset is bounded by
             // `mergeset_size_limit`. A header store hit is a cache hit on the hot path — the window
             // walk has just read the same blocks.
-            let Ok(header) = self.headers_store.get_header(hash) else { continue };
+            // `expect`, not a silent skip. A skipped block would be counted as advancing the
+            // clock, so a node that cannot read one mergeset header would compute a DIFFERENT DAA
+            // score from its peers and fork quietly — the shape of this bundle's own Critical C-1.
+            // Every mergeset member was header-processed before this block reached the DAA
+            // computation, and `internal_calc_daa_score` already unwraps the selected parent's
+            // score two lines up, so an unreadable header here is a broken database. Halting is the
+            // safe answer to that; diverging is not.
+            let header = self
+                .headers_store
+                .get_header(hash)
+                .expect("every mergeset member was header-processed before its merging block's DAA score");
             if self.lane_advances_daa_at(header.pow_algo_id, header.daa_score) {
                 priced += 1;
             } else {

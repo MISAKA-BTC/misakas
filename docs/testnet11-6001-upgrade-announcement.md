@@ -56,6 +56,9 @@ This bundle was audited twice against the code, not the design, and both reports
   a node's own storage (two honest nodes could have folded different state roots), and a `pwu` rule
   that still priced off a value the flag day retires (which both blocked every honest model block
   and let a registrant buy fork-choice weight cheaply).
+* [The release report](palw-release-6001-verdict-2026-09-18.md) — the gates checked on the frozen
+  candidate, the three holes this bundle's own fixes opened and how each was found, what a chain
+  block at the 390,000,000 gas ceiling actually costs, and the drill that armed the verdict.
 * [The DAA-clock audit](palw-daa-clock-audit-2026-09-18.md) — why ADR-0138 exists, what it closes,
   and what it does not: finality, merge depth, pruning and the DNS attestation epoch are counted in
   blue score, which the model lane still paces, so their wall-clock length is about half what the

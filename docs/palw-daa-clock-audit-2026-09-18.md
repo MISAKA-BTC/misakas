@@ -30,16 +30,42 @@ advancing the DAA score and the blue score. Every window the chain measures in D
 it measures in blue score — is then paced by however fast producers can run forwards, not by the
 120-second anchor the windows were sized against.
 
-## 2. Current testnet-11, measured (2026-09-18, 300 selected-chain blocks, 43.99 h)
+## 2. Current testnet-11, measured (2026-09-18)
+
+> **This section replaces an earlier version that was WRONG, and the correction is the finding that
+> stopped the release.** The first pass recorded "300 / 300 are algo 3 (the hash anchor); no PALW
+> block on the chain in 44 h". The opposite is true. The numbers below were read from the chain
+> itself with `scripts/misaka-t11-lane-walk.py`, which walks the selected parent back from the sink
+> over the node's JSON wRPC and counts `powAlgoId`. Run it before trusting any lane claim here.
+
+| window | algo 6 (PALW attempt) | algo 8 (heartbeat) | algo 3 (hash anchor) |
+|---|---|---|---|
+| last 60 selected-chain blocks (4.58 h) | 60 — **100 %** | 0 | **0** |
+| last 300 selected-chain blocks (41.5 h) | 261 — 87 % | 39 — 13 % | **0** |
 
 | quantity | value |
 |---|---|
-| selected-chain lanes | 300 / 300 are algo 3 (the hash anchor); no PALW block on the chain in 44 h |
-| chain blocks | 6.82 / h — one every 8.8 min |
-| DAA | 8.0 / h — **450 s per DAA** (nominal 120 s; the anchor lane under-produces at difficulty 1.0) |
-| PALW attempt lane | budget-exhausted floor, merged as blues, not selected (the 09-12 stall) |
+| chain blocks | 13.1 / h over the recent window, 7.2 / h over the long one |
+| DAA | **275 s per DAA** recently, 457 s over 41.5 h (nominal 120 s) |
+| virtual DAA at 10:19Z | 5,998 — three below the 6,000 flag day |
 
-So today one DAA is 450 s. The windows are longer than designed, which is the safe direction.
+**There is no anchor block on this chain, and there cannot be one.** The block template declares
+`bundle.algorithm_id`, which `PalwRulesetV2::validate` requires to be the committed attempt id on
+every ConsensusV2 network, so a Layer-0 hash miner asking a testnet-11 node for work is handed an
+algo-6 template and refuses it — `misaminer` stops with "this network mines with PoW algo 6 … there
+is no external-miner client for it". The registry drill's devnet reproduced this exactly.
+
+**So `palw_anchor_clock` must not be armed at 6,001 as this ADR is written.** Past the fence a lane
+advances the DAA only where `bits` prices it, and on testnet-11 that set is EMPTY. The only tick left
+is the heartbeat stand-in, and `heartbeat_interval_ms` answers the NOMINAL one-hour interval whenever
+the selected parent is a PALW-v2 block — which on this chain it always is. The clock would fall from
+275 s per DAA to 3,600 s at best, and to nothing at all across a stretch like the most recent 4.58
+hours, which carried no heartbeat. Every DAA-denominated window stretches with it: fence 6,100 at
+~100 h instead of 3.3, fence 6,900 at ~37 days, the 120-DAA challenge window at ~5 days, `T_leak` at
+~7 months. And the whole chain's clock would rest on one unbonded heartbeat producer on one host.
+
+The per-mergeset stand-in of §"the freeze" is still the right rule — it is strictly safer than either
+alternative — but it does not rescue this. A one-hour beat gives a one-hour DAA.
 
 ## 3. Window arithmetic — DAA windows
 

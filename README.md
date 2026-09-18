@@ -40,9 +40,11 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 >   longer compared to `bits`, so a model producer that wins its class ticket is not asked to win a
 >   hash draw it can only lose. The work target holds the cadence in its place.
 > * **The DAA score becomes the anchor's clock** (ADR-0138): a block advances it only if `bits`
->   priced it, or it is a heartbeat. The attempt and receipt lanes still merge, still earn and still
->   fold — they simply stop pacing the windows that are counted in DAA (the challenge window, the
->   validator leak, a bond's withdrawal), which were sized against the 120-second cadence.
+>   priced it. A heartbeat stands in where a mergeset carries no priced block at all, so a chain
+>   whose hash lane stops keeps its clock without a beating chain running it fast. The attempt and
+>   receipt lanes still merge, still earn and still fold — they simply stop pacing the windows that
+>   are counted in DAA (the challenge window, the validator leak, a bond's withdrawal), which were
+>   sized against the 120-second cadence.
 > * **The execution lane's gas scales with the lane** (ADR-0139): each distinct permitted round a
 >   chain block merges adds 3,000,000 gas to what that block may accept, under a 390,000,000
 >   ceiling — so "one block a second" is one second of transactions, not one second of scheduling
@@ -68,7 +70,10 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > a pre-arming security audit ([docs/palw-audit-2026-09-18-6001.md](docs/palw-audit-2026-09-18-6001.md),
 > two Critical and six High findings, all fixed) and a DAA-clock audit
 > ([docs/palw-daa-clock-audit-2026-09-18.md](docs/palw-daa-clock-audit-2026-09-18.md), which is why
-> ADR-0138 exists and what it deliberately does not close).
+> ADR-0138 exists and what it deliberately does not close). The release report
+> ([docs/palw-release-6001-verdict-2026-09-18.md](docs/palw-release-6001-verdict-2026-09-18.md))
+> records the gates on the frozen candidate, the three holes the bundle's own fixes opened, the
+> measured cost of a block at the 390,000,000 gas ceiling, and the drill that armed the verdict.
 
 <details>
 <summary>Historical Relaunch 5f rollout log and crossed fences</summary>

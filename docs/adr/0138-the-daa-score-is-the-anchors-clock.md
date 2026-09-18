@@ -71,19 +71,40 @@ Two holes of its own, both found by re-auditing the fix rather than the bundle:
   every fence, deadline, retention and leak window with it. This was not a thought experiment: the
   registry drill froze at virtual DAA 20 with 183 blocks accepted, on a devnet whose only producers
   are PALW lanes.
-* **The heartbeat as a stand-in, not a second clock.** Counting the heartbeat unconditionally would
-  have been the opposite error. `heartbeat_interval_ms` falls back to the 120-second RECOVERY
-  interval whenever the selected parent is not a PALW-v2 block, and on testnet-11 — whose selected
-  chain is 300/300 algo-3 blocks — that is every block. A heartbeat miner would then have added a
-  second tick beside every anchor tick and run the clock at roughly twice its nominal rate, which is
-  the very error this ADR exists to remove. testnet-11 runs such a miner today, so this was live, not
-  hypothetical. The rule is therefore per MERGESET, not per block: `palw_lane_advances_daa_v1`
-  answers `false` for the heartbeat lane, and `daa_exempt_count` returns one fewer exemption only
-  when the mergeset carries no priced block and at least one heartbeat. Where the hash lane runs the
-  heartbeat adds nothing; where it stops, exactly one heartbeat a mergeset keeps the clock alive.
+* **The heartbeat as a stand-in, not a second clock.** Counting the heartbeat unconditionally is the
+  opposite error: on a chain whose hash lane runs, a beat beside every anchor tick would pace the
+  clock twice as fast, which is the very error this ADR exists to remove. The rule is therefore per
+  MERGESET, not per block: `palw_lane_advances_daa_v1` answers `false` for the heartbeat lane, and
+  `daa_exempt_count` returns one fewer exemption only when the mergeset carries no priced block and
+  at least one heartbeat. Where a priced lane runs the heartbeat adds nothing; where it stops,
+  exactly one heartbeat a mergeset keeps the clock alive.
   `the_clock_is_the_anchor_and_the_heartbeat_and_nothing_else_past_the_fence` pins both directions,
   and the drill's fault phase stops the hash miner on a running chain and requires the DAA to keep
   moving.
+
+## 3c. Why this is NOT armed at 6,001 — the premise is false on testnet-11
+
+This ADR assumes an anchor lane paces the chain and the model lanes ride alongside it. **On
+testnet-11 there is no anchor lane at all**, and the fence would therefore leave the DAA with no
+source but the heartbeat.
+
+Measured from the chain on 2026-09-18 with `scripts/misaka-t11-lane-walk.py`: of the last 60
+selected-chain blocks, 60 are algo 6 and none is algo 3; of the last 300, 261 are algo 6, 39 are
+algo 8 and none is algo 3. There cannot be one: the template declares `bundle.algorithm_id`, which
+`PalwRulesetV2::validate` requires to be the committed attempt id on every ConsensusV2 network, so a
+Layer-0 hash miner is handed an algo-6 template and refuses it.
+
+Past the fence `palw_lane_advances_daa_v1` is true only for a `bits`-priced lane, and on testnet-11
+that set is empty. The clock would fall from 275 s per DAA to the heartbeat's nominal 3,600 s — and
+to nothing across a stretch like the most recent 4.58 hours, which carried no beat — resting entirely
+on one unbonded producer on one host. The arithmetic and its consequences are in §2 of
+[the clock audit](../palw-daa-clock-audit-2026-09-18.md).
+
+The decision this ADR still needs is where a PALW-only network's clock comes from. Two candidates:
+give such a network a priced lane, which is a params change because ConsensusV2 templates always
+name the attempt id; or make the heartbeat the designed clock by setting `HEARTBEAT_NOMINAL_INTERVAL_MS`
+to the target block time behind its own fence, which is one constant but puts the chain's clock on an
+unbonded lane. Neither is decided here, and the fence stays unarmed until one is.
 * **The DNS leak's units.** ADR-0128 Decision 3 walks the evidence window in BLUE score and adds
   `t_leak_daa` into that blue total, which was the same thing while every lane ticked both clocks.
   With the DAA clock slower than the blue clock, a blue-bounded walk reaches back fewer DAA than the
