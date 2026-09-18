@@ -537,6 +537,9 @@ pub struct VirtualStateProcessor {
     /// ADR-0142: `Params::palw_clock_cursor`. Past it the heartbeat lane's admissibility is the
     /// rooted cursor, and only a heartbeat writes it.
     pub(super) palw_clock_cursor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0142: the per-block cursor store, so a template and a test can read where the clock
+    /// stands without walking.
+    pub(super) palw_clock_cursor_store: Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>,
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
@@ -804,6 +807,7 @@ impl VirtualStateProcessor {
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
+            palw_clock_cursor_store: storage.palw_clock_cursor_store.clone(),
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),

@@ -622,6 +622,85 @@ async fn adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock() {
     assert!(!non_daa.contains(&hb_hash), "and it is NOT in `mergeset_non_daa`: it is paid and folded like any blue");
 }
 
+/// **ADR-0142 §6, at the pipeline: the lane can no longer be starved, and the clock still cannot run
+/// fast.** The two halves of the invariant, on a running consensus rather than on the pure rule.
+///
+/// The bug this pins: the slot rule measured a beat against its SELECTED PARENT, which every new
+/// chain block replaces, so a chain producing faster than the interval moved the next opportunity
+/// out of reach for ever. The drill froze at DAA 20 with the miner running and nothing minted.
+///
+/// Past the cursor a beat is admissible whenever its producer can pay for it — two in a row, in the
+/// same slot, both accepted as BLOCKS — and exactly one of them moves the clock.
+#[tokio::test]
+async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_ticks_once_a_slot() {
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    kaspa_core::log::try_init_logger("info");
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+            p.palw_anchor_clock = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+            p.palw_clock_cursor = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the clock and its cursor are a runnable ruleset");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    // Three beats in a row, each building on the last — the shape a chain with no priced lane
+    // actually has. The first still merges a priced anchor, so it is the SECOND that first merges
+    // nothing but a beat, and the second is therefore where the cursor opens.
+    use crate::model::stores::palw_clock_cursor::PalwClockCursorStoreReader;
+    let before = ctx.consensus.virtual_processor().headers_store.get_daa_score(ctx.consensus.get_sink()).unwrap();
+    let mut beats = Vec::new();
+    let mut scores = Vec::new();
+    for (i, step_ms) in [120_000u64, 1_000, 1_000].into_iter().enumerate() {
+        ctx.simulated_time += step_ms;
+        let t = ctx.build_block_template(21 + i as u64, ctx.simulated_time);
+        let (t, earliest) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(t).expect("the lane adapts");
+        // **The starvation is gone**: past the cursor the earliest admissible time is now, for every
+        // one of them. Under the retired slot rule the second and third were refused outright, and
+        // on a chain that produces faster than the interval that refusal repeated for ever.
+        assert_eq!(earliest, ctx.simulated_time, "beat {i}: past the cursor there is no slot to wait for");
+        assert_eq!(t.block.header.timestamp, ctx.simulated_time, "beat {i}: and the template is not stamped forward");
+        let hash = t.block.header.hash;
+        ctx.validate_and_insert_block(t.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+        scores.push(ctx.consensus.virtual_processor().headers_store.get_daa_score(hash).unwrap());
+        beats.push(hash);
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let cursor = |h| vp.palw_clock_cursor_store.get_clock_cursor(h).expect("readable");
+
+    // The first beat's mergeset still carries the anchor it built on, which is priced — so the
+    // anchor ticks, the beat adds nothing, and no slot is consumed.
+    assert_eq!(scores[0], before + 1, "the first beat's score is the anchor it merged");
+    assert_eq!(cursor(beats[0]), None, "and no slot was consumed, so the cursor has not opened");
+
+    // The second merges nothing but a beat. Nothing priced, so the stand-in applies, the slot is
+    // open because the cursor has not started, and the clock ticks — this is the half that keeps a
+    // chain with no priced lane alive at all.
+    assert_eq!(scores[1], scores[0] + 1, "the beat stands in where nothing priced was merged");
+    let opened = cursor(beats[1]).expect("the slot it consumed opened the cursor");
+    assert_eq!(opened.slots_consumed, 1);
+
+    // The third is one second later. It is a perfectly good block and it buys the chain nothing:
+    // one tick a slot, however fast beats arrive. This is the half that keeps the clock honest.
+    assert_eq!(scores[2], scores[1], "a beat inside the open slot moves no clock");
+    assert_eq!(cursor(beats[2]), Some(opened), "and moves no cursor either");
+    assert!(opened.next_slot_ms > ctx.simulated_time, "the next slot is still ahead of the beat that was refused it");
+}
+
 #[tokio::test]
 async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
