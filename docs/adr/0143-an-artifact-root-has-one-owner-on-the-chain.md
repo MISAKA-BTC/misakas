@@ -1,29 +1,39 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
-**Status:** IMPLEMENTED 2026-09-18, **armed on testnet-11 at DAA 6,702** by the operator's decision
-of 2026-09-19 to ship it with the 6,700 flag day. Behind its own fence,
-`palw_artifact_root_ownership`, dormant on every other preset.
+**Status:** IMPLEMENTED 2026-09-18, **NOT ARMED** — withdrawn from the 6,700 flag day by the
+adversarial audit of 2026-09-19. `palw_artifact_root_ownership` is `None` on every preset; the code
+ships inert and a state without the index is byte-identical to a state before the field.
 
-**6,702 and not 6,700**, because the fork id digests the fired heights deduplicated: a fence at a
-height the schedule already names is invisible to the handshake, and two builds that disagree about
-who owns an artifact from 6,700 would peer as if they agreed. Two DAA of separation is what makes it
-a named refusal instead of a silent fork.
+**Two defects, both in the index, both found by attacking this document's own decisions.**
 
-**Drilled, on a running chain.** The release drill arms this fence on its devnet
-(`--palw-artifact-root-ownership-devnet`, refused outright on a public network) and crosses it, two
-DAA past the flag day exactly as 6,702 sits past 6,700. Phase 1 step 1c waits for the chain to pass
-the height — a fence that stops the chain is the failure the drill exists to catch — and then asks
-the index the one question only the index can answer:
+**D1's index is unbounded.** `artifact_owners` is hashed into the state root, carried in the pruning
+carriage, and has no cap, no eviction and no TTL — while `PALW_MODEL_LINES_PER_CLASS_V1`,
+`PALW_MODEL_VERSION_HISTORY_V1`, `PALW_MODEL_PREVIEWS_V1` and `PALW_MODEL_PROPOSALS_PER_LINE_V1` all
+bound their tables. One `ModelVersionPublished` with a fresh root buys a permanent row for a
+transaction fee, and the row outlives the version: `model_versions` evicts past 64 per line and the
+owner row does not. §6 asked the right question — what the crossing block costs — and asked it only
+about the MIGRATION, never about the steady state.
 
-```
-1b/6  DAA 20 -> 23 past the fence in 543s, with 13 heartbeat(s) minted across the fleet
-1c/6  daa 23 past 22; the base class's founding line owns 1 root(s) by the index
-```
+**D1's uniqueness is global, and it should never have been.** §3 argued "a root is a file of weights;
+two classes carrying the same one are the same duplicate". That is false in this system's own terms:
+`class_id` is `PalwShapeProfile::shape_profile_id()`, which hashes `n_ctx`, `n_batch`, `n_ubatch`,
+`n_threads` and the runtime flags, so one artifact legitimately carries several classes — `@512` and
+`@2048` are two class ids over one root, and the retired positional lookups were CLASS-SCOPED, so
+they attributed both correctly. Global keying (a) refuses the second class outright, which is a
+regression against a configuration the chain accepted the block before, and (b) lets a stranger
+reserve any public model's root for one line founding, since the root is computed offline from a
+downloadable file. The acceptance filter drops the refused registration and lets the block stand, so
+the victim pays a carrier fee and is told nothing.
 
-A class's own registered root belongs to its founding line, so an empty answer there would mean the
-migration did not run in the crossing block, or that the reader is not reading the index. It is not
-empty. The lane profile is testnet-11's — `palw+heartbeat`, no hash lane — because a devnet with an
-anchor lane never reaches the state a PALW-only chain reaches at the same fence.
+**The remedy is a `(class_id, root)` key and a bound on the rows.** Per-class keying still closes the
+defect this ADR was written for — a copy line inside ONE class taking that class's founding root,
+which is what testnet-11 has — and restores the cross-class behaviour that was never in question.
+The bound has to pair with `model_versions`' own eviction, so an owner row cannot outlive every
+version that justified it.
+
+**It arms on its own day, after a drill crosses its own fence** (the launch runbook's §5c). The
+height constant stands unused so that arming it is a decision someone takes again rather than one
+this file already took.
 
 **Builds on:** ADR-0087 (a position is never money settled), ADR-0088 (model lines and versions),
 ADR-0091 (the reward buys the pair), ADR-0095 (a position is a membership).

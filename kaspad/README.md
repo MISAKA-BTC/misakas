@@ -16,7 +16,7 @@ cargo build --release -p kaspad
 Verify consensus fingerprint:
 
 ```text
-b16a94770653183bce23c8c184f58e1326e4d9ba5e1b32d51c4e9511a08638be
+d4161a86544fb03ce6f343184dd80e73b930f6665da409c5981e8cfa32786cf2
 ```
 
 A normal full node needs no model artifact or Bond. PALW production is configured with `misaka --network testnet-11 mining setup`; an external hash miner cannot produce Testnet-11 PALW blocks.

@@ -16,7 +16,7 @@
 > [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
 > [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
-**Fingerprint of the release: `b16a94770653183bce23c8c184f58e1326e4d9ba5e1b32d51c4e9511a08638be`.**
+**Fingerprint of the release: `d4161a86544fb03ce6f343184dd80e73b930f6665da409c5981e8cfa32786cf2`.**
 Every node on testnet-11 must run this build **before DAA 6,700**. The build currently deployed prints
 `ae1d6162…` and is refused from 6,700.
 
@@ -61,35 +61,23 @@ which is built and drilled but not armed anywhere. These two follow it on a late
 fence. Nothing else in the upgrade depends on them: the work target arrives on schedule, because the
 dependency runs one way — the lottery needs the work target, never the reverse.
 
-## DAA 6,702 — an artifact root gets one owner (ADR-0143)
+## ADR-0143 is in this build and does nothing
 
-Attribution asked "which line does this artifact root belong to" and the answer was **whichever
-`line_id` sorted first in a `BTreeMap`** — a consensus-visible outcome decided by a hash's byte
-order. Live here: the Qwen2.5 class's own registered founding root is also carried by a copy line,
-and the copy resolves first. Two defects, each with its own fix: the chain admitted duplicates at
-all, and it resolved them positionally.
+An artifact root having one owner on the chain was to arm at 6,702. **It does not arm.** An
+adversarial audit on 2026-09-19 found two defects in the fence as written, both in the index it
+installs:
 
-From 6,702 the chain keeps one index, `artifact_root -> (class, line, version)`, and it is the only
-answer. A class reserves its founding root in the transition that writes the class; `ClassRegistered`,
-`ModelLineFounded` and `ModelVersionPublished` all refuse a root another line owns. The crossing
-block builds the index from the rows already on the chain: a class's own registered root goes to its
-founding line however late it published, otherwise the earliest accepted version wins, and a tie
-resolves by `(line, version)`.
+* the index is state-rooted with no cap, no eviction and no TTL, while every neighbouring registry
+  table has one. One version publication per row, at a transaction fee, buys a row every node
+  re-hashes on every block and every new node downloads with the pruning carriage, for ever;
+* uniqueness was written across CLASSES. That is wrong: a class id hashes the shape profile —
+  `n_ctx`, the batch sizes, the runtime flags — so one artifact legitimately carries several
+  classes, and `@512` and `@2048` are two class ids over one root. The rule refuses the second, and
+  lets a stranger reserve a public model's root for one line founding before its owner registers.
 
-**ADR-0088's competition is untouched.** A different root on the same class, from any bond, without
-the registrant's permission, stays permissionless — only the *exact* root collides, and the chain
-never looks inside an artifact to judge similarity. Near-duplicates are a marketplace question and
-the model page is where they are answered.
-
-**Legacy duplicate rows stay** as historical record; they simply stop being the answer, and nothing
-settled before 6,702 is recomputed. Past payouts and buybacks are final.
-
-**Why 6,702 and not 6,700.** The fork id digests the fired heights, deduplicated, so a fence at a
-height the schedule already names is invisible to the handshake: a build carrying the 6,700 set
-without this rule would advertise the identical schedule, the two would peer, and they would
-disagree from 6,700 about who owns an artifact. Two DAA of separation is what makes the difference a
-named refusal instead of a silent fork. It is one release and one operator decision with the 6,700
-day; only the height is its own.
+The code ships inert: with the fence unset the index is never written, and a state without it is
+byte-identical to a state before the field. The remedy is a per-class key and a bound on the rows,
+and it will arm on its own day after a drill crosses its own fence.
 
 **DAA 6,800 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
 attests; a claim licenses when the panel's quorum holds **and** every segment of the anchor's cut is

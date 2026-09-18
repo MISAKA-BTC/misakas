@@ -541,7 +541,6 @@ mod tests {
                 // One for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
                 crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
                 // ADR-0143's own day, two past the 6,300 flag day so the gate can see it.
-                crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
                 crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
@@ -814,7 +813,6 @@ mod tests {
                         4000,
                         crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
                         crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
-                        crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                         crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                         crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
@@ -879,7 +877,6 @@ mod tests {
                         AUDIT_FENCE,
                         HELD_AND_AUDIT_DEEP,
                         PALW_UPGRADE_DAY,
-                        crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                         ADR_0120,
                         RETIRED_6201
@@ -912,7 +909,6 @@ mod tests {
                 AUDIT_FENCE,
                 HELD_AND_AUDIT_DEEP,
                 PALW_UPGRADE_DAY,
-                crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 ADR_0120,
                 RETIRED_6201,
@@ -1407,7 +1403,6 @@ mod tests {
                 4000,
                 HELD_AND_DEEP,
                 PALW_UPGRADE_DAY,
-                crate::config::params::PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 RETIRED_6201,
@@ -1487,10 +1482,6 @@ mod tests {
         // schedule reads as a build without the whole upgrade.
         at_6000.palw_verification_v2 = Some(six_thousand);
         at_6000.palw_readiness_v2 = Some(six_thousand);
-        // ADR-0143's fence is in the set for the same reason it is at 6,302 and not 6,300: moved to
-        // a height the schedule already names, it stops being visible — which is exactly what this
-        // counterfactual measures.
-        at_6000.palw_artifact_root_ownership = Some(six_thousand);
         assert_eq!(
             at_6000.fence_schedule_v1(),
             without_the_set.fence_schedule_v1(),
