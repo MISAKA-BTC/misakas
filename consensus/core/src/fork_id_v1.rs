@@ -1423,12 +1423,17 @@ mod tests {
         // roll the fleet, so those are the scores this test walks.
         const TIP_AT_THE_FIRST_MOVE: u64 = 5_798;
         const TIP_AT_THE_SECOND_MOVE: u64 = 6_008;
-        let new_peer = fork_id_v1(&upgraded, TIP_AT_THE_SECOND_MOVE);
-        let old_peer = fork_id_v1(&release_7000, TIP_AT_THE_SECOND_MOVE);
+        // 2026-09-19: the release was held for the drill and the tip reached this while it ran, so
+        // the heights moved a third time. The three are kept because each one is a measurement of
+        // the same lesson — a height is only above the tip until the release takes long enough.
+        const TIP_AT_THE_THIRD_MOVE: u64 = 6_263;
+        let new_peer = fork_id_v1(&upgraded, TIP_AT_THE_THIRD_MOVE);
+        let old_peer = fork_id_v1(&release_7000, TIP_AT_THE_THIRD_MOVE);
         assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 4,000");
         assert_eq!((new_peer.next, old_peer.next), (HELD_AND_DEEP, 6_900), "and they announce different next fences");
-        assert!(TIP_AT_THE_SECOND_MOVE < HELD_AND_DEEP, "the boundary is above the tip it was re-pinned over");
-        for local_daa in [TIP_AT_THE_FIRST_MOVE, 5_900, TIP_AT_THE_SECOND_MOVE, HELD_AND_DEEP - 1] {
+        assert!(TIP_AT_THE_FIRST_MOVE < TIP_AT_THE_SECOND_MOVE && TIP_AT_THE_SECOND_MOVE < TIP_AT_THE_THIRD_MOVE);
+        assert!(TIP_AT_THE_THIRD_MOVE < HELD_AND_DEEP, "the boundary is above the tip it was re-pinned over");
+        for local_daa in [TIP_AT_THE_FIRST_MOVE, TIP_AT_THE_SECOND_MOVE, TIP_AT_THE_THIRD_MOVE, HELD_AND_DEEP - 1] {
             let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
             assert!(
                 !evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
