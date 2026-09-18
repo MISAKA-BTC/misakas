@@ -153,6 +153,11 @@ pub struct PruningProofManager {
     /// ADR-0125: the round lane's fence, mode folded in — admitted by the proof header gate where it
     /// is open, and threaded to every proof-level GHOSTDAG so a proof never selects a round block.
     palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0132 S, and H-1 of the 2026-09-18 audit.** Past this fence an attempt-lane header's
+    /// Layer-0 digest is admitted unconditionally, so a proof carrying post-fence headers has to be
+    /// checked with the same rule the header pipeline uses — checking them with the fence off made a
+    /// proof fail its own PoW and no new node could join by a pruned sync.
+    palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -185,6 +190,7 @@ impl PruningProofManager {
         palw_heartbeat_transparent: Option<crate::processes::ghostdag::protocol::HeartbeatTransparency>,
         palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_round_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -231,6 +237,7 @@ impl PruningProofManager {
             palw_attempt_work_lane,
             palw_heartbeat_transparent,
             palw_round_lane,
+            palw_single_lottery,
 
             is_consensus_exiting,
         }
@@ -254,6 +261,11 @@ impl PruningProofManager {
     ///
     /// [`check_algo_id`]: kaspa_consensus_core::pow_layer0::check_algo_id
     /// [`check_palw_commitment_shape`]: kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at
+    /// ADR-0132 S: whether the single lottery is in force at a proof header's own DAA (H-1).
+    pub(super) fn palw_single_lottery_at(&self, daa_score: u64) -> bool {
+        self.palw_single_lottery.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     pub(super) fn check_proof_header_shape(&self, header: &Header, level: BlockLevel) -> PruningImportResult<()> {
         // Exempt EXACTLY the headers whose PoW short-circuits, using the shared predicate rather
         // than `direct_parents().is_empty()`. The two differ for `parents_by_level == [[]]`, where

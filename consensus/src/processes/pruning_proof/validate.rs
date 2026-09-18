@@ -17,7 +17,7 @@ use kaspa_database::{
     prelude::{CachePolicy, ConnBuilder, StoreResultUnitExt},
     utils::DbLifetime,
 };
-use kaspa_pow::{calc_block_level_check_pow_layer0, calc_block_level_layer0};
+use kaspa_pow::{calc_block_level_check_pow_layer0_v2, calc_block_level_layer0};
 use kaspa_utils::vec::VecExtensions;
 use parking_lot::RwLock;
 use rayon::prelude::*;
@@ -297,12 +297,24 @@ impl ProofContext {
                     // One header is the overwhelmingly common case — steady state, and every
                     // network whose PoW is a hash — so keep it off the thread pool entirely.
                     if window.len() == 1 {
-                        pow_ahead.push_back(calc_block_level_check_pow_layer0(header, &ppm.network_id, ppm.max_block_level));
+                        pow_ahead.push_back(calc_block_level_check_pow_layer0_v2(
+                            header,
+                            &ppm.network_id,
+                            ppm.max_block_level,
+                            ppm.palw_single_lottery_at(header.daa_score),
+                        ));
                     } else {
                         pow_ahead.extend(
                             window
                                 .par_iter()
-                                .map(|h| calc_block_level_check_pow_layer0(h, &ppm.network_id, ppm.max_block_level))
+                                .map(|h| {
+                                    calc_block_level_check_pow_layer0_v2(
+                                        h,
+                                        &ppm.network_id,
+                                        ppm.max_block_level,
+                                        ppm.palw_single_lottery_at(h.daa_score),
+                                    )
+                                })
                                 .collect::<Vec<_>>(),
                         );
                     }

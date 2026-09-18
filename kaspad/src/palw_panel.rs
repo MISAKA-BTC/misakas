@@ -805,7 +805,7 @@ impl PalwPanelService {
             // memory to replay this class proves nothing for it — the standing proof expires by
             // itself and the class counts one seat fewer. The chain judges the proof; the budget
             // is this node's own.
-            if let Err(why) = self.replay_memory_budget_v1() {
+            if let Err(why) = self.replay_memory_budget_v1(Some((class.class_id, class.artifact_root))) {
                 self.readiness_note(class.class_id, format!("no proof — {why}"));
                 continue;
             }
@@ -908,20 +908,29 @@ impl PalwPanelService {
 
     /// The bytes a replay of a held class needs on this host: the largest held artifact file (its
     /// pages, mapped and shared, still have to be resident to replay) plus one replay's scratch.
-    fn replay_memory_need_bytes_v1(&self) -> u64 {
-        let artifact = self
-            .class_holdings
-            .iter()
-            .filter_map(|holding| holding.path.as_ref())
-            .filter_map(|path| std::fs::metadata(path).ok().map(|m| m.len()))
-            .max()
-            .unwrap_or(0);
+    /// **What a replay of THIS class needs on this host** (H-4 of the 2026-09-18 audit). It used to
+    /// be the largest file among every holding, so a host that also held a 24 GiB artifact proved
+    /// readiness for nothing and replayed nothing — for every class, however small, which on a
+    /// fleet whose seats all hold the big artifact means no class ever gets a ready seat. The
+    /// figure is now the holding that serves the class asked about; with no class named (or none
+    /// that resolves) it falls back to the old conservative maximum, because a need this node
+    /// cannot place is not one it may under-state.
+    fn replay_memory_need_bytes_v1(&self, class: Option<(Hash64, Hash64)>) -> u64 {
+        let per_class = class.and_then(|(class_id, artifact_root)| self.backends().holding_bytes_for_v1(class_id, artifact_root));
+        let artifact = per_class.unwrap_or_else(|| {
+            self.class_holdings
+                .iter()
+                .filter_map(|holding| holding.path.as_ref())
+                .filter_map(|path| std::fs::metadata(path).ok().map(|m| m.len()))
+                .max()
+                .unwrap_or(0)
+        });
         artifact.saturating_add(crate::palw_backends::PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1)
     }
 
-    /// [`crate::palw_backends::replay_memory_budget_v1`] for this node's holdings.
-    fn replay_memory_budget_v1(&self) -> Result<(), String> {
-        crate::palw_backends::replay_memory_budget_v1(self.replay_memory_need_bytes_v1())
+    /// [`crate::palw_backends::replay_memory_budget_v1`] for the class this node is about to serve.
+    fn replay_memory_budget_v1(&self, class: Option<(Hash64, Hash64)>) -> Result<(), String> {
+        crate::palw_backends::replay_memory_budget_v1(self.replay_memory_need_bytes_v1(class))
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -4125,7 +4134,7 @@ impl PalwPanelService {
                 // past its usable memory waits for a later tick instead of starting — swap is not
                 // capacity, and a host in swap finishes no replay at all. The deadline still runs;
                 // a seat that never fits answers nothing, which the quorum prices as silence.
-                if let Err(why) = self.replay_memory_budget_v1() {
+                if let Err(why) = self.replay_memory_budget_v1(Some((duty.class_id, duty.artifact_root))) {
                     crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
                         format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
                     });

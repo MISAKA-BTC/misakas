@@ -352,8 +352,18 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         // is fetched here rather than shared with item 6b below on purpose: 6b's job is the
         // lottery, this one's is the price, and each names its own missing-fact error.
         PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => {
-            let target = state.class_target(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassTargetMissing(attempt.class_id))?;
-            let derived = crate::palw_pwu::palw_pwu_v1(target.target, pwu_per_inference);
+            // ADR-0137: the target that prices the draw is the target that counts its executions —
+            // `palw_effective_class_target_v1`, the same value `check_palw_class_lottery_v4` and the
+            // producer's facts read. Reading `state.class_target` here past the fence is what the
+            // 2026-09-18 audit found: the producer's pwu and the chain's disagreed (no model class
+            // could produce), and a declared target bought weight it never paid for.
+            let target = palw_effective_class_target_v1(
+                state,
+                state_params,
+                &attempt.class_id,
+                palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery),
+            )?;
+            let derived = crate::palw_pwu::palw_pwu_v1(target, pwu_per_inference);
             if attempt.pwu != derived {
                 return Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: attempt.pwu, derived });
             }
@@ -753,6 +763,36 @@ pub fn palw_work_lottery_floor_v1(state: &PalwChainStateV2, work_target_floor: O
 /// `MAX · min(1, CCU_m / W₀)` — its row's counted work against the block's `W₀` — and a class
 /// without a row has no price and is refused; the floor keeps its class target. With no floor at
 /// hand this is [`check_palw_class_lottery_v3`].
+/// **ADR-0137: the target that governs a class's draw at this block, in ONE place.** Below the work
+/// target (and for the liveness floor, which the fence exempts) it is the chain's class target, the
+/// value ADR-0076 seats and the retarget maintains. Past it, it is the work ticket
+/// `MAX · min(1, CCU/W)` — the registry row's counted work against the block's own floor — and the
+/// class target is not read at all.
+///
+/// **Every rule that reads "the class's target" must read it here.** The 2026-09-18 audit found the
+/// draw using the new value while the pwu derivation still used the old one: honest producers built
+/// blocks their own chain refused (`PwuClaimNotDerived`, reproduced on an eight-node devnet drill),
+/// and an attacker who declared `initial_target = 1` at registration — never re-priced past the
+/// fence — could claim `pwu = u64::MAX`, which the chain then demanded, and buy fork-choice weight
+/// for a collateral that does not scale with it.
+pub fn palw_effective_class_target_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    work_target_floor: Option<u128>,
+) -> Result<u128, PalwAdmissionV2Error> {
+    match work_target_floor {
+        Some(floor) if *class_id != state_params.base_class_id() => {
+            let ccu = state
+                .model_lifecycle(class_id)
+                .map(|row| row.work.economic_ccu_per_claim)
+                .ok_or(PalwAdmissionV2Error::ClassWorkUnknown(*class_id))?;
+            Ok(crate::palw_work_target_v1::palw_work_ticket_target_v1(ccu, floor))
+        }
+        _ => state.class_target(class_id).map(|t| t.target).ok_or(PalwAdmissionV2Error::ClassTargetMissing(*class_id)),
+    }
+}
+
 pub fn check_palw_class_lottery_v4(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
@@ -768,7 +808,7 @@ pub fn check_palw_class_lottery_v4(
         .model_lifecycle(&attempt.class_id)
         .map(|row| row.work.economic_ccu_per_claim)
         .ok_or(PalwAdmissionV2Error::ClassWorkUnknown(attempt.class_id))?;
-    let target = crate::palw_work_target_v1::palw_work_ticket_target_v1(ccu, floor);
+    let target = palw_effective_class_target_v1(state, state_params, &attempt.class_id, Some(floor))?;
     let ticket = crate::palw_attempt_v2::class_ticket_v3(attempt, execution_anchor);
     if ticket > target {
         return Err(PalwAdmissionV2Error::ClassTicketAboveWorkTarget { class_id: attempt.class_id, ticket, target, ccu, floor });

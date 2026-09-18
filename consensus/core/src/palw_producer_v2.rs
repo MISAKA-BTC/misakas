@@ -245,13 +245,10 @@ pub fn palw_producer_facts_v2(
     // ADR-0137: past the work target a model class draws against `MAX · min(1, CCU / W₀)` from
     // its registry row — no row, no price, no facts (the producer holds); the floor keeps its
     // class target.
-    let class_target = match work_target_floor {
-        Some(floor) if class_id != state_params.base_class_id() => {
-            let ccu = state.model_lifecycle(&class_id)?.work.economic_ccu_per_claim;
-            crate::palw_work_target_v1::palw_work_ticket_target_v1(ccu, floor)
-        }
-        _ => state.class_target(&class_id)?.target,
-    };
+    // ADR-0137: one spelling of the rule — the same helper the chain's admission reads, so the
+    // producer's ticket AND its pwu are the ones the chain will derive (2026-09-18 audit, C-2).
+    let class_target =
+        crate::palw_admission_v2::palw_effective_class_target_v1(state, state_params, &class_id, work_target_floor).ok()?;
     let pwu = match class.pwu_rule {
         PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(class_target, pwu_per_inference),
         PalwPwuRuleV2::MaxPerAttempt(cap) => cap,

@@ -236,6 +236,9 @@ impl ConsensusServices {
             params.palw_attempt_activation,
             // ADR-0125: the round lane's fence, for proof GHOSTDAG and the proof header gate alike.
             params.palw_execution_lane_fence().map(|lane| lane.activation),
+            // ADR-0132 S (H-1 of the 2026-09-18 audit): a proof's post-fence attempt headers carry
+            // no Layer-0 work, so the proof's PoW check reads the same fence the pipeline does.
+            params.palw_single_lottery,
             is_consensus_exiting,
         ));
 

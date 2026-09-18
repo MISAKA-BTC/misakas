@@ -8357,7 +8357,14 @@ impl<'a> TransitionBuilder<'a> {
         if !row.state.admits_claims() {
             return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: format!("{:?}", row.state) });
         }
-        if self.extras.work_target_active {
+        // **H-2 of the 2026-09-18 audit: the room check waits for the grace the registry already
+        // computes.** The work target and the registry arm at the same height, and a readiness proof
+        // is refused below that height — so on the flag day itself every class has zero ready seats,
+        // the room is zero, and every non-base class would refuse claims until seven seats prove
+        // possession, while their producers mined blocks their own chain rejected.
+        // `grace_until_daa` (activation + `readiness_probe_max_age_spans` spans) exists for exactly
+        // this window; inside it the class is bounded by the inflight cap below, as before the fence.
+        if self.extras.work_target_active && fold.governs_at(now_daa) {
             // ADR-0137 D5: one network-wide replay budget in place of the per-class cap.
             let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
             if room == 0 {
@@ -12079,15 +12086,20 @@ fn apply_class_reclamation(
 
     for id in &reclaims {
         let Some(record) = builder.state.classes.get(id).cloned() else { continue };
-        let returned = builder.state.class_shares.get(id).copied().unwrap_or(0);
-        if returned == 0 {
-            continue;
-        }
         // The floor is never reclaimed: ADR-0039 W6′ says it must always be able to produce, and a
         // chain whose floor went dormant for being idle would have no way back in.
         if *id == params.base_class_id() {
             continue;
         }
+        // **H-5 of the 2026-09-18 audit: a class that holds no permille is still reclaimed.** The
+        // `returned == 0` guard used to sit above the Dormant write and the exposure release, so a
+        // weightless registration (share 0 — what a permissionless entrant with uncertified kernels
+        // gets) was never reclaimed, its registrant's exposure never came back, and its row stayed
+        // in the rooted state for ever. The guard belongs to the redistribution alone: there is
+        // nothing to hand back to the incumbents when nothing was taken.
+        let returned = builder.state.class_shares.get(id).copied().unwrap_or(0);
+        // The row leaves the table whatever it held: a Dormant class with a zero entry is the one
+        // shape `assert_internal_consistency` refuses (a share must name a live class).
         builder.write_share(*id, None);
         let mut dormant = record.clone();
         dormant.status = PalwClassStatusV2::Dormant { since_daa: ctx.daa_score };
@@ -12095,7 +12107,9 @@ fn apply_class_reclamation(
         if let Some(bond) = record.registrant_bond {
             builder.move_registration_exposure(bond, false)?;
         }
-        redistribute_permille_v1(builder, returned, None)?;
+        if returned > 0 {
+            redistribute_permille_v1(builder, returned, None)?;
+        }
     }
     Ok(())
 }
@@ -17584,6 +17598,41 @@ pub(crate) mod tests {
     /// **Decision 5: zero production for the window returns the whole share, frees the collateral,
     /// and leaves the class adjudicable.**
     #[test]
+    fn a_weightless_class_is_reclaimed_like_any_other() {
+        // **H-5 of the 2026-09-18 audit.** The reclamation pass used to `continue` before the
+        // Dormant write whenever the class held no permille, so a share-0 registration — what a
+        // permissionless entrant with uncertified kernels gets — was never reclaimed, its
+        // registrant's exposure never came back, and its row stayed in the rooted state for ever.
+        let p = economy_params();
+        let bond = bond_key(1);
+        let (mut state, _) = apply_palw_transition_v2(
+            &PalwChainStateV2::genesis(),
+            &p,
+            &ctx(1, 10, 1),
+            &[registration(h64(1), 1000, None), registration(h64(2), 0, Some(bond))],
+            None,
+        )
+        .expect("registers a weightless entrant");
+        assert_eq!(state.class_shares.get(&h64(2)).copied(), Some(0), "the premise: it holds no permille");
+        assert_eq!(state.registration_exposure(&bond), 1_000, "…and its registrant's collateral is held");
+
+        let epoch = p.epoch_length();
+        for step in 1..=3u64 {
+            let daa = 10 + step * epoch;
+            let (next, _) =
+                apply_palw_transition_v2(&state, &p, &ctx(10 + step, daa, 10 + step), &[], None).expect("a boundary with no objects");
+            state = next;
+        }
+        assert!(
+            matches!(state.classes.get(&h64(2)).map(|r| &r.status), Some(PalwClassStatusV2::Dormant { .. })),
+            "three idle epochs reclaim a weightless class too"
+        );
+        assert_eq!(state.registration_exposure(&bond), 0, "and its registrant's collateral is free again");
+        assert_eq!(state.class_shares.get(&h64(1)).copied(), Some(1000), "the incumbent's share is untouched: nothing was taken");
+        state.assert_internal_consistency(&p).expect("the table still conserves");
+    }
+
+    #[test]
     fn a_class_that_produces_nothing_is_reclaimed_and_gives_everything_back() {
         let p = economy_params();
         let bond = bond_key(1);
@@ -19422,6 +19471,58 @@ pub(crate) mod tests {
         /// heavier than `W₀` draws the whole ticket, a floor of `MAX` prices it at 800 000 of the
         /// space, a rowless class has no price, and the floor keeps its class target.
         #[test]
+        fn adr0137_past_the_fence_the_chain_prices_pwu_from_the_same_target_the_producer_does() {
+            // **C-2 of the 2026-09-18 audit, both halves.** The draw's target and the pwu derivation
+            // are one value past the work target (`palw_effective_class_target_v1`): the producer's
+            // claim is the one the chain derives (an eight-node drill refused every model block
+            // before this), and a registrant's declared `initial_target` — never re-priced past the
+            // fence — no longer reaches pwu, so it buys no fork-choice weight.
+            use crate::palw_admission_v2::palw_effective_class_target_v1;
+            use crate::palw_work_target_v1::palw_work_ticket_target_v1;
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, _root) = kimi_active_and_priced(&p, 10_000);
+            let ccu = s7.model_lifecycle(&kimi_id()).expect("Kimi has a row").work.economic_ccu_per_claim;
+            let declared = s7.class_target(&kimi_id()).expect("and a class target").target;
+
+            for floor in [1u128, 800_000, 1_600_000, u128::MAX] {
+                let effective = palw_effective_class_target_v1(&s7, &p, &kimi_id(), Some(floor)).expect("a rowed class is priced");
+                assert_eq!(effective, palw_work_ticket_target_v1(ccu, floor), "the ticket is the target past the fence");
+                // Whatever the registrant declared, the effective target is the chain's own
+                // function of the class's counted work and the block's floor.
+                if floor != 1 {
+                    assert_ne!(effective, declared, "floor {floor}: the declared target is not read");
+                }
+                let pwu_per_inference = 7u64;
+                assert_eq!(
+                    crate::palw_pwu::palw_pwu_v1(effective, pwu_per_inference),
+                    crate::palw_pwu::palw_pwu_v1(
+                        palw_effective_class_target_v1(&s7, &p, &kimi_id(), Some(floor)).unwrap(),
+                        pwu_per_inference
+                    ),
+                    "the pwu the chain derives is a function of the effective target alone"
+                );
+            }
+            assert_eq!(
+                palw_effective_class_target_v1(&s7, &p, &kimi_id(), None).expect("below the fence"),
+                declared,
+                "below the fence the class target is the rule, unchanged"
+            );
+            let base = p.base_class_id();
+            assert_eq!(
+                palw_effective_class_target_v1(&s7, &p, &base, Some(1)).expect("the floor is exempt"),
+                s7.class_target(&base).expect("the floor has a target").target,
+                "the liveness floor keeps its class target past the fence"
+            );
+            assert!(
+                matches!(
+                    palw_effective_class_target_v1(&s7, &p, &h64(0xDEAD), Some(1)),
+                    Err(crate::palw_admission_v2::PalwAdmissionV2Error::ClassWorkUnknown(_))
+                ),
+                "a class with no row has no price"
+            );
+        }
+
+        #[test]
         fn adr0137_past_the_fence_the_lottery_reads_ccu_over_the_floor_and_a_rowless_class_has_no_price() {
             use crate::palw_admission_v2::{PalwAdmissionV2Error, check_palw_class_lottery_v3, check_palw_class_lottery_v4};
             let p = params().with_worker_carve_permille(620).expect("a legal carve");
@@ -19529,6 +19630,35 @@ pub(crate) mod tests {
         /// **Past the work target one verification budget gates claims**: every claim in flight
         /// takes from it, the per-class cap is not read, a full panel refuses
         /// (`PanelRoomExhausted`), and a reorg gives the room back.
+        #[test]
+        fn adr0137_the_room_check_waits_for_the_registrys_own_activation_grace() {
+            // **H-2 of the 2026-09-18 audit.** The work target and the registry arm at the same
+            // height, and a readiness proof is refused below it — so on the flag day itself every
+            // class has zero ready seats and the room is zero. Inside `grace_until_daa` the class is
+            // bounded by the inflight cap it had before the fence; past the grace the room binds.
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let ready = s7.seat_readiness_iter().filter(|((_, class), _)| *class == kimi_id()).count();
+            let with_grace = |grace_until_daa: u64| {
+                let mut f = fold(kimi_work());
+                f.grace_until_daa = grace_until_daa;
+                f.globals.reference_work_per_span = 1; // a budget of nothing: only the grace can admit
+                PalwTransitionExtrasV1 {
+                    work_target_active: true,
+                    model_registry: Some(f),
+                    ..priced_extras(Some(payout_fold(10_000, 0)))
+                }
+            };
+            let env = attempt_for_class(8, 4_242, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+            let c = funded(8, 131, 8);
+            apply_palw_transition_v2_with_extras(&s7, &p, &c, &[], Some(&env), false, false, false, false, &with_grace(10_000))
+                .expect("inside the registry's grace the class still admits claims");
+            let refused =
+                apply_palw_transition_v2_with_extras(&s7, &p, &c, &[], Some(&env), false, false, false, false, &with_grace(0))
+                    .expect_err("past the grace a zero budget is a closed door");
+            assert!(matches!(refused, PalwStateV2Error::PanelRoomExhausted { .. }), "{refused:?} (ready seats: {ready})");
+        }
+
         #[test]
         fn adr0137_past_the_fence_one_verification_budget_gates_claims_and_a_reorg_returns_the_room() {
             use crate::palw_work_target_v1::palw_panel_room_v1;

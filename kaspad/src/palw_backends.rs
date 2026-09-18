@@ -75,6 +75,20 @@ impl PalwBackendRegistry {
         self.sdk.resolve(class_id, artifact_root, &self.holdings)
     }
 
+    /// **The bytes on disk of the holding that serves THIS class** (H-4 of the 2026-09-18 audit).
+    /// The resolver is the only thing that knows which holding answers a (class, root), so each
+    /// holding is offered on its own and the one that resolves is the one whose file the replay
+    /// will page in. `None` when no holding serves the class — the caller then has no per-class
+    /// figure and falls back to its conservative one.
+    pub fn holding_bytes_for_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<u64> {
+        self.holdings
+            .iter()
+            .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
+            .and_then(|holding| holding.path.as_ref())
+            .and_then(|path| std::fs::metadata(path).ok())
+            .map(|meta| meta.len())
+    }
+
     /// **Resolve through the tables, then — armed — through the chain's own registration**
     /// (ADR-0067 Decisions 1–2). `fetch` is the caller's session read
     /// (`palw_registered_class_carriage_v1`): it runs only when every table has passed, and its

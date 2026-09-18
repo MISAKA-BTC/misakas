@@ -7861,7 +7861,6 @@ impl VirtualStateProcessor {
     pub(super) fn palw_known_model_works_v1(
         &self,
     ) -> std::collections::BTreeMap<kaspa_hashes::Hash64, kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1> {
-        use kaspa_consensus_core::palw_model_registry_v1::palw_model_work_from_carriage_v1;
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
         let mut cache = self.palw_model_work_cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         for object in &self.palw_genesis_objects_v2 {
@@ -7879,25 +7878,21 @@ impl VirtualStateProcessor {
                 .or_else(|| self.palw_canonical_class_work_v1(*class_id));
             cache.insert(*class_id, work);
         }
-        if let Some(state_params) = self.palw_state_params_v2.as_ref()
-            && let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params)
-        {
-            for class_id in state.class_ids() {
-                if cache.contains_key(&class_id) {
-                    continue;
-                }
-                let Some(record) = self.palw_class_carriage_store.read().get(class_id) else { continue };
-                let work = borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2>(&record.carriage)
-                    .ok()
-                    .filter(|carriage| carriage.profile.shape_profile_id() == class_id)
-                    .and_then(|carriage| palw_model_work_from_carriage_v1(&carriage.profile, &carriage.canonical));
-                // A carriage that does not describe the class is left uncached: a later adoption
-                // (the sync protocol's) may carry the one that does.
-                if work.is_some() {
-                    cache.insert(class_id, work);
-                }
-            }
-        }
+        // **C-1 of the 2026-09-18 audit: this map decides rooted state, so it reads the chain and the
+        // build — never this node's own storage.** It used to enumerate the classes of the node's OWN
+        // TIP and take each one's graph from `palw_class_carriage_store`, a local RocksDB written at
+        // acceptance (where a failure is a `warn!` and the block is still accepted) and synced
+        // best-effort at the pruning point. Past the registry fence this map answers
+        // `step_model_registry` (which writes the rooted `model_lifecycles`), `model_class_work`
+        // (which writes the rooted `claim_economics`, and so the payout) and
+        // `check_class_admits_claim`'s rowless arm — so a node holding a declaration another node
+        // lacked folded a DIFFERENT state root for the same block, and a node that adopted one later
+        // disagreed with its own earlier fold across a reorg.
+        //
+        // A class registered on a running chain PAST the fence opens its row from the object in the
+        // same block (`open_model_lifecycle`): rooted, and needing no local copy. A class registered
+        // before the fence gets no row on every node alike — it keeps the share it has, exactly as
+        // the registry's own documentation says — and enters the registry by re-registering.
         cache.iter().filter_map(|(id, work)| work.map(|work| (*id, work))).collect()
     }
 
