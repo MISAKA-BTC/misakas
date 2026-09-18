@@ -20694,3 +20694,29 @@ mod palw_model_registry_fence_tests {
         assert!(inverted.validate_palw_v2().is_err(), "a floor above the ceiling is refused");
     }
 }
+
+#[cfg(test)]
+mod adr0142_release_probe {
+    /// **What the shipped preset actually schedules at or past the boundary**, printed so a release
+    /// is checked against the build rather than against a page. Named as a probe, not a rule: it
+    /// asserts only that the two fences ADR-0142 holds back are absent, and prints the rest.
+    #[test]
+    fn the_flag_day_carries_what_the_announcement_says_it_carries() {
+        let p = super::palw_rc_shipped_params();
+        let mut rows: Vec<(&str, u64)> = p
+            .palw_fences_v1()
+            .into_iter()
+            .filter_map(|(n, f)| f.filter(|a| *a != super::ForkActivation::never()).map(|a| (n, a.daa_score())))
+            .filter(|(_, h)| *h >= super::PALW_RC_AUDIT_DEEP_FENCE_DAA)
+            .collect();
+        rows.sort_by_key(|(_, h)| *h);
+        for (n, h) in &rows {
+            println!("PROBE {h:>6}  {n}");
+        }
+        for held in ["palw_single_lottery", "palw_anchor_clock", "palw_clock_cursor"] {
+            assert!(!rows.iter().any(|(n, _)| *n == held), "{held} is armed, and ADR-0142 holds it back");
+        }
+        assert!(rows.iter().any(|(n, _)| *n == "palw_work_target"), "the work target keeps the day");
+        assert!(rows.iter().any(|(n, _)| *n == "palw_model_registry"), "and so does the registry");
+    }
+}
