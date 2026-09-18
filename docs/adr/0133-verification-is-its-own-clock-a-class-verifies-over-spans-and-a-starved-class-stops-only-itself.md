@@ -215,6 +215,11 @@ the second generation (§8) is the design question.
 
 ## 8. Second-generation designs (not adopted; compared)
 
+> **Order set by the operator (2026-09-18):** V1 full replay → **S1 segmented replay** → S3 if needed → S2 if
+> speed wins. **S4 (zero-knowledge) is not used and not planned**: PALW verifies by re-execution, and every
+> design below is read on that premise. S1's protocol half is built and fenced at testnet-11's DAA 6,100
+> (§11, 2026-09-18); its runtime half (checkpoints and resume) is the next work.
+
 | | security model | soundness | panel collusion | complexity | artifact | latency | hardware | consensus | migration | attack surface | weaker than 5 × full replay where |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | **S1. Checkpointed segmented replay** — the producer commits per-segment state roots (the trace already has them, ADR-0082 D9); each seat replays `k` segments drawn after the bind, resuming from the committed checkpoint (ADR-0103's resume route) | a lie in a segment is caught by any seat that draws it; cache-altering lies by every seat | probabilistic: ADR-0098's number per segment | as today (3 of 5), but a colluding panel can license a lie in an undrawn segment | medium: the routes exist | the whole artifact, but a seat's *time* is `k/N` of the job | `k/N` of full | as today | segment count and `k` in the profile; a fence | none (claims unchanged) | grinding the segment draw (drawn after the bind — cannot) | an undrawn segment is unverified: security drops from 100 % of the job to `k/N` per seat, `1 − (1 − k/N)^5` per lie |
@@ -317,6 +322,34 @@ exceeds every profile in §6; shortening it is ADR-0130's next ADR).
   and is what §6 prints. Verification: consensus-core 2,149 / rpc-core 148 / misaka-cli 176 / rpc-service 1 /
   kaspad 98 / integration `rpc_tests::sanity_test` 1 — all green; clippy `-D warnings` over the eleven crates
   clean; `shipped_presets_have_pinned_fingerprints` unmoved (`ab4e7b9c…`).
+
+### 11.1 Verification V2 (S1), the protocol half — built 2026-09-18, fenced at 6,100
+
+`consensus/core/src/palw_verification_v2.rs`: a job's leaves are cut into `K = seats − 1` equal segments
+(`palw_segment_leaf_range_v2`); the panel anchor names one full-replay seat and gives every other seat two
+segments — its own and the next round, with a drawn rotation — so every segment has two partial holders
+beside the full seat (`palw_segment_assignment_v2`, a function of the bind); a receipt names the segments it
+attests (`PalwSeatReceiptV3 { receipt: PalwSeatReceiptV2, segments: PalwSegmentMaskV2 }`, signed over
+`palw_receipt_message_v3` = the V2 message and the mask, so a relayer cannot widen or narrow it); the object
+`PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts }` (tag 49) is accepted past
+`Params::palw_verification_v2` by `validate_receipt_coverage_v2` — every V1 check, then the V1 quorum AND
+every segment attested `Valid` at least `PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT = 2` times
+(`palw_coverage_v2`) — and folded exactly as `ReceiptLicensed` is. A full mask is V1's receipt: a set of full
+masks licenses exactly as V1, the V1 object keeps riding past the fence, and a fleet adopts segment replay
+seat by seat. The assignment is a seat's DUTY (what it must replay to be paid), not a cap on what it may
+attest. testnet-11 arms the fence at **DAA 6,100**, its own day a hundred past the 6,001 flag day and a
+hundred before ADR-0134's 6,201; refused without the registry at or below. Pinned by the module's tests,
+`adr0133_v2_a_licence_by_coverage_is_v1_for_full_masks_and_needs_two_attestations_a_segment` (panel),
+`adr0133_v2_a_segment_scoped_receipt_set_licenses_past_the_fence_and_is_refused_below_it` (state) and the
+flag-day table (params).
+
+**Not built — S1's runtime half, the next work:** (1) the producer publishes the checkpoint at each
+segment's start (the residual stream and the KV cache at that boundary) under a commitment the trace carries;
+(2) the runtime resumes a job from a checkpoint (ADR-0119 §7's resume) for the dense family first, the hybrid
+after; (3) a seat replays its assigned segments from the checkpoint, attests its mask, and the collector
+assembles `ReceiptLicensedV2` by coverage; (4) the court resumes from a checkpoint when a segment is accused.
+Until (1)–(3) land a seat replays whole and attests the full mask, and V2 is byte-for-byte V1 at the licence
+— which is what makes 6,100 safe to cross before the runtime half ships.
 
 ## 12. Number hygiene
 

@@ -12,7 +12,8 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > regime and the audit's deep fixes to DAA 6,000 — from the 7,000 the deployed release scheduled; the
 > operator, 2026-09-17: the wait was too long — and schedules the DAA 6,001 flag day with ADR-0130's
 > operator lottery and 5-DAA spans, the model registry, the economic payout, the work target, the
-> single lottery and the short challenge window (one PALW upgrade day, 2026-09-18), and ADR-0134's compute-overlay retirement at 6,201; the 7,000
+> single lottery and the short challenge window (one PALW upgrade day, 2026-09-18), ADR-0133's
+> Verification V2 (S1) at 6,100, and ADR-0134's compute-overlay retirement at 6,201; the 7,000
 > release prints `ae1d6162…`; the earlier builds `4787b92a…`, `ab4e7b9c…` and `dd805c9f…`, which
 > scheduled 7,001, were never deployed).
 > The network produces PALW blocks at a frozen 120-second cadence. Testnet-10 and older relaunches
