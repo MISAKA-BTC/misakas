@@ -27,11 +27,20 @@ use itertools::Itertools;
 trait DifficultyManagerExtension {
     fn headers_store(&self) -> &dyn HeaderStoreReader;
 
+    /// **ADR-0138: how many mergeset blocks are in the DAA window yet do not advance the DAA
+    /// score** — the blocks `bits` does not price, past `palw_anchor_clock`. Zero where the fence is
+    /// not in force.
+    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64;
+
     #[inline]
     #[must_use]
     fn internal_calc_daa_score(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64 {
         let sp_daa_score = self.headers_store().get_daa_score(ghostdag_data.selected_parent).unwrap();
+        // ADR-0138: the DAA score is the anchor's clock. A block outside the window (`mergeset_non_daa`)
+        // never counted; past the fence a block `bits` does not price does not count either — it is
+        // still merged, still paid, still folded, it just does not move the clock every window reads.
         sp_daa_score + (ghostdag_data.mergeset_size() - mergeset_non_daa.len()) as u64
+            - self.daa_exempt_count(ghostdag_data, mergeset_non_daa)
     }
 
     fn get_difficulty_blocks(&self, window: &BlockWindowHeap) -> Vec<DifficultyBlock> {
@@ -195,6 +204,8 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     round_lane: Option<ForkActivation>,
     /// ADR-0132 S: past it an attempt row prices nothing (its digest is admitted unconditionally).
     single_lottery: Option<ForkActivation>,
+    /// ADR-0138: past this fence only a `bits`-priced block advances the DAA score.
+    anchor_clock: Option<ForkActivation>,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
@@ -213,6 +224,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         receipt_rows_activation: ForkActivation,
         round_lane: Option<ForkActivation>,
         single_lottery: Option<ForkActivation>,
+        anchor_clock: Option<ForkActivation>,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -229,6 +241,25 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             receipt_rows_activation,
             single_lottery,
             round_lane,
+            anchor_clock,
+        }
+    }
+
+    /// **ADR-0138: does a block of this lane, minted at `daa_score`, advance the DAA score?** Yes
+    /// below `palw_anchor_clock`. Past it, exactly when `bits` prices the lane at that height — the
+    /// same three-generation predicate the difficulty window reads (`algo_id_is_priced_by_bits`,
+    /// `_v2` past `palw_receipt_rows_unpriced`, `_v3` past the single lottery), so the DAA clock and
+    /// the retarget count the same blocks. One spelling: a lane that leaves the window leaves the clock.
+    pub fn lane_advances_daa_at(&self, pow_algo_id: u8, daa_score: u64) -> bool {
+        if !self.anchor_clock.is_some_and(|fence| fence.is_active(daa_score)) {
+            return true;
+        }
+        if self.single_lottery.is_some_and(|fence| fence.is_active(daa_score)) {
+            kaspa_consensus_core::pow_layer0::algo_id_is_priced_by_bits_v3(pow_algo_id)
+        } else if self.receipt_rows_activation.is_active(daa_score) {
+            kaspa_consensus_core::pow_layer0::algo_id_is_priced_by_bits_v2(pow_algo_id)
+        } else {
+            algo_id_is_priced_by_bits(pow_algo_id)
         }
     }
 
@@ -318,6 +349,23 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension for SampledDifficultyManager<T, U> {
+    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64 {
+        // The fence is read at each merged block's OWN DAA score, as `is_round_block` reads the round
+        // lane's: a block minted under the rule is exempt wherever it is later merged.
+        if self.anchor_clock.is_none() {
+            return 0;
+        }
+        ghostdag_data
+            .unordered_mergeset()
+            .filter(|hash| !mergeset_non_daa.contains(hash))
+            .filter(|hash| {
+                self.headers_store
+                    .get_header(*hash)
+                    .is_ok_and(|header| !self.lane_advances_daa_at(header.pow_algo_id, header.daa_score))
+            })
+            .count() as u64
+    }
+
     fn headers_store(&self) -> &dyn HeaderStoreReader {
         self.headers_store.deref()
     }

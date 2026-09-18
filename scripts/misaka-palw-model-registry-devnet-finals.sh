@@ -25,6 +25,7 @@ WORK_TARGET_AT="${WORK_TARGET_AT:-}"
 SINGLE_LOTTERY_AT="${SINGLE_LOTTERY_AT:-}"
 VERIFICATION_V2_AT="${VERIFICATION_V2_AT:-}"
 READINESS_V2_AT="${READINESS_V2_AT:-}"
+ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 PRODUCER_NODE="${PRODUCER_NODE:-3}"
 STEP_WAIT="${STEP_WAIT:-14400}"
@@ -87,6 +88,7 @@ start_node() {
   [ -n "$SINGLE_LOTTERY_AT" ] && args+=(--palw-single-lottery-devnet="$SINGLE_LOTTERY_AT")
   [ -n "$VERIFICATION_V2_AT" ] && args+=(--palw-verification-v2-devnet="$VERIFICATION_V2_AT")
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
+  [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ -n "$extra" ] && args+=("$extra")
   [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
@@ -135,7 +137,7 @@ rm -rf "$WORK_DIR/node-$f"
 MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/node-$f" --listen="127.0.0.1:$((P2P_BASE + f))" --rpclisten-borsh="127.0.0.1:$((RPC_BASE + f))" \
   --utxoindex --nodnsseed --disable-upnp --nogrpc \
   --palw-execution-lane-devnet="$LANE" --palw-model-registry-devnet="$REGISTRY_AT" --palw-panel --palw-class-artifact="$CLASS_ARTIFACT" \
-  ${PAYOUT_AT:+--palw-economic-payout-devnet=$PAYOUT_AT} ${WORK_TARGET_AT:+--palw-work-target-devnet=$WORK_TARGET_AT} ${SINGLE_LOTTERY_AT:+--palw-single-lottery-devnet=$SINGLE_LOTTERY_AT} ${VERIFICATION_V2_AT:+--palw-verification-v2-devnet=$VERIFICATION_V2_AT} ${READINESS_V2_AT:+--palw-readiness-v2-devnet=$READINESS_V2_AT} \
+  ${PAYOUT_AT:+--palw-economic-payout-devnet=$PAYOUT_AT} ${WORK_TARGET_AT:+--palw-work-target-devnet=$WORK_TARGET_AT} ${SINGLE_LOTTERY_AT:+--palw-single-lottery-devnet=$SINGLE_LOTTERY_AT} ${VERIFICATION_V2_AT:+--palw-verification-v2-devnet=$VERIFICATION_V2_AT} ${READINESS_V2_AT:+--palw-readiness-v2-devnet=$READINESS_V2_AT} ${ANCHOR_CLOCK_AT:+--palw-anchor-clock-devnet=$ANCHOR_CLOCK_AT} \
   --palw-producer-key="$WORK_DIR/keys/bond-$f.seed" --palw-producer-bond="$PREMINE_TXID:$f" --palw-producer-pay-address="$addr" \
   --connect="127.0.0.1:$P2P_BASE" >>"$WORK_DIR/node-$f.log" 2>&1 &
 pids+=("$!")

@@ -548,6 +548,67 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
 /// sides of the fence are asserted as blue-work DIFFERENCES through the real pipeline, so the
 /// number a peer actually adds is the number under test.
 #[tokio::test]
+async fn adr0138_past_the_anchor_clock_a_heartbeat_block_ticks_no_daa() {
+    // **ADR-0138: the DAA score is the anchor's clock.** A heartbeat carries the global `bits` but
+    // is not priced by them (ADR-0066), so past `palw_anchor_clock` merging one moves no window:
+    // the chain block that merges the heartbeat has the DAA score of one anchor, not two. Below
+    // the fence the heartbeat ticks as it always did (`palw_heartbeat_blocks_tick_the_clock…`).
+    use crate::model::stores::daa::DaaStoreReader;
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    kaspa_core::log::try_init_logger("info");
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+            p.palw_anchor_clock = Some(kaspa_consensus_core::config::params::ForkActivation::always());
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the clock alone is a runnable ruleset");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    ctx.simulated_time += 120_000;
+    let template = ctx.build_block_template(7, ctx.simulated_time);
+    let (hb_template, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+    assert_eq!(hb_template.block.header.pow_algo_id, hb::PALW_HEARTBEAT_ALGO_ID);
+    let hb_hash = hb_template.block.header.hash;
+    let sink_before = ctx.consensus.get_sink();
+    let daa_before = ctx.consensus.virtual_processor().headers_store.get_daa_score(sink_before).unwrap();
+    let hb_timestamp = hb_template.block.header.timestamp;
+    ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    // The heartbeat sits in its hourly slot, ahead of the simulated clock; the next anchor comes after it.
+    ctx.simulated_time = ctx.simulated_time.max(hb_timestamp) + 120_000;
+    let next = ctx.build_block_template(8, ctx.simulated_time);
+    assert!(next.block.header.direct_parents().contains(&hb_hash), "the next anchor merges the heartbeat");
+    let next_hash = next.block.header.hash;
+    ctx.validate_and_insert_block(next.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let vp = ctx.consensus.virtual_processor();
+    let daa_next = vp.headers_store.get_daa_score(next_hash).unwrap();
+    let daa_hb = vp.headers_store.get_daa_score(hb_hash).unwrap();
+    // Two blocks were added on top of `sink_before` — the heartbeat and the anchor that merged it —
+    // and the clock moved by exactly one: the anchor's.
+    assert_eq!(daa_hb, daa_before + 1, "the heartbeat's own score counts the anchor it built on");
+    assert_eq!(daa_next, daa_before + 1, "…and the block that merges the heartbeat adds nothing for it: one anchor, one tick");
+    let ghostdag = vp.ghostdag_store.get_data(next_hash).unwrap();
+    assert!(
+        ghostdag.mergeset_blues.contains(&hb_hash) || ghostdag.selected_parent == hb_hash,
+        "the heartbeat is merged (blue, ε work) — outside the clock is not outside the DAG"
+    );
+    let non_daa = vp.daa_excluded_store.get_mergeset_non_daa(next_hash).unwrap_or_default();
+    assert!(!non_daa.contains(&hb_hash), "and it is NOT in `mergeset_non_daa`: it is paid and folded like any blue");
+}
+
+#[tokio::test]
 async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     kaspa_core::log::try_init_logger("info");

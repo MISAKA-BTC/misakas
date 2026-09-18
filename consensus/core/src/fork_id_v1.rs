@@ -599,6 +599,7 @@ mod tests {
             "palw_short_challenge_window" => params.set_palw_short_challenge_window(Some(at)),
             "palw_verification_v2" => params.palw_verification_v2 = Some(at),
             "palw_readiness_v2" => params.palw_readiness_v2 = Some(at),
+            "palw_anchor_clock" => params.palw_anchor_clock = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,
@@ -1429,6 +1430,7 @@ mod tests {
         // only rule in force for the gap (ADR-0137 §3.5).
         at_6000.palw_work_target = Some(six_thousand);
         at_6000.palw_single_lottery = Some(six_thousand);
+        at_6000.palw_anchor_clock = Some(six_thousand);
         at_6000.set_palw_short_challenge_window(Some(six_thousand));
         // ADR-0133 V2 has its own day (6,100); the counterfactual moves it with the rest so the
         // schedule reads as a build without the whole upgrade.

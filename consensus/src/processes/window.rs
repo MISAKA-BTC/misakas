@@ -110,6 +110,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         receipt_rows_activation: ForkActivation,
         round_lane: Option<ForkActivation>,
         single_lottery: Option<ForkActivation>,
+        anchor_clock: Option<ForkActivation>,
     ) -> Self {
         let difficulty_manager = SampledDifficultyManager::new(
             headers_store.clone(),
@@ -125,6 +126,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
             receipt_rows_activation,
             round_lane,
             single_lottery,
+            anchor_clock,
         );
         let past_median_time_manager = SampledPastMedianTimeManager::new(headers_store.clone(), genesis.timestamp);
         Self {

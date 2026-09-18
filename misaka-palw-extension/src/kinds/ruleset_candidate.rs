@@ -102,6 +102,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_short_challenge_window" => params.set_palw_short_challenge_window(Some(at)),
         "palw_verification_v2" => params.palw_verification_v2 = Some(at),
         "palw_readiness_v2" => params.palw_readiness_v2 = Some(at),
+        "palw_anchor_clock" => params.palw_anchor_clock = Some(at),
         "palw_panel_economy" => params.palw_panel_economy = Some(at),
         "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
         "palw_overlay_carve" => {

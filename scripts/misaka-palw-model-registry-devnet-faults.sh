@@ -21,6 +21,7 @@ WORK_TARGET_AT="${WORK_TARGET_AT:-}"
 SINGLE_LOTTERY_AT="${SINGLE_LOTTERY_AT:-}"
 VERIFICATION_V2_AT="${VERIFICATION_V2_AT:-}"
 READINESS_V2_AT="${READINESS_V2_AT:-}"
+ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-1800}"
@@ -70,6 +71,7 @@ start_node() {
   [ -n "$SINGLE_LOTTERY_AT" ] && args+=(--palw-single-lottery-devnet="$SINGLE_LOTTERY_AT")
   [ -n "$VERIFICATION_V2_AT" ] && args+=(--palw-verification-v2-devnet="$VERIFICATION_V2_AT")
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
+  [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ "$with_artifact" = 1 ] && args+=(--palw-class-artifact="$CLASS_ARTIFACT")
   args+=(--connect="127.0.0.1:$P2P_BASE")
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &

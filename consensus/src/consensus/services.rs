@@ -108,6 +108,8 @@ impl ConsensusServices {
             // ADR-0125: round blocks are outside every block's DAA set past the lane's fence.
             params.palw_execution_lane_fence().map(|lane| lane.activation),
             params.palw_single_lottery,
+            // ADR-0138: past this fence only a `bits`-priced block advances the DAA score.
+            params.palw_anchor_clock,
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),

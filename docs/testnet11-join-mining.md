@@ -34,7 +34,7 @@ Default ports:
 The startup log must report:
 
 ```text
-Consensus params fingerprint: c472a17b461bb5578ca16023e7dda48ced0996585e93c2f2b0f459f6a3633c12 (network testnet-11)
+Consensus params fingerprint: 3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1 (network testnet-11)
 ```
 
 ## 3. Recommended setup

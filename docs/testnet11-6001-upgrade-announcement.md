@@ -1,6 +1,6 @@
 # Testnet-11: the DAA 6,001 PALW upgrade, and Verification V2 at 6,100
 
-**Fingerprint of the release: `c472a17b461bb5578ca16023e7dda48ced0996585e93c2f2b0f459f6a3633c12`.**
+**Fingerprint of the release: `3d150afd18d2367a1ed0de65d0b1c12cfe06cd8a61478354ecab27e6283855e1`.**
 Every node on testnet-11 must run this build **before DAA 6,000**. The build currently deployed prints
 `ae1d6162…` and is refused from 6,000 — it schedules the held regime and the audit's deep fixes at 7,000,
 the height the operator moved to 6,000 on 2026-09-17.
@@ -30,6 +30,7 @@ of it fires without the rest:
 | one work target `W` — a block draws against `CCU / W`; no class share, class DAA, epoch budget or seat price is read | 0137 |
 | the single lottery — an attempt block's Layer-0 digest is no longer compared to `bits`, the class ticket is the whole lottery | 0132 S |
 | the short challenge window: a claim licensed past 6,001 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
+| the anchor clock: a block advances the DAA score iff `bits` priced it — the attempt, receipt and heartbeat lanes stop ticking the windows | 0138 |
 
 **DAA 6,100 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
 attests; a claim licenses when the panel's quorum holds **and** every segment of the anchor's cut is

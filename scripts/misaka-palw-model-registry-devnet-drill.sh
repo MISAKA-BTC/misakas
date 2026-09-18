@@ -34,6 +34,7 @@ WORK_TARGET_AT="${WORK_TARGET_AT:-}"
 SINGLE_LOTTERY_AT="${SINGLE_LOTTERY_AT:-}"
 VERIFICATION_V2_AT="${VERIFICATION_V2_AT:-}"
 READINESS_V2_AT="${READINESS_V2_AT:-}"
+ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 MODEL_ID="${MODEL_ID:-}"
 # With an artifact the shipped devnet class set is used (the artifact's class is a genesis class the
@@ -82,6 +83,7 @@ node_args() {
   [ -n "$SINGLE_LOTTERY_AT" ] && args+=(--palw-single-lottery-devnet="$SINGLE_LOTTERY_AT")
   [ -n "$VERIFICATION_V2_AT" ] && args+=(--palw-verification-v2-devnet="$VERIFICATION_V2_AT")
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
+  [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   if [ -n "$CLASS_ARTIFACT" ]; then
     args+=(--palw-class-artifact="$CLASS_ARTIFACT")
     if [ "$i" -eq 1 ] && [ "$REGISTER_CLASS" = 1 ]; then
