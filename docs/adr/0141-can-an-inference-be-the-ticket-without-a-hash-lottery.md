@@ -1,10 +1,10 @@
 # ADR-0141 — Can an inference be the ticket without a hash lottery?
 
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **This ADR decides
-nothing about the lottery and changes no rule.** It states the question precisely, records why it is
-the largest of the three places a hash remains, lists what would have to be answered before anything
-replaced it, and builds the one thing that costs nothing to build: the counters that would settle
-the first half of the argument.
+nothing about the lottery, changes no rule and builds nothing.** It states the question precisely,
+records why it is the one place a hash is still worth reopening, lists what would have to be answered
+before anything replaced it, and specifies the counters that would settle the first half of the
+argument — to be built when the 6,301 rollout is behind us, not before.
 
 **Builds on:** ADR-0071 (the attempt lane's price and the ticket's bound), ADR-0072 (the ticket is
 the execution), ADR-0076 (the class target seed), ADR-0117 (one forward, one draw), ADR-0132 S (the
@@ -89,18 +89,22 @@ after.
 **M4. It must not need a new beacon.** ADR-0074's beacon retired. A scheme whose first requirement is
 "a fresh randomness source" is proposing that retirement be reversed, and must say so.
 
-**M5. The clock question must have landed first.** Slot assignment is stated in time. Deciding what
-paces the chain (ADR-0140) before deciding who fills each pace is the only order that does not
-require redoing one of them.
+**M5. ADR-0140's four claims must be in force first.** Slot assignment is stated in time, and any
+scheme that changes who may produce also changes what the heartbeat lane sees. C1 to C4 hold the line
+between the two lanes; reopening this one while that line is only believed rather than guarded would
+mean debugging both at once.
 
 ## 4. Decision
 
 **D1. The lottery is not changed, and no design is adopted here.** The question is recorded, its
 cost stated, and its preconditions named.
 
-**D2. The waste is instrumented now.** M1's counters are built, because they cost nothing, they are
-useful to an operator regardless of this question, and without them the first half of any future
-argument is a guess. They are counters: no rule reads them.
+**D2. The waste gets counted before it gets argued about.** M1's counters are specified here and
+built after the 6,301 rollout: draws, wins, inference spent on losing draws, and the longest run of
+consecutive losses, which is the wait a producer actually feels and which an average erases. They
+cost nothing, they are useful to an operator regardless of this question, and no rule reads them.
+Until they exist, every claim about how much this lottery wastes — including the ones in this
+document — is an estimate.
 
 **D3. This ADR does not merge into ADR-0140.** The clock and the lottery are separate mechanisms
 with separate failure models, and a single document covering both would let a conclusion about one
