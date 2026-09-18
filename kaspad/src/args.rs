@@ -827,6 +827,11 @@ impl Args {
                 );
             }
             config.params.palw_anchor_clock = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            // ADR-0142: the cursor arms with the clock, at the same height. `validate_palw_v2`
+            // refuses the clock without it, and arming them apart on a devnet would rehearse a
+            // ruleset no release can ship: past the clock only a heartbeat advances the score, and
+            // without the cursor a busy economic lane starves the one lane that can.
+            config.params.palw_clock_cursor = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-anchor-clock-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
