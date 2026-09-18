@@ -8,7 +8,7 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Current status (2026-09-17).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`** (the build that moves the held
+> **`727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93`** (the build that moves the held
 > regime and the audit's deep fixes to DAA 6,300 — from the 7,000 the deployed release scheduled; the
 > operator, 2026-09-17: the wait was too long — and schedules the DAA 6,301 flag day with ADR-0130's
 > operator lottery and 5-DAA spans, the model registry, the economic payout, the work target and
@@ -219,7 +219,7 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4 (network testnet-11)
+Consensus params fingerprint: 727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93 (network testnet-11)
 Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, 2125000 (schedule id …)
 ```
 

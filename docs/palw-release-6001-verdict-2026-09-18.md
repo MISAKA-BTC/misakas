@@ -1,7 +1,7 @@
 # The 6,001 release: what was gated, what was measured, and the verdict
 
 **Release candidate.** The bundle audited as `05169552` plus the fixes that audit and its own
-re-audits produced. Fingerprint `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`;
+re-audits produced. Fingerprint `727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93`;
 schedule `1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900`.
 
 This is the third report on this bundle and the only one that decides. The first
@@ -183,7 +183,7 @@ window. The dependency runs one way — the lottery needs the work target, never
 The heights moved once more for an unrelated reason: the tip reached 6,000 while the release was
 held, so the whole day moved up 300. Compatibility boundary 6,300, PALW upgrade day 6,301,
 Verification and readiness V2 at 6,400, compute-overlay retirement at 6,501; ADR-0120's 6,900 stays.
-Fingerprint `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`, read from a running
+Fingerprint `727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93`, read from a running
 node.
 
 ## 8. Verdict

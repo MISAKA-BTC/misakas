@@ -1,9 +1,22 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
-**Status:** IMPLEMENTED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
-change behind its own fence, `palw_artifact_root_ownership`, dormant on every preset.** Not part of
-the 6,301 bundle and not released with it: a fence ships only after a drill has crossed it
-(the launch runbook's §5c gate).
+**Status:** IMPLEMENTED 2026-09-18, **armed on testnet-11 at DAA 6,302** by the operator's decision
+of 2026-09-19 to ship it with the 6,300 flag day. Behind its own fence,
+`palw_artifact_root_ownership`, dormant on every other preset.
+
+**6,302 and not 6,300**, because the fork id digests the fired heights deduplicated: a fence at a
+height the schedule already names is invisible to the handshake, and two builds that disagree about
+who owns an artifact from 6,300 would peer as if they agreed. Two DAA of separation is what makes it
+a named refusal instead of a silent fork.
+
+**What is drilled and what is not, stated plainly.** The release drill crosses the 6,300/6,301 fences
+and its clock gate passed; it does **not** cross this one. The launch runbook's §5c gate asks for a
+drill that crosses each armed fence, and this fence is shipping without its own crossing — an
+operator decision taken against a deadline (the tip was ~170 DAA from 6,300 at 42 DAA/h). What
+carries the risk instead: the crossing block's whole effect is ownership rows and nothing else,
+asserted; the migration is deterministic and reverts exactly, asserted; and below the fence every
+answer is byte-identical to the chain that has been running. §6 states the one quantity that is
+bounded by the state rather than by a constant.
 
 **Builds on:** ADR-0087 (a position is never money settled), ADR-0088 (model lines and versions),
 ADR-0091 (the reward buys the pair), ADR-0095 (a position is a membership).

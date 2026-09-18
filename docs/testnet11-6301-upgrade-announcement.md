@@ -9,7 +9,7 @@
 > [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
 > [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
-**Fingerprint of the release: `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`.**
+**Fingerprint of the release: `727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93`.**
 Every node on testnet-11 must run this build **before DAA 6,300**. The build currently deployed prints
 `ae1d6162…` and is refused from 6,300.
 
@@ -17,7 +17,7 @@ Every node on testnet-11 must run this build **before DAA 6,300**. The build cur
 kaspad --testnet --netsuffix=11   # the first log lines print the fingerprint and the fence schedule
 ```
 
-## The two heights, and why they are two
+## The heights, and why they are separate
 
 **DAA 6,300 — the compatibility boundary.** The held regime (ADR-0118/0119/0121), the one-move court
 (ADR-0100) and the 2026-09-11 audit's deep fixes fire here. No rule of the PALW upgrade below fires at
@@ -53,6 +53,36 @@ The rule that fixes it is [ADR-0142](adr/0142-the-consensus-clock-is-a-cursor-a-
 which is built and drilled but not armed anywhere. These two follow it on a later day, with their own
 fence. Nothing else in the upgrade depends on them: the work target arrives on schedule, because the
 dependency runs one way — the lottery needs the work target, never the reverse.
+
+## DAA 6,302 — an artifact root gets one owner (ADR-0143)
+
+Attribution asked "which line does this artifact root belong to" and the answer was **whichever
+`line_id` sorted first in a `BTreeMap`** — a consensus-visible outcome decided by a hash's byte
+order. Live here: the Qwen2.5 class's own registered founding root is also carried by a copy line,
+and the copy resolves first. Two defects, each with its own fix: the chain admitted duplicates at
+all, and it resolved them positionally.
+
+From 6,302 the chain keeps one index, `artifact_root -> (class, line, version)`, and it is the only
+answer. A class reserves its founding root in the transition that writes the class; `ClassRegistered`,
+`ModelLineFounded` and `ModelVersionPublished` all refuse a root another line owns. The crossing
+block builds the index from the rows already on the chain: a class's own registered root goes to its
+founding line however late it published, otherwise the earliest accepted version wins, and a tie
+resolves by `(line, version)`.
+
+**ADR-0088's competition is untouched.** A different root on the same class, from any bond, without
+the registrant's permission, stays permissionless — only the *exact* root collides, and the chain
+never looks inside an artifact to judge similarity. Near-duplicates are a marketplace question and
+the model page is where they are answered.
+
+**Legacy duplicate rows stay** as historical record; they simply stop being the answer, and nothing
+settled before 6,302 is recomputed. Past payouts and buybacks are final.
+
+**Why 6,302 and not 6,300.** The fork id digests the fired heights, deduplicated, so a fence at a
+height the schedule already names is invisible to the handshake: a build carrying the 6,300 set
+without this rule would advertise the identical schedule, the two would peer, and they would
+disagree from 6,300 about who owns an artifact. Two DAA of separation is what makes the difference a
+named refusal instead of a silent fork. It is one release and one operator decision with the 6,300
+day; only the height is its own.
 
 **DAA 6,400 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
 attests; a claim licenses when the panel's quorum holds **and** every segment of the anchor's cut is

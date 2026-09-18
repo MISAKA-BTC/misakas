@@ -4055,6 +4055,17 @@ impl Params {
         if self.palw_anchor_clock == Some(ForkActivation::never()) {
             self.palw_anchor_clock = None;
         }
+        // ADR-0142's cursor and ADR-0143's ownership fence: the same collapse for the same reason.
+        // Both are hashed Some-only, so a normalised `Some(never())` writes bytes a build without
+        // the fence never writes — and the two builds would refuse each other on deploy day over a
+        // height neither has reached. ADR-0143's is the first of the pair that a shipped preset
+        // actually arms, which is what turned this from a latent omission into a red test.
+        if self.palw_clock_cursor == Some(ForkActivation::never()) {
+            self.palw_clock_cursor = None;
+        }
+        if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
+            self.palw_artifact_root_ownership = None;
+        }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
         }
@@ -12259,6 +12270,22 @@ pub const PALW_RC_COURT_LADDER_FENCE_DAA: u64 = 2_150;
 /// moved height the deployed release is refused on first.
 pub const PALW_RC_PALW_UPGRADE_FENCE_DAA: u64 = 6_301;
 
+/// **ADR-0143's height on testnet-11: an artifact root gets one owner at DAA 6,302** — the operator's
+/// call (2026-09-19) to ship it with the 6,300 flag day rather than behind its own later one.
+///
+/// **6,302 and not 6,300, for the reason [`PALW_RC_PALW_UPGRADE_FENCE_DAA`] is 6,301 and not 6,000.**
+/// `fork_id_v1` digests the FIRED HEIGHTS, deduplicated, so a fence at a height this schedule
+/// already names is INVISIBLE to the handshake: a build carrying the 6,300 set without this fence
+/// would advertise the identical schedule, the two would peer, and they would disagree from 6,300
+/// about which line owns an artifact root — a silent fork with no warning, which is the one failure
+/// the fork id exists to turn into a named refusal. 6,302 is a height no released schedule names, so
+/// a node without it is refused from there
+/// (`a-fence-at-a-scheduled-height-is-invisible-to-the-fork-id`).
+///
+/// **It is one release with the 6,300 day and one operator decision**; only the height is its own,
+/// and the two DAA of separation are what make the difference checkable rather than silent.
+pub const PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA: u64 = 6_302;
+
 /// **ADR-0134's height on testnet-11: the compute overlay retires at DAA 6,201** — its own height,
 /// two hundred past the 6,001 flag day (7,201 past 7,001 until the flag day moved on 2026-09-17; the
 /// two hundred is kept), so the fork-id gate separates a build that carries the retirement from one
@@ -12297,6 +12324,8 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     params.palw_verification_v2 = None;
     params.palw_readiness_v2 = None;
     params.palw_anchor_clock = None;
+    // ADR-0143's own day is two past the flag day and later than every release this reconstructs.
+    params.palw_artifact_root_ownership = None;
 }
 
 /// **The fleet's release as deployed (`13520042`, fingerprint `ae1d6162…`)**: no flag-day set, no
@@ -12727,6 +12756,11 @@ pub fn palw_rc_base_params() -> Params {
     // their own later height, distinct from the shallow fence so a deep build and a shallow build
     // diverge visibly at this height rather than silently at 4,000.
     params.palw_audit_2026_09_11_deep = Some(ForkActivation::new(PALW_RC_AUDIT_DEEP_FENCE_DAA));
+    // **ADR-0143 at DAA 6,302** — an artifact root has one owner, the index is built from the rows
+    // already on the chain at the crossing block, and every entrance refuses a duplicate. Its own
+    // height two past the 6,300 day so the fork id can see it; see the constant for why that is a
+    // rule and not a preference.
+    params.palw_artifact_root_ownership = Some(ForkActivation::new(PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA));
     // **The 6,001 flag day** ([`PALW_RC_PALW_UPGRADE_FENCE_DAA`]), one release for all of it:
     //
     // * ADR-0124 — a panel is paid 20 % of its claim's escrow, a drawn seat holds three times the
@@ -17296,7 +17330,7 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                "48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4",
+                "727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -18091,6 +18125,7 @@ mod consensus_params_id_tests {
                 "palw_short_challenge_window",
                 "palw_verification_v2",
                 "palw_readiness_v2",
+                "palw_artifact_root_ownership",
                 "palw_execution_lane",
                 "palw_overlay_carve",
                 "palw_model_market",
@@ -18864,6 +18899,8 @@ mod consensus_params_id_tests {
                 PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One entry for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
                 PALW_RC_PALW_UPGRADE_FENCE_DAA,
+                // ADR-0143's own day, two past the 6,300 flag day so the gate can see it.
+                PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA,
                 // ADR-0133 Verification V2's own day, a hundred past the flag day.
                 PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement, after the flag day.
@@ -20499,6 +20536,7 @@ mod palw_model_registry_fence_tests {
         // the release was held), and a test that spells the number out has to be edited each time
         // — which is the edit most likely to be made without re-reading what it pins.
         let later: &[(&str, u64)] = &[
+            ("palw_artifact_root_ownership", PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA),
             ("palw_verification_v2", PALW_RC_VERIFICATION_V2_FENCE_DAA),
             ("palw_readiness_v2", PALW_RC_VERIFICATION_V2_FENCE_DAA),
             ("palw_compute_overlay_retired", PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA),
@@ -20544,9 +20582,14 @@ mod palw_model_registry_fence_tests {
             UPGRADE_6001.iter().copied().collect::<BTreeSet<_>>(),
             "6,001 fires the whole upgrade at once"
         );
-        assert_eq!(at_6002, at_6001, "and nothing else fires until 6,100");
         assert_eq!(
-            active_at(PALW_RC_VERIFICATION_V2_FENCE_DAA).difference(&at_6001).copied().collect::<Vec<_>>(),
+            at_6002.difference(&at_6001).copied().collect::<Vec<_>>(),
+            vec!["palw_artifact_root_ownership"],
+            "6,302 is ADR-0143's own day — one past the upgrade so the fork id can see it, one release with the rest"
+        );
+        assert_eq!(at_6002, active_at(day + 2), "and nothing else fires until 6,400");
+        assert_eq!(
+            active_at(PALW_RC_VERIFICATION_V2_FENCE_DAA).difference(&at_6002).copied().collect::<Vec<_>>(),
             vec!["palw_readiness_v2", "palw_verification_v2"],
             "6,100 is ADR-0133's own day: segmented licensing and the whole-artifact possession proof together"
         );

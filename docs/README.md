@@ -40,7 +40,7 @@ When a historical report conflicts with a current operator document, use the cur
 ## Current invariants worth checking
 
 - network: `testnet-11`
-- fingerprint: `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4` (schedules the DAA 6,301 flag day: ADR-0124, 0125, 0126, 0128, 0130 M1/M2, ADR-0135's permissionless model registry, ADR-0132 Upgrade C's economic payout, ADR-0137's work target, ADR-0132 S's single lottery and §7.6's short challenge window — one PALW upgrade day, pinned by `t11_daa_6000_is_the_compatibility_boundary_and_6001_the_one_palw_upgrade_flag_day` — ADR-0133's Verification V2 (S1) at 6,400, and ADR-0134's retirement at 6,501)
+- fingerprint: `727ec391e8983d1a343ea7a4076718c68be0ce07e7e25a67b860c81ef8379c93` (schedules the DAA 6,301 flag day: ADR-0124, 0125, 0126, 0128, 0130 M1/M2, ADR-0135's permissionless model registry, ADR-0132 Upgrade C's economic payout, ADR-0137's work target, ADR-0132 S's single lottery and §7.6's short challenge window — one PALW upgrade day, pinned by `t11_daa_6000_is_the_compatibility_boundary_and_6001_the_one_palw_upgrade_flag_day` — ADR-0133's Verification V2 (S1) at 6,400, and ADR-0134's retirement at 6,501)
 - PALW cadence: 120 seconds per block
 - class shares at Relaunch 5f genesis: Floor 22‰, A16 489‰, QWEN36 489‰
 - DNS Testnet-11 minimum stake Bond: 10 MSK
