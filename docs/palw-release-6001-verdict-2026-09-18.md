@@ -156,35 +156,35 @@ And the chain's whole clock would rest on one unbonded heartbeat producer on one
 per-mergeset stand-in rule is still correct and still strictly safer than either alternative, but it
 does not rescue this: a one-hour beat gives a one-hour DAA.
 
-## 7. What closed the blocker
+## 7. What closed the blocker, and the two rules that left the day with it
 
-The premise ADR-0138 was written on — an anchor lane paces the chain at the target cadence — is false
-here, and the fix is not to restore that premise but to stop the rule depending on it.
+**§3c was not enough, and neither was the fix after it.** The heartbeat's interval, the miner's
+yield and the template's slot stamp were each a real defect and each was fixed; the drill froze
+anyway, twice more, because the rule they all rested on measured a beat against its SELECTED PARENT,
+and every new chain block replaces that parent. A block that advanced no clock was moving the next
+opportunity to advance it.
 
-`heartbeat_interval_ms` backs off for the nominal hour whenever the selected parent is a bonded
-PALW-v2 block, reading "a bonded block one block ago" as "the chain is producing, stay out of the
-way". Past the anchor clock that reading is wrong: an attempt block produces without advancing the
-DAA at all. ADR-0138 §3c makes the interval ask the question the hour of back-off was always asking —
-**is someone else pacing the clock?** — so the lane yields only to a parent that advances the DAA and
-otherwise runs at the recovery cadence.
+[ADR-0142](adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md) replaces that
+rule with a consensus clock cursor: a heartbeat consumes a slot, the slot advances in whole
+intervals, and nothing else moves it. The slot rule retires behind the same fence, because its job
+was bounding the lane's width and the cursor bounds the clock instead — so a beat may be minted
+whenever its producer can pay for it, and it earns a DAA only where a slot is open. The reference
+the cursor stands for is **derived, not stored**: the block at the selected parent's score with the
+lowest blue score, read from the DAA window every node already builds, so a pruned node and one that
+joined by pruning proof answer exactly as an archival one.
 
-On testnet-11 that makes the DAA advance at the target block time past the fence, on the bondless
-lane, which is what ADR-0060's "time is permissionless" means and what ADR-0138 wanted throughout. On
-a chain that does have a priced lane nothing changes, and below the fence the rule is byte-identical
-to the one it replaces, so no history moves.
+**So the single lottery and the anchor clock left the 6,301 day.** They arm together — one setter,
+so they can never be spelled at two heights — and `validate_palw_v2` now refuses the anchor clock
+without ADR-0142's cursor. The preset therefore ships with both dormant, and the build enforces it
+rather than trusting whoever arms them next. Everything else keeps the day: the work target, the
+registry, the payout, the panel economy, the execution lane, the DNS gate and the short challenge
+window. The dependency runs one way — the lottery needs the work target, never the reverse.
 
-It also moves ADR-0064 Fact B the safe way. Forging a heartbeat-only history covering `T` seconds
-costs `T / interval` blocks at the lane's constant target, so a shorter interval makes that forgery
-**thirty times dearer per unit of time covered**, not cheaper.
-
-The heights moved with it, because the tip reached 6,000 while the release was held: held and deep
-audit to 6,300, the PALW upgrade day to 6,301, Verification and readiness V2 to 6,400, the
-compute-overlay retirement to 6,501. ADR-0120's 6,900 stays where the deployed release put it.
-Fingerprint `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`.
-
-The tests that pinned those heights now read the constants rather than spelling the numbers out. The
-flag day has moved three times, and the edit a literal forces is the one most likely to be made
-without re-reading what it pins.
+The heights moved once more for an unrelated reason: the tip reached 6,000 while the release was
+held, so the whole day moved up 300. Compatibility boundary 6,300, PALW upgrade day 6,301,
+Verification and readiness V2 at 6,400, compute-overlay retirement at 6,501; ADR-0120's 6,900 stays.
+Fingerprint `48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4`, read from a running
+node.
 
 ## 8. Verdict
 
@@ -209,15 +209,23 @@ the lane yields to rather than as a constant.
 
 ## 9. What is deliberately NOT in this build
 
-ADR-0140 and ADR-0141 ship as documents only. The seams, the protocol-time view, the deadline
-registry, the shadow evaluation and the counters were written, reviewed and then reverted on the
-operator's call: the clock's design question is not part of this release, and a release is not the
-place to answer it. Neither ADR arms a fence and neither is referenced by a rule.
+**ADR-0132 S's single lottery and ADR-0138's anchor clock.** Dormant, and the build refuses to arm
+either without ADR-0142's cursor. §7 has the reason.
 
-The one heartbeat change in this build is §7's, and it is here because without it the verdict in §8
-stands. It is not the ADR-0140 line of work.
+**ADR-0142 itself is built, tested and drilled — and armed nowhere.** It ships as code and as a
+document so the next release starts from a rule that has been exercised rather than from a draft.
+Before it is armed it wants a reorg drill and a drill at testnet-11's own cadence, which §8 of that
+ADR states and §11 here makes a standing gate.
+
+**ADR-0140 and ADR-0141** ship as documents only. Their implementation — the seams, the protocol-time
+view, the deadline registry, the shadow evaluation and the counters — was written and then reverted
+on the operator's call: the clock's design question is not part of this release.
 
 ## 10. The drill on this build
+
+Run in testnet-11's exact lane composition — PALW producers, one bondless heartbeat miner, no hash
+lane — with the anchor clock, the cursor and the registry all armed at DAA 20, and held to that
+composition by `LANE_PROFILE`.
 
 ## 11. The gate this run adds to every future release
 
