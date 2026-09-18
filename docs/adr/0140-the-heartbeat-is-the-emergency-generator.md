@@ -136,9 +136,24 @@ The fix is §3c's principle applied to the mergeset scan rather than the parent:
 pacing the clock, and to nobody else.** It is policy, not a rule, which is exactly where D4 says this
 decision belongs — and it is why D4 is a decision rather than an observation.
 
-The lesson generalises past this bug. C1–C4 are about the generator not running when the mains are
+It happened a second time within the hour, and the second one is the more instructive. ADR-0138 §3c
+changed the slot rule's interval on the VALIDATING side and left the template adapter calling the
+pre-fence form, so a node would have stamped the nominal hour onto a template its own validator
+granted the recovery cadence — putting the timestamp an hour into the future, where the drift rule
+refuses it outright. ADR-0066 Decision 2 had already written down that construction and validation
+must read one answer. The requirement was in the file; nothing enforced it. It does now: a guard
+walks the workspace and fails if anything outside the module asks the pre-fence entry points, and it
+found the one remaining caller on its first run.
+
+A third thing was wrong and is worth naming separately: **the lane was silent about all of it.** Every
+wait in the miner was a `trace!`, so a heartbeat producer that could not mint said nothing at the
+level anyone runs. Both failures presented identically from the outside — a running miner, a frozen
+score, no line explaining either. The waits now print on a change of reason and then at most every
+five minutes, and name the state to watch for.
+
+The lesson generalises past these bugs. C1–C4 are about the generator not running when the mains are
 on; C5 is about it starting when they go off, and the two are easy to trade against each other
-without noticing. A guard that only checks the first half would have passed this.
+without noticing. A guard that only checks the first half would have passed all three.
 
 ### What is NOT closed
 
