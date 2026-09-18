@@ -1,0 +1,61 @@
+# Testnet-11: the DAA 6,001 PALW upgrade, and Verification V2 at 6,100
+
+**Fingerprint of the release: `a8f99dac4638a1fac9eef649dc9a23c7b12f6e62fa7920ac2e488eb0263717d9`.**
+Every node on testnet-11 must run this build **before DAA 6,000**. The build currently deployed prints
+`ae1d6162…` and is refused from 6,000 — it schedules the held regime and the audit's deep fixes at 7,000,
+the height the operator moved to 6,000 on 2026-09-17.
+
+```bash
+kaspad --testnet --netsuffix=11   # the first log lines print the fingerprint and the fence schedule
+```
+
+## The two heights, and why they are two
+
+**DAA 6,000 — the compatibility boundary.** The held regime (ADR-0118/0119/0121), the one-move court
+(ADR-0100) and the 2026-09-11 audit's deep fixes fire here. No rule of the PALW upgrade below fires at
+6,000: it exists so the fleet is on one binary before anything economic changes.
+
+**DAA 6,001 — one PALW upgrade day.** Every consensus change of the upgrade fires together, and no part
+of it fires without the rest:
+
+| rule | ADR |
+|---|---|
+| panel economy 80/20, seat exposure 3×, the work price | 0124 |
+| the execution lane (a second lane inside the cadence) | 0125 |
+| validator overlay 20 %, the PALW escrow carve | 0126 |
+| the DNS two-stage BFT gate, `T_leak` | 0128 |
+| the operator lottery and 5-DAA spans (M1, M2) | 0130 |
+| the permissionless model registry (rows, readiness proofs, the capacity gate) | 0135 Upgrade A |
+| the economic payout: `min(escrow, attempted × rate)` at 9 MSK a G MAC-eq, the panel's share | 0132 Upgrade C |
+| one work target `W` — a block draws against `CCU / W`; no class share, class DAA, epoch budget or seat price is read | 0137 |
+| the single lottery — an attempt block's Layer-0 digest is no longer compared to `bits`, the class ticket is the whole lottery | 0132 S |
+| the short challenge window: a claim licensed past 6,001 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
+
+**DAA 6,100 — Verification V2 (S1, segmented replay).** A receipt may name the segments of a job it
+attests; a claim licenses when the panel's quorum holds **and** every segment of the anchor's cut is
+attested twice. A whole-job receipt is a full attestation, so this changes no licence until seats file
+partial masks — a fleet adopts segment replay seat by seat. ADR-0133 §11.1.
+
+**DAA 6,201 — the compute overlay retires** (ADR-0134). **DAA 6,900 — the market's least seed** (ADR-0120).
+
+## What an operator has to do
+
+1. Build this release and check the fingerprint and the schedule on start:
+   `1150, 1900, 2150, 2400, 3500, 4000, 6000, 6001, 6100, 6201, 6900, …`.
+2. Restart every node — producers, panel seats, pool slots — before DAA 6,000. No datadir move, no resync.
+3. After 6,001, read the registry and the economics:
+   ```bash
+   misaka --network testnet-11 palw registry
+   misaka --network testnet-11 palw economics
+   ```
+   A class's row shows its lifecycle state, the seats ready for it, its `CCU/W` in permille and the panel's
+   room. A class with no row draws nothing: register it and prove possession (`--palw-register-class`, then
+   the node's own readiness proofs).
+
+## What changes for a model class
+
+Past 6,001 a class's *share* is a result, not an input. The lottery prices a block against the network's one
+work target, the registry's readiness and capacity rules decide whether a class admits claims, and the payout
+pays the compute the class actually ran. A class that registers on a running chain needs: its graph, its
+artifact root, its byte count (`ClassManifestV2`, which the CLI's extension route carries with the
+registration), and seats that hold the artifact and prove it.
