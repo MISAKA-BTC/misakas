@@ -126,7 +126,6 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         single_lottery: Option<ForkActivation>,
         anchor_clock: Option<ForkActivation>,
         clock_cursor: Option<ForkActivation>,
-        clock_cursor_store: Option<Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>>,
     ) -> Self {
         let difficulty_manager = SampledDifficultyManager::new(
             headers_store.clone(),
@@ -144,7 +143,6 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
             single_lottery,
             anchor_clock,
             clock_cursor,
-            clock_cursor_store,
         );
         let past_median_time_manager = SampledPastMedianTimeManager::new(headers_store.clone(), genesis.timestamp);
         Self {
@@ -368,7 +366,7 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
 
     fn calc_daa_window(&self, ghostdag_data: &GhostdagData, window: Arc<BlockWindowHeap>) -> DaaWindow {
         let (daa_score, mergeset_non_daa) =
-            self.difficulty_manager.calc_daa_score_and_mergeset_non_daa_blocks(ghostdag_data, self.ghostdag_store.deref());
+            self.difficulty_manager.calc_daa_score_and_mergeset_non_daa_blocks(ghostdag_data, &window, self.ghostdag_store.deref());
         DaaWindow::new(window, daa_score, mergeset_non_daa)
     }
 
@@ -379,11 +377,9 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         })?;
         // ADR-0142 §5: one call answers both the exemption count the score is built from and the
         // cursor the block leaves behind. Asking twice is how they would come to disagree.
-        let (exempt_free_score, clock_cursor) = {
-            let step = self.difficulty_manager.palw_clock_step_v1(ghostdag_data, &mergeset_non_daa);
-            (self.difficulty_manager.calc_daa_score(ghostdag_data, &mergeset_non_daa), step.1)
-        };
-        Ok(DaaWindow::with_clock_cursor(window, exempt_free_score, mergeset_non_daa, clock_cursor))
+        let clock_cursor = self.difficulty_manager.palw_clock_step_v1(ghostdag_data, &mergeset_non_daa, &window).1;
+        let daa_score = self.difficulty_manager.calc_daa_score(ghostdag_data, &mergeset_non_daa, &window);
+        Ok(DaaWindow::with_clock_cursor(window, daa_score, mergeset_non_daa, clock_cursor))
     }
 
     fn calculate_difficulty_bits(&self, ghostdag_data: &GhostdagData, daa_window: &DaaWindow) -> u32 {

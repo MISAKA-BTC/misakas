@@ -119,9 +119,6 @@ pub struct ConsensusStorage {
     pub block_transactions_store: Arc<DbBlockTransactionsStore>,
     pub past_pruning_points_store: Arc<DbPastPruningPointsStore>,
     pub daa_excluded_store: Arc<DbDaaStore>,
-    /// ADR-0142: where the consensus clock stands, per block. Empty on a chain that has not armed
-    /// `palw_clock_cursor`.
-    pub palw_clock_cursor_store: Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>,
     pub depth_store: Arc<DbDepthStore>,
     pub pruning_samples_store: Arc<DbPruningSamplesStore>,
 
@@ -274,9 +271,6 @@ impl ConsensusStorage {
             ghostdag_compact_builder.downscale(0).build(),
         ));
         let daa_excluded_store = Arc::new(DbDaaStore::new(db.clone(), daa_excluded_builder.build()));
-        // ADR-0142: two u64s a block, and only past the fence — the header-data policy is ample.
-        let palw_clock_cursor_store =
-            Arc::new(crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore::new(db.clone(), header_data_builder.build()));
         let headers_store = Arc::new(DbHeadersStore::new(db.clone(), headers_builder.build(), headers_compact_builder.build()));
         let depth_store = Arc::new(DbDepthStore::new(db.clone(), header_data_builder.build()));
         let selected_chain_store = Arc::new(RwLock::new(DbSelectedChainStore::new(db.clone(), header_data_builder.build())));
@@ -474,7 +468,6 @@ impl ConsensusStorage {
             acceptance_data_store,
             past_pruning_points_store,
             daa_excluded_store,
-            palw_clock_cursor_store,
             depth_store,
             pruning_samples_store,
             utxo_diffs_store,

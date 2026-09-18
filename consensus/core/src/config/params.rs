@@ -2641,6 +2641,21 @@ impl Params {
                 ));
             }
         }
+        // ADR-0142 §6a: the clock's reference is derived from the DAA window — the block at the
+        // parent's score with the lowest blue score — which is what lets a pruned node and one that
+        // joined by pruning proof answer exactly as an archival one. A SAMPLED window can omit that
+        // block, and the reference would then be a later one at the same score: every node would
+        // still agree, but slots would open late and the clock would run slow for no stated reason.
+        // So the rule names its own precondition rather than assuming it.
+        if let Some(cursor) = self.palw_clock_cursor
+            && cursor != ForkActivation::never()
+            && self.difficulty_sample_rate != 1
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_clock_cursor is armed on a network whose difficulty window is sampled: the clock's reference is the \
+                 window block that advanced the score, and a sampled window can omit it",
+            ));
+        }
         // ADR-0142: the anchor clock leaves the heartbeat as the only lane that can advance the
         // score. Under ADR-0066 Decision 2's rule an attempt block postponed the next beat, so a
         // chain producing faster than the interval suppressed the lane and the score stopped —

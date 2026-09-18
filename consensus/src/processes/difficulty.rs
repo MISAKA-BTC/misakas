@@ -22,7 +22,6 @@ use std::{
 };
 
 use super::ghostdag::ordering::SortableBlock;
-use crate::model::stores::palw_clock_cursor::PalwClockCursorStoreReader;
 use itertools::Itertools;
 
 trait DifficultyManagerExtension {
@@ -31,17 +30,17 @@ trait DifficultyManagerExtension {
     /// **ADR-0138: how many mergeset blocks are in the DAA window yet do not advance the DAA
     /// score** — the blocks `bits` does not price, past `palw_anchor_clock`. Zero where the fence is
     /// not in force.
-    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64;
+    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet, window: &BlockWindowHeap) -> u64;
 
     #[inline]
     #[must_use]
-    fn internal_calc_daa_score(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64 {
+    fn internal_calc_daa_score(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet, window: &BlockWindowHeap) -> u64 {
         let sp_daa_score = self.headers_store().get_daa_score(ghostdag_data.selected_parent).unwrap();
         // ADR-0138: the DAA score is the anchor's clock. A block outside the window (`mergeset_non_daa`)
         // never counted; past the fence a block `bits` does not price does not count either — it is
         // still merged, still paid, still folded, it just does not move the clock every window reads.
         sp_daa_score + (ghostdag_data.mergeset_size() - mergeset_non_daa.len()) as u64
-            - self.daa_exempt_count(ghostdag_data, mergeset_non_daa)
+            - self.daa_exempt_count(ghostdag_data, mergeset_non_daa, window)
     }
 
     fn get_difficulty_blocks(&self, window: &BlockWindowHeap) -> Vec<DifficultyBlock> {
@@ -214,7 +213,6 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     /// which is what ADR-0138 needs and what the selected-parent slot rule could not give, because
     /// a block that advances no clock was moving the next opportunity to advance it.
     clock_cursor: Option<ForkActivation>,
-    clock_cursor_store: Option<Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>>,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
@@ -235,7 +233,6 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         single_lottery: Option<ForkActivation>,
         anchor_clock: Option<ForkActivation>,
         clock_cursor: Option<ForkActivation>,
-        clock_cursor_store: Option<Arc<crate::model::stores::palw_clock_cursor::DbPalwClockCursorStore>>,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -254,7 +251,6 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             round_lane,
             anchor_clock,
             clock_cursor,
-            clock_cursor_store,
         }
     }
 
@@ -307,13 +303,14 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
 
     #[inline]
     #[must_use]
-    pub fn calc_daa_score(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64 {
-        self.internal_calc_daa_score(ghostdag_data, mergeset_non_daa)
+    pub fn calc_daa_score(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet, window: &BlockWindowHeap) -> u64 {
+        self.internal_calc_daa_score(ghostdag_data, mergeset_non_daa, window)
     }
 
     pub fn calc_daa_score_and_mergeset_non_daa_blocks(
         &self,
         ghostdag_data: &GhostdagData,
+        window: &BlockWindowHeap,
         store: &(impl GhostdagStoreReader + ?Sized),
     ) -> (u64, BlockHashSet) {
         let lowest_daa_blue_score = self.lowest_daa_blue_score(ghostdag_data);
@@ -322,7 +319,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             .unordered_mergeset()
             .filter(|hash| store.get_blue_score(*hash).unwrap() < lowest_daa_blue_score || self.is_round_block(*hash))
             .collect();
-        (self.internal_calc_daa_score(ghostdag_data, &mergeset_non_daa), mergeset_non_daa)
+        (self.internal_calc_daa_score(ghostdag_data, &mergeset_non_daa, window), mergeset_non_daa)
     }
 
     /// `daa_score` is the score of the block whose bits are being computed (the virtual's, for a
@@ -379,6 +376,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         &self,
         ghostdag_data: &GhostdagData,
         mergeset_non_daa: &BlockHashSet,
+        window: &BlockWindowHeap,
     ) -> (u64, Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>) {
         // The fence is read at each merged block's OWN DAA score, as `is_round_block` reads the round
         // lane's: a block minted under the rule is exempt wherever it is later merged.
@@ -438,10 +436,29 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         if !self.clock_cursor.is_some_and(|fence| fence.is_active(parent_daa)) {
             return (if stand_in { exempt.saturating_sub(1) } else { exempt }, None);
         }
-        // The store is `Some` on every production path (`services.rs` builds it); a manager without
-        // one has no chain behind it, so "no cursor yet" is the only answer it can give.
-        let parent_cursor =
-            self.clock_cursor_store.as_ref().and_then(|store| store.get_clock_cursor(ghostdag_data.selected_parent).ok().flatten());
+        // **ADR-0142 §6a: the reference is derived, not stored.** The block that took the score to
+        // its current value is the one at the parent's score with the LOWEST BLUE SCORE, and the
+        // window already in hand holds it. Every node that can process this block has this window,
+        // so a pruned node and one that joined by pruning proof answer exactly as an archival one —
+        // which a stored cursor could not, and which is why there is no store here.
+        let parent_cursor = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_reference_v1(
+            parent_daa,
+            window.iter().filter_map(|item| {
+                self.headers_store.get_compact_header_data(item.0.hash).ok().map(|h| {
+                    kaspa_consensus_core::palw_clock_cursor_v1::ClockWindowBlockV1 {
+                        daa_score: h.daa_score,
+                        blue_score: h.blue_score,
+                        timestamp_ms: h.timestamp,
+                    }
+                })
+            }),
+        )
+        .map(|reference| {
+            kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_cursor_from_reference_v1(
+                reference,
+                kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
+            )
+        });
         let beat_ms = newest_beat_ms.unwrap_or(0);
         let granted = stand_in
             && parent_cursor
@@ -461,8 +478,8 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension for SampledDifficultyManager<T, U> {
-    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet) -> u64 {
-        self.palw_clock_step_v1(ghostdag_data, mergeset_non_daa).0
+    fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet, window: &BlockWindowHeap) -> u64 {
+        self.palw_clock_step_v1(ghostdag_data, mergeset_non_daa, window).0
     }
 
     fn headers_store(&self) -> &dyn HeaderStoreReader {

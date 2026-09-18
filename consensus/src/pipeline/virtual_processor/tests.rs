@@ -608,11 +608,13 @@ async fn adr0138_past_the_anchor_clock_the_heartbeat_still_ticks_the_clock() {
     // is priced, so the beat adds nothing: one anchor, one tick. (Where NOTHING priced is merged —
     // a chain whose hash lane has stopped — one beat ticks in the anchor's place, which is what
     // keeps the clock from freezing; `daa_exempt_count` is where that lives.)
-    assert_eq!(
-        daa_next,
-        daa_hb + 1,
-        "the anchor ticks and the beat beside it adds nothing: the clock runs at the cadence, not at twice it"
-    );
+    // **ADR-0142 changed this answer, and the change is the rule working.** `next` merges ONLY the
+    // heartbeat — nothing priced is in its mergeset — so whether it ticks is the beat's slot to
+    // decide. The beat's own score came from the anchor IT merged, which makes the beat the block
+    // that advanced to this score and therefore the reference the slot is measured from. A beat
+    // cannot both cause an advance and then consume the slot that advance opened, so it does not
+    // tick twice. Before the cursor it did, unconditionally, which is the clock running free.
+    assert_eq!(daa_next, daa_hb, "the beat caused this score and cannot also consume the slot it opened: one advance, not two");
     let ghostdag = vp.ghostdag_store.get_data(next_hash).unwrap();
     assert!(
         ghostdag.mergeset_blues.contains(&hb_hash) || ghostdag.selected_parent == hb_hash,
@@ -660,11 +662,10 @@ async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_tic
     // Three beats in a row, each building on the last — the shape a chain with no priced lane
     // actually has. The first still merges a priced anchor, so it is the SECOND that first merges
     // nothing but a beat, and the second is therefore where the cursor opens.
-    use crate::model::stores::palw_clock_cursor::PalwClockCursorStoreReader;
     let before = ctx.consensus.virtual_processor().headers_store.get_daa_score(ctx.consensus.get_sink()).unwrap();
     let mut beats = Vec::new();
     let mut scores = Vec::new();
-    for (i, step_ms) in [120_000u64, 1_000, 1_000].into_iter().enumerate() {
+    for (i, step_ms) in [120_000u64, 120_000, 1_000].into_iter().enumerate() {
         ctx.simulated_time += step_ms;
         let t = ctx.build_block_template(21 + i as u64, ctx.simulated_time);
         let (t, earliest) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(t).expect("the lane adapts");
@@ -680,32 +681,28 @@ async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_tic
     }
 
     let vp = ctx.consensus.virtual_processor();
-    let cursor = |h| vp.palw_clock_cursor_store.get_clock_cursor(h).expect("readable");
+    // **The clock ticks once a slot, and the slot is measured from the last ADVANCE — whoever made
+    // it.** Three beats 120 s, 120 s and 1 s apart produce two ticks over 240 s, which is the
+    // cadence. Which of them ticks is worth spelling out, because it is one merge later than the
+    // naive reading:
+    //
+    //   beat 0  merges the anchor, which is priced, so the ANCHOR ticks and beat 0 adds nothing.
+    //           Beat 0 is now the block at the new score, so it is the reference.
+    //   beat 1  merges beat 0. Nothing priced, so the stand-in applies — but beat 0's timestamp is
+    //           the reference itself, so the slot it would consume is the one just opened. No tick.
+    //   beat 2  merges beat 1, whose timestamp is a full interval past the reference. The slot is
+    //           open, and the clock ticks.
+    //
+    // A beat is counted where it is MERGED, not where it is minted, so the slot is judged on the
+    // merged beat's timestamp. That is why the cadence shows as two ticks and not three.
+    assert_eq!(scores, vec![before + 1, before + 1, before + 2], "two ticks over two intervals: the cadence, not the block rate");
+    assert_eq!(scores[2] - before, 2, "and 240 s of beats bought exactly two slots");
 
-    // The first beat's mergeset still carries the anchor it built on, which is priced — so the
-    // anchor ticks, the beat adds nothing, and no slot is consumed.
-    assert_eq!(scores[0], before + 1, "the first beat's score is the anchor it merged");
-    assert_eq!(cursor(beats[0]), None, "and no slot was consumed, so the cursor has not opened");
-
-    // The second merges nothing but a beat. Nothing priced, so the stand-in applies, the slot is
-    // open because the cursor has not started, and the clock ticks — this is the half that keeps a
-    // chain with no priced lane alive at all.
-    assert_eq!(scores[1], scores[0] + 1, "the beat stands in where nothing priced was merged");
-    let opened = cursor(beats[1]).expect("the slot it consumed opened the cursor");
-    assert_eq!(opened.slots_consumed, 1);
-
-    // The third is one second later. It is a perfectly good block and it buys the chain nothing:
-    // one tick a slot, however fast beats arrive. This is the half that keeps the clock honest.
-    assert_eq!(scores[2], scores[1], "a beat inside the open slot moves no clock");
-    assert_eq!(cursor(beats[2]), Some(opened), "and moves no cursor either");
-    assert!(opened.next_slot_ms > ctx.simulated_time, "the next slot is still ahead of the beat that was refused it");
-
-    // **Operator check 2: a competing branch drags nothing.** A block's cursor is a function of its
-    // OWN selected parent's row and its own mergeset, so a block on another branch cannot reach it.
-    // Here a fourth beat is minted as a sibling of the third — same parents, different block — and
-    // every cursor already written stays exactly as it was. A reorg onto it would read its chain and
-    // never the one it replaced, because there is no shared mutable cursor to drag.
-    let before_rows: Vec<_> = beats.iter().map(|h| cursor(*h)).collect();
+    // **Operator check 2: a competing branch drags nothing.** The reference is derived from the
+    // block's OWN window, so a sibling cannot reach a score already decided. Here a fourth beat is
+    // minted as a sibling of the third — same parents, different block — and every score already
+    // written stays as it was.
+    let before_scores = scores.clone();
     ctx.simulated_time += 1_000;
     let sibling = ctx.build_block_template(99, ctx.simulated_time);
     let (sibling, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(sibling).expect("the lane adapts");
@@ -713,11 +710,14 @@ async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_tic
     assert_ne!(sibling_hash, beats[2], "the sibling is a different block");
     ctx.validate_and_insert_block(sibling.block.clone().to_immutable()).await.assert_valid_utxo_tip();
     let vp = ctx.consensus.virtual_processor();
-    let cursor = |h| vp.palw_clock_cursor_store.get_clock_cursor(h).expect("readable");
-    for (h, was) in beats.iter().zip(before_rows) {
-        assert_eq!(cursor(*h), was, "the sibling changed a cursor already written for {h}");
+    for (h, was) in beats.iter().zip(before_scores) {
+        assert_eq!(vp.headers_store.get_daa_score(*h).unwrap(), was, "the sibling changed a score already written for {h}");
     }
-    assert_eq!(cursor(sibling_hash), Some(opened), "and the sibling reads its own parent's row, which is the same one");
+    assert_eq!(
+        vp.headers_store.get_daa_score(sibling_hash).unwrap(),
+        scores[2],
+        "and the sibling finds the same slot taken that its sibling did"
+    );
 }
 
 #[tokio::test]

@@ -98,8 +98,6 @@ impl HeaderProcessor {
                 ));
             }
         }
-        // ADR-0142: the cursor this block leaves behind, decided by the same walk as its score.
-        ctx.palw_clock_cursor = daa_window.clock_cursor;
         ctx.mergeset_non_daa = Some(daa_window.mergeset_non_daa);
 
         if header.bits != expected_bits {

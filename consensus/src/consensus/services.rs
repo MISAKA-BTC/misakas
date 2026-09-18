@@ -113,7 +113,6 @@ impl ConsensusServices {
             // ADR-0142: past this one the heartbeat lane earns its exemption only at or past the
             // cursor, so the score is bounded in wall clock rather than in chain blocks.
             params.palw_clock_cursor,
-            Some(storage.palw_clock_cursor_store.clone()),
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),

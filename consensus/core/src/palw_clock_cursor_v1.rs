@@ -114,6 +114,44 @@ pub fn palw_clock_cursor_after_block_v1(
     })
 }
 
+/// One block of the DAA window, as the clock reads it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClockWindowBlockV1 {
+    pub daa_score: u64,
+    pub blue_score: u64,
+    pub timestamp_ms: u64,
+}
+
+/// **Where the clock last advanced, derived rather than stored** (ADR-0142 §6a).
+///
+/// The cursor's whole content is "when did the DAA score last move". That is not private state: the
+/// score is in every header, so the block that moved it to its current value is **the block at the
+/// selected parent's score with the lowest blue score**, and its timestamp is the reference. Every
+/// node that can process the block at all has the window this reads, so a pruned node and a node
+/// that joined by pruning proof compute the same answer as an archival one — which is the property
+/// a stored cursor could not give.
+///
+/// **The invariant survives.** An attempt block and a refused beat both carry the selected parent's
+/// score and a HIGHER blue score, so neither is ever the minimum and neither moves the reference.
+/// Only an advance does, because only an advance creates a block at a new score.
+///
+/// **Selected by blue score, not by timestamp.** Timestamps are not monotonic across a DAG, so a
+/// minimum over timestamps could be pulled backwards by a merged block with an old but admissible
+/// one, and an early reference opens a slot early. Blue score is monotonic along the chain, so the
+/// minimum picks the block that actually advanced the score and nothing else can impersonate it.
+///
+/// `None` when the window holds no block at that score — the first block past the fence, or a
+/// window that does not reach back to the advance. Both mean "no slot is known to be taken".
+pub fn palw_clock_reference_v1(parent_daa_score: u64, window: impl IntoIterator<Item = ClockWindowBlockV1>) -> Option<u64> {
+    window.into_iter().filter(|b| b.daa_score == parent_daa_score).min_by_key(|b| b.blue_score).map(|b| b.timestamp_ms)
+}
+
+/// The cursor that reference stands for: the next slot opens one interval after it.
+#[inline]
+pub fn palw_clock_cursor_from_reference_v1(reference_ms: u64, interval_ms: u64) -> PalwClockCursorV1 {
+    PalwClockCursorV1 { next_slot_ms: reference_ms.saturating_add(interval_ms.max(1)), slots_consumed: 0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +398,61 @@ mod tests {
         // and the other does not. That is a fork, not a discrepancy.
         let with_row = palw_clock_cursor_after_block_v1(Some(parent_cursor), false, beat_ms, I);
         assert_ne!(with_row, granted_without, "the same block, two cursors — and so two scores");
+    }
+
+    fn win(daa: u64, blue: u64, ts: u64) -> ClockWindowBlockV1 {
+        ClockWindowBlockV1 { daa_score: daa, blue_score: blue, timestamp_ms: ts }
+    }
+
+    /// **The derived reference is the stored cursor, without the store.** ADR-0142 §6a check 3.
+    ///
+    /// The invariant is the same one: a block that does not advance the clock must not move the
+    /// reference. Here that is structural rather than enforced — an attempt block and a refused
+    /// beat carry the selected parent's score and a higher blue score, so neither can be the
+    /// minimum.
+    #[test]
+    fn the_reference_is_the_block_that_advanced_the_score_and_nothing_else_moves_it() {
+        // The score advanced at blue 100, timestamp 1_000_000. Everything after it sits at the same
+        // score with higher blue scores: attempts, refused beats, whatever the chain produced.
+        let advance = win(7, 100, 1_000_000);
+        let mut window = vec![advance];
+        assert_eq!(palw_clock_reference_v1(7, window.clone()), Some(1_000_000));
+
+        for (i, ts) in [1_000_100u64, 1_003_300, 1_021_000, 1_119_999, 1_200_000].into_iter().enumerate() {
+            window.push(win(7, 101 + i as u64, ts));
+            assert_eq!(palw_clock_reference_v1(7, window.clone()), Some(1_000_000), "a block at the same score moved it");
+        }
+
+        // **Blue score and not timestamp.** A merged block with an OLD but admissible timestamp
+        // cannot pull the reference back, because it cannot have a lower blue score than the block
+        // that advanced. A minimum over timestamps would have taken it and opened a slot early.
+        window.push(win(7, 200, 1));
+        assert_eq!(palw_clock_reference_v1(7, window.clone()), Some(1_000_000), "an old timestamp did not pull it back");
+        assert_eq!(window.iter().map(|b| b.timestamp_ms).min(), Some(1), "…and a timestamp minimum would have");
+
+        // Blocks at other scores are other slots and are not this one's business.
+        window.push(win(6, 1, 500_000));
+        window.push(win(8, 300, 1_300_000));
+        assert_eq!(palw_clock_reference_v1(7, window.clone()), Some(1_000_000));
+        assert_eq!(palw_clock_reference_v1(8, window.clone()), Some(1_300_000), "the next score's own advance");
+        assert_eq!(palw_clock_reference_v1(9, window), None, "a score the window does not reach is no slot taken");
+    }
+
+    /// The reference and the cursor are two spellings of one fact, so they must agree on when the
+    /// next slot opens — otherwise the derived path and the stored path would admit different beats.
+    #[test]
+    fn the_derived_reference_and_the_cursor_open_the_same_slot() {
+        let reference = 1_000_000u64;
+        let cursor = palw_clock_cursor_from_reference_v1(reference, I);
+        assert_eq!(cursor.next_slot_ms, reference + I);
+        assert!(palw_clock_slot_admits_v1(&cursor, reference + I).is_ok());
+        assert!(palw_clock_slot_admits_v1(&cursor, reference + I - 1).is_err());
+        // A beat that consumed the slot becomes the next reference, and the slot after it opens one
+        // interval later — the same arithmetic the stored cursor performs on an exact beat.
+        let next = palw_clock_cursor_from_reference_v1(reference + I, I);
+        assert_eq!(next.next_slot_ms, reference + 2 * I);
+        // And a zero interval does not divide by zero here either.
+        assert_eq!(palw_clock_cursor_from_reference_v1(10, 0).next_slot_ms, 11);
     }
 
     /// The type is rooted state, so its encoding is a consensus fact: pin the byte layout.
