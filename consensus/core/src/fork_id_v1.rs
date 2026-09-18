@@ -1406,12 +1406,19 @@ mod tests {
             "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0134 two hundred past, ADR-0120 where it was"
         );
 
-        // The tip when the heights moved (5,798) and the last score below the moved height.
-        let new_peer = fork_id_v1(&upgraded, 5_798);
-        let old_peer = fork_id_v1(&release_7000, 5_798);
+        // **The deployment window.** The heights moved twice: to 6,000 on 2026-09-17 with the tip at
+        // 5,798, and to 6,300 on 2026-09-18 with the tip at 6,008 — the second move because holding
+        // the release to fix the DAA clock took the tip past the boundary it had been pinned to.
+        // Every score from the tip up to the moved height is a height at which an operator may still
+        // roll the fleet, so those are the scores this test walks.
+        const TIP_AT_THE_FIRST_MOVE: u64 = 5_798;
+        const TIP_AT_THE_SECOND_MOVE: u64 = 6_008;
+        let new_peer = fork_id_v1(&upgraded, TIP_AT_THE_SECOND_MOVE);
+        let old_peer = fork_id_v1(&release_7000, TIP_AT_THE_SECOND_MOVE);
         assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 4,000");
         assert_eq!((new_peer.next, old_peer.next), (HELD_AND_DEEP, 6_900), "and they announce different next fences");
-        for local_daa in [5_798, 5_900, HELD_AND_DEEP - 1] {
+        assert!(TIP_AT_THE_SECOND_MOVE < HELD_AND_DEEP, "the boundary is above the tip it was re-pinned over");
+        for local_daa in [TIP_AT_THE_FIRST_MOVE, 5_900, TIP_AT_THE_SECOND_MOVE, HELD_AND_DEEP - 1] {
             let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
             assert!(
                 !evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
