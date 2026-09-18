@@ -1227,6 +1227,17 @@ pub struct Params {
     /// than it was sized (`docs/palw-daa-clock-audit-2026-09-18.md`). `Some(6,001)` on testnet-11,
     /// the single lottery's own day and never a different one; `None` elsewhere; hashed Some-only.
     pub palw_anchor_clock: Option<ForkActivation>,
+    /// **ADR-0142: the consensus clock cursor.** Past it a heartbeat is admissible iff its timestamp
+    /// is at or after the cursor, and only a heartbeat moves the cursor — so a chain producing
+    /// faster than the interval can no longer suppress the lane. Below it the lane keeps
+    /// ADR-0066 Decision 2's selected-parent slot rule, byte for byte.
+    ///
+    /// **`validate_palw_v2` refuses `palw_anchor_clock` without this at or below its height.** The
+    /// anchor clock leaves the heartbeat as the only lane that can advance the score, and under the
+    /// old rule an attempt block postponed the next beat — measured on the drill as a DAA frozen at
+    /// its own flag day with zero beats minted. Arming one without the other is that failure.
+    /// `None` on every shipped preset; hashed Some-only.
+    pub palw_clock_cursor: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2627,6 +2638,23 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_single_lottery is armed without palw_work_target armed at or below its height: with the network draw \
                      gone the work target is the only rule left holding the cadence",
+                ));
+            }
+        }
+        // ADR-0142: the anchor clock leaves the heartbeat as the only lane that can advance the
+        // score. Under ADR-0066 Decision 2's rule an attempt block postponed the next beat, so a
+        // chain producing faster than the interval suppressed the lane and the score stopped —
+        // measured on the registry drill as a DAA frozen at its own flag day, zero beats minted.
+        // The two fences are therefore not independent, and this is where that is enforced.
+        if let Some(anchor) = self.palw_anchor_clock
+            && anchor != ForkActivation::never()
+        {
+            let cursor_below =
+                self.palw_clock_cursor.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= anchor.daa_score());
+            if !cursor_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_anchor_clock is armed without palw_clock_cursor armed at or below its height: past the anchor clock \
+                     only a heartbeat can advance the score, and without the cursor an attempt block postpones the next one",
                 ));
             }
         }
@@ -4984,6 +5012,7 @@ impl Params {
             palw_verification_v2,
             palw_readiness_v2,
             palw_anchor_clock,
+            palw_clock_cursor,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5060,6 +5089,7 @@ impl Params {
             ("palw_verification_v2", *palw_verification_v2),
             ("palw_readiness_v2", *palw_readiness_v2),
             ("palw_anchor_clock", *palw_anchor_clock),
+            ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5548,6 +5578,7 @@ impl Params {
             palw_verification_v2,
             palw_readiness_v2,
             palw_anchor_clock,
+            palw_clock_cursor,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5798,6 +5829,14 @@ impl Params {
         }
         // ADR-0138 the anchor clock, a bare fence: the same treatment again.
         match palw_anchor_clock.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0142 the clock cursor, the fence the anchor clock may not be armed without.
+        match palw_clock_cursor.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6268,6 +6307,7 @@ impl Params {
             palw_verification_v2,
             palw_readiness_v2,
             palw_anchor_clock,
+            palw_clock_cursor,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6509,6 +6549,12 @@ impl Params {
         // ADR-0138 the anchor clock: the height only, Some-only.
         if let Some(activation) = palw_anchor_clock {
             h.write(b"palw_anchor_clock");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0142 the clock cursor: the height only, Some-only, so every shipped preset — which
+        // leaves it unset — fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_clock_cursor {
+            h.write(b"palw_clock_cursor");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -7161,6 +7207,7 @@ impl Params {
             palw_verification_v2: self.palw_verification_v2,
             palw_readiness_v2: self.palw_readiness_v2,
             palw_anchor_clock: self.palw_anchor_clock,
+            palw_clock_cursor: None,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -8104,6 +8151,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_verification_v2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
+    palw_clock_cursor: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8300,6 +8348,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_verification_v2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
+    palw_clock_cursor: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8478,6 +8527,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_verification_v2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
+    palw_clock_cursor: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -12679,11 +12729,23 @@ pub fn palw_rc_base_params() -> Params {
     // network-wide verification budget replaces the per-class in-flight cap. The reward is
     // unchanged: the payout's `min(escrow, attempted × rate)` is what a block buys at `W₀`.
     params.palw_work_target = Some(flag_day_6001);
-    // ADR-0132 S: the single lottery, on the same day (the operator's rule, 2026-09-18: DAA 6,001
-    // is the one PALW upgrade flag day, and no part of the bundle fires without the rest).
-    // ADR-0132 S with ADR-0138: the day the attempt lane leaves `bits` it leaves the DAA clock too —
-    // one setter, so the pair can never be spelled at two heights (`validate_palw_v2` refuses it).
-    params.set_palw_single_lottery(Some(flag_day_6001));
+    // **ADR-0132 S and ADR-0138 are NOT on this flag day. Both stay dormant** (2026-09-18).
+    //
+    // They arm together — one setter, so the pair can never be spelled at two heights — and arming
+    // either needs ADR-0142's clock cursor, which `validate_palw_v2` now refuses to ship without.
+    // The reason is a measurement, not a preference: past the anchor clock only a heartbeat can
+    // advance the score, and under the slot rule they were written against, an attempt block
+    // postponed the next beat. The registry drill froze at its own flag day with the miner running
+    // and nothing minted, at a 21-second cadence; testnet-11's 302 seconds survives today, and the
+    // burst this very bundle is built to enable is 3.3 seconds, which does not.
+    //
+    // So the rest of the day ships and these two wait for ADR-0142 to land with its own fence, its
+    // own properties, and a drill that CROSSES it at a fast cadence. See
+    // `docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md`.
+    //
+    // The work target above does not depend on them: the dependency runs the other way
+    // (`palw_single_lottery` needs `palw_work_target` at or below it, never the reverse), so the
+    // class economy arrives on the flag day as designed and the lottery joins it later.
     // ADR-0132 §7.6: the short challenge window, on the same day — explicit, in the schedule and
     // the fork id, mirrored into the bundle by the setter.
     params.set_palw_short_challenge_window(Some(flag_day_6001));
@@ -13079,6 +13141,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_verification_v2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
+    palw_clock_cursor: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -17178,7 +17241,7 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                "7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f",
+                "48d1e31feefce318ae2596bfa0083a83ec9c232437f96d77c0d0c1ce42776de4",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17970,11 +18033,9 @@ mod consensus_params_id_tests {
                 "palw_model_registry",
                 "palw_economic_payout",
                 "palw_work_target",
-                "palw_single_lottery",
                 "palw_short_challenge_window",
                 "palw_verification_v2",
                 "palw_readiness_v2",
-                "palw_anchor_clock",
                 "palw_execution_lane",
                 "palw_overlay_carve",
                 "palw_model_market",
@@ -20291,10 +20352,13 @@ mod palw_model_registry_fence_tests {
             assert!(preset.palw_single_lottery.is_none(), "{name}: the single lottery is not scheduled");
             assert!(!preset.palw_single_lottery_at(u64::MAX - 1), "{name}: never active while dormant");
         }
-        // testnet-11 arms it on the 6,001 flag day with the rest of the bundle (the operator's rule,
-        // 2026-09-18); the dormant base the rest of this test reads is built here.
+        // **testnet-11 does NOT arm it on the flag day**, and that is deliberate (2026-09-18): it
+        // arms with `palw_anchor_clock`, which `validate_palw_v2` refuses without ADR-0142's clock
+        // cursor, because past the anchor clock an attempt block postponed the next heartbeat and
+        // the drill froze at its own flag day. It joins a later fence with the cursor.
         let shipped = palw_rc_shipped_params();
-        assert_eq!(shipped.palw_single_lottery, Some(ForkActivation::new(PALW_RC_PALW_UPGRADE_FENCE_DAA)));
+        assert!(shipped.palw_single_lottery.is_none(), "the single lottery waits for ADR-0142's cursor");
+        assert!(shipped.palw_anchor_clock.is_none(), "and so does the anchor clock — one setter arms both");
         let mut rc = shipped.clone();
         rc.set_palw_single_lottery(None);
         // Verification V2 (6,100) follows the registry; this test moves the registry past it.
@@ -20316,8 +20380,11 @@ mod palw_model_registry_fence_tests {
         armed.palw_economic_payout =
             Some(PalwEconomicPayoutV1 { activation: ForkActivation::new(height), ..PALW_ECONOMIC_PAYOUT_DEVNET_V1 });
         armed.palw_work_target = Some(ForkActivation::new(height));
+        // ADR-0142: the single lottery arms the anchor clock with it, and the anchor clock may not
+        // be armed without the clock cursor at or below it.
+        armed.palw_clock_cursor = Some(ForkActivation::new(height));
         armed.set_palw_single_lottery(Some(ForkActivation::new(height + 100)));
-        armed.validate_palw_v2().expect("armed above the work target");
+        armed.validate_palw_v2().expect("armed above the work target, with the cursor below it");
         assert_ne!(armed.consensus_params_id(), rc.consensus_params_id(), "arming moves the identity");
         assert!(armed.fence_schedule_v1().contains(&(height + 100)), "and the schedule names the height");
         assert!(!armed.palw_single_lottery_at(height + 99) && armed.palw_single_lottery_at(height + 100));
@@ -20363,9 +20430,7 @@ mod palw_model_registry_fence_tests {
             "palw_model_registry",
             "palw_economic_payout",
             "palw_work_target",
-            "palw_single_lottery",
             "palw_short_challenge_window",
-            "palw_anchor_clock",
             "palw_panel_economy",
             "palw_work_priced_reward",
             "palw_execution_lane",
@@ -20450,7 +20515,8 @@ mod palw_model_registry_fence_tests {
         }
         for daa in [day, day + 1] {
             assert!(rc.palw_model_registry_at(daa) && rc.palw_economic_payout_at(daa).is_some(), "registry/payout on at {daa}");
-            assert!(rc.palw_work_target_at(daa) && rc.palw_single_lottery_at(daa), "work target/single lottery on at {daa}");
+            assert!(rc.palw_work_target_at(daa), "work target on at {daa}");
+            assert!(!rc.palw_single_lottery_at(daa), "the single lottery waits for ADR-0142's cursor, at {daa} too");
             assert!(rc.palw_short_challenge_window_at(daa), "short window on at {daa}");
         }
         // The bundle's copy of the short window follows the fence, not a constant.
@@ -20468,12 +20534,19 @@ mod palw_model_registry_fence_tests {
         );
         // No part of the bundle may fire without the rest: a preset with one member moved is refused
         // or, where the order rules allow it, visibly a different identity.
+        // The single lottery is no longer on this day (ADR-0142), so the member dropped here is one
+        // that still is; the point of the assertion is unchanged.
         let mut partial = rc.clone();
-        partial.set_palw_single_lottery(None);
+        partial.palw_work_target = None;
         assert_ne!(partial.consensus_params_id(), rc.consensus_params_id(), "dropping one member moves the fingerprint");
         let mut early = rc.clone();
+        early.palw_clock_cursor = Some(ForkActivation::new(boundary));
         early.set_palw_single_lottery(Some(ForkActivation::new(boundary)));
         assert!(early.validate_palw_v2().is_err(), "the single lottery cannot precede the work target");
+        // ...and with the work target below it, it is still refused without ADR-0142's cursor.
+        let mut no_cursor = rc.clone();
+        no_cursor.set_palw_single_lottery(Some(ForkActivation::new(day)));
+        assert!(no_cursor.validate_palw_v2().is_err(), "the anchor clock cannot be armed without the clock cursor");
         let mut early = rc.clone();
         early.palw_work_target = Some(ForkActivation::new(6_000));
         assert!(early.validate_palw_v2().is_err(), "the work target cannot precede the registry and the payout");

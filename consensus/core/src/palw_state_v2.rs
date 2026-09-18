@@ -5058,6 +5058,14 @@ pub struct PalwChainStateV2 {
     /// the controller that holds the cadence. Rooted (`work_target/v1`) and carried in its own tail
     /// once it exists; a state without it is byte-identical to a state before the field.
     work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
+    /// **ADR-0142: where the consensus clock stands.** `None` until the first heartbeat past
+    /// `palw_clock_cursor`, and hashed into the root only when it exists, so a chain on which the
+    /// rule is dormant commits byte-identical roots to a build without the field.
+    ///
+    /// The ONLY writer is an admitted heartbeat's transition. Every other lane leaves it untouched,
+    /// which is the invariant in one sentence: a block that does not advance the clock must not
+    /// postpone the next opportunity to advance it.
+    clock_cursor: Option<crate::palw_clock_cursor_v1::PalwClockCursorV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5199,6 +5207,7 @@ impl PalwChainStateV2 {
             work_target_shadow: None,
             final_work: BTreeMap::new(),
             work_target: None,
+            clock_cursor: None,
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -5831,6 +5840,11 @@ impl PalwChainStateV2 {
     }
 
     /// ADR-0137 / ADR-0132 S: the work target the chain holds (past `Params::palw_work_target`).
+    /// ADR-0142: where the clock stands on this branch. `None` before the first beat past the fence.
+    pub fn clock_cursor(&self) -> Option<crate::palw_clock_cursor_v1::PalwClockCursorV1> {
+        self.clock_cursor
+    }
+
     pub fn work_target(&self) -> Option<&crate::palw_work_target_v1::PalwWorkTargetV2> {
         self.work_target.as_ref()
     }
@@ -6300,6 +6314,11 @@ impl PalwChainStateV2 {
         if let Some(target) = &self.work_target {
             state.update(b"work_target/v1");
             state.update(&borsh::to_vec(target).expect("PalwWorkTargetV2 is borsh-serializable"));
+        }
+        // ADR-0142: the clock cursor, once a heartbeat past the fence has opened it.
+        if let Some(cursor) = &self.clock_cursor {
+            state.update(b"clock_cursor/v1");
+            state.update(&borsh::to_vec(cursor).expect("PalwClockCursorV1 is borsh-serializable"));
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -7272,6 +7291,11 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
         new: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     },
+    /// ADR-0142: the clock cursor a heartbeat consumed a slot from (57). Appended last.
+    ClockCursor {
+        old: Option<crate::palw_clock_cursor_v1::PalwClockCursorV1>,
+        new: Option<crate::palw_clock_cursor_v1::PalwClockCursorV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -7996,6 +8020,14 @@ impl<'a> TransitionBuilder<'a> {
         let old = std::mem::replace(&mut self.state.work_target, new);
         if old != new {
             self.entries.push(PalwDeltaEntryV2::WorkTarget { old, new });
+        }
+    }
+
+    /// ADR-0142: the cursor's only writer. Reached for an admitted heartbeat and for nothing else.
+    fn write_clock_cursor(&mut self, new: Option<crate::palw_clock_cursor_v1::PalwClockCursorV1>) {
+        let old = std::mem::replace(&mut self.state.clock_cursor, new);
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::ClockCursor { old, new });
         }
     }
 
@@ -10292,6 +10324,27 @@ pub fn palw_v2_pre_object_base_v1(
     }
     let mut builder =
         TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+
+    // 1a. **ADR-0142: the consensus clock cursor**, before anything else because it depends on
+    //     nothing else. A heartbeat consumes a slot; every other lane leaves the cursor exactly as
+    //     the parent had it. That second clause is the invariant — a block that does not advance
+    //     the clock must not postpone the next opportunity to advance it — and here it is the
+    //     writer simply not being reached, rather than a rule something has to maintain.
+    //
+    //     The interval is the recovery cadence, flat. ADR-0138 §3c's nominal hour exists to keep
+    //     the lane out of the way while a bonded parent paces the chain; past this fence nothing
+    //     but a beat paces it, so there is nobody to stand aside for.
+    if extras.clock_cursor_active {
+        let next = crate::palw_clock_cursor_v1::palw_clock_cursor_after_block_v1(
+            parent.clock_cursor,
+            extras.clock_block_is_heartbeat,
+            extras.clock_block_timestamp_ms,
+            crate::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
+        );
+        if next != parent.clock_cursor {
+            builder.write_clock_cursor(next);
+        }
+    }
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
     }
@@ -14889,6 +14942,14 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0132 S: `Params::palw_single_lottery` resolved at the block's DAA. Past it the lottery
     /// reads `max(W₀, W)` — the chain's stepped work target — and the network draw is gone.
     pub single_lottery_active: bool,
+    /// **ADR-0142: `Params::palw_clock_cursor` resolved at the block's DAA.** Past it the heartbeat
+    /// lane's admissibility is the cursor and nothing else, and only a heartbeat writes it.
+    pub clock_cursor_active: bool,
+    /// ADR-0142: this block's own clock facts — its header timestamp, and whether it is a heartbeat.
+    /// The transition reads them ONLY to decide whether a slot was consumed; every other lane leaves
+    /// the cursor exactly as the parent had it, which is the invariant.
+    pub clock_block_timestamp_ms: u64,
+    pub clock_block_is_heartbeat: bool,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` resolved at the block's DAA. Below it
     /// a segment-scoped receipt set is refused; past it, it licenses by coverage and the V1 object
     /// still licenses by quorum.
@@ -16247,6 +16308,11 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             expect_matches(&state.work_target, expected)?;
             state.work_target = *install;
         }
+        PalwDeltaEntryV2::ClockCursor { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            expect_matches(&state.clock_cursor, expected)?;
+            state.clock_cursor = *install;
+        }
         PalwDeltaEntryV2::FinalWork { key, old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             let current = state.final_work.get(&key.0).and_then(|classes| classes.get(&key.1)).copied();
@@ -16487,6 +16553,8 @@ pub struct PalwStateCarriageV2 {
     pub final_work: BTreeMap<u64, BTreeMap<Hash64, u128>>,
     /// ADR-0137 / ADR-0132 S. A sixteenth tagged tail (`0xAD`), encoded only when it exists; rooted.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
+    /// ADR-0142: the clock cursor, so a pruned node continues where the clock stands.
+    pub clock_cursor: Option<crate::palw_clock_cursor_v1::PalwClockCursorV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -16564,6 +16632,10 @@ const PALW_CARRIAGE_CLAIM_ECONOMICS_TAIL_V1: u8 = 0xAB;
 const PALW_CARRIAGE_WORK_TARGET_SHADOW_TAIL_V1: u8 = 0xAC;
 /// ADR-0137 / ADR-0132 S: the chain's work target, once it exists (past its fence). Rooted.
 const PALW_CARRIAGE_WORK_TARGET_TAIL_V1: u8 = 0xAD;
+/// ADR-0142: the clock cursor's tagged tail. Written only once a heartbeat has opened the cursor,
+/// so a carriage from a chain where the rule is dormant is byte-identical to one from a build
+/// without the field — the same discipline every tail above it follows.
+const PALW_CARRIAGE_CLOCK_CURSOR_TAIL_V1: u8 = 0xAE;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -16683,6 +16755,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_WORK_TARGET_TAIL_V1.serialize(writer)?;
             self.work_target.serialize(writer)?;
         }
+        if self.clock_cursor.is_some() {
+            PALW_CARRIAGE_CLOCK_CURSOR_TAIL_V1.serialize(writer)?;
+            self.clock_cursor.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -16744,10 +16820,12 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut work_target_shadow = None;
         let mut final_work = BTreeMap::new();
         let mut work_target = None;
+        let mut clock_cursor = None;
         let mut seen_model_registry = false;
         let mut seen_claim_economics = false;
         let mut seen_work_target_shadow = false;
         let mut seen_work_target = false;
+        let mut seen_clock_cursor = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -16826,6 +16904,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     work_target_shadow = Option::deserialize_reader(reader)?;
                     final_work = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_CLOCK_CURSOR_TAIL_V1 if !seen_clock_cursor => {
+                    seen_clock_cursor = true;
+                    clock_cursor = Option::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_WORK_TARGET_TAIL_V1 if !seen_work_target => {
                     seen_work_target = true;
                     work_target = Option::deserialize_reader(reader)?;
@@ -16900,6 +16982,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             work_target_shadow,
             final_work,
             work_target,
+            clock_cursor,
         })
     }
 }
@@ -16956,6 +17039,7 @@ impl PalwStateCarriageV2 {
             work_target_shadow: state.work_target_shadow,
             final_work: state.final_work.clone(),
             work_target: state.work_target,
+            clock_cursor: state.clock_cursor,
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -17060,6 +17144,7 @@ impl PalwStateCarriageV2 {
             work_target_shadow: self.work_target_shadow,
             final_work: self.final_work,
             work_target: self.work_target,
+            clock_cursor: self.clock_cursor,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -28404,6 +28489,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::WorkTargetShadow { .. } => "work_target_shadow",
                     PalwDeltaEntryV2::FinalWork { .. } => "final_work",
                     PalwDeltaEntryV2::WorkTarget { .. } => "work_target",
+                    PalwDeltaEntryV2::ClockCursor { .. } => "clock_cursor",
                 });
             }
         }
@@ -28949,6 +29035,7 @@ pub(crate) mod tests {
         // decided place in the root fails to compile HERE, next to the list it has to join, and
         // the author is reading the M-02 story when it does.
         let PalwStateCarriageV2 {
+            clock_cursor: _,
             model_benefits: _,
             model_position_since: _,
             version: _,
@@ -34654,6 +34741,9 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 single_lottery_active: false,
+                clock_cursor_active: false,
+                clock_block_timestamp_ms: 0,
+                clock_block_is_heartbeat: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,
                 model_lines_active: true,
@@ -34885,6 +34975,9 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 single_lottery_active: false,
+                clock_cursor_active: false,
+                clock_block_timestamp_ms: 0,
+                clock_block_is_heartbeat: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,
                 model_lines_active: true,

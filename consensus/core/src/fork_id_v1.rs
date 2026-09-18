@@ -600,6 +600,10 @@ mod tests {
             "palw_verification_v2" => params.palw_verification_v2 = Some(at),
             "palw_readiness_v2" => params.palw_readiness_v2 = Some(at),
             "palw_anchor_clock" => params.palw_anchor_clock = Some(at),
+            // ADR-0142. `validate_palw_v2` refuses the anchor clock without this at or below it, so
+            // the probe sets the cursor wherever it sets the clock; setting the cursor alone is
+            // legal on its own.
+            "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,
