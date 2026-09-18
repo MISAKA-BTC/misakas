@@ -287,9 +287,11 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     print('ERR'); raise SystemExit(0)
-if not d.get('exists', False):
+if not d.get('exists', False) or 'service_facts' not in d:
+    # A node that cannot answer the question is not a chain with an empty index, and the two must
+    # not arrive as one number.
     print('ERR'); raise SystemExit(0)
-print(len(d.get('service_facts', {}).get('roots', [])))
+print(len(d['service_facts'].get('roots', [])))
 " 2>/dev/null || echo ERR)"
   case "$owned" in
     ERR|"")
