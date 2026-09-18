@@ -156,27 +156,70 @@ And the chain's whole clock would rest on one unbonded heartbeat producer on one
 per-mergeset stand-in rule is still correct and still strictly safer than either alternative, but it
 does not rescue this: a one-hour beat gives a one-hour DAA.
 
-## 7. Verdict
+## 7. What closed the blocker
 
-**NOT SAFE TO ARM AT 6001.**
+The premise ADR-0138 was written on — an anchor lane paces the chain at the target cadence — is false
+here, and the fix is not to restore that premise but to stop the rule depending on it.
+
+`heartbeat_interval_ms` backs off for the nominal hour whenever the selected parent is a bonded
+PALW-v2 block, reading "a bonded block one block ago" as "the chain is producing, stay out of the
+way". Past the anchor clock that reading is wrong: an attempt block produces without advancing the
+DAA at all. ADR-0138 §3c makes the interval ask the question the hour of back-off was always asking —
+**is someone else pacing the clock?** — so the lane yields only to a parent that advances the DAA and
+otherwise runs at the recovery cadence.
+
+On testnet-11 that makes the DAA advance at the target block time past the fence, on the bondless
+lane, which is what ADR-0060's "time is permissionless" means and what ADR-0138 wanted throughout. On
+a chain that does have a priced lane nothing changes, and below the fence the rule is byte-identical
+to the one it replaces, so no history moves.
+
+It also moves ADR-0064 Fact B the safe way. Forging a heartbeat-only history covering `T` seconds
+costs `T / interval` blocks at the lane's constant target, so a shorter interval makes that forgery
+**thirty times dearer per unit of time covered**, not cheaper.
+
+The heights moved with it, because the tip reached 6,000 while the release was held: held and deep
+audit to 6,300, the PALW upgrade day to 6,301, Verification and readiness V2 to 6,400, the
+compute-overlay retirement to 6,501. ADR-0120's 6,900 stays where the deployed release put it.
+Fingerprint `7920f7b233695172959046ce2d7c18cc58729753a3cbc90d0b4ba27c8ec3c30f`.
+
+The tests that pinned those heights now read the constants rather than spelling the numbers out. The
+flag day has moved three times, and the edit a literal forces is the one most likely to be made
+without re-reading what it pins.
+
+## 8. Verdict
+
+_(issued when the drill on this build completes; see §10 for the run)_
+
+### The verdict this replaces
+
+**NOT SAFE TO ARM AT 6001**, issued against the bundle before ADR-0138 §3c. Kept because the
+reasoning is what produced the fix, and because a verdict that is quietly deleted once it becomes
+inconvenient is worth nothing the next time one is issued.
 
 One new Critical, found by measuring the live chain rather than reading the design. Nothing else in
-the bundle is implicated: 2,604 consensus tests pass, the one red is the dependency-boundary test
-that is red on `main` too, and the 390 M ceiling measures comfortably inside a slot. The blocker is
+the bundle was implicated: the consensus suites passed, the one red was the dependency-boundary test
+that is red on `main` too, and the 390 M ceiling measured comfortably inside a slot. The blocker was
 `palw_anchor_clock` alone — and because `Params::set_palw_single_lottery` arms the lottery and the
-clock together, the preset cannot be shipped with one and not the other.
+clock together, the preset could not have shipped with one and not the other.
 
-**No push, no merge, no fleet roll.** The 6,000 flag day passed on the deployed build while this was
-being resolved, which damages nothing — the chain continues under today's rules and the fence is
-documented as provisional, to be set with deployment margin over the tip — but it does mean every
-height in this bundle must be re-pinned before anything ships.
+The decision it handed the operator was where a PALW-only network's clock comes from: give such a
+network a priced lane, which is a params change because ConsensusV2 templates always name the attempt
+id, or make the heartbeat the designed clock. §7 is the second of those, done as a rule about what
+the lane yields to rather than as a constant.
 
-The decision the operator owns: where a PALW-only network's clock comes from. Give such a network a
-priced lane, which is a params change because ConsensusV2 templates always name the attempt id; or
-make the heartbeat the designed clock by setting its nominal interval to the target block time behind
-its own fence, which is one constant but puts the clock on an unbonded lane.
+## 9. What is deliberately NOT in this build
 
-## 8. The lesson worth keeping
+ADR-0140 and ADR-0141 ship as documents only. The seams, the protocol-time view, the deadline
+registry, the shadow evaluation and the counters were written, reviewed and then reverted on the
+operator's call: the clock's design question is not part of this release, and a release is not the
+place to answer it. Neither ADR arms a fence and neither is referenced by a rule.
+
+The one heartbeat change in this build is §7's, and it is here because without it the verdict in §8
+stands. It is not the ADR-0140 line of work.
+
+## 10. The drill on this build
+
+## 11. The lesson worth keeping
 
 Every finding in this report and the two before it came from checking a claim against the thing it
 describes — the code, then the running chain. This one was different in kind: the false claim was
