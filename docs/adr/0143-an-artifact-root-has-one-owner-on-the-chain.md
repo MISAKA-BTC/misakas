@@ -1,6 +1,6 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
-**Status:** IMPLEMENTED 2026-09-18, **NOT ARMED** — withdrawn from the 6,700 flag day by the
+**Status:** IMPLEMENTED 2026-09-18, **NOT ARMED** — withdrawn from the 7,100 flag day by the
 adversarial audit of 2026-09-19. `palw_artifact_root_ownership` is `None` on every preset; the code
 ships inert and a state without the index is byte-identical to a state before the field.
 
@@ -159,7 +159,7 @@ owner fee for a root they do not own.
 12,816 MSK already attributed included. The fence changes attribution from the fence, and no earlier
 state root moves.
 
-**D9. Its own fence.** `palw_artifact_root_ownership`, independent of the 6,701 bundle, so a failure
+**D9. Its own fence.** `palw_artifact_root_ownership`, independent of the 7,101 bundle, so a failure
 in either is one failure domain. It is dormant on every preset here.
 
 ## 4. Why the index and not a rule against duplicates alone
@@ -207,7 +207,7 @@ nothing else — a chain with a few hundred roots crosses in one ordinary block,
 hundreds of thousands needs the question asked again before a height is picked.
 
 **Measured on testnet-11, 2026-09-19 at DAA 6,263: five classes, six lines, and SIX distinct
-artifact roots.** The block that crosses 6,702 writes six delta entries. The ceiling was worth
+artifact roots.** The block that crosses 7,102 writes six delta entries. The ceiling was worth
 computing; the answer is that this chain is nowhere near it, and the number is in this document so
 the next reader takes the measurement rather than the ceiling.
 

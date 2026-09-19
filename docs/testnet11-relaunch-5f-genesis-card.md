@@ -5435,7 +5435,7 @@ Post-cut: the filler must store the header's `pow_algo_id`, or the explorer must
 
 A 25-minute inference on a template taken at job start yields parents 25 minutes old; under k=1 the DAG merges such a
 block red — the case the ADR-0058 note names ("a slow class is structurally red"). The state nonetheless counts them:
-`epochProducedBlocks 2` of budget 489, `bondReservedExposure 26,853,600 = 2 × 13,426,800` — ADR-0058's merged work
+`epochProducedBlocks 2` of budget 489, `bondReservedExposure 26,853,600 = 2 × 13,427,200` — ADR-0058's merged work
 counted, as written. Whether a red block's claim is adjudicated is a reading not yet taken: node1, seat4 and seat2
 (capable) have filed nothing for either claim; `.113`'s node filed Incapable (refitted). `live_total=0` in node0's own
 state line after both. Post-cut, for the seat runbook and the ADR: on CPU-class hosts every attempt block of a model
@@ -5455,7 +5455,7 @@ subset of the internal facts (no `liveTotal`, `unresolvedClaims`, `finalClaims`,
 is the facts line at node0's **next** produced block: job #3 began 18:44Z, after #1 was merged red at daa 82 and
 before #2 was merged at daa 127. `unresolved=1, live_total>0` → red claims are live and the seats' silence is replay
 speed; `unresolved=1, live_total=0` → a maturity condition the reds have not met; `unresolved=0` → the fold did not
-admit it (though `bondReservedExposure = 2 × 13,426,800` says the carriage reserved for both). A watch is on that line.
+admit it (though `bondReservedExposure = 2 × 13,427,200` says the carriage reserved for both). A watch is on that line.
 Reference from 3e's drill (blue claims, v5): `live_total` +663,054 per claim one job later, `unresolved 15` after #9,
 `final_claims 0` throughout run 1 — Final needs receipts + quorum + ReceiptLicensed, run 2's stage 6.
 
@@ -5572,7 +5572,7 @@ withheld from a fetch that was lost … on testnet-11 roughly a third of every r
 wearing the first's clothes"). Unarmed, the state's `ProducerDefaulted` arm is live: `slash_dissenting_seats`,
 `slash_silent_seats`, then `void_and_slash(ProducerWithholding)`, which takes `claim.reserved` from the producer's bond:
 
-    QWEN36  reserved 13,426,800 sompi = 0.134 MSK per claim      v5  33,152,720 sompi = 0.332 MSK per claim      collateral 10,000 MSK
+    QWEN36  reserved 13,427,200 sompi = 0.134 MSK per claim      v5  33,152,720 sompi = 0.332 MSK per claim      collateral 10,000 MSK
 
 Economically small on a testnet; structurally an honest producer convicted for the transport's failure. The three
 QWEN36 claims already open (18:18Z, 18:43Z, 20:06Z) default on the clock whatever happens now.

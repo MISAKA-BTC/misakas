@@ -537,13 +537,13 @@ mod tests {
                 crate::config::params::PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_AUDIT_FENCE_DAA,
                 // One entry for 6,000: the held regime and the deep-audit fence share it (ADR-0118; 7,000 until 2026-09-17).
+                // ADR-0120's 6,900, where the deployed release put it — now BELOW the moved flag day.
+                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
                 crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
-                // ADR-0143's own day, two past the 6,300 flag day so the gate can see it.
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
-                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
             ],
             "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, and ADR-0134's 6,201), and deriving the list must not widen it"
@@ -811,10 +811,11 @@ mod tests {
                         2400,
                         3500,
                         4000,
+                        // ADR-0120's 6,900, where the deployed release put it — now BELOW the moved flag day.
+                        crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                         crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
                         crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                        crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                         crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                         2_125_000
                     ]
@@ -875,10 +876,10 @@ mod tests {
                         ADR_0095,
                         ADR_0114,
                         AUDIT_FENCE,
+                        ADR_0120,
                         HELD_AND_AUDIT_DEEP,
                         PALW_UPGRADE_DAY,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                        ADR_0120,
                         RETIRED_6201
                     ],
                     "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0143's own day two past it, ADR-0133's 6,100, and ADR-0134's 6,201, and nothing else"
@@ -907,10 +908,10 @@ mod tests {
                 ADR_0095,
                 ADR_0114,
                 AUDIT_FENCE,
+                ADR_0120,
                 HELD_AND_AUDIT_DEEP,
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                ADR_0120,
                 RETIRED_6201,
                 CRESCENDO_T11
             ]
@@ -1401,10 +1402,11 @@ mod tests {
                 2400,
                 3500,
                 4000,
+                // ADR-0120's 6,900, where the deployed release put it — now BELOW the moved flag day.
+                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 HELD_AND_DEEP,
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                crate::config::params::PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 RETIRED_6201,
                 CRESCENDO_T11
             ],
@@ -1422,13 +1424,28 @@ mod tests {
         // the heights moved a third time. The three are kept because each one is a measurement of
         // the same lesson — a height is only above the tip until the release takes long enough.
         const TIP_AT_THE_THIRD_MOVE: u64 = 6_263;
-        let new_peer = fork_id_v1(&upgraded, TIP_AT_THE_THIRD_MOVE);
-        let old_peer = fork_id_v1(&release_7000, TIP_AT_THE_THIRD_MOVE);
+        // 2026-09-19, the fourth: the drill's own clock runs on heartbeats past its anchor-clock
+        // fence, so the DAA-denominated challenge window the finals phase waits on is hours of wall
+        // clock, and the heights went above ADR-0120's 6,900 to buy that time.
+        const TIP_AT_THE_FOURTH_MOVE: u64 = 6_454;
+        let new_peer = fork_id_v1(&upgraded, TIP_AT_THE_FOURTH_MOVE);
+        let old_peer = fork_id_v1(&release_7000, TIP_AT_THE_FOURTH_MOVE);
         assert_eq!(new_peer.fired, old_peer.fired, "one history: both crossed every fence through 4,000");
-        assert_eq!((new_peer.next, old_peer.next), (HELD_AND_DEEP, 6_900), "and they announce different next fences");
+        // **The fourth move put the flag day ABOVE ADR-0120's 6,900, and that changes what the
+        // handshake can see and when.** Both builds schedule 6,900, so below it they advertise the
+        // identical schedule and are indistinguishable — correctly, because they agree about every
+        // block either can produce there. From 6,900 their next fences differ (this build's 7,100
+        // against the deployed release's 7,000), and the disputed fence is the LOWER of the two, so
+        // the refusal lands at 7,000 — which is where the two actually start disagreeing about
+        // blocks, the deployed release firing its held regime there and this build not. Refused
+        // before the disputed fence, never after: the property is intact, only its dates moved.
+        assert_eq!((new_peer.next, old_peer.next), (6_900, 6_900), "below 6,900 the two are one schedule");
         assert!(TIP_AT_THE_FIRST_MOVE < TIP_AT_THE_SECOND_MOVE && TIP_AT_THE_SECOND_MOVE < TIP_AT_THE_THIRD_MOVE);
-        assert!(TIP_AT_THE_THIRD_MOVE < HELD_AND_DEEP, "the boundary is above the tip it was re-pinned over");
-        for local_daa in [TIP_AT_THE_FIRST_MOVE, TIP_AT_THE_SECOND_MOVE, TIP_AT_THE_THIRD_MOVE, HELD_AND_DEEP - 1] {
+        assert!(TIP_AT_THE_THIRD_MOVE < TIP_AT_THE_FOURTH_MOVE && TIP_AT_THE_FOURTH_MOVE < 6_900);
+        assert!(TIP_AT_THE_FOURTH_MOVE < HELD_AND_DEEP, "the boundary is above the tip it was re-pinned over");
+        assert_eq!(fork_id_v1(&upgraded, 6_900).next, HELD_AND_DEEP, "past 6,900 this build points at the flag day");
+        assert_eq!(fork_id_v1(&release_7000, 6_900).next, 7_000, "…and the deployed release at its own held regime");
+        for local_daa in [TIP_AT_THE_FIRST_MOVE, TIP_AT_THE_SECOND_MOVE, TIP_AT_THE_FOURTH_MOVE, 6_900, 6_999] {
             let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
             assert!(
                 !evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),
@@ -1439,7 +1456,9 @@ mod tests {
                 "this build keeps the 7,000 release at {local_daa}"
             );
         }
-        for local_daa in [HELD_AND_DEEP, PALW_UPGRADE_DAY, PALW_UPGRADE_DAY + 1, RETIRED_6201, 6_900, 7_000, 7_001] {
+        // 7,000 is the first height the two disagree about a BLOCK: the deployed release fires its
+        // held regime there and this build does not.
+        for local_daa in [7_000, 7_001, HELD_AND_DEEP, PALW_UPGRADE_DAY, PALW_UPGRADE_DAY + 1, RETIRED_6201] {
             let (new_at, old_at) = (fork_id_v1(&upgraded, local_daa), fork_id_v1(&release_7000, local_daa));
             assert!(
                 evaluate_fork_id_v1(&release_7000, local_daa, new_at.fired.as_bytes().as_slice(), new_at.next).refuses(),

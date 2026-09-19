@@ -12200,7 +12200,7 @@ pub const PALW_RC_AUDIT_FENCE_DAA: u64 = 4_000;
 /// which never reaches its height: 6,000 is a height that release does not schedule, so the fork-id
 /// gate refuses it from 6,000 and the whole fleet must carry this build before then. ADR-0120's
 /// 6,900 stays where that release put it and now follows this height.
-pub const PALW_RC_HELD_FENCE_DAA: Option<u64> = Some(6_700);
+pub const PALW_RC_HELD_FENCE_DAA: Option<u64> = Some(7_100);
 
 /// **The held regime on a network minted before it, at one height** (ADR-0118 Decision 6).
 ///
@@ -12236,7 +12236,7 @@ pub fn palw_arm_held_regime_at_v1(params: &mut Params, daa: u64) {
 /// a fingerprint and a schedule yet fold differently at 4,000 — a silent split. **Provisional** —
 /// set with deployment margin over the tip when the deep set ships, and announced as its own flag
 /// day. 7,000 from 2026-09-12; 6,000 from 2026-09-17 (the operator: the wait was too long).
-pub const PALW_RC_AUDIT_DEEP_FENCE_DAA: u64 = 6_700;
+pub const PALW_RC_AUDIT_DEEP_FENCE_DAA: u64 = 7_100;
 
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
@@ -12268,7 +12268,7 @@ pub const PALW_RC_COURT_LADDER_FENCE_DAA: u64 = 2_150;
 /// (`a-fence-at-a-scheduled-height-is-invisible-to-the-fork-id`, ADR-0120's 6,900 for the same
 /// reason). Every node must run a build carrying it before the height — and before 6,000, the
 /// moved height the deployed release is refused on first.
-pub const PALW_RC_PALW_UPGRADE_FENCE_DAA: u64 = 6_701;
+pub const PALW_RC_PALW_UPGRADE_FENCE_DAA: u64 = 7_101;
 
 /// **ADR-0143's height on testnet-11: an artifact root gets one owner at DAA 6,702** — the operator's
 /// call (2026-09-19) to ship it with the 6,300 flag day rather than behind its own later one.
@@ -12284,14 +12284,14 @@ pub const PALW_RC_PALW_UPGRADE_FENCE_DAA: u64 = 6_701;
 ///
 /// **It is one release with the 6,300 day and one operator decision**; only the height is its own,
 /// and the two DAA of separation are what make the difference checkable rather than silent.
-pub const PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA: u64 = 6_702;
+pub const PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA: u64 = 7_102;
 
 /// **ADR-0134's height on testnet-11: the compute overlay retires at DAA 6,201** — its own height,
 /// two hundred past the 6,001 flag day (7,201 past 7,001 until the flag day moved on 2026-09-17; the
 /// two hundred is kept), so the fork-id gate separates a build that carries the retirement from one
 /// that does not, and a failure at either height names its cause (the operator: the beacon
 /// retirement is a different failure domain from the liveness and economics fences).
-pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 6_901;
+pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 7_301;
 
 /// **ADR-0133 Verification V2 (S1) — testnet-11 arms it at DAA 6,100**, its own height a hundred DAA
 /// past the 6,001 flag day and a hundred before ADR-0134's retirement: the licence rule generalises
@@ -12299,7 +12299,7 @@ pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 6_901;
 /// refused there and a fleet that crossed 6,001 has its own day to cross this one. The operator's
 /// order (2026-09-18): V1 full replay → S1 segmented replay → S3 if needed → S2 if speed wins; no
 /// zero-knowledge proof is used or planned.
-pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 6_800;
+pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 
 /// **The build before the 6,001 flag day**, for the tests that reconstruct an earlier release: the
 /// fences [`PALW_RC_PALW_UPGRADE_FENCE_DAA`] schedules, cleared (the held regime and the deep audit
@@ -17344,7 +17344,7 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                "d4161a86544fb03ce6f343184dd80e73b930f6665da409c5981e8cfa32786cf2",
+                "c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -18909,13 +18909,14 @@ mod consensus_params_id_tests {
                 PALW_RC_MODEL_LEG_V2_FENCE_DAA,
                 PALW_RC_AUDIT_FENCE_DAA,
                 // One entry for 6,000: the deep-audit fence and the held regime share it (ADR-0118; 7,000 until 2026-09-17).
+                // ADR-0120's 6,900, where the deployed release put it — now BELOW the moved flag day.
+                PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 PALW_RC_AUDIT_DEEP_FENCE_DAA,
                 // One entry for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
                 PALW_RC_PALW_UPGRADE_FENCE_DAA,
                 // ADR-0133 Verification V2's own day, a hundred past the flag day.
                 PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement, after the flag day.
-                PALW_RC_MODEL_SEED_V2_FENCE_DAA,
                 PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"

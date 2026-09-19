@@ -4,7 +4,7 @@
 nothing about the lottery, changes no rule and builds nothing.** It states the question precisely,
 records why it is the one place a hash is still worth reopening, lists what would have to be answered
 before anything replaced it, and specifies the counters that would settle the first half of the
-argument — to be built when the 6,701 rollout is behind us, not before.
+argument — to be built when the 7,101 rollout is behind us, not before.
 
 **Builds on:** ADR-0071 (the attempt lane's price and the ticket's bound), ADR-0072 (the ticket is
 the execution), ADR-0076 (the class target seed), ADR-0117 (one forward, one draw), ADR-0132 S (the
@@ -19,7 +19,7 @@ worth reopening.
 ## 1. The question
 
 A producer runs one deterministic inference, commits its execution, derives a ticket digest, and the
-block is admitted when that digest falls under a target. Past 6,701 the target is `CCU / W` — the
+block is admitted when that digest falls under a target. Past 7,101 the target is `CCU / W` — the
 class's counted compute against the network's one work target — and the Layer-0 digest is no longer
 compared to `bits` at all (ADR-0132 S). The comparison is still a comparison against a target.
 
@@ -100,7 +100,7 @@ mean debugging both at once.
 cost stated, and its preconditions named.
 
 **D2. The waste gets counted before it gets argued about.** M1's counters are specified here and
-built after the 6,701 rollout: draws, wins, inference spent on losing draws, and the longest run of
+built after the 7,101 rollout: draws, wins, inference spent on losing draws, and the longest run of
 consecutive losses, which is the wait a producer actually feels and which an average erases. They
 cost nothing, they are useful to an operator regardless of this question, and no rule reads them.
 Until they exist, every claim about how much this lottery wastes — including the ones in this
@@ -110,7 +110,7 @@ document — is an estimate.
 with separate failure models, and a single document covering both would let a conclusion about one
 carry a conclusion about the other. That is the specific mistake this pair of ADRs exists to avoid.
 
-**D4. Nothing here is scheduled.** No fence, no height, no dependency for the 6,701 bundle.
+**D4. Nothing here is scheduled.** No fence, no height, no dependency for the 7,101 bundle.
 
 ## 5. What this ADR does not decide
 

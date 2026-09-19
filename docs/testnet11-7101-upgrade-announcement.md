@@ -1,9 +1,18 @@
-# Testnet-11: the DAA 6,701 PALW upgrade, and Verification V2 at 6,800
+# Testnet-11: the DAA 7,101 PALW upgrade, and Verification V2 at 7,200
 
-> **The heights moved again on 2026-09-19, and this is the third move.** The release was held for the
+> **The heights moved a FOURTH time on 2026-09-19, to 7,100.** The release drill's own devnet runs
+> its clock on heartbeats past its anchor-clock fence, so the DAA-denominated challenge window its
+> finals phase waits on is hours of wall clock rather than minutes — the estimate that set the third
+> move was wrong about that, and the drill could not have finished before 6,700. The heights now sit
+> above ADR-0120's 6,900, which both this build and the deployed one schedule: below 6,900 the two
+> advertise one schedule and peer, from 6,900 the handshake can tell them apart, and 7,000 — where
+> the deployed release fires its held regime and this build does not — is where it refuses.
+> **Every node must therefore run this build before DAA 7,000, not 7,100.**
+>
+> **The heights moved on 2026-09-19, and that was the third move.** The release was held for the
 > registry drill; its phase 1 passed — including the new clock gate, which is the reason the drill
 > exists — but the tip reached 6,259 while it ran, and at the measured 46 DAA/h the build could not
-> have been on every node before 6,700's predecessor. Nothing fired and nothing was at risk: the
+> have been on every node before 7,100's predecessor. Nothing fired and nothing was at risk: the
 > deployed build schedules nothing at those heights. The heights are re-pinned above the tip, which
 > is the same answer the two moves below record.
 >
@@ -16,9 +25,9 @@
 > [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
 > [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
-**Fingerprint of the release: `d4161a86544fb03ce6f343184dd80e73b930f6665da409c5981e8cfa32786cf2`.**
-Every node on testnet-11 must run this build **before DAA 6,700**. The build currently deployed prints
-`ae1d6162…` and is refused from 6,700.
+**Fingerprint of the release: `c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f`.**
+Every node on testnet-11 must run this build **before DAA 7,000** (see the note above). The build currently deployed prints
+`ae1d6162…` and is refused from 7,100.
 
 ```bash
 kaspad --testnet --netsuffix=11   # the first log lines print the fingerprint and the fence schedule
@@ -26,11 +35,11 @@ kaspad --testnet --netsuffix=11   # the first log lines print the fingerprint an
 
 ## The heights, and why they are separate
 
-**DAA 6,700 — the compatibility boundary.** The held regime (ADR-0118/0119/0121), the one-move court
+**DAA 7,100 — the compatibility boundary.** The held regime (ADR-0118/0119/0121), the one-move court
 (ADR-0100) and the 2026-09-11 audit's deep fixes fire here. No rule of the PALW upgrade below fires at
-6,700: it exists so the fleet is on one binary before anything economic changes.
+7,100: it exists so the fleet is on one binary before anything economic changes.
 
-**DAA 6,701 — one PALW upgrade day.** Every consensus change of the upgrade fires together, and no part
+**DAA 7,101 — one PALW upgrade day.** Every consensus change of the upgrade fires together, and no part
 of it fires without the rest:
 
 | rule | ADR |
@@ -43,7 +52,7 @@ of it fires without the rest:
 | the permissionless model registry (rows, readiness proofs, the capacity gate) | 0135 Upgrade A |
 | the economic payout: `min(escrow, attempted × rate)` at 9 MSK a G MAC-eq, the panel's share | 0132 Upgrade C |
 | one work target `W` — a block draws against `CCU / W`; no class share, class DAA, epoch budget or seat price is read | 0137 |
-| the short challenge window: a claim licensed past 6,701 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
+| the short challenge window: a claim licensed past 7,101 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
 | the execution lane's gas: one 3 M budget per permitted round a chain block merges, under a 390 M ceiling (O13 decided) | 0139 |
 
 **Two rules left this day, and why.** ADR-0132 S's single lottery and ADR-0138's anchor clock are
@@ -63,7 +72,7 @@ dependency runs one way — the lottery needs the work target, never the reverse
 
 ## ADR-0143 is in this build and does nothing
 
-An artifact root having one owner on the chain was to arm at 6,702. **It does not arm.** An
+An artifact root having one owner on the chain was to arm at 7,102. **It does not arm.** An
 adversarial audit on 2026-09-19 found two defects in the fence as written, both in the index it
 installs:
 
@@ -79,19 +88,19 @@ The code ships inert: with the fence unset the index is never written, and a sta
 byte-identical to a state before the field. The remedy is a per-class key and a bound on the rows,
 and it will arm on its own day after a drill crosses its own fence.
 
-**DAA 6,800 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
+**DAA 7,200 — Verification V2 (S1, segmented replay) and readiness V2.** A receipt may name the segments of a job it
 attests; a claim licenses when the panel's quorum holds **and** every segment of the anchor's cut is
 attested twice. A whole-job receipt is a full attestation, so this changes no licence until seats file
 partial masks — a fleet adopts segment replay seat by seat. ADR-0133 §11.1.
 
 The same day, a seat's possession proof becomes a **multiproof over the whole artifact**: the
 challenge draws sixteen leaves from the full inventory for each (class, bond, span), the proof opens
-them all at once, and its signature covers the bytes it opened. The one-leaf proof of 6,701 is
-refused from 6,800, and a seat re-proves every few spans instead of every thirty. A seat that holds
+them all at once, and its signature covers the bytes it opened. The one-leaf proof of 7,101 is
+refused from 7,200, and a seat re-proves every few spans instead of every thirty. A seat that holds
 the artifact needs no change beyond running this build; a seat that was answering with one window
 will stop counting. ADR-0133 §11.2.
 
-**DAA 6,901 — the compute overlay retires** (ADR-0134). **DAA 6,900 — the market's least seed** (ADR-0120).
+**DAA 7,301 — the compute overlay retires** (ADR-0134). **DAA 6,900 — the market's least seed** (ADR-0120).
 
 ## What the two audits found before this was armed
 
@@ -115,8 +124,8 @@ This bundle was audited twice against the code, not the design, and both reports
 
 1. Build this release and check the fingerprint and the schedule on start:
    `1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, …`.
-2. Restart every node — producers, panel seats, pool slots — before DAA 6,700. No datadir move, no resync.
-3. After 6,701, read the registry and the economics:
+2. Restart every node — producers, panel seats, pool slots — before DAA 7,100. No datadir move, no resync.
+3. After 7,101, read the registry and the economics:
    ```bash
    misaka --network testnet-11 palw registry
    misaka --network testnet-11 palw economics
@@ -127,7 +136,7 @@ This bundle was audited twice against the code, not the design, and both reports
 
 ## What changes for a model class
 
-Past 6,701 a class's *share* is a result, not an input. The lottery prices a block against the network's one
+Past 7,101 a class's *share* is a result, not an input. The lottery prices a block against the network's one
 work target, the registry's readiness and capacity rules decide whether a class admits claims, and the payout
 pays the compute the class actually ran. A class that registers on a running chain needs: its graph, its
 artifact root, its byte count (`ClassManifestV2`, which the CLI's extension route carries with the

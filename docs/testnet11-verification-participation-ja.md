@@ -46,7 +46,7 @@ DNS が使えない場合は、公開エントリポイントを追加します�
 起動ログで次を確認してください。
 
 ```text
-Consensus params fingerprint: d4161a86544fb03ce6f343184dd80e73b930f6665da409c5981e8cfa32786cf2
+Consensus params fingerprint: c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f
 Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6501, 6900, 2125000
 ```
 

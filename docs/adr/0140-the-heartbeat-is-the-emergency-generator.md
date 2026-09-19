@@ -235,5 +235,5 @@ plus commitments is the existing doctrine and it suffices.
   price rather than lower it. If it is ever revisited it needs its own ADR and this one's C1–C5 in
   force first.
 * Whether the attempt lottery can go. ADR-0141.
-* Anything in the 6,701 bundle. This ADR is scheduled behind that rollout and behind arming ADR-0105:
+* Anything in the 7,101 bundle. This ADR is scheduled behind that rollout and behind arming ADR-0105:
   **roll out, arm, measure, then decide.** Nothing here requests a height.
