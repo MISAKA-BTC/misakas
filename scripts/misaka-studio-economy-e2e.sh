@@ -297,11 +297,13 @@ log "    gateway: $(python3 -c 'import json,sys; c=json.load(open(sys.argv[1])).
 # (`engine_pairing_refusal`), so the class artifact is what Studio lists.
 mkdir -p "$WORK_DIR/studio/models"
 ln -sf "$MISAKA_PALW_ARTIFACT" "$WORK_DIR/studio/models/$(basename "$MISAKA_PALW_ARTIFACT")"
+# The engine is chosen by the settings file — `misaka-studiod --backend` names only the local
+# engines (auto, llamacpp, mlx, mock); the gateway is an HTTP endpoint the settings point at.
 cat >"$WORK_DIR/studio/settings.json" <<JSON
 {"backend": {"kind": "gateway"}, "node": {"palw_gateway_url": "http://127.0.0.1:$GATEWAY_PORT"}}
 JSON
 "$STUDIO_BIN" --host 127.0.0.1 --port "$STUDIO_PORT" --data-dir "$WORK_DIR/studio" --settings "$WORK_DIR/studio/settings.json" \
-  --models-dir "$WORK_DIR/studio/models" --backend gateway >"$WORK_DIR/studio.log" 2>&1 &
+  --models-dir "$WORK_DIR/studio/models" >"$WORK_DIR/studio.log" 2>&1 &
 pids+=($!)
 wait_for "curl -fsS 'http://127.0.0.1:$STUDIO_PORT/api/v1/health' >/dev/null 2>&1" "MISAKA Studio's runtime to answer"
 log "5/9 OK — gateway on :$GATEWAY_PORT (bond 0), Studio on :$STUDIO_PORT with the Gateway backend"
