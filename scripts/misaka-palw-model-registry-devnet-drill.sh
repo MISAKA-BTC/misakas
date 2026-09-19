@@ -92,6 +92,24 @@ die() { log "FATAL: $*"; exit 1; }
 
 for b in "$KASPAD_BIN" "$CLI_BIN"; do [ -x "$b" ] || die "missing binary $b (cargo build --release -p kaspad -p misaka-cli)"; done
 "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--palw-model-registry-devnet" || die "this kaspad has no --palw-model-registry-devnet (ADR-0135)"
+# **Every knob this run will pass must exist in THIS binary.**
+#
+# The drill's own header prints a commit read from a file somebody has to remember to update, and
+# on 2026-09-20 that file was three runs stale — the log said `ffc7e80b` while the binary was
+# `d0dd1717`. A marker that has to be maintained by hand is a marker that will be wrong exactly
+# when the evidence matters. This check cannot go stale, because it asks the binary the same
+# question the launcher is about to: if the run is going to pass a flag, the flag has to be there.
+#
+# It is not a substitute for checking that the binary is the one being SHIPPED — that is the rule
+# in `the-drill-must-run-the-binary-you-are-shipping` and it is checked before rsync, not here. It
+# catches the narrower and more common case: a source tree synced and a binary not rebuilt.
+for knob in ${ECONOMY_AT:+palw-canonical-work-devnet palw-admission-independence-devnet palw-fp-derived-work-devnet} \
+            ${ARTIFACT_ROOT_OWNERSHIP_AT:+palw-artifact-root-ownership-devnet} \
+            ${WORK_TARGET_AT:+palw-work-target-devnet}; do
+  "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--$knob" \
+    || die "this run passes --$knob and this kaspad does not have it: the binary is older than the source tree. \
+Rebuild before drilling — a drill that runs a different build than the one under test proves nothing about either."
+done
 "$CLI_BIN" palw registry --help >/dev/null 2>&1 || die "this misaka has no \`palw registry\`"
 [ -z "$CLASS_ARTIFACT" ] || [ -f "$CLASS_ARTIFACT" ] || die "CLASS_ARTIFACT=$CLASS_ARTIFACT is not a file"
 
