@@ -348,6 +348,15 @@ pub struct Args {
     /// graph rather than read off the step-leaf count its registrant declared. Needs the model
     /// registry at or below it — the derived work is read from a class's registry row.
     pub palw_canonical_work_devnet_daa: Option<u64>,
+    /// ADR-0145 I3/I4 on a private devnet: the DAA from which a registered class must be judged
+    /// by a seat its registrant does not hold, opens `Candidate`, and enters neither the work-price
+    /// unit nor a seated class target until it admits claims. Needs the model registry at or below
+    /// it — every one of its rules reads a registry row.
+    pub palw_admission_independence_devnet_daa: Option<u64>,
+    /// ADR-0145 §5/§6 on a private devnet: the DAA from which a free-prompt claim's work is DERIVED
+    /// from the class's graph instead of typed by the executor, and a prefix already paid for is
+    /// not paid again.
+    pub palw_fp_derived_work_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -481,6 +490,8 @@ impl Default for Args {
             palw_anchor_clock_devnet_daa: None,
             palw_artifact_root_ownership_devnet_daa: None,
             palw_canonical_work_devnet_daa: None,
+            palw_admission_independence_devnet_daa: None,
+            palw_fp_derived_work_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -870,6 +881,34 @@ impl Args {
             config.params.palw_canonical_work = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-canonical-work-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_admission_independence_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-admission-independence-devnet is devnet/simnet only (got {net:?}). Who may judge a class is a \
+                     consensus rule, and that ships in a release, not a command line."
+                );
+            }
+            config.params.palw_admission_independence = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-admission-independence-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_fp_derived_work_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-fp-derived-work-devnet is devnet/simnet only (got {net:?}). What the free-prompt lane is PAID \
+                     for is a consensus rule, and that ships in a release, not a command line."
+                );
+            }
+            config.params.palw_fp_derived_work = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-fp-derived-work-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1576,6 +1615,33 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_CANONICAL_WORK_DEVNET"),
         )
         .arg(
+            Arg::new("palw-admission-independence-devnet")
+                .long("palw-admission-independence-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0145 I3/I4 on a PRIVATE devnet: from this DAA score a registered class must be judged by a seat \
+                     its registrant does not hold, opens as a CANDIDATE, and enters neither the work-price unit nor a \
+                     seated class target until it admits claims. Needs --palw-model-registry at or below it. \
+                     DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_ADMISSION_INDEPENDENCE_DEVNET"),
+        )
+        .arg(
+            Arg::new("palw-fp-derived-work-devnet")
+                .long("palw-fp-derived-work-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0145 §5/§6 on a PRIVATE devnet: from this DAA score a free-prompt claim is priced on work this \
+                     node DERIVES from the class's graph — refused if the executor's declaration disagrees — and credited \
+                     for the new tokens only, so a cached prefix is not paid for twice. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_FP_DERIVED_WORK_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-work-target-devnet")
                 .long("palw-work-target-devnet")
                 .value_name("daa-score")
@@ -2013,6 +2079,14 @@ impl Args {
                 .get_one::<u64>("palw-canonical-work-devnet")
                 .copied()
                 .or(defaults.palw_canonical_work_devnet_daa),
+            palw_admission_independence_devnet_daa: m
+                .get_one::<u64>("palw-admission-independence-devnet")
+                .copied()
+                .or(defaults.palw_admission_independence_devnet_daa),
+            palw_fp_derived_work_devnet_daa: m
+                .get_one::<u64>("palw-fp-derived-work-devnet")
+                .copied()
+                .or(defaults.palw_fp_derived_work_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),
@@ -2400,5 +2474,49 @@ mod profile_tests {
         assert_eq!(a.node_profile, NodeProfile::Archive);
         assert_eq!(a.ram_scale, Args::default().ram_scale);
         assert!(!a.disable_grpc);
+    }
+}
+
+#[cfg(test)]
+mod devnet_fence_knob_tests {
+    use super::*;
+
+    /// **A fence with no devnet knob is a fence no drill can cross.**
+    ///
+    /// This repo's first working rule is that a build which arms a fence does not ship without a
+    /// drill that CROSSES that fence, and every drill arms its fences with a
+    /// `--palw-<name>-devnet=<daa>` flag (`scripts/misaka-palw-model-registry-devnet-drill.sh`
+    /// passes one per fence). So the knob is not a convenience: without it the rule cannot be
+    /// satisfied and the fence cannot honestly be armed anywhere.
+    ///
+    /// The 2026-09-19 integration landed three new fences and only `palw_canonical_work` arrived
+    /// with a knob — the other two were unreachable from any drill, which is how a fence reaches a
+    /// flag day untested. This pins all three.
+    ///
+    /// It does NOT assert that every fence in `for_each_fence` has a knob: most shipped fences were
+    /// drilled before the pattern existed and adding knobs retroactively would widen the devnet
+    /// surface for no evidence. The rule binds a fence you intend to arm.
+    #[test]
+    fn every_fence_added_for_the_2026_09_19_reward_work_has_a_devnet_knob() {
+        let rendered = cli().render_help().to_string();
+        for flag in ["--palw-canonical-work-devnet", "--palw-admission-independence-devnet", "--palw-fp-derived-work-devnet"] {
+            assert!(rendered.contains(flag), "{flag} must exist or no drill can cross that fence");
+        }
+    }
+
+    /// And the knob has to REACH the fence — a flag parsed into a field nothing reads is the same
+    /// as no flag, and is exactly the failure the merge produced one level up in the fold.
+    #[test]
+    fn each_new_devnet_knob_parses_into_the_field_that_arms_its_fence() {
+        let mut argv = vec!["kaspad", "--devnet"];
+        argv.extend_from_slice(&[
+            "--palw-canonical-work-devnet=9000",
+            "--palw-admission-independence-devnet=9100",
+            "--palw-fp-derived-work-devnet=9200",
+        ]);
+        let a = Args::parse(argv).expect("args parse");
+        assert_eq!(a.palw_canonical_work_devnet_daa, Some(9_000));
+        assert_eq!(a.palw_admission_independence_devnet_daa, Some(9_100));
+        assert_eq!(a.palw_fp_derived_work_devnet_daa, Some(9_200));
     }
 }
