@@ -28671,6 +28671,21 @@ pub(crate) mod tests {
         assert_eq!(committed.fp_claimed_prompts_of(&class, &bond_key(1)).len(), 1);
         assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::FpClaimPrompt { new: Some(_), .. })));
 
+        // **And both indices survive a carriage round trip.** A tail that serialized and did not
+        // read back would lose the class's graph and every paid prefix on the next restart, and
+        // the loss would be silent: the chain would simply start pricing prompts it had already
+        // bought. The root is what catches it, so the round trip is asserted against the root.
+        let carriage = PalwStateCarriageV2::from_state(&committed);
+        let bytes = borsh::to_vec(&carriage).expect("the carriage serializes");
+        let restored: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("and reads back");
+        let back = restored.into_state(&p, Some(committed.state_root())).expect("the round trip keeps the root");
+        assert_eq!(back.fp_work_profile_of(&class), Some(&derived_profile()), "the graph comes back");
+        assert_eq!(
+            back.fp_claimed_prompts_of(&class, &bond_key(1)),
+            committed.fp_claimed_prompts_of(&class, &bond_key(1)),
+            "and so does every prompt row"
+        );
+
         let reverted = revert_delta_v2(&committed, &delta, &p).expect("the delta reverts");
         assert_eq!(reverted.state_root(), published.state_root(), "the row goes back where it came from");
         assert!(reverted.fp_claimed_prompts_of(&class, &bond_key(1)).is_empty());
