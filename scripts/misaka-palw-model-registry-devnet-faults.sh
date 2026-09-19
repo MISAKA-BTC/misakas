@@ -125,6 +125,40 @@ start_miner() {
 }
 start_miner
 
+# **"On the nodes phase two left running" was never true, and this phase inherited the lie.**
+# `run20-all.sh` runs the phases in sequence, and finals.sh ends with `trap cleanup EXIT` killing
+# every node it started — on PASS and on FATAL alike. So by the time this script runs there is no
+# fleet, and every check below reports an absence it caused. That is why phase 3 has never run in
+# any generation of this drill: not a chain fault, not a timing fault, a hand-off that does not exist.
+#
+# A phase that depends on its predecessor's processes is a phase that can only be run one way. This
+# one now brings the fleet up from the datadirs itself, exactly as phase 2 does — and ATTACHES to
+# whatever is already listening, so running it straight after a live phase 2 still works.
+wait_for_free_datadir() {
+  local i="$1" lock="$WORK_DIR/node-$i/misaka-devnet/datadir/meta/LOCK" waited=0 holders=""
+  [ -e "$lock" ] || return 0
+  while lsof -nP -- "$lock" >/dev/null 2>&1; do
+    waited=$((waited + 2))
+    if [ "$waited" -gt 180 ]; then
+      holders="$(lsof -nP -t -- "$lock" 2>/dev/null | tr '\n' ' ')"
+      log "    node-$i's datadir is still held after ${waited}s by pid(s): ${holders:-none}; SIGKILL"
+      for pid in $holders; do kill -9 "$pid" 2>/dev/null || true; done
+      sleep 5
+      lsof -nP -- "$lock" >/dev/null 2>&1 && die "node-$i's datadir lock survives a SIGKILL of ${holders}"
+      return 0
+    fi
+    sleep 2
+  done
+}
+started=0; attached=0
+for ((i=0; i<NODES; i++)); do
+  if lsof -nP -iTCP:"$((RPC_BASE + i))" -sTCP:LISTEN >/dev/null 2>&1; then attached=$((attached + 1)); continue; fi
+  wait_for_free_datadir "$i"
+  start_node "$i" 1 >/dev/null
+  started=$((started + 1))
+done
+log "fleet: $attached node(s) already listening, $started started from their datadirs"
+
 # **The only thing that waited for the nodes was the hash miner, and this drill has no hash lane.**
 # `start_miner` returns at its first line when MINER_BIN is empty -- which is the configuration that
 # matches testnet-11 (no bits-priced lane) -- and the gRPC wait it would otherwise have done was the
