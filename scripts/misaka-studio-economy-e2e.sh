@@ -39,6 +39,12 @@
 #   ECONOMY_AT [30]  REGISTRY_AT/WORK_TARGET_AT/PAYOUT_AT/OWNERSHIP_AT [= ECONOMY_AT]  LANE [0,2,2]
 #   RAM_SCALE [0.3]  MIN_FREE_GB [4] (the run stops itself below it)  WORK_DIR  P2P_BASE  RPC_BASE
 #   PROMPT, MAX_TOKENS [16]  STEP_WAIT_DAA [400]  STALL_WAIT [1200]
+#   GATEWAY_PUBLIC_BUDGET_PERMILLE [1000] — the share of bond 0's room the gateway's jobs may reserve
+#                per 24 h. The gateway's default (200) is for a gateway strangers use; here the
+#                operator IS the person chatting, as on the Studio pool (contrib/minerpool/run-fp.sh
+#                runs 1000). Past the bundle one claim reserves the compute era's exposure, and 200‰
+#                of a devnet genesis bond's room is smaller than ONE claim (run4, 2026-09-20:
+#                147,880,590 sompi per claim against a 110,000,868 budget) — no job could commit.
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_DIR="${BIN_DIR:-$REPO_ROOT/target/release}"
@@ -65,6 +71,7 @@ P2P_BASE="${P2P_BASE:-17010}"
 RPC_BASE="${RPC_BASE:-18310}"
 GATEWAY_PORT="${GATEWAY_PORT:-18895}"
 STUDIO_PORT="${STUDIO_PORT:-18896}"
+GATEWAY_PUBLIC_BUDGET_PERMILLE="${GATEWAY_PUBLIC_BUDGET_PERMILLE:-1000}"
 PROMPT="${PROMPT:-In one sentence: what does a hash function do?}"
 MAX_TOKENS="${MAX_TOKENS:-16}"
 STEP_WAIT_DAA="${STEP_WAIT_DAA:-400}"
@@ -281,7 +288,8 @@ JSON
 MISAKA_PALW_ARTIFACT="$MISAKA_PALW_ARTIFACT" MISAKA_PALW_TOKENIZER="$MISAKA_PALW_TOKENIZER" \
 MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 MISAKA_PALW_NETWORK_ID="devnet" \
 "$GATEWAY_BIN" --listen "127.0.0.1:$GATEWAY_PORT" --worker "$WORKER_BIN" --outbox "$WORK_DIR/outbox" \
-  --identity "$WORK_DIR/identity.json" --rpc "127.0.0.1:$RPC_BASE" >"$WORK_DIR/gateway.log" 2>&1 &
+  --identity "$WORK_DIR/identity.json" --rpc "127.0.0.1:$RPC_BASE" \
+  --public-job-budget-permille "$GATEWAY_PUBLIC_BUDGET_PERMILLE" >"$WORK_DIR/gateway.log" 2>&1 &
 pids+=($!)
 wait_for "curl -fsS 'http://127.0.0.1:$GATEWAY_PORT/health' -o '$WORK_DIR/gateway-health.json' 2>/dev/null" "the gateway's /health"
 # **The rail as a watcher, funded from what bond 0 has EARNED.** Its genesis fee float is node-0's
@@ -331,7 +339,17 @@ json.dump(payload, open(out, "w"), indent=2)
 print("  answer: %r" % payload["choices"][0]["message"]["content"], file=sys.stderr)
 PY
 JOB_STEM="$(ls -t "$WORK_DIR"/outbox/fp-job-*.commitment-unsigned.borsh 2>/dev/null | head -1)"
-[ -n "$JOB_STEM" ] || die "Studio answered but the gateway queued no commitment (gateway.log, studio.log) — the chat was not mined"
+if [ -z "$JOB_STEM" ]; then
+  why="$(grep -h "answered, not committed" "$WORK_DIR/gateway.log" | tail -1 | sed -E 's/.*answered, not committed/answered, not committed/' | cut -c1-300)"
+  die "Studio answered but the gateway queued no commitment — the chat was not mined: ${why:-see gateway.log, studio.log}"
+fi
+# **Studio must say what the gateway said.** Before MISAKA-Studio d1e70ec it logged "free-prompt claim
+# committed" off the claim id alone, for an answer the gateway kept off the chain (run4).
+if grep -q "answered, not committed" "$WORK_DIR/studio.log"; then
+  die "the gateway committed a job but Studio logged this chat as not committed (studio.log)"
+fi
+studio_line="$(grep -h "free-prompt claim" "$WORK_DIR/studio.log" | tail -1 | sed -E 's/.*(free-prompt claim)/\1/' | cut -c1-200)"
+[ -n "$studio_line" ] && log "    studio: $studio_line"
 JOB_STEM="${JOB_STEM%.commitment-unsigned.borsh}"
 JOB_ID="$(basename "$JOB_STEM")"; JOB_ID="${JOB_ID#fp-job-}"
 log "6/9 OK — Studio's chat produced a commitment: ${JOB_STEM##*/}"
