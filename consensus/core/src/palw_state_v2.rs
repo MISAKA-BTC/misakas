@@ -8920,6 +8920,28 @@ impl<'a> TransitionBuilder<'a> {
         self.state.palw_exposure_basis_v1(&self.params.base_class_id, accepted_daa, self.extras.canonical_work_daa)
     }
 
+    /// **The pwu a class's DIFFICULTY is seeded from** — ADR-0145 I1 and the audit's invariant
+    /// (vi), "protocol difficulty must not be set from miner-controlled metadata".
+    ///
+    /// `attempt_target_seed_v1(share, pwu)` read `palw_max_exposure_pwu_of_rule_v1` of the class's
+    /// rule at both of its live call sites: the registrant's own declared number, deciding the
+    /// class target, hence `expected_attempts`, hence `claim.pwu`, hence fork-choice weight. That
+    /// is F1's remaining path, and unlike the work price it had no canonical fallback at all.
+    ///
+    /// **Normalised, for the reason the exposure is and the price unit is not.** The seed meets an
+    /// ABSOLUTE constant — `PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1`, past which the target
+    /// saturates and `expected_attempts` pins at one — so a change of unit moves which classes
+    /// saturate. The work price and a claim's weight are RATIOS, where the unit divides out, and
+    /// normalising one side of those would break the cancellation instead of preserving it. The
+    /// rule is the quantity's company, not the quantity: normalise where a pwu meets a constant,
+    /// leave it raw where it meets another pwu.
+    fn class_seed_pwu(&self, class_id: &Hash64, accepted_daa: u64) -> u64 {
+        let declared = self.state.classes.get(class_id).map(|record| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule));
+        let Some(declared) = declared else { return 0 };
+        let Some(record) = self.state.classes.get(class_id) else { return declared };
+        palw_exposure_pwu_v3(record, declared, self.canonical_per_draw(class_id, accepted_daa), self.exposure_basis(accepted_daa))
+    }
+
     // ---- ADR-0132 Upgrade C: the economic payout in the fold ----------------------------------
 
     /// The registry's work for a class: its lifecycle row's, or the genesis registration's.
@@ -9695,7 +9717,7 @@ impl<'a> TransitionBuilder<'a> {
             .collect();
         for id in seated {
             let share = self.state.class_shares.get(&id).copied().unwrap_or(0);
-            let pwu = self.state.classes.get(&id).map(|record| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule)).unwrap_or(0);
+            let pwu = self.class_seed_pwu(&id, ctx.daa_score);
             let priced = crate::palw_class_daa::attempt_target_seed_v1(share, pwu);
             if self.state.class_targets.get(&id).map(|t| t.target) != Some(priced) {
                 self.write_target(id, Some(PalwClassTargetV2 { target: priced }));
@@ -14769,12 +14791,7 @@ fn apply_object(
                     // produces nothing). So the seat comes with the seat's price, derived from the
                     // share the table just wrote and the class's own counted work.
                     let seated = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
-                    let pwu = builder
-                        .state
-                        .classes
-                        .get(class_id)
-                        .map(|record| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule))
-                        .unwrap_or(0);
+                    let pwu = builder.class_seed_pwu(class_id, ctx.daa_score);
                     builder.write_target(
                         *class_id,
                         Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }),

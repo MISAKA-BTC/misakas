@@ -1255,3 +1255,52 @@ fn a_derived_basis_changes_the_unit_the_collateral_is_denominated_in() {
     assert_eq!(6_630_544u128 * SLASH_VALUE_PER_PWU as u128, 33_152_720, "0.33 MSK reserved per dense claim today");
     assert_eq!(83_102_171_136u128 * SLASH_VALUE_PER_PWU as u128, 415_510_855_680, "4,155 MSK per dense claim on a MAC-eq basis");
 }
+
+/// **Invariant (vi): the protocol's difficulty is not seeded from a registrant's declaration.**
+///
+/// `attempt_target_seed_v1(share, pwu)` decides a class's target, hence `expected_attempts`, hence
+/// `claim.pwu`, hence fork-choice weight. Both of its live call sites read
+/// `palw_max_exposure_pwu_of_rule_v1` of the class's own rule — the registrant's declared number —
+/// with no canonical fallback at all, unlike the work price, which had one. That is F1's remaining
+/// path into consensus, and the 2026-09-19 re-audit found it unfixed after the accounting branch
+/// landed: the branch repointed the price and the reservation and left the difficulty.
+///
+/// Both now run `class_seed_pwu`. This reads the fold rather than a model of it, because the
+/// defect was a MISSING call, and no behavioural fixture can fail for a call that is not there.
+#[test]
+fn the_difficulty_seed_reads_no_registrant_declaration() {
+    let source = include_str!("palw_state_v2.rs");
+    let fold = &source[..source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+
+    let sites: Vec<&str> = fold.match_indices("attempt_target_seed_v1(").map(|(at, _)| &fold[at.saturating_sub(220)..at]).collect();
+    assert!(sites.len() >= 2, "both live seeding sites are still here ({})", sites.len());
+    for (n, before) in sites.iter().enumerate() {
+        assert!(
+            !before.contains("palw_max_exposure_pwu_of_rule_v1"),
+            "seeding site {n} still takes its pwu from the class's declared rule"
+        );
+    }
+    assert_eq!(fold.matches("self.class_seed_pwu(").count() + fold.matches("builder.class_seed_pwu(").count(), 2, "and both take it from one expression");
+}
+
+/// **Where a pwu is normalised and where it must not be.**
+///
+/// `palw_exposure_pwu_v3` converts derived work into the unit the collateral was posted in. Applying
+/// it everywhere would be as wrong as applying it nowhere: a pwu that meets an ABSOLUTE constant
+/// needs the unit (the reservation meets `slash_value_per_pwu`; the difficulty seed meets
+/// `PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1`, past which the target saturates and `expected_attempts`
+/// pins at one), while a pwu that meets ANOTHER PWU is already a ratio and the unit divides out —
+/// normalising one side of `escrow × own pwu / unit` would break the cancellation it exists to
+/// preserve. This pins the rule so a later branch cannot tidy it into uniformity.
+#[test]
+fn the_price_unit_stays_raw_because_it_is_a_denominator() {
+    let source = include_str!("palw_state_v2.rs");
+    let fold = &source[..source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+    let at = fold.find("fn work_price_unit_at(").expect("the work price is still here");
+    let body = &fold[at..at + 600];
+    assert!(body.contains("self.canonical_per_draw(id, accepted_daa)"), "the price unit reads the derived work RAW");
+    assert!(
+        !body.contains("exposure_basis") && !body.contains("palw_exposure_pwu_v3"),
+        "and it must not be normalised: it is a denominator, and the numerator is not"
+    );
+}
