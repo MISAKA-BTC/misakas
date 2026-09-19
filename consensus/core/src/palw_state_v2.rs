@@ -641,6 +641,96 @@ pub fn palw_licence_names_its_outsider_v1(
     if served { Ok(()) } else { Err(PalwStateV2Error::LicenceWithoutOutsider { claim: *claim_id, class: claim.class_id, outsider }) }
 }
 
+/// **ADR-0148: how a chain prices free-prompt quanta** — the unit's height and the floor that
+/// defines the network quantum. One value, so the commitment that prices a claim, the spend that
+/// weighs it, the retirement that books it, the consistency check that re-derives it and the
+/// admission that draws its tickets are handed the same three facts and run the same expressions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwFpPricingV1 {
+    /// `Params::palw_canonical_work_daa()`: a free-prompt claim accepted at or past it is priced in
+    /// compute. The bundle arms it at the same height as `palw_fp_derived_work`.
+    pub canonical_work_daa: Option<u64>,
+    /// The liveness floor, whose derived draw defines the network quantum and whose collateral unit
+    /// and slash price every compute-priced reservation is expressed in.
+    pub base_class_id: Hash64,
+    /// The ruleset's `fp_quanta_per_canonical_job`: the network quantum is the floor's draw over it.
+    pub quanta_per_canonical_job: u32,
+}
+
+impl PalwFpPricingV1 {
+    pub fn of(params: &PalwStateParamsV2, canonical_work_daa: Option<u64>) -> Self {
+        Self {
+            canonical_work_daa,
+            base_class_id: params.base_class_id(),
+            quanta_per_canonical_job: params.fp_quanta_per_canonical_job(),
+        }
+    }
+
+    /// Whether this claim was priced in compute — keyed on its own `accepted_daa`, so a claim
+    /// accepted below the fence keeps its leaves pricing at every later chain point.
+    pub fn prices_in_compute(&self, claim: &PalwClaimStateV2) -> bool {
+        matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
+            && self.canonical_work_daa.is_some_and(|h| claim.accepted_daa >= h)
+    }
+
+    /// The network quantum at `state`: the floor's derived draw (its registry row's
+    /// `economic_ccu_per_claim`, frozen when the registry opened the floor) over the ruleset's
+    /// divisor. Zero where the floor has no row, which prices nothing.
+    pub fn network_quantum(&self, state: &PalwChainStateV2) -> u128 {
+        let floor_draw = state.model_lifecycle(&self.base_class_id).map(|row| row.work.economic_ccu_per_claim).unwrap_or(0);
+        crate::palw_freeprompt_v3::fp_network_quantum_v1(floor_draw, self.quanta_per_canonical_job)
+    }
+}
+
+/// **ADR-0148: what one spent quantum of a free-prompt claim weighs.**
+///
+/// A leaves-era claim weighs `pwu / quanta` a spend, as it always has. A compute-era claim weighs
+/// ONE NETWORK QUANTUM a spend, whatever compute its own quanta carry: its odds already scale with
+/// that compute ([`palw_fp_quantum_receipt_target_v1`]), so its expected weight is
+/// `pooled / MAX × credited`, proportional to the compute it ran and to nothing about its class —
+/// where weighing each spend by its own quantum would square the compute into the weight.
+pub fn palw_fp_spend_weight_v1(state: &PalwChainStateV2, claim: &PalwClaimStateV2, quanta: u32, pricing: &PalwFpPricingV1) -> u128 {
+    if pricing.prices_in_compute(claim) {
+        return pricing.network_quantum(state);
+    }
+    claim.pwu.checked_div(quanta as u64).unwrap_or(0) as u128
+}
+
+/// **ADR-0148: the receipt target one quantum of a free-prompt claim is drawn against.**
+///
+/// Leaves era: the class's own receipt target, as ever. Compute era: the lane's ONE pooled target,
+/// scaled by the compute each of the claim's quanta carries — `pooled × (pwu / quanta) / quantum`,
+/// saturating at certainty. No class has a target of its own there, so no class's registration,
+/// usage or census moves any other class's odds, and a unit of compute has the same odds whichever
+/// model ran it. `None` where the needed target or the floor's row is absent: a missing fact admits
+/// nothing.
+pub fn palw_fp_quantum_receipt_target_v1(
+    state: &PalwChainStateV2,
+    claim: &PalwClaimStateV2,
+    quanta: u32,
+    pricing: &PalwFpPricingV1,
+) -> Option<u128> {
+    if !pricing.prices_in_compute(claim) {
+        return state.receipt_target(&claim.class_id).map(|target| target.target);
+    }
+    let pooled = state.receipt_target(&crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1())?.target;
+    let quantum = pricing.network_quantum(state);
+    if quantum == 0 || quanta == 0 {
+        return None;
+    }
+    let per_quantum = claim.pwu as u128 / quanta as u128;
+    Some(crate::palw_freeprompt_v3::fp_quantum_target_of_compute_v1(pooled, per_quantum, quantum))
+}
+
+/// **ADR-0148: the network's slash price per unit of exposure** — the liveness floor's
+/// `slash_value_per_pwu`. A class's own value is a number its registrant writes, and past the
+/// canonical-work fence no registrant-written number may set how much a claim puts at stake: the
+/// collateral behind a claim of the registrant's own class is the deterrent the outsider seat
+/// (ADR-0147) relies on, and letting the registrant price it would let it price its own fraud.
+pub fn palw_network_slash_value_per_pwu_v1(state: &PalwChainStateV2, base_class_id: &Hash64) -> Option<u64> {
+    state.class(base_class_id).map(|record| record.slash_value_per_pwu)
+}
+
 /// **ADR-0124 Decision 6's unit, as a function of the state** — the dearest exposure pwu among
 /// the `Active`, weight-bearing model classes, never the liveness floor's, and zero where no model
 /// class bears weight. Every claim's work-priced escrow is `escrow × its own pwu / this`, so it is
@@ -3939,21 +4029,21 @@ pub struct PalwClassLaneCertificationV2 {
     pub certified_daa: u64,
 }
 
-/// **What one live free-prompt claim's prompt was** (ADR-0145 §6), for the ONE question the cache
-/// rule asks: is a new prompt an extension of one this bond was already paid for on this class?
+/// **What one free-prompt claim's prompt was** (ADR-0145 §6), for the ONE question the cache rule
+/// asks: has this class already been paid to evaluate a prefix of a new prompt?
 ///
 /// `prefix_root` is [`crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1`] over the claim's
 /// prompt ids — the running commitment, not the flat `prompt_token_ids_hash`, because a flat
 /// digest can only be compared against a prompt of exactly the same length.
 ///
-/// The row lives exactly as long as the claim does: written when the commitment enters the state,
-/// dropped in `write_claim` where the work-id index is dropped. That is deliberate and it is a
-/// narrower window than "paid once, never again" — a prefix whose claim has RETIRED is not
-/// accounted, and so it is credited a second time. Widening it is not a matter of keeping the row:
-/// "one inference, one claim" is already scoped to live claims (`work_ids`), so a durable prefix
-/// ledger would make the cache rule stricter than the duplicate rule it rides beside, which is two
-/// answers to one question. Closing it properly is the receipt's prefix-STATE commitment (ADR-0145
-/// §6), which is a change to the commitment's wire.
+/// **The row outlives its claim, for a bounded time.** It used to be dropped with the claim, which
+/// sold a retired claim's prefill again to whoever re-committed the prompt after the challenge
+/// window. The re-audit made it durable — and durable without bound would put every prompt any
+/// user ever mined into consensus state for ever. So it lives [`PALW_FP_PROMPT_ROW_KEEP_EPOCHS_V1`]
+/// epochs past the epoch it was accepted in (`expires_daa`, epoch-aligned) and is swept at the
+/// first boundary at or past that (`sweep_fp_prompt_rows`). The re-sale that survives is one per
+/// retention window per prefix, by a producer that held the prefix's KV state for the whole of it;
+/// the state the rule costs is the lane's throughput times the window, not its history.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpClaimPromptV1 {
     pub prompt_tokens: u32,
@@ -3965,6 +4055,23 @@ pub struct PalwFpClaimPromptV1 {
     /// [`crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2`]. Bounded by the ruleset's own
     /// `max_prompt_tokens`, which the commitment transaction already carries in full.
     pub prompt_token_ids: Vec<u32>,
+    /// **The first DAA at which the row no longer answers**, epoch-aligned: the start of the epoch
+    /// [`PALW_FP_PROMPT_ROW_KEEP_EPOCHS_V1`] epochs after the one the claim was accepted in. Rows
+    /// are written only past `Params::palw_fp_derived_work`, which is dormant on every preset, so
+    /// no row with the older layout exists anywhere to be read.
+    pub expires_daa: u64,
+}
+
+/// **How many whole epochs a paid prompt row outlives its acceptance epoch** (ADR-0145 §6,
+/// ADR-0148). One hundred, the unit `PALW_FINAL_WORK_EPOCHS_KEPT_V1` already keeps the finalized
+/// work shadow in: longer than any claim's own life on a shipped ruleset by more than an order of
+/// magnitude, so the row always outlives the claim it records.
+pub const PALW_FP_PROMPT_ROW_KEEP_EPOCHS_V1: u64 = 100;
+
+/// The `expires_daa` of a row written at `accepted_daa`.
+pub fn palw_fp_prompt_row_expiry_v1(accepted_daa: u64, epoch_length: u64) -> u64 {
+    let epoch_length = epoch_length.max(1);
+    (accepted_daa / epoch_length).saturating_add(PALW_FP_PROMPT_ROW_KEEP_EPOCHS_V1 + 1).saturating_mul(epoch_length)
 }
 
 /// The most fault vectors one `FamilyCertified` object may carry — the grading work one object
@@ -5165,6 +5272,16 @@ pub enum PalwStateV2Error {
     /// outsider never says `Valid`. `outsider` is `None` when no panel with a first seat is bound.
     #[error("class {class}: claim {claim} is licensed without its outsider seat {outsider:?} answering Valid")]
     LicenceWithoutOutsider { claim: Hash64, class: Hash64, outsider: Option<PalwBondKeyV2> },
+    /// ADR-0148: a free-prompt commitment accepted where the lane prices compute, on a build that
+    /// does not derive the run's work. There is no credited compute to price, and pricing it in
+    /// leaves instead would make a claim the consistency check disagrees with for ever. The bundle
+    /// rule arms the unit and the derivation together, so this is unreachable on a valid ruleset.
+    #[error("claim {claim} of class {class}: the lane prices compute here, and no derivation of the run's work is armed")]
+    FreePromptComputeWithoutDerivation { claim: Hash64, class: Hash64 },
+    /// ADR-0148: the network quantum is the floor's derived draw, and the floor has no registry row
+    /// to read it from — so no free-prompt claim can be priced in compute at this chain point.
+    #[error("claim {claim}: the network quantum is unknown — the floor class holds no registry row")]
+    FreePromptNetworkQuantumUnknown { claim: Hash64 },
     /// ADR-0147: a claim whose panel had to carry an outsider cannot be licensed BY PARTS — the
     /// stratified draw seats no outsider, so a part licence would be the class's own population
     /// judging itself shard by shard. `validate_palw_v2` refuses a build arming the bundle with
@@ -6514,10 +6631,14 @@ impl PalwChainStateV2 {
     /// and it is a change to the commitment's wire. Until it exists the conservative direction is
     /// the one that never pays for compute that may not have happened, because the other direction
     /// is the 62× finding.
-    pub fn fp_claimed_prompt_ids_of(&self, class_id: &Hash64) -> Vec<&[u32]> {
+    ///
+    /// `now_daa` is the block asking: a row whose retention has run out does not answer, whether or
+    /// not the boundary that sweeps it has been folded yet.
+    pub fn fp_claimed_prompt_ids_of(&self, class_id: &Hash64, now_daa: u64) -> Vec<&[u32]> {
         self.fp_claim_prompts
             .range((*class_id, PALW_BOND_KEY_V2_MIN, Hash64::default())..)
             .take_while(|((class, _, _), _)| class == class_id)
+            .filter(|(_, row)| row.expires_daa > now_daa)
             .map(|(_, row)| row.prompt_token_ids.as_slice())
             .collect()
     }
@@ -7152,7 +7273,9 @@ impl PalwChainStateV2 {
                     }
                     // A free-prompt Final licenses; only SPENT quanta weighed blocks.
                     PalwClaimSourceV2::FreePrompt { quanta, spent } => {
-                        let per_quantum = (claim.pwu / (*quanta as u64)) as u128;
+                        // ADR-0148: the spend's own expression, by the claim's era.
+                        let per_quantum =
+                            palw_fp_spend_weight_v1(self, claim, *quanta, &PalwFpPricingV1::of(params, canonical_work_daa));
                         let spent_weight = per_quantum
                             .checked_mul(spent.len() as u128)
                             .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
@@ -7357,20 +7480,26 @@ impl PalwChainStateV2 {
         if work_ids != self.work_ids {
             return Err(PalwStateV2Error::CarriageInconsistent("work-id index differs from the claims".into()));
         }
-        // **ADR-0145 §6: a prompt row may not outlive its claim.** The row is not derivable from
-        // the claim table — a claim record carries no prompt — so unlike the work-id index above
-        // this is a containment check rather than an equality: every row names a live claim of the
-        // class and bond it is filed under. A row that outlived its claim would discount every
-        // later prompt of that bond for as long as the state lived, and it would do it silently,
-        // which is the failure mode a carriage-supplied index is for.
-        for (class_id, bond, claim_id) in self.fp_claim_prompts.keys() {
-            match self.claims.get(claim_id) {
-                Some(claim) if claim.class_id == *class_id && claim.bond == *bond => {}
-                _ => {
-                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
-                        "free-prompt prompt row names claim {claim_id}, which is not a live claim of class {class_id} on this bond"
-                    )));
-                }
+        // **ADR-0145 §6 / ADR-0148: a prompt row outlives its claim, and not its retention.** The
+        // row is not derivable from the claim table — it is deliberately kept past the claim, so a
+        // retired claim's prefill is not sold twice — so this is a containment check: every row is
+        // filed under a class the chain holds, and none has outlived the epoch-aligned expiry the
+        // boundary sweep removes it at. A row past its expiry would discount later prompts of its
+        // class for as long as the state lived, silently, which is the failure a carriage-supplied
+        // index is checked for. (It used to require the row's CLAIM to be live, which the durable
+        // row broke on the first retirement — every node would have refused its own tip.)
+        let now = self.last_point.as_ref().map(|point| point.daa_score);
+        for ((class_id, _, claim_id), row) in &self.fp_claim_prompts {
+            if !self.classes.contains_key(class_id) {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "free-prompt prompt row of claim {claim_id} is filed under class {class_id}, which the chain does not hold"
+                )));
+            }
+            if now.is_some_and(|now| row.expires_daa <= now) {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "free-prompt prompt row of claim {claim_id} expired at {} and was not swept",
+                    row.expires_daa
+                )));
             }
         }
         if open_courts != self.open_courts_by_claim {
@@ -8839,8 +8968,8 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::FpWorkProfile { key, old, new });
     }
 
-    /// **ADR-0145 §6: record (or drop) one live claim's prompt.** Dropped from `write_claim`, where
-    /// the work-id index is dropped, so the two windows are the same one.
+    /// **ADR-0145 §6: record (or drop) one claim's prompt row.** Written with the commitment and
+    /// dropped by `sweep_fp_prompt_rows` when its retention runs out — never with the claim.
     fn write_fp_claim_prompt(&mut self, key: (Hash64, PalwBondKeyV2, Hash64), new: Option<PalwFpClaimPromptV1>) {
         let old = self.state.fp_claim_prompts.get(&key).cloned();
         if old == new {
@@ -8970,6 +9099,49 @@ impl<'a> TransitionBuilder<'a> {
     /// saturated into `u64` because that is the width `palw_exposure_pwu_v2` and the ADR-0124 work
     /// price speak in; the largest shipped class's draw is ~2 × 10^11 MAC-equivalents, four orders
     /// under the ceiling, so the saturation is a type boundary rather than a rule.
+    /// ADR-0148: this fold's free-prompt pricing, from the ruleset and the unit's height.
+    fn fp_pricing(&self) -> PalwFpPricingV1 {
+        PalwFpPricingV1::of(self.params, self.extras.canonical_work_daa)
+    }
+
+    /// **ADR-0148: a compute-priced free-prompt claim's reservation** — its claimed compute in the
+    /// floor's collateral unit (the exposure basis, `base_declared / base_canonical`, the same
+    /// conversion the attempt lane's exposure makes), at the network's slash price. Refused where
+    /// the floor cannot say what either is, rather than reserved at a number nobody derived.
+    fn fp_compute_reserved(&self, pwu: u64, accepted_daa: u64, claim_id: &Hash64) -> Result<u128, PalwStateV2Error> {
+        let basis = self
+            .state
+            .palw_exposure_basis_v1(&self.params.base_class_id, accepted_daa, self.extras.canonical_work_daa)
+            .ok_or(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id })?;
+        let slash = palw_network_slash_value_per_pwu_v1(&self.state, &self.params.base_class_id)
+            .ok_or(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id })?;
+        let normalized =
+            crate::palw_work_target_v1::mul_div_u128(pwu as u128, basis.base_declared as u128, basis.base_canonical as u128);
+        normalized.checked_mul(slash as u128).ok_or(PalwStateV2Error::Overflow("free-prompt compute reserve"))
+    }
+
+    /// **ADR-0148: open the lane's one receipt target**, once — at the first compute-priced
+    /// commitment, from the floor's own receipt target (so a floor quantum keeps the odds it had:
+    /// the network quantum IS one floor quantum's share of the floor's job), clamped to the price
+    /// ceiling ([`crate::palw_freeprompt_v3::fp_pooled_target_ceiling_v1`]) where the chain holds
+    /// a work target. After this only the retarget moves it.
+    fn seed_fp_pooled_receipt_target(&mut self) {
+        let key = crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1();
+        if self.state.receipt_targets.contains_key(&key) {
+            return;
+        }
+        let pricing = self.fp_pricing();
+        let floor =
+            self.state.receipt_targets.get(&self.params.base_class_id).map(|t| t.target).unwrap_or(PALW_RECEIPT_TARGET_SEED_V1);
+        let seed = match self.state.work_target.map(|target| target.work.max(target.floor)) {
+            Some(work) => {
+                floor.min(crate::palw_freeprompt_v3::fp_pooled_target_ceiling_v1(pricing.network_quantum(&self.state), work))
+            }
+            None => floor,
+        };
+        self.write_receipt_target(key, Some(PalwClassTargetV2 { target: seed.max(1) }));
+    }
+
     fn canonical_per_draw(&self, class_id: &Hash64, accepted_daa: u64) -> Option<u64> {
         self.state
             .palw_canonical_per_draw_v1(class_id, accepted_daa, self.extras.canonical_work_daa)
@@ -11111,7 +11283,9 @@ impl<'a> TransitionBuilder<'a> {
                 // `quanta == 0` is unrepresentable (`ZeroQuanta` at creation, and the consistency
                 // check refuses it in every phase), so the `unwrap_or(0)` is a division guard and
                 // not a policy — a claim that reached here with no quanta carried no spend either.
-                let per_quantum = claim.pwu.checked_div(*quanta as u64).unwrap_or(0) as u128;
+                // ADR-0148: the same expression the spend added — one function, so the two eras
+                // retire exactly what they weighed.
+                let per_quantum = palw_fp_spend_weight_v1(&self.state, claim, *quanta, &self.fp_pricing());
                 Some(per_quantum.checked_mul(spent.len() as u128).ok_or(PalwStateV2Error::Overflow("retired free-prompt weight"))?)
             }
             _ => None,
@@ -11463,6 +11637,9 @@ pub fn palw_v2_pre_object_base_v1(
     sweep_court_deadlines(&mut builder, ctx)?;
     apply_artifact_root_ownership_migration(&mut builder);
     apply_class_retargets(&mut builder, parent, ctx)?;
+    // ADR-0145 §6 / ADR-0148: the epoch boundary sweeps the paid-prompt rows whose retention ran
+    // out — before this block's objects, so no commitment here is priced against one.
+    sweep_fp_prompt_rows(&mut builder, parent, ctx);
     apply_work_target_shadow(&mut builder, parent, ctx);
     apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
@@ -11582,6 +11759,9 @@ pub fn apply_palw_transition_v7(
     //     epoch as one span and retargets every share-bearing, unfrozen class against it. Runs
     //     between the sweeps and the objects — a fixed slot, because fixed IS the requirement.
     apply_class_retargets(&mut builder, parent, ctx)?;
+    // ADR-0145 §6 / ADR-0148: the epoch boundary sweeps the paid-prompt rows whose retention ran
+    // out — before this block's objects, so no commitment here is priced against one.
+    sweep_fp_prompt_rows(&mut builder, parent, ctx);
     // ADR-0143 Decision 6: the one-time canonicalisation, before any object of this block is
     // folded — a block that crosses the fence AND founds a line must see the index the migration
     // built, not the empty one it found.
@@ -13597,7 +13777,51 @@ fn apply_class_retargets(
     // `combined > 0` is established above, so at least one lane produced and this cannot be zero.
     let producing_lanes_permille: u32 =
         (if attempt_total > 0 { split } else { 0 }) + (if receipt_total > 0 { 1000 - split } else { 0 });
+    // **ADR-0148: past the canonical-work fence the receipt lane has ONE target.** Every
+    // compute-priced quantum is drawn against the pooled target scaled by its own compute, so what
+    // the lane's slice of the census holds the lane to is that one number, walked on the lane's
+    // WHOLE receipt output — leaves-era spends included, because they are blocks the slice holds
+    // too. The per-class receipt targets are frozen from here: they serve only the leaves-era
+    // claims still draining, and walking them on a census the pooled target also answers to would
+    // be two controllers pulling one lane.
+    //
+    // Clamped at the price ceiling — a quantum never gets better odds than a forward of the same
+    // compute at `W` — which is also what makes easing on a silent epoch safe: silence walks the
+    // pooled target up by the clamp toward the most the network pays for a unit of compute, never
+    // past it.
+    let pooled_key = crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1();
+    let pooled_active = builder.extras.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height)
+        && builder.state.receipt_targets.contains_key(&pooled_key);
+    if pooled_active {
+        let current = builder.state.receipt_targets.get(&pooled_key).map(|t| t.target).unwrap_or(PALW_RECEIPT_TARGET_SEED_V1);
+        let max_factor = builder.params.class_daa_max_factor();
+        let receipt_lane = 1000 - split;
+        let walked = if receipt_lane == 0 {
+            // A ruleset that gives the receipt lane no slice gives the pooled target nothing to be
+            // held to; it stays where it is, under the ceiling.
+            current
+        } else if receipt_total == 0 {
+            current.saturating_mul(max_factor.max(1) as u128)
+        } else {
+            let lane_permille = u16::try_from((receipt_lane * 1000 / producing_lanes_permille).min(1000)).expect("clamped to 1000");
+            let census = crate::palw_class_daa::PalwClassSpanCensusV1 { class_daa_blocks: receipt_total, total_daa_blocks: combined };
+            crate::palw_class_daa::retarget_over_span_v1(current, &census, lane_permille, max_factor)
+                .map_err(|e| PalwStateV2Error::Retarget(e.to_string()))?
+        };
+        let quantum = builder.fp_pricing().network_quantum(&builder.state);
+        let ceiling = match builder.state.work_target.map(|target| target.work.max(target.floor)) {
+            Some(work) if quantum > 0 => crate::palw_freeprompt_v3::fp_pooled_target_ceiling_v1(quantum, work),
+            _ => u128::MAX,
+        };
+        let next = walked.min(ceiling).max(1);
+        if next != current {
+            builder.write_receipt_target(pooled_key, Some(PalwClassTargetV2 { target: next }));
+        }
+    }
     for (lane_permille, counters_are_receipts) in [(split, false), (1000 - split, true)] {
+        if counters_are_receipts && pooled_active {
+            continue;
+        }
         if lane_permille == 0 {
             // A lane the split allots nothing measures nothing (the pure-attempt configuration's
             // receipt arm, and only that on a live network — FP-05 refuses interior zeros).
@@ -13730,6 +13954,27 @@ fn apply_class_retargets(
         }
     }
     Ok(())
+}
+
+/// **ADR-0145 §6 / ADR-0148: drop the paid-prompt rows whose retention has run out**, at the first
+/// block of an epoch — the only blocks at which an epoch-aligned expiry can have been reached. A
+/// scan of the rows, once an epoch; the rows are bounded by the lane's throughput over the
+/// retention window, which is what the window exists to bound. Every removal is a delta entry, so a
+/// reorg across the boundary restores exactly what it swept.
+fn sweep_fp_prompt_rows(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+    if builder.state.fp_claim_prompts.is_empty() {
+        return;
+    }
+    let Some(last) = &parent.last_point else { return };
+    let epoch_length = builder.params.epoch_length.max(1);
+    if ctx.daa_score / epoch_length <= last.daa_score / epoch_length {
+        return;
+    }
+    let expired: Vec<(Hash64, PalwBondKeyV2, Hash64)> =
+        builder.state.fp_claim_prompts.iter().filter(|(_, row)| row.expires_daa <= ctx.daa_score).map(|(key, _)| *key).collect();
+    for key in expired {
+        builder.write_fp_claim_prompt(key, None);
+    }
 }
 
 fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
@@ -14885,7 +15130,7 @@ fn apply_object(
                     // profile is not a re-drill.
                     let already = builder.state.fp_certified_classes.contains_key(class_id);
                     let publishing_profile =
-                        builder.extras.fp_derived_work_active && !builder.state.fp_work_profiles.contains_key(class_id);
+                        builder.extras.fp_derived_work_at(ctx.daa_score) && !builder.state.fp_work_profiles.contains_key(class_id);
                     if already && !publishing_profile {
                         return Err(PalwStateV2Error::ClassLaneAlreadyCertified { class: *class_id, lane: *lane });
                     }
@@ -14895,7 +15140,7 @@ fn apply_object(
                             Some(PalwClassLaneCertificationV2 { family_digest: covering, certified_daa: ctx.daa_score }),
                         );
                     }
-                    if builder.extras.fp_derived_work_active {
+                    if builder.extras.fp_derived_work_at(ctx.daa_score) {
                         builder.write_fp_work_profile(*class_id, Some(profile.clone()));
                     }
                 }
@@ -15997,7 +16242,7 @@ fn apply_object(
             // The refusals are BY NAME and every one of them is a thing a producer can check
             // before it spends an inference: the class has published a graph, the run's leaves are
             // the graph's answer, and the prompt is not one the chain already bought.
-            let derived = if builder.extras.fp_derived_work_active {
+            let derived = if builder.extras.fp_derived_work_at(ctx.daa_score) {
                 let profile = builder
                     .state
                     .fp_work_profiles
@@ -16030,7 +16275,7 @@ fn apply_object(
                 // ruleset (the same reason `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` exists at all).
                 let ladder =
                     builder.state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
-                let already_paid = builder.state.fp_claimed_prompt_ids_of(class_id);
+                let already_paid = builder.state.fp_claimed_prompt_ids_of(class_id, ctx.daa_score);
                 let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid);
                 let work =
                     crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, *prompt_tokens, *decode_tokens_executed, accounted, ladder)
@@ -16046,20 +16291,87 @@ fn apply_object(
                         derived: work.total_leaves,
                     });
                 }
-                Some(work)
+                Some((work, profile))
             } else {
                 None
             };
-            let credited = match &derived {
-                Some(work) => work.credited_leaves,
-                None => crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, *work_leaves, 0),
+            // **ADR-0148: past the canonical-work fence the lane prices COMPUTE, in the network's
+            // unit, the same for every class.**
+            //
+            // Below it three things priced a claim, and none of them was the compute it ran: the
+            // credit was step LEAVES, which count activations while cost counts weights (the audit's
+            // F5 — a 6.8x spread, monotone in model width, so the widest model was paid least per unit
+            // of arithmetic); the quantum was a fraction of the class's own DECLARED canonical job, so
+            // the registrant set how much work one lottery entry stood for; and the quanta were capped
+            // at `fp_max_quanta_per_receipt`, so every long prompt and every wide model was paid a
+            // ceiling. The receipt odds were then a per-class target retargeted on the class's own
+            // census, which made the price of a unit of compute a function of how much the class was
+            // used.
+            //
+            // Past it: the credit is the canonical work of the NEW positions (the same derivation the
+            // attempt lane's weight comes from), the quantum is one network quantum derived from the
+            // floor's graph, the quanta scale the ODDS rather than cap the credit, and the receipt odds
+            // are one pooled target for every class (`palw_fp_quantum_receipt_target_v1`). The
+            // exposure is the claimed compute in the floor's collateral unit at the network's slash
+            // price, so no registrant-written number reaches the reservation either.
+            //
+            // Compute pricing needs the derivation: a build that armed the unit without it would have
+            // no credited compute to price, and the bundle rule makes that combination unarmable.
+            // Refused by name rather than priced in leaves, because the consistency check prices a
+            // claim's weight by its era and a leaves-priced claim of the compute era would be a claim
+            // it disagreed with forever.
+            let pricing = builder.fp_pricing();
+            let in_compute = pricing.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height);
+            let (quanta, pwu, reserved) = if in_compute {
+                let Some((work, profile)) = &derived else {
+                    return Err(PalwStateV2Error::FreePromptComputeWithoutDerivation { claim: *claim_id, class: *class_id });
+                };
+                let credited = crate::palw_freeprompt_v3::fp_derive_credited_compute_v1(
+                    profile,
+                    *prompt_tokens,
+                    *decode_tokens_executed,
+                    work.accounted_prefix_tokens,
+                )
+                .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
+                    claim: *claim_id,
+                    class: *class_id,
+                    why: e.to_string(),
+                })?;
+                let quantum = pricing.network_quantum(&builder.state);
+                if quantum == 0 {
+                    return Err(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id });
+                }
+                let quanta = crate::palw_freeprompt_v3::fp_quanta_of_compute_v1(credited, quantum);
+                if quanta == 0 {
+                    return Err(PalwStateV2Error::ZeroQuanta);
+                }
+                // Uniform quanta, as the consistency check and the validator crate both demand: the
+                // remainder of `credited / quanta` — under one MAC-equivalent per quantum — is dropped.
+                let per_quantum = credited / quanta as u128;
+                let pwu = u64::try_from(per_quantum.saturating_mul(quanta as u128))
+                    .map_err(|_| PalwStateV2Error::Overflow("free-prompt credited compute"))?;
+                let reserved = builder.fp_compute_reserved(pwu, ctx.daa_score, claim_id)?;
+                (quanta, pwu, reserved)
+            } else {
+                let credited = match &derived {
+                    Some((work, _)) => work.credited_leaves,
+                    None => crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, *work_leaves, 0),
+                };
+                let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
+                let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(credited, quantum, cap);
+                if quanta == 0 {
+                    return Err(PalwStateV2Error::ZeroQuanta);
+                }
+                let pwu = (quanta as u64).checked_mul(quantum).ok_or(PalwStateV2Error::Overflow("free-prompt pwu"))?;
+                // **Exposure is the work claimed.** An attempt's `pwu` is statistical (expected draws
+                // × one inference), so its exposure is the one inference the block commits to; a
+                // free-prompt claim's `pwu` IS its leaves (ADR-0074 Decision 5), so its exposure is
+                // exactly that — neither a whole canonical job for a small user job nor one job for a
+                // claim the size of eight.
+                let reserved =
+                    (pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
+                (quanta, pwu, reserved)
             };
-            let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
-            let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(credited, quantum, cap);
-            if quanta == 0 {
-                return Err(PalwStateV2Error::ZeroQuanta);
-            }
-            let pwu = (quanta as u64).checked_mul(quantum).ok_or(PalwStateV2Error::Overflow("free-prompt pwu"))?;
             // **Fail-closed on the one field the court cannot do without (audit C3).** A claim
             // carrying no execution root has nothing a refutation's binding can be tested
             // against; the shipped worker commits the binding's own root, so what this refuses
@@ -16074,13 +16386,6 @@ fn apply_object(
             if let Some(holder) = builder.state.work_ids.get(&work_id) {
                 return Err(PalwStateV2Error::DuplicateWork { work_id, claim: *holder });
             }
-            // **Exposure is the work claimed.** An attempt's `pwu` is statistical (expected draws
-            // × one inference), so its exposure is the one inference the block commits to; a
-            // free-prompt claim's `pwu` IS its leaves (ADR-0074 Decision 5), so its exposure is
-            // exactly that — neither a whole canonical job for a small user job nor one job for a
-            // claim the size of eight.
-            let reserved =
-                (pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
             // **Admission item 8, on this lane** (closes the free-prompt half of P0-10): what this
             // bond already backs — live claims and its own registrations — plus what this claim
             // would reserve, against collateral × ratio. A commitment meets no admission list (it
@@ -16172,12 +16477,17 @@ fn apply_object(
             // was never there. Only past the fence: below it the map stays empty, which is what
             // keeps the state root where it was.
             if derived.is_some() {
+                // ADR-0148: the first compute-priced commitment opens the lane's one target.
+                if in_compute {
+                    builder.seed_fp_pooled_receipt_target();
+                }
                 builder.write_fp_claim_prompt(
                     (*class_id, *bond, *claim_id),
                     Some(PalwFpClaimPromptV1 {
                         prompt_tokens: *prompt_tokens,
                         prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
                         prompt_token_ids: prompt_token_ids.clone(),
+                        expires_daa: palw_fp_prompt_row_expiry_v1(ctx.daa_score, builder.params.epoch_length),
                     }),
                 );
             }
@@ -16222,7 +16532,12 @@ fn apply_receipt_spend(
     if spent.contains(&spend.quantum_index) {
         return Err(PalwStateV2Error::QuantumAlreadySpent { claim: claim_id, index: spend.quantum_index });
     }
-    let per_quantum = claim.pwu / (*quanta as u64);
+    // ADR-0148: a compute-era claim weighs one network quantum a spend and counts in the lane's
+    // pooled census; a leaves-era claim weighs `pwu / quanta` and counts in its class's, as ever.
+    let pricing = builder.fp_pricing();
+    let per_quantum = palw_fp_spend_weight_v1(&builder.state, &claim, *quanta, &pricing);
+    let census_key =
+        if pricing.prices_in_compute(&claim) { crate::palw_freeprompt_v3::fp_pooled_receipt_key_v1() } else { claim.class_id };
     // **ADR-0069 Decision 7 is deliberately NOT applied here, and this is an open question rather
     // than an oversight.**
     //
@@ -16238,8 +16553,7 @@ fn apply_receipt_spend(
     // The candidate rule, if the FP lane wants one, is `fp_certified_classes` membership at this
     // block's chain point. That is a different decision with a different proof obligation and it
     // belongs to whoever owns ADR-0074/0075, not to this remediation.
-    builder.state.safe_weight =
-        builder.state.safe_weight.checked_add(per_quantum as u128).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+    builder.state.safe_weight = builder.state.safe_weight.checked_add(per_quantum).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     let mut updated = claim.clone();
     let PalwClaimSourceV2::FreePrompt { spent: ledger, .. } = &mut updated.source else { unreachable!("matched above") };
     ledger.insert(spend.quantum_index);
@@ -16247,22 +16561,22 @@ fn apply_receipt_spend(
 
     // Receipt-lane production census — what the receipt retarget measures.
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
-    let previous = builder.state.receipt_epoch_counters.get(&claim.class_id).cloned();
+    let previous = builder.state.receipt_epoch_counters.get(&census_key).cloned();
     let counter = match previous {
         Some(counter) if counter.epoch_index == epoch_index => PalwEpochCounterV2 {
             epoch_index,
             produced_pwu: counter
                 .produced_pwu
-                .checked_add(per_quantum as u128)
+                .checked_add(per_quantum)
                 .ok_or(PalwStateV2Error::Overflow("receipt epoch produced_pwu"))?,
             produced_blocks: counter
                 .produced_blocks
                 .checked_add(1)
                 .ok_or(PalwStateV2Error::Overflow("receipt epoch produced_blocks"))?,
         },
-        _ => PalwEpochCounterV2 { epoch_index, produced_pwu: per_quantum as u128, produced_blocks: 1 },
+        _ => PalwEpochCounterV2 { epoch_index, produced_pwu: per_quantum, produced_blocks: 1 },
     };
-    builder.write_receipt_epoch(claim.class_id, Some(counter));
+    builder.write_receipt_epoch(census_key, Some(counter));
     Ok(())
 }
 
@@ -16356,12 +16670,15 @@ pub struct PalwTransitionExtrasV1 {
     /// `None` by `Default` and on every preset, so a caller that does not set it keeps the
     /// behaviour every existing row was written under.
     pub admission_independence_daa: Option<u64>,
-    /// **ADR-0145 §5/§6: `Params::palw_fp_derived_work` resolved at the block's DAA.** Past it a
-    /// free-prompt lane certification records the class's graph, a class already certified may
-    /// publish one, and a free-prompt commitment is priced on work the transition DERIVES from
-    /// that graph — refused if it disagrees with the declaration, and credited for the new tokens
-    /// only. `false` by `Default`, which is the lane exactly as every accepted claim was priced.
-    pub fp_derived_work_active: bool,
+    /// **ADR-0145 §5/§6: `Params::palw_fp_derived_work`'s HEIGHT.** Past it a free-prompt lane
+    /// certification records the class's graph, a class already certified may publish one, and a
+    /// free-prompt commitment is priced on work the transition DERIVES from that graph — refused if
+    /// it disagrees with the declaration, and credited for the new tokens only. Every rule it
+    /// governs is a block-level one, asked through [`Self::fp_derived_work_at`]; it is a height
+    /// rather than a flag so the extras describe the ruleset once, the way the other two bundle
+    /// fences are described. `None` by `Default`, which is the lane exactly as every accepted claim
+    /// was priced.
+    pub fp_derived_work_daa: Option<u64>,
     /// ADR-0132 S: `Params::palw_single_lottery` resolved at the block's DAA. Past it the lottery
     /// reads `max(W₀, W)` — the chain's stepped work target — and the network draw is gone.
     pub single_lottery_active: bool,
@@ -16509,6 +16826,11 @@ impl PalwTransitionExtrasV1 {
     /// the height against the claim instead — see [`Self::admission_independence_daa`].
     pub fn admission_independence_at(&self, daa_score: u64) -> bool {
         self.admission_independence_daa.is_some_and(|height| daa_score >= height)
+    }
+
+    /// Whether ADR-0145 §5/§6's derivation governs the free-prompt lane at `daa_score`.
+    pub fn fp_derived_work_at(&self, daa_score: u64) -> bool {
+        self.fp_derived_work_daa.is_some_and(|height| daa_score >= height)
     }
 
     /// The network's genesis prompt-ids form, from [`Self::prompt_ids_merkle`].
@@ -29272,7 +29594,7 @@ pub(crate) mod tests {
     }
 
     fn derived_work_armed() -> PalwTransitionExtrasV1 {
-        PalwTransitionExtrasV1 { fp_derived_work_active: true, ..Default::default() }
+        PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), ..Default::default() }
     }
 
     /// A free-prompt commitment of the floor's class carrying a REAL prompt and whatever leaf
@@ -29398,6 +29720,477 @@ pub(crate) mod tests {
             class_id: class,
             lane: PalwCertifiedLaneV1::FreePrompt,
             profile: Box::new(derived_profile()),
+        }
+    }
+
+    /// **ADR-0148: past the canonical-work fence the free-prompt lane prices COMPUTE, and prices it
+    /// the same for every class.** The 2026-09-19 audit's F5 on the lane ADR-0144 makes the
+    /// product, and the rest of F1 on it: below the fence a free-prompt claim was paid in step
+    /// LEAVES (activations, not weights — the 6.8x spread, monotone in model width), in quanta the
+    /// class's registrant sized, capped at 64 whatever the run cost, against a receipt target its
+    /// own class's census walked.
+    mod fp_compute_pricing {
+        use super::*;
+        use crate::palw_freeprompt_v3::{
+            PALW_FP_STRUCTURAL_WORK_LEAVES_CAP, fp_class_quantum_leaves_v1, fp_derive_credited_compute_v1, fp_derive_work_v1,
+            fp_network_quantum_v1, fp_pooled_receipt_key_v1, fp_pooled_target_ceiling_v1, fp_quanta_of_compute_v1, fp_quanta_v3,
+            fp_quantum_target_of_compute_v1,
+        };
+        use crate::palw_model_registry_v1::{PalwModelLifecycleRowV1, PalwModelLifecycleV1, PalwModelWorkV1};
+
+        /// The floor's derived draw: its attempt job's economic compute, from its own graph and its
+        /// own canonical job — the number the registry's row carries for it.
+        fn floor_draw() -> u128 {
+            let floor = derived_profile();
+            let (prefill, decode) = crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL;
+            let canonical = crate::palw_base0_profile::rc_job_context(&floor, prefill, decode);
+            crate::palw_economic_compute_v1::palw_attempt_economic_compute_v1(
+                &floor,
+                &canonical,
+                true,
+                &crate::palw_economic_compute_v1::PALW_ECONOMIC_COST_TABLE_V1,
+            )
+            .expect("the floor's draw prices")
+        }
+
+        /// The row the registry opens for the floor at its first boundary, inserted directly: a test
+        /// of the lane should not have to fold the registry to be handed the floor's derived draw.
+        fn with_floor_row(mut state: PalwChainStateV2) -> PalwChainStateV2 {
+            let draw = floor_draw();
+            state.model_lifecycles.insert(
+                h64(1),
+                PalwModelLifecycleRowV1 {
+                    state: PalwModelLifecycleV1::Active,
+                    work: PalwModelWorkV1 {
+                        verification_ccu: draw,
+                        economic_ccu_per_claim: draw,
+                        ops_supported: true,
+                        ..Default::default()
+                    },
+                    profile: Default::default(),
+                    since_span: 0,
+                    probes_passed: 0,
+                    probes_failed: 0,
+                    probes_passed_this_span: 0,
+                    probes_failed_this_span: 0,
+                    ready_seats: 0,
+                    inflight_claims: 0,
+                    utilization_permille: 0,
+                    admission_milli: 0,
+                    cap_utilization_permille: 0,
+                    priced_share_permille: 0,
+                },
+            );
+            state
+        }
+
+        /// The bundle's two halves the lane reads: the unit (canonical work) and the derivation.
+        fn compute_era() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), canonical_work_daa: Some(0), ..Default::default() }
+        }
+
+        /// The leaves era of the same derivation — the lane as ADR-0145 left it.
+        fn leaves_era() -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), ..Default::default() }
+        }
+
+        fn pricing() -> PalwFpPricingV1 {
+            PalwFpPricingV1::of(&derived_work_chain().0, Some(0))
+        }
+
+        /// The floor's graph re-tiled: every node's `tile_len` moved, so a different class id and a
+        /// different LEAF count for any run — and identical arithmetic. The audit's 101x lever.
+        fn retiled() -> crate::palw_step::PalwShapeProfileV3 {
+            let mut profile = derived_profile();
+            for table in [&mut profile.pre_nodes, &mut profile.gdn_nodes, &mut profile.attn_nodes, &mut profile.post_nodes] {
+                for node in table.iter_mut() {
+                    node.tile_len = node.tile_len.saturating_mul(4).min(crate::palw_step::PALW_STEP_MAX_TILE_LEN);
+                }
+            }
+            profile.validate_shape().expect("a re-tiling of a legal profile is legal");
+            assert_ne!(profile.shape_profile_id(), derived_profile().shape_profile_id(), "a different class");
+            profile
+        }
+
+        fn commit(class: Hash64, claim_word: u64, bond: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
+            PalwConsensusObjectV2::FreePromptCommitted {
+                claim: h64(claim_word),
+                class_id: class,
+                bond: bond_key(bond),
+                executor_pubkey: vec![6 + bond as u8; 4],
+                work_leaves,
+                prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(prompt),
+                prompt_tokens: prompt.len() as u32,
+                prompt_token_ids: prompt.to_vec(),
+                decode_tokens_executed: decode,
+                trace_root: h64(41),
+                output_root: h64(42),
+                execution_root: h64(43),
+                trace_chunk_count: 4,
+                trace_retention_daa: 999_999,
+            }
+        }
+
+        fn honest_leaves(profile: &crate::palw_step::PalwShapeProfileV3, prompt: &[u32], decode: u32) -> u64 {
+            fp_derive_work_v1(profile, prompt.len() as u32, decode, 0, PALW_FP_STRUCTURAL_WORK_LEAVES_CAP)
+                .expect("the run derives")
+                .total_leaves
+        }
+
+        /// The derived-work chain, the floor's row, and TWO free-prompt classes of one arithmetic:
+        /// the floor's graph as the fixture registers it (8,000 leaves declared), and its re-tiling
+        /// registered by somebody who declared a tenth of the job. (The slash value cannot differ:
+        /// registration already refuses any but the floor's, `SlashValueNotTheNetworks`.) Both
+        /// lane-certified, so both publish their graph.
+        fn two_classes(extras: &PalwTransitionExtrasV1) -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Hash64) {
+            let (p, s2, plain, _) = derived_work_chain();
+            let s2 = with_floor_row(s2);
+            let other = retiled();
+            let registered = PalwConsensusObjectV2::ClassRegistered {
+                class_id: other.shape_profile_id(),
+                artifact_root: h64(13),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(800),
+                initial_target: u128::MAX / 2,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            };
+            let certified = PalwConsensusObjectV2::ClassLaneCertified {
+                class_id: other.shape_profile_id(),
+                lane: PalwCertifiedLaneV1::FreePrompt,
+                profile: Box::new(other.clone()),
+            };
+            let (s3, _) = apply_derived(&s2, &p, &ctx(3, 102, 3), &[registered, lane_certification(plain), certified], extras)
+                .expect("both classes register and certify");
+            (p, s3, plain, other.shape_profile_id())
+        }
+
+        /// **The property F5 names, stated over three real graphs.** One run's expected receipt wins
+        /// per unit of compute, past the fence, for the floor, the shipped dense row and the shipped
+        /// hybrid — and the same quantity under the leaves-era pricing, which is the bias measured.
+        #[test]
+        fn a_unit_of_compute_has_the_same_odds_whichever_model_ran_it() {
+            let floor = derived_profile();
+            let dense = crate::palw_context_ladder::palw_a16_context_row_profile_v5(512).expect("the dense row");
+            let hybrid = crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                crate::palw_qwen36_profile::QWEN36_35B_A3B,
+            ))
+            .expect("the hybrid");
+            let quantum = fp_network_quantum_v1(floor_draw(), 8);
+            let pooled = u128::MAX / 4_096;
+            let two_128 = 2f64.powi(128);
+            let (prompt, decode) = (4u32, 3u32);
+            let mut compute_era: Vec<(&str, f64)> = Vec::new();
+            let mut leaves_era: Vec<(&str, f64)> = Vec::new();
+            for (name, profile, canonical) in [
+                ("floor", &floor, crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL),
+                ("dense", &dense, crate::palw_qwen25_profile::qwen25_a16_graph_v5_canonical_v1()),
+                ("hybrid", &hybrid, crate::palw_qwen36_profile::QWEN36_RC_CANONICAL),
+            ] {
+                let credited = fp_derive_credited_compute_v1(profile, prompt, decode, 0).expect("the run's compute derives");
+                let quanta = fp_quanta_of_compute_v1(credited, quantum);
+                assert!(quanta > 0, "{name}: a run of a real model is at least one network quantum");
+                let per_quantum = credited / quanta as u128;
+                let target = fp_quantum_target_of_compute_v1(pooled, per_quantum, quantum);
+                compute_era.push((name, quanta as f64 * target as f64 / two_128 / credited as f64));
+
+                // The leaves era: the class's own declared job over eight, capped at 64 quanta.
+                let job = crate::palw_base0_profile::rc_job_context(profile, canonical.0, canonical.1);
+                let declared = crate::palw_step::step_leaf_count_capped_v1(profile, &job, u64::MAX).expect("the canonical job counts");
+                let leaves = fp_derive_work_v1(profile, prompt, decode, 0, u64::MAX).expect("the run counts").credited_leaves;
+                let leaves_quanta = fp_quanta_v3(leaves, fp_class_quantum_leaves_v1(declared, 8), 64);
+                leaves_era.push((name, leaves_quanta as f64 * pooled as f64 / two_128 / credited as f64));
+            }
+            let spread = |rows: &[(&str, f64)]| {
+                let max = rows.iter().map(|(_, v)| *v).fold(f64::MIN, f64::max);
+                let min = rows.iter().map(|(_, v)| *v).fold(f64::MAX, f64::min);
+                max / min
+            };
+            assert!(
+                spread(&compute_era) < 1.002,
+                "past the fence one unit of compute is one unit of odds, whatever the model: {compute_era:?}"
+            );
+            assert!(
+                spread(&leaves_era) > 2.0,
+                "the leaves era it replaces paid the same compute differently by model — the bias, measured: {leaves_era:?}"
+            );
+        }
+
+        /// **A compute-era claim reads no number its registrant wrote.** Two classes of one
+        /// arithmetic, one registered by somebody who declared a tenth of the canonical job and
+        /// re-tiled the graph so every leaf count moves; the same prompt
+        /// committed to both. In the leaves era they are paid differently. In the compute era the
+        /// quanta, the credited compute and the reservation are byte-identical.
+        #[test]
+        fn a_compute_era_claim_reads_no_number_its_registrant_wrote() {
+            let prompt: Vec<u32> = (1..=6).collect();
+            let decode = 4u32;
+            let other_profile = retiled();
+            let facts = |state: &PalwChainStateV2, word: u64| {
+                let claim = state.claim(&h64(word)).expect("the commitment is a claim").clone();
+                let PalwClaimSourceV2::FreePrompt { quanta, .. } = claim.source else { unreachable!("a free-prompt claim") };
+                (quanta, claim.pwu, claim.reserved)
+            };
+            let fold_both = |extras: &PalwTransitionExtrasV1| {
+                let (p, s3, plain, other) = two_classes(extras);
+                let objects = [
+                    commit(plain, 0xA1, 1, &prompt, decode, honest_leaves(&derived_profile(), &prompt, decode)),
+                    commit(other, 0xA2, 1, &prompt, decode, honest_leaves(&other_profile, &prompt, decode)),
+                ];
+                let (s4, _) = apply_derived(&s3, &p, &ctx(4, 103, 4), &objects, extras).expect("both commitments are admitted");
+                (facts(&s4, 0xA1), facts(&s4, 0xA2), s4)
+            };
+
+            let (plain_leaves, other_leaves, _) = fold_both(&leaves_era());
+            assert_ne!(
+                plain_leaves, other_leaves,
+                "the leaves era: a registrant's tiling and declarations price the same run differently"
+            );
+
+            let (plain_compute, other_compute, state) = fold_both(&compute_era());
+            assert_eq!(plain_compute, other_compute, "the compute era: identical quanta, credited compute and reservation");
+            let (quanta, pwu, reserved) = plain_compute;
+            let credited = fp_derive_credited_compute_v1(&derived_profile(), prompt.len() as u32, decode, 0).unwrap();
+            let quantum = pricing().network_quantum(&state);
+            assert_eq!(quantum, fp_network_quantum_v1(floor_draw(), 8), "the network quantum is the floor's draw over eight");
+            assert_eq!(quanta, fp_quanta_of_compute_v1(credited, quantum));
+            assert_eq!(pwu as u128, (credited / quanta as u128) * quanta as u128, "uniform quanta of the credited compute");
+            // In the floor's collateral unit at the network's slash price (the floor's five).
+            let normalized = crate::palw_work_target_v1::mul_div_u128(pwu as u128, 160, floor_draw());
+            assert_eq!(reserved, normalized * 5);
+        }
+
+        /// **The lane has one receipt target.** The first compute-priced commitment opens it from
+        /// the floor's own; every class's quanta draw against it, scaled by the compute they carry;
+        /// and a registration after the fact moves nobody's odds.
+        #[test]
+        fn the_lane_has_one_receipt_target_and_a_registration_moves_nobodys_odds() {
+            let prompt: Vec<u32> = (1..=6).collect();
+            let decode = 4u32;
+            let other_profile = retiled();
+            let (p, s3, plain, other) = two_classes(&compute_era());
+            assert!(s3.receipt_target(&fp_pooled_receipt_key_v1()).is_none(), "nothing opened it yet");
+            let class_targets_before: Vec<u128> = [plain, other].iter().map(|c| s3.receipt_target(c).unwrap().target).collect();
+            let objects = [
+                commit(plain, 0xB1, 1, &prompt, decode, honest_leaves(&derived_profile(), &prompt, decode)),
+                commit(other, 0xB2, 2, &prompt, decode, honest_leaves(&other_profile, &prompt, decode)),
+            ];
+            let (s4, _) = apply_derived(&s3, &p, &ctx(4, 103, 4), &objects, &compute_era()).expect("admitted");
+            let pooled = s4.receipt_target(&fp_pooled_receipt_key_v1()).expect("the first compute-priced commitment opened it").target;
+            assert_eq!(pooled, s3.receipt_target(&h64(1)).unwrap().target, "seeded from the floor's receipt target");
+            let class_targets_after: Vec<u128> = [plain, other].iter().map(|c| s4.receipt_target(c).unwrap().target).collect();
+            assert_eq!(class_targets_before, class_targets_after, "the per-class targets are not what the compute era draws against");
+
+            let target_of = |state: &PalwChainStateV2, word: u64| {
+                let claim = state.claim(&h64(word)).unwrap();
+                let PalwClaimSourceV2::FreePrompt { quanta, .. } = claim.source else { unreachable!() };
+                palw_fp_quantum_receipt_target_v1(state, claim, quanta, &pricing()).expect("a compute-era claim has a target")
+            };
+            let (a, b) = (target_of(&s4, 0xB1), target_of(&s4, 0xB2));
+            assert_eq!(a, b, "one unit of compute, one odds, across classes");
+            let claim = s4.claim(&h64(0xB1)).unwrap();
+            let PalwClaimSourceV2::FreePrompt { quanta, .. } = claim.source else { unreachable!() };
+            assert_eq!(
+                a,
+                fp_quantum_target_of_compute_v1(pooled, claim.pwu as u128 / quanta as u128, pricing().network_quantum(&s4)),
+                "the pooled target scaled by the compute one quantum carries"
+            );
+
+            // A stranger registers a class declaring an enormous job: nobody's odds move.
+            let stranger = PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(0x5717),
+                artifact_root: h64(14),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(u64::MAX / 4),
+                initial_target: 1,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            };
+            let (s5, _) = apply_derived(&s4, &p, &ctx(5, 104, 5), &[stranger], &compute_era()).expect("a registration lands");
+            assert_eq!(s5.receipt_target(&fp_pooled_receipt_key_v1()).unwrap().target, pooled);
+            assert_eq!((target_of(&s5, 0xB1), target_of(&s5, 0xB2)), (a, b), "and no claim's odds");
+        }
+
+        /// **A spend weighs one network quantum, counts in the lane's census, and retires what it
+        /// weighed** — through the fold and both consistency checks, so the running totals and their
+        /// re-derivation agree about the new era.
+        #[test]
+        fn a_spend_weighs_one_network_quantum_and_retires_exactly_that() {
+            let prompt: Vec<u32> = (1..=6).collect();
+            let decode = 4u32;
+            let extras = compute_era();
+            let (p, s3, plain, _) = two_classes(&extras);
+            let checked = |state: &PalwChainStateV2| {
+                state.assert_internal_consistency_v3(&p, true, Some(0)).expect("the re-derivation agrees with the running totals");
+                state.assert_deadline_consistency(&p).expect("deadlines agree");
+            };
+            let fold =
+                |parent: &PalwChainStateV2, c: PalwBlockContextV2, objects: &[PalwConsensusObjectV2], work: PalwBlockWorkV3<'_>| {
+                    let (state, _, _) = apply_palw_transition_v7(
+                        parent,
+                        &p,
+                        None,
+                        &c,
+                        objects,
+                        work,
+                        &[],
+                        Hash64::default(),
+                        false,
+                        false,
+                        true,
+                        false,
+                        &extras,
+                    )
+                    .expect("the block folds");
+                    checked(&state);
+                    state
+                };
+            let s4 = fold(
+                &s3,
+                ctx(4, 103, 4),
+                &[commit(plain, 0xC1, 1, &prompt, decode, honest_leaves(&derived_profile(), &prompt, decode))],
+                PalwBlockWorkV3::None,
+            );
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+            let s5 = fold(
+                &s4,
+                ctx(5, 104, 5),
+                &[PalwConsensusObjectV2::PanelBound { claim: h64(0xC1), anchor: h64(77), seats }],
+                PalwBlockWorkV3::None,
+            );
+            let s6 = fold(
+                &s5,
+                ctx(6, 105, 6),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xC1), receipts: vec![seat_receipt(bond_key(2), true)] }],
+                PalwBlockWorkV3::None,
+            );
+            let s7 = fold(&s6, ctx(7, 126, 7), &[], PalwBlockWorkV3::None);
+            assert!(matches!(s7.claim(&h64(0xC1)).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the claim certifies");
+            let before = s7.safe_weight();
+
+            let spend = fp_spend(0xC1, 0);
+            let s8 = fold(&s7, ctx(8, 130, 8), &[], PalwBlockWorkV3::ReceiptSpend(&spend));
+            let quantum = pricing().network_quantum(&s8);
+            assert_eq!(s8.safe_weight() - before, quantum, "one spend weighs one network quantum");
+            let census = s8.receipt_epoch_counter(&fp_pooled_receipt_key_v1()).expect("counted in the lane's census");
+            assert_eq!((census.produced_blocks, census.produced_pwu), (1, quantum));
+            assert!(s8.receipt_epoch_counter(&plain).is_none(), "not in the class's own");
+
+            // Past retirement: the weight moves to `retired_safe_weight`, exactly what it added.
+            let s9 = fold(&s8, ctx(9, 400, 9), &[], PalwBlockWorkV3::None);
+            assert!(s9.claim(&h64(0xC1)).is_none(), "retired");
+            assert_eq!(s9.safe_weight(), s8.safe_weight(), "retirement moves weight, it does not remove it");
+            assert_eq!(s9.retired_safe_weight() - s8.retired_safe_weight(), quantum);
+        }
+
+        /// **A paid prompt row outlives its claim, for exactly its retention, and a reorg across the
+        /// sweep restores it.** The row made durable by the re-audit is what keeps a retired claim's
+        /// prefill from being sold again; kept without bound it would put every prompt ever mined
+        /// into consensus state. So: the row survives the claim's retirement (and the consistency
+        /// check accepts it — the check used to demand a LIVE claim, which the durable row broke on
+        /// the first retirement), a replay inside the window is credited its generation only, the
+        /// first boundary past the expiry sweeps it, a replay after that is credited in full, and
+        /// reverting the sweeping block's delta puts the row back byte for byte.
+        #[test]
+        fn a_paid_prompt_row_outlives_its_claim_for_its_retention_and_no_longer() {
+            let prompt: Vec<u32> = (1..=6).collect();
+            let decode = 4u32;
+            let extras = compute_era();
+            let (p, s3, plain, _) = two_classes(&extras);
+            let checked = |state: &PalwChainStateV2| {
+                state.assert_internal_consistency_v3(&p, true, Some(0)).expect("consistent");
+            };
+            let fold = |parent: &PalwChainStateV2, c: PalwBlockContextV2, objects: &[PalwConsensusObjectV2]| {
+                let (state, delta) = apply_derived(parent, &p, &c, objects, &extras).expect("the block folds");
+                checked(&state);
+                (state, delta)
+            };
+            let first = commit(plain, 0xD1, 1, &prompt, decode, honest_leaves(&derived_profile(), &prompt, decode));
+            let (s4, _) = fold(&s3, ctx(4, 103, 4), &[first]);
+            let full = s4.claim(&h64(0xD1)).unwrap().pwu;
+            let expiry = palw_fp_prompt_row_expiry_v1(103, p.epoch_length());
+            assert_eq!(expiry, 101 * p.epoch_length(), "a hundred whole epochs past the acceptance epoch");
+            // The claim certifies and retires; its row stays, and the state stays consistent.
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+            let (bound, _) =
+                fold(&s4, ctx(41, 104, 5), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xD1), anchor: h64(77), seats }]);
+            let (licensed, _) = fold(
+                &bound,
+                ctx(42, 105, 6),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xD1), receipts: vec![seat_receipt(bond_key(2), true)] }],
+            );
+            let (final_, _) = fold(&licensed, ctx(43, 126, 7), &[]);
+            assert!(matches!(final_.claim(&h64(0xD1)).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+            let (s5, _) = fold(&final_, ctx(5, 400, 8), &[]);
+            assert!(s5.claim(&h64(0xD1)).is_none(), "the claim is gone");
+            assert_eq!(s5.fp_claimed_prompt_ids_of(&plain, 400).len(), 1, "its paid prompt is not");
+            // A replay inside the window is credited its generation, not its prefill.
+            let replay = commit(plain, 0xD2, 2, &prompt, decode, honest_leaves(&derived_profile(), &prompt, decode));
+            let (inside, _) = fold(&s5, ctx(6, 401, 9), std::slice::from_ref(&replay));
+            assert!(inside.claim(&h64(0xD2)).unwrap().pwu < full, "the prefill is not sold twice inside the window");
+            // The first block of the expiry epoch sweeps it — and only then.
+            let (before, _) = fold(&s5, ctx(6, expiry - 1, 9), &[]);
+            assert_eq!(before.fp_claimed_prompt_ids_of(&plain, expiry - 1).len(), 1, "not a block early");
+            let (swept, delta) = fold(&before, ctx(7, expiry, 10), &[]);
+            assert!(swept.fp_claimed_prompt_ids_of(&plain, expiry).is_empty(), "swept at the boundary");
+            // A replay after the window is credited in full again: one re-sale per window, bounded.
+            let (after, _) = fold(&swept, ctx(8, expiry + 1, 11), &[replay]);
+            assert_eq!(after.claim(&h64(0xD2)).unwrap().pwu, full, "after the window the prefill is credited again");
+            // A reorg across the sweep restores the row exactly.
+            let reverted = revert_delta_v2(&swept, &delta, &p).expect("the sweep reverts");
+            assert_eq!(reverted.state_root(), before.state_root(), "byte for byte");
+        }
+
+        /// **The pooled target walks on the lane's whole output, under the price ceiling.** An epoch
+        /// in which the receipt lane over-produced its slice tightens it; an epoch in which it made
+        /// nothing eases it — never past the odds a forward of the same compute gets at `W`.
+        #[test]
+        fn the_pooled_target_walks_on_the_lanes_output_and_never_past_the_price_ceiling() {
+            let (_, s3, _, _) = two_classes(&compute_era());
+            // The shipped split: the attempt lane nine tenths of the census, the receipt lane one.
+            let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 900, 0)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_claim_retirement_daa(50)
+                .unwrap();
+            let key = fp_pooled_receipt_key_v1();
+            let quantum = pricing().network_quantum(&s3);
+            let epoch_zero = |attempt_blocks: u64, receipt_blocks: u64, pooled: u128, work: Option<u128>| {
+                let mut state = s3.clone();
+                state.receipt_targets.insert(key, PalwClassTargetV2 { target: pooled });
+                if attempt_blocks > 0 {
+                    state
+                        .epoch_counters
+                        .insert(h64(1), PalwEpochCounterV2 { epoch_index: 0, produced_pwu: 0, produced_blocks: attempt_blocks });
+                }
+                if receipt_blocks > 0 {
+                    state
+                        .receipt_epoch_counters
+                        .insert(key, PalwEpochCounterV2 { epoch_index: 0, produced_pwu: 0, produced_blocks: receipt_blocks });
+                }
+                state.work_target =
+                    work.map(|w| crate::palw_work_target_v1::PalwWorkTargetV2 { work: w, floor: w, ..Default::default() });
+                state
+            };
+            let crossed = |state: &PalwChainStateV2| {
+                let (next, _) = apply_derived(state, &p, &ctx(9, 1_000, 9), &[], &compute_era()).expect("the boundary folds");
+                next.receipt_target(&key).unwrap().target
+            };
+            // The receipt lane's slice is a tenth; 900 attempt blocks and 300 receipt blocks put it at
+            // two and a half times that.
+            let start = u128::MAX / 1_024;
+            let tightened = crossed(&epoch_zero(900, 300, start, None));
+            assert!(tightened < start, "an over-producing lane tightens: {start} -> {tightened}");
+            let eased = crossed(&epoch_zero(900, 0, start, None));
+            assert!(eased > start, "a silent lane eases toward the ceiling: {start} -> {eased}");
+            // With a work target the ceiling binds: easing stops at the forward-of-equal-compute odds.
+            let work = quantum * 1_000;
+            let ceiling = fp_pooled_target_ceiling_v1(quantum, work);
+            let capped = crossed(&epoch_zero(900, 0, ceiling, Some(work)));
+            assert_eq!(capped, ceiling, "never past the most the network pays for a unit of compute");
         }
     }
 
@@ -29620,7 +30413,7 @@ pub(crate) mod tests {
         // of a different CLASS is still unrelated, because a different class is a different graph.
         assert!(second.fp_claimed_prompts_of(&class, &bond_key(2)).is_empty(), "provenance stays per bond");
         assert!(second.fp_claimed_prompts_of(&h64(1), &bond_key(1)).is_empty());
-        assert_eq!(second.fp_claimed_prompt_ids_of(&class).len(), 2, "…and the credit reads the whole class");
+        assert_eq!(second.fp_claimed_prompt_ids_of(&class, 0).len(), 2, "…and the credit reads the whole class");
     }
 
     /// **RE-AUDIT 2026-09-19 — one conversation has one price, whatever order it was committed
@@ -38677,7 +39470,7 @@ pub(crate) mod tests {
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_daa: None,
-                fp_derived_work_active: false,
+                fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,
@@ -38913,7 +39706,7 @@ pub(crate) mod tests {
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_daa: None,
-                fp_derived_work_active: false,
+                fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,

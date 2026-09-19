@@ -126,6 +126,9 @@ pub const PALW_FP_V3_DOMAIN_BEACON_FOLD: &[u8] = b"misaka-palw/fp-v3/beacon-fold
 /// ADR-0145 §6: the running commitment to a prompt's first `k` token ids (see
 /// [`fp_prompt_prefix_roots_at_v1`]).
 pub const PALW_FP_V3_DOMAIN_PROMPT_PREFIX: &[u8] = b"misaka-palw/fp-v3/prompt-prefix/v1";
+/// ADR-0148: the key the lane's ONE receipt target, and its census, are kept under (see
+/// [`fp_pooled_receipt_key_v1`]).
+pub const PALW_FP_V3_DOMAIN_POOLED_RECEIPT_KEY: &[u8] = b"misaka-palw/fp-v3/pooled-receipt-key/v1";
 
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
@@ -143,6 +146,7 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_CANONICAL_ANCHOR,
     PALW_FP_V3_DOMAIN_WORK_ID,
     PALW_FP_V3_DOMAIN_BEACON_FOLD,
+    PALW_FP_V3_DOMAIN_POOLED_RECEIPT_KEY,
     PALW_FP_V3_DOMAIN_PROMPT_PREFIX,
 ];
 
@@ -708,6 +712,113 @@ pub fn fp_derive_work_v1(
         accounted_prefix_tokens: prefix,
         mode: PalwFpExecutionModeV1::PrefixReused,
     })
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0148 — the free-prompt lane prices compute, and prices it the same for every class
+// ---------------------------------------------------------------------------------------------
+
+/// **The most quanta one claim may carry past `Params::palw_fp_derived_work`** — the most receipt
+/// blocks it can ever win, and nothing else.
+///
+/// Below the fence the cap was `fp_max_quanta_per_receipt` (64) quanta of a fixed size, so a claim
+/// was credited at most 64 quanta of work however much it ran: every long prompt and every wide
+/// model was paid a ceiling, and the ceiling is where the lane's model bias lived. Past it a claim's
+/// odds scale with the compute each quantum carries ([`fp_quantum_target_of_compute_v1`]), so the cap
+/// no longer bounds credited work at all; it bounds how many BLOCKS one claim can produce, which is
+/// the flood guard the old cap also was. 2^16 wins is four times the whole receipt slice of a
+/// sixty-epoch window, and a single local inference never approaches it at the price ceiling.
+pub const PALW_FP_MAX_QUANTA_V2: u32 = 1 << 16;
+
+/// **ADR-0148: the key the lane's one receipt target is kept under** in the per-class receipt maps
+/// — its target in `receipt_targets`, its census in `receipt_epoch_counters`. A keyed hash of the
+/// domain alone: not a class any registration can reach, because a class id is the id of a shape
+/// profile and nothing hashes to this preimage under that domain.
+pub fn fp_pooled_receipt_key_v1() -> Hash64 {
+    canonical_id(PALW_FP_V3_DOMAIN_POOLED_RECEIPT_KEY, &[])
+}
+
+/// **The network's free-prompt quantum, in MAC-equivalents** — one `quanta_per_canonical_job`-th of
+/// the liveness floor's derived draw.
+///
+/// Below the fence a quantum was a fraction of EACH class's own declared canonical job, in leaves,
+/// so a quantum of a wide model and a quantum of the floor were different amounts of work and the
+/// class's registrant chose how much. Past it there is one quantum for the network, in the unit the
+/// attempt lane's weight and pay are in: derived from the floor's graph, which is genesis's and
+/// nobody's to register, and re-using the ruleset's own `quanta_per_canonical_job` rather than a new
+/// constant. Zero where the floor's draw is unknown or the divisor is zero — which prices nothing,
+/// and the caller refuses rather than divides by it.
+pub fn fp_network_quantum_v1(floor_draw_ccu: u128, quanta_per_canonical_job: u32) -> u128 {
+    if quanta_per_canonical_job == 0 || floor_draw_ccu == 0 {
+        return 0;
+    }
+    (floor_draw_ccu / quanta_per_canonical_job as u128).max(1)
+}
+
+/// How many quanta a claim's credited compute is split into: `min(⌊credited / quantum⌋, 2^16)`.
+/// Zero for a run below one quantum, which the caller refuses as `ZeroQuanta`.
+pub fn fp_quanta_of_compute_v1(credited_ccu: u128, quantum_ccu: u128) -> u32 {
+    if quantum_ccu == 0 {
+        return 0;
+    }
+    (credited_ccu / quantum_ccu).min(PALW_FP_MAX_QUANTA_V2 as u128) as u32
+}
+
+/// **One quantum's receipt target: the pooled target scaled by the compute the quantum carries.**
+///
+/// `pooled` is the lane's odds for one network quantum; a quantum carrying `per_quantum_ccu` wins
+/// with `pooled × per_quantum / quantum`, saturating at certainty. So a claim's expected wins are
+/// `pooled / MAX × credited / quantum` whatever its quanta count — proportional to its compute and
+/// to nothing about its class — until a quantum saturates, which at the price ceiling
+/// ([`fp_pooled_target_ceiling_v1`]) needs a quantum heavier than a whole block's work.
+///
+/// The old refusal to scale a target ("a scaled target re-opens the shape-grinding surface") was
+/// about DECLARED work: a producer who chose its own leaf count could choose its own odds. Past the
+/// fence the credited compute is the chain's derivation from the graph and the committed token
+/// counts, and the expected value is linear in it, so there is no shape to grind toward.
+pub fn fp_quantum_target_of_compute_v1(pooled_target: u128, per_quantum_ccu: u128, quantum_ccu: u128) -> u128 {
+    if quantum_ccu == 0 || per_quantum_ccu == 0 {
+        return 1;
+    }
+    crate::palw_work_target_v1::mul_div_u128(pooled_target.max(1), per_quantum_ccu, quantum_ccu).max(1)
+}
+
+/// **The most the lane may pay for a unit of compute**: the pooled target never offers a quantum
+/// better odds than the attempt lane's ticket offers a forward of the same compute at `W`
+/// (`palw_work_ticket_target_v1(quantum, W)`), because `W₀ = escrow / rate_max` is the most the
+/// network will pay for a unit of compute (ADR-0137) and a lane that paid more would be where every
+/// unit of compute went. It is also the flood guard: at the ceiling a claim's expected receipt
+/// blocks are its compute over `W`, whatever a quiet epoch's retarget would otherwise ease to.
+pub fn fp_pooled_target_ceiling_v1(quantum_ccu: u128, work: u128) -> u128 {
+    crate::palw_work_target_v1::palw_work_ticket_target_v1(quantum_ccu, work)
+}
+
+/// **One free-prompt run's credited compute, derived** — ADR-0145's canonical work of the run the
+/// commitment states, NEW positions only, in the provisional scalar the attempt lane is priced in.
+///
+/// The same derivation the attempt lane's work comes from (`palw_canonical_work_v1`), handed the
+/// run's own facts rather than a draw's: `prompt_tokens` positions, `decode_tokens_executed`
+/// generated tokens, and the chain's reading of how much of the prompt this class was already paid
+/// to evaluate as the reused prefix — clamped to the prompt, so an exact re-run is credited its
+/// generation and not its prefill, which is the answer `fp_derive_work_v1` gives in leaves.
+pub fn fp_derive_credited_compute_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    accounted_prefix_tokens: u32,
+) -> Result<u128, crate::palw_canonical_work_v1::PalwCanonicalWorkError> {
+    use crate::palw_canonical_work_v1::{
+        PalwCanonicalClassDescriptorV1, PalwCanonicalExecutionFactsV1, PalwExecutionModeV1, palw_canonical_work_v1,
+    };
+    let descriptor = PalwCanonicalClassDescriptorV1::of(profile, Hash64::default())?;
+    let reused = accounted_prefix_tokens.min(prompt_tokens);
+    let facts = PalwCanonicalExecutionFactsV1 {
+        prefill_tokens: prompt_tokens,
+        generated_tokens: decode_tokens_executed,
+        reused_prefix_tokens: reused,
+        mode: if reused == 0 { PalwExecutionModeV1::Uncached } else { PalwExecutionModeV1::PrefixReused },
+    };
+    Ok(palw_canonical_work_v1(&descriptor, &facts)?.provisional_scalar_v1())
 }
 
 /// The quantum's lottery draw: leading 128 bits (big-endian, matching `palw_ticket_v1`'s reading)

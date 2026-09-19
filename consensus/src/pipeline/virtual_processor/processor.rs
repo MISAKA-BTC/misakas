@@ -4249,6 +4249,7 @@ impl VirtualStateProcessor {
             Some(self.genesis.hash),
         );
         let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
+        let pricing = self.palw_fp_pricing();
 
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
@@ -4257,7 +4258,19 @@ impl VirtualStateProcessor {
             }
             let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { continue };
             let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else { continue };
-            let Some(target) = state.receipt_target(&claim.class_id) else { continue };
+            // ADR-0148: the admission's own target expression for the claim's era — the pooled
+            // target scaled by the compute a quantum carries, or the class's target below the fence.
+            let target = match pricing.as_ref() {
+                Some(pricing) => {
+                    kaspa_consensus_core::palw_state_v2::palw_fp_quantum_receipt_target_v1(&state, claim, *quanta, pricing)
+                }
+                None => state.receipt_target(&claim.class_id).map(|target| target.target),
+            };
+            let Some(target) = target else { continue };
+            // A compute-era claim may carry up to 2^16 quanta; listing every losing ticket of every
+            // such claim would make this RPC's answer the size of the lottery. Its winners are what a
+            // producer can spend, and they are what it returns.
+            let winners_only = pricing.as_ref().is_some_and(|pricing| pricing.prices_in_compute(claim));
             let Some(slot) = fp_draw_slot_v3(final_daa, freeprompt.receipt_maturity_daa()) else { continue };
             // The beacon is a chain fact; a slot the chain has not reached yet has no beacon and
             // therefore no rows — "not yet drawable" and "lost" must not look alike.
@@ -4267,14 +4280,18 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 let ticket = fp_quantum_ticket_v3(network_domain, beacon.beacon_block, *claim_id, quantum_index);
+                let wins = kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1(ticket, target);
+                if winners_only && !wins {
+                    continue;
+                }
                 out.push(PalwFpSpendableQuantumV3 {
                     claim_id: *claim_id,
                     class_id: claim.class_id,
                     quantum_index,
                     beacon,
-                    receipt_target: target.target,
+                    receipt_target: target,
                     ticket,
-                    wins: kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1(ticket, target.target),
+                    wins,
                     spend_deadline_daa: beacon.beacon_daa.saturating_add(freeprompt.receipt_use_window_daa()),
                 });
             }
@@ -7790,7 +7807,11 @@ impl VirtualStateProcessor {
             // (`admission_independence_at`); the claim-level one — the outsider seat and its veto on
             // the licence — compares it against the CLAIM's own `accepted_daa`, as the draw does.
             admission_independence_daa: self.palw_admission_independence_daa(),
-            fp_derived_work_active: self.palw_fp_derived_work_at(daa_score),
+            // ADR-0145 §5/§6's height; the fold asks it at each block (`fp_derived_work_at`).
+            fp_derived_work_daa: self
+                .palw_fp_derived_work
+                .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+                .map(|fence| fence.daa_score()),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
@@ -8117,6 +8138,15 @@ impl VirtualStateProcessor {
     /// two nodes folding one block must price it identically however far either has synced.
     pub(super) fn palw_fp_derived_work_at(&self, daa_score: u64) -> bool {
         self.palw_fp_derived_work.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0148: the chain's free-prompt pricing** — the canonical-work fence's height and the
+    /// floor. The admission that draws a quantum's ticket and the producer's finder that looks for a
+    /// winning one read the same value the fold priced the claim with.
+    pub(super) fn palw_fp_pricing(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPricingV1> {
+        self.palw_state_params_v2
+            .as_ref()
+            .map(|state| kaspa_consensus_core::palw_state_v2::PalwFpPricingV1::of(state, self.palw_canonical_work_daa))
     }
 
     /// ADR-0137: `W₀` for a block of `daa_score` paying `subsidy`, where the work target is in
@@ -8728,7 +8758,7 @@ impl VirtualStateProcessor {
         // hold and spend that producer's certified quantum. `_full_v3` — documented as "the composed
         // admission a wiring layer should call" and covered by three tests — had no non-test caller.
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+        kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v4(
             state,
             point,
             network_domain,
@@ -8740,6 +8770,8 @@ impl VirtualStateProcessor {
             &beacon,
             &envelope,
             |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+            // ADR-0148: a compute-era claim draws against the lane's pooled target.
+            self.palw_fp_pricing().as_ref(),
         )
         .map_err(|e| e.to_string())?;
         let _ = state_params;

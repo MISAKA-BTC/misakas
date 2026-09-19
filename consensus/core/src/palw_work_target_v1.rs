@@ -180,7 +180,7 @@ pub fn palw_effective_work_v1(work: u128, network_draws_q32: u128) -> u128 {
 }
 
 /// `a · b / d` without overflow in the middle (`a / d · b + (a mod d) · b / d`), saturating.
-fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
+pub(crate) fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
     let d = d.max(1);
     (a / d).saturating_mul(b).saturating_add((a % d).saturating_mul(b) / d)
 }

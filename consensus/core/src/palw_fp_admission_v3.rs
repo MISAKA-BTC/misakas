@@ -109,6 +109,23 @@ pub fn check_palw_receipt_spend_admission_v3(
     beacon: &PalwBeaconFactV3,
     envelope: &PalwReceiptSpendEnvelopeV3,
 ) -> Result<Hash64, PalwFpAdmissionV3Error> {
+    check_palw_receipt_spend_admission_v4(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, None)
+}
+
+/// [`check_palw_receipt_spend_admission_v3`] with **ADR-0148's pricing**: `pricing` is the chain's
+/// free-prompt pricing (the canonical-work fence's height and the floor), and a compute-era claim's
+/// quantum is drawn against the lane's pooled target scaled by the compute the quantum carries
+/// ([`crate::palw_state_v2::palw_fp_quantum_receipt_target_v1`]) rather than against its class's
+/// own target. `None` — every caller that predates the fence — is the leaves-era rule exactly.
+pub fn check_palw_receipt_spend_admission_v4(
+    state: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    receipt_maturity_daa: u64,
+    receipt_use_window_daa: u64,
+    beacon: &PalwBeaconFactV3,
+    envelope: &PalwReceiptSpendEnvelopeV3,
+    pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
+) -> Result<Hash64, PalwFpAdmissionV3Error> {
     let spend = &envelope.spend;
 
     // 1. The claim: exists, free-prompt, certified.
@@ -147,7 +164,13 @@ pub fn check_palw_receipt_spend_admission_v3(
     }
 
     // 5. The lottery — the one and only place a receipt block's work is priced (see module doc).
-    let target = state.receipt_target(&claim.class_id).ok_or(PalwFpAdmissionV3Error::ReceiptTargetMissing(claim.class_id))?.target;
+    //    ADR-0148: one expression for both eras, so the admission and the producer's finder read
+    //    the same target the chain would.
+    let target = match pricing {
+        Some(pricing) => crate::palw_state_v2::palw_fp_quantum_receipt_target_v1(state, claim, *quanta, pricing),
+        None => state.receipt_target(&claim.class_id).map(|target| target.target),
+    }
+    .ok_or(PalwFpAdmissionV3Error::ReceiptTargetMissing(claim.class_id))?;
     let ticket = fp_quantum_ticket_v3(spend.network_domain, spend.beacon_block, spend.claim_id, spend.quantum_index);
     if !palw_ticket_admits_v1(ticket, target) {
         return Err(PalwFpAdmissionV3Error::TicketRejected { ticket, target });
@@ -196,9 +219,45 @@ pub fn check_palw_receipt_spend_admission_full_v3<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    check_palw_receipt_spend_admission_full_v4(
+        state,
+        ctx,
+        network_domain,
+        pre_pow_hash,
+        timestamp,
+        nonce,
+        receipt_maturity_daa,
+        receipt_use_window_daa,
+        beacon,
+        envelope,
+        verify_mldsa87,
+        None,
+    )
+}
+
+/// [`check_palw_receipt_spend_admission_full_v3`] with ADR-0148's pricing — the entry point the
+/// consensus wiring calls (see [`check_palw_receipt_spend_admission_v4`]).
+#[allow(clippy::too_many_arguments)]
+pub fn check_palw_receipt_spend_admission_full_v4<V>(
+    state: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
+    receipt_maturity_daa: u64,
+    receipt_use_window_daa: u64,
+    beacon: &PalwBeaconFactV3,
+    envelope: &PalwReceiptSpendEnvelopeV3,
+    verify_mldsa87: V,
+    pricing: Option<&crate::palw_state_v2::PalwFpPricingV1>,
+) -> Result<Hash64, PalwFpAdmissionV3Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
     envelope.validate_stateless_v3(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v3(verify_mldsa87)?;
-    check_palw_receipt_spend_admission_v3(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope)
+    check_palw_receipt_spend_admission_v4(state, ctx, receipt_maturity_daa, receipt_use_window_daa, beacon, envelope, pricing)
 }
 
 #[cfg(test)]
