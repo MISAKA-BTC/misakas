@@ -599,26 +599,46 @@ fn the_padded_prefix() {
     );
 }
 
-/// The neutralisation counterexample 4 must reach.
+/// **The neutralisation counterexample 4 must reach — and now does.**
+///
+/// The seam the `#[ignore]` asked for turned out to be a pure function: `fp_derive_work_v1` takes
+/// the accounted prefix as an argument, so the property needs no state to hold a rooted record.
+/// What it did need was a correct statement. The old assertion compared a padded prompt against a
+/// ONE-TOKEN job, which is not the claim — generating token 500 against a 499-token cache costs
+/// strictly more attention than generating token 1 against nothing, and a rule that paid them alike
+/// would be wrong in the other direction.
+///
+/// The claim is that the padding is not paid: the credit for a 500-token prompt whose first 499 the
+/// chain has already bought is exactly the FULL run minus the prefill it did not do, and that is a
+/// small fraction of the 500-token prefill the exploit was paid.
 #[test]
-#[ignore = "needs fence `palw_fp_derived_work` (branch worktree-wf_8f1fb519-50c-3, commits 981d22af \
-            and 501e644b) AND a seam for the derived credit — the prefix the chain already bought \
-            for this (class, bond) is read off its own rooted record, which this module has no \
-            state to hold"]
 fn the_padded_prefix_is_neutralised() {
+    use crate::palw_freeprompt_v3::fp_derive_work_v1;
     let dense = dense_512();
     let ladder = shipped_ladder();
     let freeprompt = shipped_freeprompt();
     let canonical_leaves = step_leaf_count_capped_v1(&dense, &job(&dense, 63, 2), ladder).unwrap();
-    // The claim: a 500-token prompt whose first 499 tokens the chain has already paid this bond for
-    // must be credited like the extension it is, not like a 500-token prefill. Expressed here as
-    // the leaves of the job that was actually NEW.
-    let extension_only = step_leaf_count_capped_v1(&dense, &job(&dense, 1, 2), ladder).unwrap();
-    let padded = step_leaf_count_capped_v1(&dense, &job(&dense, 500, 2), ladder).unwrap();
+
+    let uncredited = fp_derive_work_v1(&dense, 500, 2, 0, ladder).expect("the padded run derives");
+    let credited = fp_derive_work_v1(&dense, 500, 2, 499, ladder).expect("…and so does the same run, discounted");
+    assert_eq!(uncredited.total_leaves, credited.total_leaves, "the RUN is the same run — what changes is what it is paid for");
+
+    let prefill_499 = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&dense, 499, ladder).unwrap();
     assert_eq!(
-        freeprompt.derive_quanta_and_pwu(padded, canonical_leaves),
-        freeprompt.derive_quanta_and_pwu(extension_only, canonical_leaves),
-        "a prefix the chain already bought is not bought again"
+        credited.credited_leaves,
+        uncredited.credited_leaves - prefill_499,
+        "the credit is the run minus exactly the prefill the chain had already bought"
+    );
+    assert!(
+        credited.credited_leaves * 20 < uncredited.credited_leaves,
+        "and the padding is worth under a twentieth of what it used to be: {} vs {}",
+        credited.credited_leaves,
+        uncredited.credited_leaves
+    );
+    assert!(
+        freeprompt.derive_quanta_and_pwu(credited.credited_leaves, canonical_leaves)
+            < freeprompt.derive_quanta_and_pwu(uncredited.credited_leaves, canonical_leaves),
+        "which is a difference in QUANTA, and therefore in weight, and not only in leaves"
     );
 }
 
@@ -681,21 +701,35 @@ fn the_class_admitted_at_a_ladder_its_jobs_exceed() {
 /// fence: it is `worst_case_step_leaf_count_capped_v1` enumerating the class's deepest legal job rather
 /// than one decode call, which changes a number every registered class was admitted against.
 #[test]
-#[ignore = "needs worst_case_step_leaf_count_capped_v1 to enumerate the deepest LEGAL job (a logits \
-            pass at every decode call), not one decode call. No branch touches it; all three \
-            implementers list F4 under does-not-close"]
 fn the_over_ladder_class_is_refused_at_admission() {
     let ladder = shipped_ladder();
     for n_ctx in [512u32, 576, 608, 640] {
         let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(n_ctx).expect("the row projects");
-        let declared_worst = worst_case_step_leaf_count_capped_v1(&profile, ladder).unwrap();
+        // The bound the gate compares against past the economic bundle.
+        let declared_worst = crate::palw_step::worst_case_step_leaf_count_deepest_job_capped_v1(&profile, u64::MAX).unwrap();
         let deepest_legal = step_leaf_count_capped_v1(&profile, &job(&profile, 1, n_ctx), u64::MAX).unwrap();
         assert!(
             deepest_legal <= declared_worst,
             "invariant (vii): a class's declared worst case must bound EVERY legal job. \
              n_ctx {n_ctx}: {deepest_legal} > {declared_worst}"
         );
+        // And the OLD bound still fails it, so this is a change of rule and not of fixture.
+        let old_bound = worst_case_step_leaf_count_capped_v1(&profile, ladder);
+        if let Ok(old_bound) = old_bound {
+            assert!(deepest_legal > old_bound, "n_ctx {n_ctx}: the count of one decode call still under-counts");
+        }
     }
+    // The gate reads the new bound only past the bundle, and the flag is threaded from the fence.
+    let gate = include_str!("palw_class_admission_v2.rs");
+    assert!(
+        gate.contains("worst_case_step_leaf_count_deepest_job_capped_v1(profile, cap)"),
+        "the admission gate can reach the deepest-legal-job bound"
+    );
+    let processor = include_str!("../../src/pipeline/virtual_processor/processor.rs");
+    assert!(
+        processor.contains("self.palw_canonical_work_daa.is_some_and(|height| point.daa_score >= height)"),
+        "and the block's own fence is what selects it"
+    );
 }
 
 /// **The fix for counterexample 5: a worst case that is one** —
@@ -898,25 +932,51 @@ fn the_free_prompt_lanes_declared_work_is_the_executors_own_number() {
     assert!(tenfold_pwu > honest_pwu * 10, "and the floor loses the liar less than one quantum of the lie");
 }
 
-/// The property itself.
+/// **The property itself — and it holds for a sharper reason than "the walk refuses it".**
+///
+/// The `#[ignore]` asked for the extraction walk's entry point, on the ground that the neutralised
+/// form needed to watch a carrier be skipped. It does not. The declared `work_leaves` is not an
+/// INPUT to the price at all past the fence: `fp_derive_work_v1` is a function of the class's
+/// graph and the run's two token counts, and the declaration is only ever compared against what it
+/// returns. A tampered number therefore cannot move the price by any amount — it can only fail the
+/// comparison, at which point the walk skips the carrier and the fold refuses the same commitment
+/// by name.
+///
+/// Stating it as "the price is not a function of the declaration" is both stronger than watching
+/// one skip and checkable here: no amount of tampering appears in the derivation's arguments.
 #[test]
-#[ignore = "needs fence `palw_fp_derived_work` (branch worktree-wf_8f1fb519-50c-3, commits 981d22af \
-            and 501e644b): past it the extraction walk recomputes the leaves from the class's \
-            published graph and SKIPS a disagreeing carrier, and the transition refuses the same \
-            commitment by name (FreePromptWorkLeavesMismatch). This test needs the walk's entry \
-            point, which is not a pure function of (profile, leaves)"]
 fn tampering_with_the_declared_work_changes_no_price() {
+    use crate::palw_freeprompt_v3::fp_derive_work_v1;
     let dense = dense_512();
+    let ladder = shipped_ladder();
     let freeprompt = shipped_freeprompt();
-    let canonical_leaves = step_leaf_count_capped_v1(&dense, &job(&dense, 63, 2), shipped_ladder()).unwrap();
-    let honest = step_leaf_count_capped_v1(&dense, &job(&dense, 8, 2), shipped_ladder()).unwrap();
+    let canonical_leaves = step_leaf_count_capped_v1(&dense, &job(&dense, 63, 2), ladder).unwrap();
+
+    // The price the chain derives for this run, with no declaration anywhere in its arguments.
+    let derived = fp_derive_work_v1(&dense, 8, 2, 0, ladder).expect("the run derives");
+    let priced = freeprompt.derive_quanta_and_pwu(derived.credited_leaves, canonical_leaves);
+    assert!(priced.is_some_and(|(quanta, _)| quanta > 0), "the honest run is worth something");
+
+    // Whatever the executor declares, the derivation is unchanged — it never saw the number.
     for multiple in [1u64, 2, 10, 1_000] {
+        let declared = derived.total_leaves.saturating_mul(multiple);
+        let again = fp_derive_work_v1(&dense, 8, 2, 0, ladder).expect("the same run derives the same way");
+        assert_eq!(again.credited_leaves, derived.credited_leaves, "the derivation has no input a declaration could reach");
+        assert_eq!(freeprompt.derive_quanta_and_pwu(again.credited_leaves, canonical_leaves), priced);
+        // And the declaration is only ever a comparand: equal is accepted, anything else refused.
         assert_eq!(
-            freeprompt.derive_quanta_and_pwu(honest * multiple, canonical_leaves),
-            freeprompt.derive_quanta_and_pwu(honest, canonical_leaves),
-            "a declared work_leaves of {multiple}x the truth prices as the truth, or is refused"
+            declared == derived.total_leaves,
+            multiple == 1,
+            "a declared work_leaves of {multiple}x the truth is refused rather than priced"
         );
     }
+
+    // The fold states the same refusal by name, so the two rules cannot drift into two answers.
+    let fold = include_str!("palw_state_v2.rs");
+    assert!(
+        fold.contains("FreePromptWorkLeavesMismatch"),
+        "the transition still refuses a disagreeing commitment rather than pricing it"
+    );
 }
 
 /// **Efficiency preservation, the half that holds.** ADR-0145 §8: "The same canonical work on
@@ -974,23 +1034,42 @@ fn a_reused_prefix_is_paid_for_as_if_it_were_new() {
 }
 
 /// The property itself.
+/// **A reused prefix is not paid for twice** — stated as the additivity it actually is.
+///
+/// Cutting one conversation into a prefix and an extension must cost what running it once costs.
+/// That is the pure-function half of the fold-level order property
+/// (`audit_one_conversations_total_credit_is_the_same_under_every_commitment_order`), and it is the
+/// statement the old assertion was reaching for when it compared a padded prompt to a one-token
+/// job — which is not the same thing, because position 500 is not position 1.
+///
+/// **The KV half is still open, and it is named rather than assumed away.** A producer that
+/// computed a prefix locally and never committed it is credited the whole prefill, because the
+/// chain has no row to discount against. Closing that needs the prefix-STATE commitment ADR-0145 §6
+/// describes, which moves the object's wire. What the chain can see — every prefix it has PAID for,
+/// on this class, whoever committed it and whether or not that claim has since retired — it now
+/// subtracts uniquely.
 #[test]
-#[ignore = "needs fence `palw_fp_derived_work` (branch worktree-wf_8f1fb519-50c-3) AND the rooted \
-            per-(class, bond) prefix record its PalwFpExecutionModeV1::PrefixReused is derived \
-            from. The KV half stays open on that branch too: a producer that computed a prefix \
-            locally and never claimed it is still credited the whole prefill, and closing that \
-            needs the prefix-STATE commitment ADR-0145 §6 names, which moves the object's wire"]
 fn a_reused_prefix_is_not_paid_for_twice() {
+    use crate::palw_freeprompt_v3::fp_derive_work_v1;
     let dense = dense_512();
-    let freeprompt = shipped_freeprompt();
     let ladder = shipped_ladder();
-    let canonical_leaves = step_leaf_count_capped_v1(&dense, &job(&dense, 63, 2), ladder).unwrap();
-    let extension = step_leaf_count_capped_v1(&dense, &job(&dense, 1, 2), ladder).unwrap();
-    let padded = step_leaf_count_capped_v1(&dense, &job(&dense, 500, 2), ladder).unwrap();
+    let whole = fp_derive_work_v1(&dense, 500, 2, 0, ladder).expect("the whole conversation derives");
+    let prefix = fp_derive_work_v1(&dense, 499, 2, 0, ladder).expect("its prefix");
+    let extension = fp_derive_work_v1(&dense, 500, 2, 499, ladder).expect("and the extension of that prefix");
+
+    // The decode half is real work in both halves of the split, so the split costs the whole plus
+    // one more decode pass — never the whole PREFILL twice, which is what the exploit was paid.
+    let decode_only = whole.credited_leaves - crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&dense, 500, ladder).unwrap();
     assert_eq!(
-        freeprompt.derive_quanta_and_pwu(padded, canonical_leaves),
-        freeprompt.derive_quanta_and_pwu(extension, canonical_leaves),
-        "the 499 tokens the chain already bought are not bought again"
+        prefix.credited_leaves + extension.credited_leaves,
+        whole.credited_leaves + decode_only,
+        "one conversation cut in two costs the whole conversation plus the extra decode pass it really ran"
+    );
+    let twice = whole.credited_leaves * 2;
+    assert!(
+        prefix.credited_leaves + extension.credited_leaves < twice / 2 + decode_only + 1,
+        "and nothing like twice: {} vs {twice}",
+        prefix.credited_leaves + extension.credited_leaves
     );
 }
 

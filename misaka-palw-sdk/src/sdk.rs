@@ -618,6 +618,8 @@ impl PalwClassSdk {
             false,
             shape.token_lift,
             shape.fused_dissectable,
+            // F4's deepest-legal-job bound rides the economic bundle, dormant on every preset.
+            false,
             shape.held,
         )
         .map_err(|e| {

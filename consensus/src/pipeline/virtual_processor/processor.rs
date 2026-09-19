@@ -6506,6 +6506,13 @@ impl VirtualStateProcessor {
                         self.palw_token_lift_at(point.daa_score),
                         // ADR-0093 Decision 6: past its fence, a fused tile must be one head's.
                         self.palw_fused_dissectable_at(point.daa_score),
+                        // **F4, on the economic bundle's fence.** Past it the ladder is compared
+                        // against the deepest job the class can LEGALLY run rather than against a
+                        // count of one decode call — so a class is refused at REGISTRATION instead
+                        // of being admitted and then refused, silently, when it runs its own jobs.
+                        // Resolved at the block, unlike the claim-borne half of the same fence: a
+                        // registration is decided once and never re-derived.
+                        self.palw_canonical_work_daa.is_some_and(|height| point.daa_score >= height),
                         // ADR-0103: the held map is admitted by its fence alone, and a held class's
                         // walls are read under the regime — the PanelDa fence says whether its
                         // widest job commits with no ids.

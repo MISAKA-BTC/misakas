@@ -1693,6 +1693,8 @@ pub fn verify_class_admission_v7(
         decode_rules,
         token_lift,
         false,
+        // F4's deepest-legal-job bound rides the economic bundle; v7's callers predate it.
+        false,
         PalwHeldAdmissionV1::default(),
     )
 }
@@ -1743,6 +1745,12 @@ pub fn verify_class_admission_v8(
     decode_rules: bool,
     token_lift: bool,
     fused_dissectable: bool,
+    // `Params::palw_canonical_work` at the registering block's DAA (the 2026-09-19 audit's F4).
+    // With it the ladder is compared against the deepest job the class can LEGALLY run; without
+    // it, the old count of one decode call — every shipped preset, and every class admitted so
+    // far. Resolved at the block rather than carried as a height, unlike the claim-borne half of
+    // the same fence: a registration is decided once and never re-derived.
+    deepest_job_bound: bool,
     held: PalwHeldAdmissionV1,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
@@ -1989,9 +1997,26 @@ pub fn verify_class_admission_v8(
     // exists only past the held fence, where no bisection of the whole step space is played, so the
     // clock that froze the network's ladder never binds it — and the network's for every other.
     let bundle_ladder = crate::palw_state_chunk_map::palw_class_step_ladder_v1(bundle.court.max_step_leaf_count(), profile);
+    // **F4: past the bundle the bound is the DEEPEST LEGAL JOB, not one decode call.**
+    //
+    // `worst_case_step_leaf_count_capped_v1` enumerates `n_ctx - 1` prefill positions and exactly
+    // one decode call, and adds no aux series — while the only bound on a job's shape is
+    // `P + exact_decode_tokens - 1 <= n_ctx`, so `(1, n_ctx - 1)` is legal and deeper. Measured on
+    // the shipped profiles the gap is +2.9 % / +6.9 % / +4.1 % and, on the dense @512 row, +18.4 %.
+    // A class admitted on the old count is then silently refused when it runs its own legal jobs,
+    // because the lane checks the real count against the same ladder — the refusal moved from
+    // registration, where it reads as an operator error, to the lane, where it reads as a chain
+    // bug. All four shipped classes clear 2^26 under the new bound, so nothing shipped is lost.
+    let count = |cap: u64| {
+        if deepest_job_bound {
+            crate::palw_step::worst_case_step_leaf_count_deepest_job_capped_v1(profile, cap)
+        } else {
+            crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, cap)
+        }
+    };
     let worst = match match ladder {
-        Some(rules) => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, rules.ladder),
-        None => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, bundle_ladder),
+        Some(rules) => count(rules.ladder),
+        None => count(bundle_ladder),
     } {
         Ok(worst) => worst,
         // **A class too deep for the ladder is reported as too deep, not as a bad profile.** The
@@ -2865,6 +2890,7 @@ mod tests {
                 false,
                 true,
                 fused_dissectable,
+                false,
                 PalwHeldAdmissionV1::default(),
             );
             if !fused_dissectable {

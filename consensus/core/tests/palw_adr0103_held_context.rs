@@ -122,6 +122,8 @@ fn gate(params: &Params, profile: &PalwShapeProfileV3, shape: PalwAdmissionShape
         false,
         shape.token_lift,
         shape.fused_dissectable,
+        // F4's deepest-legal-job bound rides the economic bundle, dormant on every preset.
+        false,
         shape.held,
     )
     .map(|_| ())
