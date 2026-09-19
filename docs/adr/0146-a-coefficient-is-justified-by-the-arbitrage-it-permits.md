@@ -148,6 +148,51 @@ cited earlier came from `#[cfg(test)]` fixtures in `palw_verification_profile_v1
 production path overrides a measured p99 with a reference-rate estimate. That correction is why this
 section exists rather than a table.
 
+### It cannot be run on this fleet, and that is the more useful result
+
+Measured 2026-09-19 across every host the network runs on:
+
+| host | RAM | `qwen36.palwq36` | `qwen25-1.5b-a16.palwart` |
+|---|---|---|---|
+| 169.58.232.113 | 23 G | 34.0 G | 1.7 G |
+| 5.104.81.23 | 23 G | 34.0 G | 1.7 G |
+| 169.58.39.220 (ibm) | 23 G | present | present |
+| 95.111.236.186 | 11 G | absent | 1.7 G |
+
+**No host can hold the hybrid class resident.** The artifact is 34 G on machines with 23 G, and
+ADR-0112's loader takes at most a fifth of the artifact's weights within what the host has past a
+reserve — so on this fleet roughly four fifths of every Qwen3.6 inference is read from disk, every
+time, while the 1.7 G dense class is resident on every host.
+
+So the residency question §6 poses is not open on this network: **residency is binary here and the
+two live classes sit on opposite sides of it.** The cost difference between them is not a subtle
+memory-traffic term to be calibrated, it is RAM against disk — and neither the leaf basis nor the
+MAC basis contains a term that can express it. ADR-0131's table says as much about itself: its
+entries are counts of arithmetic, "not from any host's timing".
+
+Two consequences for this ADR:
+
+* the traffic term of §2 is necessary and still not sufficient — it distinguishes Q4 from W8 but not
+  resident from paged, and `artifact_bytes` against a host's cache budget is the quantity that does.
+  Whether a HOST-dependent quantity may reach the price at all is a real question: ADR-0038 Decision
+  D refuses wall-clock, and artifact size is not wall-clock, but the budget it is compared against
+  is a property of a machine. **This is the open design question the experiment would have refined
+  and did not create.**
+* §4's fallback moves from contingency toward the likely answer. When two classes differ by whether
+  they fit in memory, one scalar relating their work is unlikely to bound arbitrage below the
+  efficiency spread the protocol wants to reward.
+
+**And the experiment was not run rather than run badly.** The bench harness exists
+(`palw-worker-iso-bench --mode v2-replay-bench`, fleet-measured at p50 2,885 ms for 16 decode tokens
+and 84,513 ms for 512 — a marginal 164.6 ms per decode token on a 2B model). Running it against the
+34 G artifact would mean thrashing the page cache of a host carrying two live testnet-11 nodes,
+while a third fleet node was already 330 DAA behind. A measurement that costs the network its
+liveness is not evidence, and the number would have described one machine anyway.
+
+**What it needs:** a host that can hold 34 G resident and carries no fleet node. Until one exists,
+§2's derived terms ship and §4's bound is measured over the admissible space — which needs no host
+at all, because it is arithmetic over profiles.
+
 **What the experiment decides.** If residency explains the gap, §2's derived traffic term is
 sufficient and the collapse may have no free parameters at all. If it does not, there is a real
 dimension neither arithmetic nor bytes captures, and §4's fallback — separate budgets — becomes the
