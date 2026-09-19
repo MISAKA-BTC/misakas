@@ -64,6 +64,81 @@ may run their model ten thousand times a day. Only the inferences a future beaco
 earn. Spam economics are controlled by the scarcity of eligibility, never by the chain forming an
 opinion about a prompt.
 
+**P7 — Model admission is permissionless; economic weight is earned through verified use.**
+
+Any user may register a new compatible local model **without modifying `main`**, without adding the
+model to a hard-coded consensus list, and without a model-specific protocol upgrade or fork
+activation. Model identity, architecture and execution semantics are carried as protocol-defined
+canonical data, so a model nobody has heard of enters through the same generic path as one that
+shipped with the network.
+
+Registration alone MUST NOT grant unrestricted reward, consensus weight or full eligibility. A newly
+registered model starts at bounded or zero eligibility and earns capacity only from
+protocol-verifiable evidence: independent validation, correct execution, sustained real local use,
+completed claims, continued compliance with the accounting rules.
+
+**The distinction that makes this safe, and the one most likely to be got wrong:**
+
+```
+the price of one unit of canonical work   →  NEVER changes with usage
+how much reward-eligible work a model
+may contribute                            →  grows with verified use
+```
+
+A model does not become worth more per inference because it is popular. It becomes able to put MORE
+of its inference in front of the protocol. Pricing popularity would make the economy a contest to
+appear used; budgeting it makes the economy a contest to actually be used.
+
+Specifically:
+
+* adding a model MUST NOT require changing the `main` source tree merely to name or recognise it;
+* registrants MUST NOT choose their own reward multiplier, work value or admission strength;
+* usage growth MUST be derived from verified protocol events, never from self-reported popularity
+  or self-declared compute;
+* repeated legitimate use MAY increase the reward-eligible work budget available to that model;
+* increasing usage MUST NOT change the accounting value of one unit of canonical work;
+* a newly registered model MUST NOT alter the reward rate, difficulty, accounting coefficients or
+  economic position of any unrelated existing model;
+* efficiency improvements may increase miner profit; representation tricks may not increase reward
+  per canonical work;
+* admission and growth rules MUST stay generic, so future architectures arrive permissionlessly
+  without model-specific consensus code.
+
+The lifecycle, and what each transition controls:
+
+```
+Candidate → independently validated → Probation → verified local use
+          → ActiveLimited → sustained verified use → Active
+```
+
+Each transition changes **how much** reward-eligible work the model may contribute — never what one
+unit of canonical work is worth.
+
+### What of this already exists, and what does not
+
+The shape is implemented. `PalwModelLifecycleStateV1` already gates admission by state —
+`admission_permille()` returns **50 ‰ in Probation, 100 ‰ in ActiveLimited and 1,000 ‰ when Active**
+— a class is admitted into `Probation { probes_passed: 0 }`, and promotion is driven by
+`probation_claims` (10) COMPLETED CLAIMS, which are protocol-verified events rather than anybody's
+word. That is P7's budget-not-price rule, already in the tree.
+
+**Two things are not there, and P7 is written to name them rather than to imply they are handled.**
+
+First, **the unit price is exactly what a registrant declares**, which is the reward audit's critical
+finding: `claim.pwu = expected_attempts × pwu_per_inference`, and `pwu_per_inference` is the step-leaf
+count of a canonical job the registrant writes. Until that is a derived quantity, P7's central
+sentence is violated at the root — the lifecycle budgets HOW MUCH work a model may contribute while
+the registrant still sets what a unit of it is worth.
+
+Second, and the correction that matters for any decision about the registry fence:
+**`palw_model_registry` does not gate registration.** Permissionless `ClassRegistered` is already
+open and has been since ADR-0049 Decision H ("the refusal that stood here was never a policy, it was
+the absence of a check"). What the fence adds is the LIFECYCLE — so arming it is the brake described
+above, and disarming it does not close permissionless registration, it removes the only throttle a
+new class currently meets. A proposal to disarm the registry in the name of safety is therefore
+backwards on its own terms, and this paragraph exists because that proposal was made, by the author
+of this ADR, before the code was read carefully enough.
+
 ## 3. What the protocol verifies, and what it deliberately does not
 
 | verifies | does not |
