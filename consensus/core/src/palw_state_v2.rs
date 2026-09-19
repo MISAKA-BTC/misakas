@@ -4752,6 +4752,12 @@ pub enum PalwStateV2Error {
     /// collides, and the chain never looks inside an artifact to judge similarity.
     #[error("artifact root {root} is already owned by line {owner}")]
     DuplicateArtifactRoot { root: Hash64, owner: Hash64 },
+    /// The 2026-09-19 audit: `operator_id` is the unit of panel dedup and of the executor
+    /// exclusion, and it was established by an unauthenticated declaration — so a registrant could
+    /// name somebody else's and take their place, or lock them out of every panel judging his own
+    /// claims. One registration per operator identity, past the fence.
+    #[error("operator {operator} is already registered by bond {holder:?}; one identity, one bond")]
+    DuplicateOperator { operator: Hash64, holder: PalwBondKeyV2 },
     #[error("line {0} holds the most previews it may")]
     ModelPreviewsFull(Hash64),
     #[error("version {1} of line {0} is not a preview")]
@@ -12982,6 +12988,24 @@ fn apply_object(
             if builder.state.bonds.values().any(|existing| existing.pubkey == *pubkey) {
                 return Err(PalwStateV2Error::DuplicateBondKey(*bond));
             }
+            // **One identity, one bond** (audit 2026-09-19). The line above makes a second bond
+            // cost a second KEY; this one makes it cost a second IDENTITY. `operator_id` is derived
+            // from `operator_pubkey`, which no rule in this tree ever verifies a signature under —
+            // it is a declaration, and the field's own doc claims the opposite. Undeclared, a
+            // registrant could name a victim's identity and be dropped from that victim's panels by
+            // `palw_panel_eligible_bonds_v2`'s executor exclusion, taking the victim out of the jury
+            // of every claim the attacker produces, for nothing and for ever.
+            //
+            // Uniqueness does not prove possession — that needs a signature under the operator key,
+            // which changes the object's bytes and so waits for a wire break. It does make the
+            // attack a race against a registration rather than a free primitive: an identity
+            // already on the chain cannot be claimed a second time.
+            if builder.extras.operator_id_unique_active {
+                let operator = palw_operator_id_v2(operator_pubkey);
+                if let Some((holder, _)) = builder.state.bonds.iter().find(|(_, existing)| existing.operator_id == operator) {
+                    return Err(PalwStateV2Error::DuplicateOperator { operator, holder: *holder });
+                }
+            }
             if *payout_payload == Hash64::default() {
                 return Err(PalwStateV2Error::EmptyPayoutPayload(*bond));
             }
@@ -15201,6 +15225,11 @@ pub struct PalwTransitionExtrasV1 {
     /// lookups that walked the lines in id order are gone. `false` by `Default`, so a caller that
     /// does not set it keeps the behaviour every existing row was written under.
     pub artifact_root_ownership_active: bool,
+    /// The 2026-09-19 audit: `Params::palw_operator_id_unique` resolved at the block's DAA. Past it
+    /// an operator identity may back one bond, so a registrant cannot name an identity somebody
+    /// else already holds. `false` by `Default`, so a caller that does not set it keeps the
+    /// behaviour every existing row was written under.
+    pub operator_id_unique_active: bool,
     /// ADR-0132 S: `Params::palw_single_lottery` resolved at the block's DAA. Past it the lottery
     /// reads `max(W₀, W)` — the chain's stepped work target — and the network draw is gone.
     pub single_lottery_active: bool,
@@ -35238,6 +35267,82 @@ pub(crate) mod tests {
             assert!(wrote_class && wrote_owner, "one transition, both writes");
         }
 
+        /// **An operator identity cannot be taken from the bond that holds it** (audit 2026-09-19).
+        ///
+        /// `operator_id` is the unit of panel dedup and of the executor exclusion
+        /// (`palw_panel_eligible_bonds_v2` drops every bond whose `operator_id` equals the
+        /// executor's), and it is derived from an `operator_pubkey` that no rule in this tree ever
+        /// verifies a signature under — a declaration, not a possession. Undeclared, a registrant
+        /// could name a victim's identity and thereby take that victim out of the jury of every
+        /// claim he produces, free, deterministically and with no remedy: `operator_id` is written
+        /// once at registration and has no mutator.
+        ///
+        /// Uniqueness is not possession — that needs a signature under the operator key, which
+        /// changes the object's bytes — but it turns a free primitive into a race against a
+        /// registration that is already on the chain.
+        #[test]
+        fn an_operator_identity_already_on_the_chain_cannot_be_registered_again() {
+            let p = economy_params();
+            let victim = bond_registration_with_collateral(1, 7, 4242, 1_000_000);
+            let attacker = bond_registration_with_collateral(2, 8, 4242, 1_000_000);
+
+            // Below the fence the collision is accepted — the defect, reproduced.
+            let below = PalwTransitionExtrasV1::default();
+            let (open, _) = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(),
+                &p,
+                &ctx(1, 100, 1),
+                &[victim.clone(), attacker.clone()],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &below,
+            )
+            .expect("below the fence the chain takes both");
+            let ids: Vec<_> = open.bonds_iter().map(|(_, b)| b.operator_id).collect();
+            assert_eq!(ids.len(), 2, "two bonds");
+            assert_eq!(ids[0], ids[1], "…sharing one operator identity, which is the defect");
+
+            // Past it the second registration is refused by name, and the first keeps its identity.
+            let armed = PalwTransitionExtrasV1 { operator_id_unique_active: true, ..Default::default() };
+            let refusal = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(),
+                &p,
+                &ctx(1, 100, 1),
+                &[victim.clone(), attacker],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect_err("the collision is refused");
+            assert!(
+                matches!(refusal, PalwStateV2Error::DuplicateOperator { holder, .. } if holder == bond_key(1)),
+                "the refusal names the bond that already holds the identity: {refusal}"
+            );
+
+            // …and an honest second registration, with its own identity, still passes.
+            let honest = bond_registration_with_collateral(2, 8, 4243, 1_000_000);
+            let (both, _) = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(),
+                &p,
+                &ctx(1, 100, 1),
+                &[victim, honest],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect("two identities, two bonds");
+            assert_eq!(both.bonds_iter().count(), 2, "uniqueness prices a second identity, it does not forbid one");
+        }
+
         /// **The front-running the first cut of this rule allowed, and no longer does** (audit
         /// 2026-09-19, reproduced then with a control).
         ///
@@ -35478,6 +35583,7 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 artifact_root_ownership_active: false,
+                operator_id_unique_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,
@@ -35710,6 +35816,7 @@ pub(crate) mod tests {
                 work_target: None,
                 work_target_active: false,
                 artifact_root_ownership_active: false,
+                operator_id_unique_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,

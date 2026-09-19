@@ -605,6 +605,7 @@ mod tests {
             // legal on its own.
             "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
+            "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,

@@ -1251,6 +1251,15 @@ pub struct Params {
     /// shipped preset; hashed Some-only, so a build with it unset fingerprints byte-identically to
     /// a build without the field.
     pub palw_artifact_root_ownership: Option<ForkActivation>,
+    /// **One operator identity, one bond** (the adversarial audit of 2026-09-19). `operator_id` is
+    /// the unit of panel dedup and of the executor exclusion, and nothing in this tree ever verifies
+    /// a signature under the `operator_pubkey` it is derived from — so it is a declaration, and a
+    /// registrant could name an identity somebody else holds. Past this fence a second registration
+    /// of an identity already on the chain is refused by name.
+    ///
+    /// It does not prove possession; that needs a signature under the operator key, which changes
+    /// the object's bytes. `None` on every preset; hashed Some-only.
+    pub palw_operator_id_unique: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -4066,6 +4075,9 @@ impl Params {
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
         }
+        if self.palw_operator_id_unique == Some(ForkActivation::never()) {
+            self.palw_operator_id_unique = None;
+        }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
         }
@@ -4375,6 +4387,11 @@ impl Params {
     /// ADR-0143: whether an artifact root has one recorded owner at `daa_score`.
     pub fn palw_artifact_root_ownership_at(&self, daa_score: u64) -> bool {
         self.palw_artifact_root_ownership.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The 2026-09-19 audit: whether one operator identity backs one bond at `daa_score`.
+    pub fn palw_operator_id_unique_at(&self, daa_score: u64) -> bool {
+        self.palw_operator_id_unique.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
@@ -5058,6 +5075,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_artifact_root_ownership,
+            palw_operator_id_unique,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5136,6 +5154,7 @@ impl Params {
             ("palw_anchor_clock", *palw_anchor_clock),
             ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
+            ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5626,6 +5645,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_artifact_root_ownership,
+            palw_operator_id_unique,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5892,6 +5912,14 @@ impl Params {
         }
         // ADR-0143 the artifact-root ownership fence.
         match palw_artifact_root_ownership.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // The 2026-09-19 audit's operator-identity fence.
+        match palw_operator_id_unique.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6364,6 +6392,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_artifact_root_ownership,
+            palw_operator_id_unique,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6616,6 +6645,10 @@ impl Params {
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
         if let Some(activation) = palw_artifact_root_ownership {
             h.write(b"palw_artifact_root_ownership");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_operator_id_unique {
+            h.write(b"palw_operator_id_unique");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -7270,6 +7303,7 @@ impl Params {
             palw_anchor_clock: self.palw_anchor_clock,
             palw_clock_cursor: None,
             palw_artifact_root_ownership: None,
+            palw_operator_id_unique: None,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -8215,6 +8249,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
+    palw_operator_id_unique: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8413,6 +8448,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
+    palw_operator_id_unique: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8593,6 +8629,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
+    palw_operator_id_unique: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -13245,6 +13282,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
+    palw_operator_id_unique: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
