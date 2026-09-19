@@ -6515,6 +6515,42 @@ impl PalwChainStateV2 {
         (derived > 0).then_some(derived)
     }
 
+    /// **ADR-0149 §5: the derived draw an ATTEMPT is priced on** — the class's row, or, for the
+    /// liveness floor before the registry has written any row, the draw that row will carry.
+    ///
+    /// The registry writes a class's row at its first span boundary (`step_model_registry`), and a
+    /// chain block's attempt is admitted against its PARENT's state. So with the canonical-work
+    /// fence at the registry's own height — which `validate_palw_v2` permits, and which is what
+    /// arming the economy at a network's genesis means — the first blocks past the fence are
+    /// admitted against a state that holds no row at all. Read from the row alone, every attempt
+    /// there is `PwuUnderivable`, the floor's included; the producers hold; and a network whose
+    /// only block type is the attempt stops at the fence it was built to cross.
+    ///
+    /// The floor is the one class whose production cannot wait for its row — every other class is
+    /// refused its row-less window already, by the work target, which arms at the registry's
+    /// height — and the one class a caller can price without one. `base_known_draw` is the floor's
+    /// entry in the table the registry reads (`PalwModelRegistryFoldV1::genesis_works`), which
+    /// `step_model_registry` copies into the row VERBATIM: the claim priced on it is priced on
+    /// exactly the number its row will carry, so every later reading of that claim agrees with this
+    /// one. Where the floor has a row, the row answers and `base_known_draw` is not read.
+    pub fn palw_attempt_per_draw_v1(
+        &self,
+        base_class_id: &Hash64,
+        class_id: &Hash64,
+        accepted_daa: u64,
+        canonical_work_daa: Option<u64>,
+        base_known_draw: Option<u128>,
+    ) -> Option<u128> {
+        if let Some(draw) = self.palw_canonical_per_draw_v1(class_id, accepted_daa, canonical_work_daa) {
+            return Some(draw);
+        }
+        let past_the_unit = canonical_work_daa.is_some_and(|height| accepted_daa >= height);
+        if !past_the_unit || class_id != base_class_id || self.model_lifecycles.contains_key(class_id) {
+            return None;
+        }
+        base_known_draw.filter(|draw| *draw > 0)
+    }
+
     /// **The floor class's two measures of one draw** — see [`PalwExposureBasisV1`] for why
     /// exposure needs a unit when reward and weight do not.
     ///
@@ -6528,7 +6564,23 @@ impl PalwChainStateV2 {
         accepted_daa: u64,
         canonical_work_daa: Option<u64>,
     ) -> Option<PalwExposureBasisV1> {
-        let base_canonical = self.palw_canonical_per_draw_v1(base_class_id, accepted_daa, canonical_work_daa)?;
+        self.palw_exposure_basis_v2(base_class_id, accepted_daa, canonical_work_daa, None)
+    }
+
+    /// [`Self::palw_exposure_basis_v1`] with the floor's draw read through
+    /// [`Self::palw_attempt_per_draw_v1`] — ADR-0149 §5. A basis that needed the floor's row would
+    /// leave the floor's first row-less attempt reserved on its claimed pwu, which past the fence
+    /// is the derived work of a WIN rather than of one inference: the gate's ceiling and the fold's
+    /// ledger would part at the very block the fence is crossed.
+    pub fn palw_exposure_basis_v2(
+        &self,
+        base_class_id: &Hash64,
+        accepted_daa: u64,
+        canonical_work_daa: Option<u64>,
+        base_known_draw: Option<u128>,
+    ) -> Option<PalwExposureBasisV1> {
+        let base_canonical =
+            self.palw_attempt_per_draw_v1(base_class_id, base_class_id, accepted_daa, canonical_work_daa, base_known_draw)?;
         let base_declared = palw_max_exposure_pwu_of_rule_v1(&self.classes.get(base_class_id)?.pwu_rule);
         let base_canonical = base_canonical.min(u64::MAX as u128) as u64;
         (base_declared > 0 && base_canonical > 0).then_some(PalwExposureBasisV1 { base_declared, base_canonical })
@@ -6904,6 +6956,17 @@ impl PalwChainStateV2 {
     #[cfg(test)]
     pub(crate) fn set_receipt_target_for_tests(&mut self, class_id: Hash64, target: u128) {
         self.receipt_targets.insert(class_id, PalwClassTargetV2 { target });
+    }
+
+    /// Tests only: write a class's registry row directly, for the modules outside this one that
+    /// need a class the canonical-work fence can price without folding the registry to get it.
+    #[cfg(test)]
+    pub(crate) fn set_model_lifecycle_for_tests(
+        &mut self,
+        class_id: Hash64,
+        row: crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+    ) {
+        self.model_lifecycles.insert(class_id, row);
     }
 
     pub fn reserved_exposure(&self, key: &PalwBondKeyV2) -> u128 {
@@ -9108,13 +9171,6 @@ impl<'a> TransitionBuilder<'a> {
         self.state.palw_claim_canonical_weight_v1(claim, self.extras.canonical_work_daa)
     }
 
-    /// **What one draw of a class really costs, for the exposure and work-price paths** — `None`
-    /// while the fence is dormant.
-    ///
-    /// `accepted_daa` is the claim's own, or the accepting block's for a claim being created. It is
-    /// saturated into `u64` because that is the width `palw_exposure_pwu_v2` and the ADR-0124 work
-    /// price speak in; the largest shipped class's draw is ~2 × 10^11 MAC-equivalents, four orders
-    /// under the ceiling, so the saturation is a type boundary rather than a rule.
     /// ADR-0148: this fold's free-prompt pricing, from the ruleset and the unit's height.
     fn fp_pricing(&self) -> PalwFpPricingV1 {
         PalwFpPricingV1::of(self.params, self.extras.canonical_work_daa)
@@ -9158,16 +9214,49 @@ impl<'a> TransitionBuilder<'a> {
         self.write_receipt_target(key, Some(PalwClassTargetV2 { target: seed.max(1) }));
     }
 
+    /// **What one draw of a class really costs, for the exposure and work-price paths** — `None`
+    /// while the fence is dormant.
+    ///
+    /// `accepted_daa` is the claim's own, or the accepting block's for a claim being created. It is
+    /// saturated into `u64` because that is the width `palw_exposure_pwu_v2` and the ADR-0124 work
+    /// price speak in; the largest shipped class's draw is ~2 × 10^11 MAC-equivalents, four orders
+    /// under the ceiling, so the saturation is a type boundary rather than a rule.
+    ///
+    /// ADR-0149 §5: through [`PalwChainStateV2::palw_attempt_per_draw_v1`], so the floor's first
+    /// row-less attempt is reserved on the draw its admission was priced on.
     fn canonical_per_draw(&self, class_id: &Hash64, accepted_daa: u64) -> Option<u64> {
         self.state
-            .palw_canonical_per_draw_v1(class_id, accepted_daa, self.extras.canonical_work_daa)
+            .palw_attempt_per_draw_v1(
+                &self.params.base_class_id,
+                class_id,
+                accepted_daa,
+                self.extras.canonical_work_daa,
+                self.base_known_draw(),
+            )
             .map(|work| work.min(u64::MAX as u128) as u64)
+    }
+
+    /// **ADR-0149 §5: the floor's draw as the registry will write it**, for the blocks before it has
+    /// — the same table entry `step_model_registry` copies into the floor's row, and the same one
+    /// the node hands the admission (`PalwEpochBudgetFencesV1::base_known_draw`), so the gate that
+    /// admits the floor's first row-less attempt and the ledger that reserves for it read one
+    /// number. `None` below the registry, where nothing past the canonical-work fence can be
+    /// (`validate_palw_v2` keeps the registry at or below it).
+    fn base_known_draw(&self) -> Option<u128> {
+        self.model_registry_fold()
+            .and_then(|fold| fold.genesis_works.get(&self.params.base_class_id))
+            .map(|work| work.economic_ccu_per_claim)
     }
 
     /// The floor class's leaves-to-derived-work ratio at this block, for the one place a pwu is
     /// multiplied by an absolute price rather than divided by a unit ([`PalwExposureBasisV1`]).
     fn exposure_basis(&self, accepted_daa: u64) -> Option<PalwExposureBasisV1> {
-        self.state.palw_exposure_basis_v1(&self.params.base_class_id, accepted_daa, self.extras.canonical_work_daa)
+        self.state.palw_exposure_basis_v2(
+            &self.params.base_class_id,
+            accepted_daa,
+            self.extras.canonical_work_daa,
+            self.base_known_draw(),
+        )
     }
 
     /// **The pwu a class's DIFFICULTY is seeded from** — ADR-0145 I1 and the audit's invariant
@@ -11885,9 +11974,19 @@ pub fn apply_palw_transition_v7(
                         // ADR-0045's boundary fence is inert here: `ensure_epoch_budgets` has
                         // already installed the live epoch's table. ADR-0123's release is
                         // resolved once for this block and must remain armed in the fold.
+                        //
+                        // **ADR-0149 §6: and the canonical-work height rides too.** Left at its
+                        // default this re-run judged every merged attempt past the fence on the
+                        // DECLARED rule while the node's pre-check (`palw_v2_merged_works`, which
+                        // passes the height) judged it on the derived one — no merged attempt could
+                        // pass both, so past the bundle every merged blue's work was skipped here:
+                        // claimed by nobody, paid to nobody, weighing nothing. The two readings of
+                        // one attempt now take the same height and the same floor draw.
                         crate::palw_admission_v2::PalwEpochBudgetFencesV1 {
                             budget_release_active: builder.extras.epoch_budget_release_active,
                             work_target_floor: builder.work_target_floor(ctx),
+                            canonical_work_daa: builder.extras.canonical_work_daa,
+                            base_known_draw: builder.base_known_draw(),
                             ..Default::default()
                         },
                     ) {
@@ -22282,6 +22381,278 @@ pub(crate) mod tests {
         /// liveness floor and never touched Kimi, and a registrant with seven sybils that serve the
         /// floor AND hold Kimi — so every probability they measure is the registrant's share of THAT
         /// network, which is the quantity the rule is designed to make it pay for.
+        /// **ADR-0149: past the canonical-work fence an attempt's pwu IS the derivation** — and the
+        /// two places that derivation used to be missing: the floor's first attempts past a bundle
+        /// armed at the registry's own height (§5), and every merged attempt past it (§6).
+        mod attempt_pwu_is_the_derivation {
+            use super::*;
+            use crate::palw_admission_v2::{
+                PalwAdmissionParamsV2, PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2,
+                palw_attempt_derived_pwu_v1,
+            };
+            use crate::palw_producer_v2::palw_producer_facts_v3;
+
+            /// The bundle's height, and the registry's: armed together, as `validate_palw_v2` permits
+            /// and as arming the economy at a network's birth does. MID-span on purpose — the span is
+            /// `[100, 110)`, so the registry, active from 105, cannot step before the boundary at 110,
+            /// and every block in between is admitted AND folded against a state with no row at all.
+            const FENCE: u64 = 105;
+
+            /// The floor's work in the table the registry reads — the entry `step_model_registry`
+            /// copies into the floor's row.
+            fn floor_draw() -> u128 {
+                fold(kimi_work()).genesis_works[&h64(1)].economic_ccu_per_claim
+            }
+
+            fn admission() -> PalwAdmissionParamsV2 {
+                PalwAdmissionParamsV2::new(500).unwrap()
+            }
+
+            /// What the node resolves for a block past the fence, with and without the floor's draw.
+            fn fences(known: Option<u128>) -> PalwEpochBudgetFencesV1 {
+                PalwEpochBudgetFencesV1 { canonical_work_daa: Some(FENCE), base_known_draw: known, ..Default::default() }
+            }
+
+            /// The fold past the fence: the lane, the registry and the canonical-work height.
+            fn armed() -> PalwTransitionExtrasV1 {
+                PalwTransitionExtrasV1 { canonical_work_daa: Some(FENCE), ..extras(Some(fold(kimi_work()))) }
+            }
+
+            /// The floor (class 1, `MaxPerAttempt(160)`, slash 5, two expected draws) and a producer
+            /// collateralised for a derived claim (bond 2), folded below both fences: no class has a
+            /// row, because the registry has never stepped.
+            fn below_the_fence(p: &PalwStateParamsV2) -> PalwChainStateV2 {
+                let mut objects = register_class_and_bond();
+                objects.push(bond(2, 10_000));
+                let (s1, _) = apply_palw_transition_v2_with_extras(
+                    &PalwChainStateV2::genesis(),
+                    p,
+                    &ctx(1, 100, 1),
+                    &objects,
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &extras(None),
+                )
+                .expect("the network registers");
+                assert!(s1.model_lifecycle(&h64(1)).is_none(), "the premise: the registry has not stepped, so no class has a row");
+                s1
+            }
+
+            fn floor_attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
+                attempt_for_class(pwu, nonce, h64(1), bond_key(2), vec![0x42; 4], op_id(22), h64(11))
+            }
+
+            fn fold_armed(
+                parent: &PalwChainStateV2,
+                p: &PalwStateParamsV2,
+                c: &PalwBlockContextV2,
+                objects: &[PalwConsensusObjectV2],
+                att: Option<&PalwAttemptEnvelopeV2>,
+            ) -> PalwChainStateV2 {
+                let (next, _) = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &armed())
+                    .unwrap_or_else(|e| panic!("the block at {} folds: {e:?}", c.daa_score));
+                next.assert_internal_consistency_v3(p, false, Some(FENCE)).expect("and the state it leaves is consistent");
+                next
+            }
+
+            /// **§5.** With the bundle at the registry's own height the parent of the first blocks
+            /// past it holds no row, and a chain block's attempt is admitted against its parent. Read
+            /// from the row alone the floor there is `PwuUnderivable`, its producers hold, and a
+            /// network whose only block type is the attempt stops at the fence it was built to cross.
+            ///
+            /// The floor is priced on the draw its row WILL carry, by the gate, the producer and the
+            /// fold alike — and the row the registry then writes carries exactly that number, so the
+            /// claim is never re-priced and the next block, reading the row, derives the same pwu.
+            #[test]
+            fn the_floor_produces_on_the_first_blocks_past_a_bundle_armed_at_the_registrys_height() {
+                let p = params();
+                let admission = admission();
+                let s1 = below_the_fence(&p);
+                let derived = palw_attempt_derived_pwu_v1(u128::MAX / 2, floor_draw());
+                assert_eq!(derived as u128, 2 * floor_draw(), "two expected draws of the floor's derived work");
+                let c = ctx(2, FENCE, 2);
+
+                // The rule without the floor's known draw — the rule as it stood: nobody can produce.
+                assert!(
+                    palw_producer_facts_v3(&s1, &p, &admission, c.block, FENCE, h64(1), Some(&bond_key(2)), None, Some(FENCE), None)
+                        .is_none(),
+                    "a floor with no row and no known draw has no facts: every producer holds"
+                );
+                assert_eq!(
+                    check_palw_attempt_admission_v2(&s1, &p, &admission, &c, &floor_attempt(derived, 1), fences(None)).unwrap_err(),
+                    PalwAdmissionV2Error::PwuUnderivable { class: h64(1) },
+                    "and the gate refuses the floor's only legal attempt"
+                );
+
+                // With it, the producer is handed the one pwu the gate accepts, and the gate accepts it.
+                let facts = palw_producer_facts_v3(
+                    &s1,
+                    &p,
+                    &admission,
+                    c.block,
+                    FENCE,
+                    h64(1),
+                    Some(&bond_key(2)),
+                    None,
+                    Some(FENCE),
+                    Some(floor_draw()),
+                )
+                .expect("the floor has facts before its row");
+                assert_eq!(facts.pwu, derived, "the producer's pwu is the derivation");
+                let env = floor_attempt(facts.pwu, 1);
+                check_palw_attempt_admission_v2(&s1, &p, &admission, &c, &env, fences(Some(floor_draw())))
+                    .expect("admitted against the row-less parent");
+                // And only that value: the declared basis is not a second legal answer.
+                assert!(
+                    matches!(
+                        check_palw_attempt_admission_v2(&s1, &p, &admission, &c, &floor_attempt(40, 2), fences(Some(floor_draw()))),
+                        Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: 40, .. })
+                    ),
+                    "a pwu the cap allowed below the fence is not the derivation past it"
+                );
+
+                // The fold, mid-span, has no row either — and reserves what the gate priced: the
+                // floor's derived draw in the floor's own collateral unit, which is its declared
+                // 160 × slash 5 byte for byte, NOT the derived work of a win (1,000 × 5).
+                let s2 = fold_armed(&s1, &p, &c, &[], Some(&env));
+                assert!(s2.model_lifecycle(&h64(1)).is_none(), "mid-span: the registry has not stepped in the fold either");
+                let claim = s2.claim(&attempt_id_v2(&env.attempt)).expect("the floor's claim is created").clone();
+                assert_eq!(claim.pwu, derived);
+                assert_eq!(claim.reserved, 160 * 5, "the floor's reservation does not move across the fence");
+                assert_eq!(
+                    facts.bond.as_ref().expect("bond facts").claim_exposure,
+                    claim.reserved,
+                    "and the producer predicted exactly the headroom the ledger took"
+                );
+
+                // The registry's first boundary writes the floor's row with exactly that draw, and the
+                // next block — read off the row, with no known draw handed in — derives the same pwu.
+                let s3 = fold_armed(&s2, &p, &ctx(3, 110, 3), &[], None);
+                assert_eq!(
+                    s3.model_lifecycle(&h64(1)).expect("the boundary opens the floor's row").work.economic_ccu_per_claim,
+                    floor_draw(),
+                    "the row carries the number the row-less claim was priced on"
+                );
+                let next =
+                    palw_producer_facts_v3(&s3, &p, &admission, h64(3), 111, h64(1), Some(&bond_key(2)), None, Some(FENCE), None)
+                        .expect("row-backed facts");
+                assert_eq!(next.pwu, derived, "the row and the known draw are one price");
+                check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 111, 4), &floor_attempt(derived, 3), fences(None))
+                    .expect("admitted on the row alone");
+                assert_eq!(
+                    s3.claim(&attempt_id_v2(&env.attempt)).map(|c| c.pwu),
+                    Some(derived),
+                    "and the row-less claim was not re-priced"
+                );
+            }
+
+            /// **§6.** A merged blue's attempt is admitted twice: by the node's pre-check
+            /// (`palw_v2_merged_works`, with the block's fences) and by the fold's own re-run, which
+            /// passed `..Default::default()` — the DECLARED rule. Past the fence no attempt satisfied
+            /// both, so every merged blue's work was skipped: claimed by nobody, weighing nothing.
+            #[test]
+            fn a_merged_attempt_past_the_fence_is_folded_on_the_rule_its_pre_check_admitted_it_on() {
+                let p = params();
+                let admission = admission();
+                let s1 = below_the_fence(&p);
+                // A span boundary past the fence: the registry steps and the floor has its row.
+                let s2 = fold_armed(&s1, &p, &ctx(2, 110, 2), &[], None);
+                assert!(s2.model_lifecycle(&h64(1)).is_some(), "the premise: the floor's row exists");
+                let derived = palw_attempt_derived_pwu_v1(u128::MAX / 2, floor_draw());
+                let honest = floor_attempt(derived, 1);
+                let declared = floor_attempt(40, 2);
+                let c = ctx(3, 111, 3);
+
+                // The node's pre-check, with the fences it resolves for the block.
+                check_palw_attempt_admission_v2(&s2, &p, &admission, &c, &honest, fences(None))
+                    .expect("the pre-check admits the derivation");
+                assert!(matches!(
+                    check_palw_attempt_admission_v2(&s2, &p, &admission, &c, &declared, fences(None)),
+                    Err(PalwAdmissionV2Error::PwuClaimNotDerived { .. })
+                ));
+
+                let merged = [
+                    PalwMergedWorkV1 {
+                        carrying_block: h64(0xB1),
+                        work: PalwBlockWorkV3::Attempt(&honest),
+                        execution_key: h64(0xE1),
+                        subsidy: 0,
+                        escrow_carve: None,
+                        bits: 0,
+                    },
+                    PalwMergedWorkV1 {
+                        carrying_block: h64(0xB2),
+                        work: PalwBlockWorkV3::Attempt(&declared),
+                        execution_key: h64(0xE2),
+                        subsidy: 0,
+                        escrow_carve: None,
+                        bits: 0,
+                    },
+                ];
+                let (s3, _, skips) = apply_palw_transition_v7(
+                    &s2,
+                    &p,
+                    Some(&admission),
+                    &c,
+                    &[],
+                    PalwBlockWorkV3::None,
+                    &merged,
+                    Hash64::default(),
+                    false,
+                    false,
+                    false,
+                    false,
+                    &armed(),
+                )
+                .expect("the accepting block stands");
+                s3.assert_internal_consistency_v3(&p, false, Some(FENCE)).expect("consistent");
+                let honest_claim =
+                    s3.claim(&attempt_id_v2(&honest.attempt)).expect("the merged blue that ran the derived work is claimed");
+                assert_eq!(honest_claim.pwu, derived);
+                assert_eq!(honest_claim.reserved, 160 * 5, "at the reservation the own-work path would take");
+                assert!(s3.claim(&attempt_id_v2(&declared.attempt)).is_none(), "the declared one is not");
+                assert_eq!(skips.len(), 1, "exactly one refusal: {skips:?}");
+                assert_eq!(skips[0].0, h64(0xB2), "and it names the declared blue");
+                assert!(skips[0].1.contains("is not the derived"), "for the reason the pre-check gave: {}", skips[0].1);
+            }
+
+            /// **The rule, end to end:** past the fence the one legal pwu is the derivation, the claim
+            /// carries it, and the `Final` weighs exactly it — no re-pricing, no declared factor
+            /// anywhere between the gate and the fork choice.
+            #[test]
+            fn past_the_fence_a_final_weighs_exactly_the_derivation_it_was_admitted_on() {
+                let p = params();
+                let s1 = below_the_fence(&p);
+                let s2 = fold_armed(&s1, &p, &ctx(2, 110, 2), &[], None);
+                let derived = palw_attempt_derived_pwu_v1(u128::MAX / 2, floor_draw());
+                let env = floor_attempt(derived, 1);
+                let claim_id = attempt_id_v2(&env.attempt);
+                let s3 = fold_armed(&s2, &p, &ctx(3, 111, 3), &[], Some(&env));
+                let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+                let s4 = fold_armed(
+                    &s3,
+                    &p,
+                    &ctx(4, 112, 4),
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                    None,
+                );
+                let s5 = fold_armed(
+                    &s4,
+                    &p,
+                    &ctx(5, 113, 5),
+                    &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+                    None,
+                );
+                let s6 = fold_armed(&s5, &p, &ctx(6, 140, 6), &[], None);
+                assert!(matches!(s6.claim(&claim_id).expect("held").phase, PalwClaimPhaseV2::Final { .. }), "the claim finalises");
+                assert_eq!(s6.safe_weight(), derived as u128, "its weight is its pwu, and its pwu is the derivation");
+                assert_eq!(s6.palw_claim_canonical_weight_v1(s6.claim(&claim_id).unwrap(), Some(FENCE)), Some(derived as u128));
+            }
+        }
+
         mod admission_independence {
             use super::*;
             use crate::palw_panel_v2::{

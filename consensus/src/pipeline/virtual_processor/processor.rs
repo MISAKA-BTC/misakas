@@ -4187,8 +4187,10 @@ impl VirtualStateProcessor {
                 budget_fences.work_target_floor,
                 budget_fences.single_lottery,
             ),
-            // ADR-0149: the height the admission compares the candidate against.
+            // ADR-0149: the height the admission compares the candidate against, and the floor's
+            // draw it prices the floor on before the registry has written its row.
             budget_fences.canonical_work_daa,
+            budget_fences.base_known_draw,
         )?;
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
@@ -7905,7 +7907,20 @@ impl VirtualStateProcessor {
             // measuring the declared basis while the ledger measured the derived one, which is the
             // 2026-09-19 re-audit's finding (a) — the gate admitting what the ledger cannot record.
             canonical_work_daa: self.palw_canonical_work_daa,
+            // ADR-0149 §5: the floor's draw from the table the registry copies into its row, so the
+            // first blocks past a fence armed at the registry's own height can price the floor. Only
+            // resolved where the fence is scheduled at all: a network without it never reads it.
+            base_known_draw: self.palw_canonical_work_daa.and_then(|_| self.palw_base_known_draw_v1()),
         }
+    }
+
+    /// **ADR-0149 §5: the floor class's derived draw as the registry will write it** — its entry in
+    /// [`Self::palw_known_model_works_v1`], the map `palw_model_registry_fold_at` hands the fold as
+    /// `genesis_works` and `step_model_registry` copies into the floor's row. One table, so the
+    /// admission, the producer's facts and the fold price the floor's row-less attempts alike.
+    fn palw_base_known_draw_v1(&self) -> Option<u128> {
+        let base = self.palw_state_params_v2.as_ref()?.base_class_id();
+        self.palw_known_model_works_v1().get(&base).map(|work| work.economic_ccu_per_claim).filter(|draw| *draw > 0)
     }
 
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.

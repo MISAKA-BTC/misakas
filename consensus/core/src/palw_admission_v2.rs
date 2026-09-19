@@ -94,6 +94,13 @@ pub struct PalwEpochBudgetFencesV1 {
     /// a flag resolved at the block would price one claim under two bases. `None` by `Default`,
     /// which is every shipped preset and the declared basis exactly.
     pub canonical_work_daa: Option<u64>,
+    /// **ADR-0149 §5: the floor class's derived draw as the registry will write it** — its entry in
+    /// the table `step_model_registry` copies into the floor's row (`genesis_works`), resolved by
+    /// the node from the same table it hands the fold. Read only past `canonical_work_daa` and only
+    /// while the floor has no row: the parent state of the first blocks past a fence armed at the
+    /// registry's own height holds no row at all, and without this the floor — the class the
+    /// chain's liveness rides on — could not be priced there. `None` by `Default`.
+    pub base_known_draw: Option<u128>,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -427,8 +434,15 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             &attempt.class_id,
             palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery),
         )?;
+        // ADR-0149 §5: the floor is priced before its row exists, on the draw the row will carry.
         let per_draw = state
-            .palw_canonical_per_draw_v1(&attempt.class_id, ctx.daa_score, budget_fences.canonical_work_daa)
+            .palw_attempt_per_draw_v1(
+                &state_params.base_class_id(),
+                &attempt.class_id,
+                ctx.daa_score,
+                budget_fences.canonical_work_daa,
+                budget_fences.base_known_draw,
+            )
             .ok_or(PalwAdmissionV2Error::PwuUnderivable { class: attempt.class_id })?;
         let derived = palw_attempt_derived_pwu_v1(target, per_draw);
         if attempt.pwu != derived {
@@ -568,9 +582,20 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     // ceiling and the ledger cannot disagree at any fence position, which is exactly what the
     // paragraph above requires and what a second copy of the expression stopped delivering.
     let canonical_draw = state
-        .palw_canonical_per_draw_v1(&attempt.class_id, ctx.daa_score, budget_fences.canonical_work_daa)
+        .palw_attempt_per_draw_v1(
+            &state_params.base_class_id(),
+            &attempt.class_id,
+            ctx.daa_score,
+            budget_fences.canonical_work_daa,
+            budget_fences.base_known_draw,
+        )
         .map(|work| work.min(u64::MAX as u128) as u64);
-    let exposure_basis = state.palw_exposure_basis_v1(&state_params.base_class_id(), ctx.daa_score, budget_fences.canonical_work_daa);
+    let exposure_basis = state.palw_exposure_basis_v2(
+        &state_params.base_class_id(),
+        ctx.daa_score,
+        budget_fences.canonical_work_daa,
+        budget_fences.base_known_draw,
+    );
     let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
@@ -1549,6 +1574,85 @@ mod tests {
         // producing a block for it: a 2^-24 target has no admitting draw inside the 512 executions
         // the fixture searches — which is the same fact its pwu now states.
         assert_eq!(hard_pwu, crate::palw_pwu::palw_pwu_v1(hard_target, 7), "the refusal named the hard chain's derivation");
+    }
+
+    /// A registry row whose derived draw is `draw` — what the canonical-work fence prices on.
+    fn row_with_draw(draw: u128) -> crate::palw_model_registry_v1::PalwModelLifecycleRowV1 {
+        use crate::palw_model_registry_v1::{PalwModelLifecycleRowV1, PalwModelLifecycleV1, PalwModelWorkV1};
+        PalwModelLifecycleRowV1 {
+            state: PalwModelLifecycleV1::Active,
+            work: PalwModelWorkV1 { verification_ccu: draw, economic_ccu_per_claim: draw, ops_supported: true, ..Default::default() },
+            profile: Default::default(),
+            since_span: 0,
+            probes_passed: 0,
+            probes_failed: 0,
+            probes_passed_this_span: 0,
+            probes_failed_this_span: 0,
+            ready_seats: 0,
+            inflight_claims: 0,
+            utilization_permille: 0,
+            admission_milli: 0,
+            cap_utilization_permille: 0,
+            priced_share_permille: 0,
+        }
+    }
+
+    /// The composed order with the block's fences — `check_with_lottery` with a fence argument.
+    fn check_fenced(
+        state: &PalwChainStateV2,
+        c: &PalwBlockContextV2,
+        envelope: &PalwAttemptEnvelopeV2,
+        fences: PalwEpochBudgetFencesV1,
+    ) -> Result<Hash64, PalwAdmissionV2Error> {
+        check_palw_attempt_da_pins_v1(&state_params(), &envelope.attempt, c.daa_score)?;
+        let id = check_palw_attempt_admission_v2(state, &state_params(), &admission_params_with_derived_class(), c, envelope, fences)?;
+        check_palw_class_lottery_v3(state, &envelope.attempt, anchor_of(envelope))?;
+        Ok(id)
+    }
+
+    /// **ADR-0149: past the canonical-work fence the one legal pwu is the ROW's derivation.**
+    ///
+    /// Below the fence a `DerivedV1` class's pwu is its target times the per-inference cost its
+    /// registrant DECLARED (7 here); past it, its target times the derived draw of the class's own
+    /// graph (9 here) — the declaration is not a second legal answer, and it is not an input at all.
+    /// A class the chain has no derived draw for is refused by name rather than priced on the
+    /// declared basis, and the floor's known draw (ADR-0149 §5) prices the floor and nothing else.
+    #[test]
+    fn past_the_canonical_fence_the_one_legal_pwu_is_the_rows_derivation() {
+        let target = u128::MAX / 2;
+        let c = ctx(4, 1_002, 4);
+        let mut state = state_with_derived_class(target);
+        state.set_model_lifecycle_for_tests(h64(2), row_with_draw(9));
+        let declared = crate::palw_pwu::palw_pwu_v1(target, 7);
+        let derived = palw_attempt_derived_pwu_v1(target, 9);
+        assert_eq!((declared, derived), (14, 18), "two expected draws, at the declared 7 and at the derived 9");
+
+        // Below the fence (it sits at 2,000): the registrant's number, exactly as before.
+        let below = PalwEpochBudgetFencesV1 { canonical_work_daa: Some(2_000), ..Default::default() };
+        check_fenced(&state, &c, &derived_class_attempt_admitting(declared, target), below).expect("the declared basis below");
+        assert_eq!(
+            check_fenced(&state, &c, &derived_class_attempt(derived, 2), below).unwrap_err(),
+            PalwAdmissionV2Error::PwuClaimNotDerived { claimed: derived, derived: declared }
+        );
+
+        // Past it (1,000 ≤ 1,002): the row's derivation, and the declaration refused.
+        let past = PalwEpochBudgetFencesV1 { canonical_work_daa: Some(1_000), ..Default::default() };
+        check_fenced(&state, &c, &derived_class_attempt_admitting(derived, target), past).expect("the derivation past");
+        assert_eq!(
+            check_fenced(&state, &c, &derived_class_attempt(declared, 3), past).unwrap_err(),
+            PalwAdmissionV2Error::PwuClaimNotDerived { claimed: declared, derived },
+            "the declared per-inference cost buys nothing past the fence"
+        );
+
+        // A class with no row cannot be priced, and is not priced on the declared basis instead.
+        let rowless = state_with_derived_class(target);
+        for fences in [past, PalwEpochBudgetFencesV1 { base_known_draw: Some(9), ..past }] {
+            assert_eq!(
+                check_fenced(&rowless, &c, &derived_class_attempt(declared, 4), fences).unwrap_err(),
+                PalwAdmissionV2Error::PwuUnderivable { class: h64(2) },
+                "no row, no price — and the floor's known draw is the floor's, never another class's"
+            );
+        }
     }
 
     // ---- the remaining items, one refusal each ----

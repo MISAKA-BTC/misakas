@@ -241,7 +241,7 @@ pub fn palw_producer_facts_v2(
     bond: Option<&PalwBondKeyV2>,
     work_target_floor: Option<u128>,
 ) -> Option<PalwProducerFactsV2> {
-    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None)
+    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None, None)
 }
 
 /// [`palw_producer_facts_v2`] with **ADR-0149's derived pwu**: `canonical_work_daa` is
@@ -251,6 +251,11 @@ pub fn palw_producer_facts_v2(
 /// builds an attempt its own chain refuses and never mispredicts its own headroom. A class the chain
 /// has no derived draw for has no facts past the fence: it cannot produce, and saying so is the
 /// producer holding rather than mining into a refusal.
+///
+/// `base_known_draw` is the admission's own (`PalwEpochBudgetFencesV1::base_known_draw`): the
+/// floor's draw as the registry will write it, read only while the floor has no row (ADR-0149 §5).
+/// Without it a fence armed at the registry's height would leave the floor with no facts on the
+/// first blocks past it, and every producer holding at once is a chain that has stopped.
 #[allow(clippy::too_many_arguments)]
 pub fn palw_producer_facts_v3(
     state: &PalwChainStateV2,
@@ -262,6 +267,7 @@ pub fn palw_producer_facts_v3(
     bond: Option<&PalwBondKeyV2>,
     work_target_floor: Option<u128>,
     canonical_work_daa: Option<u64>,
+    base_known_draw: Option<u128>,
 ) -> Option<PalwProducerFactsV2> {
     let class = state.class(&class_id)?;
     // ADR-0137: past the work target a model class draws against `MAX · min(1, CCU / W₀)` from
@@ -271,7 +277,8 @@ pub fn palw_producer_facts_v3(
     // producer's ticket AND its pwu are the ones the chain will derive (2026-09-18 audit, C-2).
     let class_target =
         crate::palw_admission_v2::palw_effective_class_target_v1(state, state_params, &class_id, work_target_floor).ok()?;
-    let derived_draw = state.palw_canonical_per_draw_v1(&class_id, daa_score, canonical_work_daa);
+    let derived_draw =
+        state.palw_attempt_per_draw_v1(&state_params.base_class_id(), &class_id, daa_score, canonical_work_daa, base_known_draw);
     let past_the_unit = canonical_work_daa.is_some_and(|height| daa_score >= height);
     let pwu = if past_the_unit {
         crate::palw_admission_v2::palw_attempt_derived_pwu_v1(class_target, derived_draw?)
@@ -285,7 +292,7 @@ pub fn palw_producer_facts_v3(
         class,
         pwu,
         derived_draw.map(|work| work.min(u64::MAX as u128) as u64),
-        state.palw_exposure_basis_v1(&state_params.base_class_id(), daa_score, canonical_work_daa),
+        state.palw_exposure_basis_v2(&state_params.base_class_id(), daa_score, canonical_work_daa, base_known_draw),
     );
     let epoch_index = daa_score / state_params.epoch_length();
     let epoch_budget_blocks = state
