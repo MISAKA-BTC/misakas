@@ -145,3 +145,42 @@ Test: `fp_compute_pricing::the_entrance_prices_a_commitment_exactly_as_the_fold_
 eras, two classes: the quoted quanta, pwu and reservation equal the claim the fold writes one block
 later, the bond's room moves by exactly the quote, and a lying leaf count is refused by both with
 the same error.
+
+## 7. Addendum (2026-09-20): the entrance's budget is sized in the same unit
+
+§6 made the gateway price a commitment with the fold's own expression. The Studio drill then showed
+the other number at the entrance still sized for the leaves era: the operator's **public-job
+budget** (ADR-0077 SA-1), a per-day share of the bond's room, default 200‰. Past the bundle the
+entrance's per-claim figure from the chain's facts was 147,880,590 sompi, and the exact reservation
+of the drill's 19-token, 16-token chat (measured in run6) 86,152,240, against a devnet genesis bond's
+room of 550,004,340 — whose 200‰ is 110,000,868, below the first and barely above the second. Every
+chat was answered and none could commit, and the gateway said "the public-job budget for this window
+is spent (0 of 110000868 sompi)", which reads like a busy day rather than a setting under which
+nothing can ever commit.
+
+**And one step later, the same old unit.** With the budget fixed (run6) the gateway committed the
+chat at the chain's price — 17,883 quanta, 86,152,240 sompi reserved — and the rail refused to build
+its carrier: `build_fp_commitment_tx` asked whether the claim earns a quantum by the leaves rule
+(`derive_quanta_and_pwu(3,806,528 leaves, 83,102,171,136-leaf canonical job)` → none). §6 moved the
+exposure and left this guard. The builder now takes `FpCommitmentPriceV1`: the chain's quote
+(op 187 in the rail, the session in kaspad's canonical claim) wherever a node was asked, the leaves
+rule only where none could be. Every quote is asked with the ids the carrier holds
+(`palw_fp_carried_prompt_ids_v1` — none under PanelDa or a canonical prompt), because those are the
+ids the fold's prefix accounting reads; the gateway and the rail had sent the full prompt.
+
+The budget, for its part, is not a pricing defect — the reservation is the compute the claim
+stands for, and the room is the bond's — but it moves who can mine with a given bond. Three consequences, each landed:
+
+* **A gateway whose only user is its operator runs 1000‰.** MISAKA Studio's own gateway and the
+  Studio pool (`contrib/minerpool/run-fp.sh`, which met the same wall in the leaves era) are that
+  case; the default stays 200‰ for a gateway strangers reach. The drill passes
+  `GATEWAY_PUBLIC_BUDGET_PERMILLE` [1000].
+* **The gateway names the case.** A claim larger than the whole window's budget is refused with
+  "no public job can commit at this setting — raise --public-job-budget-permille … or the bond's
+  room", not "spent (0 of …)".
+* **The client repeats the verdict.** MISAKA Studio had logged "free-prompt claim committed" off
+  the claim id and counted the job `Committed` while the gateway said `committed: false`; it now
+  reads `committed` / `not_committed_because` and shows such a chat as not mined, with the reason.
+
+Bond sizing for operators, and any pool's arithmetic of claims per bond per day, must use the
+compute era's reservation (`GetPalwFreePromptPrice`), not the leaves figure.

@@ -305,8 +305,8 @@ impl PublicJobBudget {
         let budget = Self::daily_budget(config, price);
         // **A claim larger than the whole window is not a window that got spent.** Said as "spent
         // (0 of N)" it read like a busy day; it is a setting under which no public job can EVER
-        // commit — the 2026-09-20 economy drill: past the ADR-0145 bundle one claim reserved the
-        // compute era's 147,880,590 sompi against a 200‰ budget of 110,000,868.
+        // commit — the 2026-09-20 economy drill: past the ADR-0145 bundle the entrance priced one
+        // claim at the compute era's 147,880,590 sompi against a 200‰ budget of 110,000,868.
         if price.claim_sompi > budget {
             return Err(format!(
                 "one claim reserves {} sompi and this window's whole public-job budget is {} ({}‰ of the bond's room {}): \
