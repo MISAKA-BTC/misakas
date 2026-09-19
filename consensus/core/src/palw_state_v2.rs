@@ -35267,6 +35267,68 @@ pub(crate) mod tests {
             assert!(wrote_class && wrote_owner, "one transition, both writes");
         }
 
+        /// **The two carriage tails the state root deliberately does not cover stay out of
+        /// consensus** (audit 2026-09-19).
+        ///
+        /// `work_target_shadow` and `final_work` ride the carriage so a reader (op 186) sees them
+        /// and a restart keeps them, and they are NOT hashed into `state_root` — which is correct
+        /// only for as long as nothing a rule reads depends on them. They are also attacker-
+        /// influenced: `final_work` is a census of the work classes actually produced. So the day a
+        /// consensus path starts reading either, two nodes could agree about the root and disagree
+        /// about behaviour, and nothing in the type system would say so.
+        ///
+        /// This is the same shape as `only_this_module_may_ask_the_pre_fence_slot_rule`: a grep is
+        /// the only thing that sees a new call site before a network does. The readers allowed are
+        /// the shadow's own step, the RPC/registry readout, and tests.
+        #[test]
+        fn nothing_in_consensus_reads_the_unrooted_carriage_tails() {
+            let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
+            // Where reading them is the POINT: the step that writes the shadow, the readouts that
+            // exist to show it, and this guard.
+            let allowed = ["palw_state_v2.rs", "palw_work_target_v1.rs", "palw_model_registry_v1.rs"];
+            let mut offenders = Vec::new();
+            let mut stack = vec![root];
+            while let Some(dir) = stack.pop() {
+                let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if path.is_dir() {
+                        if !matches!(name.as_str(), "target" | ".git" | "node_modules" | "vendor") {
+                            stack.push(path);
+                        }
+                        continue;
+                    }
+                    if !name.ends_with(".rs") || allowed.contains(&name.as_str()) {
+                        continue;
+                    }
+                    // Only consensus decides blocks. An RPC or a CLI printing the shadow is what it
+                    // is for.
+                    let in_consensus = path.components().any(|c| c.as_os_str() == "consensus");
+                    if !in_consensus {
+                        continue;
+                    }
+                    let Ok(text) = std::fs::read_to_string(&path) else { continue };
+                    for (n, line) in text.lines().enumerate() {
+                        let trimmed = line.trim_start();
+                        if trimmed.starts_with("//") {
+                            continue;
+                        }
+                        for reader in ["work_target_shadow(", "final_work_shares_v1("] {
+                            if line.contains(reader) {
+                                offenders.push(format!("{}:{}: {}", path.display(), n + 1, trimmed.trim_end()));
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                offenders.is_empty(),
+                "a consensus path now reads a field the state root does not cover — root it, or stop reading it:\n{}",
+                offenders.join("\n")
+            );
+        }
+
         /// **An operator identity cannot be taken from the bond that holds it** (audit 2026-09-19).
         ///
         /// `operator_id` is the unit of panel dedup and of the executor exclusion
