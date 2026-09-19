@@ -2303,6 +2303,33 @@ pub const PALW_CLASS_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/class-registr
 pub const PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA: u64 = 4_000;
 
 pub const PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/bond-registration-v2/mldsa87/v1";
+/// **The operator key's own context** (audit 2026-09-19). `operator_id` is the unit of panel dedup
+/// and of the executor exclusion, and it is derived from `operator_pubkey` — a field the
+/// registration signs under the BOND key, which proves the registrant chose those bytes and not
+/// that anybody holds them. Past `Params::palw_operator_id_unique` the registration carries a
+/// second signature, by the operator key, over this context: a proof of possession, which is what
+/// makes a second identity cost a second key rather than a second declaration.
+pub const PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/operator-possession/mldsa87/v1";
+/// The message that proof is over — the registration it belongs to, and nothing else, so a proof
+/// cannot be lifted onto another bond, another key or another network.
+pub const PALW_OPERATOR_POSSESSION_DOMAIN: &[u8] = b"misaka-palw/operator-possession/message/v1";
+
+/// The message an operator key signs to prove it holds the identity a registration declares.
+pub fn palw_operator_possession_message_v1(
+    network_domain: Hash64,
+    bond: &PalwBondKeyV2,
+    pubkey: &[u8],
+    operator_pubkey: &[u8],
+) -> Hash64 {
+    let mut state = keyed(PALW_OPERATOR_POSSESSION_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(&borsh::to_vec(bond).expect("a bond key is borsh-serializable"));
+    state.update(&(pubkey.len() as u64).to_le_bytes());
+    state.update(pubkey);
+    state.update(&(operator_pubkey.len() as u64).to_le_bytes());
+    state.update(operator_pubkey);
+    finish(state)
+}
 pub const PALW_BOND_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/bond-registration-v2/message/v1";
 
 /// What a registrant signs to put a bond on a running chain: every field the registration binds,

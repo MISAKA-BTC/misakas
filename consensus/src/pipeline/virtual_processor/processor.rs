@@ -6595,13 +6595,64 @@ impl VirtualStateProcessor {
                         payout_payload,
                         capable_classes,
                     );
+                    // **Past the fence the registration carries TWO signatures, and the second
+                    // proves the operator identity is held rather than declared** (audit
+                    // 2026-09-19).
+                    //
+                    // `operator_id` is the unit of panel dedup and of the executor exclusion, and
+                    // it is derived from `operator_pubkey` — which this message signs under the
+                    // BOND key. That proves the registrant chose those bytes; it proves nothing
+                    // about holding them. Undeclared, a registrant could name a victim's identity
+                    // and thereby take that victim out of the jury of every claim he produces.
+                    //
+                    // An ML-DSA-87 signature is a fixed `MLDSA87_SIG_LEN`, so a registration past
+                    // the fence is exactly two of them and the split is unambiguous. That is why
+                    // this needs no new object and no new state: the field already exists, and the
+                    // fence is what says how to read it.
+                    let operator_proof = if self.palw_operator_id_unique_at(point.daa_score) {
+                        let sig_len = kaspa_txscript::MLDSA87_SIG_LEN;
+                        if signature.len() != 2 * sig_len {
+                            return Err(format!(
+                                "bond {bond:?}'s registration carries {} signature bytes; past the operator-possession fence it \
+                                 carries two signatures ({} bytes): the bond's, then the operator key's",
+                                signature.len(),
+                                2 * sig_len
+                            ));
+                        }
+                        Some(signature.split_at(sig_len))
+                    } else {
+                        None
+                    };
+                    let bond_sig = operator_proof.map(|(first, _)| first).unwrap_or(signature.as_slice());
                     if !Self::verify_mldsa87_with_context_bool(
                         pubkey,
                         message.as_byte_slice(),
-                        signature,
+                        bond_sig,
                         kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
                     ) {
                         return Err(format!("bond {bond:?}'s registration is not signed by the key it declares"));
+                    }
+                    if let Some((_, operator_sig)) = operator_proof {
+                        let proof = kaspa_consensus_core::palw_state_v2::palw_operator_possession_message_v1(
+                            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                                self.network_id_bytes.as_slice(),
+                                Some(self.genesis.hash),
+                            ),
+                            &signed_bond,
+                            pubkey,
+                            operator_pubkey,
+                        );
+                        if !Self::verify_mldsa87_with_context_bool(
+                            operator_pubkey,
+                            proof.as_byte_slice(),
+                            operator_sig,
+                            kaspa_consensus_core::palw_state_v2::PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT,
+                        ) {
+                            return Err(format!(
+                                "bond {bond:?} declares an operator identity it does not prove it holds: the second signature does \
+                                 not verify under the operator key"
+                            ));
+                        }
                     }
                 }
                 // **A capability declaration is authorised by the bond's own key, and by nothing

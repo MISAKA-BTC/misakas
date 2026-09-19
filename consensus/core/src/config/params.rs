@@ -1257,8 +1257,15 @@ pub struct Params {
     /// registrant could name an identity somebody else holds. Past this fence a second registration
     /// of an identity already on the chain is refused by name.
     ///
-    /// It does not prove possession; that needs a signature under the operator key, which changes
-    /// the object's bytes. `None` on every preset; hashed Some-only.
+    /// **And it proves possession.** The registration past this fence carries TWO signatures — the
+    /// bond's, then the operator key's over
+    /// [`crate::palw_state_v2::PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT`] — so a second identity
+    /// costs a second key rather than a second declaration. An ML-DSA-87 signature is fixed length,
+    /// so the split is unambiguous and the field that already exists carries both: no new object,
+    /// no new state. The two halves arm together because either alone leaves the gap: uniqueness
+    /// without possession is a race, possession without uniqueness lets one key hold many bonds.
+    ///
+    /// `None` on every preset; hashed Some-only.
     pub palw_operator_id_unique: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
