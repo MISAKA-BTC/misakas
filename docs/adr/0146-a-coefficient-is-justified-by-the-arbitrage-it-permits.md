@@ -1,0 +1,174 @@
+# ADR-0146 — A coefficient is justified by the arbitrage it permits, not by being right
+
+**Status:** DESIGN, 2026-09-19. No code, no fence. ADR-0145 named the coefficient table its hardest
+open question and deferred it here.
+
+---
+
+## 1. The trap this ADR exists to avoid
+
+ADR-0145 says canonical work is a vector and that "the coefficients that turn a vector into an
+economic unit are protocol-set". That sentence hides a problem: **a coefficient table is a place
+where somebody decides numbers**, and the operator's standing rule forbids hand-written per-model
+multipliers. A table of hand-picked weights is the same object one level up — it just spreads the
+decision across operations instead of across models.
+
+The existing table already understood this and took a position (`palw_economic_compute_v1.rs`):
+
+> Chosen from the arithmetic each kernel performs at the integer engine's batch of one, **not from
+> any host's timing**.
+
+Every entry is a **count**, not a preference. That is why it has survived review, and it is also
+exactly why it fails: arithmetic counts do not see memory traffic, so a 35B mixture activating 3B
+and a 1.5B dense row can execute the same MAC-equivalents and cost very different amounts.
+
+So the table cannot be fixed by picking better numbers. It has to be fixed by deciding **what makes
+any number legitimate.**
+
+---
+
+## 2. Most dimensions need no coefficient at all
+
+The first result is that the free-parameter problem is much smaller than it looks, because most of
+the vector is derivable from facts already on chain.
+
+**The existing unit already doubles as a byte count.** `matmul_mac` is "one 8-bit weight × integer
+activation multiply–accumulate, which at the integer engine's batch of one is also **one weight byte
+streamed**". So for 8-bit weights, arithmetic and traffic coincide — and they diverge exactly in
+proportion to the quantisation format, which the canonical class descriptor carries (ADR-0145 §3).
+
+```
+traffic_term = MAC-eq × real_bits_per_weight / 8
+```
+
+Q4_K_M streams half a byte per weight; W8A16 streams one. **No new trusted input, no hand-picked
+number** — the format is a declared-and-verified property of the artifact, not a preference. This is
+the red-team's C9 and it closes the one gap the current table is known to have.
+
+The same holds elsewhere. A routed expert row's cost follows from how many experts the row activates
+— a graph fact. Attention follows from heads × head dimension × true KV length — an execution fact.
+KV read and write follow from the cache the receipt commits to (ADR-0145 §6).
+
+**Rule R1.** A dimension that can be derived from the canonical graph, the artifact's declared and
+verified format, or the execution facts MUST be derived. A coefficient is permitted only where no
+derivation exists.
+
+That leaves far fewer free parameters than "a coefficient table" suggests: essentially the
+**relative price between dimensions** when the vector is collapsed into one economic unit.
+
+---
+
+## 3. The coefficients that remain cannot be validated by being "right"
+
+Nobody can demonstrate that a dense MAC is worth 1.0 and a KV byte 0.31. Any such claim is a
+measurement on one host, one runtime and one batch size, and ADR-0038 Decision D already refuses to
+let a wall-clock second reach fork choice.
+
+So this ADR does not ask for correct coefficients. It asks for a **bound**.
+
+**The requirement is not that reward tracks cost. It is that no participant can choose a
+configuration whose reward-per-real-cost materially beats another's.**
+
+That is a property of the table *over the space of admissible configurations*, and unlike
+correctness it is checkable — by exactly the method the 2026-09-19 red-team used: enumerate the
+admissible space and search it for the extreme.
+
+**Rule R2.** A coefficient table is accompanied by its **measured arbitrage bound**: the maximum
+ratio of reward-per-unit-real-cost between any two admissible configurations, found by adversarial
+search over profiles, quantisations, canonical jobs and execution modes. The table is proposed
+together with the search that produced the bound, and the search is committed and re-runnable.
+
+The table is not "the right numbers". It is "numbers whose worst case somebody measured, and here is
+the program that measures it".
+
+For scale, the bounds on the basis in force today, from the audit's own probes:
+
+| basis | measured spread | what the spread is over |
+|---|---|---|
+| STEP leaves | **427×** | admissible canonical jobs, one graph |
+| STEP leaves | **101×** | tilings of one graph |
+| STEP leaves | **6.8×** | the four live classes, monotone in model width |
+
+A candidate table is not an improvement because it is better reasoned. It is an improvement when its
+number in that column is smaller, measured the same way.
+
+---
+
+## 4. What the bound must be, and what happens if none is reachable
+
+**Rule R3.** An arbitrage bound is acceptable only if it is **smaller than the efficiency gains the
+protocol intends to reward**. If representation choice can move reward-per-cost by 10× while a
+genuinely better model moves it by 3×, the economy rewards representation over engineering, and the
+table fails no matter how principled its derivation.
+
+This gives a concrete target rather than a wish: the bound must sit below the spread of real
+efficiency across the models the network expects to run. That spread is itself measurable, and
+measuring it is part of proposing a table.
+
+**If no coefficient vector reaches an acceptable bound, the vector must not be collapsed.** The
+fallback is to keep the dimensions separate and give each its own eligibility budget, so a
+configuration that is extreme in one dimension exhausts that dimension's budget rather than
+converting it into a general claim on the reward pool. Collapsing to one number is a convenience,
+not a requirement, and this ADR declines to assume it is achievable.
+
+---
+
+## 5. Governance
+
+**Rule R4 — nobody in the economy sets them.** Not miners, not class registrants, not panel seats,
+not model owners. A coefficient is never a field in any object a participant signs. This is
+ADR-0145's I1 and I2 applied to the table itself.
+
+**Rule R5 — a table is versioned whole, never edited.** The current table already states this ("a
+change to any entry is a new version, never an edit") and it stays. A claim records the table
+version it was priced under, so history stays re-verifiable and no repricing is retroactive.
+
+**Rule R6 — a new version is a consensus change.** Its own fence, its own drill that crosses that
+fence, its own adversarial review, and its arbitrage bound re-measured and published with it. Per
+ADR-0144 §6 item 0 and this repo's own working rule: the height is chosen after the evidence, not
+before.
+
+**Rule R7 — the bound is a gate, not a note.** A version that does not ship with a re-runnable
+search and a bound does not arm. "We reasoned about it carefully" is what the current table did, and
+the current table is 427× wide.
+
+---
+
+## 6. The experiment that has not been run
+
+ADR-0145 says any coefficient today is "a guess wearing a number", and that remains true until this
+runs:
+
+> Both live classes' draw jobs replayed warm on **one host**, with the artifact fully resident, and
+> then not resident. If the gap survives residency, MAC-equivalents need the traffic term of §2.
+
+**It must be run on one host** precisely because a comparison across hosts measures the hosts. And
+the figures that looked like this experiment were not: the red-team established that the 13.7× gap
+cited earlier came from `#[cfg(test)]` fixtures in `palw_verification_profile_v1.rs`, and that the
+production path overrides a measured p99 with a reference-rate estimate. That correction is why this
+section exists rather than a table.
+
+**What the experiment decides.** If residency explains the gap, §2's derived traffic term is
+sufficient and the collapse may have no free parameters at all. If it does not, there is a real
+dimension neither arithmetic nor bytes captures, and §4's fallback — separate budgets — becomes the
+likely answer rather than the contingency.
+
+---
+
+## 7. What this ADR does not decide
+
+The dimensions (ADR-0145 §4 holds them provisional), the numbers, and any height. It decides what a
+proposal must carry to be considered: a derivation for every dimension that admits one, a search
+program, a measured bound, and a comparison of that bound against real efficiency spread.
+
+---
+
+## 8. Done means
+
+> No coefficient is set by anyone in the economy. Every dimension that can be derived is derived.
+> The few that cannot ship with a committed program that searches the admissible space and reports
+> the worst arbitrage they permit, and that number is smaller than the efficiency differences the
+> protocol means to reward. If no such table exists, the vector is not collapsed.
+
+The test of this ADR is not whether the numbers look reasonable. It is whether, a year from now,
+somebody can re-run one command and find out whether they still are.
