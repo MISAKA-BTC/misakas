@@ -172,3 +172,50 @@ fn a_stranger_may_register_and_may_not_arrive_with_a_share() {
         "and the acceptance layer is where a registration's share is forced"
     );
 }
+
+/// **The lifecycle expands the AMOUNT of eligible work, and never its price.**
+///
+/// The operator's design in one sentence: *registration is not eligibility; independent admission,
+/// then probation, then real use expand how much eligible work a class may have — not what a unit
+/// of it is worth.* Both halves are checkable without a chain.
+///
+/// The ladder is `Registered`/`Prefetching`/`Candidate` → 0, `Probation` → 50, `ActiveLimited` →
+/// 100, `Active` → 1,000 permille, and it is monotone: a class never moves to a stage that admits
+/// less by doing more. Promotion out of `Probation` costs `probation_claims` COMPLETED claims —
+/// real use, not a declaration and not a wait.
+///
+/// And the number it scales is a COUNT. `admission_milli` is
+/// `admission_claims_per_span_milli × admission_permille / 1000` — claims per span. It is not a
+/// rate, a multiplier on reward, or a share of anything; the reward per unit of work is
+/// ADR-0132's one `rate_sompi_per_giga`, which no lifecycle stage can reach.
+#[test]
+fn the_lifecycle_expands_the_amount_of_eligible_work_and_never_its_price() {
+    use kaspa_consensus_core::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, PalwModelLifecycleV1 as L};
+
+    // Nothing a registration alone reaches admits any work at all.
+    for state in [L::Registered, L::Prefetching, L::Candidate] {
+        assert_eq!(state.admission_permille(), 0, "{state:?} is a registration, not an eligibility");
+        assert!(!state.admits_claims(), "{state:?} admits no claim");
+    }
+    // And the earned stages are monotone in the AMOUNT.
+    let ladder = [L::Probation { probes_passed: 0 }, L::ActiveLimited { stable_epochs: 0 }, L::Active];
+    let mut previous = 0;
+    for state in ladder {
+        let permille = state.admission_permille();
+        assert!(permille > previous, "{state:?} admits more than the stage below it, not less");
+        assert!(state.admits_claims(), "{state:?} admits claims");
+        previous = permille;
+    }
+    assert_eq!(L::Active.admission_permille(), 1_000, "and the top of the ladder is the whole allowance, not a bonus above it");
+
+    // Promotion is bought with COMPLETED CLAIMS — real use, not a declaration and not a wait.
+    assert!(PALW_REGISTRY_GLOBALS_V1.probation_claims > 0, "probation costs completed claims to leave");
+
+    // The quantity the ladder scales is a COUNT of claims per span, and the registry says so in
+    // the one expression that reads it.
+    let fold = include_str!("../src/palw_state_v2.rs");
+    assert!(
+        fold.contains("profile.admission_claims_per_span_milli.saturating_mul(state.admission_permille() as u64) / 1_000"),
+        "admission_permille scales claims per span — an amount — and nothing else"
+    );
+}
