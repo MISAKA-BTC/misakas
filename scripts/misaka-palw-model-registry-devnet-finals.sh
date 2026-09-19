@@ -17,6 +17,16 @@ KASPAD_BIN="${KASPAD_BIN:-target/release/kaspad}"
 CLI_BIN="${CLI_BIN:-target/release/misaka}"
 WORK_DIR="${WORK_DIR:-.drill-adr0135}"
 NODES="${NODES:-8}"
+# **RAM_SCALE: the drill's nodes are neighbours competing for one host's memory, and a panel that
+# cannot replay licenses nothing.** ADR-0136's budget is `70 % x (MemAvailable - 1 GiB)` and it is a
+# `const` with no flag, so the only lever is what the NODES leave unclaimed. Run 20 measured the
+# trap: eight nodes on a 12 GiB host left 1.61 GiB available, a 1.87 GiB budget against the 2.17 GiB
+# a 1.67 GiB class needs, and 2,226 deferrals in four hours with the class stuck at licensed 5 /
+# final 0. Fewer nodes is not the fix -- `PALW_V2_PANEL_SEATS` (5) needs `seats + 1` distinct
+# operators or nothing is ever licensed, so six is the floor and six is still short. `--ram-scale`
+# is: it bounds the caches the node claims for itself and hands the rest back to the replay.
+# Empty keeps the node's own default, so a host with room behaves exactly as before.
+RAM_SCALE="${RAM_SCALE:-}"
 LANE="${LANE:-0,2,2}"
 REGISTRY_AT="${REGISTRY_AT:-20}"
 # ADR-0132 Upgrade C and ADR-0137: the payout and the work target, armed at a DAA or left dormant.
@@ -97,6 +107,7 @@ start_node() {
         --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i"
         --palw-producer-pay-address="$addr" --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
   [ "$FLOOR_ONLY" = 1 ] && args+=(--palw-devnet-floor-only)
+  [ -n "$RAM_SCALE" ] && args+=(--ram-scale="$RAM_SCALE")
   [ -n "$PAYOUT_AT" ] && args+=(--palw-economic-payout-devnet="$PAYOUT_AT")
   [ -n "$WORK_TARGET_AT" ] && args+=(--palw-work-target-devnet="$WORK_TARGET_AT")
   [ -n "$SINGLE_LOTTERY_AT" ] && args+=(--palw-single-lottery-devnet="$SINGLE_LOTTERY_AT")
