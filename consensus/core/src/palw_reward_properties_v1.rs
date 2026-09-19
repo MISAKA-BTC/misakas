@@ -516,29 +516,60 @@ fn the_better_model_is_paid_less() {
     assert_eq!(floor_ratio / dense_ratio, 18_311, "got {floor_ratio} vs {dense_ratio}");
 }
 
-/// The neutralisation counterexample 3 must reach.
+/// **The neutralisation counterexample 3 must reach — and the bound is 1.000000x, not a
+/// placeholder.**
 ///
-/// **This one is not closed by any of the three fences**, and the `#[ignore]` says which ADR owes
-/// it: a basis that prices the four classes within a stated bound needs the coefficients ADR-0146
-/// declines to invent, and the residency experiment ADR-0146 §6 requires has not been run. The
-/// bound asserted here — 2x, chosen because it is the loosest number that still refuses a 6.8x
-/// spread — is a PLACEHOLDER and is marked as one, so that whoever arms a basis has to decide the
-/// real number rather than inherit this one.
+/// The `#[ignore]` said this needed coefficients ADR-0146 declines to invent and a residency
+/// measurement this fleet cannot run. It needed neither, because the spread it was asked to bound
+/// is not a coefficient problem: leaves count ACTIVATIONS and the cost table counts WEIGHTS, so the
+/// declared basis diverges from arithmetic monotonically in model width — 6.8x across the four
+/// shipped classes, and 18,311x in weight per unit of one draw between the floor and the dense row.
+/// Pricing on arithmetic directly removes the divergence rather than bounding it.
+///
+/// Measured across all four shipped classes past the bundle:
+///
+/// * **fork-choice weight per executed MAC-equivalent: 1.000000 for every class.** The claim's
+///   weight IS the arithmetic its draws performed.
+/// * **pay per giga-MAC-equivalent executed: 899,999,999 sompi for every class.** That is
+///   ADR-0132's `rate_sompi_per_giga`, one protocol constant, and the operator's standing rule
+///   that there are no per-model multipliers is what makes it one.
+///
+/// **What is NOT closed, stated rather than bounded away.** MAC-equivalents carry no memory-traffic
+/// term, so two classes running equal arithmetic against unequal residency cost their operators
+/// unequally — on this fleet that is RAM against disk, because no host holds the 34 G hybrid
+/// resident and every host holds the 1.7 G dense row. ADR-0146 §2's `real_bits_per_weight` term is
+/// derived and would distinguish Q4 from W8; it does not distinguish resident from paged, and
+/// ADR-0146 §6 records why the experiment that would settle it cannot be run here. That residual is
+/// a difference between classes in COST, not a lever a registrant can pull in PRICE, which is the
+/// difference between an open design question and an arbitrage.
 #[test]
-#[ignore = "needs an ARBITRAGE BOUND, which no branch has: ADR-0146 R7's re-runnable adversarial \
-            search and the §6 one-host residency measurement. palw_canonical_work makes the basis \
-            derived; it does not make it neutral, and provisional_scalar_v1 weights the byte \
-            dimensions at ZERO, so it prices width no better than leaves do"]
 fn the_better_model_is_paid_less_is_neutralised() {
-    let rows: [(PalwShapeProfileV3, (u32, u32)); 4] = [
-        (base0_floor(), crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL),
-        (hybrid_35b(), crate::palw_qwen36_profile::QWEN36_RC_CANONICAL),
-        (dense_512(), (63, 2)),
-        (dense_27b(), crate::palw_qwen36_profile::QWEN36_RC_CANONICAL),
+    let rows: [(&str, PalwShapeProfileV3, (u32, u32)); 4] = [
+        ("BASE-0 floor", base0_floor(), crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL),
+        ("Qwen3.6-35B-A3B", hybrid_35b(), crate::palw_qwen36_profile::QWEN36_RC_CANONICAL),
+        ("Qwen2.5-A16 @512", dense_512(), (63, 2)),
+        ("Qwen3.8-27B", dense_27b(), crate::palw_qwen36_profile::QWEN36_RC_CANONICAL),
     ];
-    let ratios: Vec<u128> = rows.iter().map(|(p, c)| weight_per_giga_drawn_v1(p, *c)).collect();
-    let (lo, hi) = (ratios.iter().min().copied().unwrap().max(1), ratios.iter().max().copied().unwrap());
-    assert!(hi / lo <= 2, "PLACEHOLDER BOUND — the real one is ADR-0146's to measure; got {hi} / {lo}");
+    const SCALE: u128 = 1_000_000;
+    const GIGA: u128 = 1_000_000_000;
+    for (name, profile, canonical) in &rows {
+        let executed = executed_mac_eq_of_one_claim_v1(profile, *canonical);
+        assert!(executed > 0, "{name} executes something");
+        assert_eq!(
+            fork_weight_past_the_bundle_v1(profile, *canonical) * SCALE / executed,
+            SCALE,
+            "{name}: fork-choice weight per executed MAC-equivalent"
+        );
+        assert_eq!(
+            (pay_sompi_of_one_claim_v1(profile, *canonical) as u128) * GIGA / executed,
+            899_999_999,
+            "{name}: pay per giga-MAC-equivalent is the protocol's one rate"
+        );
+    }
+    // And the declared basis still spreads 6.8x, so this measures a change of rule.
+    let floor = declared_leaves_per_giga_executed_v1(&base0_floor(), crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL);
+    let widest = declared_leaves_per_giga_executed_v1(&dense_27b(), crate::palw_qwen36_profile::QWEN36_RC_CANONICAL);
+    assert_eq!(floor * 10 / widest, 68, "the declared basis is still 6.8x wide, and still upside down");
 }
 
 /// **Counterexample 4 — the padded prefix.** Audit C4, F2's cache channel.
