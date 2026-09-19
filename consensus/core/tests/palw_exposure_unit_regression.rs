@@ -67,10 +67,9 @@ fn the_ceiling_and_the_ledger_price_one_claim_with_one_expression() {
     let floor_drawn = one_draw_mac_eq(&floor, PALW_RC_BASE0_CANONICAL) as u64;
     let basis = PalwExposureBasisV1 { base_declared: floor_declared, base_canonical: floor_drawn };
 
-    for (name, profile, canonical) in [
-        ("BASE-0 floor", floor.clone(), PALW_RC_BASE0_CANONICAL),
-        ("Qwen2.5-A16 @512", dense, qwen25_a16_graph_v5_canonical_v1()),
-    ] {
+    for (name, profile, canonical) in
+        [("BASE-0 floor", floor.clone(), PALW_RC_BASE0_CANONICAL), ("Qwen2.5-A16 @512", dense, qwen25_a16_graph_v5_canonical_v1())]
+    {
         let leaves = declared_leaves(&profile, canonical);
         let drawn = one_draw_mac_eq(&profile, canonical) as u64;
         let class = class_of(leaves);
@@ -87,11 +86,7 @@ fn the_ceiling_and_the_ledger_price_one_claim_with_one_expression() {
 
         // 2. A half-applied unit is what produced the divergence, so a derived draw with no basis
         //    to normalise it against keeps the declared basis rather than mixing the two.
-        assert_eq!(
-            palw_exposure_pwu_v3(&class, claimed_pwu, Some(drawn), None),
-            declared,
-            "{name}: no basis, no change of unit"
-        );
+        assert_eq!(palw_exposure_pwu_v3(&class, claimed_pwu, Some(drawn), None), declared, "{name}: no basis, no change of unit");
 
         // 3. The floor class is EXACTLY unchanged past the fence. It is the normaliser, and it is
         //    also where liveness lives: every node must be able to produce on it.
@@ -126,7 +121,10 @@ fn neither_the_ceiling_nor_the_ledger_carries_its_own_copy_of_the_expression() {
     let fold = include_str!("../src/palw_state_v2.rs");
     let fold_body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
 
-    assert!(gate.contains("palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis)"), "the ceiling runs the shared expression");
+    assert!(
+        gate.contains("palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis)"),
+        "the ceiling runs the shared expression"
+    );
     assert!(
         fold_body.contains("palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis)"),
         "and so does the ledger write, over the same two inputs"

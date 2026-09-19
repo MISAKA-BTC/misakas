@@ -1148,8 +1148,7 @@ mod tests {
         /// not, because the draw executes exactly one decode call whatever was declared.
         const PREFILL: u32 = 63;
 
-        let tiles: [u32; 13] =
-            [PALW_STEP_MIN_TILE_LEN, 8, 16, 24, 32, 48, 64, 128, 256, 512, 4096, 16_384, PALW_STEP_MAX_TILE_LEN];
+        let tiles: [u32; 13] = [PALW_STEP_MIN_TILE_LEN, 8, 16, 24, 32, 48, 64, 128, 256, 512, 4096, 16_384, PALW_STEP_MAX_TILE_LEN];
         let decodes: [u32; 11] = [1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 370];
         let threads: [u32; 3] = [1, 2, 4];
 
@@ -1173,9 +1172,7 @@ mod tests {
                 for &n_threads in threads.iter() {
                     generated += 1;
                     let mut profile = dense();
-                    for table in
-                        [&mut profile.pre_nodes, &mut profile.gdn_nodes, &mut profile.attn_nodes, &mut profile.post_nodes]
-                    {
+                    for table in [&mut profile.pre_nodes, &mut profile.gdn_nodes, &mut profile.attn_nodes, &mut profile.post_nodes] {
                         for node in table.iter_mut() {
                             node.tile_len = tile;
                         }
@@ -1202,7 +1199,8 @@ mod tests {
 
                     // The work the chain DERIVES for the job a draw really runs.
                     let d = descriptor(&profile);
-                    let derived = palw_canonical_draw_work_v1(&d, &job, true).expect("a shipped profile derives").provisional_scalar_v1();
+                    let derived =
+                        palw_canonical_draw_work_v1(&d, &job, true).expect("a shipped profile derives").provisional_scalar_v1();
 
                     // The chain's own pipeline: the declaration seeds the difficulty
                     // (`attempt_target_seed_v1`, live at `palw_state_v2.rs:9595` and `:14676`),
@@ -1258,8 +1256,8 @@ mod tests {
         let worst_row = rows.iter().max_by(|a, b| ratio(a).total_cmp(&ratio(b))).unwrap();
         let best_row = rows.iter().min_by(|a, b| ratio(a).total_cmp(&ratio(b))).unwrap();
         let spread = ratio(worst_row) / ratio(best_row);
-        let reward_spread = rows.iter().map(|r| r.reward_today).max().unwrap() as f64
-            / rows.iter().map(|r| r.reward_today).min().unwrap() as f64;
+        let reward_spread =
+            rows.iter().map(|r| r.reward_today).max().unwrap() as f64 / rows.iter().map(|r| r.reward_today).min().unwrap() as f64;
 
         println!(
             "variations generated {generated}, admissible {} (refused by the ladder {refused})\n\
@@ -1288,9 +1286,6 @@ mod tests {
             "the shipped basis priced every representation alike — the canonical-work fence must have been armed; \
              re-point this assertion at equality and delete the F1 finding"
         );
-        assert!(
-            reward_spread > 1.0,
-            "the shipped reward basis priced every representation alike — see above"
-        );
+        assert!(reward_spread > 1.0, "the shipped reward basis priced every representation alike — see above");
     }
 }

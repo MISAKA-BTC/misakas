@@ -516,8 +516,7 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     let canonical_draw = state
         .palw_canonical_per_draw_v1(&attempt.class_id, ctx.daa_score, budget_fences.canonical_work_daa)
         .map(|work| work.min(u64::MAX as u128) as u64);
-    let exposure_basis =
-        state.palw_exposure_basis_v1(&state_params.base_class_id(), ctx.daa_score, budget_fences.canonical_work_daa);
+    let exposure_basis = state.palw_exposure_basis_v1(&state_params.base_class_id(), ctx.daa_score, budget_fences.canonical_work_daa);
     let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;

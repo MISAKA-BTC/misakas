@@ -65,19 +65,19 @@ impl ClockSlotTooEarly {
 pub fn palw_clock_slot_admits_v1(cursor: &PalwClockCursorV1, proposed_ms: u64) -> Result<(), ClockSlotTooEarly> {
     if proposed_ms >= cursor.next_slot_ms { Ok(()) } else { Err(ClockSlotTooEarly { next_slot_ms: cursor.next_slot_ms, proposed_ms }) }
 }
-/// **The carried cursor is gone, and that is the point of ADR-0142 §6a.**
-///
-/// This module once also opened, advanced and carried a cursor from block to block. That half was
-/// computed on every block and written into a `DaaWindow` field no reader ever read, so its
-/// arithmetic — the whole-slot advance, "missed slots are lost not banked", `slots_consumed` —
-/// decided nothing, while a property suite exercising it passed and looked like evidence about the
-/// chain. It is deleted rather than wired, because wiring it is precisely the stored-cursor design
-/// ADR-0142 replaced: a node that joined by pruning proof cannot reconstruct a carried value, and
-/// that divergence is the bug the derivation below exists to remove.
-///
-/// What runs is two functions: [`palw_clock_reference_v1`] derives where the clock last advanced
-/// from the DAA window every node has, and [`palw_clock_slot_admits_v1`] asks whether a beat is at
-/// or past the slot that reference opens.
+// **The carried cursor is gone, and that is the point of ADR-0142 §6a.**
+//
+// This module once also opened, advanced and carried a cursor from block to block. That half was
+// computed on every block and written into a `DaaWindow` field no reader ever read, so its
+// arithmetic — the whole-slot advance, "missed slots are lost not banked", `slots_consumed` —
+// decided nothing, while a property suite exercising it passed and looked like evidence about the
+// chain. It is deleted rather than wired, because wiring it is precisely the stored-cursor design
+// ADR-0142 replaced: a node that joined by pruning proof cannot reconstruct a carried value, and
+// that divergence is the bug the derivation below exists to remove.
+//
+// What runs is two functions: [`palw_clock_reference_v1`] derives where the clock last advanced
+// from the DAA window every node has, and [`palw_clock_slot_admits_v1`] asks whether a beat is at
+// or past the slot that reference opens.
 
 /// One block of the DAA window, as the clock reads it.
 ///
@@ -118,11 +118,7 @@ pub struct ClockWindowBlockV1 {
 /// `None` when the window holds no block at that score — the first block past the fence, or a
 /// window that does not reach back to the advance. Both mean "no slot is known to be taken".
 pub fn palw_clock_reference_v1(parent_daa_score: u64, window: impl IntoIterator<Item = ClockWindowBlockV1>) -> Option<u64> {
-    window
-        .into_iter()
-        .filter(|b| b.daa_score == parent_daa_score)
-        .min_by_key(|b| (b.blue_score, b.hash))
-        .map(|b| b.timestamp_ms)
+    window.into_iter().filter(|b| b.daa_score == parent_daa_score).min_by_key(|b| (b.blue_score, b.hash)).map(|b| b.timestamp_ms)
 }
 
 /// The cursor that reference stands for: the next slot opens one interval after it.
@@ -137,8 +133,8 @@ mod tests {
 
     const I: u64 = 120_000;
 
-    /// A small deterministic generator, so the properties below run over sequences rather than
-    /// examples. No `rand` dependency and no wall clock: the seed is the test's own.
+    // A small deterministic generator, so the properties below run over sequences rather than
+    // examples. No `rand` dependency and no wall clock: the seed is the test's own.
 
     /// **Property 2.** Past the cursor a beat is admissible, and one millisecond before it is not.
     /// There is no gap between "the slot opened" and "a beat may be built".

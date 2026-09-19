@@ -372,12 +372,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
     ///
     /// Returns `(exempt_count, cursor_after_this_block)`. The cursor is `None` below the fence and
     /// before the first beat past it, which is also what an absent store row means.
-    pub fn palw_clock_step_v1(
-        &self,
-        ghostdag_data: &GhostdagData,
-        mergeset_non_daa: &BlockHashSet,
-        window: &BlockWindowHeap,
-    ) -> u64 {
+    pub fn palw_clock_step_v1(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet, window: &BlockWindowHeap) -> u64 {
         // The fence is read at each merged block's OWN DAA score, as `is_round_block` reads the round
         // lane's: a block minted under the rule is exempt wherever it is later merged.
         if self.anchor_clock.is_none() {
