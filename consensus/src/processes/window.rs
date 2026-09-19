@@ -37,25 +37,11 @@ pub struct DaaWindow {
     pub window: Arc<BlockWindowHeap>,
     pub daa_score: u64,
     pub mergeset_non_daa: BlockHashSet,
-    /// **ADR-0142: where the clock stands after this block.** Carried here rather than recomputed,
-    /// because it is the same decision that produced `daa_score` — one walk of the mergeset answers
-    /// both, and two walks are how the two answers would drift. `None` below the fence.
-    pub clock_cursor: Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>,
 }
 
 impl DaaWindow {
     pub fn new(window: Arc<BlockWindowHeap>, daa_score: u64, mergeset_non_daa: BlockHashSet) -> Self {
-        Self { window, daa_score, mergeset_non_daa, clock_cursor: None }
-    }
-
-    /// ADR-0142: the same, with the cursor the DAA step decided.
-    pub fn with_clock_cursor(
-        window: Arc<BlockWindowHeap>,
-        daa_score: u64,
-        mergeset_non_daa: BlockHashSet,
-        clock_cursor: Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>,
-    ) -> Self {
-        Self { window, daa_score, mergeset_non_daa, clock_cursor }
+        Self { window, daa_score, mergeset_non_daa }
     }
 }
 
@@ -375,11 +361,8 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         let window = self.build_block_window(ghostdag_data, WindowType::DifficultyWindow, |hash| {
             mergeset_non_daa.insert(hash);
         })?;
-        // ADR-0142 §5: one call answers both the exemption count the score is built from and the
-        // cursor the block leaves behind. Asking twice is how they would come to disagree.
-        let clock_cursor = self.difficulty_manager.palw_clock_step_v1(ghostdag_data, &mergeset_non_daa, &window).1;
         let daa_score = self.difficulty_manager.calc_daa_score(ghostdag_data, &mergeset_non_daa, &window);
-        Ok(DaaWindow::with_clock_cursor(window, daa_score, mergeset_non_daa, clock_cursor))
+        Ok(DaaWindow::new(window, daa_score, mergeset_non_daa))
     }
 
     fn calculate_difficulty_bits(&self, ghostdag_data: &GhostdagData, daa_window: &DaaWindow) -> u32 {

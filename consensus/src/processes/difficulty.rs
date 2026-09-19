@@ -377,11 +377,11 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         ghostdag_data: &GhostdagData,
         mergeset_non_daa: &BlockHashSet,
         window: &BlockWindowHeap,
-    ) -> (u64, Option<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockCursorV1>) {
+    ) -> u64 {
         // The fence is read at each merged block's OWN DAA score, as `is_round_block` reads the round
         // lane's: a block minted under the rule is exempt wherever it is later merged.
         if self.anchor_clock.is_none() {
-            return (0, None);
+            return 0;
         }
         let mut exempt = 0u64;
         let mut priced = 0u64;
@@ -434,7 +434,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         let stand_in = priced == 0 && heartbeats > 0;
         let parent_daa = self.headers_store.get_daa_score(ghostdag_data.selected_parent).unwrap_or(0);
         if !self.clock_cursor.is_some_and(|fence| fence.is_active(parent_daa)) {
-            return (if stand_in { exempt.saturating_sub(1) } else { exempt }, None);
+            return if stand_in { exempt.saturating_sub(1) } else { exempt };
         }
         // **ADR-0142 §6a: the reference is derived, not stored.** The block that took the score to
         // its current value is the one at the parent's score with the LOWEST BLUE SCORE, and the
@@ -449,6 +449,8 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
                         daa_score: h.daa_score,
                         blue_score: h.blue_score,
                         timestamp_ms: h.timestamp,
+                        // The identity that makes the selection total — see `ClockWindowBlockV1`.
+                        hash: item.0.hash,
                     }
                 })
             }),
@@ -463,23 +465,19 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         let granted = stand_in
             && parent_cursor
                 .is_none_or(|cursor| kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_slot_admits_v1(&cursor, beat_ms).is_ok());
-        let cursor_after = if granted {
-            kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_cursor_after_block_v1(
-                parent_cursor,
-                true,
-                beat_ms,
-                kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
-            )
-        } else {
-            parent_cursor
-        };
-        (if granted { exempt.saturating_sub(1) } else { exempt }, cursor_after)
+        // **The cursor this block leaves behind is NOT carried.** ADR-0142 §6a settled that the
+        // reference is DERIVED from the window on every block, precisely so a pruned node and one
+        // that joined by pruning proof answer as an archival one — a stored cursor could not, and
+        // that was the bug the ADR replaced. An advanced cursor was computed here and written into a
+        // `DaaWindow` field no reader ever read, which is the shape that makes a property suite pass
+        // over a path nothing runs. It is gone; the derivation above is the whole rule.
+        if granted { exempt.saturating_sub(1) } else { exempt }
     }
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> DifficultyManagerExtension for SampledDifficultyManager<T, U> {
     fn daa_exempt_count(&self, ghostdag_data: &GhostdagData, mergeset_non_daa: &BlockHashSet, window: &BlockWindowHeap) -> u64 {
-        self.palw_clock_step_v1(ghostdag_data, mergeset_non_daa, window).0
+        self.palw_clock_step_v1(ghostdag_data, mergeset_non_daa, window)
     }
 
     fn headers_store(&self) -> &dyn HeaderStoreReader {
