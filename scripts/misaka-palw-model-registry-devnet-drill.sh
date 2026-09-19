@@ -280,6 +280,41 @@ log "0/6 the registry is scheduled on the nodes' ruleset"
 wait_reg 1 "v.get('scheduled') == True and v.get('fenceDaa') == $REGISTRY_AT" "op 186 to answer scheduled at $REGISTRY_AT"
 log "    $(reg 1 "'span %s DAA · grace until DAA %s · seats %s+%s' % (v.get('spanDaa'), v.get('graceUntilDaa'), v.get('seatCount'), v.get('spareSeats'))")"
 
+# **The clock's measured rate, before anything waits four hours on it.**
+#
+# Every DAA-sized wait in this drill is denominated in the chain's clock, and that clock is not a
+# constant: past `palw_anchor_clock` only the heartbeat advances the score, and the heartbeat is a
+# process competing with every producer on the host. Measured on run22 — eight producers on six
+# cores, load average 7.9 — it ran at **192 s/DAA**, so the 82 DAA step 4 needs took three hours.
+# A slower host does not fail differently, it fails LATER: `STEP_WAIT` is four hours, so the drill
+# spends four hours to report that the fixture was too slow.
+#
+# So the rate is measured once, here, and the remaining fence heights are projected against it. A
+# projection past `STEP_WAIT` is a refusal now rather than a timeout later — and the number is in
+# the log either way, which is the thing that was missing when run20 and run22 both came in near
+# 200 s/DAA and nobody had written down whether that was the fixture or the host.
+clock_t0=$SECONDS
+clock_a="$(daa_of 1)"
+sleep 120
+clock_b="$(daa_of 1)"
+if [ -n "$clock_a" ] && [ -n "$clock_b" ] && [ "$clock_b" -gt "$clock_a" ] 2>/dev/null; then
+  moved=$((clock_b - clock_a))
+  secs_per_daa=$(( (SECONDS - clock_t0) / moved ))
+  log "    clock: $moved DAA in $((SECONDS - clock_t0)) s = ${secs_per_daa} s/DAA"
+  for target in $ECONOMY_AT $ARTIFACT_ROOT_OWNERSHIP_AT $VERIFICATION_V2_AT; do
+    [ -n "$target" ] || continue
+    [ "$target" -gt "$clock_b" ] 2>/dev/null || continue
+    eta=$(( (target - clock_b) * secs_per_daa ))
+    log "    clock: DAA $target is ~${eta} s away at this rate"
+    [ "$eta" -lt "$STEP_WAIT" ] \
+      || die "THE FIXTURE IS TOO SLOW FOR ITS OWN FENCES: DAA $target is ~${eta} s away at ${secs_per_daa} s/DAA, \
+past STEP_WAIT=${STEP_WAIT}. Raise STEP_WAIT, lower the fence heights, or run fewer nodes — the clock is the \
+heartbeat and the heartbeat competes with every producer on this host."
+  done
+else
+  log "    (the clock did not move in 120 s: ${clock_a:-?} -> ${clock_b:-?}; no projection, and the next wait will say so)"
+fi
+
 log "1/6 the fence crossed: the base class's row opens ACTIVE at the first boundary past it"
 wait_reg 1 "v.get('active') == True and any(c.get('isBaseClass') and c.get('hasRow') and c.get('state') == 'Active' for c in v.get('classes', []))" "the base class's row"
 log "    $(reg 1 "'tip DAA %s · rows %s' % (v.get('tipDaa'), [(c['classId'][:12], c['state'] if c['hasRow'] else 'legacy') for c in v.get('classes', [])])")"

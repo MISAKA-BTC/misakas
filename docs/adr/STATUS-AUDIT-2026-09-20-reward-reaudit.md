@@ -54,6 +54,34 @@ unequal residency cost their operators unequally — on this fleet, RAM against 
 difference between classes in COST, not a lever a registrant can pull in PRICE, which is why it is
 an open design question (ADR-0146 §6) and not an arbitrage.
 
+**Four defects the DRILLS found that no test did, and the pattern in them.**
+None of these was visible to 2,316 unit tests, and each needed a chain to surface:
+
+| # | found by | what it was |
+|---|---|---|
+| a | run22, first block | every `--palw-*-devnet` knob validated its own fence, so the FIRST of three refused a legitimate three-knob command line with the bundle's own message |
+| b | review of the F1 code | the fold's merged re-check built its fence struct with `..Default::default()`, so past the bundle it asked for the DECLARED rule while the pre-check asked for the derived one — **no attempt satisfies both, every merged blue's work silently skipped, and the chain does not stop** |
+| c | Studio E2E, R=H | `getPalwRegistrationTerms` resolves at the SINK's DAA, so a registration composed just before a fence is priced at the old share and dropped when its carrier lands past it; the panel retries 200 DAA later |
+| d | Studio E2E, past the bundle | the fold reserves a free-prompt claim's collateral in compute converted to the floor's unit while the gateway and the rail watcher estimate in LEAVES — a several-fold under-estimate on a wide model, so a thin bond pays its fee and is then refused `FreePromptExposureCeiling` |
+
+(a) and (b) are fixed and in this branch. (c) and (d) are another session's, in progress.
+
+**The pattern worth keeping.** Three of the four are a rule asked in two places that answer
+differently, and the fourth is the same shape one layer out — a node and its client pricing the
+same claim by different measures. None of them stops the chain, which is why a drill that watches
+for a stop cannot see them either: (b) would have PASSED run22's crossing step. What finds this
+class is not liveness but AGREEMENT — running the two sides against each other and requiring the
+same answer.
+
+**run22 does not hit (c).** Its registration landed at DAA 23 with `REGISTRY_AT=20` and
+`ECONOMY_AT=30`, so the carrier was accepted before the fence and the class took its 1 permille.
+Checked rather than assumed, because (c)'s reporter named the window run22 sits in.
+
+**A new wRPC op is a network hazard on its own.** (d)'s fix adds op 187, and an old node answers an
+unknown op by closing the whole WebSocket — every later read on that connection dies with it. The
+implementer asks on a disposable connection and falls back to the old estimate; that is the shape
+this repo already learned once and it is recorded here so the next one inherits it.
+
 **A correction to this document's own first draft.** It said MISAKA Studio has no PALW path and
 that its chat reaches its own llama.cpp with nothing committed. That repeated an operations record
 that is out of date: Studio carries `BackendKind::Gateway`, a mining queue and a prompt-mining API,
@@ -66,10 +94,21 @@ network's own synthetic job and prices them identically. This is deliberate: pri
 differently would be consensus judging whether a prompt was real, which ADR-0144 forbids. It is
 also the honest limit of "the user's own inference becomes the work".
 
-**The tooling half of permissionless.** The consensus gate reads the carriage and has no table to
-miss a model from. `misaka model add` resolves its argument against a compiled-in ledger, so a user
-who cannot build the node cannot use that command. The escape hatch is ADR-0108's extension
-submission with an inline profile.
+**The tooling half of permissionless — CLOSED 2026-09-20, in another session's `8367782c`.**
+`misaka model add --manifest <file>` takes the class from an ADR-0108 manifest (inline profile,
+projection, or catalog id) and walks the same registration and certification the catalog path
+does, at the root the manifest pins. Verification goes through the same function `extension
+submit` uses, so anything submit refuses, `model add` refuses. Serving needs no build change
+either: `--palw-chain-classes` (ADR-0067 D5) already runs a class the binary does not carry.
+
+Checked before this line was changed: the commit exists, it touches `misaka-cli` only, and
+`--manifest` really is a flag on `model add`. What its own tests cover, as reported: a manifest
+from another network and a manifest that is not a class are refused before the node is touched,
+and a real 1.7 GiB artifact whose root is recomputed at Full depth yields an entry for an A16 row
+width the catalog does not contain.
+
+So the consensus gate reads the carriage and has no table to miss a model from, and the operator
+tool no longer needs one either.
 
 **`palw_artifact_root_ownership` is commented out on the shipped card**, and the bundle now refuses
 to arm without it. A build that arms the economy must arm ADR-0143 with it.
