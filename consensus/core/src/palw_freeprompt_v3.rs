@@ -3436,3 +3436,33 @@ mod fp_answer_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod audit_e2e_probe_2026_09_19 {
+    /// AUDIT SCRATCH — prints the shipped fences at RUNTIME, from `palw_rc_shipped_params()`.
+    #[test]
+    fn print_shipped_fences() {
+        let p = crate::config::params::palw_rc_shipped_params();
+        println!("network                         = {:?}", p.net);
+        println!("palw_fp_derived_work (raw)      = {:?}", p.palw_fp_derived_work);
+        println!("palw_fp_derived_work_fence()    = {:?}", p.palw_fp_derived_work_fence());
+        for daa in [0u64, 1, 6_000, 6_001, 6_700, 6_702, 6_901, 1_000_000, u64::MAX / 2] {
+            println!("  active_at({daa:>12}) = {}", p.palw_fp_derived_work_active_at(daa));
+        }
+        println!("palw_fp_decode_rules (raw)      = {:?}", p.palw_fp_decode_rules);
+        println!("palw_fp_decode_rules_fence()    = {:?}", p.palw_fp_decode_rules_fence());
+        println!("palw_canonical_work (raw?)      = {:?}", p.palw_uncertified_weightless);
+        println!("palw_held_context               = {:?}", p.palw_held_context);
+        println!("palw_panel_da                   = {:?}", p.palw_panel_da);
+        println!("palw_prompt_ids_merkle          = {:?}", p.palw_prompt_ids_merkle);
+        // Every other preset that ships.
+        for (name, q) in [
+            ("MAINNET", crate::config::params::MAINNET_PARAMS),
+            ("TESTNET", crate::config::params::TESTNET_PARAMS),
+            ("DEVNET", crate::config::params::DEVNET_PARAMS),
+            ("SIMNET", crate::config::params::SIMNET_PARAMS),
+        ] {
+            println!("{name:<8} palw_fp_derived_work = {:?}  fence = {:?}", q.palw_fp_derived_work, q.palw_fp_derived_work_fence());
+        }
+    }
+}

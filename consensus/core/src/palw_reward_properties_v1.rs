@@ -1049,42 +1049,63 @@ fn the_registry_already_says_a_registered_class_admits_nothing() {
 // PART 3 — the integration trap
 // =============================================================================================
 
-/// **A fence that refuses to assemble without `palw_model_registry` is a fence nobody can arm.**
+/// **`palw_canonical_work` may not precede `palw_model_registry`, and the reason is not tidiness.**
 ///
-/// The 2026-09-19 disarm (`805056ac`) put `palw_model_registry` back to `None` on every preset,
-/// because permissionless registration is the precondition of every blocking finding and the height
-/// is to be chosen after the design is proven. Two of the three fixes then added an ordering guard
-/// to `validate_palw_v2` of the form "refused without `palw_model_registry` at or below it".
+/// This test was written on a branch that also carried the 2026-09-19 disarm (`805056ac`), which
+/// put `palw_model_registry` back to `None` everywhere; it asserted the registry was dormant and
+/// called the ordering guard a trap, on the ground that the derivation "reads no registry row to
+/// price a claim". **The disarm was not integrated** — the operator's design fixes the lifecycle
+/// itself as the brake — and that ground turns out to be false, which reverses the conclusion.
 ///
-/// Those two guards were written against a base where the registry was armed at DAA 7,101. On this
-/// branch the registry is `None`, so a build that armed either fence would be REFUSED AT ASSEMBLY —
-/// which is exactly the shape the free-prompt implementer identified in `palw_fp_decode_rules` and
-/// deliberately did not repeat.
+/// `PalwChainStateV2::palw_canonical_per_draw_v1` sources the derived work from
+/// `model_lifecycles[class].work.economic_ccu_per_claim`, and `model_lifecycles` is written by
+/// `write_model_lifecycle` from eight sites that all sit behind `model_registry_fold()`. Below the
+/// registry's height the table is EMPTY. So a build that armed `palw_canonical_work` first would
+/// derive `None` for every class, and `None` means *fall back to the declared basis* — the fence
+/// would announce that weight had stopped being a registrant's number while changing nothing at
+/// all. That is worse than leaving it dormant, because it is the same failure wearing a fix.
 ///
-/// For `palw_admission_independence` the coupling is correct: two of its four rules read registry
-/// rows, and it has nothing to do until a stranger can register. For `palw_canonical_work` it is
-/// not: **F1 is live today.** `claim.pwu` needs no fence, testnet-11 already carries two
-/// post-genesis classes, and the derivation the fence installs is a function of the class's graph —
-/// it reads no registry row to price a claim. Gating the fix for a live finding on a dormant
-/// registry means the finding cannot be closed until the thing that makes it worse is turned on.
+/// The ordering guard in `validate_palw_v2` is therefore load-bearing, and this test pins the three
+/// facts it rests on: the registry IS armed on the shipped params, the table is empty below it, and
+/// the guard refuses the inverted order.
 ///
-/// This test pins the precondition so the trap is visible at integration rather than at arming.
+/// What stays true from the original note: **F1 is live today.** `claim.pwu` needs no fence, and
+/// testnet-11 already carries post-genesis classes. The fix cannot land before DAA
+/// [`crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA`], and the window until then is exposure
+/// the schedule cannot remove — not a reason to arm the derivation over an empty table.
 #[test]
-fn the_model_registry_is_dormant_so_a_fence_gated_on_it_cannot_be_armed() {
+fn canonical_work_cannot_precede_the_registry_that_fills_the_table_it_derives_from() {
+    use crate::config::params::{ForkActivation, PALW_RC_PALW_UPGRADE_FENCE_DAA};
     let rc = palw_rc_shipped_params();
-    assert_eq!(
-        rc.palw_model_registry, None,
-        "the shipped release params carry no model registry since the 2026-09-19 disarm; any new \
-         fence whose validate_palw_v2 guard demands the registry at or below it is unarmable on \
-         this branch, and `palw_canonical_work` closes a finding that is LIVE without one"
-    );
-    for preset in [
-        crate::config::params::MAINNET_PARAMS,
-        crate::config::params::TESTNET_PARAMS,
-        crate::config::params::SIMNET_PARAMS,
-        crate::config::params::DEVNET_PARAMS,
-    ] {
-        assert_eq!(preset.palw_model_registry, None, "and it is dormant on every preset, not only the shipped one");
+    let registry = rc.palw_model_registry.expect("the shipped params arm the model registry — the lifecycle is the brake");
+    assert_eq!(registry.daa_score(), PALW_RC_PALW_UPGRADE_FENCE_DAA, "and it arms at the upgrade fence");
+
+    // The guard refuses the inverted order and accepts the level and later ones.
+    let mut below = rc.clone();
+    below.palw_canonical_work = Some(ForkActivation::new(PALW_RC_PALW_UPGRADE_FENCE_DAA - 1));
+    let refusal = below.validate_palw_v2().expect_err("a canonical-work fence below the registry must be refused");
+    assert!(format!("{refusal:?}").contains("palw_canonical_work"), "{refusal:?}");
+    for height in [PALW_RC_PALW_UPGRADE_FENCE_DAA, PALW_RC_PALW_UPGRADE_FENCE_DAA + 1_000] {
+        let mut ok = rc.clone();
+        ok.palw_canonical_work = Some(ForkActivation::new(height));
+        ok.validate_palw_v2().unwrap_or_else(|e| panic!("at or past the registry it assembles: {e:?}"));
+    }
+
+    // And the substantive reason, demonstrated rather than described: the derivation reads a
+    // registry row, so over the table as it stands BEFORE the registry has run — empty — it
+    // answers `None` for every class, at any height, including heights past the fence. `None` is
+    // "keep the declared basis", so an earlier arming would change nothing while announcing that
+    // it had. Genesis is exactly that state: classes exist, lifecycle rows do not.
+    let genesis = crate::palw_state_v2::PalwChainStateV2::genesis();
+    assert!(genesis.model_lifecycles_iter().next().is_none(), "genesis carries no lifecycle row");
+    for (class_id, _) in genesis.classes_iter() {
+        for daa in [PALW_RC_PALW_UPGRADE_FENCE_DAA, PALW_RC_PALW_UPGRADE_FENCE_DAA + 1_000_000] {
+            assert_eq!(
+                genesis.palw_canonical_per_draw_v1(class_id, daa, Some(PALW_RC_PALW_UPGRADE_FENCE_DAA)),
+                None,
+                "with no registry row the derivation has nothing to answer with, so the declared basis survives the fence"
+            );
+        }
     }
 }
 
