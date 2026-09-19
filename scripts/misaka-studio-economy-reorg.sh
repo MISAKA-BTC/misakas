@@ -67,11 +67,14 @@ import json,sys
 v=json.load(sys.stdin)['registry']
 print(sorted((c['classId'], c['state'] if c['hasRow'] else 'legacy', c['economicCcuPerClaim']) for c in v.get('classes', [])))" 2>/dev/null || true
 }
+# The claim's phase and economics are `palw claim`'s (GetPalwFreePromptClaim) — `palw derived` carries
+# the phase but not the quanta, and a comparison of Nones agrees about nothing.
 claim_state() {
-  cli "$1" palw derived --json "$CLAIM_ID" 2>/dev/null | python3 -c "
+  cli "$1" palw claim --json "$CLAIM_ID" 2>/dev/null | python3 -c "
 import json,sys
-d=json.load(sys.stdin)
-print((d.get('claim_phase'), d.get('quanta'), d.get('quanta_spent'), d.get('work_leaves')))" 2>/dev/null || true
+rows = [c for c in json.load(sys.stdin).get('claims', []) if c.get('found')]
+c = rows[0] if rows else None
+print((c.get('phase'), c.get('quanta'), c.get('quanta_spent'), c.get('work_leaves'), c.get('accepted_block')) if c else '')" 2>/dev/null || true
 }
 
 # The E2E's node arguments, byte for byte, but for WHICH hub a node connects to.

@@ -395,12 +395,22 @@ for phase in provisional panel_bound receipt_licensed final; do
   log "    $phase on every node (DAA $(daa_of 1))"
 done
 cli 1 palw derived --json "$CLAIM_ID" > "$WORK_DIR/out/claim-final.json" 2>/dev/null || true
-log "7/9 OK — the chat is a Final claim on every node: $(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print({k: d.get(k) for k in ("claim_phase","work_leaves","quanta","accepted_daa")})' "$WORK_DIR/out/claim-final.json" 2>/dev/null)"
+# The claim's economics — quanta, the spend, the work — are `palw claim`'s (GetPalwFreePromptClaim);
+# `palw derived` reads the derived artifacts and carries the phase, not the quanta.
+claim_row() {  # $1 = node, $2 = python expression over the claim row `c`
+  cli "$1" palw claim --json "$CLAIM_ID" 2>/dev/null | python3 -c "
+import json,sys
+rows = [c for c in json.load(sys.stdin).get('claims', []) if c.get('found')]
+c = rows[0] if rows else None
+print($2 if c else '')" 2>/dev/null || true
+}
+cli 1 palw claim --json "$CLAIM_ID" > "$WORK_DIR/out/claim-final-economics.json" 2>/dev/null || true
+log "7/9 OK — the chat is a Final claim on every node: $(claim_row 1 "{k: c.get(k) for k in ('phase', 'work_leaves', 'quanta', 'quanta_spent', 'accepted_daa', 'class_id')}")"
 
 # ---------------------------------------------------------------------------------------------
 # 8/9  A receipt block spends one of its quanta, accepted by every node.
 # ---------------------------------------------------------------------------------------------
-spent_on() { cli "$1" palw derived --json "$CLAIM_ID" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("quanta_spent", 0))' 2>/dev/null || echo 0; }
+spent_on() { local n; n="$(claim_row "$1" "c.get('quanta_spent') or 0")"; echo "${n:-0}"; }
 wait_for "[ \"\$(spent_on 1)\" -ge 1 ] 2>/dev/null" "a receipt block spending one of the claim's quanta"
 for ((i=0; i<NODES; i++)); do [ "$(spent_on "$i")" -ge 1 ] 2>/dev/null || wait_for "[ \"\$(spent_on $i)\" -ge 1 ] 2>/dev/null" "node-$i to hold the spend"; done
 log "8/9 OK — $(spent_on 1) of the claim's quanta spent into receipt blocks, on every node"
