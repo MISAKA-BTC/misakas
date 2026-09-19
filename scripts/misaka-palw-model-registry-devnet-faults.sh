@@ -124,8 +124,30 @@ start_miner() {
   log "hash miner pid $mp on node-$MINER_NODE gRPC $GRPC_PORT, one block per ${MINER_INTERVAL_MS} ms — the anchor lane the DAA clock counts"
 }
 start_miner
+
+# **The only thing that waited for the nodes was the hash miner, and this drill has no hash lane.**
+# `start_miner` returns at its first line when MINER_BIN is empty -- which is the configuration that
+# matches testnet-11 (no bits-priced lane) -- and the gRPC wait it would otherwise have done was the
+# sole reason the read below ever found a node up. Run 20's phase 3 died in the SAME SECOND it
+# started, and blamed the chain: `reg` swallows a connection failure into an empty string, so a node
+# that has not opened its RPC yet is indistinguishable from a registry with no class in it.
+# Wait for the answer, and say which of the two failed.
+registry_answers() {
+  local node="$1" out
+  out="$(cli "$node" palw registry --output json 2>/dev/null)" || return 1
+  [ -n "$out" ] || return 1
+  printf '%s' "$out" | python3 -c "import json,sys; json.load(sys.stdin)['registry']['classes']" 2>/dev/null
+}
+waited=0
+until registry_answers 1; do
+  waited=$((waited + 3))
+  [ "$waited" -gt 240 ] && die "node-1 never answered op 186 in ${waited}s — the nodes were not up, which is not the same as a registry with no class"
+  sleep 3
+done
+log "node-1 answers op 186 after ${waited}s"
+
 CLASS_ID="$(reg 1 "[c['classId'] for c in v.get('classes', []) if not c.get('isBaseClass') and c.get('hasRow')][0]")"
-[ -n "$CLASS_ID" ] || die "op 186 lists no non-base class with a row on node-1"
+[ -n "$CLASS_ID" ] || die "node-1 answers op 186 but lists no non-base class with a row — the registry is genuinely empty of registered classes"
 before="$(reg 1 "[(c['state'], c['readySeatsNow'], c['requiredReadySeats']) for c in v['classes'] if c['classId']=='$CLASS_ID'][0]")"
 log "class $CLASS_ID before the faults: (state, ready, required) = $before"
 
