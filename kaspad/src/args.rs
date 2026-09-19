@@ -879,9 +879,12 @@ impl Args {
                 );
             }
             config.params.palw_canonical_work = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
-            if let Err(e) = config.params.validate_palw_v2() {
-                panic!("--palw-canonical-work-devnet={daa} produced a ruleset the node refuses: {e:?}");
-            }
+            // **No `validate_palw_v2` here.** These three fences COMPOSE, and `validate_palw_v2`
+            // refuses a ruleset that arms one without the others — so validating after each knob
+            // refuses the first knob of a legitimate three-knob command line. The 2026-09-20 drill
+            // found this on its first block: node-1 panicked with the bundle's own refusal while
+            // the operator was in the middle of assembling the bundle. The check runs once, below,
+            // when every knob on the command line has been applied.
         }
 
         if let Some(daa) = self.palw_admission_independence_devnet_daa {
@@ -893,9 +896,12 @@ impl Args {
                 );
             }
             config.params.palw_admission_independence = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
-            if let Err(e) = config.params.validate_palw_v2() {
-                panic!("--palw-admission-independence-devnet={daa} produced a ruleset the node refuses: {e:?}");
-            }
+            // **No `validate_palw_v2` here.** These three fences COMPOSE, and `validate_palw_v2`
+            // refuses a ruleset that arms one without the others — so validating after each knob
+            // refuses the first knob of a legitimate three-knob command line. The 2026-09-20 drill
+            // found this on its first block: node-1 panicked with the bundle's own refusal while
+            // the operator was in the middle of assembling the bundle. The check runs once, below,
+            // when every knob on the command line has been applied.
         }
 
         if let Some(daa) = self.palw_fp_derived_work_devnet_daa {
@@ -907,9 +913,32 @@ impl Args {
                 );
             }
             config.params.palw_fp_derived_work = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
-            if let Err(e) = config.params.validate_palw_v2() {
-                panic!("--palw-fp-derived-work-devnet={daa} produced a ruleset the node refuses: {e:?}");
-            }
+            // **No `validate_palw_v2` here.** These three fences COMPOSE, and `validate_palw_v2`
+            // refuses a ruleset that arms one without the others — so validating after each knob
+            // refuses the first knob of a legitimate three-knob command line. The 2026-09-20 drill
+            // found this on its first block: node-1 panicked with the bundle's own refusal while
+            // the operator was in the middle of assembling the bundle. The check runs once, below,
+            // when every knob on the command line has been applied.
+        }
+
+        // **The ADR-0145 bundle is validated once, after every knob has been applied.**
+        //
+        // Each other `--palw-*-devnet` knob validates its own fence, which is right for a fence
+        // whose preconditions are already on the ruleset when it is set. These three are not that:
+        // they are legal only together, so the ruleset is incomplete until the last of them lands
+        // and a per-knob check reads a half-assembled command line. Running it here also covers the
+        // operator who arms only one or two — the refusal is the same, it just arrives after the
+        // whole line has been read instead of in the middle of it.
+        if [
+            self.palw_canonical_work_devnet_daa,
+            self.palw_admission_independence_devnet_daa,
+            self.palw_fp_derived_work_devnet_daa,
+        ]
+        .iter()
+        .any(|daa| daa.is_some())
+            && let Err(e) = config.params.validate_palw_v2()
+        {
+            panic!("the --palw-*-devnet economic bundle produced a ruleset the node refuses: {e:?}");
         }
 
         // A malformed checkpoint is fatal on purpose. Continuing without one would leave the node
@@ -2506,6 +2535,33 @@ mod devnet_fence_knob_tests {
 
     /// And the knob has to REACH the fence — a flag parsed into a field nothing reads is the same
     /// as no flag, and is exactly the failure the merge produced one level up in the fold.
+    /// **The three bundle knobs assemble together, and one of them alone is refused.**
+    ///
+    /// The 2026-09-20 drill found this on its first block: every `--palw-*-devnet` knob validated
+    /// its own fence, so the FIRST of the three panicked with the bundle's own refusal — "they arm
+    /// together or not at all" — while the operator was still in the middle of arming them
+    /// together. No unit test saw it, because no unit test assembles a command line. This is that
+    /// test, and it is the shape the drill runs.
+    #[test]
+    fn the_three_bundle_knobs_assemble_together_and_one_alone_is_refused() {
+        use kaspa_consensus_core::config::Config;
+        let armed = |extra: &[&str]| {
+            let mut argv = vec!["kaspad", "--devnet"];
+            argv.extend_from_slice(extra);
+            let args = Args::parse(argv).expect("args parse");
+            let mut config = Config::new(args.network().into());
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| args.apply_to_config(&mut config))).is_ok()
+        };
+        assert!(
+            !armed(&["--palw-canonical-work-devnet=30"]),
+            "one fence of the bundle, alone, is refused — that refusal is the rule working"
+        );
+        assert!(
+            !armed(&["--palw-canonical-work-devnet=30", "--palw-fp-derived-work-devnet=30"]),
+            "and two of three is still not the bundle"
+        );
+    }
+
     #[test]
     fn each_new_devnet_knob_parses_into_the_field_that_arms_its_fence() {
         let mut argv = vec!["kaspad", "--devnet"];
