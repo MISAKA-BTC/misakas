@@ -1267,6 +1267,29 @@ pub struct Params {
     ///
     /// `None` on every preset; hashed Some-only.
     pub palw_operator_id_unique: Option<ForkActivation>,
+    /// **ADR-0145 §1–§5: a claim's work is DERIVED, not declared** (the 2026-09-19 reward audit,
+    /// finding F1 — CRITICAL and live). `claim.pwu` is `expected_attempts(class_target) ×
+    /// pwu_per_inference`, and `pwu_per_inference` is the step-leaf count of a canonical job the
+    /// class REGISTRANT writes and signs. That cancelled correctly while a producer ran the job it
+    /// declared; since `palw_prefill_draw` armed at DAA 4,000 an attempt runs
+    /// `exact_decode_tokens = 1` and the price still counts every declared decode call, so the
+    /// cancellation fails by the ratio between the two — measured at 7.8× the fork-choice weight
+    /// for identical arithmetic, 24,572× per unit of arithmetic at the admissible extreme.
+    ///
+    /// Past this fence the weight, exposure and work-price paths read
+    /// [`crate::palw_canonical_work_v1`]'s derivation of the job the draw actually executes, and
+    /// the registrant's number is economically inert. Below it every one of those paths is
+    /// byte-identical, which `a_dormant_canonical_work_fence_moves_no_number` pins.
+    ///
+    /// **It is keyed on the CLAIM's `accepted_daa`, not on the block's.** `safe_weight` is a
+    /// running total priced once at a claim's `Final` and re-derived at two later chain points
+    /// (`retire_claim` and `assert_internal_consistency_v3`); a block-keyed fence would price one
+    /// claim under two bases and the state would refuse itself.
+    ///
+    /// `None` on every preset; hashed Some-only. **Arming it changes the UNIT of `safe_weight` from
+    /// step leaves to MAC-equivalents**, so it needs a drill that crosses it before any height is
+    /// chosen — ADR-0144 §6 item 0: the design is proven first and the date after.
+    pub palw_canonical_work: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2667,6 +2690,29 @@ impl Params {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_single_lottery is armed without palw_work_target armed at or below its height: with the network draw \
                      gone the work target is the only rule left holding the cadence",
+                ));
+            }
+        }
+        // **ADR-0145: the derived basis needs the registry UNDER it, and the reason is a drift that
+        // nothing later can reconcile.**
+        //
+        // A claim's derived work is read from its class's `model_lifecycles` row, which is written
+        // when the registry first steps (`step_model_registry` gives every class in state a row,
+        // real or inert) and never rewritten afterwards. A claim accepted past the canonical-work
+        // fence but BEFORE the registry fence would find no row at its `Final` — priced on the
+        // declared basis — and would find one at its retirement, priced on the derived one. The
+        // difference lands in `retired_safe_weight`, the claim is gone, and no fence position
+        // reconciles it: the node refuses its own tip on the next restart and every peer importing
+        // that snapshot is refused with it. Requiring the registry at or below the height makes the
+        // row exist before any re-priced claim can, so the three readings cannot disagree.
+        if let Some(canonical) = self.palw_canonical_work.filter(|f| *f != ForkActivation::never()) {
+            let registry_below =
+                self.palw_model_registry.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= canonical.daa_score());
+            if !registry_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_canonical_work is armed without palw_model_registry armed at or below its height: the derived work is \
+                     read from a class's registry row, and a claim that finalizes before the row exists is re-priced when it \
+                     retires — a drift nothing later can reconcile",
                 ));
             }
         }
@@ -4085,6 +4131,13 @@ impl Params {
         if self.palw_operator_id_unique == Some(ForkActivation::never()) {
             self.palw_operator_id_unique = None;
         }
+        // ADR-0145's canonical-work fence: Some-only in the fingerprint, so the same collapse for
+        // the same reason — a normalised `Some(never())` writes bytes a build without the field
+        // never writes, and the two builds refuse each other on deploy day over a height neither
+        // has reached.
+        if self.palw_canonical_work == Some(ForkActivation::never()) {
+            self.palw_canonical_work = None;
+        }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
         }
@@ -4394,6 +4447,21 @@ impl Params {
     /// ADR-0143: whether an artifact root has one recorded owner at `daa_score`.
     pub fn palw_artifact_root_ownership_at(&self, daa_score: u64) -> bool {
         self.palw_artifact_root_ownership.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0145: whether a claim's work is derived rather than declared at `daa_score`. Callers on
+    /// the accounting path resolve it at the CLAIM's `accepted_daa`, not at the block's — see the
+    /// field's own doc.
+    pub fn palw_canonical_work_at(&self, daa_score: u64) -> bool {
+        self.palw_canonical_work.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **ADR-0145: the height the canonical-work basis comes into force, if it ever does.** The
+    /// accounting path needs the HEIGHT rather than a yes/no at the block, because a claim must be
+    /// priced under one basis at its `Final`, at its retirement and at every re-derivation in
+    /// between. `None` — every shipped preset — is the declared basis, unchanged.
+    pub fn palw_canonical_work_daa(&self) -> Option<u64> {
+        self.palw_canonical_work.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
     }
 
     /// The 2026-09-19 audit: whether one operator identity backs one bond at `daa_score`.
@@ -5083,6 +5151,7 @@ impl Params {
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
+            palw_canonical_work,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5162,6 +5231,7 @@ impl Params {
             ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
+            ("palw_canonical_work", *palw_canonical_work),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5653,6 +5723,7 @@ impl Params {
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
+            palw_canonical_work,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5927,6 +5998,14 @@ impl Params {
         }
         // The 2026-09-19 audit's operator-identity fence.
         match palw_operator_id_unique.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0145's canonical-work fence.
+        match palw_canonical_work.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6400,6 +6479,7 @@ impl Params {
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
+            palw_canonical_work,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6656,6 +6736,12 @@ impl Params {
         }
         if let Some(activation) = palw_operator_id_unique {
             h.write(b"palw_operator_id_unique");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0145 the canonical-work fence, Some-only for the same reason: every shipped preset
+        // leaves it unset and therefore fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_canonical_work {
+            h.write(b"palw_canonical_work");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -7311,6 +7397,7 @@ impl Params {
             palw_clock_cursor: None,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
+            palw_canonical_work: None,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -8257,6 +8344,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_canonical_work: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8456,6 +8544,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_canonical_work: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8637,6 +8726,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_canonical_work: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -12370,6 +12460,7 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     params.palw_anchor_clock = None;
     // ADR-0143's own day is two past the flag day and later than every release this reconstructs.
     params.palw_artifact_root_ownership = None;
+    params.palw_canonical_work = None;
 }
 
 /// **The fleet's release as deployed (`13520042`, fingerprint `ae1d6162…`)**: no flag-day set, no
@@ -13290,6 +13381,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_canonical_work: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).
@@ -16067,6 +16159,77 @@ mod consensus_params_id_tests {
         assert!(matches!(legacy.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::Disabled));
         assert_eq!(legacy.palw_fp_decode_rules_fence(), None);
         assert!(!legacy.palw_fp_decode_rules_active_at(u64::MAX));
+    }
+
+    /// **ADR-0145's canonical-work fence is dormant on every shipped preset, collapses from
+    /// `never()`, and is visible the moment it is not.**
+    ///
+    /// The sharpest reason any fence in this file has: past it the UNIT of `safe_weight` changes
+    /// from step leaves to MAC-equivalents, and `safe_weight` is fork choice's second key. Two
+    /// nodes that disagreed about this fence would not disagree about a block — they would agree
+    /// about every block and disagree about which chain is heavier, which is the failure no
+    /// validity check catches.
+    ///
+    /// The `never()` arm is the one that actually bites: the fingerprint writes this field
+    /// Some-only, so a normalised `Some(never())` left standing would write bytes a build without
+    /// the field never writes, and the two builds would refuse each other on deploy day over a
+    /// height neither has reached.
+    #[test]
+    fn the_canonical_work_fence_is_dormant_and_visible_the_moment_it_is_not() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_canonical_work.is_none(), "{name} must leave ADR-0145 dormant");
+            assert!(!shipped.palw_canonical_work_at(u64::MAX), "{name}: a dormant fence is never active");
+            assert_eq!(shipped.palw_canonical_work_daa(), None, "{name}: a dormant fence names no height");
+        }
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_canonical_work.is_none(), "the bundled devnet leaves it dormant too");
+        assert!(palw_rc_shipped_params().palw_canonical_work.is_none(), "and so does the shipped release");
+
+        let mut armed = shipped.clone();
+        armed.palw_canonical_work = Some(ForkActivation::new(9_000_000));
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the basis must move the fingerprint");
+        assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
+        assert!(armed.palw_canonical_work_at(9_000_000));
+        assert!(!armed.palw_canonical_work_at(8_999_999));
+        assert_eq!(armed.palw_canonical_work_daa(), Some(9_000_000), "the accounting path reads the HEIGHT, not a flag");
+
+        let mut never_armed = shipped.clone();
+        never_armed.palw_canonical_work = Some(ForkActivation::never());
+        assert_eq!(
+            never_armed.consensus_identity_id(),
+            shipped.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+        assert_eq!(never_armed.palw_canonical_work_daa(), None, "never() names no height either");
+
+        // Its own failure domain: this fence is not an alias of the two it sits beside, so a
+        // release can schedule any one of them without dragging the others.
+        let mut neighbour = shipped.clone();
+        neighbour.palw_artifact_root_ownership = Some(ForkActivation::new(9_000_000));
+        assert_ne!(neighbour.consensus_params_id(), armed.consensus_params_id(), "three fences, three fingerprints");
+
+        // **The ordering guard fires.** The derived work is read from a class's registry row, so a
+        // ruleset that arms the basis above the registry — or without it — is refused rather than
+        // booted: a claim priced declared at its `Final` and derived at its retirement leaves a
+        // permanent difference in `retired_safe_weight` that no fence position reconciles.
+        // Read the registry's own height off the SHIPPED RELEASE rather than typing one in: the
+        // registry sits on several fences of its own, and a hand-picked number would trip one of
+        // those instead and make this test prove somebody else's rule. The bundled devnet leaves
+        // the registry dormant, so the release preset is the one that can exercise this ordering.
+        let shipped = palw_rc_shipped_params();
+        let registry_daa = shipped.palw_model_registry.expect("the shipped release arms the registry").daa_score();
+        let mut below_the_registry = shipped.clone();
+        below_the_registry.palw_canonical_work = Some(ForkActivation::new(registry_daa - 1));
+        let refusal = below_the_registry.validate_palw_v2().expect_err("the basis cannot precede the rows it reads");
+        assert!(format!("{refusal:?}").contains("palw_canonical_work"), "{refusal:?}");
+        let mut level = shipped.clone();
+        level.palw_canonical_work = Some(ForkActivation::new(registry_daa));
+        assert!(level.validate_palw_v2().is_ok(), "the same height is legal — the rows exist before any re-priced claim can");
+        let mut later = shipped.clone();
+        later.palw_canonical_work = Some(ForkActivation::new(registry_daa + 1_000));
+        assert!(later.validate_palw_v2().is_ok(), "and so is any height above it");
     }
 
     /// **ADR-0096 Decisions 6–8's fence is dormant on every shipped preset and visible the

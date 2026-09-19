@@ -177,6 +177,12 @@ pub mod palw_block_commitment;
 /// bodies, their caps, and the stateless validators that become the Stage-1 admission
 /// validators verbatim. Land-stage, consensus-inert — the Stage-0 consumer is an external
 /// watcher; no transaction validation or store reads any of it.
+/// **ADR-0145 §1–§5: a claim's work is DERIVED from the graph and the execution, never declared.**
+/// The 2026-09-19 reward audit measured 7.8× the fork-choice weight for identical arithmetic
+/// because `pwu_per_inference` counts a canonical job the registrant writes while an attempt past
+/// `Params::palw_prefill_draw` runs a different one. Behind `Params::palw_canonical_work`, `None`
+/// on every preset.
+pub mod palw_canonical_work_v1;
 pub mod palw_carriage;
 pub mod palw_catalog_coverage;
 pub mod palw_chain_weight;

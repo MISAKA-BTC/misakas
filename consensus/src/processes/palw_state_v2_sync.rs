@@ -249,6 +249,13 @@ impl PalwStateSyncV2 {
                 // preset, so no chain is affected today; arming it means threading the fence AND
                 // `(header.timestamp, header.pow_algo_id == heartbeat)` onto `PalwChainStepV2`
                 // first, because the fold reads both.
+                //
+                // **And of ADR-0145's `palw_canonical_work`**, which this walker leaves `None` in
+                // the extras below. That one is a HEIGHT, not a per-block answer, so threading it
+                // is only a constructor field rather than a per-step fact — but until it is
+                // threaded a sync walk would price every `Final` attempt claim's weight on the
+                // declared basis while the fold priced it on the derived one, and the two would
+                // write different state roots for the same block. Dormant on every preset.
                 false,
                 self.uncertified_weightless.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                 self.da_court.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),

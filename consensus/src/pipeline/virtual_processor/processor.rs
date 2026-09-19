@@ -422,6 +422,13 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-19 audit: `Params::palw_operator_id_unique` — dormant everywhere; past it one
     /// operator identity backs one bond.
     pub(super) palw_operator_id_unique: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0145: `Params::palw_canonical_work_daa()` — the fence's HEIGHT, dormant everywhere.**
+    /// Past it a claim's fork-choice weight, its exposure and its work price read the work the
+    /// chain DERIVED from its class's graph instead of the step-leaf count the class's registrant
+    /// declared. Stored as a height rather than a `ForkActivation` because no site resolves it at
+    /// a block: every one compares it against the CLAIM's own `accepted_daa` (see
+    /// `PalwTransitionExtrasV1::canonical_work_daa`).
+    pub(super) palw_canonical_work_daa: Option<u64>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
@@ -955,6 +962,7 @@ impl VirtualStateProcessor {
             palw_epoch_budget_release: params.palw_epoch_budget_release,
             palw_fp_ruleset_caps: params.palw_fp_ruleset_caps,
             palw_uncertified_weightless: params.palw_uncertified_weightless,
+            palw_canonical_work_daa: params.palw_canonical_work_daa(),
             palw_da_court: params.palw_da_court,
             palw_shard_court: params.palw_shard_court_fence(),
             palw_shard_licensing: params.palw_shard_licensing_fence(),
@@ -7712,6 +7720,14 @@ impl VirtualStateProcessor {
             work_target_active: self.palw_work_target_at(daa_score),
             artifact_root_ownership_active: self.palw_artifact_root_ownership_at(daa_score),
             operator_id_unique_active: self.palw_operator_id_unique_at(daa_score),
+            // **ADR-0145: the HEIGHT, not this block's answer.** Every other fence here is resolved
+            // at `daa_score` because it decides something about THIS block. This one decides the
+            // unit a CLAIM's work is carried in, and a claim is priced at the block that finalizes
+            // it, re-priced at the block that retires it, and re-derived by every consistency check
+            // in between — so each of those sites compares the height against the claim's own
+            // `accepted_daa` instead. Resolving it here would price one claim under two bases and
+            // the node would refuse its own tip. `None` on every shipped preset.
+            canonical_work_daa: self.palw_canonical_work_daa,
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
@@ -12312,7 +12328,7 @@ impl VirtualStateProcessor {
         let state = carriage
             // ADR-0069 Decision 7: the consistency check has to know the rule the snapshot was
             // built under, or it refuses a state for having obeyed it.
-            .into_state_v2(params, Some(expected_root), self.palw_uncertified_weightless_at(witness_daa))
+            .into_state_v3(params, Some(expected_root), self.palw_uncertified_weightless_at(witness_daa), self.palw_canonical_work_daa)
             .map_err(|e| PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, e.to_string()))?;
         // Written through `set_tip_batch`, which RE-DERIVES the root from the state it is handed —
         // so what becomes durable is a function of what was verified, and a caller cannot store a

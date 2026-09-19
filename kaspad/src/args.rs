@@ -344,6 +344,10 @@ pub struct Args {
     pub palw_anchor_clock_devnet_daa: Option<u64>,
     /// ADR-0143 on a private devnet: the DAA from which an artifact root has one owner.
     pub palw_artifact_root_ownership_devnet_daa: Option<u64>,
+    /// ADR-0145 on a private devnet: the DAA from which a claim's work is DERIVED from its class's
+    /// graph rather than read off the step-leaf count its registrant declared. Needs the model
+    /// registry at or below it — the derived work is read from a class's registry row.
+    pub palw_canonical_work_devnet_daa: Option<u64>,
     /// PALW on a PRIVATE devnet: run the floor-only ruleset (the base class alone, seeded by
     /// ADR-0076 with the whole share, `MAX/278`) instead of the shipped devnet's testnet-11 class
     /// set, whose floor holds a sliver of the share and prices a fixture block at minutes per
@@ -476,6 +480,7 @@ impl Default for Args {
             palw_readiness_v2_devnet_daa: None,
             palw_anchor_clock_devnet_daa: None,
             palw_artifact_root_ownership_devnet_daa: None,
+            palw_canonical_work_devnet_daa: None,
             palw_devnet_floor_only: false,
             testnet: false,
             testnet_suffix: 10,
@@ -851,6 +856,20 @@ impl Args {
             config.params.palw_artifact_root_ownership = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-artifact-root-ownership-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_canonical_work_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-canonical-work-devnet is devnet/simnet only (got {net:?}). What a claim's work IS decides fork \
+                     choice, and that ships in a release, not a command line."
+                );
+            }
+            config.params.palw_canonical_work = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-canonical-work-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1544,6 +1563,19 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_ARTIFACT_ROOT_OWNERSHIP_DEVNET"),
         )
         .arg(
+            Arg::new("palw-canonical-work-devnet")
+                .long("palw-canonical-work-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0145 on a PRIVATE devnet: from this DAA score a claim's fork-choice weight, its exposure and its \
+                     work price read the work this node DERIVES from the class's graph, instead of the step-leaf count the \
+                     class's registrant declared. Needs --palw-model-registry at or below it. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_CANONICAL_WORK_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-work-target-devnet")
                 .long("palw-work-target-devnet")
                 .value_name("daa-score")
@@ -1977,6 +2009,10 @@ impl Args {
                 .get_one::<u64>("palw-artifact-root-ownership-devnet")
                 .copied()
                 .or(defaults.palw_artifact_root_ownership_devnet_daa),
+            palw_canonical_work_devnet_daa: m
+                .get_one::<u64>("palw-canonical-work-devnet")
+                .copied()
+                .or(defaults.palw_canonical_work_devnet_daa),
             palw_devnet_floor_only: arg_match_unwrap_or::<bool>(&m, "palw-devnet-floor-only", defaults.palw_devnet_floor_only),
             utxoindex: arg_match_unwrap_or::<bool>(&m, "utxoindex", defaults.utxoindex),
             testnet: arg_match_unwrap_or::<bool>(&m, "testnet", defaults.testnet),

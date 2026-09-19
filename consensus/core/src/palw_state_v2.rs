@@ -1438,7 +1438,34 @@ pub fn palw_claim_safe_contribution_v2(
     claim: &PalwClaimStateV2,
     uncertified_weightless: bool,
 ) -> u128 {
-    if palw_class_bears_weight_v2(class_shares, &claim.class_id, uncertified_weightless) { claim.pwu as u128 } else { 0 }
+    palw_claim_safe_contribution_v3(class_shares, claim, uncertified_weightless, None)
+}
+
+/// [`palw_claim_safe_contribution_v2`] with **ADR-0145 I1's derived work**.
+///
+/// `canonical` is the claim's work as [`crate::palw_canonical_work_v1`] derives it — `None` below
+/// `Params::palw_canonical_work`, which is every shipped preset, and then this is the face above
+/// byte for byte. The delegation is the byte-identity: there is one expression, and the dormant
+/// path is the same expression with the same operand.
+///
+/// **Why the fork-choice half needed this at all.** `claim.pwu` is
+/// `expected_attempts(class_target) × pwu_per_inference`, and the second factor is the STEP-LEAF
+/// count of a canonical job the class REGISTRANT declares and signs. `crate::palw_pwu`'s own
+/// header says "a `pwu` magnitude must never be read as a cross-class price" — and `safe_weight`
+/// is fork choice's second key, so this function has been reading it as exactly that. The
+/// 2026-09-19 reward audit priced the gap: 7.8× the weight for identical arithmetic, 24,572× per
+/// unit of arithmetic at the admissible extreme, on rows that pass every check the chain performs.
+pub fn palw_claim_safe_contribution_v3(
+    class_shares: &BTreeMap<Hash64, u16>,
+    claim: &PalwClaimStateV2,
+    uncertified_weightless: bool,
+    canonical: Option<u128>,
+) -> u128 {
+    if palw_class_bears_weight_v2(class_shares, &claim.class_id, uncertified_weightless) {
+        canonical.unwrap_or(claim.pwu as u128)
+    } else {
+        0
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1661,8 +1688,27 @@ pub enum PalwClassStatusV2 {
 /// the exposure were "chain-fixed (`DerivedV1` pins the pwu)". Half of that was true: `DerivedV1`
 /// pins the pwu to a *formula*, and the formula reads a value the retarget moves.
 pub fn palw_exposure_pwu_v1(class: &PalwClassStateV2, claimed_pwu: u64) -> u64 {
+    palw_exposure_pwu_v2(class, claimed_pwu, None)
+}
+
+/// [`palw_exposure_pwu_v1`] with **ADR-0145 I1's derived work per draw**.
+///
+/// `canonical` is what [`crate::palw_canonical_work_v1`] derives for one draw of this class —
+/// `None` below `Params::palw_canonical_work`, which is every shipped preset, and then this is the
+/// face above byte for byte.
+///
+/// It replaces the `DerivedV1` arm only. That arm returns `pwu_per_inference`, which is the
+/// registrant's declared step-leaf count, and it is read by three things at once: the collateral a
+/// claim reserves, the ADR-0124 work price that decides how much of its escrow the claim is paid,
+/// and the ADR-0125 execution credit. All three are the same sentence — *what one canonical
+/// inference of this class is worth* — so all three move together or the "paid on the same number
+/// it can be slashed on" property that `work_priced_escrow` is built on stops being true.
+/// `MaxPerAttempt` is untouched: it is pre-derivation scaffolding for fixtures, bounded by a
+/// registered ceiling rather than derived from anything, and a value network registers only
+/// `DerivedV1` classes.
+pub fn palw_exposure_pwu_v2(class: &PalwClassStateV2, claimed_pwu: u64, canonical: Option<u64>) -> u64 {
     match class.pwu_rule {
-        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => pwu_per_inference,
+        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => canonical.unwrap_or(pwu_per_inference),
         PalwPwuRuleV2::MaxPerAttempt(_) => claimed_pwu,
     }
 }
@@ -5948,6 +5994,53 @@ impl PalwChainStateV2 {
         self.model_lifecycles.iter()
     }
 
+    // ---- ADR-0145: the derived work, read from rooted state ----------------------------------
+
+    /// **What one draw of `class_id` really costs, derived — `None` while the fence is dormant.**
+    ///
+    /// `canonical_work_daa` is `Params::palw_canonical_work_daa()`, the fence's HEIGHT, and
+    /// `accepted_daa` is the claim's own. Keying on the claim rather than on the block is not a
+    /// style choice: `safe_weight` is priced once at a claim's `Final` and then re-derived at two
+    /// later chain points (`retire_claim` and [`Self::assert_internal_consistency_v3`]), so a
+    /// block-keyed fence would price one claim under two bases and the state would refuse itself
+    /// on the next restart.
+    ///
+    /// **The source is `model_lifecycles`, which is rooted state.** The row's
+    /// `economic_ccu_per_claim` is `palw_model_work_from_carriage_v1`'s walk of the class's own
+    /// registration carriage under ADR-0131's cost table — the compute of the PREFILL-DRAW job,
+    /// i.e. of the job an attempt actually runs — and
+    /// `palw_canonical_work_v1::the_provisional_scalar_is_adr_0131_of_the_executed_job` pins that
+    /// it is the same number [`crate::palw_canonical_work_v1::PalwCanonicalWorkVectorV1::provisional_scalar_v1`]
+    /// returns. So the chain already derives this quantity; what changes past the fence is only
+    /// that the accounting reads it.
+    ///
+    /// It is read from the row and not recomputed because the row is frozen when the registry
+    /// opens the class, so every re-derivation of a given claim returns the same value forever —
+    /// which is the property that makes the fence armable. Past `Params::palw_model_registry`
+    /// every class in state holds a row (`step_model_registry` writes an inert zero row for one
+    /// the build cannot describe), and a class with no row or zero work keeps the declared basis
+    /// rather than falling to zero weight: an accounting change must not become a liveness failure.
+    pub fn palw_canonical_per_draw_v1(&self, class_id: &Hash64, accepted_daa: u64, canonical_work_daa: Option<u64>) -> Option<u128> {
+        if accepted_daa < canonical_work_daa? {
+            return None;
+        }
+        let derived = self.model_lifecycles.get(class_id)?.work.economic_ccu_per_claim;
+        (derived > 0).then_some(derived)
+    }
+
+    /// **A claim's `safe_weight` contribution on the derived basis** — `None` while the fence is
+    /// dormant, or where the class offers nothing to derive from.
+    ///
+    /// See [`crate::palw_canonical_work_v1::palw_claim_canonical_pwu_v1`] for why this is a
+    /// re-pricing of `claim.pwu` rather than a fresh product: the lottery factor is a fact about
+    /// the chain the claim really paid and must survive; the per-inference factor is the
+    /// registrant's number and must not.
+    pub fn palw_claim_canonical_weight_v1(&self, claim: &PalwClaimStateV2, canonical_work_daa: Option<u64>) -> Option<u128> {
+        let derived = self.palw_canonical_per_draw_v1(&claim.class_id, claim.accepted_daa, canonical_work_daa)?;
+        let declared = self.classes.get(&claim.class_id)?.pwu_rule.canonical_leaves_v1();
+        crate::palw_canonical_work_v1::palw_claim_canonical_pwu_v1(claim.pwu, declared, derived)
+    }
+
     /// ADR-0135: a seat's last possession proof for a class.
     pub fn seat_readiness(
         &self,
@@ -6513,6 +6606,23 @@ impl PalwChainStateV2 {
         params: &PalwStateParamsV2,
         uncertified_weightless: bool,
     ) -> Result<(), PalwStateV2Error> {
+        self.assert_internal_consistency_v3(params, uncertified_weightless, None)
+    }
+
+    /// [`Self::assert_internal_consistency_v2`] with ADR-0145's derived work basis.
+    ///
+    /// `canonical_work_daa` is `Params::palw_canonical_work_daa()` — the fence's height, `None` on
+    /// every shipped preset, and then byte-identical to the face above. Past it BOTH sums here and
+    /// `retire_claim`'s attempt arm re-price through the same helper, so the identity stays an
+    /// equality (and, with Decision 7 armed, the bound stays a bound): a claim priced on
+    /// MAC-equivalents at its `Final` must not be re-derived in step leaves here, or every node
+    /// refuses its own tip the first time a re-priced claim finalizes.
+    pub fn assert_internal_consistency_v3(
+        &self,
+        params: &PalwStateParamsV2,
+        uncertified_weightless: bool,
+        canonical_work_daa: Option<u64>,
+    ) -> Result<(), PalwStateV2Error> {
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
         // The same sum with Decision 7 switched OFF: the most `safe_weight` this claim set could
@@ -6581,11 +6691,19 @@ impl PalwChainStateV2 {
                     PalwClaimSourceV2::Attempt => {
                         // ADR-0069 Decision 7, through the SAME helper the fold accumulates with —
                         // a re-derivation that priced weight by its own rule would refuse every
-                        // state the fold had just built.
-                        let contribution = palw_claim_safe_contribution_v2(&self.class_shares, claim, uncertified_weightless);
+                        // state the fold had just built. ADR-0145's basis rides the same helper for
+                        // the same reason, and the CEILING moves with it: `safe_ceiling` is "the
+                        // most this claim could have carried", which is the same quantity in
+                        // whichever unit the claim was priced in, so leaving it on `claim.pwu`
+                        // would make the armed bound compare MAC-equivalents against step leaves
+                        // and refuse every honest tip.
+                        let canonical = self.palw_claim_canonical_weight_v1(claim, canonical_work_daa);
+                        let contribution =
+                            palw_claim_safe_contribution_v3(&self.class_shares, claim, uncertified_weightless, canonical);
                         safe = safe.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
-                        safe_ceiling =
-                            safe_ceiling.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        safe_ceiling = safe_ceiling
+                            .checked_add(canonical.unwrap_or(claim.pwu as u128))
+                            .ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                     // A free-prompt Final licenses; only SPENT quanta weighed blocks.
                     PalwClaimSourceV2::FreePrompt { quanta, spent } => {
@@ -8316,6 +8434,32 @@ impl<'a> TransitionBuilder<'a> {
         }
     }
 
+    // ---- ADR-0145: the derived basis, resolved once for the fold -----------------------------
+
+    /// **A claim's `safe_weight` contribution on the derived basis** — `None` while the fence is
+    /// dormant, which is every shipped preset.
+    ///
+    /// Reads the SAME rooted state the two later re-derivations read
+    /// ([`PalwChainStateV2::palw_claim_canonical_weight_v1`]), so the three cannot drift — the
+    /// failure `retire_claim`'s own comment calls "permanent, because the claim is gone and
+    /// nothing later can reconcile it".
+    fn canonical_claim_weight(&self, claim: &PalwClaimStateV2) -> Option<u128> {
+        self.state.palw_claim_canonical_weight_v1(claim, self.extras.canonical_work_daa)
+    }
+
+    /// **What one draw of a class really costs, for the exposure and work-price paths** — `None`
+    /// while the fence is dormant.
+    ///
+    /// `accepted_daa` is the claim's own, or the accepting block's for a claim being created. It is
+    /// saturated into `u64` because that is the width `palw_exposure_pwu_v2` and the ADR-0124 work
+    /// price speak in; the largest shipped class's draw is ~2 × 10^11 MAC-equivalents, four orders
+    /// under the ceiling, so the saturation is a type boundary rather than a rule.
+    fn canonical_per_draw(&self, class_id: &Hash64, accepted_daa: u64) -> Option<u64> {
+        self.state
+            .palw_canonical_per_draw_v1(class_id, accepted_daa, self.extras.canonical_work_daa)
+            .map(|work| work.min(u64::MAX as u128) as u64)
+    }
+
     // ---- ADR-0132 Upgrade C: the economic payout in the fold ----------------------------------
 
     /// The registry's work for a class: its lifecycle row's, or the genesis registration's.
@@ -9170,12 +9314,18 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         let operator_id = self.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?.operator_id;
+        // ADR-0145: the execution lane's credit is the ADR-0124 work price by another name, so it
+        // reads the same basis — measure and unit both derived past the fence, both declared below.
+        // Resolved before the class borrow so the two reads of `self.state` do not overlap.
+        let canonical = self.canonical_per_draw(&claim.class_id, claim.accepted_daa);
         // A claim names a registered class, and a class row leaves the state only when a delta that
         // registered it is reverted; an attempt whose class is gone, or that certified no compute,
         // earns nothing rather than a guessed credit.
         let Some(class) = self.state.classes.get(&claim.class_id) else { return Ok(()) };
-        let credit =
-            crate::palw_execution_lane_v1::palw_execution_credit_v1(palw_exposure_pwu_v1(class, claim.pwu), self.work_price_unit());
+        let credit = crate::palw_execution_lane_v1::palw_execution_credit_v1(
+            palw_exposure_pwu_v2(class, claim.pwu, canonical),
+            self.work_price_unit_at(claim.accepted_daa),
+        );
         if credit == 0 {
             return Ok(());
         }
@@ -9385,22 +9535,34 @@ impl<'a> TransitionBuilder<'a> {
     /// is priced on the pwu its exposure is priced on (`palw_exposure_pwu_v1`): paid on the same
     /// number it can be slashed on. A floor claim, a claim of a class the state no longer holds,
     /// or a network with no weight-bearing model class is paid the escrow whole.
+    ///
+    /// **ADR-0145**: past the fence both the claim's measure and the unit it is measured against
+    /// are the DERIVED work, so the ratio is arithmetic against arithmetic. Pricing only one of the
+    /// two would compare MAC-equivalents to step leaves and pay every class the wrong fraction of
+    /// its escrow, which is worse than either basis alone.
     fn work_priced_escrow(&self, claim: &PalwClaimStateV2) -> u64 {
         if claim.class_id == self.params.base_class_id {
             return claim.escrowed_reward;
         }
+        let canonical = self.canonical_per_draw(&claim.class_id, claim.accepted_daa);
         let Some(class) = self.state.classes.get(&claim.class_id) else { return claim.escrowed_reward };
         crate::palw_panel_economy_v1::palw_work_priced_reward_v1(
             claim.escrowed_reward,
-            palw_exposure_pwu_v1(class, claim.pwu),
-            self.work_price_unit(),
+            palw_exposure_pwu_v2(class, claim.pwu, canonical),
+            self.work_price_unit_at(claim.accepted_daa),
         )
     }
 
     /// **ADR-0124 Decision 6's unit**: the dearest exposure pwu among the `Active`, weight-bearing
     /// model classes at this block — never the liveness floor's — and zero where no model class
     /// bears weight. The work price and the execution lane's credit (ADR-0125) read this one number.
-    fn work_price_unit(&self) -> u64 {
+    ///
+    /// **ADR-0145**: the unit follows the CLAIM being priced, not the block, for the reason the
+    /// weight does — the numerator is that claim's own measure, and dividing a measure taken on one
+    /// basis by a unit taken on the other is a ratio of nothing. While the fence is dormant — every
+    /// shipped preset — this returns exactly what the argument-free form returned before it
+    /// existed, for every `accepted_daa`.
+    fn work_price_unit_at(&self, accepted_daa: u64) -> u64 {
         self.state
             .classes
             .iter()
@@ -9409,7 +9571,9 @@ impl<'a> TransitionBuilder<'a> {
                     && matches!(record.status, PalwClassStatusV2::Active)
                     && palw_class_bears_weight_v2(&self.state.class_shares, id, self.uncertified_weightless)
             })
-            .map(|(_, record)| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule))
+            .map(|(id, record)| {
+                self.canonical_per_draw(id, accepted_daa).unwrap_or_else(|| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule))
+            })
             .max()
             .unwrap_or(0)
     }
@@ -9984,8 +10148,16 @@ impl<'a> TransitionBuilder<'a> {
             // share cannot be prosecuted, so its work buys no fork-choice weight — the block still
             // advanced DAA, was still paid its budgeted subsidy, and its claim still ran this whole
             // lattice to get here. Priced through the one helper, so the re-derivation in
-            // `assert_internal_consistency_v2` and `retire_claim` cannot drift from it.
-            let contribution = palw_claim_safe_contribution_v2(&self.state.class_shares, claim, self.uncertified_weightless);
+            // `assert_internal_consistency_v3` and `retire_claim` cannot drift from it.
+            //
+            // **ADR-0145 rides the same helper.** Past `Params::palw_canonical_work` the
+            // contribution is the work the chain derived from the class's graph rather than the
+            // step-leaf count its registrant wrote — and it is keyed on the CLAIM's own
+            // `accepted_daa`, so the two re-derivations above return the same number at whatever
+            // height they run.
+            let canonical = self.canonical_claim_weight(claim);
+            let contribution =
+                palw_claim_safe_contribution_v3(&self.state.class_shares, claim, self.uncertified_weightless, canonical);
             self.state.safe_weight =
                 self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         }
@@ -10219,8 +10391,19 @@ impl<'a> TransitionBuilder<'a> {
         // sources UNFENCED; this fold keeps the fence for the state-root reason argued above, so
         // the defect is closed past the activation and stays open below it, which is exactly what
         // the known-limitation test named just above pins as an executable fact.
+        //
+        // **ADR-0145 is the one thing the attempt arm DOES have to follow, and for the opposite
+        // reason to Decision 7's.** The share table can move between a claim's `Final` and its
+        // retirement, which is why that question is not asked twice. The derived basis cannot: it
+        // is keyed on the claim's own `accepted_daa` and reads a lifecycle row frozen when the
+        // registry opened the class, so `canonical_claim_weight` returns at this later chain point
+        // exactly what it returned at `finalize_claim`. Leaving the attempt arm on `claim.pwu` past
+        // the fence would book step leaves against a total that received MAC-equivalents, and the
+        // difference would be permanent in exactly the way this comment warns about.
         let retiring: Option<u128> = match (&claim.phase, &claim.source) {
-            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::Attempt) => Some(claim.pwu as u128),
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::Attempt) => {
+                Some(self.canonical_claim_weight(claim).unwrap_or(claim.pwu as u128))
+            }
             (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::FreePrompt { quanta, spent }) if self.uncertified_weightless => {
                 // `quanta == 0` is unrepresentable (`ZeroQuanta` at creation, and the consistency
                 // check refuses it in every phase), so the `unwrap_or(0)` is a division guard and
@@ -15257,6 +15440,18 @@ pub struct PalwTransitionExtrasV1 {
     /// else already holds. `false` by `Default`, so a caller that does not set it keeps the
     /// behaviour every existing row was written under.
     pub operator_id_unique_active: bool,
+    /// **ADR-0145: `Params::palw_canonical_work_daa()` — the fence's HEIGHT, not a yes/no at this
+    /// block.** Past it the weight, exposure and work-price paths read the work the chain DERIVED
+    /// from the class's graph instead of the step-leaf count its registrant declared.
+    ///
+    /// A height rather than the usual resolved flag because the quantity it governs is carried by
+    /// a CLAIM across three chain points — the block that finalizes it, the block that retires it
+    /// and every re-derivation in between — and a flag resolved at the block would price one claim
+    /// under two bases. Every site compares it against the claim's own `accepted_daa`.
+    ///
+    /// `None` by `Default` and on every preset, so a caller that does not set it keeps the
+    /// declared basis exactly.
+    pub canonical_work_daa: Option<u64>,
     /// ADR-0132 S: `Params::palw_single_lottery` resolved at the block's DAA. Past it the lottery
     /// reads `max(W₀, W)` — the chain's stepped work target — and the network draw is gone.
     pub single_lottery_active: bool,
@@ -16336,7 +16531,15 @@ fn apply_attempt(
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.
     builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score)?;
-    let reserved = (palw_exposure_pwu_v1(class, attempt.pwu) as u128)
+    // **ADR-0145: past the fence the collateral is priced on the DERIVED work of one draw**, not on
+    // the step-leaf count the class's registrant declared. `None` — every shipped preset — leaves
+    // the reservation byte-identical.
+    //
+    // This is also the audit's invariant (viii), "collateral reserved must scale with the weight
+    // bought": the reservation and `safe_weight` now read one number, so a registrant cannot
+    // inflate the weight while the exposure stays where its declaration put it.
+    let canonical_draw = builder.canonical_per_draw(&attempt.class_id, ctx.daa_score);
+    let reserved = (palw_exposure_pwu_v2(class, attempt.pwu, canonical_draw) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwStateV2Error::Overflow("reserve"))?;
     let claim = PalwClaimStateV2 {
@@ -17416,6 +17619,24 @@ impl PalwStateCarriageV2 {
         expected_root: Option<Hash64>,
         uncertified_weightless: bool,
     ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+        self.into_state_v3(params, expected_root, uncertified_weightless, None)
+    }
+
+    /// [`Self::into_state_v2`] with ADR-0145's derived work basis.
+    ///
+    /// `canonical_work_daa` is `Params::palw_canonical_work_daa()`. It has to reach the import for
+    /// the reason ADR-0069 Decision 7's flag does: the consistency check re-derives `safe_weight`
+    /// from the claims, and a re-derivation that used the other basis would refuse a state that
+    /// obeyed the rule exactly — on the node's own durable tip, on every restart, and on every peer
+    /// importing that pruning-point snapshot. `None` on every shipped preset and byte-identical to
+    /// the import before the basis existed.
+    pub fn into_state_v3(
+        self,
+        params: &PalwStateParamsV2,
+        expected_root: Option<Hash64>,
+        uncertified_weightless: bool,
+        canonical_work_daa: Option<u64>,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
         if self.version != PALW_STATE_V2_VERSION {
             return Err(PalwStateV2Error::CarriageInconsistent(format!(
                 "carriage version {} is not {}",
@@ -17492,7 +17713,7 @@ impl PalwStateCarriageV2 {
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
-        state.assert_internal_consistency_v2(params, uncertified_weightless)?;
+        state.assert_internal_consistency_v3(params, uncertified_weightless, canonical_work_daa)?;
         state.assert_deadline_consistency(params)?;
         if let Some(expected) = expected_root {
             let got = state.state_root();
@@ -35182,7 +35403,10 @@ pub(crate) mod tests {
             };
             // Below the fence this founding is legal — that is the defect, and it is why the
             // ordering matters rather than being a detail.
-            assert!(try_lines(&s3, &p, &ctx(4, 252, 4), std::slice::from_ref(&steal), None).is_ok(), "below the fence the root is still takeable");
+            assert!(
+                try_lines(&s3, &p, &ctx(4, 252, 4), std::slice::from_ref(&steal), None).is_ok(),
+                "below the fence the root is still takeable"
+            );
 
             let refusal = try_owned(&s3, &p, &ctx(4, 252, 4), &[steal], None).expect_err("refused");
             assert!(
@@ -35290,7 +35514,8 @@ pub(crate) mod tests {
                 "…and owns its founding root, written by the same block"
             );
             let wrote_class = d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::Class { key, .. } if *key == h64(3)));
-            let wrote_owner = d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ArtifactOwner { key, .. } if *key == (h64(3), h64(0xC3))));
+            let wrote_owner =
+                d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ArtifactOwner { key, .. } if *key == (h64(3), h64(0xC3))));
             assert!(wrote_class && wrote_owner, "one transition, both writes");
         }
 
@@ -35495,8 +35720,13 @@ pub(crate) mod tests {
                 let version = 2 + n;
                 let root = h64(0x1000 + u64::from(n));
                 let at = 253 + u64::from(n) * step;
-                let (next, _) =
-                    apply_owned(&state, &p, &ctx(5 + u64::from(n), at, 5 + u64::from(n)), &[publish(copy, version, root, false)], None);
+                let (next, _) = apply_owned(
+                    &state,
+                    &p,
+                    &ctx(5 + u64::from(n), at, 5 + u64::from(n)),
+                    &[publish(copy, version, root, false)],
+                    None,
+                );
                 state = next;
             }
 
@@ -35673,6 +35903,7 @@ pub(crate) mod tests {
                 work_target_active: false,
                 artifact_root_ownership_active: false,
                 operator_id_unique_active: false,
+                canonical_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,
@@ -35906,6 +36137,7 @@ pub(crate) mod tests {
                 work_target_active: false,
                 artifact_root_ownership_active: false,
                 operator_id_unique_active: false,
+                canonical_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,

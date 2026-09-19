@@ -662,6 +662,15 @@ mod tests {
     /// `palw_exposure_pwu_v1` takes the class and the claimed pwu and, under `DerivedV1`,
     /// returns `pwu_per_inference` — a registered constant. There is no leaf argument, so no
     /// restructuring can change what one claim reserves.
+    ///
+    /// **ADR-0145 amends the second sentence and keeps the first, which is why this test stands
+    /// unchanged.** Past `Params::palw_canonical_work` the constant is no longer the REGISTRANT's:
+    /// `palw_exposure_pwu_v2` substitutes the work the chain derived from the class's graph, which
+    /// is what makes the reservation scale with the weight the claim buys (the 2026-09-19 audit's
+    /// invariant viii). It is still one number per class and still has no leaf argument, so what
+    /// this test measures — that the reservation does not move with what the attempt claims — is
+    /// the same property on either basis, and `palw_exposure_pwu_v1` is the dormant face every
+    /// shipped preset runs.
     #[test]
     fn attempt_exposure_is_flat_per_claim_whatever_the_claim_did() {
         let c = class(1_600, 5);

@@ -108,6 +108,15 @@ pub struct DbPalwStateV2Store {
     /// back from a restart unable to load its own tip. `None` on every shipped preset, which is
     /// byte-for-byte the behaviour before the field existed.
     uncertified_weightless: Option<ForkActivation>,
+    /// **ADR-0145's canonical-work fence HEIGHT, carried here for the reason the field above is.**
+    ///
+    /// Past it a `Final` attempt claim's `safe_weight` contribution is the work the chain derived
+    /// from its class's graph rather than the step-leaf count its registrant declared, and both
+    /// loaders re-derive that sum. A store that did not carry the height would decode a state this
+    /// node's own fold had just written, re-derive it on the declared basis, and refuse it — the
+    /// node unable to load its own tip, and every peer refused the snapshot with it. `None` on
+    /// every shipped preset, which is byte-for-byte the behaviour before the field existed.
+    canonical_work_daa: Option<u64>,
     /// **The materialized tip, keyed on the tip row it was decoded from** (audit M-7).
     ///
     /// `load_tip` is a full re-materialization: borsh-decode the whole carriage,
@@ -156,6 +165,7 @@ impl DbPalwStateV2Store {
             pruning_snapshot: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwPruningPointState.into()),
             schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
             uncertified_weightless: None,
+            canonical_work_daa: None,
             tip_cache: Arc::new(parking_lot::Mutex::new(None)),
             tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pruning_snapshot_cache: Arc::new(parking_lot::Mutex::new(None)),
@@ -182,6 +192,13 @@ impl DbPalwStateV2Store {
         self
     }
 
+    /// Install ADR-0145's canonical-work fence height (`Params::palw_canonical_work_daa()`). Every
+    /// construction path starts dormant, for the reason the setter above gives.
+    pub fn with_canonical_work_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.canonical_work_daa = from_daa;
+        self
+    }
+
     /// The rule in force at the chain point a decoded snapshot stands at. A carriage with no
     /// `last_point` is a genesis state, which holds no claims and so is priced identically either
     /// way.
@@ -191,7 +208,9 @@ impl DbPalwStateV2Store {
     }
 
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
-        Self::new(Arc::clone(&self.db), cache_policy).with_uncertified_weightless(self.uncertified_weightless)
+        Self::new(Arc::clone(&self.db), cache_policy)
+            .with_uncertified_weightless(self.uncertified_weightless)
+            .with_canonical_work_daa(self.canonical_work_daa)
     }
 
     /// If the stored schema is not this build's, delete rows and tip TOGETHER and stamp the new
@@ -413,7 +432,7 @@ impl DbPalwStateV2Store {
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 pruning snapshot does not decode: {e}")))?;
         let armed = self.uncertified_weightless_at(&carriage);
         let state = carriage
-            .into_state_v2(params, Some(record.state_root), armed)
+            .into_state_v3(params, Some(record.state_root), armed, self.canonical_work_daa)
             .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 pruning snapshot refused: {e}")))?;
         Ok(Some((record.block, state)))
     }
@@ -470,7 +489,7 @@ impl DbPalwStateV2Store {
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 pruning snapshot does not decode: {e}")))?;
         let armed = self.uncertified_weightless_at(&carriage);
         let state = carriage
-            .into_state_v2(params, Some(record.state_root), armed)
+            .into_state_v3(params, Some(record.state_root), armed, self.canonical_work_daa)
             .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 pruning snapshot refused: {e}")))?;
         let served = Arc::new(PalwStateCarriageV2::from_state(&state));
         *self.pruning_snapshot_cache.lock() = Some((record.block, record.state_root, Arc::clone(&served)));
@@ -524,7 +543,7 @@ impl DbPalwStateV2Store {
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 tip snapshot does not decode: {e}")))?;
         let armed = self.uncertified_weightless_at(&carriage);
         carriage
-            .into_state_v2(params, Some(record.state_root), armed)
+            .into_state_v3(params, Some(record.state_root), armed, self.canonical_work_daa)
             .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 tip snapshot refused: {e}")))
     }
 }

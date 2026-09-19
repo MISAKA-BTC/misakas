@@ -233,6 +233,23 @@ impl PalwEconomicShapeV1 {
     pub fn logits_at(&self, kv_len: u128) -> PalwEconomicBreakdownV1 {
         self.logits.sum_over(kv_len, kv_len)
     }
+
+    /// **The body over an INCLUSIVE range of kv lengths, by kind** — the closed form
+    /// [`palw_job_breakdown_from_shape_v1`] already uses internally, exposed because a caller that
+    /// wants the prefill phase and the decode phase as separate quantities cannot get them by
+    /// summing [`Self::body_at`] over the range: a held class's context runs to 2^40 positions, so
+    /// a per-position loop is not a walk anybody can afford. Empty when `from > to`.
+    ///
+    /// Added for [`crate::palw_canonical_work_v1`] (ADR-0145 §4), which prices attention during
+    /// prefill and attention during decode as different dimensions because the hardware does.
+    pub fn body_over(&self, from: u128, to: u128) -> PalwEconomicBreakdownV1 {
+        self.body.sum_over(from, to)
+    }
+
+    /// The logits pass over an inclusive range of kv lengths, by kind. [`Self::body_over`]'s reason.
+    pub fn logits_over(&self, from: u128, to: u128) -> PalwEconomicBreakdownV1 {
+        self.logits.sum_over(from, to)
+    }
 }
 
 /// Which table a node lives in, for the LM-head rule.

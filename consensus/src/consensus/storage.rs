@@ -308,7 +308,11 @@ impl ConsensusStorage {
             // decodes: past the fence the consistency identity is an upper bound, and a store told
             // otherwise would refuse this node's own tip on the next restart.
             let mut store = DbPalwStateV2Store::new(db.clone(), PolicyBuilder::new().max_items(4096).untracked().build())
-                .with_uncertified_weightless(params.palw_uncertified_weightless);
+                .with_uncertified_weightless(params.palw_uncertified_weightless)
+                // ADR-0145's basis rides the store for the same reason, and it is a HEIGHT rather
+                // than a fence because every site that reads it compares it against a CLAIM's own
+                // `accepted_daa`, never against a block's.
+                .with_canonical_work_daa(params.palw_canonical_work_daa());
             if let Err(err) = store.reindex_if_stale() {
                 kaspa_core::warn!("[palw-state-v2-store] could not check the record layout version: {err}; leaving existing rows");
             }
