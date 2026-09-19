@@ -57,7 +57,7 @@ pub struct PalwAdmissionParamsV2 {
     max_exposure_ratio_permille: u32,
 }
 
-/// The epoch-budget fences resolved for one candidate block.
+/// The per-block fence resolutions the admission gate needs, epoch budget and otherwise.
 ///
 /// These are deliberately named fields rather than adjacent positional booleans. Both fences
 /// are resolved from the same block DAA, but they have different semantics: the boundary fence
@@ -80,6 +80,20 @@ pub struct PalwEpochBudgetFencesV1 {
     /// floor is `max(W₀, W)` where `W` is the chain's stepped work target — the controller that holds
     /// the cadence once the network draw is gone.
     pub single_lottery: bool,
+    /// **ADR-0145: `Params::palw_canonical_work_daa()` — the HEIGHT, not this block's answer.**
+    ///
+    /// The exposure ceiling below must price a claim the way the fold will price it when it writes
+    /// `claim.reserved`, and past this fence the fold prices one draw's DERIVED work normalised by
+    /// the floor class's own ratio (`PalwExposureBasisV1`). Without the height here the gate could
+    /// only measure the declared basis, and the 2026-09-19 re-audit measured what that costs: the
+    /// gate admits an attempt the ledger then reserves 2,809×–12,533× against, the next attempt
+    /// trips `ExposureCeilingExceeded`, and on the floor class the chain stops for being used.
+    ///
+    /// A height rather than a resolved flag for the same reason every other site keeps one: a
+    /// claim is priced at the block that accepts it and re-derived at two later chain points, and
+    /// a flag resolved at the block would price one claim under two bases. `None` by `Default`,
+    /// which is every shipped preset and the declared basis exactly.
+    pub canonical_work_daa: Option<u64>,
 }
 
 impl PalwAdmissionParamsV2 {
@@ -492,7 +506,19 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     // succeeding, and on the floor class that is the chain stopping. This must stay the same
     // expression the state uses when it writes `claim.reserved`, or the ceiling would be checked
     // against a number the ledger never records.
-    let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v1(class, attempt.pwu) as u128)
+    //
+    // **ADR-0145, and the 2026-09-19 re-audit's finding (a).** Past `palw_canonical_work` the fold
+    // reserves one draw's DERIVED work, normalised by the floor class's own leaves-per-MAC-eq so
+    // the unit stays the one the collateral was posted in. This reads the same expression over the
+    // same two inputs — `canonical_per_draw` for this class and the basis for the floor — so the
+    // ceiling and the ledger cannot disagree at any fence position, which is exactly what the
+    // paragraph above requires and what a second copy of the expression stopped delivering.
+    let canonical_draw = state
+        .palw_canonical_per_draw_v1(&attempt.class_id, ctx.daa_score, budget_fences.canonical_work_daa)
+        .map(|work| work.min(u64::MAX as u128) as u64);
+    let exposure_basis =
+        state.palw_exposure_basis_v1(&state_params.base_class_id(), ctx.daa_score, budget_fences.canonical_work_daa);
+    let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
     let ceiling = (bond.collateral as u128)

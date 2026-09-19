@@ -1840,6 +1840,66 @@ pub fn palw_exposure_pwu_v2(class: &PalwClassStateV2, claimed_pwu: u64, canonica
     }
 }
 
+/// **The floor class's own two measures of one draw — the unit that makes the derived basis
+/// commensurate with the collateral already posted.**
+///
+/// Every other quantity ADR-0145 moves onto the derived basis is a RATIO: reward is
+/// `escrow × own pwu / unit`, weight is `declared × derived / declared`, and in each the change of
+/// unit divides out. Exposure is the one place a pwu is multiplied by an ABSOLUTE price —
+/// `slash_value_per_pwu`, sompi per pwu, equal for every class and frozen at registration. So
+/// repointing exposure at raw derived work multiplies every reservation by that class's
+/// leaves-to-MAC-eq ratio: measured 2,809.8× on the floor class and 12,533.2× on the shipped dense
+/// row, against collateral sized under the old unit. A 10,000 MSK bond's concurrent dense claims
+/// fall from ~30,000 to 2, the floor class starts refusing its own producers, and the chain stops
+/// — for being used. That is the 2026-09-19 re-audit's finding (a), and it fires on the flag day,
+/// not before.
+///
+/// The fix is a unit, and the unit is DERIVED rather than chosen. `base_declared / base_canonical`
+/// is the floor class's own leaves per MAC-equivalent, read from the same chain rows every node
+/// holds. Multiplying a class's derived draw by it:
+///
+/// * leaves the floor class's reservation **byte-identical** across the fence, which is where
+///   liveness actually lives — the base class is the one every node must be able to produce on;
+/// * moves every other class by its work RELATIVE to the floor, which is invariant (viii)'s whole
+///   content: the shipped dense row reserves 4.46× the floor's rate because it really does 4.46×
+///   the arithmetic per declared leaf, not 12,533× because the unit changed underneath it;
+/// * introduces no number anybody wrote. ADR-0146 R1 permits a coefficient only where no
+///   derivation exists, and here one does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwExposureBasisV1 {
+    /// `palw_max_exposure_pwu_of_rule_v1` of the base class's rule — its declared leaves per draw.
+    pub base_declared: u64,
+    /// The base class's derived work for one draw, `palw_canonical_per_draw_v1`.
+    pub base_canonical: u64,
+}
+
+/// [`palw_exposure_pwu_v2`] in the unit the collateral was posted in (see [`PalwExposureBasisV1`]).
+///
+/// **Fail-safe by construction: no basis, no change of unit.** If the floor class has no derived
+/// work to normalise against — below the registry, or a network whose base class the build cannot
+/// describe — this returns the DECLARED exposure for every class, ignoring `canonical` entirely.
+/// A half-applied unit is what produced the divergence this function exists to close, so the
+/// degenerate case is the old rule exactly rather than a mixture.
+pub fn palw_exposure_pwu_v3(
+    class: &PalwClassStateV2,
+    claimed_pwu: u64,
+    canonical: Option<u64>,
+    basis: Option<PalwExposureBasisV1>,
+) -> u64 {
+    match (canonical, basis) {
+        (Some(canonical), Some(basis)) if basis.base_canonical > 0 && basis.base_declared > 0 => match class.pwu_rule {
+            // u128 throughout: the largest shipped draw is ~8.3 × 10^10 MAC-eq and the floor's
+            // declared leaves are 7,708, so the product passes 6 × 10^14 before the divide.
+            PalwPwuRuleV2::DerivedV1 { .. } => {
+                let scaled = (canonical as u128) * (basis.base_declared as u128) / (basis.base_canonical as u128);
+                scaled.min(u64::MAX as u128) as u64
+            }
+            PalwPwuRuleV2::MaxPerAttempt(_) => claimed_pwu,
+        },
+        _ => palw_exposure_pwu_v2(class, claimed_pwu, None),
+    }
+}
+
 /// The dearest exposure a claim under this rule can carry.
 ///
 /// The form a gate wants when there is no attempt yet to read a claimed pwu from — the genesis
@@ -3851,10 +3911,17 @@ pub struct PalwClassLaneCertificationV2 {
 /// ledger would make the cache rule stricter than the duplicate rule it rides beside, which is two
 /// answers to one question. Closing it properly is the receipt's prefix-STATE commitment (ADR-0145
 /// §6), which is a change to the commitment's wire.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpClaimPromptV1 {
     pub prompt_tokens: u32,
     pub prefix_root: Hash64,
+    /// **The prompt's own ids** (re-audit 2026-09-19). `prefix_root` alone answers only "is a
+    /// SHORTER paid prompt a prefix of mine", so a producer committing its conversation
+    /// longest-first was never met by a shorter row and was paid for the same prefill on every
+    /// rung. The ids make the reading symmetric — see
+    /// [`crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2`]. Bounded by the ruleset's own
+    /// `max_prompt_tokens`, which the commitment transaction already carries in full.
+    pub prompt_token_ids: Vec<u32>,
 }
 
 /// The most fault vectors one `FamilyCertified` object may carry — the grading work one object
@@ -6277,6 +6344,25 @@ impl PalwChainStateV2 {
         (derived > 0).then_some(derived)
     }
 
+    /// **The floor class's two measures of one draw** — see [`PalwExposureBasisV1`] for why
+    /// exposure needs a unit when reward and weight do not.
+    ///
+    /// `None` wherever the floor has nothing to normalise against, and every caller then keeps the
+    /// declared basis. Deriving it here, from the base class the params name, is what lets the
+    /// admission ceiling and the fold's ledger reach the same number without either looking the
+    /// other up: they are handed the same two inputs and run the same expression.
+    pub fn palw_exposure_basis_v1(
+        &self,
+        base_class_id: &Hash64,
+        accepted_daa: u64,
+        canonical_work_daa: Option<u64>,
+    ) -> Option<PalwExposureBasisV1> {
+        let base_canonical = self.palw_canonical_per_draw_v1(base_class_id, accepted_daa, canonical_work_daa)?;
+        let base_declared = palw_max_exposure_pwu_of_rule_v1(&self.classes.get(base_class_id)?.pwu_rule);
+        let base_canonical = base_canonical.min(u64::MAX as u128) as u64;
+        (base_declared > 0 && base_canonical > 0).then_some(PalwExposureBasisV1 { base_declared, base_canonical })
+    }
+
     /// **A claim's `safe_weight` contribution on the derived basis** — `None` while the fence is
     /// dormant, or where the class offers nothing to derive from.
     ///
@@ -6360,6 +6446,18 @@ impl PalwChainStateV2 {
             .range((*class_id, *bond, Hash64::default())..)
             .take_while(|((class, key, _), _)| class == class_id && key == bond)
             .map(|(_, row)| (row.prompt_tokens, row.prefix_root))
+            .collect()
+    }
+
+    /// **The prompts themselves**, for the symmetric cache reading
+    /// ([`crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2`]). Same range, same key, same
+    /// emptiness below the fence — what changes is that a paid prompt LONGER than the one being
+    /// priced can now be recognised as containing it.
+    pub fn fp_claimed_prompt_ids_of(&self, class_id: &Hash64, bond: &PalwBondKeyV2) -> Vec<&[u32]> {
+        self.fp_claim_prompts
+            .range((*class_id, *bond, Hash64::default())..)
+            .take_while(|((class, key, _), _)| class == class_id && key == bond)
+            .map(|(_, row)| row.prompt_token_ids.as_slice())
             .collect()
     }
 
@@ -8682,12 +8780,12 @@ impl<'a> TransitionBuilder<'a> {
     /// **ADR-0145 §6: record (or drop) one live claim's prompt.** Dropped from `write_claim`, where
     /// the work-id index is dropped, so the two windows are the same one.
     fn write_fp_claim_prompt(&mut self, key: (Hash64, PalwBondKeyV2, Hash64), new: Option<PalwFpClaimPromptV1>) {
-        let old = self.state.fp_claim_prompts.get(&key).copied();
+        let old = self.state.fp_claim_prompts.get(&key).cloned();
         if old == new {
             return;
         }
         match &new {
-            Some(row) => self.state.fp_claim_prompts.insert(key, *row),
+            Some(row) => self.state.fp_claim_prompts.insert(key, row.clone()),
             None => self.state.fp_claim_prompts.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::FpClaimPrompt { key, old, new });
@@ -8814,6 +8912,12 @@ impl<'a> TransitionBuilder<'a> {
         self.state
             .palw_canonical_per_draw_v1(class_id, accepted_daa, self.extras.canonical_work_daa)
             .map(|work| work.min(u64::MAX as u128) as u64)
+    }
+
+    /// The floor class's leaves-to-derived-work ratio at this block, for the one place a pwu is
+    /// multiplied by an absolute price rather than divided by a unit ([`PalwExposureBasisV1`]).
+    fn exposure_basis(&self, accepted_daa: u64) -> Option<PalwExposureBasisV1> {
+        self.state.palw_exposure_basis_v1(&self.params.base_class_id, accepted_daa, self.extras.canonical_work_daa)
     }
 
     // ---- ADR-0132 Upgrade C: the economic payout in the fold ----------------------------------
@@ -15767,8 +15871,8 @@ fn apply_object(
                 // ruleset (the same reason `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` exists at all).
                 let ladder =
                     builder.state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
-                let already_paid = builder.state.fp_claimed_prompts_of(class_id, bond);
-                let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v1(prompt_token_ids, &already_paid);
+                let already_paid = builder.state.fp_claimed_prompt_ids_of(class_id, bond);
+                let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid);
                 let work =
                     crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, *prompt_tokens, *decode_tokens_executed, accounted, ladder)
                         .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
@@ -15914,6 +16018,7 @@ fn apply_object(
                     Some(PalwFpClaimPromptV1 {
                         prompt_tokens: *prompt_tokens,
                         prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
+                        prompt_token_ids: prompt_token_ids.clone(),
                     }),
                 );
             }
@@ -17176,7 +17281,14 @@ fn apply_attempt(
     // bought": the reservation and `safe_weight` now read one number, so a registrant cannot
     // inflate the weight while the exposure stays where its declaration put it.
     let canonical_draw = builder.canonical_per_draw(&attempt.class_id, ctx.daa_score);
-    let reserved = (palw_exposure_pwu_v2(class, attempt.pwu, canonical_draw) as u128)
+    // **And in the unit the collateral was posted in** — the 2026-09-19 re-audit's finding (a).
+    // `palw_exposure_pwu_v2` here multiplied the reservation by this class's leaves-to-MAC-eq
+    // ratio on the flag day (2,809× on the floor, 12,533× on the dense row) while the admission
+    // ceiling at `palw_admission_v2.rs` still measured the declared basis, so the gate admitted
+    // what the ledger could not afford to record. Both sides now run `palw_exposure_pwu_v3` over
+    // the same basis; see `PalwExposureBasisV1`.
+    let exposure_basis = builder.exposure_basis(ctx.daa_score);
+    let reserved = (palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwStateV2Error::Overflow("reserve"))?;
     let claim = PalwClaimStateV2 {
@@ -22067,6 +22179,148 @@ pub(crate) mod tests {
                 for (id, target) in &targets_before {
                     assert_eq!(after.class_target(id).map(|t| t.target), Some(*target), "class {id}'s difficulty");
                 }
+            }
+
+            // =============================================================================
+            // 2026-09-19 RE-AUDIT (admission lane) — what the armed fence still permits
+            // =============================================================================
+
+            /// The same network the fixtures above build, except that every bond the registrant
+            /// funds pays its OWN address — `bond`'s default `payout_payload` is `0x9A00 + n`, one
+            /// per bond — and there is no stranger on the chain at all.
+            fn bought_network_paying_separately(root: Hash64) -> Vec<PalwConsensusObjectV2> {
+                let mut objects = register_class_and_bond();
+                objects.push(bond(9, 1_000));
+                objects.push(kimi_bought_by(root, bond_key(9)));
+                objects.extend((2..=8).map(|n| bond(n, 1_000)));
+                objects
+            }
+
+            /// **The fence's price, measured: eight keys and eight payout addresses — and then it
+            /// is a no-op.**
+            ///
+            /// `palw_bond_is_independent_of_registrant_v1` (`palw_state_v2.rs:611-628`) asks
+            /// whether a seat's bond DIFFERS from the registrant's in `operator_id`, `pubkey` and
+            /// `payout_payload`. All three are values the registrant writes into its own
+            /// `BondRegistered`. The fixtures above make the attack fail by having the registrant
+            /// pay every sybil into ONE address; nothing on the chain requires that, and paying
+            /// them separately restores the attack whole — with the fence ARMED and with no
+            /// stranger anywhere on the chain:
+            ///
+            /// * the admission gate lets the class out of `Candidate` on the registrant's own
+            ///   "independent" ready seats;
+            /// * `PanelBound` seats a jury of the registrant's own bonds;
+            /// * `ReceiptLicensed` licenses the claim on the registrant's own `Valid` receipts.
+            ///
+            /// So the fence prices self-certification at one extra payout address per identity —
+            /// free — and does not prevent it. Its own doc says as much ("A registrant who funds
+            /// several bonds under several operator keys AND several payout payloads is several
+            /// parties by this test"); this is that sentence as an executable measurement.
+            #[test]
+            fn a_registrant_paying_its_sybils_separately_defeats_the_armed_independence_fence() {
+                let p = params();
+                let (operands, root) = inventory();
+                let f = fold(kimi_work());
+                let genesis = PalwChainStateV2::genesis();
+                let sybil_proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 10)).collect();
+
+                // ---- the admission gate ----
+                let (s1, _) =
+                    fold_step(&genesis, &p, &ctx(1, 100, 1), &bought_network_paying_separately(root), None, &armed(None)).unwrap();
+                let (s2, _) = fold_step(&s1, &p, &ctx(2, 101, 2), &sybil_proofs, None, &armed(Some(f.clone()))).unwrap();
+                let (s3, _) = fold_step(&s2, &p, &ctx(3, 110, 3), &[], None, &armed(Some(f.clone()))).unwrap();
+                let row = s3.model_lifecycle(&kimi_id()).expect("the boundary opens a row");
+                assert_eq!(
+                    (row.state, row.ready_seats),
+                    (PalwModelLifecycleV1::Prefetching, 7),
+                    "seven of the registrant's own seats, paid to seven of its own addresses, are \
+                     seven independent parties by this rule — the class leaves Candidate at the \
+                     first boundary, exactly as if a stranger had looked at it"
+                );
+                let (s4, _) = fold_step(&s3, &p, &ctx(4, 120, 4), &[], None, &armed(Some(f.clone()))).unwrap();
+                let row = s4.model_lifecycle(&kimi_id()).expect("a row");
+                assert_eq!(
+                    (row.state, row.ready_seats),
+                    (PalwModelLifecycleV1::Probation { probes_passed: 0 }, 7),
+                    "…and one boundary later it admits claims, judged by nobody but its owner"
+                );
+                assert!(row.state.admits_claims());
+
+                // ---- the panel, and then the quorum ----
+                let env = kimi_attempt(4, root);
+                let claim_id = attempt_id_v2(&env.attempt);
+                let (s5, _) = fold_step(&s4, &p, &ctx(5, 121, 5), &[], Some(&env), &armed(Some(f.clone()))).unwrap();
+                let panel =
+                    PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat(2), seat(3), seat(4)] };
+                let (s6, _) = fold_step(&s5, &p, &ctx(6, 122, 6), &[panel], None, &armed(Some(f.clone())))
+                    .expect("a jury of the registrant's own bonds passes the independence test");
+                assert_eq!(s6.panel(&claim_id).map(|panel| panel.seats.len()), Some(3));
+                let own = PalwConsensusObjectV2::ReceiptLicensed {
+                    claim: claim_id,
+                    receipts: vec![says(bond_key(2), true), says(bond_key(3), true)],
+                };
+                let (s7, _) = fold_step(&s6, &p, &ctx(7, 123, 7), &[own], None, &armed(Some(f)))
+                    .expect("and so does a quorum of the registrant's own Valid receipts");
+                assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+            }
+
+            /// **Grandfathering: one self-licensed `Final` before the registry's first boundary
+            /// buys `Active` for ever** (`palw_state_v2.rs:9389` — `if *class_id == base ||
+            /// has_final { Active }`, asked BEFORE the `Candidate` arm).
+            ///
+            /// The registrant drives one claim of its own class to `Final` on a chain whose
+            /// registry is not open yet — every seat its own, which is what the test above shows
+            /// the armed fence does not stop either — and the registry's first boundary then writes
+            /// the row `Active` rather than `Candidate`, at 1,000‰ admission, skipping
+            /// `Prefetching`, `Probation` and `ActiveLimited` entirely. ADR-0145 I4's filter in
+            /// `palw_work_price_unit_of_v1` asks `row.state.admits_claims()`, and `Active` answers
+            /// yes — so the class is inside the work-price unit past the fence, which is the one
+            /// quantity a registration was not supposed to be able to move.
+            #[test]
+            fn a_final_won_before_the_registry_opens_grandfathers_a_bought_class_active() {
+                let p = params();
+                let (operands, root) = inventory();
+                let f = fold(kimi_work());
+                let genesis = PalwChainStateV2::genesis();
+                let env = kimi_attempt(5, root);
+                let claim_id = attempt_id_v2(&env.attempt);
+
+                // No registry fold yet: this is the chain BEFORE `palw_model_registry` arms.
+                let (s1, _) =
+                    fold_step(&genesis, &p, &ctx(1, 100, 1), &bought_network_paying_separately(root), None, &extras(None)).unwrap();
+                let (s2, _) = fold_step(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), &extras(None)).unwrap();
+                let panel = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat(2), seat(3)] };
+                let (s3, _) = fold_step(&s2, &p, &ctx(3, 102, 3), &[panel], None, &extras(None)).unwrap();
+                let receipts =
+                    PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: vec![says(bond_key(2), true)] };
+                let (s4, _) = fold_step(&s3, &p, &ctx(4, 103, 4), &[receipts], None, &extras(None)).unwrap();
+                // The challenge window (20) from licensing at 103 ends at 123.
+                let (s5, _) = fold_step(&s4, &p, &ctx(5, 124, 5), &[], None, &extras(None)).unwrap();
+                assert!(
+                    matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
+                    "the registrant licensed its own claim to Final while the registry was dormant"
+                );
+                assert!(s5.model_lifecycles.is_empty(), "…and no lifecycle row exists yet");
+
+                // Now the registry opens, with the independence fence ARMED from its first block.
+                // The registrant's own seats prove possession (the readiness half is registrant-
+                // doable by construction: it holds the artifact it registered).
+                let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 12)).collect();
+                let (s5b, _) = fold_step(&s5, &p, &ctx(6, 125, 6), &proofs, None, &armed(Some(f.clone()))).unwrap();
+                let (s6, _) = fold_step(&s5b, &p, &ctx(7, 130, 7), &[], None, &armed(Some(f))).unwrap();
+                let row = s6.model_lifecycle(&kimi_id()).expect("the first boundary opens every class's row");
+                assert_eq!(
+                    (row.state, row.state.admission_permille()),
+                    (PalwModelLifecycleV1::Active, 1_000),
+                    "a bought class with one self-licensed Final opens ACTIVE past the fence, not Candidate"
+                );
+                assert!(row.state.admits_claims(), "so ADR-0145 I4's filter admits it…");
+                // …and therefore it is inside the work-price unit, the quantity I4 exists to protect.
+                assert_eq!(
+                    palw_work_price_unit_v1(&s6, &h64(1), false, true),
+                    160,
+                    "…and its registrant-declared pwu IS the unit every other class's reward divides by"
+                );
             }
         }
     }
@@ -28649,6 +28903,82 @@ pub(crate) mod tests {
         // here: the row is keyed by both, so one bond's history never discounts another's.
         assert!(second.fp_claimed_prompts_of(&class, &bond_key(2)).is_empty());
         assert!(second.fp_claimed_prompts_of(&h64(1), &bond_key(1)).is_empty());
+    }
+
+    /// **RE-AUDIT 2026-09-19 — one conversation has one price, whatever order it was committed
+    /// in.**
+    ///
+    /// The regression for the defect this test was written to expose: `fp_accounted_prefix_tokens_v1`
+    /// kept only paid rows STRICTLY SHORTER than the prompt in front of it, so a producer that
+    /// committed its conversation LONG PROMPT FIRST never met a shorter row and every prefix it
+    /// committed afterwards was priced as uncached — while it recomputed nothing, holding the long
+    /// prompt's KV state. Before `fp_accounted_prefix_tokens_v2` this test read 37,000 pwu
+    /// descending against 32,000 ascending; the two are now the same number, and they are the same
+    /// number because the reading is the longest COMMON prefix, which has no direction.
+    #[test]
+    fn audit_one_conversation_has_one_price_whatever_order_it_was_committed_in() {
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let profile = derived_profile();
+        let leaves = |n: u32| crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, n, 8, 1 << 26).unwrap();
+        let ids: Vec<u32> = (0..32).collect();
+        let short = derived_commit(0xB1, &ids[..8], 8, leaves(8));
+        let long = derived_commit(0xB2, &ids, 8, leaves(32));
+
+        // ASCENDING — 8 tokens, then the 32-token extension of them.
+        let (a1, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[short.clone()], &armed).expect("the short prompt");
+        let (a2, _) = apply_derived(&a1, &p, &ctx(5, 104, 5), &[long.clone()], &armed).expect("the extension");
+        let ascending = a2.claim(&h64(0xB1)).unwrap().pwu + a2.claim(&h64(0xB2)).unwrap().pwu;
+
+        // DESCENDING — the same two runs, the same bond, the same class, long prompt first.
+        let (d1, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[long], &armed).expect("the long prompt");
+        let (d2, _) = apply_derived(&d1, &p, &ctx(5, 104, 5), &[short], &armed).expect("its own prefix");
+        let descending = d2.claim(&h64(0xB1)).unwrap().pwu + d2.claim(&h64(0xB2)).unwrap().pwu;
+
+        assert_eq!(ascending, 32_000, "10 quanta for the short run, 22 for the extension it was not sold twice");
+        assert_eq!(
+            descending, ascending,
+            "the price of one conversation must not depend on the order its prompts were committed in"
+        );
+        // And the shorter claim really was priced as a cache hit, not merely refused: its decode
+        // half is credited and its prefill is not.
+        assert_eq!(d2.claim(&h64(0xB1)).unwrap().pwu, 5_000, "the prefix the chain already bought earns its decode calls only");
+    }
+
+    /// **RE-AUDIT 2026-09-19 — one inference does not pay for its whole prefix ladder.**
+    ///
+    /// The generalisation of the test above: every prefix of ONE prompt, committed longest-first.
+    /// Before the fix the chain paid 74,000 pwu for one 32-token prefill (22,424 leaves) plus four
+    /// decode halves; the honest single-prefill price is 42,920 leaves and the ladder now costs
+    /// 42,000 pwu — under it, because quanta floor.
+    #[test]
+    fn audit_one_inference_does_not_pay_for_its_whole_prefix_ladder() {
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (mut state, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let profile = derived_profile();
+        let ids: Vec<u32> = (0..32).collect();
+        let mut total = 0u64;
+        let mut honest = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&profile, 32, 1 << 26).unwrap();
+        for (i, n) in [32u32, 24, 16, 8].into_iter().enumerate() {
+            let full = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, n, 8, 1 << 26).unwrap();
+            honest += full - crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&profile, n, 1 << 26).unwrap();
+            let claim = 0xC0 + i as u64;
+            let (next, _) = apply_derived(
+                &state,
+                &p,
+                &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64),
+                &[derived_commit(claim, &ids[..n as usize], 8, full)],
+                &armed,
+            )
+            .unwrap_or_else(|e| panic!("the prefix of {n} applies: {e:?}"));
+            total += next.claim(&h64(claim)).unwrap().pwu;
+            state = next;
+        }
+        assert_eq!(honest, 42_920, "one 32-token prefill and four decode halves");
+        assert_eq!(total, 42_000, "the ladder is paid for one prefill, not four");
+        assert!(total <= honest, "the chain must never pay more than the run cost: {total} vs {honest}");
     }
 
     /// **The prompt row leaves with the claim, and a reorg puts it back.**

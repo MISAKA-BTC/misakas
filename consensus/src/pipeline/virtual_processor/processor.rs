@@ -7846,6 +7846,13 @@ impl VirtualStateProcessor {
             // `calc_block_subsidy` at its DAA, the same reading every attempt block's context takes.
             work_target_floor: self.palw_work_target_floor_for(daa_score, self.coinbase_manager.calc_block_subsidy(daa_score)),
             single_lottery: self.palw_single_lottery_at(daa_score),
+            // **ADR-0145: the HEIGHT, not this block's answer** — the exposure ceiling must price
+            // a claim the way the fold will price it when it writes `claim.reserved`, and the fold
+            // compares this height against the CLAIM's own `accepted_daa`. Passing a flag resolved
+            // here would price one claim under two bases; passing nothing would leave the ceiling
+            // measuring the declared basis while the ledger measured the derived one, which is the
+            // 2026-09-19 re-audit's finding (a) — the gate admitting what the ledger cannot record.
+            canonical_work_daa: self.palw_canonical_work_daa,
         }
     }
 
