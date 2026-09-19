@@ -12,9 +12,12 @@
 #
 #   1/9  N floor-only validators, every one holding the class artifact; the chain crosses the fence
 #        and keeps producing (the §5 gate — the floor is priced before its row exists)
-#   2/9  node-1 registers MODEL_ID past the registry fence: a BOUGHT class, so it opens CANDIDATE
-#   3/9  the seats prove possession; a jury the NETWORK drew (ADR-0147) moves it on; it reaches
-#        PROBATION — registration is not eligibility, and eligibility is earned
+#   2/9  node-1 registers MODEL_ID past the registry fence. Accepted past the independence fence
+#        (ECONOMY_AT) it is a BOUGHT class and must open CANDIDATE; accepted before it, the
+#        pre-independence path (grandfathered) and PREFETCHING — the stage judges which by the fence
+#   3/9  the seats prove possession; a CANDIDATE waits for a jury the NETWORK drew (ADR-0147), whose
+#        first audit is at the first epoch boundary (DAA 1,000 on devnet: set STEP_WAIT_DAA past
+#        it); it reaches PROBATION — registration is not eligibility, and eligibility is earned
 #   4/9  the free-prompt lane is certified for the class's family (ADR-0075)
 #   5/9  the gateway (bond 0) and MISAKA Studio (`misaka-studiod`, Gateway backend) come up
 #   6/9  ONE chat, sent to STUDIO — not to the gateway — and the commitment it produced
@@ -211,18 +214,44 @@ log "1/9 OK — fence crossed at $cross_daa, the chain is at $(daa_of 1) with ev
 wait_reg "any(c['classId'] == '$EXPECTED_CLASS_ID' and c.get('hasRow') for c in v.get('classes', []))" "node-1's registration of $MODEL_ID to open a row"
 CLASS_ID="$EXPECTED_CLASS_ID"
 first_state="$(reg 1 "[c['state'] for c in v['classes'] if c['classId'] == '$CLASS_ID'][0]")"
-log "2/9 OK — ${CLASS_ID:0:16}… is on the chain with a row, opened as $first_state"
-case "$first_state" in
-  Candidate*) : ;;
-  *) log "    NOTE: a bought class past the independence fence should open CANDIDATE; this one opened $first_state" ;;
-esac
+# **Which door the class came through is the fence's, not the drill's wish.** A registration the
+# chain accepted past the independence fence (the bundle, ECONOMY_AT) is a BOUGHT class and opens
+# CANDIDATE — only a network-drawn jury moves it (ADR-0147). One accepted before it keeps the
+# pre-independence path and opens PREFETCHING (grandfathered). The row's opening span brackets the
+# acceptance DAA; a span that straddles the fence is reported, not judged.
+opened_from="$(reg 1 "[c['sinceSpan'] * v['spanDaa'] for c in v['classes'] if c['classId'] == '$CLASS_ID'][0]")"
+span_daa="$(reg 1 "v['spanDaa']")"
+if [ "$opened_from" -ge "$ECONOMY_AT" ]; then
+  case "$first_state" in
+    Candidate*) door="bought past the independence fence at $ECONOMY_AT: CANDIDATE, as ADR-0147 requires" ;;
+    *) die "the class was registered at DAA ≥ $opened_from, past the independence fence at $ECONOMY_AT, and opened $first_state — a bought class must open CANDIDATE" ;;
+  esac
+elif [ $((opened_from + span_daa)) -le "$ECONOMY_AT" ]; then
+  case "$first_state" in
+    Candidate*) die "the class was registered before DAA $((opened_from + span_daa)), before the independence fence at $ECONOMY_AT, and opened CANDIDATE — a pre-independence registration keeps its path" ;;
+    *) door="registered before the independence fence at $ECONOMY_AT: the pre-independence path (grandfathered), no jury" ;;
+  esac
+else
+  door="the opening span straddles the independence fence at $ECONOMY_AT; opened $first_state"
+fi
+log "2/9 OK — ${CLASS_ID:0:16}… is on the chain with a row, opened as $first_state ($door)"
 
 # ---------------------------------------------------------------------------------------------
 # 3/9  Possession proved, a network-drawn jury, and PROBATION.
 # ---------------------------------------------------------------------------------------------
 req="$(reg 1 "[c['requiredReadySeats'] for c in v['classes'] if c['classId'] == '$CLASS_ID'][0]")"
 [ -n "$req" ] && [ "$req" -le "$NODES" ] || die "the class needs $req ready seats and this run has $NODES nodes: it can never leave PREFETCHING"
-log "3/9 waiting for the jury and PROBATION (needs $req ready seats)"
+case "$first_state" in
+  Candidate*) log "3/9 waiting for the network-drawn jury (the first audit is at the first epoch boundary) and PROBATION (needs $req ready seats)" ;;
+  *) log "3/9 waiting for PROBATION (needs $req ready seats; a grandfathered class sits no jury)" ;;
+esac
+if [[ "$first_state" == Candidate* ]]; then
+  # Only an audit moves a CANDIDATE: once per period (epoch_length / span_daa spans), seeded by the
+  # execution anchor of the span before, drawn from bonds that are neither the registrant's bond nor
+  # its operator's, and holding only if a majority of that jury holds the class (ADR-0147).
+  wait_reg "any(c['classId'] == '$CLASS_ID' and not c['state'].startswith('Candidate') for c in v['classes'])" "the admission jury to move $MODEL_ID out of CANDIDATE"
+  log "    the jury held the class: $(reg 1 "[(c['state'], 'since span %d = DAA %d' % (c['sinceSpan'], c['sinceSpan'] * v['spanDaa']), 'ready seats %d' % c['readySeatsNow']) for c in v['classes'] if c['classId'] == '$CLASS_ID'][0]")"
+fi
 wait_reg "any(c['classId'] == '$CLASS_ID' and c['state'].startswith(('Probation', 'ActiveLimited', 'Active')) for c in v['classes'])" "$MODEL_ID to reach PROBATION"
 log "3/9 OK — $(reg 1 "[(c['state'], c['readySeatsNow'], c['admissionMilli']) for c in v['classes'] if c['classId'] == '$CLASS_ID'][0]") (state, ready seats, admission milli)"
 
@@ -348,7 +377,7 @@ fi
 if grep -q "answered, not committed" "$WORK_DIR/studio.log"; then
   die "the gateway committed a job but Studio logged this chat as not committed (studio.log)"
 fi
-studio_line="$(grep -h "free-prompt claim" "$WORK_DIR/studio.log" | tail -1 | sed -E 's/.*(free-prompt claim)/\1/' | cut -c1-200)"
+studio_line="$(grep -h "free-prompt claim" "$WORK_DIR/studio.log" | tail -1 | sed -E $'s/\x1b\\[[0-9;]*m//g' | sed -E 's/.*(free-prompt claim)/\1/' | cut -c1-200)"
 [ -n "$studio_line" ] && log "    studio: $studio_line"
 JOB_STEM="${JOB_STEM%.commitment-unsigned.borsh}"
 JOB_ID="$(basename "$JOB_STEM")"; JOB_ID="${JOB_ID#fp-job-}"
