@@ -1290,6 +1290,37 @@ pub struct Params {
     /// step leaves to MAC-equivalents**, so it needs a drill that crosses it before any height is
     /// chosen — ADR-0144 §6 item 0: the design is proven first and the date after.
     pub palw_canonical_work: Option<ForkActivation>,
+    /// **A class is not judged by its own registrant** (the 2026-09-19 reward audit's F3, ADR-0145
+    /// invariants I3 and I4). `palw_panel_eligible_bonds_v2` draws only from bonds that declared
+    /// capability — or, under the registry, proved possession — for the class, and both are things
+    /// the registrant can do for itself, so a stranger's class is normally judged by the party that
+    /// registered it. Past this fence four rules hold at once, because each alone leaves the door:
+    ///
+    /// * a panel of a registered class must seat at least one bond the registrant does not hold;
+    /// * the `Valid` receipts that license a claim must name at least one such seat, so the QUORUM
+    ///   and not merely the room is independent;
+    /// * a registered class opens `Candidate` — existence, no claims, no weight — and leaves it
+    ///   only once an independent seat is ready for it, so admission is earned rather than granted
+    ///   by registering (ADR-0145 §7);
+    /// * a class that does not admit claims does not enter the work-price unit or take a seated
+    ///   class target, so one registration cannot reprice or dilute any other class (I4).
+    ///
+    /// **Independence is the executor exclusion's own identity triple — bond, `operator_id`,
+    /// pubkey — plus the PAYEE.** The triple alone would be a fence that never fires: when a
+    /// registrant produces its own class's claims, the executor exclusion has already dropped its
+    /// bond, operator and key from the draw, so every seat passes. `payout_payload` is where a
+    /// bond's rewards are paid and is already the key the panel payout queue groups by, so reading
+    /// it here asks an existing fact a second question rather than inventing an ownership notion.
+    ///
+    /// It is a price, not a proof: a registrant with several keys paid to several addresses is
+    /// several parties on this chain, because the chain cannot see otherwise. **And it has a
+    /// deployment precondition a drill must establish before any network arms it** — seats that
+    /// share one payout address are one party here, so a fleet paying its seats into one address
+    /// would license nothing for a registered class.
+    ///
+    /// `None` on every preset; hashed Some-only, so a build with it unset fingerprints
+    /// byte-identically to a build without the field.
+    pub palw_admission_independence: Option<ForkActivation>,
     /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
@@ -2748,6 +2779,26 @@ impl Params {
                 ));
             }
         }
+        // **The 2026-09-19 audit's F3: admission independence is enforced through the registry's
+        // rows, so it may not be armed without the registry.** Two of its four rules read a class's
+        // lifecycle row — the `Candidate` state a registration opens in, and ADR-0145 I4's rule
+        // that a class which admits no claims is not in the work-price unit — and rows exist only
+        // past `palw_model_registry`. Armed alone it would carry the panel and quorum halves and
+        // silently carry neither of the others: a registration would still reprice every
+        // incumbent, which is the finding it is here to close. The rule names its own precondition
+        // rather than leaving it to a deployment note.
+        if let Some(independence) = self.palw_admission_independence
+            && independence != ForkActivation::never()
+        {
+            let registry_below =
+                self.palw_model_registry.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= independence.daa_score());
+            if !registry_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_admission_independence is armed without palw_model_registry armed at or below its height: a class's \
+                     admission and the work-price unit are both read off registry rows, and without the registry there are none",
+                ));
+            }
+        }
         // ADR-0132 §7.6: the short challenge window's fence and the V2 bundle's copy of its height
         // are one value. A bundle that disagrees would price challenge deadlines the fork id never
         // advertised — the silent divergence the fence exists to end.
@@ -4137,6 +4188,9 @@ impl Params {
         // has reached.
         if self.palw_canonical_work == Some(ForkActivation::never()) {
             self.palw_canonical_work = None;
+    }
+        if self.palw_admission_independence == Some(ForkActivation::never()) {
+            self.palw_admission_independence = None;
         }
         if self.palw_economic_payout.is_some_and(|payout| payout.activation == ForkActivation::never()) {
             self.palw_economic_payout = None;
@@ -4467,6 +4521,12 @@ impl Params {
     /// The 2026-09-19 audit: whether one operator identity backs one bond at `daa_score`.
     pub fn palw_operator_id_unique_at(&self, daa_score: u64) -> bool {
         self.palw_operator_id_unique.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The 2026-09-19 audit (F3, ADR-0145 I3/I4): whether a class must be judged — and admitted —
+    /// by at least one seat its registrant does not hold, at `daa_score`.
+    pub fn palw_admission_independence_at(&self, daa_score: u64) -> bool {
+        self.palw_admission_independence.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
@@ -5152,6 +5212,7 @@ impl Params {
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_canonical_work,
+            palw_admission_independence,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -5232,6 +5293,7 @@ impl Params {
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_canonical_work", *palw_canonical_work),
+            ("palw_admission_independence", *palw_admission_independence),
             ("palw_context_ladder", *palw_context_ladder),
             ("palw_panel_da", *palw_panel_da),
             ("palw_certification_rent", *palw_certification_rent),
@@ -5724,6 +5786,7 @@ impl Params {
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_canonical_work,
+            palw_admission_independence,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6006,6 +6069,14 @@ impl Params {
         }
         // ADR-0145's canonical-work fence.
         match palw_canonical_work.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // The 2026-09-19 audit's admission-independence fence (F3, ADR-0145 I3/I4).
+        match palw_admission_independence.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6480,6 +6551,7 @@ impl Params {
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_canonical_work,
+            palw_admission_independence,
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
@@ -6742,6 +6814,10 @@ impl Params {
         // leaves it unset and therefore fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_canonical_work {
             h.write(b"palw_canonical_work");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_admission_independence {
+            h.write(b"palw_admission_independence");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
@@ -7398,6 +7474,7 @@ impl Params {
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_canonical_work: None,
+            palw_admission_independence: None,
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
@@ -8345,6 +8422,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_canonical_work: None,
+    palw_admission_independence: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8545,6 +8623,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_canonical_work: None,
+    palw_admission_independence: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -8727,6 +8806,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_canonical_work: None,
+    palw_admission_independence: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
     // network arms on purpose, never one it acquires by upgrading.
@@ -13382,6 +13462,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_canonical_work: None,
+    palw_admission_independence: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is
     // the whole point of registering the graph-v5 512 row (`misaka_palw_base0::classes`).

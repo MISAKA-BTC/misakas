@@ -429,6 +429,10 @@ pub struct VirtualStateProcessor {
     /// a block: every one compares it against the CLAIM's own `accepted_daa` (see
     /// `PalwTransitionExtrasV1::canonical_work_daa`).
     pub(super) palw_canonical_work_daa: Option<u64>,
+    /// The 2026-09-19 audit (F3): `Params::palw_admission_independence` — dormant everywhere; past
+    /// it a registered class's panel and its licensing quorum must each name a seat the registrant
+    /// does not hold, and a registered class is a `Candidate` until one is ready for it.
+    pub(super) palw_admission_independence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
@@ -945,6 +949,7 @@ impl VirtualStateProcessor {
             palw_work_target: params.palw_work_target,
             palw_artifact_root_ownership: params.palw_artifact_root_ownership,
             palw_operator_id_unique: params.palw_operator_id_unique,
+            palw_admission_independence: params.palw_admission_independence,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
             palw_readiness_v2: params.palw_readiness_v2,
@@ -3997,8 +4002,17 @@ impl VirtualStateProcessor {
         // other, and an entrant seeded from a stale copy would start at a difficulty the chain
         // stopped using.
         let base_target = state.class_target(&bundle.base_class_id)?;
+        // **The terms an operator is told are the terms the chain will take** (ADR-0122 §6: this
+        // exists so a registration is not assembled from two numbers that can disagree). Past
+        // `palw_admission_independence` every entrant joins at 0‰ — registration buys existence,
+        // cadence is earned — so the offer has to say 0, or the CLI builds an object the gate
+        // refuses. Resolved at the tip, which is the height the registration would land at or just
+        // below; the gate resolves it at the carrying block, and a registration assembled in the
+        // last block before the fence is refused by the gate exactly as one assembled after it.
+        let tip_daa = state.last_point().map(|point| point.daa_score).unwrap_or(0);
+        let entrant_share = if self.palw_admission_independence_at(tip_daa) { 0 } else { state_params.min_grantable_share_permille() };
         Some(kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
-            min_grantable_share_permille: state_params.min_grantable_share_permille(),
+            min_grantable_share_permille: entrant_share,
             slash_value_per_pwu: base.slash_value_per_pwu,
             initial_target: base_target.target,
             registered_class_ids: state.class_ids(),
@@ -6326,12 +6340,32 @@ impl VirtualStateProcessor {
                     .map_err(|e| format!("class {class_id}: {e}"))?
                     .is_some();
                     let floor = state_params.min_grantable_share_permille();
-                    let required = if prosecutable { floor } else { 0 };
+                    // **ADR-0145 §7 and I4, past `palw_admission_independence`: registration buys
+                    // existence, and cadence is earned.** The minimum grantable share is not a
+                    // small number — it is a permille taken from every incumbent by donation, and
+                    // it moves their weight, their budget and (through
+                    // `attempt_target_seed_v1(share, pwu)`) their difficulty, for a class nobody
+                    // has yet verified. Past the fence every entrant joins weightless, exactly as
+                    // an uncertified one already does, and earns its share from the registry once
+                    // it has passed an admission its own registrant cannot grant it.
+                    //
+                    // This gate and the transition must agree or no prosecutable class could
+                    // register at all: the fold refuses a bought registration carrying any share
+                    // (`RegistrationTakesNoShare`), so a `required` of `floor` here would be a rule
+                    // demanding exactly what the next layer rejects.
+                    let independence = self.palw_admission_independence_at(point.daa_score);
+                    let required = if prosecutable && !independence { floor } else { 0 };
                     if *share_permille != required {
-                        return Err(if prosecutable {
+                        return Err(if prosecutable && !independence {
                             format!(
                                 "class {class_id} registers at {share_permille}‰; a post-genesis entrant joins at the \
                                  minimum grantable share ({floor}‰) — ADR-0049 Decision H"
+                            )
+                        } else if independence {
+                            format!(
+                                "class {class_id} registers at {share_permille}‰; past palw_admission_independence a \
+                                 registration buys existence and not cadence, so every entrant joins at 0‰ and earns its \
+                                 share from an admission it has passed — ADR-0145 §7"
                             )
                         } else {
                             format!(
@@ -7728,6 +7762,7 @@ impl VirtualStateProcessor {
             // `accepted_daa` instead. Resolving it here would price one claim under two bases and
             // the node would refuse its own tip. `None` on every shipped preset.
             canonical_work_daa: self.palw_canonical_work_daa,
+            admission_independence_active: self.palw_admission_independence_at(daa_score),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
@@ -8026,6 +8061,12 @@ impl VirtualStateProcessor {
     /// The 2026-09-19 audit: whether one operator identity backs one bond at `daa_score`.
     pub(super) fn palw_operator_id_unique_at(&self, daa_score: u64) -> bool {
         self.palw_operator_id_unique.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// The 2026-09-19 audit (F3): whether a class must be judged by a seat its registrant does not
+    /// hold at `daa_score`.
+    pub(super) fn palw_admission_independence_at(&self, daa_score: u64) -> bool {
+        self.palw_admission_independence.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// ADR-0137: `W₀` for a block of `daa_score` paying `subsidy`, where the work target is in
@@ -8816,6 +8857,25 @@ impl VirtualStateProcessor {
             let Ok(seats) = drawn else {
                 continue;
             };
+            // **The 2026-09-19 audit's F3, past `palw_admission_independence`: do not propose a
+            // panel this node's own fold will refuse.** A panel of a registered class whose every
+            // seat is the registrant's own bond, operator or key is not a jury, and the transition
+            // rejects it — so binding it would put an object in this node's block that every node,
+            // this one included, then rejects. The claim simply waits, and voids at its bind
+            // deadline if no independent seat ever becomes eligible: the ending a class with too
+            // few capable bonds already has.
+            //
+            // Resolved at the CARRYING block's DAA and not at the anchor, unlike every draw input
+            // above it. Those decide which panel is derived and must therefore be the anchor's, or
+            // the derived panel would change block by block; this one decides whether the fold
+            // will take the object, and the fold resolves it at the block that carries it. Reading
+            // it at the anchor would open a window on the flag day where this node proposes what
+            // it is about to reject.
+            if self.palw_admission_independence_at(block_daa)
+                && !kaspa_consensus_core::palw_state_v2::palw_panel_has_independent_seat_v1(state, &claim.class_id, &seats)
+            {
+                continue;
+            }
             out.push(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
                 claim: *claim_id,
                 anchor: anchor.anchor_block,

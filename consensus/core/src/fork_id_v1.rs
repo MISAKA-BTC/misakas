@@ -607,6 +607,7 @@ mod tests {
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
+            "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,

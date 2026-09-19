@@ -292,10 +292,27 @@ pub enum PalwModelLifecycleV1 {
     /// A class whose panel cannot be drawn or whose utilization passed one: its own new claims
     /// hold; nothing else stops.
     Held,
+    /// **Registered is not eligible** (ADR-0145 §7, the 2026-09-19 audit's F3). A class a
+    /// registrant bought exists, may be inspected, benchmarked and run in shadow — and earns no
+    /// sompi and no unit of fork-choice weight — until the chain has seen a seat the registrant
+    /// does NOT hold ready to verify it. Only then does it enter the ordinary walk at
+    /// `Prefetching`. Written only past `Params::palw_admission_independence`; below the fence
+    /// nothing constructs it and every existing row keeps the state it was written with.
+    ///
+    /// **It is last in this enum although it is first in the lifecycle**, and that is deliberate:
+    /// the enum is borsh, its discriminants are chain bytes, and inserting a variant ahead of
+    /// `Registered` would renumber every row already written — the exact failure that made a main
+    /// build unable to sync testnet-11 from genesis on 2026-09-10. The order a reader wants lives
+    /// in `palw_lifecycle_step_v1` and in this doc, never in the tag.
+    Candidate,
 }
 
 impl PalwModelLifecycleV1 {
     /// Whether the class accepts new claims at all.
+    ///
+    /// `Candidate` is absent from this list for the reason it exists: a registration is existence,
+    /// not eligibility. The list is positive — states that DO admit — so a state added later
+    /// admits nothing until someone writes it here on purpose.
     pub fn admits_claims(&self) -> bool {
         matches!(self, Self::Probation { .. } | Self::ActiveLimited { .. } | Self::Active)
     }
@@ -335,6 +352,16 @@ pub struct PalwLifecycleObservationV1 {
     pub window_fits_receipt: bool,
     /// Whether this span ran at or under the target utilization with no held claim.
     pub span_stable: bool,
+    /// **Ready seats this class's registrant does not hold** (ADR-0145 §7, past
+    /// `Params::palw_admission_independence`): the subset of `ready_seats` whose bond is neither
+    /// the registrant's bond nor shares its `operator_id` or its pubkey. Read ONLY by the
+    /// `Candidate` arm — a state nothing writes below the fence — so every other transition is the
+    /// one it was before this field existed, and a caller that leaves it `0` (the `Default`) can
+    /// never turn an admitted class back.
+    ///
+    /// Zero for a genesis class by construction: nobody registered it, so there is no registrant
+    /// for a seat to be independent OF, and the fold never puts such a class in `Candidate`.
+    pub independent_ready_seats: u32,
 }
 
 /// `PalwManifestVerdictV1`, as a flag the observation carries (`Valid` or not).
@@ -359,6 +386,25 @@ pub fn palw_lifecycle_step_v1(
     // overloaded for ever — it admits nothing, and it re-enters Probation only once it fits.
     let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
     match state {
+        // **The one transition a registrant cannot make alone** (ADR-0145 §7, audit F3). A class
+        // leaves `Candidate` when the chain has seen at least one READY seat outside the
+        // registrant's own identity — not when the registrant says it is ready, and not when the
+        // registrant's own seats prove possession, because a panel drawn entirely from them is the
+        // registrant certifying itself. Until then the class exists and admits nothing.
+        //
+        // It rejoins the ordinary walk exactly where a registration used to start, so nothing
+        // downstream of `Prefetching` learns a new state: the manifest verdict still decides
+        // whether there is any work to prefetch for, and `Registered` still means "no work derived
+        // from the graph", which independence cannot cure.
+        Candidate => {
+            if obs.independent_ready_seats == 0 {
+                Candidate
+            } else if obs.manifest == PalwManifestVerdictV1Flag::Valid {
+                Prefetching
+            } else {
+                Registered
+            }
+        }
         Registered => {
             if obs.manifest == PalwManifestVerdictV1Flag::Valid {
                 Prefetching
@@ -819,6 +865,11 @@ pub fn palw_lifecycle_reason_v1(row: &PalwModelLifecycleRowV1, is_base_class: bo
     }
     let seats = g.seat_count as u32;
     match row.state {
+        PalwModelLifecycleV1::Candidate => {
+            "candidate: registered, and not admitted — no seat outside the registrant's own identity has proved it is ready to \
+             verify this class"
+                .to_string()
+        }
         PalwModelLifecycleV1::Registered => "no work derived from the graph (the VM boundary): never admits".to_string(),
         PalwModelLifecycleV1::Prefetching => {
             format!("ready {} < {} required (seats prove possession to be counted)", row.ready_seats, row.profile.required_ready_seats)
@@ -1130,6 +1181,12 @@ pub fn palw_model_registry_read_v1(
             PalwModelLifecycleV1::Prefetching => 3,
             PalwModelLifecycleV1::Registered => 4,
             PalwModelLifecycleV1::Held => 5,
+            // **A `Candidate` is counted where an operator already looks for "on chain and
+            // admitting nothing".** A seventh slot would widen `counts` and with it the RPC row
+            // (`classes_registered` and its five siblings are named fields), which is a wire break
+            // for a state that cannot exist below a dormant fence. The distinction an operator
+            // needs is in the class's own reason line, which names independence by name.
+            PalwModelLifecycleV1::Candidate => 4,
         };
         counts[slot] += 1;
     }
@@ -1287,6 +1344,8 @@ mod tests {
             cap_ok: true,
             window_fits_receipt: fits,
             span_stable: true,
+            // ADR-0145 §7: the `Candidate` arm's only input, and this fixture starts past it.
+            independent_ready_seats: 0,
         };
         for from in [Probation { probes_passed: 9 }, ActiveLimited { stable_epochs: 9 }, Active] {
             assert_eq!(palw_lifecycle_step_v1(from, &obs(false, true), &k, &G), Held, "{from:?}: does not fit → Held");
@@ -1393,6 +1452,10 @@ mod tests {
             cap_ok: true,
             window_fits_receipt: true,
             span_stable: true,
+            // Every fixture below this line walks a class that is already past `Candidate`, and
+            // `independent_ready_seats` is read by that one arm: zero here says so, and says that
+            // nothing else in the lifecycle learned to read it.
+            independent_ready_seats: 0,
         };
         let mut s = Registered;
         s = palw_lifecycle_step_v1(s, &PalwLifecycleObservationV1 { manifest: PalwManifestVerdictV1Flag::Invalid, ..calm(0) }, &k, &G);
@@ -1526,6 +1589,10 @@ mod tests {
             cap_ok,
             window_fits_receipt: true,
             span_stable: true,
+            // Every fixture below this line walks a class that is already past `Candidate`, and
+            // `independent_ready_seats` is read by that one arm: zero here says so, and says that
+            // nothing else in the lifecycle learned to read it.
+            independent_ready_seats: 0,
         };
         assert_eq!(
             palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G),
