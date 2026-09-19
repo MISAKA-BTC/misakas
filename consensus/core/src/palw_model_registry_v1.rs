@@ -1278,6 +1278,40 @@ pub fn palw_registration_waits_for_registry_v1(registry_fence: Option<crate::con
     registry_fence.is_some_and(|fence| fence != crate::config::params::ForkActivation::never() && !fence.is_active(daa_score))
 }
 
+/// **How many DAA a registration's carrier may take to land** — the window before the admission-
+/// independence fence in which a node does not build one (see
+/// [`palw_registration_waits_for_fences_v2`]). A carrier is accepted by the next chain block that
+/// merges it; ten DAA is several blocks on every preset, and a carrier that lands later still is
+/// caught by the panel's own retry, which rebuilds it on the terms then in force.
+pub const PALW_REGISTRATION_LANDING_MARGIN_DAA_V1: u64 = 10;
+
+/// [`palw_registration_waits_for_registry_v1`], and **the admission-independence fence too**
+/// (ADR-0147 §2.4 at the entrance; the 2026-09-20 Studio economy drill).
+///
+/// Below `palw_admission_independence` a post-genesis registration must take the minimum grantable
+/// share, past it exactly 0‰ — registration buys existence, cadence is earned — and the gate reads
+/// the fence at the block that ACCEPTS the carrier. A registration built in the last blocks before
+/// the fence therefore carries a share the fence refuses when the carrier lands past it. The drill
+/// that armed the registry and the bundle at one height found exactly that: the node registered the
+/// moment the registry opened, the object was dropped "registers at 1‰", and the panel's retry only
+/// came 200 DAA later. So the node also waits while the independence fence is scheduled and the
+/// chain is within [`PALW_REGISTRATION_LANDING_MARGIN_DAA_V1`] below it, and registers once the
+/// fence is in force — when the terms say 0‰ and the gate agrees.
+pub fn palw_registration_waits_for_fences_v2(
+    registry_fence: Option<crate::config::params::ForkActivation>,
+    independence_fence: Option<crate::config::params::ForkActivation>,
+    daa_score: u64,
+) -> bool {
+    if palw_registration_waits_for_registry_v1(registry_fence, daa_score) {
+        return true;
+    }
+    independence_fence.is_some_and(|fence| {
+        fence != crate::config::params::ForkActivation::never()
+            && !fence.is_active(daa_score)
+            && daa_score.saturating_add(PALW_REGISTRATION_LANDING_MARGIN_DAA_V1) >= fence.daa_score()
+    })
+}
+
 pub fn palw_readiness_duty_due_v1(
     row: Option<&PalwSeatReadinessRowV1>,
     now_daa: u64,
@@ -1326,6 +1360,31 @@ mod tests {
         assert!(palw_registration_waits_for_registry_v1(Some(ForkActivation::new(20)), 19), "scheduled, not yet: wait");
         assert!(!palw_registration_waits_for_registry_v1(Some(ForkActivation::new(20)), 20), "in force: go");
         assert!(!palw_registration_waits_for_registry_v1(Some(ForkActivation::always()), 0), "always: go");
+    }
+
+    /// The Studio economy drill's finding: with the registry and the bundle at one height, the node
+    /// registered the moment the registry opened, on the pre-independence share, and the carrier
+    /// landed past the independence fence, which refused it. A registration is not built within a
+    /// landing margin below the independence fence, and is built once the fence is in force.
+    #[test]
+    fn a_registration_is_not_built_where_its_carrier_could_land_on_the_other_side_of_independence() {
+        use crate::config::params::ForkActivation;
+        let registry = Some(ForkActivation::new(30));
+        let independence = Some(ForkActivation::new(30));
+        let margin = PALW_REGISTRATION_LANDING_MARGIN_DAA_V1;
+        assert!(palw_registration_waits_for_fences_v2(registry, independence, 29), "the registry is not open yet");
+        assert!(!palw_registration_waits_for_fences_v2(registry, independence, 30), "both in force: build on the 0 permille terms");
+        // The registry open well before the bundle: register freely, until the margin before it.
+        let registry = Some(ForkActivation::new(20));
+        let independence = Some(ForkActivation::new(100));
+        assert!(!palw_registration_waits_for_fences_v2(registry, independence, 25), "far from the fence: the carrier lands before it");
+        assert!(!palw_registration_waits_for_fences_v2(registry, independence, 100 - margin - 1));
+        assert!(palw_registration_waits_for_fences_v2(registry, independence, 100 - margin), "inside the landing margin: wait");
+        assert!(palw_registration_waits_for_fences_v2(registry, independence, 99), "the last block before the fence: wait");
+        assert!(!palw_registration_waits_for_fences_v2(registry, independence, 100), "the fence in force: build");
+        // No independence fence scheduled: the registry is the only thing waited for.
+        assert!(!palw_registration_waits_for_fences_v2(registry, None, 99));
+        assert!(!palw_registration_waits_for_fences_v2(registry, Some(ForkActivation::never()), 99));
     }
     use super::*;
     use crate::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_schedule_snapshot_v1};

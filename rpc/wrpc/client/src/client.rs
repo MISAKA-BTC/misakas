@@ -686,6 +686,7 @@ impl RpcApi for KaspaRpcClient {
             GetPalwClassContexts,
             GetPalwClassEconomics,
             GetPalwModelRegistry,
+            GetPalwFreePromptPrice,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,

@@ -1836,6 +1836,39 @@ mod mockery {
 
     test!(GetPalwModelRegistryRequest);
 
+    impl Mock for GetPalwFreePromptPriceRequest {
+        fn mock() -> Self {
+            GetPalwFreePromptPriceRequest {
+                class_id: mock_hex(),
+                prompt_token_ids: vec![151644, 872, 198, 9707],
+                prompt_tokens: mock(),
+                decode_tokens_executed: mock(),
+                work_leaves: mock(),
+                bond: format!("{}:0", mock_hex()),
+            }
+        }
+    }
+
+    test!(GetPalwFreePromptPriceRequest);
+
+    impl Mock for GetPalwFreePromptPriceResponse {
+        fn mock() -> Self {
+            GetPalwFreePromptPriceResponse {
+                available: mock(),
+                daa_score: mock(),
+                priced: mock(),
+                refusal: "FreePromptWorkLeavesMismatch".to_string(),
+                priced_in_compute: mock(),
+                quanta: mock(),
+                pwu: mock(),
+                reserved_sompi: "340282366920938463463374607431768211455".to_string(),
+                bond_room_sompi: "1000000000000".to_string(),
+            }
+        }
+    }
+
+    test!(GetPalwFreePromptPriceResponse);
+
     impl Mock for RpcPalwModelLifecycle {
         fn mock() -> Self {
             RpcPalwModelLifecycle {

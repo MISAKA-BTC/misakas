@@ -333,6 +333,10 @@ JOB_STEM="$(ls -t "$WORK_DIR"/outbox/fp-job-*.commitment-unsigned.borsh 2>/dev/n
 JOB_STEM="${JOB_STEM%.commitment-unsigned.borsh}"
 JOB_ID="$(basename "$JOB_STEM")"; JOB_ID="${JOB_ID#fp-job-}"
 log "6/9 OK — Studio's chat produced a commitment: ${JOB_STEM##*/}"
+# ADR-0148 §6: the gateway priced it with the chain's own expression (op 187) — past the bundle the
+# quanta are the compute era's, not the leaves era's sixty-four at most.
+committed_line="$(grep -h "committed claim" "$WORK_DIR/gateway.log" | tail -1 | sed -E 's/.*committed claim/committed claim/' | cut -c1-200)"
+[ -n "$committed_line" ] && log "    gateway: $committed_line"
 
 # ---------------------------------------------------------------------------------------------
 # 7/9  The rail signs and submits; the claim walks to Final on every node.

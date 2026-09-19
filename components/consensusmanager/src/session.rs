@@ -470,6 +470,26 @@ impl ConsensusSessionOwned {
         self.consensus.palw_producer_facts_v2(class_id, bond)
     }
 
+    /// ADR-0148: the free-prompt lane's price for one job, as the fold would write it now.
+    pub fn palw_fp_commitment_price_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+        prompt_token_ids: Vec<u32>,
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        work_leaves: u64,
+        bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
+        self.consensus.palw_fp_commitment_price_v1(
+            class_id,
+            prompt_token_ids,
+            prompt_tokens,
+            decode_tokens_executed,
+            work_leaves,
+            bond,
+        )
+    }
+
     /// ADR-0060 Decision 1: re-shape a standard template into the bondless heartbeat lane.
     /// Reads the virtual state and walks a bounded chain suffix — the same order of work as a
     /// template build, so it shares that call profile.

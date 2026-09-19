@@ -801,6 +801,19 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwModelRegistryResponse::default())
     }
 
+    /// ADR-0148: the free-prompt lane's price for one job, as the fold would write it now.
+    async fn get_palw_free_prompt_price(&self, request: GetPalwFreePromptPriceRequest) -> RpcResult<GetPalwFreePromptPriceResponse> {
+        self.get_palw_free_prompt_price_call(None, request).await
+    }
+    async fn get_palw_free_prompt_price_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwFreePromptPriceRequest,
+    ) -> RpcResult<GetPalwFreePromptPriceResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwFreePromptPriceResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

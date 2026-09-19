@@ -9176,22 +9176,6 @@ impl<'a> TransitionBuilder<'a> {
         PalwFpPricingV1::of(self.params, self.extras.canonical_work_daa)
     }
 
-    /// **ADR-0148: a compute-priced free-prompt claim's reservation** — its claimed compute in the
-    /// floor's collateral unit (the exposure basis, `base_declared / base_canonical`, the same
-    /// conversion the attempt lane's exposure makes), at the network's slash price. Refused where
-    /// the floor cannot say what either is, rather than reserved at a number nobody derived.
-    fn fp_compute_reserved(&self, pwu: u64, accepted_daa: u64, claim_id: &Hash64) -> Result<u128, PalwStateV2Error> {
-        let basis = self
-            .state
-            .palw_exposure_basis_v1(&self.params.base_class_id, accepted_daa, self.extras.canonical_work_daa)
-            .ok_or(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id })?;
-        let slash = palw_network_slash_value_per_pwu_v1(&self.state, &self.params.base_class_id)
-            .ok_or(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id })?;
-        let normalized =
-            crate::palw_work_target_v1::mul_div_u128(pwu as u128, basis.base_declared as u128, basis.base_canonical as u128);
-        normalized.checked_mul(slash as u128).ok_or(PalwStateV2Error::Overflow("free-prompt compute reserve"))
-    }
-
     /// **ADR-0148: open the lane's one receipt target**, once — at the first compute-priced
     /// commitment, from the floor's own receipt target (so a floor quantum keeps the odds it had:
     /// the network quantum IS one floor quantum's share of the floor's job), clamped to the price
@@ -16357,136 +16341,27 @@ fn apply_object(
             // The refusals are BY NAME and every one of them is a thing a producer can check
             // before it spends an inference: the class has published a graph, the run's leaves are
             // the graph's answer, and the prompt is not one the chain already bought.
-            let derived = if builder.extras.fp_derived_work_at(ctx.daa_score) {
-                let profile = builder
-                    .state
-                    .fp_work_profiles
-                    .get(class_id)
-                    .ok_or(PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: *claim_id, class: *class_id })?
-                    .clone();
-                // **The ids are how the chain reads the cache, so a mode that carries none cannot
-                // be priced past this fence.** `PanelDa` keeps the prompt off chain and a canonical
-                // claim derives it from the anchor; in both the chain holds no token list, so the
-                // accounted prefix is unknowable and the only honest answer is to refuse rather
-                // than to assume zero — assuming zero is precisely the "declare it uncached" lie
-                // this rule exists to make unavailable. Both modes are dormant or unused on every
-                // shipped preset, and a network that arms one owes this rule a prefix-STATE
-                // commitment it can check instead (ADR-0145 §6).
-                if prompt_token_ids.len() != *prompt_tokens as usize {
-                    return Err(PalwStateV2Error::FreePromptPromptNotAccountable {
-                        claim: *claim_id,
-                        carried: prompt_token_ids.len(),
-                    });
-                }
-                // **The class's ladder, defaulted to the STRUCTURAL top rather than the network's.**
-                //
-                // The transition holds no bundle, so it cannot read `max_step_leaf_count`; the
-                // extraction walk can and does, and it has already refused any commitment whose
-                // `work_leaves` is past it. What this cap does here is bound the ENUMERATION, and
-                // the equality below binds the answer to a number the walk already bounded — so a
-                // wider default cannot admit a claim the network's ladder would have refused, it
-                // can only avoid refusing an honest one twice. The structural top is the widest a
-                // ruleset may ever freeze, which is the only honest default for a caller with no
-                // ruleset (the same reason `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` exists at all).
-                let ladder =
-                    builder.state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
-                let already_paid = builder.state.fp_claimed_prompt_ids_of(class_id, ctx.daa_score);
-                let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid);
-                let work =
-                    crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, *prompt_tokens, *decode_tokens_executed, accounted, ladder)
-                        .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
-                            claim: *claim_id,
-                            class: *class_id,
-                            why: e.to_string(),
-                        })?;
-                if work.total_leaves != *work_leaves {
-                    return Err(PalwStateV2Error::FreePromptWorkLeavesMismatch {
-                        claim: *claim_id,
-                        declared: *work_leaves,
-                        derived: work.total_leaves,
-                    });
-                }
-                Some((work, profile))
-            } else {
-                None
-            };
-            // **ADR-0148: past the canonical-work fence the lane prices COMPUTE, in the network's
-            // unit, the same for every class.**
-            //
-            // Below it three things priced a claim, and none of them was the compute it ran: the
-            // credit was step LEAVES, which count activations while cost counts weights (the audit's
-            // F5 — a 6.8x spread, monotone in model width, so the widest model was paid least per unit
-            // of arithmetic); the quantum was a fraction of the class's own DECLARED canonical job, so
-            // the registrant set how much work one lottery entry stood for; and the quanta were capped
-            // at `fp_max_quanta_per_receipt`, so every long prompt and every wide model was paid a
-            // ceiling. The receipt odds were then a per-class target retargeted on the class's own
-            // census, which made the price of a unit of compute a function of how much the class was
-            // used.
-            //
-            // Past it: the credit is the canonical work of the NEW positions (the same derivation the
-            // attempt lane's weight comes from), the quantum is one network quantum derived from the
-            // floor's graph, the quanta scale the ODDS rather than cap the credit, and the receipt odds
-            // are one pooled target for every class (`palw_fp_quantum_receipt_target_v1`). The
-            // exposure is the claimed compute in the floor's collateral unit at the network's slash
-            // price, so no registrant-written number reaches the reservation either.
-            //
-            // Compute pricing needs the derivation: a build that armed the unit without it would have
-            // no credited compute to price, and the bundle rule makes that combination unarmable.
-            // Refused by name rather than priced in leaves, because the consistency check prices a
-            // claim's weight by its era and a leaves-priced claim of the compute era would be a claim
-            // it disagreed with forever.
-            let pricing = builder.fp_pricing();
-            let in_compute = pricing.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height);
-            let (quanta, pwu, reserved) = if in_compute {
-                let Some((work, profile)) = &derived else {
-                    return Err(PalwStateV2Error::FreePromptComputeWithoutDerivation { claim: *claim_id, class: *class_id });
-                };
-                let credited = crate::palw_freeprompt_v3::fp_derive_credited_compute_v1(
-                    profile,
-                    *prompt_tokens,
-                    *decode_tokens_executed,
-                    work.accounted_prefix_tokens,
-                )
-                .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
-                    claim: *claim_id,
-                    class: *class_id,
-                    why: e.to_string(),
-                })?;
-                let quantum = pricing.network_quantum(&builder.state);
-                if quantum == 0 {
-                    return Err(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id });
-                }
-                let quanta = crate::palw_freeprompt_v3::fp_quanta_of_compute_v1(credited, quantum);
-                if quanta == 0 {
-                    return Err(PalwStateV2Error::ZeroQuanta);
-                }
-                // Uniform quanta, as the consistency check and the validator crate both demand: the
-                // remainder of `credited / quanta` — under one MAC-equivalent per quantum — is dropped.
-                let per_quantum = credited / quanta as u128;
-                let pwu = u64::try_from(per_quantum.saturating_mul(quanta as u128))
-                    .map_err(|_| PalwStateV2Error::Overflow("free-prompt credited compute"))?;
-                let reserved = builder.fp_compute_reserved(pwu, ctx.daa_score, claim_id)?;
-                (quanta, pwu, reserved)
-            } else {
-                let credited = match &derived {
-                    Some((work, _)) => work.credited_leaves,
-                    None => crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, *work_leaves, 0),
-                };
-                let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
-                let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(credited, quantum, cap);
-                if quanta == 0 {
-                    return Err(PalwStateV2Error::ZeroQuanta);
-                }
-                let pwu = (quanta as u64).checked_mul(quantum).ok_or(PalwStateV2Error::Overflow("free-prompt pwu"))?;
-                // **Exposure is the work claimed.** An attempt's `pwu` is statistical (expected draws
-                // × one inference), so its exposure is the one inference the block commits to; a
-                // free-prompt claim's `pwu` IS its leaves (ADR-0074 Decision 5), so its exposure is
-                // exactly that — neither a whole canonical job for a small user job nor one job for a
-                // claim the size of eight.
-                let reserved =
-                    (pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
-                (quanta, pwu, reserved)
-            };
+            // ADR-0148 / the entrance's agreement with the ledger: the price is ONE function of the
+            // state, which a node also answers a gateway with (`palw_fp_commitment_price_v1`), so the
+            // exposure a gateway checks before an inference and the reservation written here are
+            // the same number by construction rather than by two readings agreeing.
+            let price = palw_fp_commitment_price_v1(
+                &builder.state,
+                builder.params,
+                PalwFpPriceInputsV1 {
+                    fp_derived_work_daa: builder.extras.fp_derived_work_daa,
+                    canonical_work_daa: builder.extras.canonical_work_daa,
+                    daa_score: ctx.daa_score,
+                },
+                claim_id,
+                class_id,
+                prompt_token_ids,
+                *prompt_tokens,
+                *decode_tokens_executed,
+                *work_leaves,
+            )?;
+            let (quanta, pwu, reserved, in_compute) = (price.quanta, price.pwu, price.reserved, price.priced_in_compute);
+            let derived = price.derived_work;
             // **Fail-closed on the one field the court cannot do without (audit C3).** A claim
             // carrying no execution root has nothing a refutation's binding can be tested
             // against; the shipped worker commits the binding's own root, so what this refuses
@@ -16620,6 +16495,238 @@ fn apply_object(
         }
     }
     Ok(())
+}
+
+/// Everything the free-prompt lane's price reads besides the state, resolved by the caller: the
+/// two fence HEIGHTS (never a block's resolved answer — see `PalwEpochBudgetFencesV1`) and the DAA
+/// the commitment is priced at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwFpPriceInputsV1 {
+    /// `Params::palw_fp_derived_work_daa()`.
+    pub fp_derived_work_daa: Option<u64>,
+    /// `Params::palw_canonical_work_daa()`.
+    pub canonical_work_daa: Option<u64>,
+    /// The DAA the commitment is accepted (or would be accepted) at.
+    pub daa_score: u64,
+}
+
+/// **What pricing one free-prompt commitment yields** — the fold's three numbers, which era priced
+/// them, and the derivation it read (whose presence also decides whether the claim's prompt is
+/// recorded for the cache rule).
+#[derive(Clone, Debug)]
+pub struct PalwFpCommitmentPriceV1 {
+    pub quanta: u32,
+    pub pwu: u64,
+    /// What the claim reserves against its bond — the number the exposure ceiling is checked with.
+    pub reserved: u128,
+    /// ADR-0148: priced in compute (past the canonical-work fence) rather than in leaves.
+    pub priced_in_compute: bool,
+    pub derived_work: Option<(crate::palw_freeprompt_v3::PalwFpDerivedWorkV1, Box<crate::palw_step::PalwShapeProfileV3>)>,
+}
+
+/// **What a node answers a gateway's "what would this job cost" with** (`GetPalwFreePromptPrice`):
+/// the price the fold would write at the candidate DAA, and the room the bond has for it by the
+/// fold's own two terms.
+#[derive(Clone, Debug)]
+pub struct PalwFpPriceAnswerV1 {
+    /// The DAA the job was priced at — the virtual's, which is where a commitment sent now lands.
+    pub daa_score: u64,
+    /// The fold's price, or its refusal by name.
+    pub price: Result<PalwFpCommitmentPriceV1, PalwStateV2Error>,
+    /// `ceiling − backed` for the bond asked about; `None` without a bond, or for one the chain
+    /// does not hold.
+    pub bond_room: Option<u128>,
+}
+
+/// **The room a bond has for one more free-prompt claim**, by the fold's expression: collateral ×
+/// `fp_max_exposure_ratio_permille`, less what it already backs — its live reservations, its
+/// registrations, and (past the capability fence) its declared capability. A commitment whose
+/// `reserved` exceeds this is refused `FreePromptExposureCeiling` at the transition.
+pub fn palw_fp_bond_room_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    capability_bound: bool,
+) -> Option<u128> {
+    let record = state.bonds.get(bond)?;
+    let declared = if capability_bound { palw_bond_capability_exposure_v1(record) } else { 0 };
+    let backed = state.reserved_exposure(bond).saturating_add(state.registration_exposure(bond)).saturating_add(declared);
+    let ceiling = (record.collateral as u128).saturating_mul(params.fp_max_exposure_ratio_permille as u128) / 1000;
+    Some(ceiling.saturating_sub(backed))
+}
+
+/// **The free-prompt lane's price for one commitment, as a pure function of the state it is folded
+/// against** (ADR-0145 §5–§6, ADR-0148).
+///
+/// The fold prices every `FreePromptCommitted` with this, and a node answers a gateway's "what would
+/// this job cost" with it (`GetPalwFreePromptPrice`), so the exposure an entrance checks before it
+/// pays to carry a commitment and the reservation the ledger writes are one expression. The
+/// entrance used to price in step leaves (`misaka_palw_fp_submit::fp_claim_exposure_v1`) after the
+/// ledger had moved to compute, and past the bundle a wide model's claim reserved several times what
+/// its gateway had checked — a commitment the entrance admitted and the transition refused, after
+/// the carrier fee.
+///
+/// The refusals are the fold's own, by name. Nothing here writes: the prompt row, the pooled
+/// target's seeding and the reservation itself stay the fold's.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_commitment_price_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    inputs: PalwFpPriceInputsV1,
+    claim_id: &Hash64,
+    class_id: &Hash64,
+    prompt_token_ids: &[u32],
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    work_leaves: u64,
+) -> Result<PalwFpCommitmentPriceV1, PalwStateV2Error> {
+    let class = state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+    let (per_job, cap) = (params.fp_quanta_per_canonical_job, params.fp_max_quanta_per_receipt);
+    if per_job == 0 || cap == 0 {
+        return Err(PalwStateV2Error::FreePromptLaneUnpriced);
+    }
+    let decode_rules = params.fp_decode_rules_at(inputs.daa_score);
+    let derived = if inputs.fp_derived_work_daa.is_some_and(|height| inputs.daa_score >= height) {
+        let profile = state
+            .fp_work_profiles
+            .get(class_id)
+            .ok_or(PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: *claim_id, class: *class_id })?
+            .clone();
+        // **The ids are how the chain reads the cache, so a mode that carries none cannot
+        // be priced past this fence.** `PanelDa` keeps the prompt off chain and a canonical
+        // claim derives it from the anchor; in both the chain holds no token list, so the
+        // accounted prefix is unknowable and the only honest answer is to refuse rather
+        // than to assume zero — assuming zero is precisely the "declare it uncached" lie
+        // this rule exists to make unavailable. Both modes are dormant or unused on every
+        // shipped preset, and a network that arms one owes this rule a prefix-STATE
+        // commitment it can check instead (ADR-0145 §6).
+        if prompt_token_ids.len() != prompt_tokens as usize {
+            return Err(PalwStateV2Error::FreePromptPromptNotAccountable { claim: *claim_id, carried: prompt_token_ids.len() });
+        }
+        // **The class's ladder, defaulted to the STRUCTURAL top rather than the network's.**
+        //
+        // The transition holds no bundle, so it cannot read `max_step_leaf_count`; the
+        // extraction walk can and does, and it has already refused any commitment whose
+        // `work_leaves` is past it. What this cap does here is bound the ENUMERATION, and
+        // the equality below binds the answer to a number the walk already bounded — so a
+        // wider default cannot admit a claim the network's ladder would have refused, it
+        // can only avoid refusing an honest one twice. The structural top is the widest a
+        // ruleset may ever freeze, which is the only honest default for a caller with no
+        // ruleset (the same reason `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` exists at all).
+        let ladder = state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+        let already_paid = state.fp_claimed_prompt_ids_of(class_id, inputs.daa_score);
+        let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid);
+        let work = crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, prompt_tokens, decode_tokens_executed, accounted, ladder)
+            .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable { claim: *claim_id, class: *class_id, why: e.to_string() })?;
+        if work.total_leaves != work_leaves {
+            return Err(PalwStateV2Error::FreePromptWorkLeavesMismatch {
+                claim: *claim_id,
+                declared: work_leaves,
+                derived: work.total_leaves,
+            });
+        }
+        Some((work, profile))
+    } else {
+        None
+    };
+    // **ADR-0148: past the canonical-work fence the lane prices COMPUTE, in the network's
+    // unit, the same for every class.**
+    //
+    // Below it three things priced a claim, and none of them was the compute it ran: the
+    // credit was step LEAVES, which count activations while cost counts weights (the audit's
+    // F5 — a 6.8x spread, monotone in model width, so the widest model was paid least per unit
+    // of arithmetic); the quantum was a fraction of the class's own DECLARED canonical job, so
+    // the registrant set how much work one lottery entry stood for; and the quanta were capped
+    // at `fp_max_quanta_per_receipt`, so every long prompt and every wide model was paid a
+    // ceiling. The receipt odds were then a per-class target retargeted on the class's own
+    // census, which made the price of a unit of compute a function of how much the class was
+    // used.
+    //
+    // Past it: the credit is the canonical work of the NEW positions (the same derivation the
+    // attempt lane's weight comes from), the quantum is one network quantum derived from the
+    // floor's graph, the quanta scale the ODDS rather than cap the credit, and the receipt odds
+    // are one pooled target for every class (`palw_fp_quantum_receipt_target_v1`). The
+    // exposure is the claimed compute in the floor's collateral unit at the network's slash
+    // price, so no registrant-written number reaches the reservation either.
+    //
+    // Compute pricing needs the derivation: a build that armed the unit without it would have
+    // no credited compute to price, and the bundle rule makes that combination unarmable.
+    // Refused by name rather than priced in leaves, because the consistency check prices a
+    // claim's weight by its era and a leaves-priced claim of the compute era would be a claim
+    // it disagreed with forever.
+    let pricing = PalwFpPricingV1::of(params, inputs.canonical_work_daa);
+    let in_compute = pricing.canonical_work_daa.is_some_and(|height| inputs.daa_score >= height);
+    let (quanta, pwu, reserved) = if in_compute {
+        let Some((work, profile)) = &derived else {
+            return Err(PalwStateV2Error::FreePromptComputeWithoutDerivation { claim: *claim_id, class: *class_id });
+        };
+        let credited = crate::palw_freeprompt_v3::fp_derive_credited_compute_v1(
+            profile,
+            prompt_tokens,
+            decode_tokens_executed,
+            work.accounted_prefix_tokens,
+        )
+        .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
+            claim: *claim_id,
+            class: *class_id,
+            why: e.to_string(),
+        })?;
+        let quantum = pricing.network_quantum(state);
+        if quantum == 0 {
+            return Err(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id });
+        }
+        let quanta = crate::palw_freeprompt_v3::fp_quanta_of_compute_v1(credited, quantum);
+        if quanta == 0 {
+            return Err(PalwStateV2Error::ZeroQuanta);
+        }
+        // Uniform quanta, as the consistency check and the validator crate both demand: the
+        // remainder of `credited / quanta` — under one MAC-equivalent per quantum — is dropped.
+        let per_quantum = credited / quanta as u128;
+        let pwu = u64::try_from(per_quantum.saturating_mul(quanta as u128))
+            .map_err(|_| PalwStateV2Error::Overflow("free-prompt credited compute"))?;
+        let reserved = palw_fp_compute_reserved_v1(state, params, inputs.canonical_work_daa, pwu, inputs.daa_score, claim_id)?;
+        (quanta, pwu, reserved)
+    } else {
+        let credited = match &derived {
+            Some((work, _)) => work.credited_leaves,
+            None => crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, work_leaves, 0),
+        };
+        let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
+        let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(credited, quantum, cap);
+        if quanta == 0 {
+            return Err(PalwStateV2Error::ZeroQuanta);
+        }
+        let pwu = (quanta as u64).checked_mul(quantum).ok_or(PalwStateV2Error::Overflow("free-prompt pwu"))?;
+        // **Exposure is the work claimed.** An attempt's `pwu` is statistical (expected draws
+        // × one inference), so its exposure is the one inference the block commits to; a
+        // free-prompt claim's `pwu` IS its leaves (ADR-0074 Decision 5), so its exposure is
+        // exactly that — neither a whole canonical job for a small user job nor one job for a
+        // claim the size of eight.
+        let reserved = (pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
+        (quanta, pwu, reserved)
+    };
+    Ok(PalwFpCommitmentPriceV1 { quanta, pwu, reserved, priced_in_compute: in_compute, derived_work: derived })
+}
+
+/// **ADR-0148's reservation for a compute-priced claim** — its claimed compute in the floor's
+/// collateral unit (the exposure basis, `base_declared / base_canonical`, the same conversion the
+/// attempt lane's exposure makes), at the network's slash price. Refused where the floor cannot say
+/// what either is, rather than reserved at a number nobody derived.
+pub fn palw_fp_compute_reserved_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    canonical_work_daa: Option<u64>,
+    pwu: u64,
+    accepted_daa: u64,
+    claim_id: &Hash64,
+) -> Result<u128, PalwStateV2Error> {
+    let basis = state
+        .palw_exposure_basis_v1(&params.base_class_id, accepted_daa, canonical_work_daa)
+        .ok_or(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id })?;
+    let slash = palw_network_slash_value_per_pwu_v1(state, &params.base_class_id)
+        .ok_or(PalwStateV2Error::FreePromptNetworkQuantumUnknown { claim: *claim_id })?;
+    let normalized = crate::palw_work_target_v1::mul_div_u128(pwu as u128, basis.base_declared as u128, basis.base_canonical as u128);
+    normalized.checked_mul(slash as u128).ok_or(PalwStateV2Error::Overflow("free-prompt compute reserve"))
 }
 
 /// Apply a receipt block's own work: spend one certified quantum (ADR-0044 Decision 6 as the
@@ -30452,6 +30559,76 @@ pub(crate) mod tests {
             let (s3, _) = apply_derived(&s2, &p, &ctx(3, 102, 3), &[registered, lane_certification(plain), certified], extras)
                 .expect("both classes register and certify");
             (p, s3, plain, other.shape_profile_id())
+        }
+
+        /// **The entrance prices a commitment exactly as the fold reserves it** — ADR-0148's
+        /// agreement between a gateway and the ledger. A node answers `GetPalwFreePromptPrice` with
+        /// `palw_fp_commitment_price_v1` over its tip; the fold prices the same object with the same
+        /// function when it lands. Both eras and both classes: the quanta, the pwu and the
+        /// reservation are equal, the bond's room moves by exactly the quoted reservation, and a
+        /// commitment the fold refuses is refused by the quote with the same error.
+        #[test]
+        fn the_entrance_prices_a_commitment_exactly_as_the_fold_reserves_it() {
+            let prompt: Vec<u32> = (1..=6).collect();
+            let decode = 4u32;
+            for (era, extras) in [("leaves", leaves_era()), ("compute", compute_era())] {
+                let (p, s3, plain, other) = two_classes(&extras);
+                for (i, (class, profile)) in [(plain, derived_profile()), (other, retiled())].into_iter().enumerate() {
+                    let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, prompt.len() as u32, decode, 1 << 26)
+                        .expect("the run counts");
+                    let claim_word = 0xE0 + i as u64;
+                    let mut object = derived_commit_from(1, claim_word, &prompt, decode, leaves);
+                    if let PalwConsensusObjectV2::FreePromptCommitted { class_id, .. } = &mut object {
+                        *class_id = class;
+                    }
+                    let inputs = PalwFpPriceInputsV1 {
+                        fp_derived_work_daa: extras.fp_derived_work_daa,
+                        canonical_work_daa: extras.canonical_work_daa,
+                        daa_score: 103,
+                    };
+                    let quoted = palw_fp_commitment_price_v1(
+                        &s3,
+                        &p,
+                        inputs,
+                        &h64(claim_word),
+                        &class,
+                        &prompt,
+                        prompt.len() as u32,
+                        decode,
+                        leaves,
+                    )
+                    .unwrap_or_else(|e| panic!("{era}/{i}: the entrance prices it: {e:?}"));
+                    assert_eq!(quoted.priced_in_compute, era == "compute", "{era}: the era is the fence's");
+                    let room_before = palw_fp_bond_room_v1(&s3, &p, &bond_key(1), false).expect("the bond is held");
+                    let (s4, _) = apply_derived(&s3, &p, &ctx(4, 103, 4), &[object], &extras).expect("the commitment folds");
+                    let claim = s4.claim(&h64(claim_word)).expect("the claim is created");
+                    let PalwClaimSourceV2::FreePrompt { quanta, .. } = &claim.source else { panic!("a free-prompt claim") };
+                    assert_eq!(
+                        (*quanta, claim.pwu, claim.reserved),
+                        (quoted.quanta, quoted.pwu, quoted.reserved),
+                        "{era}/{i}: the ledger reserves exactly what the entrance quoted"
+                    );
+                    let room_after = palw_fp_bond_room_v1(&s4, &p, &bond_key(1), false).expect("the bond is held");
+                    assert_eq!(room_before - room_after, quoted.reserved, "{era}/{i}: and the room moves by exactly that");
+                }
+                // A refusal is the fold's own, by name: a lying leaf count.
+                let quoted = palw_fp_commitment_price_v1(
+                    &s3,
+                    &p,
+                    PalwFpPriceInputsV1 {
+                        fp_derived_work_daa: extras.fp_derived_work_daa,
+                        canonical_work_daa: extras.canonical_work_daa,
+                        daa_score: 103,
+                    },
+                    &h64(0xEF),
+                    &plain,
+                    &prompt,
+                    prompt.len() as u32,
+                    decode,
+                    1,
+                );
+                assert!(matches!(quoted, Err(PalwStateV2Error::FreePromptWorkLeavesMismatch { .. })), "{era}: got {quoted:?}");
+            }
         }
 
         /// **The property F5 names, stated over three real graphs.** One run's expected receipt wins

@@ -4014,8 +4014,16 @@ impl VirtualStateProcessor {
         // refuses. Resolved at the tip, which is the height the registration would land at or just
         // below; the gate resolves it at the carrying block, and a registration assembled in the
         // last block before the fence is refused by the gate exactly as one assembled after it.
+        //
+        // **At the VIRTUAL's DAA, not the sink's.** A carrier sent now is accepted by a block at or
+        // past the virtual; the sink is one step behind it, and on the fence's own block that step
+        // is the difference between 1‰ and 0‰ (the Studio economy drill: the offer said 1‰ at DAA
+        // 29, the carrier landed at 31 and was dropped). The node's registration also waits out
+        // the landing margin below the fence (`palw_registration_waits_for_fences_v2`).
         let tip_daa = state.last_point().map(|point| point.daa_score).unwrap_or(0);
-        let entrant_share = if self.palw_admission_independence_at(tip_daa) { 0 } else { state_params.min_grantable_share_permille() };
+        let virtual_daa = self.virtual_stores.read().state.get().map(|state| state.daa_score).unwrap_or(tip_daa).max(tip_daa);
+        let entrant_share =
+            if self.palw_admission_independence_at(virtual_daa) { 0 } else { state_params.min_grantable_share_permille() };
         Some(kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
             min_grantable_share_permille: entrant_share,
             slash_value_per_pwu: base.slash_value_per_pwu,
@@ -4160,6 +4168,55 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&state, state_params, mine)
+    }
+
+    /// **ADR-0148: the free-prompt lane's price for one job, at the virtual** — the fold's own
+    /// function over the tip state, at the DAA a commitment sent now would be accepted at, with the
+    /// bond's room by the fold's two terms. A gateway reads this AFTER its job ran and BEFORE the
+    /// commitment is written, so what it checks and what the ledger reserves are one expression.
+    pub fn palw_fp_commitment_price_impl(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+        prompt_token_ids: &[u32],
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        work_leaves: u64,
+        bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_read = self.virtual_stores.read();
+        let daa_score = virtual_read.state.get().ok()?.daa_score;
+        drop(virtual_read);
+        let inputs = kaspa_consensus_core::palw_state_v2::PalwFpPriceInputsV1 {
+            fp_derived_work_daa: self
+                .palw_fp_derived_work
+                .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+                .map(|fence| fence.daa_score()),
+            canonical_work_daa: self.palw_canonical_work_daa,
+            daa_score,
+        };
+        // The claim id only names a refusal; no claim exists until the rail signs one.
+        let price = kaspa_consensus_core::palw_state_v2::palw_fp_commitment_price_v1(
+            &state,
+            state_params,
+            inputs,
+            &kaspa_hashes::Hash64::default(),
+            &class_id,
+            prompt_token_ids,
+            prompt_tokens,
+            decode_tokens_executed,
+            work_leaves,
+        );
+        let bond_room = bond.and_then(|outpoint| {
+            kaspa_consensus_core::palw_state_v2::palw_fp_bond_room_v1(
+                &state,
+                state_params,
+                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                self.palw_capability_bound_at(daa_score),
+            )
+        });
+        Some(kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1 { daa_score, price, bond_room })
     }
 
     pub fn palw_producer_facts_v2_impl(

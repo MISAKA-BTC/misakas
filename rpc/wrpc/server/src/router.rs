@@ -99,6 +99,7 @@ impl Router {
                 GetPalwClassContexts,
                 GetPalwClassEconomics,
                 GetPalwModelRegistry,
+                GetPalwFreePromptPrice,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

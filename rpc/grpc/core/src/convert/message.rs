@@ -997,6 +997,31 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassEconomicsResponse>, protowire
     }
 });
 from!(&kaspa_rpc_core::GetPalwModelRegistryRequest, protowire::GetPalwModelRegistryRequestMessage);
+// ADR-0148: the free-prompt lane's price for one job.
+from!(item: &kaspa_rpc_core::GetPalwFreePromptPriceRequest, protowire::GetPalwFreePromptPriceRequestMessage, {
+    Self {
+        class_id: item.class_id.clone(),
+        prompt_token_ids: item.prompt_token_ids.clone(),
+        prompt_tokens: item.prompt_tokens,
+        decode_tokens_executed: item.decode_tokens_executed,
+        work_leaves: item.work_leaves,
+        bond: item.bond.clone(),
+    }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwFreePromptPriceResponse>, protowire::GetPalwFreePromptPriceResponseMessage, {
+    Self {
+        available: item.available,
+        daa_score: item.daa_score,
+        priced: item.priced,
+        refusal: item.refusal.clone(),
+        priced_in_compute: item.priced_in_compute,
+        quanta: item.quanta,
+        pwu: item.pwu,
+        reserved_sompi: item.reserved_sompi.clone(),
+        bond_room_sompi: item.bond_room_sompi.clone(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifecycle, {
     Self {
         class_id: item.class_id.clone(),
@@ -2412,6 +2437,29 @@ try_from!(item: &protowire::GetPalwClassEconomicsResponseMessage, RpcResult<kasp
     }
 });
 try_from!(&protowire::GetPalwModelRegistryRequestMessage, kaspa_rpc_core::GetPalwModelRegistryRequest);
+try_from!(item: &protowire::GetPalwFreePromptPriceRequestMessage, kaspa_rpc_core::GetPalwFreePromptPriceRequest, {
+    Self {
+        class_id: item.class_id.clone(),
+        prompt_token_ids: item.prompt_token_ids.clone(),
+        prompt_tokens: item.prompt_tokens,
+        decode_tokens_executed: item.decode_tokens_executed,
+        work_leaves: item.work_leaves,
+        bond: item.bond.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwFreePromptPriceResponseMessage, RpcResult<kaspa_rpc_core::GetPalwFreePromptPriceResponse>, {
+    Self {
+        available: item.available,
+        daa_score: item.daa_score,
+        priced: item.priced,
+        refusal: item.refusal.clone(),
+        priced_in_compute: item.priced_in_compute,
+        quanta: item.quanta,
+        pwu: item.pwu,
+        reserved_sompi: item.reserved_sompi.clone(),
+        bond_room_sompi: item.bond_room_sompi.clone(),
+    }
+});
 try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelLifecycle, {
     Self {
         class_id: item.class_id.clone(),

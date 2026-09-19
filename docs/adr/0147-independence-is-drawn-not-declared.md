@@ -174,3 +174,21 @@ In `palw_state_v2::tests::adr0135::admission_independence`:
 And `palw_reward_properties_v1::a_class_whose_owner_holds_every_capable_seat_cannot_be_admitted` —
 ADR-0145 §8's property, un-ignored: declaring the class buys no juror, and the owner alone is admitted
 at its network share.
+
+## 6. Addendum (2026-09-20): a registration does not straddle the fence
+
+Below `palw_admission_independence` a post-genesis registration must take the minimum grantable
+share; past it, exactly 0‰. The gate reads the fence at the block that ACCEPTS the carrier. The
+Studio economy drill, which arms the registry and this fence at one height, found the gap between
+the two: the node registered the moment the registry opened, on terms the RPC had computed at the
+sink's DAA (one block behind, pre-fence, 1‰), and the carrier landed past the fence, which dropped
+it — "registers at 1‰; past palw_admission_independence a registration buys existence and not
+cadence". The panel's own retry only rebuilt it 200 DAA later.
+
+The registration terms are now resolved at the virtual's DAA, which is where a carrier sent now
+lands, and a node does not build a registration within `PALW_REGISTRATION_LANDING_MARGIN_DAA_V1`
+(10) DAA below a scheduled independence fence (`palw_registration_waits_for_fences_v2`); it builds
+once the fence is in force, on the 0‰ terms the gate will apply. A carrier that still lands late is
+caught by the panel's retry, as before. The CLI paths (`model add`, `extension submit`) read the
+same terms; they have no landing-margin wait, which leaves a ten-DAA window in which a hand-filed
+registration can be refused and its fee lost — named, not closed.

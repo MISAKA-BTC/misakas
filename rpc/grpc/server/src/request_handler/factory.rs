@@ -111,6 +111,7 @@ impl Factory {
                 GetPalwClassContexts,
                 GetPalwClassEconomics,
                 GetPalwModelRegistry,
+                GetPalwFreePromptPrice,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 NotifyBlockAdded,

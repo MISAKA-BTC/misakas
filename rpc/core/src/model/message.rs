@@ -5585,6 +5585,105 @@ impl Deserializer for GetPalwModelRegistryResponse {
     }
 }
 
+/// ADR-0148: price ONE free-prompt job before its commitment is written — the facts the fold prices
+/// a `FreePromptCommitted` from, as the executor's result states them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwFreePromptPriceRequest {
+    /// 128-hex class id.
+    pub class_id: String,
+    /// The prompt as the commitment will carry it — the chain reads which prefix of it the class
+    /// has already been paid for (ADR-0145 §6), so a price without the ids is not the chain's.
+    pub prompt_token_ids: Vec<u32>,
+    pub prompt_tokens: u32,
+    pub decode_tokens_executed: u32,
+    /// The capture's leaf count — the comparand the fold refuses a mismatch of by name.
+    pub work_leaves: u64,
+    /// `txid_hex:index` of the executor bond, for its room; empty for the price alone.
+    pub bond: String,
+}
+
+impl Serializer for GetPalwFreePromptPriceRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(Vec<u32>, &self.prompt_token_ids, writer)?;
+        store!(u32, &self.prompt_tokens, writer)?;
+        store!(u32, &self.decode_tokens_executed, writer)?;
+        store!(u64, &self.work_leaves, writer)?;
+        store!(String, &self.bond, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwFreePromptPriceRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let class_id = load!(String, reader)?;
+        let prompt_token_ids = load!(Vec<u32>, reader)?;
+        let prompt_tokens = load!(u32, reader)?;
+        let decode_tokens_executed = load!(u32, reader)?;
+        let work_leaves = load!(u64, reader)?;
+        let bond = load!(String, reader)?;
+        Ok(Self { class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond })
+    }
+}
+
+/// ADR-0148: the fold's price for the job at the virtual's DAA, or its refusal by name.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwFreePromptPriceResponse {
+    /// False off `ConsensusV2` and on a node with no PALW state; every other field is then empty.
+    pub available: bool,
+    /// The DAA the job was priced at.
+    pub daa_score: u64,
+    /// True when the fold would price the commitment; false when it would refuse it (`refusal`).
+    pub priced: bool,
+    /// The fold's refusal, by name, when `priced` is false.
+    pub refusal: String,
+    /// Past the canonical-work fence the lane prices compute (ADR-0148), below it leaves.
+    pub priced_in_compute: bool,
+    pub quanta: u32,
+    pub pwu: u64,
+    /// Decimal `u128`: what the claim reserves against its bond.
+    pub reserved_sompi: String,
+    /// Decimal `u128`: the bond's room (`ceiling − backed`); empty without a bond, or for one the
+    /// chain does not hold.
+    pub bond_room_sompi: String,
+}
+
+impl Serializer for GetPalwFreePromptPriceResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.daa_score, writer)?;
+        store!(bool, &self.priced, writer)?;
+        store!(String, &self.refusal, writer)?;
+        store!(bool, &self.priced_in_compute, writer)?;
+        store!(u32, &self.quanta, writer)?;
+        store!(u64, &self.pwu, writer)?;
+        store!(String, &self.reserved_sompi, writer)?;
+        store!(String, &self.bond_room_sompi, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwFreePromptPriceResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        let available = load!(bool, reader)?;
+        let daa_score = load!(u64, reader)?;
+        let priced = load!(bool, reader)?;
+        let refusal = load!(String, reader)?;
+        let priced_in_compute = load!(bool, reader)?;
+        let quanta = load!(u32, reader)?;
+        let pwu = load!(u64, reader)?;
+        let reserved_sompi = load!(String, reader)?;
+        let bond_room_sompi = load!(String, reader)?;
+        Ok(Self { available, daa_score, priced, refusal, priced_in_compute, quanta, pwu, reserved_sompi, bond_room_sompi })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwNodeStatusRequest {}

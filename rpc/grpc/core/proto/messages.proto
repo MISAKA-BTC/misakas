@@ -102,6 +102,7 @@ message KaspadRequest {
     GetPalwClassContextsRequestMessage getPalwClassContextsRequest = 1170;
     GetPalwClassEconomicsRequestMessage getPalwClassEconomicsRequest = 1172;
     GetPalwModelRegistryRequestMessage getPalwModelRegistryRequest = 1174;
+    GetPalwFreePromptPriceRequestMessage getPalwFreePromptPriceRequest = 1176;
   }
 }
 
@@ -199,6 +200,7 @@ message KaspadResponse {
     GetPalwClassContextsResponseMessage getPalwClassContextsResponse = 1171;
     GetPalwClassEconomicsResponseMessage getPalwClassEconomicsResponse = 1173;
     GetPalwModelRegistryResponseMessage getPalwModelRegistryResponse = 1175;
+    GetPalwFreePromptPriceResponseMessage getPalwFreePromptPriceResponse = 1177;
   }
 }
 

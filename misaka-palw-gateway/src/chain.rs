@@ -335,6 +335,45 @@ impl ChainSource {
 /// inference is seconds of a whole model, and a loopback wRPC connect is milliseconds. Holding a
 /// long-lived client in a std-threads process would buy nothing measurable and would add the one
 /// failure mode this lane cannot afford — a stale connection that answers with yesterday's facts.
+/// **ADR-0148: the chain's own price for one job** — what the fold would reserve for this job's
+/// commitment at the virtual's DAA (`GetPalwFreePromptPrice`), and the executor bond's room for it.
+///
+/// The gateway used to size a commitment's exposure in step leaves
+/// (`misaka_palw_fp_submit::fp_claim_exposure_v1`) after the ledger had moved to compute, and past
+/// the bundle a wide model's claim reserved several times what the gateway had checked: a
+/// commitment written at the entrance and refused at the transition, after the carrier fee. This is
+/// the ledger's number, asked for after the job ran and before its commitment is written.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FpJobPrice {
+    /// The fold would price the commitment; `false` means it would refuse it (`refusal`).
+    pub priced: bool,
+    pub refusal: String,
+    /// Past the canonical-work fence the lane prices compute (ADR-0148).
+    pub priced_in_compute: bool,
+    pub quanta: u32,
+    /// What the claim reserves against its bond.
+    pub reserved_sompi: u128,
+    /// The bond's room (`ceiling − backed`), by the fold's own two terms.
+    pub bond_room_sompi: Option<u128>,
+}
+
+impl ChainSource {
+    /// [`FpJobPrice`] from a node that answers it; `None` from an anchor file (which cannot submit
+    /// anyway) and from a node older than the op — the caller then keeps its own estimate.
+    pub fn fp_job_price(
+        &self,
+        prompt_token_ids: &[u32],
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        work_leaves: u64,
+    ) -> Option<FpJobPrice> {
+        match self {
+            Self::Rpc(rpc) => rpc.fp_job_price(prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves),
+            Self::AnchorFile(_) => None,
+        }
+    }
+}
+
 pub struct RpcChainSource {
     runtime: tokio::runtime::Runtime,
     url: String,
@@ -410,8 +449,8 @@ impl RpcChainSource {
 
     /// The two calls, in one connection: the sink and its DAA (the anchor Decision 3 says must be
     /// fresh), and the producer facts (the other three names).
-    async fn read_async(&self) -> Result<((String, u64), kaspa_rpc_core::GetPalwProducerFactsResponse), String> {
-        use kaspa_rpc_core::api::rpc::RpcApi;
+    /// One connection, opened for one question and closed after it.
+    async fn connect(&self) -> Result<kaspa_wrpc_client::KaspaRpcClient, String> {
         use kaspa_wrpc_client::{
             KaspaRpcClient, WrpcEncoding,
             client::{ConnectOptions, ConnectStrategy},
@@ -426,6 +465,63 @@ impl RpcChainSource {
             ..Default::default()
         };
         client.connect(Some(options)).await.map_err(|e| e.to_string())?;
+        Ok(client)
+    }
+
+    /// See [`ChainSource::fp_job_price`].
+    pub fn fp_job_price(
+        &self,
+        prompt_token_ids: &[u32],
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        work_leaves: u64,
+    ) -> Option<FpJobPrice> {
+        self.runtime
+            .block_on(self.fp_job_price_async(prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves))
+            .ok()
+            .flatten()
+    }
+
+    async fn fp_job_price_async(
+        &self,
+        prompt_token_ids: &[u32],
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        work_leaves: u64,
+    ) -> Result<Option<FpJobPrice>, String> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let client = self.connect().await?;
+        // **A node older than the op closes the WebSocket on it** (not "method not found"). This
+        // connection was opened for this one question, so that costs the question and nothing
+        // else, and the caller falls back to its own estimate.
+        let answer = client
+            .get_palw_free_prompt_price(kaspa_rpc_core::GetPalwFreePromptPriceRequest {
+                class_id: self.class_id.clone(),
+                prompt_token_ids: prompt_token_ids.to_vec(),
+                prompt_tokens,
+                decode_tokens_executed,
+                work_leaves,
+                bond: if self.bond_txid.is_empty() { String::new() } else { format!("{}:{}", self.bond_txid, self.bond_index) },
+            })
+            .await;
+        let _ = client.disconnect().await;
+        let answer = answer.map_err(|e| e.to_string())?;
+        if !answer.available {
+            return Ok(None);
+        }
+        Ok(Some(FpJobPrice {
+            priced: answer.priced,
+            refusal: answer.refusal,
+            priced_in_compute: answer.priced_in_compute,
+            quanta: answer.quanta,
+            reserved_sompi: decimal_u128(&answer.reserved_sompi),
+            bond_room_sompi: (!answer.bond_room_sompi.is_empty()).then(|| decimal_u128(&answer.bond_room_sompi)),
+        }))
+    }
+
+    async fn read_async(&self) -> Result<((String, u64), kaspa_rpc_core::GetPalwProducerFactsResponse), String> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let client = self.connect().await?;
         let dag = client.get_block_dag_info().await.map_err(|e| e.to_string())?;
         let producer = client
             .get_palw_producer_facts(self.class_id.clone(), self.bond_txid.clone(), self.bond_index, !self.bond_txid.is_empty())

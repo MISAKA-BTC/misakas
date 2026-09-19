@@ -312,6 +312,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_class_contexts_call, GetPalwClassContexts);
     route!(get_palw_class_economics_call, GetPalwClassEconomics);
     route!(get_palw_model_registry_call, GetPalwModelRegistry);
+    route!(get_palw_free_prompt_price_call, GetPalwFreePromptPrice);
     route!(get_token_supply_call, GetTokenSupply);
     route!(get_token_emission_info_call, GetTokenEmissionInfo);
     route!(submit_evm_transaction_call, SubmitEvmTransaction);

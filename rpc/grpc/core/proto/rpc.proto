@@ -2170,3 +2170,27 @@ message GetPalwModelRegistryResponseMessage {
   uint64 finalWorkEpochs = 36;
   RPCError error = 1000;
 }
+
+// ADR-0148: price ONE free-prompt job before its commitment is written — the fold's own price at the
+// virtual's DAA, and the executor bond's room for it.
+message GetPalwFreePromptPriceRequestMessage {
+  string classId = 1;
+  repeated uint32 promptTokenIds = 2;
+  uint32 promptTokens = 3;
+  uint32 decodeTokensExecuted = 4;
+  uint64 workLeaves = 5;
+  string bond = 6;
+}
+
+message GetPalwFreePromptPriceResponseMessage {
+  bool available = 1;
+  uint64 daaScore = 2;
+  bool priced = 3;
+  string refusal = 4;
+  bool pricedInCompute = 5;
+  uint32 quanta = 6;
+  uint64 pwu = 7;
+  string reservedSompi = 8;
+  string bondRoomSompi = 9;
+  RPCError error = 1000;
+}

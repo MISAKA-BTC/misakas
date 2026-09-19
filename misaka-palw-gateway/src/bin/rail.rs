@@ -1037,6 +1037,35 @@ mod watch {
         )
     }
 
+    /// **ADR-0148: the chain's own price for this job**, on a connection opened for the question
+    /// alone — a node older than `GetPalwFreePromptPrice` closes the WebSocket on the unknown op
+    /// rather than answering "method not found", and the watcher's own connection must not be the
+    /// one that pays for asking. `None` when the node does not answer it (or holds no PALW state):
+    /// the caller keeps [`job_exposure`]'s leaves estimate. `Some(Err)` names the fold's refusal.
+    pub(super) fn chain_job_exposure(
+        runtime: &tokio::runtime::Runtime,
+        rpc: &str,
+        stem: &Path,
+        commitment: &PalwFreePromptCommitmentV3,
+    ) -> Option<Result<u128, String>> {
+        use kaspa_rpc_core::api::rpc::RpcApi;
+        let bytes = std::fs::read(PathBuf::from(format!("{}.result.borsh", stem.display()))).ok()?;
+        let result: super::PalwFpWorkerResultV3 = borsh::from_slice(&bytes).ok()?;
+        let client = super::try_rpc_connect(runtime, rpc).ok()?;
+        let bond = commitment.job.executor_bond;
+        let answer = runtime.block_on(client.get_palw_free_prompt_price(kaspa_rpc_core::GetPalwFreePromptPriceRequest {
+            class_id: commitment.job.class_id.to_string(),
+            prompt_token_ids: result.prompt_token_ids.clone(),
+            prompt_tokens: commitment.job.prompt_tokens,
+            decode_tokens_executed: commitment.decode_tokens_executed,
+            work_leaves: commitment.work_leaves,
+            bond: format!("{}:{}", bond.transaction_id, bond.index),
+        }));
+        let _ = runtime.block_on(client.disconnect());
+        let answer = answer.ok().filter(|a| a.available)?;
+        Some(if answer.priced { answer.reserved_sompi.parse::<u128>().map_err(|e| e.to_string()) } else { Err(answer.refusal) })
+    }
+
     /// How a failed one-shot run is treated — by what it says about the CLAIM, because a queue
     /// that counts the node's restart against a good job renames it out of existence.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1226,7 +1255,16 @@ mod watch {
             return Ok(());
         }
         quiet.clear("chain");
-        if let Some(need) = job_exposure(&facts, commitment.work_leaves) {
+        // ADR-0148: past the canonical-work fence the ledger prices compute, and the leaves
+        // estimate under-states a wide model's reservation several times over — so the chain's own
+        // price for THIS job is asked first, and a commitment it would refuse is not paid to carry.
+        let chain_need = chain_job_exposure(runtime, &config.rpc, &job.stem, &commitment);
+        if let Some(Err(refusal)) = &chain_need {
+            log(format!("{}: the chain would refuse this commitment ({refusal}); not paying to carry it", job.name));
+            give_up(&config.outbox, &job, &mut state, "refused-by-price")?;
+            return Ok(());
+        }
+        if let Some(need) = chain_need.and_then(Result::ok).or_else(|| job_exposure(&facts, commitment.work_leaves)) {
             let ceiling: u128 = facts.bond_exposure_ceiling.parse().unwrap_or(0);
             let backed: u128 = facts.bond_reserved_exposure.parse().unwrap_or(0);
             if need > ceiling {

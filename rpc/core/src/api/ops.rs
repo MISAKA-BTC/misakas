@@ -228,6 +228,10 @@ pub enum RpcApiOps {
     /// lifecycle row and derived profile, the seats ready for it, the claims in flight, and every
     /// seat's last possession proof.
     GetPalwModelRegistry = 186,
+    /// ADR-0148: what the free-prompt lane would charge ONE job — the fold's own price at the
+    /// virtual's DAA, and the executor bond's room for it — asked by a gateway after its inference
+    /// and before it writes the commitment, so the entrance and the ledger price one expression.
+    GetPalwFreePromptPrice = 187,
 }
 
 impl RpcApiOps {

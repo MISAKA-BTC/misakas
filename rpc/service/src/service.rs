@@ -1910,6 +1910,77 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_free_prompt_price_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwFreePromptPriceRequest,
+    ) -> RpcResult<GetPalwFreePromptPriceResponse> {
+        // **ADR-0148: the entrance prices with the ledger's expression.** A gateway used to size a
+        // commitment's exposure in step leaves after the ledger had moved to compute, and past the
+        // bundle a wide model's claim reserved several times what its gateway had checked — a
+        // commitment admitted at the entrance and refused at the transition, after the carrier fee.
+        // This answers with the fold's own function over the tip state, at the DAA a commitment
+        // sent now lands at.
+        //
+        // Everything the caller sent is parsed before a byte of chain state is read (mainnet audit
+        // M-5): a malformed request is an error and it is free. The token list is bounded by the
+        // widest context the structural ladder admits, so the request cannot be made to walk an
+        // unbounded prefix comparison.
+        let class_id = request
+            .class_id
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("class id '{}' is not a 128-hex Hash64", request.class_id)))?;
+        if request.prompt_token_ids.len() > (1usize << 21) {
+            return Err(RpcError::General(format!(
+                "{} prompt ids is past any context a class can register",
+                request.prompt_token_ids.len()
+            )));
+        }
+        let bond = if request.bond.is_empty() {
+            None
+        } else {
+            let (txid, index) =
+                request.bond.split_once(':').ok_or_else(|| RpcError::General(format!("bond '{}' is not txid:index", request.bond)))?;
+            let transaction_id = txid
+                .parse::<kaspa_consensus_core::tx::TransactionId>()
+                .map_err(|_| RpcError::General(format!("bond transaction id '{txid}' is not a 128-hex transaction id")))?;
+            let index = index.parse::<u32>().map_err(|_| RpcError::General(format!("bond index '{index}' is not a u32")))?;
+            Some(kaspa_consensus_core::tx::TransactionOutpoint { transaction_id, index })
+        };
+        let GetPalwFreePromptPriceRequest { prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, .. } = request;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let answer = session
+            .spawn_blocking(move |c| {
+                c.palw_fp_commitment_price_v1(class_id, prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, bond)
+            })
+            .await;
+        let Some(answer) = answer else {
+            return Ok(GetPalwFreePromptPriceResponse::default());
+        };
+        let bond_room_sompi = answer.bond_room.map(|room| room.to_string()).unwrap_or_default();
+        Ok(match answer.price {
+            Ok(price) => GetPalwFreePromptPriceResponse {
+                available: true,
+                daa_score: answer.daa_score,
+                priced: true,
+                refusal: String::new(),
+                priced_in_compute: price.priced_in_compute,
+                quanta: price.quanta,
+                pwu: price.pwu,
+                reserved_sompi: price.reserved.to_string(),
+                bond_room_sompi,
+            },
+            Err(refusal) => GetPalwFreePromptPriceResponse {
+                available: true,
+                daa_score: answer.daa_score,
+                priced: false,
+                refusal: format!("{refusal:?}"),
+                bond_room_sompi,
+                ..Default::default()
+            },
+        })
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,

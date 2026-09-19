@@ -938,6 +938,27 @@ async fn sanity_test() {
                     assert_eq!(response.seat_count, 0, "and seats nobody");
                 })
             }
+            // ADR-0148: the price reader answers `available: false` on a network with no PALW
+            // state — the daemon under test is hash-only — and refuses a malformed class id as an
+            // error rather than as an answer.
+            KaspadPayloadOps::GetPalwFreePromptPrice => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let request = GetPalwFreePromptPriceRequest {
+                        class_id: "00".repeat(64),
+                        prompt_token_ids: vec![1, 2, 3],
+                        prompt_tokens: 3,
+                        decode_tokens_executed: 1,
+                        work_leaves: 1,
+                        bond: String::new(),
+                    };
+                    let response = rpc_client.get_palw_free_prompt_price_call(None, request.clone()).await.unwrap();
+                    assert!(!response.available, "a chain without ConsensusV2 prices no free-prompt job");
+                    assert!(!response.priced);
+                    let malformed = GetPalwFreePromptPriceRequest { class_id: "not-hex".to_string(), ..request };
+                    assert!(rpc_client.get_palw_free_prompt_price_call(None, malformed).await.is_err(), "a malformed id is an error");
+                })
+            }
             KaspadPayloadOps::GetPalwFreePromptClaim => {
                 let rpc_client = client.clone();
                 tst!(op, {

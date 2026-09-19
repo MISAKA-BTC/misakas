@@ -285,6 +285,21 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **What the free-prompt lane would charge one commitment, before anyone pays to carry it**
+    /// (ADR-0148; `GetPalwFreePromptPrice`): the fold's own price at the virtual's DAA, and the
+    /// bond's room for it. `None` off `ConsensusV2` and where the node holds no PALW state.
+    fn palw_fp_commitment_price_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+        _prompt_token_ids: Vec<u32>,
+        _prompt_tokens: u32,
+        _decode_tokens_executed: u32,
+        _work_leaves: u64,
+        _bond: Option<crate::tx::TransactionOutpoint>,
+    ) -> Option<crate::palw_state_v2::PalwFpPriceAnswerV1> {
+        None
+    }
+
     /// **The certified free-prompt quanta this bond may spend into receipt blocks (FP-R5).**
     ///
     /// Empty on every network that is not `ConsensusV2`, on one with no free-prompt bundle, and

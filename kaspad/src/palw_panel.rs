@@ -5052,8 +5052,11 @@ impl PalwPanelService {
                 // registration until it is — the 2026-09-18 drill registered at boot, crossed the
                 // fence at 20, and left a class with a share and no row that the work target then
                 // refused for ever.
-                let registration_waits = kaspa_consensus_core::palw_model_registry_v1::palw_registration_waits_for_registry_v1(
+                // ADR-0147 at the entrance: and not in the landing margin below the admission-
+                // independence fence, where a carrier built on the pre-fence share lands past it.
+                let registration_waits = kaspa_consensus_core::palw_model_registry_v1::palw_registration_waits_for_fences_v2(
                     self.consensus_config.params.palw_model_registry,
+                    self.consensus_config.params.palw_admission_independence,
                     current_daa,
                 );
                 if registration_waits && self.config.register_class.is_some() && !class_registration_done {

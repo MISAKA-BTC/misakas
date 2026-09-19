@@ -88,6 +88,7 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwClassContexts);
     impl_into_kaspad_request!(GetPalwClassEconomics);
     impl_into_kaspad_request!(GetPalwModelRegistry);
+    impl_into_kaspad_request!(GetPalwFreePromptPrice);
     impl_into_kaspad_request!(GetTokenSupply);
     impl_into_kaspad_request!(GetTokenEmissionInfo);
     impl_into_kaspad_request!(GetValidatorStatus);
@@ -257,6 +258,7 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwClassContexts);
     impl_into_kaspad_response!(GetPalwClassEconomics);
     impl_into_kaspad_response!(GetPalwModelRegistry);
+    impl_into_kaspad_response!(GetPalwFreePromptPrice);
     impl_into_kaspad_response!(GetTokenSupply);
     impl_into_kaspad_response!(GetTokenEmissionInfo);
     impl_into_kaspad_response!(GetValidatorStatus);

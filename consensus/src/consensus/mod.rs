@@ -1258,6 +1258,25 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_producer_facts_v2_impl(class_id, bond)
     }
 
+    fn palw_fp_commitment_price_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+        prompt_token_ids: Vec<u32>,
+        prompt_tokens: u32,
+        decode_tokens_executed: u32,
+        work_leaves: u64,
+        bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
+        self.virtual_processor.palw_fp_commitment_price_impl(
+            class_id,
+            &prompt_token_ids,
+            prompt_tokens,
+            decode_tokens_executed,
+            work_leaves,
+            bond,
+        )
+    }
+
     fn palw_fp_spendable_v3(
         &self,
         bond: kaspa_consensus_core::tx::TransactionOutpoint,

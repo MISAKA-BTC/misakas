@@ -119,3 +119,29 @@ for the whole window; the state the rule costs is throughput times the window.
 * `a_paid_prompt_row_outlives_its_claim_for_its_retention_and_no_longer` — survival past retirement,
   replay inside and after the window, the sweep at exactly the expiry block, the reorg revert.
 * `the_pooled_target_walks_on_the_lanes_output_and_never_past_the_price_ceiling`.
+
+## 6. Addendum (2026-09-20): the entrance prices with the ledger's expression
+
+The lane moved to compute; its entrance did not. A gateway sized a commitment's exposure with
+`misaka_palw_fp_submit::fp_claim_exposure_v1` — quanta of the class's leaves times the slash rate —
+and the rail's watcher checked the bond's room with the same number, while the fold reserved the
+claim's COMPUTE in the floor's collateral unit. For the floor the two agree by construction; for a
+wider model the reservation is several times the leaves figure (the spread §1 measured, now on the
+exposure side). A bond with room for the leaves figure and not for the reservation got a commitment
+written, carried and paid for, and then refused at the transition as `FreePromptExposureCeiling`.
+
+**One expression, asked for.** The fold's pricing — the derivation, the prefix accounting, the
+network quantum, the quanta, the pwu and the reservation, for both eras — is now one pure function
+of the state, `palw_fp_commitment_price_v1`, and the fold calls it. A node answers
+`GetPalwFreePromptPrice` (op 187, wRPC and gRPC) with the same function over its tip at the
+virtual's DAA, plus the bond's room by the fold's own two terms (`palw_fp_bond_room_v1`). The gateway
+asks after the job ran and before the commitment is written, and uses the chain's reservation,
+quanta and room; a refusal the fold would make is a `commit_refusal` by name. The rail's watcher
+asks before it pays a carrier fee and gives up on a job the chain would refuse. Both ask on a
+connection opened for the one question, because a node older than the op closes the WebSocket on
+it, and both fall back to the leaves figure there.
+
+Test: `fp_compute_pricing::the_entrance_prices_a_commitment_exactly_as_the_fold_reserves_it` — both
+eras, two classes: the quoted quanta, pwu and reservation equal the claim the fold writes one block
+later, the bond's room moves by exactly the quote, and a lying leaf count is refused by both with
+the same error.

@@ -913,6 +913,7 @@ fn handle_chat(
     worker: &WorkerSupervisor,
     budget: &Mutex<PublicJobBudget>,
     facts: &chain::ChainFacts,
+    chain_source: &chain::ChainSource,
     chat: &ChatRequest,
     admitted: AdmittedRequest,
     sink: &mut dyn ChatSink,
@@ -1022,6 +1023,19 @@ fn handle_chat(
         let cap = if facts.fp_max_quanta_per_receipt > 0 { facts.fp_max_quanta_per_receipt } else { u32::MAX };
         fp_quanta_v3(work_leaves, fp_class_quantum_leaves_v1(class_leaves, quanta_per_job), cap)
     };
+    // **ADR-0148: the chain's own price for THIS job, where the node answers it.** The leaves
+    // figures above are the lane's price below the canonical-work fence only; past it the ledger
+    // prices compute in the network's unit, and a wide model's claim reserves several times its
+    // leaves. The node prices the job with the fold's own function at the virtual's DAA — the same
+    // prefix accounting, the same quanta, the same reservation — so what is checked here is what
+    // will be reserved there. A node older than the op answers nothing, and the estimate stands.
+    let chain_price = chain_source
+        .fp_job_price(&result.prompt_token_ids, result.job.prompt_tokens, commitment.decode_tokens_executed, work_leaves)
+        .filter(|_| commit_refusal.is_none());
+    let quanta = chain_price.as_ref().filter(|p| p.priced).map(|p| p.quanta).unwrap_or(quanta);
+    if let Some(refused) = chain_price.as_ref().filter(|p| !p.priced) {
+        commit_refusal = Some(format!("the chain would refuse this commitment: {}", refused.refusal));
+    }
     // **This claim's own price, now that the job has run** (SA-1/SA-7 at their word: refused at
     // the entrance, not at the transition). The entrance above could only price one CANONICAL
     // claim, and a free-prompt claim reserves its own quanta's worth — a 256-token answer on
@@ -1032,9 +1046,16 @@ fn handle_chat(
     // `--claim-exposure-sompi`, where declared, stays the price (it is their bound to set).
     if commit_refusal.is_none()
         && config.claim_exposure_sompi == 0
-        && let Some(exact) = facts.fp_claim_exposure(work_leaves)
+        && let Some(exact) = chain_price.as_ref().map(|p| p.reserved_sompi).or_else(|| facts.fp_claim_exposure(work_leaves))
     {
-        let exact = ExposurePrice { room_sompi: price.room_sompi, claim_sompi: u64::try_from(exact).unwrap_or(u64::MAX) };
+        // The room too, when the node answered: it was read with the price, after the job, where
+        // `price.room_sompi` is the reading from before the inference started.
+        let room_sompi = chain_price
+            .as_ref()
+            .and_then(|p| p.bond_room_sompi)
+            .map(|room| u64::try_from(room).unwrap_or(u64::MAX))
+            .unwrap_or(price.room_sompi);
+        let exact = ExposurePrice { room_sompi, claim_sompi: u64::try_from(exact).unwrap_or(u64::MAX) };
         commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, exact).err().map(|why| {
             format!("{why} (this answer's claim is {quanta} quanta; one canonical claim would have been {})", price.claim_sompi)
         });
@@ -1734,7 +1755,7 @@ fn serve_connection(
                 let include_usage = admitted.include_usage;
                 let mut sink = SseSink { stream, id: format!("palwcmpl-{}", faster_hex::hex_string(&nonce)), model, started: false };
                 sink.head();
-                let outcome = handle_chat(config, identity, worker, budget, &facts, &chat, admitted, &mut sink);
+                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, admitted, &mut sink);
                 in_flight.fetch_sub(1, Ordering::AcqRel);
                 match outcome {
                     Ok(body) => {
@@ -1774,7 +1795,7 @@ fn serve_connection(
                 }
             } else {
                 let mut sink = BufferedSink;
-                let outcome = handle_chat(config, identity, worker, budget, &facts, &chat, admitted, &mut sink);
+                let outcome = handle_chat(config, identity, worker, budget, &facts, chain_source, &chat, admitted, &mut sink);
                 in_flight.fetch_sub(1, Ordering::AcqRel);
                 match outcome {
                     Ok(body) => respond(stream, "200 OK", &body),
