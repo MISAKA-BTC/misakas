@@ -29904,6 +29904,103 @@ pub(crate) mod tests {
             );
         }
 
+        /// **THE END-TO-END PROPERTY — the user's own inference is the inference that is priced.**
+        ///
+        /// ADR-0144's whole claim, and the one this economy exists to make true: a person prompts a
+        /// local model, and *that* inference becomes the consensus work. This walks the chain half
+        /// of that path with the bundle armed — the user's token ids into a job, the job into the
+        /// worker's result, the result into a commitment through `to_commitment`, the commitment
+        /// into the fold — and asserts four things about what comes out.
+        ///
+        /// 1. **The object the chain folds is the commitment of the user's run**, field for field:
+        ///    the same ids, the same prompt length, the same executed decode count, the same leaf
+        ///    count the worker read off the capture it produced.
+        /// 2. **The price is derived from the class's graph and the user's own two token counts**,
+        ///    and the executor's `work_leaves` is only ever a comparand — tamper with it and the
+        ///    fold refuses the commitment rather than pricing it.
+        /// 3. **The prompt's TEXT does not reach the reward.** Two different prompts of the same
+        ///    length, run for the same number of decode calls, are worth exactly the same. Nothing
+        ///    in the price reads what was asked, which is ADR-0144's "consensus must not judge
+        ///    usefulness" made checkable.
+        /// 4. **And the chain cannot tell a user's job from the network's own synthetic one**, and
+        ///    prices them identically. `prompt_mode` is a job field that the fold NEVER READS — it
+        ///    is not even carried on `FreePromptCommitted` — so a canonical job run when nobody is
+        ///    asking earns exactly what a user's job of the same shape earns. That is a deliberate
+        ///    property and not an oversight: pricing the two differently would be consensus judging
+        ///    whether a prompt was "real", which is the thing ADR-0144 forbids. It is recorded here
+        ///    because it is also the honest limit of the claim in this test's title.
+        #[test]
+        fn audit_a_users_own_prompt_is_the_inference_the_chain_prices() {
+            use crate::palw_freeprompt_v3::{PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_PROMPT_MODE_USER};
+            let (p, base, class, _) = derived_work_chain();
+            let base = with_floor_row(base);
+            let armed = compute_era();
+            let (published, _) =
+                apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+            let profile = derived_profile();
+            let ladder = 1u64 << 26;
+
+            // What a person typed, as the tokenizer read it — 16 ids, 8 tokens generated back.
+            let user_prompt: Vec<u32> = vec![72, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33, 32, 87, 104, 121];
+            let decode = 8u32;
+            let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(
+                &profile,
+                user_prompt.len() as u32,
+                decode,
+                ladder,
+            )
+            .expect("the user's run counts under the class's ladder");
+
+            // 1. The object the chain folds carries the run's own facts.
+            let object = derived_commit_from(1, 0xE2E1, &user_prompt, decode, leaves);
+            let PalwConsensusObjectV2::FreePromptCommitted {
+                prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, ..
+            } = &object
+            else {
+                panic!("the lane's object is a free-prompt commitment")
+            };
+            assert_eq!(prompt_token_ids, &user_prompt, "the ids on the wire are the ids the user's prompt became");
+            assert_eq!(*prompt_tokens as usize, user_prompt.len(), "and the length the job declares is their count");
+            assert_eq!(*decode_tokens_executed, decode, "and the decode count is what the run really generated");
+            assert_eq!(*work_leaves, leaves, "and the leaf count is the graph's own answer for that run");
+
+            let (folded, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[object], &armed).expect("the user's run folds");
+            let paid = folded.claim(&h64(0xE2E1)).expect("the user's inference became a claim");
+            assert!(paid.pwu > 0, "and it is worth something");
+
+            // 2. The declaration is a comparand, never an input: a tampered leaf count is refused.
+            let lying = derived_commit_from(1, 0xE2E2, &user_prompt, decode, leaves * 10);
+            let refused = apply_derived(&published, &p, &ctx(4, 103, 4), &[lying], &armed)
+                .expect_err("a commitment whose leaves disagree with the graph is refused, not priced");
+            assert!(
+                matches!(refused, PalwStateV2Error::FreePromptWorkLeavesMismatch { .. }),
+                "and refused BY NAME: {refused:?}"
+            );
+
+            // 3. The prompt's text does not reach the reward.
+            let other_prompt: Vec<u32> = user_prompt.iter().map(|id| id ^ 0x5A5A).collect();
+            assert_ne!(other_prompt, user_prompt, "a different question…");
+            let other = derived_commit_from(1, 0xE2E3, &other_prompt, decode, leaves);
+            let (folded_other, _) =
+                apply_derived(&published, &p, &ctx(4, 103, 4), &[other], &armed).expect("…folds the same way");
+            assert_eq!(
+                folded_other.claim(&h64(0xE2E3)).unwrap().pwu,
+                paid.pwu,
+                "…and is worth exactly the same: the price reads the SHAPE of the run, never what was asked"
+            );
+
+            // 4. And `prompt_mode` — the one field that says whether a user was there — is not on
+            //    the object at all, so the fold has nothing to read it from.
+            assert_ne!(PALW_FP_PROMPT_MODE_USER, PALW_FP_PROMPT_MODE_CANONICAL, "the two modes are distinct on the wire");
+            let fold_source = include_str!("palw_state_v2.rs");
+            let body = &fold_source[..fold_source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+            assert!(
+                !body.contains("prompt_mode"),
+                "the fold must not read prompt_mode — pricing a user's job differently from the network's own would be \
+                 consensus judging whether a prompt was real, which ADR-0144 forbids"
+            );
+        }
+
         /// The bundle's two halves the lane reads: the unit (canonical work) and the derivation.
         fn compute_era() -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), canonical_work_daa: Some(0), ..Default::default() }
