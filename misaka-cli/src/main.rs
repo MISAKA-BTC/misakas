@@ -1907,6 +1907,15 @@ fn key_address(ctx: &node::Ctx, ks: &keys::KeySource) -> CliResult {
 
 #[derive(Subcommand, Debug)]
 enum NodeCmd {
+    /// The DAG as the node holds it: the sink (the selected chain's tip), the virtual DAA, the
+    /// tips and the pruning point. With --chain-from <hash>, how the selected chain moved since
+    /// that block — the chain blocks removed and added — which is what a reorg is, measured.
+    DagInfo {
+        /// A block hash this node once had as its sink (or any block): report the chain blocks
+        /// removed from and added to the selected chain since it.
+        #[arg(long, value_name = "HASH")]
+        chain_from: Option<String>,
+    },
     /// One-shot health check: ports, sync, versions, RPC surface.
     Doctor,
     /// Liveness probe for a watchdog: is the node ANSWERING and is its chain MOVING? Exits 0 when
@@ -2352,6 +2361,7 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Node(NodeCmd::Doctor) => node::doctor(&ctx).await,
         Command::Node(NodeCmd::Liveness { state, stall_secs }) => node::liveness(&ctx, &state, stall_secs).await,
+        Command::Node(NodeCmd::DagInfo { chain_from }) => node::dag_info(&ctx, chain_from.as_deref()).await,
         Command::Node(NodeCmd::SecurityReport { worker, verify_artifacts }) => {
             security::security_report(&ctx, worker.as_ref(), verify_artifacts)
         }

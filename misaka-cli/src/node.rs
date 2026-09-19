@@ -311,6 +311,57 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
 /// `LIVENESS_STALLED` (12) when the RPC answers but neither the virtual DAA nor the block count
 /// advanced within `stall_secs` (the sink's past-median time is reported too, so an operator can
 /// tell a stalled node from an idle chain). The state file is written on every run.
+/// `misaka node dag-info` — see `NodeCmd::DagInfo`. Read-only: two RPC reads, nothing signed.
+pub async fn dag_info(ctx: &Ctx, chain_from: Option<&str>) -> CliResult {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    let start = match chain_from {
+        Some(hex) => Some(
+            hex.trim()
+                .parse::<kaspa_rpc_core::RpcHash>()
+                .map_err(|_| CliError::generic(format!("--chain-from {hex:?} is not a block hash")))?,
+        ),
+        None => None,
+    };
+    let reader = crate::palw_derived::connect(ctx).await?;
+    let dag = reader.client.get_block_dag_info().await.map_err(|e| CliError::connection(format!("getBlockDagInfo: {e}")))?;
+    let moved = match start {
+        Some(start) => Some(
+            reader
+                .client
+                .get_virtual_chain_from_block(start, false, None)
+                .await
+                .map_err(|e| CliError::connection(format!("getVirtualChainFromBlock: {e}")))?,
+        ),
+        None => None,
+    };
+    let doc = serde_json::json!({
+        "schema": "misaka.node.dag-info.v1",
+        "sink": dag.sink.to_string(),
+        "virtual_daa": dag.virtual_daa_score,
+        "block_count": dag.block_count,
+        "tips": dag.tip_hashes.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+        "pruning_point": dag.pruning_point_hash.to_string(),
+        "chain_from": chain_from,
+        "removed_chain_blocks": moved.as_ref().map(|m| m.removed_chain_block_hashes.len()),
+        "added_chain_blocks": moved.as_ref().map(|m| m.added_chain_block_hashes.len()),
+    });
+    match ctx.output {
+        crate::OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&doc).unwrap_or_default()),
+        _ => {
+            println!("sink {}  virtual daa {}  blocks {}  tips {}", dag.sink, dag.virtual_daa_score, dag.block_count, dag.tip_hashes.len());
+            if let Some(m) = &moved {
+                println!(
+                    "since {}: {} chain block(s) removed, {} added",
+                    chain_from.unwrap_or_default(),
+                    m.removed_chain_block_hashes.len(),
+                    m.added_chain_block_hashes.len()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub async fn liveness(ctx: &Ctx, state_path: &std::path::Path, stall_secs: u64) -> CliResult {
     #[derive(serde::Serialize, serde::Deserialize, Default)]
     struct Probe {
