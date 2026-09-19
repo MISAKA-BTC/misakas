@@ -167,10 +167,7 @@ fn a_stranger_may_register_and_may_not_arrive_with_a_share() {
         "the gate answers the graph question either way — the share is settled at the acceptance layer"
     );
     let processor = include_str!("../../src/pipeline/virtual_processor/processor.rs");
-    assert!(
-        processor.contains("palw_admission_independence"),
-        "and the acceptance layer is where a registration's share is forced"
-    );
+    assert!(processor.contains("palw_admission_independence"), "and the acceptance layer is where a registration's share is forced");
 }
 
 /// **The lifecycle expands the AMOUNT of eligible work, and never its price.**

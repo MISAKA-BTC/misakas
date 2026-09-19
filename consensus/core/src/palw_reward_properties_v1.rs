@@ -1227,10 +1227,7 @@ fn eligible_weight_never_exceeds_the_protocol_budget() {
     let fold = include_str!("palw_state_v2.rs");
     let body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
     assert!(body.contains("ClassNotAdmitting"), "a class that does not admit is refused by name");
-    assert!(
-        body.contains("panel_room_v1"),
-        "and the room a class has is the network's replay budget, not an allowance of its own"
-    );
+    assert!(body.contains("panel_room_v1"), "and the room a class has is the network's replay budget, not an allowance of its own");
 }
 
 /// **Fork determinism.** ADR-0145 §8: "Archival, pruned, IBD, pruning-proof join and post-reorg

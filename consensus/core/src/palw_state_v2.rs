@@ -29862,7 +29862,7 @@ pub(crate) mod tests {
             for (i, (_, object)) in blocks.iter().enumerate() {
                 let parent = states.last().unwrap().clone();
                 let (next, delta) =
-                    apply_derived(&parent, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), &[object.clone()], &armed)
+                    apply_derived(&parent, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), std::slice::from_ref(object), &armed)
                         .unwrap_or_else(|e| panic!("block {i} applies: {e:?}"));
                 states.push(next);
                 deltas.push(delta);
@@ -29886,7 +29886,7 @@ pub(crate) mod tests {
             }
             let mut fresh = published.clone();
             for (i, (_, object)) in blocks.iter().enumerate() {
-                let (next, _) = apply_derived(&fresh, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), &[object.clone()], &armed)
+                let (next, _) = apply_derived(&fresh, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), std::slice::from_ref(object), &armed)
                     .expect("the fresh walk applies");
                 fresh = next;
             }
@@ -29897,7 +29897,8 @@ pub(crate) mod tests {
                 let carriage = PalwStateCarriageV2::from_state(state);
                 let bytes = borsh::to_vec(&carriage).expect("the carriage serializes");
                 let restored: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("and reads back");
-                let back = restored.into_state(&p, Some(state.state_root())).unwrap_or_else(|e| panic!("point {i} round-trips: {e:?}"));
+                let back =
+                    restored.into_state(&p, Some(state.state_root())).unwrap_or_else(|e| panic!("point {i} round-trips: {e:?}"));
                 assert_eq!(back.state_root(), state.state_root(), "point {i}: the root survives an IBD");
                 assert_eq!(
                     back.fp_claimed_prompt_ids_of(&class, 105),
@@ -29909,8 +29910,8 @@ pub(crate) mod tests {
             // And the credit really did depend on the rows, so the three properties above are about
             // something: the same prompt priced on the reverted chain costs what it cost the first time.
             let repeat = derived_commit_from(1, 0xFA, &ids[..16], 8, leaves(16));
-            let (on_fresh, _) = apply_derived(&published, &p, &ctx(9, 120, 9), &[repeat.clone()], &armed).expect("fresh");
-            let (on_reverted, _) = apply_derived(&walked_back, &p, &ctx(9, 120, 9), &[repeat], &armed).expect("reverted");
+            let (on_fresh, _) = apply_derived(&published, &p, &ctx(9, 120, 9), std::slice::from_ref(&repeat), &armed).expect("fresh");
+            let (on_reverted, _) = apply_derived(&walked_back, &p, &ctx(9, 120, 9), std::slice::from_ref(&repeat), &armed).expect("reverted");
             assert_eq!(
                 on_fresh.claim(&h64(0xFA)).unwrap().pwu,
                 on_reverted.claim(&h64(0xFA)).unwrap().pwu,
@@ -29949,26 +29950,24 @@ pub(crate) mod tests {
             let (p, base, class, _) = derived_work_chain();
             let base = with_floor_row(base);
             let armed = compute_era();
-            let (published, _) =
-                apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+            let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
             let profile = derived_profile();
             let ladder = 1u64 << 26;
 
             // What a person typed, as the tokenizer read it — 16 ids, 8 tokens generated back.
             let user_prompt: Vec<u32> = vec![72, 101, 108, 108, 111, 32, 119, 111, 114, 108, 100, 33, 32, 87, 104, 121];
             let decode = 8u32;
-            let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(
-                &profile,
-                user_prompt.len() as u32,
-                decode,
-                ladder,
-            )
-            .expect("the user's run counts under the class's ladder");
+            let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, user_prompt.len() as u32, decode, ladder)
+                .expect("the user's run counts under the class's ladder");
 
             // 1. The object the chain folds carries the run's own facts.
             let object = derived_commit_from(1, 0xE2E1, &user_prompt, decode, leaves);
             let PalwConsensusObjectV2::FreePromptCommitted {
-                prompt_token_ids, prompt_tokens, decode_tokens_executed, work_leaves, ..
+                prompt_token_ids,
+                prompt_tokens,
+                decode_tokens_executed,
+                work_leaves,
+                ..
             } = &object
             else {
                 panic!("the lane's object is a free-prompt commitment")
@@ -29986,17 +29985,13 @@ pub(crate) mod tests {
             let lying = derived_commit_from(1, 0xE2E2, &user_prompt, decode, leaves * 10);
             let refused = apply_derived(&published, &p, &ctx(4, 103, 4), &[lying], &armed)
                 .expect_err("a commitment whose leaves disagree with the graph is refused, not priced");
-            assert!(
-                matches!(refused, PalwStateV2Error::FreePromptWorkLeavesMismatch { .. }),
-                "and refused BY NAME: {refused:?}"
-            );
+            assert!(matches!(refused, PalwStateV2Error::FreePromptWorkLeavesMismatch { .. }), "and refused BY NAME: {refused:?}");
 
             // 3. The prompt's text does not reach the reward.
             let other_prompt: Vec<u32> = user_prompt.iter().map(|id| id ^ 0x5A5A).collect();
             assert_ne!(other_prompt, user_prompt, "a different question…");
             let other = derived_commit_from(1, 0xE2E3, &other_prompt, decode, leaves);
-            let (folded_other, _) =
-                apply_derived(&published, &p, &ctx(4, 103, 4), &[other], &armed).expect("…folds the same way");
+            let (folded_other, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[other], &armed).expect("…folds the same way");
             assert_eq!(
                 folded_other.claim(&h64(0xE2E3)).unwrap().pwu,
                 paid.pwu,

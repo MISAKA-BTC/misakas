@@ -929,13 +929,9 @@ impl Args {
         // and a per-knob check reads a half-assembled command line. Running it here also covers the
         // operator who arms only one or two — the refusal is the same, it just arrives after the
         // whole line has been read instead of in the middle of it.
-        if [
-            self.palw_canonical_work_devnet_daa,
-            self.palw_admission_independence_devnet_daa,
-            self.palw_fp_derived_work_devnet_daa,
-        ]
-        .iter()
-        .any(|daa| daa.is_some())
+        if [self.palw_canonical_work_devnet_daa, self.palw_admission_independence_devnet_daa, self.palw_fp_derived_work_devnet_daa]
+            .iter()
+            .any(|daa| daa.is_some())
             && let Err(e) = config.params.validate_palw_v2()
         {
             panic!("the --palw-*-devnet economic bundle produced a ruleset the node refuses: {e:?}");
