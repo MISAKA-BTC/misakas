@@ -839,8 +839,15 @@ pub fn palw_lifecycle_reason_v1(row: &PalwModelLifecycleRowV1, is_base_class: bo
         PalwModelLifecycleV1::Active => "admitting in full".to_string(),
         PalwModelLifecycleV1::Held => {
             if row.ready_seats < seats {
+                // **The number the DECISION used, said to be that** (audit 2026-09-19). The row's
+                // `ready_seats` is what the rule read when it held the class; the readout beside
+                // this line reports `readySeatsNow`, recomputed. Both are honest and they disagree
+                // the moment seats come back, so an operator reading "ready 0" next to "8" cannot
+                // tell whether the class is stuck or recovering. Naming the reading is the whole
+                // fix; this repository already has the rule that a status must carry its provenance.
                 format!(
-                    "held: ready {} < {seats} for a panel (recovers through probation once {} are ready)",
+                    "held: {} seats were ready when it was held, {seats} are needed for a panel (recovers through probation once \
+                     {} are ready — compare readySeatsNow for what is ready right now)",
                     row.ready_seats, row.profile.required_ready_seats
                 )
             } else {

@@ -173,7 +173,7 @@ mod tests {
                 max_inflight_claims: 9,
                 required_ready_seats: 7,
                 ready_seats_now: 3,
-                reason: "held: ready 3 < 5 for a panel (recovers through probation once 7 are ready)".to_string(),
+                reason: "held: 3 seats were ready when it was held, 5 are needed for a panel (recovers through probation once 7 are ready — compare readySeatsNow for what is ready right now)".to_string(),
                 ..Default::default()
             }],
             readiness: vec![RpcPalwSeatReadiness {
