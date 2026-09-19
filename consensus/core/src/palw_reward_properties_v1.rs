@@ -1154,9 +1154,12 @@ fn canonical_work_cannot_precede_the_registry_that_fills_the_table_it_derives_fr
     below.palw_canonical_work = Some(ForkActivation::new(PALW_RC_PALW_UPGRADE_FENCE_DAA - 1));
     let refusal = below.validate_palw_v2().expect_err("a canonical-work fence below the registry must be refused");
     assert!(format!("{refusal:?}").contains("palw_canonical_work"), "{refusal:?}");
+    // With its bundle: ADR-0145's three fences arm at one height or not at all.
     for height in [PALW_RC_PALW_UPGRADE_FENCE_DAA, PALW_RC_PALW_UPGRADE_FENCE_DAA + 1_000] {
         let mut ok = rc.clone();
         ok.palw_canonical_work = Some(ForkActivation::new(height));
+        ok.palw_admission_independence = Some(ForkActivation::new(height));
+        ok.palw_fp_derived_work = Some(ForkActivation::new(height));
         ok.validate_palw_v2().unwrap_or_else(|e| panic!("at or past the registry it assembles: {e:?}"));
     }
 

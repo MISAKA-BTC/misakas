@@ -2782,6 +2782,60 @@ impl Params {
                 ));
             }
         }
+        // **The economic activation bundle arms at ONE height, or not at all.**
+        //
+        // ADR-0145's three fences are not independent policies that happen to have landed
+        // together. Accounting made new while admission stays old leaves a registrant able to admit
+        // the very class whose work the new accounting prices; admission made new while the
+        // free-prompt lane still takes the executor's word leaves that lane outside the rule; and
+        // either of those composed with the other is an arbitrage path neither fence opens alone.
+        // The 2026-09-19 re-audit found three such compositions, of which item 7 is the clearest —
+        // a `Final` bought before the registry opened, carried through an ARMED independence fence.
+        // Each fence was correct and the pair was not.
+        //
+        // The registry and the work target join the rule, and at one height rather than in order:
+        // the registry's share redistribution writes `class_shares` in proportion to
+        // `admission_milli`, which carries `admission_permille` (Probation 50, ActiveLimited 100,
+        // Active 1000), and `class_shares` is the pwu side of `attempt_target_seed_v1` — a class's
+        // DIFFICULTY, hence its weight per claim. That path is dead only while the work target is
+        // active, so with the registry armed strictly first a class's lifecycle stage moves its
+        // PRICE. The design says the lifecycle expands the AMOUNT of eligible work and nothing else,
+        // and a property that holds because two numbers in a release card happen to match is not a
+        // property.
+        //
+        // A build that arms none of the three is refused nothing here, which is every shipped
+        // preset today.
+        if let Some(height) = [self.palw_canonical_work, self.palw_admission_independence, self.palw_fp_derived_work]
+            .iter()
+            .find_map(|f| f.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score()))
+        {
+            let at_height = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() == height);
+            if !at_height(self.palw_canonical_work)
+                || !at_height(self.palw_admission_independence)
+                || !at_height(self.palw_fp_derived_work)
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "the ADR-0145 economic fences are not all armed at one height: canonical work, independent admission and \
+                     the free-prompt lane's derived work COMPOSE, and each is safe in a way the pairs are not — they arm \
+                     together or not at all",
+                ));
+            }
+            let one_height_below = match (
+                self.palw_model_registry.filter(|f| *f != ForkActivation::never()),
+                self.palw_work_target.filter(|f| *f != ForkActivation::never()),
+            ) {
+                (Some(registry), Some(target)) => registry.daa_score() == target.daa_score() && registry.daa_score() <= height,
+                _ => false,
+            };
+            if !one_height_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "the ADR-0145 economic bundle is armed without palw_model_registry and palw_work_target armed at ONE height \
+                     at or below it: armed apart, the registry redistributes class_shares in proportion to admission_permille, \
+                     so a class's lifecycle stage moves its difficulty and therefore its weight per claim — the lifecycle may \
+                     expand the amount of eligible work, never its price",
+                ));
+            }
+        }
         // ADR-0142 §6a: the clock's reference is derived from the DAA window — the block at the
         // parent's score with the lowest blue score — which is what lets a pruned node and one that
         // joined by pruning proof answer exactly as an archival one. A SAMPLED window can omit that
@@ -16313,7 +16367,22 @@ mod consensus_params_id_tests {
         // disagrees, and a class that has published no graph is refused by a name that says what
         // to carry. A fence whose only reachable effect is a refusal is the mistake that one is
         // kept dormant by; this one is not that shape, and the assembly gate agrees.
-        armed.validate_palw_v2().expect("the derived-work fence is armable by a build that carries its rule");
+        // It assembles only WITH its bundle: ADR-0145's three fences COMPOSE, so `validate_palw_v2`
+        // refuses any one of them alone (see the bundle rule beside the ordering guards). Arming
+        // one is therefore no longer the shape to test; arming the three together is.
+        armed.validate_palw_v2().expect_err("one fence of the economic bundle, alone, does not assemble");
+        // The bundle's preconditions cascade — registry, panel economy, execution lane, payout,
+        // work target — and the SHIPPED RELEASE is the ruleset that already satisfies all of them,
+        // so it is the honest base for "can an operator actually arm this". The bundled devnet
+        // above leaves the registry dormant and would only prove somebody else's dependency.
+        let release = palw_rc_shipped_params();
+        let height = release.palw_model_registry.expect("the shipped release arms the registry").daa_score() + 1_000;
+        let mut bundled = release.clone();
+        bundled.palw_fp_derived_work = Some(ForkActivation::new(height));
+        bundled.palw_canonical_work = Some(ForkActivation::new(height));
+        bundled.palw_admission_independence = Some(ForkActivation::new(height));
+        bundled.validate_palw_v2().expect("the derived-work fence is armable by a build that carries its rule, with its bundle");
+        assert!(bundled.palw_fp_derived_work_active_at(height));
         // The collapse, observable through `consensus_identity_id`, which is where the normalizer
         // runs (`consensus_params_id` hashes the raw field and never normalizes).
         let mut never_armed = shipped.clone();
@@ -16448,16 +16517,26 @@ mod consensus_params_id_tests {
         // the registry dormant, so the release preset is the one that can exercise this ordering.
         let shipped = palw_rc_shipped_params();
         let registry_daa = shipped.palw_model_registry.expect("the shipped release arms the registry").daa_score();
-        let mut below_the_registry = shipped.clone();
-        below_the_registry.palw_canonical_work = Some(ForkActivation::new(registry_daa - 1));
-        let refusal = below_the_registry.validate_palw_v2().expect_err("the basis cannot precede the rows it reads");
+        // The bundle rule means these heights are probed with all three economic fences armed
+        // together; arming `palw_canonical_work` alone is refused for its own separate reason.
+        let bundled = |daa: u64| {
+            let mut p = shipped.clone();
+            p.palw_canonical_work = Some(ForkActivation::new(daa));
+            p.palw_admission_independence = Some(ForkActivation::new(daa));
+            p.palw_fp_derived_work = Some(ForkActivation::new(daa));
+            p
+        };
+        let refusal = bundled(registry_daa - 1).validate_palw_v2().expect_err("the basis cannot precede the rows it reads");
         assert!(format!("{refusal:?}").contains("palw_canonical_work"), "{refusal:?}");
-        let mut level = shipped.clone();
-        level.palw_canonical_work = Some(ForkActivation::new(registry_daa));
-        assert!(level.validate_palw_v2().is_ok(), "the same height is legal — the rows exist before any re-priced claim can");
-        let mut later = shipped.clone();
-        later.palw_canonical_work = Some(ForkActivation::new(registry_daa + 1_000));
-        assert!(later.validate_palw_v2().is_ok(), "and so is any height above it");
+        assert!(
+            bundled(registry_daa).validate_palw_v2().is_ok(),
+            "the same height is legal — the rows exist before any re-priced claim can"
+        );
+        assert!(bundled(registry_daa + 1_000).validate_palw_v2().is_ok(), "and so is any height above it");
+        let mut alone = shipped.clone();
+        alone.palw_canonical_work = Some(ForkActivation::new(registry_daa));
+        let refusal = alone.validate_palw_v2().expect_err("and one fence of the bundle, alone, is refused");
+        assert!(format!("{refusal:?}").contains("arm together or not at all"), "{refusal:?}");
     }
 
     /// **ADR-0096 Decisions 6–8's fence is dormant on every shipped preset and visible the
