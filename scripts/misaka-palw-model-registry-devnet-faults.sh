@@ -35,6 +35,10 @@ ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
 # ADR-0143: the drill crosses this fence too, so the build that arms it on testnet-11 has been
 # through a crossing rather than only through its unit tests (the launch runbook's §5c gate).
 ARTIFACT_ROOT_OWNERSHIP_AT="${ARTIFACT_ROOT_OWNERSHIP_AT:-}"
+# The ADR-0145 economic bundle, one height for all three (see the drill script's note): a phase that
+# launched its own nodes WITHOUT it would run the old economy while phase 1 ran the new one, and the
+# fault it then reported would be about a chain nobody is shipping.
+ECONOMY_AT="${ECONOMY_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-1800}"
@@ -132,6 +136,8 @@ start_node() {
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ] && args+=(--palw-artifact-root-ownership-devnet="$ARTIFACT_ROOT_OWNERSHIP_AT")
+  [ -n "$ECONOMY_AT" ] && args+=(--palw-canonical-work-devnet="$ECONOMY_AT"
+    --palw-admission-independence-devnet="$ECONOMY_AT" --palw-fp-derived-work-devnet="$ECONOMY_AT")
   [ "$with_artifact" = 1 ] && args+=(--palw-class-artifact="$CLASS_ARTIFACT")
   # **node-0 is the hub; telling it to dial itself is not a no-op.** finals.sh guards this with
   # `[ "$i" -gt 0 ]` and this script did not, so phase 3 started node-0 with

@@ -48,6 +48,14 @@ ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
 # ADR-0143: the drill crosses this fence too, so the build that arms it on testnet-11 has been
 # through a crossing rather than only through its unit tests (the launch runbook's §5c gate).
 ARTIFACT_ROOT_OWNERSHIP_AT="${ARTIFACT_ROOT_OWNERSHIP_AT:-}"
+# **The ADR-0145 economic activation bundle.** One height for all three, because
+# `validate_palw_v2` refuses to assemble a ruleset that arms them apart: canonical work sets the
+# unit, independent admission decides who may judge a class, and the free-prompt lane's derived
+# work decides what the lane is paid for — each is safe in a way the pairs are not. It also
+# refuses the bundle without the registry and the work target at ONE height at or below it, and
+# without artifact-root ownership at or below it, so a drill that sets ECONOMY_AT must set those
+# too. Empty leaves every one of them dormant, which is every shipped preset.
+ECONOMY_AT="${ECONOMY_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 MODEL_ID="${MODEL_ID:-}"
 # With an artifact the shipped devnet class set is used (the artifact's class is a genesis class the
@@ -115,6 +123,8 @@ node_args() {
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ] && args+=(--palw-artifact-root-ownership-devnet="$ARTIFACT_ROOT_OWNERSHIP_AT")
+  [ -n "$ECONOMY_AT" ] && args+=(--palw-canonical-work-devnet="$ECONOMY_AT"
+    --palw-admission-independence-devnet="$ECONOMY_AT" --palw-fp-derived-work-devnet="$ECONOMY_AT")
   if [ -n "$CLASS_ARTIFACT" ]; then
     args+=(--palw-class-artifact="$CLASS_ARTIFACT")
     if [ "$i" -eq 1 ] && [ "$REGISTER_CLASS" = 1 ]; then
@@ -392,6 +402,52 @@ else
 fi
 
 for n in 1 2; do cli "$n" palw registry --output json > "$WORK_DIR/out/registry-node-$n.json" 2>/dev/null || true; done
-log "6/6 PASS — the registry armed at $REGISTRY_AT, the rows opened at the boundary, the grace passed with the base class ACTIVE and the chain producing, and a restarted node holds the same rows$([ -n "$CLASS_ID" ] && echo "; the second class was registered and proved" || echo " (no second class: the proof path was not exercised)")"
+# **1d/6 the ECONOMIC BUNDLE is crossed and the chain keeps producing.**
+#
+# The repo's first working rule: a build that arms a fence does not ship without a drill that
+# CROSSES it. The ADR-0145 bundle arms three fences at once — canonical work, independent
+# admission, the free-prompt lane's derived work — and every one of them changes a quantity the
+# chain re-derives at later chain points. The failure this step exists to catch is the one the
+# 2026-09-19 re-audit found by reading: a unit change that makes an honest producer trip its own
+# exposure ceiling, so the chain stops FOR BEING USED. That is not visible in any unit test,
+# because a unit test never runs out of collateral.
+#
+# Evidence must postdate the crossing, so the tip is read AFTER the fence height and the chain is
+# then required to advance again from there.
+if [ -n "$ECONOMY_AT" ]; then
+  log "1d/6 the ADR-0145 economic bundle is crossed and the chain keeps producing"
+  eco_t0=$SECONDS
+  eco_daa=""
+  while [ $((SECONDS - eco_t0)) -lt "${ECONOMY_WAIT:-900}" ]; do
+    eco_daa="$(daa_of 1)"
+    [ -n "$eco_daa" ] && [ "$eco_daa" -gt "$ECONOMY_AT" ] 2>/dev/null && break
+    alive; sleep 10
+  done
+  [ -n "$eco_daa" ] && [ "$eco_daa" -gt "$ECONOMY_AT" ] 2>/dev/null \
+    || die "THE CHAIN DID NOT CROSS THE ECONOMIC BUNDLE: daa ${eco_daa:-?} is not past $ECONOMY_AT after \
+${ECONOMY_WAIT:-900}s. A fence that stops the chain is what this step exists to catch."
+  # And it must keep going PAST it: crossing a height and then wedging is the shape of an exposure
+  # or admission regression, and it looks identical to success if the tip is only read once.
+  after_t0=$SECONDS
+  moved=""
+  while [ $((SECONDS - after_t0)) -lt "${ECONOMY_AFTER_WAIT:-420}" ]; do
+    now_daa="$(daa_of 1)"
+    [ -n "$now_daa" ] && [ "$now_daa" -gt "$eco_daa" ] 2>/dev/null && { moved="$now_daa"; break; }
+    alive; sleep 10
+  done
+  [ -n "$moved" ] || die "THE CHAIN WEDGED PAST THE ECONOMIC BUNDLE: daa stuck at $eco_daa for \
+${ECONOMY_AFTER_WAIT:-420}s after crossing $ECONOMY_AT. Crossing a fence and then stopping is the \
+regression this step is here to separate from crossing it."
+  # Every node agrees on the crossing — a bundle one node armed and another did not would partition
+  # here rather than on the flag day.
+  for i in $(seq 0 $((NODES - 1))); do
+    n_daa="$(daa_of "$i")"
+    [ -n "$n_daa" ] && [ "$n_daa" -gt "$ECONOMY_AT" ] 2>/dev/null \
+      || die "node-$i is at daa ${n_daa:-?}, not past the bundle at $ECONOMY_AT: the fence partitioned the fleet"
+  done
+  log "1d/6 the bundle at $ECONOMY_AT is crossed; tip $eco_daa then $moved, and all $NODES nodes are past it"
+fi
+
+log "6/6 PASS — the registry armed at $REGISTRY_AT$([ -n "$ECONOMY_AT" ] && echo ", the ADR-0145 economic bundle crossed at $ECONOMY_AT with the chain still producing" || echo ""), the rows opened at the boundary, the grace passed with the base class ACTIVE and the chain producing, and a restarted node holds the same rows$([ -n "$CLASS_ID" ] && echo "; the second class was registered and proved" || echo " (no second class: the proof path was not exercised)")"
 log "evidence: $WORK_DIR/node-*.log, $WORK_DIR/out/"
 exit 0

@@ -39,6 +39,10 @@ ANCHOR_CLOCK_AT="${ANCHOR_CLOCK_AT:-}"
 # ADR-0143: the drill crosses this fence too, so the build that arms it on testnet-11 has been
 # through a crossing rather than only through its unit tests (the launch runbook's §5c gate).
 ARTIFACT_ROOT_OWNERSHIP_AT="${ARTIFACT_ROOT_OWNERSHIP_AT:-}"
+# The ADR-0145 economic bundle, one height for all three (see the drill script's note): a phase that
+# launched its own nodes WITHOUT it would run the old economy while phase 1 ran the new one, and the
+# fault it then reported would be about a chain nobody is shipping.
+ECONOMY_AT="${ECONOMY_AT:-}"
 CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 PRODUCER_NODE="${PRODUCER_NODE:-3}"
 STEP_WAIT="${STEP_WAIT:-14400}"
@@ -149,6 +153,8 @@ start_node() {
   [ -n "$READINESS_V2_AT" ] && args+=(--palw-readiness-v2-devnet="$READINESS_V2_AT")
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ] && args+=(--palw-artifact-root-ownership-devnet="$ARTIFACT_ROOT_OWNERSHIP_AT")
+  [ -n "$ECONOMY_AT" ] && args+=(--palw-canonical-work-devnet="$ECONOMY_AT"
+    --palw-admission-independence-devnet="$ECONOMY_AT" --palw-fp-derived-work-devnet="$ECONOMY_AT")
   [ -n "$extra" ] && args+=("$extra")
   [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
   [ -n "$HEARTBEAT_NODE" ] && [ "$i" = "$HEARTBEAT_NODE" ] && args+=(--palw-heartbeat-miner-address="$addr")
