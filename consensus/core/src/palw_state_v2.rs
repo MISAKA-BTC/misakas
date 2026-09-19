@@ -5071,7 +5071,7 @@ pub struct PalwChainStateV2 {
     /// dormant leaves this empty, and an empty map is rooted and carried as nothing at all, so the
     /// state root is byte-identical to a state before the field. Decision 6's migration fills it
     /// once, at the fence, from the rows already on the chain.
-    artifact_owners: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
+    artifact_owners: BTreeMap<(Hash64, Hash64), crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5724,8 +5724,7 @@ impl PalwChainStateV2 {
     /// saying so is what keeps a cross-class duplicate from paying the wrong pair.
     pub fn artifact_line_of_root(&self, class_id: &Hash64, root: &Hash64, ownership_active: bool) -> Option<Hash64> {
         if ownership_active {
-            let owner = self.artifact_owners.get(root)?;
-            return (owner.class_id == *class_id).then_some(owner.line_id);
+            return self.artifact_owners.get(&(*class_id, *root)).map(|owner| owner.line_id);
         }
         self.model_line_of_root_positional(class_id, root)
     }
@@ -5738,10 +5737,7 @@ impl PalwChainStateV2 {
     /// is how a class's synthesised founding line answers.
     pub fn model_version_of_root(&self, class_id: &Hash64, root: &Hash64, daa: u64, ownership_active: bool) -> Option<(Hash64, u32)> {
         if ownership_active {
-            let owner = self.artifact_owners.get(root)?;
-            if owner.class_id != *class_id {
-                return None;
-            }
+            let owner = self.artifact_owners.get(&(*class_id, *root))?;
             if self.model_lines.get(&owner.line_id).is_some_and(|line| line.retired_daa.is_some_and(|d| daa >= d)) {
                 return None;
             }
@@ -5953,8 +5949,8 @@ impl PalwChainStateV2 {
     /// ADR-0143 Decision 1: the one owner of an artifact root, or `None` where the index has not
     /// been built (the fence is dormant) or the root is unclaimed. A caller that must distinguish
     /// "no owner" from "no index" asks [`Self::artifact_owners_are_written`].
-    pub fn artifact_owner_of(&self, root: &Hash64) -> Option<&crate::palw_model_lines_v1::PalwArtifactOwnerV1> {
-        self.artifact_owners.get(root)
+    pub fn artifact_owner_of(&self, class_id: &Hash64, root: &Hash64) -> Option<&crate::palw_model_lines_v1::PalwArtifactOwnerV1> {
+        self.artifact_owners.get(&(*class_id, *root))
     }
 
     /// Whether the ownership index exists at all. Empty means the fence has not fired — past it the
@@ -5963,7 +5959,7 @@ impl PalwChainStateV2 {
         !self.artifact_owners.is_empty()
     }
 
-    pub fn artifact_owners_iter(&self) -> impl Iterator<Item = (&Hash64, &crate::palw_model_lines_v1::PalwArtifactOwnerV1)> {
+    pub fn artifact_owners_iter(&self) -> impl Iterator<Item = (&(Hash64, Hash64), &crate::palw_model_lines_v1::PalwArtifactOwnerV1)> {
         self.artifact_owners.iter()
     }
 
@@ -7416,7 +7412,7 @@ pub enum PalwDeltaEntryV2 {
     },
     /// ADR-0143: an artifact root's owner was written or dropped (57). Appended last.
     ArtifactOwner {
-        key: Hash64,
+        key: (Hash64, Hash64),
         old: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
         new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
     },
@@ -7917,7 +7913,47 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.model_versions.remove(&key),
         };
         if old != new {
+            let dropped_root = match (&old, &new) {
+                (Some(before), None) => Some(before.root),
+                (Some(before), Some(after)) if before.root != after.root => Some(before.root),
+                _ => None,
+            };
             self.entries.push(PalwDeltaEntryV2::ModelVersion { key, old, new });
+            if let Some(root) = dropped_root {
+                self.release_artifact_root_if_unused(key.0, root);
+            }
+        }
+    }
+
+    /// **ADR-0143: an owner row lives exactly as long as something it describes** (the 2026-09-19
+    /// audit).
+    ///
+    /// The index shipped with no cap, no eviction and no TTL, while every neighbouring registry
+    /// table has one — so a version publication with a fresh root bought a permanent row in the
+    /// state root for a transaction fee, and the row outlived the version, because
+    /// `model_versions` evicts past `PALW_MODEL_VERSION_HISTORY_V1` and the owner row did not.
+    ///
+    /// Tying the row's life to a carrier makes the index a function of `model_versions` and
+    /// `classes`, so it inherits their bounds rather than having none — and it removes the other
+    /// half of the same defect, a root reserved for ever by a line that no longer serves it.
+    /// A class's registered founding root is never released: the class row is its carrier.
+    fn release_artifact_root_if_unused(&mut self, line_id: Hash64, root: Hash64) {
+        if !self.extras.artifact_root_ownership_active {
+            return;
+        }
+        let Some(line) = self.state.model_lines.get(&line_id).map(|l| l.class_id).or(Some(line_id)) else { return };
+        let key = (line, root);
+        let Some(owner) = self.state.artifact_owners.get(&key).copied() else { return };
+        if owner.line_id != line_id {
+            return;
+        }
+        if self.state.classes.get(&line).is_some_and(|class| class.artifact_root == root) {
+            return;
+        }
+        let still_carried =
+            self.state.model_versions.range((line_id, 0)..=(line_id, u32::MAX)).any(|(_, version)| version.root == root);
+        if !still_carried {
+            self.write_artifact_owner(key, None);
         }
     }
 
@@ -8150,7 +8186,7 @@ impl<'a> TransitionBuilder<'a> {
     /// ADR-0143 Decision 3: the ONE place a root's owner is written. Every entrance — the founding
     /// reservation, a line founding, a version publication and the activation migration — goes
     /// through here, so "who owns this root" has one writer as well as one reader.
-    fn write_artifact_owner(&mut self, key: Hash64, new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>) {
+    fn write_artifact_owner(&mut self, key: (Hash64, Hash64), new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>) {
         let old = self.state.artifact_owners.get(&key).copied();
         if old == new {
             return;
@@ -8186,14 +8222,14 @@ impl<'a> TransitionBuilder<'a> {
         if !self.extras.artifact_root_ownership_active {
             return Ok(());
         }
-        if let Some(owner) = self.state.artifact_owners.get(root).copied() {
+        if let Some(owner) = self.state.artifact_owners.get(&(*class_id, *root)).copied() {
             if owner.line_id != line_id {
                 return Err(PalwStateV2Error::DuplicateArtifactRoot { root: *root, owner: owner.line_id });
             }
             return Ok(());
         }
         self.write_artifact_owner(
-            *root,
+            (*class_id, *root),
             Some(crate::palw_model_lines_v1::PalwArtifactOwnerV1 { class_id: *class_id, line_id, version }),
         );
         Ok(())
@@ -12250,9 +12286,11 @@ fn apply_artifact_root_ownership_migration(builder: &mut TransitionBuilder<'_>) 
     // Every root that exists, with every claimant to it. A class's registered founding root is a
     // claimant of its own even where the founding line has no version row, which is the usual case
     // and the one the old fallback handled by accident.
-    let mut claimants: BTreeMap<Hash64, Vec<PalwArtifactClaimantV1>> = BTreeMap::new();
+    // Keyed by (class, root): one artifact legitimately carries several classes, because a class id
+    // is a shape profile and `@512` and `@2048` are two of them over one file.
+    let mut claimants: BTreeMap<(Hash64, Hash64), Vec<PalwArtifactClaimantV1>> = BTreeMap::new();
     for (class_id, class) in builder.state.classes.iter() {
-        claimants.entry(class.artifact_root).or_default().push(PalwArtifactClaimantV1 {
+        claimants.entry((*class_id, class.artifact_root)).or_default().push(PalwArtifactClaimantV1 {
             class_id: *class_id,
             line_id: *class_id,
             version: 1,
@@ -12264,7 +12302,7 @@ fn apply_artifact_root_ownership_migration(builder: &mut TransitionBuilder<'_>) 
         let Some(line) = builder.state.model_lines.get(line_id) else { continue };
         let founding = builder.state.classes.get(&line.class_id).is_some_and(|class| class.artifact_root == row.root)
             && *line_id == line.class_id;
-        claimants.entry(row.root).or_default().push(PalwArtifactClaimantV1 {
+        claimants.entry((line.class_id, row.root)).or_default().push(PalwArtifactClaimantV1 {
             class_id: line.class_id,
             line_id: *line_id,
             version: *version,
@@ -12272,9 +12310,9 @@ fn apply_artifact_root_ownership_migration(builder: &mut TransitionBuilder<'_>) 
             is_founding_root: founding,
         });
     }
-    for (root, rows) in claimants {
+    for (key, rows) in claimants {
         if let Some(owner) = palw_canonical_artifact_owner_v1(rows) {
-            builder.write_artifact_owner(root, Some(owner));
+            builder.write_artifact_owner(key, Some(owner));
         }
     }
 }
@@ -16789,7 +16827,7 @@ pub struct PalwStateCarriageV2 {
     /// ADR-0137 / ADR-0132 S. A sixteenth tagged tail (`0xAD`), encoded only when it exists; rooted.
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     /// ADR-0143. A seventeenth tagged tail (`0xAE`), encoded only when non-empty; rooted.
-    pub artifact_owners: BTreeMap<Hash64, crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
+    pub artifact_owners: BTreeMap<(Hash64, Hash64), crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -28782,7 +28820,7 @@ pub(crate) mod tests {
             (55, PalwDeltaEntryV2::FinalWork { key: (1, key), old: None, new: None }),
             (56, PalwDeltaEntryV2::WorkTarget { old: None, new: None }),
             // ADR-0143, appended last.
-            (57, PalwDeltaEntryV2::ArtifactOwner { key, old: None, new: None }),
+            (57, PalwDeltaEntryV2::ArtifactOwner { key: (key, key), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -35030,14 +35068,14 @@ pub(crate) mod tests {
             let (s4, d4) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
 
             assert_eq!(
-                s4.artifact_owner_of(&h64(0xA1)).copied(),
+                s4.artifact_owner_of(&class, &h64(0xA1)).copied(),
                 Some(PalwArtifactOwnerV1 { class_id: class, line_id: class, version: 1 }),
                 "D6 rule 1: the founding line, always — registration is what created the root's meaning"
             );
             assert_eq!(s4.artifact_line_of_root(&class, &h64(0xA1), true), Some(class));
             assert_eq!(s4.model_version_of_root(&class, &h64(0xA1), 252, true), Some((class, 1)));
             assert_eq!(
-                s4.artifact_owner_of(&h64(11)).copied(),
+                s4.artifact_owner_of(&h64(1), &h64(11)).copied(),
                 Some(PalwArtifactOwnerV1 { class_id: h64(1), line_id: h64(1), version: 1 }),
                 "every class's founding root is reserved, not only the disputed one"
             );
@@ -35130,7 +35168,7 @@ pub(crate) mod tests {
             let rival = model_line_id_v1(&class, &bond_key(2), b"RIVAL");
             assert_eq!(s5.model_line(&rival).map(|l| l.owner), Some(Some(bond_key(2))), "a different root, a different bond, allowed");
             assert_eq!(
-                s5.artifact_owner_of(&h64(0xD1)).copied(),
+                s5.artifact_owner_of(&class, &h64(0xD1)).copied(),
                 Some(PalwArtifactOwnerV1 { class_id: class, line_id: rival, version: 1 })
             );
 
@@ -35143,7 +35181,7 @@ pub(crate) mod tests {
             );
             let (s6, _) = apply_owned(&s5, &p, &ctx(6, 254, 6), &[publish(copy, 2, h64(0xB2), false)], None);
             assert_eq!(
-                s6.artifact_owner_of(&h64(0xB2)).copied(),
+                s6.artifact_owner_of(&class, &h64(0xB2)).copied(),
                 Some(PalwArtifactOwnerV1 { class_id: class, line_id: copy, version: 2 }),
                 "a fresh root is claimed by the line that published it"
             );
@@ -35168,23 +35206,125 @@ pub(crate) mod tests {
                 object
             };
 
-            let refusal = try_owned(&s4, &p, &ctx(5, 253, 5), &[register(h64(3), h64(0xA1))], None).expect_err("refused");
-            assert!(
-                matches!(refusal, PalwStateV2Error::DuplicateArtifactRoot { root, owner } if root == h64(0xA1) && owner == class),
-                "a class cannot be registered holding a root another line owns: {refusal}"
+            // **A SECOND CLASS OVER ONE ARTIFACT IS ACCEPTED, and the 2026-09-19 audit is why this
+            // test says so.** A class id is `PalwShapeProfile::shape_profile_id()`, which hashes
+            // `n_ctx`, the batch sizes and the runtime flags, so `@512` and `@2048` are two class
+            // ids over one `artifact_root` — a configuration this chain accepted before the fence
+            // and must keep accepting. The first cut of this rule keyed the index by the root
+            // alone, refused the second class, and let a stranger reserve any public model's root
+            // for one line founding, because the root is computed offline from a downloadable file.
+            let (second, _) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[register(h64(3), h64(0xA1))], None);
+            assert!(second.class(&h64(3)).is_some(), "a different shape over the same artifact is its own class");
+            assert_eq!(
+                second.artifact_owner_of(&h64(3), &h64(0xA1)).map(|o| o.class_id),
+                Some(h64(3)),
+                "and it owns that root FOR ITSELF"
             );
-            assert!(s4.class(&h64(3)).is_none(), "and the refusal leaves no class row behind");
+            assert_eq!(
+                second.artifact_line_of_root(&class, &h64(0xA1), true),
+                Some(class),
+                "…while the first class's attribution is untouched, which the retired class-scoped walk also gave"
+            );
 
             let (s5, d5) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[register(h64(3), h64(0xC3))], None);
             assert!(s5.class(&h64(3)).is_some(), "the class exists");
             assert_eq!(
-                s5.artifact_owner_of(&h64(0xC3)).copied(),
+                s5.artifact_owner_of(&h64(3), &h64(0xC3)).copied(),
                 Some(PalwArtifactOwnerV1 { class_id: h64(3), line_id: h64(3), version: 1 }),
                 "…and owns its founding root, written by the same block"
             );
             let wrote_class = d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::Class { key, .. } if *key == h64(3)));
-            let wrote_owner = d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ArtifactOwner { key, .. } if *key == h64(0xC3)));
+            let wrote_owner = d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::ArtifactOwner { key, .. } if *key == (h64(3), h64(0xC3))));
             assert!(wrote_class && wrote_owner, "one transition, both writes");
+        }
+
+        /// **The front-running the first cut of this rule allowed, and no longer does** (audit
+        /// 2026-09-19, reproduced then with a control).
+        ///
+        /// An artifact root is computed offline from a downloadable file, so it is public before
+        /// anybody registers a class over it. Under a root-only key, one line founding in ANYBODY's
+        /// class — permissionless by ADR-0088, and priced at one object's rent — reserved that root
+        /// globally and the owner's own registration was refused for ever, silently, because the
+        /// acceptance filter drops the object and lets the block stand. Keyed by `(class, root)` the
+        /// attacker reserves only his own class's slot, which was never the victim's to lose.
+        #[test]
+        fn a_stranger_cannot_reserve_a_root_a_class_has_not_registered_yet() {
+            let (p, s3, class, _) = squatted_chain();
+            let (s4, _) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+            let victim_root = h64(0xDEAD);
+
+            let front_run = PalwConsensusObjectV2::ModelLineFounded {
+                class_id: class,
+                name: b"FRONT-RUN".to_vec(),
+                founder: bond_key(1),
+                root: victim_root,
+                signature: vec![1],
+            };
+            let (s5, _) = apply_owned(&s4, &p, &ctx(5, 253, 5), &[front_run], None);
+
+            let mut victim = registration(h64(0x5D), 0, Some(bond_key(2)));
+            if let PalwConsensusObjectV2::ClassRegistered { artifact_root, slash_value_per_pwu, activation_daa, .. } = &mut victim {
+                *artifact_root = victim_root;
+                *slash_value_per_pwu = 5;
+                *activation_daa = 255;
+            }
+            let (after, _) = apply_owned(&s5, &p, &ctx(6, 254, 6), &[victim], None);
+            assert!(after.class(&h64(0x5D)).is_some(), "the victim registers, whatever a stranger reserved in another class");
+            assert_eq!(
+                after.artifact_owner_of(&h64(0x5D), &victim_root).map(|o| o.class_id),
+                Some(h64(0x5D)),
+                "and owns the root in its own class"
+            );
+        }
+
+        /// **An owner row lives exactly as long as something it describes** (audit 2026-09-19).
+        ///
+        /// The index is state-rooted and rides the pruning carriage, and it shipped with no cap, no
+        /// eviction and no TTL while every neighbouring registry table has one — so a publication
+        /// with a fresh root bought a permanent row for a transaction fee, and the row outlived the
+        /// version, since `model_versions` evicts past `PALW_MODEL_VERSION_HISTORY_V1` and the owner
+        /// row did not. This drives the REAL eviction: publish past the history window and watch the
+        /// index stay bounded by the rows that justify it rather than growing with every publish.
+        #[test]
+        fn the_index_is_bounded_by_the_versions_that_justify_it() {
+            let (p, s3, class, copy) = squatted_chain();
+            let (mut state, _) = apply_owned(&s3, &p, &ctx(4, 252, 4), &[], None);
+            let before = state.artifact_owners_iter().count();
+
+            // Publish well past the 64-row history window, each with a root of its own. Under the
+            // shipped rule every one of these bought a permanent row.
+            let publishes = PALW_MODEL_VERSION_HISTORY_V1 + 8;
+            // The DAA step clears `PALW_VERSION_GRACE_DAA_V1`: the window evicts rows that are past
+            // it AND out of force, and a superseded version keeps its root in force for the grace.
+            let step = PALW_VERSION_GRACE_DAA_V1 / 8 + 1;
+            for n in 0..publishes {
+                let version = 2 + n;
+                let root = h64(0x1000 + u64::from(n));
+                let at = 253 + u64::from(n) * step;
+                let (next, _) =
+                    apply_owned(&state, &p, &ctx(5 + u64::from(n), at, 5 + u64::from(n)), &[publish(copy, version, root, false)], None);
+                state = next;
+            }
+
+            let versions_held = state.model_versions_of(&copy).len();
+            let owners_held = state.artifact_owners_iter().count();
+            assert!(
+                versions_held <= PALW_MODEL_VERSION_HISTORY_V1 as usize + 1,
+                "the premise: model_versions evicts past its window ({versions_held} rows)"
+            );
+            assert!(
+                owners_held <= before + versions_held,
+                "the index is bounded by the rows that justify it: {owners_held} owner rows against {versions_held} versions \
+                 and {before} class roots, after {publishes} publications"
+            );
+            assert!(
+                owners_held < before + publishes as usize,
+                "…and strictly fewer than one row per publication, which is what unbounded would mean"
+            );
+            assert!(
+                state.artifact_owner_of(&class, &h64(0xA1)).is_some(),
+                "a class's REGISTERED founding root is never released: the class row is its carrier"
+            );
         }
 
         /// **ADR-0143 §5.** The index is ordinary rooted state: a reorg reverts it row by row, a

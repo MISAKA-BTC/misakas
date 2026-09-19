@@ -1,39 +1,38 @@
 # ADR-0143 — An artifact root has one owner on the chain, and competing weights stay permissionless
 
-**Status:** IMPLEMENTED 2026-09-18, **NOT ARMED** — withdrawn from the 7,100 flag day by the
-adversarial audit of 2026-09-19. `palw_artifact_root_ownership` is `None` on every preset; the code
-ships inert and a state without the index is byte-identical to a state before the field.
+**Status:** IMPLEMENTED 2026-09-18, **withdrawn from the 7,100 flag day and REWORKED** after the
+adversarial audit of 2026-09-19 found two defects in the index this ADR installs. Both are fixed on
+`fix/audit-2026-09-19`; `palw_artifact_root_ownership` stays `None` on every preset and arms on its
+own day, after a drill crosses its own fence.
 
-**Two defects, both in the index, both found by attacking this document's own decisions.**
+**What the audit found, and what the rework changes.**
 
-**D1's index is unbounded.** `artifact_owners` is hashed into the state root, carried in the pruning
-carriage, and has no cap, no eviction and no TTL — while `PALW_MODEL_LINES_PER_CLASS_V1`,
-`PALW_MODEL_VERSION_HISTORY_V1`, `PALW_MODEL_PREVIEWS_V1` and `PALW_MODEL_PROPOSALS_PER_LINE_V1` all
-bound their tables. One `ModelVersionPublished` with a fresh root buys a permanent row for a
-transaction fee, and the row outlives the version: `model_versions` evicts past 64 per line and the
-owner row does not. §6 asked the right question — what the crossing block costs — and asked it only
-about the MIGRATION, never about the steady state.
-
-**D1's uniqueness is global, and it should never have been.** §3 argued "a root is a file of weights;
-two classes carrying the same one are the same duplicate". That is false in this system's own terms:
+**The uniqueness was global across classes, and that was wrong on this system's own terms.** §3
+argued "a root is a file of weights; two classes carrying the same one are the same duplicate". But
 `class_id` is `PalwShapeProfile::shape_profile_id()`, which hashes `n_ctx`, `n_batch`, `n_ubatch`,
-`n_threads` and the runtime flags, so one artifact legitimately carries several classes — `@512` and
-`@2048` are two class ids over one root, and the retired positional lookups were CLASS-SCOPED, so
-they attributed both correctly. Global keying (a) refuses the second class outright, which is a
-regression against a configuration the chain accepted the block before, and (b) lets a stranger
-reserve any public model's root for one line founding, since the root is computed offline from a
-downloadable file. The acceptance filter drops the refused registration and lets the block stand, so
-the victim pays a carrier fee and is told nothing.
+`n_threads` and the runtime flags — so one artifact legitimately carries several classes, and
+`@512` and `@2048` are two class ids over one root. The retired positional lookups were
+CLASS-SCOPED and attributed both correctly; global keying refused the second class outright, a
+configuration the chain accepted the block before. Worse, it let a stranger reserve any public
+model's root — the root is computed offline from a downloadable file — for one line founding in
+anybody's class, permanently and silently, because the acceptance filter drops the refused
+registration and lets the block stand. **The index is now keyed `(class_id, root)`**, which closes
+the defect this ADR was written for — a copy line inside ONE class taking that class's founding
+root, which is what testnet-11 has — and restores the cross-class behaviour that was never in
+question.
 
-**The remedy is a `(class_id, root)` key and a bound on the rows.** Per-class keying still closes the
-defect this ADR was written for — a copy line inside ONE class taking that class's founding root,
-which is what testnet-11 has — and restores the cross-class behaviour that was never in question.
-The bound has to pair with `model_versions`' own eviction, so an owner row cannot outlive every
-version that justified it.
+**The index was unbounded.** It is state-rooted and rides the pruning carriage, and it had no cap,
+no eviction and no TTL while `PALW_MODEL_LINES_PER_CLASS_V1`, `PALW_MODEL_VERSION_HISTORY_V1`,
+`PALW_MODEL_PREVIEWS_V1` and `PALW_MODEL_PROPOSALS_PER_LINE_V1` all bound their tables. A
+publication with a fresh root bought a permanent row for a transaction fee, and the row outlived
+the version: `model_versions` evicts past 64 per line and the owner row did not. §6 asked what the
+CROSSING block costs and never asked what the steady state costs. **An owner row now lives exactly
+as long as a version row that carries it**, so the index is a function of `model_versions` and
+`classes` and inherits their bounds; a class's registered founding root is never released, because
+the class row is its carrier.
 
-**It arms on its own day, after a drill crosses its own fence** (the launch runbook's §5c). The
-height constant stands unused so that arming it is a decision someone takes again rather than one
-this file already took.
+Both are pinned by tests that reproduce the defect first — the front-run with a control, and the
+boundedness by publishing past the history window and watching the index not grow with it.
 
 **Builds on:** ADR-0087 (a position is never money settled), ADR-0088 (model lines and versions),
 ADR-0091 (the reward buys the pair), ADR-0095 (a position is a membership).
