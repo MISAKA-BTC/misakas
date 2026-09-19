@@ -1,0 +1,34 @@
+testnet-11 shipped params (palw_rc_shipped_params, this worktree):
+  court.max_step_leaf_count()            = 67108864  (2^26.0)
+  PALW_STEP_LEG_MAX_LEAVES (walker const)= 4194304
+  palw_court_ladder fence                = Some(ForkActivation(2150))
+  palw_context_ladder fence              = None
+  palw_prefill_draw fence                = Some(ForkActivation(4000))
+  palw_work_priced_reward fence          = Some(ForkActivation(7101))
+  palw_economic_payout fence             = Some(ForkActivation(7101))
+  palw_work_target fence                 = Some(ForkActivation(7101))
+  palw_model_registry fence              = Some(ForkActivation(7101))
+  palw_fp_decode_rules fence             = None
+  palw_uncertified_weightless fence      = Some(ForkActivation(0))
+  at DAA   6000: court_ladder true  prefill_draw true  work_priced false payout false work_target false
+  at DAA   6300: court_ladder true  prefill_draw true  work_priced false payout false work_target false
+  at DAA   7100: court_ladder true  prefill_draw true  work_priced false payout false work_target false
+  at DAA   7101: court_ladder true  prefill_draw true  work_priced true  payout true  work_target true 
+  at DAA   7102: court_ladder true  prefill_draw true  work_priced true  payout true  work_target true 
+
+the walkers' cap at this block, by the repo's own function:
+  DAA   2149: palw_refutation_leaf_cap_v2 = 4194304
+  DAA   2150: palw_refutation_leaf_cap_v2 = 67108864
+  DAA   6300: palw_refutation_leaf_cap_v2 = 67108864
+  DAA   7101: palw_refutation_leaf_cap_v2 = 67108864
+
+the SHIPPED dense class against that cap (nothing registered, nothing changed):
+  declared worst_case (max_step_leaf_count of the class) = 52778128
+      prompt   decode  real job leaves   over ladder?     court can walk it?
+          63        2          6630544             no                    yes
+           1      256         31238144             no                    yes
+           1      432         52714368             no                    yes
+           1      512         62476288             no                    yes
+         512        1         52759112             no                    yes
+         256      256         57505184             no                    yes
+         400      112         54766880             no                    yes
