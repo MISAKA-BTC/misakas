@@ -298,6 +298,11 @@ pub mod palw_receipt;
 /// adjudication maths. Land-stage, consensus-inert.
 pub mod palw_reference;
 pub mod palw_registry;
+/// ADR-0145 §8: the reward properties, each stated as something an attacker cannot do, plus the
+/// 2026-09-19 audit's five counterexamples as in-tree fixtures. Test-only — gated by the
+/// `#[cfg(test)]` below, like `palw_adversarial`.
+#[cfg(test)]
+pub mod palw_reward_properties_v1;
 pub mod palw_reward_v2;
 /// MISAKA PALW re-verification routing (ADR-0034): the four execution-class families, five
 /// model bands, and the binding-aware eligibility/coverage machinery. Consensus-inert —
