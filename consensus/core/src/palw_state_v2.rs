@@ -11888,6 +11888,20 @@ pub fn apply_palw_transition_v7(
                         crate::palw_admission_v2::PalwEpochBudgetFencesV1 {
                             budget_release_active: builder.extras.epoch_budget_release_active,
                             work_target_floor: builder.work_target_floor(ctx),
+                            // **The merged re-check reads the same fence the pre-check did.**
+                            //
+                            // `..Default::default()` left this `None`, which is the DECLARED pwu
+                            // rule — while the node's pre-check passes the height, which past the
+                            // bundle is the DERIVED one. No attempt satisfies both, so every merged
+                            // blue's work was skipped: no claim, no weight, and no error anywhere,
+                            // because a skip is how the fold declines work it cannot price.
+                            //
+                            // The chain does not stop, which is exactly why this is the shape a
+                            // drill will not catch. A field added to this struct needs every
+                            // construction site, and `..Default::default()` is what hides the one
+                            // that was missed — this field was added for the processor's builder
+                            // and this second site kept the default.
+                            canonical_work_daa: builder.extras.canonical_work_daa,
                             ..Default::default()
                         },
                     ) {
