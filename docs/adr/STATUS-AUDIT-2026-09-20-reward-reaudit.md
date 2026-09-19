@@ -66,10 +66,21 @@ network's own synthetic job and prices them identically. This is deliberate: pri
 differently would be consensus judging whether a prompt was real, which ADR-0144 forbids. It is
 also the honest limit of "the user's own inference becomes the work".
 
-**The tooling half of permissionless.** The consensus gate reads the carriage and has no table to
-miss a model from. `misaka model add` resolves its argument against a compiled-in ledger, so a user
-who cannot build the node cannot use that command. The escape hatch is ADR-0108's extension
-submission with an inline profile.
+**The tooling half of permissionless — CLOSED 2026-09-20, in another session's `8367782c`.**
+`misaka model add --manifest <file>` takes the class from an ADR-0108 manifest (inline profile,
+projection, or catalog id) and walks the same registration and certification the catalog path
+does, at the root the manifest pins. Verification goes through the same function `extension
+submit` uses, so anything submit refuses, `model add` refuses. Serving needs no build change
+either: `--palw-chain-classes` (ADR-0067 D5) already runs a class the binary does not carry.
+
+Checked before this line was changed: the commit exists, it touches `misaka-cli` only, and
+`--manifest` really is a flag on `model add`. What its own tests cover, as reported: a manifest
+from another network and a manifest that is not a class are refused before the node is touched,
+and a real 1.7 GiB artifact whose root is recomputed at Full depth yields an entry for an A16 row
+width the catalog does not contain.
+
+So the consensus gate reads the carriage and has no table to miss a model from, and the operator
+tool no longer needs one either.
 
 **`palw_artifact_root_ownership` is commented out on the shipped card**, and the bundle now refuses
 to arm without it. A build that arms the economy must arm ADR-0143 with it.
