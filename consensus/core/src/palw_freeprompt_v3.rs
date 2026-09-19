@@ -618,7 +618,7 @@ pub fn fp_accounted_prefix_tokens_v1(ids: &[u32], already_paid: &[(u32, Hash64)]
     best
 }
 
-/// **The longest prefix of `ids` this bond has already been paid for on this class, in EITHER
+/// **The longest prefix of `ids` this CLASS has already been paid to evaluate, in either
 /// direction** (ADR-0145 §6, re-audit 2026-09-19).
 ///
 /// [`fp_accounted_prefix_tokens_v1`] answers only the BACKWARD half: it keeps paid rows strictly
@@ -633,9 +633,16 @@ pub fn fp_accounted_prefix_tokens_v1(ids: &[u32], already_paid: &[(u32, Hash64)]
 /// own ids, so "what has this bond already been paid to evaluate on this lineage" is the longest
 /// COMMON PREFIX of this prompt and any paid one — which is order-free by construction.
 ///
-/// A paid row EQUAL to `ids` is excluded: that is the same prompt, which `DuplicateWork` refuses,
-/// and accounting it here would price a claim the duplicate rule is about to reject — two answers
-/// to one question. Every other row contributes `min(common_prefix, ids.len())`.
+/// **A paid row EQUAL to `ids` is counted, and that is the third defect this function closes.**
+/// It used to be skipped, on the reasoning that an identical prompt is what `DuplicateWork`
+/// refuses and accounting it here would be two answers to one question. That reasoning held only
+/// while a prompt row died with its claim. `work_ids` is scoped to LIVE claims — deliberately, a
+/// retired claim's inference may honestly be run again — so once the rows outlive their claims,
+/// skipping the equal row meant: wait out a challenge window, re-commit the identical prompt, and
+/// be paid for its prefill a second time. Counting it credits the re-run its DECODE half and not
+/// its prefill, which is the honest answer: the tokens generated are new work, the prefill is not.
+/// The two rules are not two answers, they are two questions — "is a live claim already this
+/// inference" and "has this prefill been bought".
 ///
 /// Cost: `O(rows × common_prefix)`, early-exiting on the first differing id, so an unrelated
 /// prompt costs one comparison per row. The only input that makes it linear in the prompt is a
@@ -644,9 +651,6 @@ pub fn fp_accounted_prefix_tokens_v1(ids: &[u32], already_paid: &[(u32, Hash64)]
 pub fn fp_accounted_prefix_tokens_v2(ids: &[u32], already_paid: &[&[u32]]) -> u32 {
     let mut best = 0usize;
     for paid in already_paid {
-        if *paid == ids {
-            continue;
-        }
         let shared = paid.iter().zip(ids.iter()).take_while(|(a, b)| a == b).count();
         if shared > best {
             best = shared;

@@ -1641,6 +1641,12 @@ pub fn palw_claim_safe_contribution_v3(
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwBondKeyV2(pub TransactionOutpoint);
 
+/// The smallest [`PalwBondKeyV2`] under the ordering below — a range start for "every row of this
+/// class, whichever bond committed it". Not a bond any chain holds: an all-zero transaction id has
+/// no preimage, and `index` 0 is the first output of it.
+pub const PALW_BOND_KEY_V2_MIN: PalwBondKeyV2 =
+    PalwBondKeyV2(TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0u8; 64]), index: 0 });
+
 impl Ord for PalwBondKeyV2 {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (self.0.transaction_id, self.0.index).cmp(&(other.0.transaction_id, other.0.index))
@@ -6485,14 +6491,29 @@ impl PalwChainStateV2 {
             .collect()
     }
 
-    /// **The prompts themselves**, for the symmetric cache reading
-    /// ([`crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2`]). Same range, same key, same
-    /// emptiness below the fence — what changes is that a paid prompt LONGER than the one being
-    /// priced can now be recognised as containing it.
-    pub fn fp_claimed_prompt_ids_of(&self, class_id: &Hash64, bond: &PalwBondKeyV2) -> Vec<&[u32]> {
+    /// **Every prompt this CLASS has been paid for, whoever committed it**, for the symmetric cache
+    /// reading ([`crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2`]). Empty below the
+    /// fence.
+    ///
+    /// **The bond left the question** (re-audit 2026-09-19). Read per bond, the discount was a
+    /// function of WHO was asking, so a producer holding one conversation's KV cache split its
+    /// bond and sold the same prefill again at full price — and bonds are cheap and permanent.
+    /// Whether a prefix's compute has been paid for is a fact about the prefix, not about the
+    /// payee, so the reading is over the class. Together with the row now outliving its claim, the
+    /// credit is a pure function of (this prompt, the prompts committed in this candidate chain):
+    /// no bond, no claim id, no commitment order, and therefore the same total however a
+    /// conversation is cut up, in whatever order, across however many bonds.
+    ///
+    /// **What it costs, stated rather than hidden.** A producer that genuinely re-runs a committed
+    /// prompt COLD did the prefill and is now credited only its extension. The chain cannot tell a
+    /// cold re-run from a cached one — that is what ADR-0145 §6's prefix-STATE commitment is for,
+    /// and it is a change to the commitment's wire. Until it exists the conservative direction is
+    /// the one that never pays for compute that may not have happened, because the other direction
+    /// is the 62× finding.
+    pub fn fp_claimed_prompt_ids_of(&self, class_id: &Hash64) -> Vec<&[u32]> {
         self.fp_claim_prompts
-            .range((*class_id, *bond, Hash64::default())..)
-            .take_while(|((class, key, _), _)| class == class_id && key == bond)
+            .range((*class_id, PALW_BOND_KEY_V2_MIN, Hash64::default())..)
+            .take_while(|((class, _, _), _)| class == class_id)
             .map(|(_, row)| row.prompt_token_ids.as_slice())
             .collect()
     }
@@ -8399,19 +8420,20 @@ impl<'a> TransitionBuilder<'a> {
         {
             self.state.work_ids.insert(work_id, key);
         }
-        // **ADR-0145 §6: the prompt row leaves with the claim**, at the same door the work-id
-        // index leaves by — so the cache rule's window and the duplicate rule's window are the
-        // same window and cannot drift apart. Removal is NOT fence-gated: below the fence the map
-        // is empty and this is a no-op, and gating a REMOVAL on a fence would leave a row behind
-        // on a chain that reorged across the height.
-        if new.is_none()
-            && let Some(previous) = &old
-        {
-            let prompt_key = (previous.class_id, previous.bond, key);
-            if self.state.fp_claim_prompts.contains_key(&prompt_key) {
-                self.write_fp_claim_prompt(prompt_key, None);
-            }
-        }
+        // **The prompt row OUTLIVES its claim** (re-audit 2026-09-19). It used to leave here, with
+        // the work-id index, so that the cache rule's window and the duplicate rule's window were
+        // one window. They are not one question. `work_ids` asks "is this the same inference a LIVE
+        // claim already names", and a retired claim's inference may honestly be run again. The
+        // cache rule asks "has this prefill already been paid for", and a retirement does not unpay
+        // it — so dropping the row here sold the same prefix a second time on the same bond, for
+        // the price of waiting out a challenge window.
+        //
+        // Keeping it makes the credit a pure function of the prompts committed in this candidate
+        // chain, which is what makes the total invariant under retire-and-replay the way it is
+        // already invariant under ordering and under bond splitting. A reverted delta still takes
+        // the row with it: the write is recorded as a delta entry like any other, so a reorg that
+        // undoes the commitment undoes its row and the credit is recomputed on the new chain.
+        let _ = &old;
         // **ADR-0062 SA-1: the accuser's stake comes back HERE**, for the reason `write_court`
         // gives about the challenger's — one site that every door already passes through.
         //
@@ -15947,7 +15969,7 @@ fn apply_object(
                 // ruleset (the same reason `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` exists at all).
                 let ladder =
                     builder.state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
-                let already_paid = builder.state.fp_claimed_prompt_ids_of(class_id, bond);
+                let already_paid = builder.state.fp_claimed_prompt_ids_of(class_id);
                 let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid);
                 let work =
                     crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, *prompt_tokens, *decode_tokens_executed, accounted, ladder)
@@ -28679,11 +28701,20 @@ pub(crate) mod tests {
     /// count the caller states — so a test can hand the transition the graph's own answer, or ten
     /// times it, and see the difference.
     fn derived_commit(claim_word: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
+        derived_commit_from(1, claim_word, prompt, decode, work_leaves)
+    }
+
+    /// [`derived_commit`] from a named bond — for the property that the credit does not depend on
+    /// which bond is asking.
+    fn derived_commit_from(bond: u64, claim_word: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
             claim: h64(claim_word),
             class_id: derived_profile().shape_profile_id(),
-            bond: bond_key(1),
-            executor_pubkey: vec![7; 4],
+            bond: bond_key(bond),
+            // The key the fixture registered THIS bond under — the fold refuses a commitment whose
+            // executor key is not the named bond's (`BondKeyMismatch`), and "one key, one bond"
+            // means the two bonds cannot share one.
+            executor_pubkey: vec![6 + bond as u8; 4],
             work_leaves,
             prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(prompt),
             prompt_tokens: prompt.len() as u32,
@@ -28730,6 +28761,22 @@ pub(crate) mod tests {
                 // reserves 6,000 pwu × 5 sompi, and the ceiling is collateral × 1000‰.
                 collateral: 10_000_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+            // **A SECOND bond of the same operator**, so the re-audit's "split the bond and sell
+            // the same prefix again" is a thing a test can actually do. Bonds are cheap and
+            // permanent, which is why that was the cheapest way around a per-bond cache rule.
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                // A SECOND KEY, because "one key, one bond" is enforced at registration — so
+                // splitting is not free, it is the price of one more ML-DSA-87 seed. That is still
+                // far under the value of re-selling a prefill, which is why a per-bond cache rule
+                // was not a rule.
+                pubkey: vec![8; 4],
+                operator_pubkey: op_key(22),
+                collateral: 10_000_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A12),
                 capable_classes: Default::default(),
                 signature: Vec::new(),
             },
@@ -28988,10 +29035,14 @@ pub(crate) mod tests {
         // which is the direction that keeps `slash_value_per_pwu` honest.
         assert_eq!(cached.reserved, cached.pwu as u128 * 5);
 
-        // A prompt of a DIFFERENT bond's, or of a different class, is not a prefix of anything
-        // here: the row is keyed by both, so one bond's history never discounts another's.
-        assert!(second.fp_claimed_prompts_of(&class, &bond_key(2)).is_empty());
+        // The ROW is still keyed by the bond that committed it — that is provenance, and the
+        // per-bond reader below still answers "what did this bond commit". What no longer depends
+        // on the bond is the CREDIT: `fp_claimed_prompt_ids_of` reads the class, because whether a
+        // prefill has been paid for is a fact about the prefix and not about the payee. A prompt
+        // of a different CLASS is still unrelated, because a different class is a different graph.
+        assert!(second.fp_claimed_prompts_of(&class, &bond_key(2)).is_empty(), "provenance stays per bond");
         assert!(second.fp_claimed_prompts_of(&h64(1), &bond_key(1)).is_empty());
+        assert_eq!(second.fp_claimed_prompt_ids_of(&class).len(), 2, "…and the credit reads the whole class");
     }
 
     /// **RE-AUDIT 2026-09-19 — one conversation has one price, whatever order it was committed
@@ -29033,6 +29084,139 @@ pub(crate) mod tests {
         // And the shorter claim really was priced as a cache hit, not merely refused: its decode
         // half is credited and its prefill is not.
         assert_eq!(d2.claim(&h64(0xB1)).unwrap().pwu, 5_000, "the prefix the chain already bought earns its decode calls only");
+    }
+
+    /// **THE ORDER PROPERTY — one conversation costs the same under every commitment order, from
+    /// every bond, across a retirement, and across a reorg.**
+    ///
+    /// The operator's completion condition for the cache rule: the credit must not be "search the
+    /// rows shorter than me", it must be *the work already credited for the same computational
+    /// state, subtracted uniquely from committed chain state*. That makes it a pure function of
+    /// (this prompt, the prompts committed in this candidate chain) — and this test is the
+    /// statement that nothing else is in the expression.
+    ///
+    /// Three things had to change for it to hold, and each was its own live defect:
+    ///
+    /// * the reading had a DIRECTION (`fp_accounted_prefix_tokens_v1` kept only rows strictly
+    ///   shorter), so committing longest-first was never met by anything — O(N²) in the rungs;
+    /// * the reading was per BOND, so splitting a bond sold the same prefill again at full price;
+    /// * the row LEFT WITH ITS CLAIM, so waiting out a challenge window sold it again.
+    ///
+    /// The total is the number of distinct prefix positions of the committed set — a trie, which
+    /// has no order — so every permutation below reaches one number. It is asserted against the
+    /// honest single-prefill price too, because an invariant total that was invariantly wrong
+    /// would satisfy the permutations and not the economics.
+    #[test]
+    fn audit_one_conversations_total_credit_is_the_same_under_every_commitment_order() {
+        let profile = derived_profile();
+        let leaves = |n: u32| crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, n, 8, 1 << 26).unwrap();
+        let ids: Vec<u32> = (0..32).collect();
+        let rungs = [8u32, 16, 24, 32];
+
+        // One run of the sequence, in the given order, from the given bonds. Returns the total pwu
+        // the chain paid and the final state, so a caller can go on folding it.
+        let run = |order: &[(u32, u64)], from: &PalwChainStateV2, p: &PalwStateParamsV2, armed: &PalwTransitionExtrasV1| {
+            let mut state = from.clone();
+            let mut total = 0u64;
+            for (i, (n, bond)) in order.iter().enumerate() {
+                let claim = 0xE000 + (*n as u64) * 16 + *bond;
+                let object = derived_commit_from(*bond, claim, &ids[..*n as usize], 8, leaves(*n));
+                let (next, _) = apply_derived(&state, p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), &[object], armed)
+                    .unwrap_or_else(|e| panic!("rung {n} from bond {bond} applies: {e:?}"));
+                total += next.claim(&h64(claim)).unwrap().pwu;
+                state = next;
+            }
+            (total, state)
+        };
+
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+
+        // The honest price of the whole conversation: ONE 32-token prefill, plus each rung's own
+        // decode half — the compute a producer holding the KV cache actually performs.
+        let honest = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&profile, 32, 1 << 26).unwrap()
+            + rungs
+                .iter()
+                .map(|n| leaves(*n) - crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&profile, *n, 1 << 26).unwrap())
+                .sum::<u64>();
+
+        // The CREDITED LEAVES are exactly invariant, and that is the statement to make first,
+        // because it is the one that is exactly true. Modelled with the pure rules the fold runs,
+        // over the same permutations, so the arithmetic is visible rather than inferred.
+        let credited_leaves = |order: &[(u32, u64)]| -> u64 {
+            let mut committed: Vec<Vec<u32>> = Vec::new();
+            let mut total = 0u64;
+            for (n, _) in order {
+                let mine = &ids[..*n as usize];
+                let rows: Vec<&[u32]> = committed.iter().map(|v| v.as_slice()).collect();
+                let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(mine, &rows);
+                let work = crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, *n, 8, accounted, 1 << 26).unwrap();
+                total += work.credited_leaves;
+                committed.push(mine.to_vec());
+            }
+            total
+        };
+
+        let ascending: Vec<(u32, u64)> = rungs.iter().map(|n| (*n, 1u64)).collect();
+        let (expected_pwu, _) = run(&ascending, &published, &p, &armed);
+        let expected_leaves = credited_leaves(&ascending);
+        assert_eq!(expected_leaves, honest, "ascending credits exactly one prefill and four decode halves");
+        assert!(expected_pwu > 0 && expected_pwu <= honest, "and pays under it: {expected_pwu} vs {honest}");
+
+        // 1. DESCENDING, 2. INTERLEAVED, 3. SPLIT ACROSS TWO BONDS — every permutation of who and
+        //    when. The credited LEAVES are the same number every time; the pwu is that number
+        //    floored into quanta ONCE PER CLAIM, so the orders differ by the dust of that flooring
+        //    and by nothing else. Asserting pwu equality would be asserting that four floors equal
+        //    one floor, which is false and has nothing to do with the cache rule — so the dust is
+        //    bounded instead, by one quantum per rung, and every order is held under the honest
+        //    price. That is the property that matters: no order PAYS MORE than the compute.
+        let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(8_000, 8);
+        let dust = quantum * rungs.len() as u64;
+        for (name, order) in [
+            ("descending", vec![(32u32, 1u64), (24, 1), (16, 1), (8, 1)]),
+            ("interleaved", vec![(16, 1), (32, 1), (8, 1), (24, 1)]),
+            ("split across two bonds", vec![(8, 1), (16, 2), (24, 1), (32, 2)]),
+            ("split, descending", vec![(32, 2), (24, 1), (16, 2), (8, 1)]),
+        ] {
+            assert_eq!(credited_leaves(&order), expected_leaves, "{name}: one conversation, one credited work");
+            let (total, _) = run(&order, &published, &p, &armed);
+            assert!(total <= honest, "{name}: never more than the compute performed — {total} vs {honest}");
+            assert!(
+                total.abs_diff(expected_pwu) <= dust,
+                "{name}: and within the quantisation of the rungs — {total} vs {expected_pwu}, dust {dust}"
+            );
+        }
+
+        // 4. RETIRE THEN REPLAY. The first rung is committed, its claim is voided and swept off the
+        //    live set, and the same prompt is committed again. A row that left with its claim would
+        //    make the replay full price; the paid prefix stays paid, so the total is unchanged.
+        let first = derived_commit_from(1, 0xE001, &ids[..8], 8, leaves(8));
+        let (r1, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[first], &armed).expect("the first rung");
+        let paid_once = r1.claim(&h64(0xE001)).unwrap().pwu;
+        let (voided, _) = apply_derived(&r1, &p, &ctx(5, 114, 5), &[], &armed).expect("the bind window closes");
+        let (retired, _) = apply_derived(&voided, &p, &ctx(6, 165, 6), &[], &armed).expect("the retirement sweeps");
+        assert!(retired.claim(&h64(0xE001)).is_none(), "the claim is gone from the live set");
+        let replay = derived_commit_from(2, 0xE002, &ids[..8], 8, leaves(8));
+        let (after, _) = apply_derived(&retired, &p, &ctx(7, 166, 7), &[replay], &armed).expect("the replay applies");
+        let paid_again = after.claim(&h64(0xE002)).unwrap().pwu;
+        assert!(
+            paid_again < paid_once,
+            "waiting out a challenge window and switching bonds must not re-buy a prefill: {paid_again} vs {paid_once}"
+        );
+
+        // 5. REORG. The credit is candidate-scoped: undo the commitment and the row goes with it,
+        //    so the same prompt on the reverted chain is priced exactly as it was the first time.
+        let fresh = derived_commit_from(1, 0xE003, &ids[..16], 8, leaves(16));
+        let (with_it, delta) = apply_derived(&published, &p, &ctx(4, 103, 4), &[fresh.clone()], &armed).expect("applies");
+        let reverted = revert_delta_v2(&with_it, &delta, &p).expect("and reverts");
+        assert_eq!(reverted.state_root(), published.state_root(), "the reorg takes the row with the commitment");
+        let (again, _) = apply_derived(&reverted, &p, &ctx(4, 103, 4), &[fresh], &armed).expect("and the same block re-applies");
+        assert_eq!(
+            again.claim(&h64(0xE003)).unwrap().pwu,
+            with_it.claim(&h64(0xE003)).unwrap().pwu,
+            "a reorged-away commitment leaves no discount behind, and no debt either"
+        );
     }
 
     /// **RE-AUDIT 2026-09-19 — one inference does not pay for its whole prefix ladder.**
@@ -29177,19 +29361,29 @@ pub(crate) mod tests {
         let reapplied = apply_delta_v2(&published, &delta, &p).expect("and reapplies");
         assert_eq!(reapplied.state_root(), committed.state_root());
 
-        // Retiring the claim drops the row at the same door the work-id index leaves by, so the
-        // cache rule's window and the duplicate rule's window stay the same window. Committed at
-        // 103 with a bind window of 10, so the deadline is 113 and the next block past it voids;
-        // the 50-DAA retirement then sweeps one block past 164. Driven through the lattice rather
-        // than poked into state, because the door under test is the one a real chain goes through.
+        // **Retiring the claim does NOT drop the row** (re-audit 2026-09-19). It used to leave at
+        // the same door the work-id index leaves by, so that the cache rule's window and the
+        // duplicate rule's window were one window — but they are not one question. `work_ids` asks
+        // whether a LIVE claim already names this inference, and a retired claim's inference may
+        // honestly be run again. The cache rule asks whether this prefill has already been paid
+        // for, and a retirement does not unpay it. Dropping the row sold the same prefix twice on
+        // the same bond, for the price of waiting out a challenge window.
+        //
+        // Committed at 103 with a bind window of 10, so the deadline is 113 and the next block past
+        // it voids; the 50-DAA retirement then sweeps one block past 164. Driven through the lattice
+        // rather than poked into state, because the door under test is the one a real chain uses.
         let (voided, _) = apply_derived(&committed, &p, &ctx(5, 114, 5), &[], &armed).expect("the bind window closes");
         assert!(matches!(voided.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
         assert_eq!(voided.fp_claimed_prompts_of(&class, &bond_key(1)).len(), 1, "a voided claim still holds its row");
-        let (retired, sweep) = apply_derived(&voided, &p, &ctx(6, 165, 6), &[], &armed).expect("the retirement sweeps");
+        let (retired, _) = apply_derived(&voided, &p, &ctx(6, 165, 6), &[], &armed).expect("the retirement sweeps");
         assert!(retired.claim(&h64(0xFC)).is_none(), "the claim retires");
-        assert!(retired.fp_claimed_prompts_of(&class, &bond_key(1)).is_empty(), "and the row leaves with it");
-        assert!(sweep.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::FpClaimPrompt { new: None, .. })), "by its own entry");
-        assert_eq!(revert_delta_v2(&retired, &sweep, &p).unwrap().state_root(), voided.state_root(), "and a reorg puts it back");
+        assert_eq!(
+            retired.fp_claimed_prompts_of(&class, &bond_key(1)).len(),
+            1,
+            "and the paid prefix stays paid — outliving the claim is what makes retire-and-replay cost the same as not doing it"
+        );
+        // The row is still delta-borne, so a reorg that undoes the COMMITMENT undoes it: that is
+        // the entry asserted above, and the revert of it two paragraphs up.
     }
 
     /// ADR-0075 Decision 2: evidence the court refuses records nothing, and the refusal names the
