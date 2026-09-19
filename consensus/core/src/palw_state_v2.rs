@@ -29800,6 +29800,110 @@ pub(crate) mod tests {
             state
         }
 
+        /// **REORG AND IBD, with the economic bundle ARMED.**
+        ///
+        /// The repo's existing reorg properties — `a_reorg_through_deltas_equals_a_fresh_walk`,
+        /// `fp_reorg_by_delta_equals_building_the_winning_branch_fresh` — all run with every ADR-0145
+        /// fence dormant, so nothing in them exercises the rows the new economy writes. The durable
+        /// prompt row is the sharpest of those: it is the one piece of state this work made OUTLIVE its
+        /// claim, and a row that outlives its claim but not its REORG would be a fork in the credit.
+        ///
+        /// Three properties, in the order a node meets them:
+        ///
+        /// 1. **Undo is exact.** Reverting the deltas of a branch reaches the parent's state root,
+        ///    byte for byte, at every step back.
+        /// 2. **Redo is exact**, and a fresh walk of the same blocks reaches the same root as replaying
+        ///    the deltas — which is what a node that reorged and a node that never did must agree on.
+        /// 3. **IBD carries it.** `PalwStateCarriageV2` round-trips through borsh at every one of those
+        ///    points and the root survives, so a node that joined by pruning proof prices the next
+        ///    prompt exactly as the node that watched it arrive. A carriage that serialised the prompt
+        ///    rows and did not read them back would be silent: the chain would simply start paying for
+        ///    prefills it had already bought.
+        #[test]
+        fn audit_a_reorg_and_an_ibd_agree_with_a_fresh_walk_past_the_economic_bundle() {
+            let (p, base, class, _) = derived_work_chain();
+            // The compute era reads the floor's derived draw to size the network quantum, and the
+            // registry's first boundary is what writes that row on a real chain. Inserted directly
+            // here, as this module's other properties do: the subject is the reorg, not the registry.
+            let base = with_floor_row(base);
+            // The whole bundle, not one fence of it: canonical work sets the unit, derived work the
+            // derivation, and admission independence the lifecycle — `validate_palw_v2` refuses to arm
+            // them apart, so a property that armed one would be testing a chain nobody can run.
+            let armed = PalwTransitionExtrasV1 { admission_independence_daa: Some(0), ..compute_era() };
+            let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+            let profile = derived_profile();
+            let leaves = |n: u32| crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, n, 8, 1 << 26).unwrap();
+            let ids: Vec<u32> = (0..32).collect();
+
+            // A branch of three commitments of one conversation, so the prompt rows accumulate and the
+            // later ones' credit DEPENDS on the earlier ones' rows — the state a reorg must undo.
+            let blocks: Vec<(u64, PalwConsensusObjectV2)> = [8u32, 16, 32]
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (0xF0 + i as u64, derived_commit_from(1, 0xF0 + i as u64, &ids[..*n as usize], 8, leaves(*n))))
+                .collect();
+
+            let mut states = vec![published.clone()];
+            let mut deltas = Vec::new();
+            for (i, (_, object)) in blocks.iter().enumerate() {
+                let parent = states.last().unwrap().clone();
+                let (next, delta) =
+                    apply_derived(&parent, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), &[object.clone()], &armed)
+                        .unwrap_or_else(|e| panic!("block {i} applies: {e:?}"));
+                states.push(next);
+                deltas.push(delta);
+            }
+            let tip = states.last().unwrap().clone();
+            assert_eq!(tip.fp_claimed_prompt_ids_of(&class, 105).len(), 3, "three prompts are on the branch");
+
+            // 1. Undo is exact, one block at a time, all the way back.
+            let mut walked_back = tip.clone();
+            for (i, delta) in deltas.iter().enumerate().rev() {
+                walked_back = revert_delta_v2(&walked_back, delta, &p).unwrap_or_else(|e| panic!("block {i} reverts: {e:?}"));
+                assert_eq!(walked_back.state_root(), states[i].state_root(), "the revert of block {i} reaches its parent's root");
+            }
+            assert!(walked_back.fp_claimed_prompt_ids_of(&class, 105).is_empty(), "and the branch's prompt rows go with it");
+
+            // 2. Redo is exact, and a FRESH walk of the same blocks agrees with replaying the deltas.
+            let mut replayed = walked_back.clone();
+            for (i, delta) in deltas.iter().enumerate() {
+                replayed = apply_delta_v2(&replayed, delta, &p).unwrap_or_else(|e| panic!("block {i} re-applies: {e:?}"));
+                assert_eq!(replayed.state_root(), states[i + 1].state_root(), "replaying block {i} reaches the same root");
+            }
+            let mut fresh = published.clone();
+            for (i, (_, object)) in blocks.iter().enumerate() {
+                let (next, _) = apply_derived(&fresh, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), &[object.clone()], &armed)
+                    .expect("the fresh walk applies");
+                fresh = next;
+            }
+            assert_eq!(fresh.state_root(), tip.state_root(), "a node that never reorged and one that did agree on the tip");
+
+            // 3. IBD: the carriage round-trips at every point on the branch, root and credit intact.
+            for (i, state) in states.iter().enumerate() {
+                let carriage = PalwStateCarriageV2::from_state(state);
+                let bytes = borsh::to_vec(&carriage).expect("the carriage serializes");
+                let restored: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("and reads back");
+                let back = restored.into_state(&p, Some(state.state_root())).unwrap_or_else(|e| panic!("point {i} round-trips: {e:?}"));
+                assert_eq!(back.state_root(), state.state_root(), "point {i}: the root survives an IBD");
+                assert_eq!(
+                    back.fp_claimed_prompt_ids_of(&class, 105),
+                    state.fp_claimed_prompt_ids_of(&class, 105),
+                    "point {i}: and so does every prefix the chain has already bought"
+                );
+            }
+
+            // And the credit really did depend on the rows, so the three properties above are about
+            // something: the same prompt priced on the reverted chain costs what it cost the first time.
+            let repeat = derived_commit_from(1, 0xFA, &ids[..16], 8, leaves(16));
+            let (on_fresh, _) = apply_derived(&published, &p, &ctx(9, 120, 9), &[repeat.clone()], &armed).expect("fresh");
+            let (on_reverted, _) = apply_derived(&walked_back, &p, &ctx(9, 120, 9), &[repeat], &armed).expect("reverted");
+            assert_eq!(
+                on_fresh.claim(&h64(0xFA)).unwrap().pwu,
+                on_reverted.claim(&h64(0xFA)).unwrap().pwu,
+                "a reorged-away branch leaves no discount behind, and no debt either"
+            );
+        }
+
         /// The bundle's two halves the lane reads: the unit (canonical work) and the derivation.
         fn compute_era() -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 { fp_derived_work_daa: Some(0), canonical_work_daa: Some(0), ..Default::default() }
