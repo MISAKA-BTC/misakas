@@ -99,7 +99,12 @@ start_node() {
   [ -n "$ANCHOR_CLOCK_AT" ] && args+=(--palw-anchor-clock-devnet="$ANCHOR_CLOCK_AT")
   [ -n "$ARTIFACT_ROOT_OWNERSHIP_AT" ] && args+=(--palw-artifact-root-ownership-devnet="$ARTIFACT_ROOT_OWNERSHIP_AT")
   [ "$with_artifact" = 1 ] && args+=(--palw-class-artifact="$CLASS_ARTIFACT")
-  args+=(--connect="127.0.0.1:$P2P_BASE")
+  # **node-0 is the hub; telling it to dial itself is not a no-op.** finals.sh guards this with
+  # `[ "$i" -gt 0 ]` and this script did not, so phase 3 started node-0 with
+  # `--listen=127.0.0.1:16710 --connect=127.0.0.1:16710`. `--connect` also sets the outbound
+  # target to zero and disables discovery, so the fleet has exactly one edge to form and it was
+  # the hub pointed at itself.
+  [ "$i" -gt 0 ] && args+=(--connect="127.0.0.1:$P2P_BASE")
   [ -n "$HEARTBEAT_NODE" ] && [ "$i" = "$HEARTBEAT_NODE" ] && args+=(--palw-heartbeat-miner-address="$addr")
   if [ -n "$MINER_BIN" ] && [ "$i" -eq "$MINER_NODE" ]; then args+=(--rpclisten="127.0.0.1:$GRPC_PORT"); else args+=(--nogrpc); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >>"$WORK_DIR/node-$i.log" 2>&1 &
@@ -179,6 +184,25 @@ until registry_answers 1; do
   sleep 3
 done
 log "node-1 answers op 186 after ${waited}s"
+
+# **A fleet with no peers stops the DAA clock, and says nothing about it.** The heartbeat lane is
+# the only thing advancing the DAA on a network with no `bits`-priced producer, and its peer check
+# is a `trace!` — so run 20's phase 3 sat at DAA 153 for 30 minutes and reported "the class did not
+# become HELD", which was true and was not the fault. Ask the chain whether it is moving at all
+# before asking it anything else, and name the clock when it is not.
+clock_moves() {
+  local a b
+  a="$(cli 1 palw round-lane --output json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['virtualDaa'])" 2>/dev/null)"
+  sleep 60
+  b="$(cli 1 palw round-lane --output json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)['virtualDaa'])" 2>/dev/null)"
+  [ -n "$a" ] && [ -n "$b" ] && [ "$b" != "$a" ]
+}
+waited=0
+until clock_moves; do
+  waited=$((waited + 60))
+  [ "$waited" -ge 600 ] && die "the DAA clock has not moved in ${waited}s. This drill has no bits-priced lane, so the heartbeat IS the clock, and it holds silently when the node has no peers — check that every node opened its P2P listener on $P2P_BASE..$((P2P_BASE + NODES - 1)) and that they are connected. Nothing below this line would be about the chain."
+done
+log "the DAA clock moves (checked over ${waited}s of settling)"
 
 CLASS_ID="$(reg 1 "[c['classId'] for c in v.get('classes', []) if not c.get('isBaseClass') and c.get('hasRow')][0]")"
 [ -n "$CLASS_ID" ] || die "node-1 answers op 186 but lists no non-base class with a row — the registry is genuinely empty of registered classes"
