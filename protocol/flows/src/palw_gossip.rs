@@ -163,7 +163,22 @@ const SERVE_BUDGET_BYTES_PER_WINDOW: u64 = 256 << 20;
 /// on a 25-DAA throttle (~50 minutes at the frozen cadence), so this is far above any honest need
 /// and far below what a request loop can conjure.
 const SERVE_BUDGET_BYTES_PER_PEER: u64 = 48 << 20;
-/// How long one claim stays un-servable after a serve is ATTEMPTED for it.
+/// How long one claim stays un-servable **to one asker** after a serve is ATTEMPTED for it.
+///
+/// **Keyed by `(peer, claim)`, not by the claim** (the 2026-09-20 Studio drill). Keyed by the
+/// claim alone it refused the honest fan-out it sits beside: a panel binds at one block, all of
+/// its seats see the duty at the same tick and pull the same claim within a second, and the first
+/// was served while the other four were refused for the window — silently, since a refusal sends
+/// nothing. A seat re-pulls on its own throttle, and on the devnet's 40-DAA receipt window the
+/// half-window accusation came first: four `Unavailable`s, a quorum, and an honest free-prompt
+/// producer defaulted for a material it was holding and serving. The budget arithmetic below
+/// already counted "five seats pulling one 9.7 MB claim"; the throttle did not.
+///
+/// What the throttle is FOR survives the re-key: one asker cannot loop a claim's read (audit3 H6),
+/// and the record is still charged on the attempt. What it no longer does is make one seat's pull
+/// a reason to refuse another's — the read rate across askers is the per-peer share and the
+/// node-wide ceiling, which charge real bytes, and on a panel node only the claim's readers get
+/// past `authorize_serve` to ask at all.
 const SERVE_THROTTLE: std::time::Duration = std::time::Duration::from_secs(10);
 /// A pull's answer is exempt from the per-claim budget for this long after asking.
 ///
@@ -181,7 +196,8 @@ const OUTSTANDING_PULL_CAP: usize = 512;
 
 /// **The serve throttle is a courtesy, and it must not become the cost centre.**
 ///
-/// `served_recently` is keyed by a claim id taken straight off the wire — no on-chain existence
+/// `served_recently` is keyed by a claim id taken straight off the wire (with its asker, since the
+/// 2026-09-20 re-key — see [`SERVE_THROTTLE`]) — no on-chain existence
 /// check, no signature, no per-peer request rate — and the window sweep used to walk the WHOLE map
 /// on every request, under a `std::sync::Mutex` held from an async task. A peer sending a fresh
 /// random claim id per ~70-byte request therefore bought one entry and one full walk each time:
@@ -271,21 +287,21 @@ pub const PALW_MATERIAL_BUDGET_WINDOW: std::time::Duration = std::time::Duration
 /// request walks the map under the lock any more.
 #[derive(Default)]
 struct ServeThrottle {
-    at: HashMap<Hash64, std::time::Instant>,
-    order: VecDeque<Hash64>,
+    at: HashMap<(PeerKey, Hash64), std::time::Instant>,
+    order: VecDeque<(PeerKey, Hash64)>,
 }
 
 impl ServeThrottle {
-    fn recorded_at(&self, claim: &Hash64) -> Option<std::time::Instant> {
-        self.at.get(claim).copied()
+    fn recorded_at(&self, asked: &(PeerKey, Hash64)) -> Option<std::time::Instant> {
+        self.at.get(asked).copied()
     }
 
-    /// Charge `claim` its window. A claim already recorded keeps its place in the FIFO and only
-    /// refreshes its time: moving it would let a peer pin an entry by re-asking, which is the
+    /// Charge `(peer, claim)` its window. A pair already recorded keeps its place in the FIFO and
+    /// only refreshes its time: moving it would let a peer pin an entry by re-asking, which is the
     /// behaviour the throttle exists to charge for.
-    fn record(&mut self, claim: Hash64, now: std::time::Instant) {
-        if self.at.insert(claim, now).is_none() {
-            self.order.push_back(claim);
+    fn record(&mut self, asked: (PeerKey, Hash64), now: std::time::Instant) {
+        if self.at.insert(asked, now).is_none() {
+            self.order.push_back(asked);
             while self.order.len() > SERVED_RECENTLY_CAP {
                 let Some(oldest) = self.order.pop_front() else { break };
                 self.at.remove(&oldest);
@@ -467,7 +483,7 @@ impl PalwGossipCenter {
     async fn resolve_material_bytes(&self, peer: PeerKey, claim: Hash64) -> Option<Vec<u8>> {
         {
             let served = self.served_recently.lock().unwrap();
-            if let Some(at) = served.recorded_at(&claim)
+            if let Some(at) = served.recorded_at(&(peer, claim))
                 && std::time::Instant::now().duration_since(at) < SERVE_THROTTLE
             {
                 return None;
@@ -505,7 +521,7 @@ impl PalwGossipCenter {
         // claim throttle being defeated at all.
         {
             let mut served = self.served_recently.lock().unwrap();
-            served.record(claim, std::time::Instant::now());
+            served.record((peer, claim), std::time::Instant::now());
         }
         // **Past the reservation every exit costs the asker [`SERVE_ATTEMPT_FLOOR_BYTES`].** The
         // refund used to return the reservation minus the bytes actually sent, and the whole
@@ -1677,9 +1693,9 @@ mod tests {
 
         assert!(center.resolve_material_for_serve(peer(1), claim).await.is_some(), "the first ask is answered");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
-        // Immediately again — and from a DIFFERENT peer, so this is the claim throttle rather than
-        // the per-peer budget doing the work.
-        assert!(center.resolve_material_for_serve(peer(2), claim).await.is_none(), "the claim is inside its throttle window");
+        // Immediately again from the SAME asker — the loop the throttle exists to charge for (the
+        // per-peer budget has room, so this is the throttle doing the work).
+        assert!(center.resolve_material_for_serve(peer(1), claim).await.is_none(), "the claim is inside its throttle window");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "and the refusal did NOT touch the disk");
 
         // **A serve that reached the resolver and produced nothing is still charged.** This is
@@ -1691,7 +1707,7 @@ mod tests {
         center.set_material_resolver(std::sync::Arc::new(move |_| None));
         assert!(center.resolve_material_for_serve(peer(4), absent).await.is_none(), "nothing on disk, nothing served");
         assert!(
-            center.served_recently.lock().unwrap().recorded_at(&absent).is_some(),
+            center.served_recently.lock().unwrap().recorded_at(&(peer(4), absent)).is_some(),
             "a serve that found nothing still costs the asker its throttle window, or the refusal is free and repeatable"
         );
 
@@ -1712,9 +1728,39 @@ mod tests {
         //     record now costs `SERVE_ATTEMPT_FLOOR_BYTES` of the asker's own share, which is the
         //     only currency nothing on the wire can reset.
         assert!(
-            center.served_recently.lock().unwrap().recorded_at(&other).is_none(),
+            center.served_recently.lock().unwrap().recorded_at(&(peer(3), other)).is_none(),
             "a request this node's budget refused must not buy an entry in the map — that is the eviction being free"
         );
+    }
+
+    /// **Every seat of a panel is served the claim it was bound to, at once** (the 2026-09-20 Studio
+    /// drill). A panel binds at one block, so its seats pull the same claim within a second. Keyed
+    /// by the claim, the throttle served the first and refused the other four, and on a 40-DAA
+    /// receipt window those four signed `Unavailable` before their next pull: an honest producer
+    /// defaulted for a material it held. Each asker is its own window now — and each is still
+    /// throttled against itself.
+    #[tokio::test]
+    async fn every_seat_of_a_panel_is_served_the_same_claim_at_once() {
+        let center = PalwGossipCenter::default();
+        let claim = h64(0x5EA7);
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reads.clone();
+        // The drill's material: 9,796,853 bytes, a free-prompt capture of the Qwen2.5 A16 class.
+        center.set_material_resolver(std::sync::Arc::new(move |_| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(vec![0u8; 9_796_853])
+        }));
+        for seat in 1..=5u128 {
+            assert!(center.resolve_material_for_serve(peer(seat), claim).await.is_some(), "seat {seat} of the panel is served");
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 5, "one read per seat, inside the node-wide allowance");
+        for seat in 1..=5u128 {
+            assert!(
+                center.resolve_material_for_serve(peer(seat), claim).await.is_none(),
+                "seat {seat} re-asking inside its window is the loop the throttle charges for"
+            );
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 5, "and no re-ask touched the disk");
     }
 
     /// **A stranger must not be able to decide how much memory this node uses** (audit
@@ -2225,15 +2271,18 @@ mod tests {
             "one peer filled the throttle map ({held} of {SERVED_RECENTLY_CAP}), which is what evicting somebody else's record takes"
         );
 
-        // The honest claim is inside its window still, and no message any peer can send may change
-        // that. Asked from a THIRD peer, so this is the claim throttle and not a spent budget.
-        // (The flooder's own admitted requests did read the disk — that is the floor being charged
-        // — so the count is sampled here, and what must not move is the read for SOMEBODY ELSE'S
-        // claim.)
+        // The honest seat's record is inside its window still, and no message any peer can send may
+        // change that: the seat re-asking is refused, and the disk is not touched for it. (The
+        // flooder's own admitted requests did read the disk — that is the floor being charged — so
+        // the count is sampled here, and what must not move is the read the flood was buying.)
         let reads_before = reads.load(std::sync::atomic::Ordering::SeqCst);
         assert!(
-            center.resolve_material_for_serve(peer(3), honest).await.is_none(),
-            "a flooder must not be able to buy this node a fresh read of somebody else's claim"
+            center.served_recently.lock().unwrap().recorded_at(&(peer(1), honest)).is_some(),
+            "the honest seat's record survived the flood"
+        );
+        assert!(
+            center.resolve_material_for_serve(peer(1), honest).await.is_none(),
+            "a flooder must not be able to buy the honest seat a fresh read inside its own window"
         );
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), reads_before, "and the disk was not touched for it");
     }
@@ -2284,7 +2333,7 @@ mod tests {
              price of ~70-byte messages again"
         );
         assert!(
-            center.served_recently.lock().unwrap().recorded_at(&honest).is_some(),
+            center.served_recently.lock().unwrap().recorded_at(&(peer(1), honest)).is_some(),
             "and the honest claim's window, which is the thing the flood was buying, is still there"
         );
 

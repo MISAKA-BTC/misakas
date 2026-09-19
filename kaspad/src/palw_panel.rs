@@ -263,6 +263,14 @@ const COURT_MOVE_REPLAN_DAA: u64 = 10;
 /// sequences of moves — the ladder's rounds, the fused terminal's root claim, and the dissection's
 /// own rounds, which restart at 0 — and keyed by the bare number a dissection move would be taken
 /// for a ladder move already sent and skipped as "moved" while its rung clock ran out.
+/// **How often a seat holding no verifying material asks for it again**: a quarter of the receipt
+/// window, so two asks land before the half-window `Unavailable`, and never less often than the
+/// 25 DAA it always was. Before 2026-09-20 it was a flat 25 against a devnet half-window of 20, so a
+/// seat whose one pull went unanswered accused without asking twice.
+fn seat_reask_daa_v1(receipt_window_daa: u64) -> u64 {
+    (receipt_window_daa / 4).clamp(1, 25)
+}
+
 fn court_move_round_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u32 {
     const DISSECTION: u32 = 1 << 31;
     const ROOT_CLAIM: u32 = 1 << 30;
@@ -4865,7 +4873,17 @@ impl PalwPanelService {
                     // the pool is non-empty and matches nothing, the seat never asks, and at half
                     // the window it signs `Unavailable` against an honest producer. Reaching this
                     // line already means every pooled payload failed to verify.
-                    if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
+                    //
+                    // **At least twice before the accusation below** (the 2026-09-20 Studio drill).
+                    // The re-ask was a flat 25 DAA, and the accusation comes at half the receipt
+                    // window: on the devnet's 40-DAA window that is 20, so a seat whose first pull
+                    // went unanswered — the executor's throttle refused four of five seats asking
+                    // in the same second — signed `Unavailable` without ever asking again. A
+                    // quarter of the window puts two asks inside the half; 25 stays the ceiling, so
+                    // a long window (testnet-11's) re-asks exactly as before.
+                    let window = duty.receipt_deadline.saturating_sub(duty.bound_daa);
+                    let reask_daa = seat_reask_daa_v1(window);
+                    if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(reask_daa)) {
                         requested.insert(duty.claim_id, current_daa);
                         // Registered with the gossip center first, and SIGNED (ADR-0077 SA-2): the
                         // answer must be exempt from the per-claim relay budget an attacker may
@@ -4876,7 +4894,6 @@ impl PalwPanelService {
                     }
                     // Wait out half the window before accusing — gossip is not instant and an
                     // early `Unavailable` is a false accusation with a signature on it.
-                    let window = duty.receipt_deadline.saturating_sub(duty.bound_daa);
                     if current_daa >= duty.bound_daa.saturating_add(window / 2) {
                         break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
                             chunk_index: 0,
@@ -7874,6 +7891,25 @@ mod accepted_objects_walk_tests {
         assert_eq!(walk(0, 1), vec![8, 7], "and so does the block cap");
         // Nothing in this chain is a root claim: the tile read finds none rather than a wrong one.
         assert!(attn_root_filings_from_chain_v1(&chain, Hash64::from_u64_word(1), 0, 100).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod seat_reask_tests {
+    use super::seat_reask_daa_v1;
+
+    /// A seat asks at least twice before it may accuse: the first pull at the bind and a re-ask
+    /// strictly inside the half window, at every window a ruleset can set — and a long window keeps
+    /// the old 25-DAA cadence. The 2026-09-20 drill's window was 40: one ask, then `Unavailable`.
+    #[test]
+    fn a_seat_asks_twice_before_it_may_accuse() {
+        assert_eq!(seat_reask_daa_v1(40), 10, "the devnet's receipt window");
+        assert_eq!(seat_reask_daa_v1(600), 25, "a long window re-asks exactly as before");
+        for window in 4..=2_000u64 {
+            let reask = seat_reask_daa_v1(window);
+            assert!(reask >= 1 && reask <= 25);
+            assert!(reask < window / 2, "window {window}: the second ask at +{reask} is not before the accusation at +{}", window / 2);
+        }
     }
 }
 
