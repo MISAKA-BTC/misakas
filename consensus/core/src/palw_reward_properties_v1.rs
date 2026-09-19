@@ -1627,3 +1627,61 @@ fn the_price_unit_stays_raw_because_it_is_a_denominator() {
         "and it is pure — it takes the state and the fence rather than reaching for either"
     );
 }
+
+/// **Every place that asks admission a question asks it under the same fence.**
+///
+/// `PalwEpochBudgetFencesV1` is how the per-block fence resolutions reach
+/// `check_palw_attempt_admission_v2`, and it is built in more than one place: the processor's
+/// pre-check, and the fold's re-check of a MERGED blue's attempt. When `canonical_work_daa` was
+/// added to it, the processor's site was updated and the fold's was not — and `..Default::default()`
+/// filled it with `None`, which is the DECLARED pwu rule.
+///
+/// Past the bundle the pre-check therefore asked for the derived pwu and the re-check asked for the
+/// declared one. **No attempt satisfies both**, so every merged blue's work was skipped: no claim,
+/// no weight, no error. A skip is how the fold declines work it cannot price, so nothing logged and
+/// nothing failed — the chain does not stop, and a drill watching for liveness sees a healthy
+/// network quietly paying nobody for merged work.
+///
+/// A behavioural fixture cannot catch the NEXT field added to this struct, so this reads the source:
+/// every production construction of it must name `canonical_work_daa` rather than inherit it.
+#[test]
+fn every_construction_of_the_admission_fences_names_the_canonical_work_height() {
+    let sources = [
+        ("palw_state_v2.rs", include_str!("palw_state_v2.rs")),
+        ("processor.rs", include_str!("../../src/pipeline/virtual_processor/processor.rs")),
+    ];
+    let mut checked = 0;
+    for (name, source) in sources {
+        let body = source.find("\n#[cfg(test)]").map(|at| &source[..at]).unwrap_or(source);
+        for (at, _) in body.match_indices("PalwEpochBudgetFencesV1 {") {
+            // The literal runs from its opening brace to the one that balances it. Cutting on an
+            // indentation guess is what the first draft of this test did, and it read the wrong
+            // span — the same class of mistake the test is about.
+            let open = at + body[at..].find('{').expect("the literal has an opening brace");
+            let mut depth = 0usize;
+            let mut close = open;
+            for (offset, ch) in body[open..].char_indices() {
+                match ch {
+                    '{' => depth += 1,
+                    '}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = open + offset;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let literal = &body[open..=close];
+            assert!(
+                literal.contains("canonical_work_daa"),
+                "{name}: a construction of PalwEpochBudgetFencesV1 does not name canonical_work_daa, so it \
+                 inherits None — the DECLARED pwu rule — while its neighbour asks for the derived one. \
+                 No attempt satisfies both and the work is silently skipped."
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 2, "both the fold's re-check and the processor's pre-check are still here (found {checked})");
+}
