@@ -185,6 +185,21 @@ pub struct ValidatorKey {
     pub validator_id: Hash64,
 }
 
+/// **Who says whether a free-prompt commitment earns a quantum**, for
+/// [`ValidatorKey::build_fp_commitment_tx`] — the one question the builder asks before a fee is
+/// spent on a carrier the transition would refuse.
+#[derive(Clone, Copy, Debug)]
+pub enum FpCommitmentPriceV1<'a> {
+    /// The chain's own price for the job as carried (`GetPalwFreePromptPrice`, ADR-0148 §6, asked
+    /// with [`kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1`]): the fold's
+    /// function at the virtual's DAA. The only source past the ADR-0145 bundle, where the ledger
+    /// prices compute.
+    Chain { quanta: u32, pwu: u64 },
+    /// No node was asked — offline, or one older than the op: the leaves era's derivation against
+    /// the class's canonical job, which is the chain's own rule below the bundle.
+    Leaves { freeprompt: &'a kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3, class_canonical_leaves: u64 },
+}
+
 impl ValidatorKey {
     pub fn from_seed(seed: [u8; VALIDATOR_SEED_LEN]) -> Self {
         let keypair = ml_dsa_87::generate_key_pair(seed);
@@ -769,9 +784,11 @@ impl ValidatorKey {
     ///
     /// The price is NOT re-derived here on purpose: `work_leaves` is the capture's leaf count the
     /// worker read off its binding (ADR-0074 Decision 5), and the seats verify it against the
-    /// served capture. What IS asked here is the transition's own question — does this many
-    /// leaves earn a whole quantum of `class_canonical_leaves`, the class's canonical job size —
-    /// so a sub-quantum claim never pays a fee to be refused.
+    /// served capture. What IS asked here is the transition's own question — does this claim earn
+    /// a whole quantum — so a sub-quantum claim never pays a fee to be refused. WHO answers it is
+    /// the caller's `price` ([`FpCommitmentPriceV1`]): the chain's own quote wherever a node was
+    /// asked, because past the ADR-0145 bundle the ledger prices compute and the leaves no longer
+    /// decide (ADR-0148); the leaves era's derivation only where no node could be.
     #[allow(clippy::too_many_arguments)]
     pub fn build_fp_commitment_tx(
         &self,
@@ -779,8 +796,7 @@ impl ValidatorKey {
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
         commitment: PalwFreePromptCommitmentV3,
         prompt_token_ids: Vec<u32>,
-        freeprompt: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3,
-        class_canonical_leaves: u64,
+        price: FpCommitmentPriceV1<'_>,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
         fee: u64,
@@ -805,13 +821,31 @@ impl ValidatorKey {
         payload
             .validate_stateless_v3(network_domain, prompt_ids_form)
             .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
-        let (quanta, pwu) = freeprompt.derive_quanta_and_pwu(payload.commitment.work_leaves, class_canonical_leaves).ok_or_else(|| {
-            format!(
-                "free-prompt job earns no quanta at {} leaves against a {class_canonical_leaves}-leaf canonical job — it certifies \
-                 nothing the chain can act on",
-                payload.commitment.work_leaves
-            )
-        })?;
+        let (quanta, pwu) = match price {
+            // **The chain's own number, not a re-derivation of it.** The 2026-09-20 Studio drill:
+            // past the bundle a chat of 3,806,528 leaves that the chain priced at 17,883 quanta was
+            // refused here as earning none "against a 83102171136-leaf canonical job" — the leaves
+            // era's question, asked of a claim the ledger prices in compute.
+            FpCommitmentPriceV1::Chain { quanta, pwu } => {
+                if quanta == 0 {
+                    return Err(format!(
+                        "free-prompt job earns no quanta by the chain's own price ({} leaves) — it certifies nothing the chain can \
+                         act on",
+                        payload.commitment.work_leaves
+                    ));
+                }
+                (quanta, pwu)
+            }
+            FpCommitmentPriceV1::Leaves { freeprompt, class_canonical_leaves } => {
+                freeprompt.derive_quanta_and_pwu(payload.commitment.work_leaves, class_canonical_leaves).ok_or_else(|| {
+                    format!(
+                        "free-prompt job earns no quanta at {} leaves against a {class_canonical_leaves}-leaf canonical job — it \
+                         certifies nothing the chain can act on",
+                        payload.commitment.work_leaves
+                    )
+                })?
+            }
+        };
         if quanta == 0 || pwu % (quanta as u64) != 0 || pwu / (quanta as u64) == 0 {
             return Err(format!("free-prompt derivation is not uniform ({pwu} pwu over {quanta} quanta)"));
         }
@@ -2105,8 +2139,7 @@ mod tests {
                 kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 commitment,
                 ids.clone(),
-                &bundle.freeprompt,
-                FLOOR_LEAVES,
+                FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: FLOOR_LEAVES },
                 fop(9, 0),
                 &fentry(u64::MAX / 2, 0, false),
                 SF_FEE,
@@ -2157,8 +2190,7 @@ mod tests {
                 kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 commitment.clone(),
                 wrong_ids,
-                &bundle.freeprompt,
-                FLOOR_LEAVES,
+                FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: FLOOR_LEAVES },
                 fop(9, 0),
                 &fentry(u64::MAX / 2, 0, false),
                 SF_FEE,
@@ -2195,14 +2227,54 @@ mod tests {
                 kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 tiny,
                 tiny_ids,
-                &bundle.freeprompt,
-                FLOOR_LEAVES,
+                FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: FLOOR_LEAVES },
                 fop(9, 0),
                 &fentry(u64::MAX / 2, 0, false),
                 SF_FEE,
             )
             .unwrap_err();
         assert!(err.contains("earns no quanta"), "got {err}");
+    }
+
+    /// **Past the bundle the chain's price decides, not the leaves** (ADR-0148). The 2026-09-20
+    /// Studio drill: a chat the chain priced at 17,883 quanta was refused by the builder as earning
+    /// none against the class's canonical leaves, so the rail never carried it. With the chain's
+    /// quote the same sub-quantum-by-leaves job builds; a quote of zero quanta is still refused,
+    /// and a non-uniform one too — the builder checks the chain's number, it does not trust a typo.
+    #[test]
+    fn fp_commitment_tx_asks_the_chains_price_where_it_was_quoted() {
+        let key = compute_key();
+        let bundle = fp_bundle();
+        let network_domain = Hash64::from_bytes([0x4E; 64]);
+        let quantum = kaspa_consensus_core::palw_freeprompt_v3::fp_class_quantum_leaves_v1(
+            FLOOR_LEAVES,
+            bundle.freeprompt.quanta_per_canonical_job(),
+        );
+        let (mut job, ids) = fp_commitment_fixture_with_prompt(network_domain, &key, 8);
+        job.decode_tokens_executed = 1;
+        job.work_leaves = quantum / 2;
+        let build = |price: FpCommitmentPriceV1<'_>| {
+            key.build_fp_commitment_tx(
+                network_domain,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                job.clone(),
+                ids.clone(),
+                price,
+                fop(9, 0),
+                &fentry(u64::MAX / 2, 0, false),
+                SF_FEE,
+            )
+        };
+        // The leaves era refuses it…
+        let leaves = FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: FLOOR_LEAVES };
+        assert!(build(leaves).unwrap_err().contains("earns no quanta"));
+        // …the chain's compute price admits it, and the payload is the same commitment.
+        let tx = build(FpCommitmentPriceV1::Chain { quanta: 17_883, pwu: 17_883 * 5 }).expect("the chain's price admits it");
+        let decoded: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).expect("the payload decodes");
+        assert_eq!(decoded.claim_id(), fp_claim_id_v3(&job));
+        // A chain that prices it at nothing, or unevenly, is refused before the fee.
+        assert!(build(FpCommitmentPriceV1::Chain { quanta: 0, pwu: 0 }).unwrap_err().contains("by the chain's own price"));
+        assert!(build(FpCommitmentPriceV1::Chain { quanta: 3, pwu: 10 }).unwrap_err().contains("not uniform"));
     }
 
     /// The fixed key the free-prompt builder tests above sign with.

@@ -2284,6 +2284,28 @@ impl PalwPanelService {
         };
         let seed = kaspa_pq_validator_core::load_validator_seed(&self.config.key_path)?;
         let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        // **ADR-0148: the fold's own price, asked of this node's own state**, with the ids the
+        // carrier holds (none: a canonical payload carries no prompt). Past the ADR-0145 bundle the
+        // ledger prices compute and the leaves rule no longer says whether the claim earns; below
+        // it the function IS the leaves rule. A refusal is the fold's, by name, before any fee.
+        let carried = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&job, &ids);
+        let price = match session.palw_fp_commitment_price_v1(
+            class_id,
+            carried.clone(),
+            job.prompt_tokens,
+            commitment.decode_tokens_executed,
+            commitment.work_leaves,
+            Some(bond),
+        ) {
+            Some(answer) => match answer.price {
+                Ok(price) => kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: price.quanta, pwu: price.pwu },
+                Err(refusal) => return Err(format!("the chain would refuse this canonical claim: {refusal}")),
+            },
+            None => kaspa_pq_validator_core::FpCommitmentPriceV1::Leaves {
+                freeprompt: &bundle.freeprompt,
+                class_canonical_leaves: per_inference,
+            },
+        };
         // Canonical: the chain carries no prompt ids (they are a function of the job). Built
         // twice — once at the floor to read the carrier's mass, once at the fee that mass prices —
         // because the fee is the only field the second build changes and the mass does not move
@@ -2296,9 +2318,8 @@ impl PalwPanelService {
                 // so it reads nothing here.
                 self.config.prompt_ids_form,
                 commitment.clone(),
-                Vec::new(),
-                &bundle.freeprompt,
-                per_inference,
+                carried.clone(),
+                price,
                 funding_outpoint,
                 funding,
                 fee,

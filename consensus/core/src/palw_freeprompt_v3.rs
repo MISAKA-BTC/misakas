@@ -317,6 +317,22 @@ pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes)
 }
 
+/// **The prompt ids a commitment's carrier holds** — and therefore the ids the transition reads
+/// (`FreePromptCommitted.prompt_token_ids` is the payload's list, and ADR-0145 §6's prefix
+/// accounting reads it). Empty under the two modes whose payload carries none, which
+/// `validate_stateless_under_ruleset_v3` REQUIRES empty: `PanelDa` privacy (ADR-0077 Decision 16)
+/// and the canonical prompt mode (ADR-0074 Decision 1).
+///
+/// A price asked for before the carrier exists (`GetPalwFreePromptPrice`) must be asked with these
+/// ids and not with the job's full prompt, or the quote and the fold price two different prompts.
+pub fn palw_fp_carried_prompt_ids_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32]) -> Vec<u32> {
+    if job.privacy_mode == PALW_FP_PRIVACY_PANEL_DA || job.prompt_mode == PALW_FP_PROMPT_MODE_CANONICAL {
+        Vec::new()
+    } else {
+        prompt_token_ids.to_vec()
+    }
+}
+
 /// The prompt is the user's (ADR-0044's lane, unchanged).
 pub const PALW_FP_PROMPT_MODE_USER: u8 = 0;
 /// The prompt is the family's canonical prompt for the job's own anchor (ADR-0074 Decision 1).
@@ -2101,6 +2117,21 @@ mod tests {
             sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
             temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
         }
+    }
+
+    /// A price asked before the carrier exists reads the ids the carrier will hold — the ones
+    /// `validate_stateless_under_ruleset_v3` admits, which the fold's prefix accounting reads: the
+    /// user's prompt under PublicDA, and NONE under PanelDa or a canonical prompt, whatever the
+    /// caller holds. A quote asked with the full prompt under PanelDa priced a claim the fold would
+    /// never see (the gateway and the rail both did, before this).
+    #[test]
+    fn a_quote_reads_the_ids_the_carrier_holds() {
+        let ids = [11u32, 12, 13];
+        assert_eq!(palw_fp_carried_prompt_ids_v1(&job(), &ids), ids.to_vec(), "PublicDA carries the user's prompt");
+        let panel_da = PalwFreePromptJobV3 { privacy_mode: PALW_FP_PRIVACY_PANEL_DA, ..job() };
+        assert!(palw_fp_carried_prompt_ids_v1(&panel_da, &ids).is_empty(), "PanelDa carries none");
+        let canonical = PalwFreePromptJobV3 { prompt_mode: PALW_FP_PROMPT_MODE_CANONICAL, ..job() };
+        assert!(palw_fp_carried_prompt_ids_v1(&canonical, &ids).is_empty(), "a canonical prompt is a function of the job");
     }
 
     fn commitment() -> PalwFreePromptCommitmentV3 {

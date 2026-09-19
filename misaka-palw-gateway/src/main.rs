@@ -303,6 +303,18 @@ impl PublicJobBudget {
             ));
         }
         let budget = Self::daily_budget(config, price);
+        // **A claim larger than the whole window is not a window that got spent.** Said as "spent
+        // (0 of N)" it read like a busy day; it is a setting under which no public job can EVER
+        // commit — the 2026-09-20 economy drill: past the ADR-0145 bundle one claim reserved the
+        // compute era's 147,880,590 sompi against a 200‰ budget of 110,000,868.
+        if price.claim_sompi > budget {
+            return Err(format!(
+                "one claim reserves {} sompi and this window's whole public-job budget is {} ({}‰ of the bond's room {}): \
+                 no public job can commit at this setting — raise --public-job-budget-permille (the Studio pool runs 1000) \
+                 or the bond's room",
+                price.claim_sompi, budget, config.public_job_budget_permille, price.room_sompi
+            ));
+        }
         if self.spent_sompi.saturating_add(price.claim_sompi) > budget {
             return Err(format!(
                 "the public-job budget for this window is spent ({} of {} sompi); the operator's own claims are not starved by strangers'",
@@ -1029,8 +1041,11 @@ fn handle_chat(
     // leaves. The node prices the job with the fold's own function at the virtual's DAA — the same
     // prefix accounting, the same quanta, the same reservation — so what is checked here is what
     // will be reserved there. A node older than the op answers nothing, and the estimate stands.
+    // Asked with the ids the carrier will hold — none under PanelDa — because those are the ids
+    // the fold's prefix accounting reads; the full prompt would quote a different claim.
+    let carried_ids = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&result.job, &result.prompt_token_ids);
     let chain_price = chain_source
-        .fp_job_price(&result.prompt_token_ids, result.job.prompt_tokens, commitment.decode_tokens_executed, work_leaves)
+        .fp_job_price(&carried_ids, result.job.prompt_tokens, commitment.decode_tokens_executed, work_leaves)
         .filter(|_| commit_refusal.is_none());
     let quanta = chain_price.as_ref().filter(|p| p.priced).map(|p| p.quanta).unwrap_or(quanta);
     if let Some(refused) = chain_price.as_ref().filter(|p| !p.priced) {
@@ -2045,6 +2060,12 @@ mod tests {
         let never = Config { answer_never_commit: true, ..bounded_config() };
         let err = PublicJobBudget::new().may_commit(&never, declared_price(&never)).unwrap_err();
         assert!(err.contains("answer, never commit"));
+
+        // A claim that fits the room but not the whole window's budget is a setting that can never
+        // commit, and says so — not "spent (0 of …)", which read like a busy day.
+        let never_fits = Config { claim_exposure_sompi: 300_000, ..bounded_config() };
+        let err = PublicJobBudget::new().may_commit(&never_fits, declared_price(&never_fits)).unwrap_err();
+        assert!(err.contains("no public job can commit at this setting") && err.contains("200‰"), "got {err}");
 
         // SA-7: a claim that would exceed the bond's room is refused HERE, at the entrance.
         let over = Config { claim_exposure_sompi: 2_000_000, ..bounded_config() };

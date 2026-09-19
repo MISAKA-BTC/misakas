@@ -53,7 +53,7 @@ use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePro
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
-use kaspa_pq_validator_core::{ATTESTATION_TX_FEE_FLOOR_SOMPI, VALIDATOR_SEED_LEN, ValidatorKey};
+use kaspa_pq_validator_core::{ATTESTATION_TX_FEE_FLOOR_SOMPI, FpCommitmentPriceV1, VALIDATOR_SEED_LEN, ValidatorKey};
 use kaspa_txscript::{pay_to_address_script, script_class::ScriptClass};
 
 fn die(msg: String) -> ! {
@@ -428,14 +428,25 @@ fn main() {
         )
     })
     .unwrap_or_else(|| die("the worker result's prompt ids do not commit to the job under either prompt-id form".into()));
+    // **ADR-0148: the chain's own price decides whether this claim earns a quantum**, wherever a
+    // node is named. Past the ADR-0145 bundle the ledger prices compute, and the leaves derivation
+    // below it said "earns no quanta" of a chat the chain priced at 17,883 (the 2026-09-20 Studio
+    // drill) — so the rail never carried it. The leaves rule stays for the offline path and for a
+    // node older than the op, where it is the only rule anyone can apply.
+    let chain_price =
+        rpc_endpoint.as_deref().and_then(|endpoint| chain_fp_price(&rpc_runtime(), endpoint, &commitment, &result.prompt_token_ids));
+    let price = match &chain_price {
+        Some(answer) if !answer.priced => die(format!("the chain would refuse this commitment: {}", answer.refusal)),
+        Some(answer) => FpCommitmentPriceV1::Chain { quanta: answer.quanta, pwu: answer.pwu },
+        None => FpCommitmentPriceV1::Leaves { freeprompt: &bundle.freeprompt, class_canonical_leaves: class_leaves },
+    };
     let build = |fee: u64| {
         key.build_fp_commitment_tx(
             commitment.job.network_domain,
             prompt_ids_form,
             commitment.clone(),
             result.prompt_token_ids.clone(),
-            &bundle.freeprompt,
-            class_leaves,
+            price,
             funding_outpoint,
             &funding_entry,
             fee,
@@ -496,10 +507,14 @@ fn main() {
         None
     };
 
-    let (quanta, pwu) = bundle
-        .freeprompt
-        .derive_quanta_and_pwu(commitment.work_leaves, class_leaves)
-        .expect("the builder already refused a sub-quantum job");
+    // The numbers the builder checked, from the source it checked them against — the leaves
+    // derivation here would contradict the chain past the bundle (and panic on its `None`).
+    let (quanta, pwu) = match price {
+        FpCommitmentPriceV1::Chain { quanta, pwu } => (quanta, pwu),
+        FpCommitmentPriceV1::Leaves { freeprompt, class_canonical_leaves } => freeprompt
+            .derive_quanta_and_pwu(commitment.work_leaves, class_canonical_leaves)
+            .expect("the builder already refused a sub-quantum job"),
+    };
     // **What this carrier leaves behind for the next one.** The commitment spends the one funding
     // input and pays its change back to the same script, so the change is a spendable outpoint the
     // moment the node accepts the transaction — the mempool resolves a child against its pending
@@ -532,6 +547,11 @@ fn main() {
         // as `--funding-outpoint`/`--funding-amount`. Null when the carrier left no change.
         "next_funding": next_funding,
         "class_leaves": class_leaves,
+        // Who priced it: "chain" (GetPalwFreePromptPrice, the fold's own function) or "leaves"
+        // (no node answered — the leaves era's rule).
+        "priced_by": if chain_price.is_some() { "chain" } else { "leaves" },
+        "priced_in_compute": chain_price.as_ref().map(|answer| answer.priced_in_compute),
+        "reserved_sompi": chain_price.as_ref().map(|answer| answer.reserved_sompi.clone()),
         "material_file": submitted.as_ref().and_then(|s| s.material_file.clone()),
         // ADR-0084 Decision 5: the answer envelope beside the material, and the directory the
         // node serves both from — the fact that was missing when the first two public
@@ -762,6 +782,33 @@ fn chain_class_leaves(endpoint: &str, class_id: Hash64) -> u64 {
     });
     let facts = facts.unwrap_or_else(|e| die(format!("cannot read class {class_id}'s facts from the node: {e}")));
     class_leaves_from_facts(&facts).unwrap_or_else(|why| die(why))
+}
+
+/// **ADR-0148: the chain's own price for this commitment**, on a connection opened for the question
+/// alone — a node older than `GetPalwFreePromptPrice` closes the WebSocket on the unknown op rather
+/// than answering "method not found". Asked with the ids the CARRIER will hold
+/// (`palw_fp_carried_prompt_ids_v1`: none under PanelDa or a canonical prompt), because those are
+/// the ids the fold reads; the job's full prompt would price a different prefix. `None` when the
+/// node does not answer (or holds no PALW state): the caller keeps the leaves era's rule.
+fn chain_fp_price(
+    runtime: &tokio::runtime::Runtime,
+    endpoint: &str,
+    commitment: &PalwFreePromptCommitmentV3,
+    prompt_token_ids: &[u32],
+) -> Option<kaspa_rpc_core::GetPalwFreePromptPriceResponse> {
+    use kaspa_rpc_core::api::rpc::RpcApi;
+    let client = try_rpc_connect(runtime, endpoint).ok()?;
+    let bond = commitment.job.executor_bond;
+    let answer = runtime.block_on(client.get_palw_free_prompt_price(kaspa_rpc_core::GetPalwFreePromptPriceRequest {
+        class_id: commitment.job.class_id.to_string(),
+        prompt_token_ids: kaspa_consensus_core::palw_freeprompt_v3::palw_fp_carried_prompt_ids_v1(&commitment.job, prompt_token_ids),
+        prompt_tokens: commitment.job.prompt_tokens,
+        decode_tokens_executed: commitment.decode_tokens_executed,
+        work_leaves: commitment.work_leaves,
+        bond: format!("{}:{}", bond.transaction_id, bond.index),
+    }));
+    let _ = runtime.block_on(client.disconnect());
+    answer.ok().filter(|a| a.available)
 }
 
 /// **`pwu_per_inference`, recovered from the facts** — through the lane's one inversion
@@ -1048,21 +1095,9 @@ mod watch {
         stem: &Path,
         commitment: &PalwFreePromptCommitmentV3,
     ) -> Option<Result<u128, String>> {
-        use kaspa_rpc_core::api::rpc::RpcApi;
         let bytes = std::fs::read(PathBuf::from(format!("{}.result.borsh", stem.display()))).ok()?;
         let result: super::PalwFpWorkerResultV3 = borsh::from_slice(&bytes).ok()?;
-        let client = super::try_rpc_connect(runtime, rpc).ok()?;
-        let bond = commitment.job.executor_bond;
-        let answer = runtime.block_on(client.get_palw_free_prompt_price(kaspa_rpc_core::GetPalwFreePromptPriceRequest {
-            class_id: commitment.job.class_id.to_string(),
-            prompt_token_ids: result.prompt_token_ids.clone(),
-            prompt_tokens: commitment.job.prompt_tokens,
-            decode_tokens_executed: commitment.decode_tokens_executed,
-            work_leaves: commitment.work_leaves,
-            bond: format!("{}:{}", bond.transaction_id, bond.index),
-        }));
-        let _ = runtime.block_on(client.disconnect());
-        let answer = answer.ok().filter(|a| a.available)?;
+        let answer = super::chain_fp_price(runtime, rpc, commitment, &result.prompt_token_ids)?;
         Some(if answer.priced { answer.reserved_sompi.parse::<u128>().map_err(|e| e.to_string()) } else { Err(answer.refusal) })
     }
 
