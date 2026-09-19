@@ -4965,6 +4965,40 @@ impl VirtualStateProcessor {
             // would be honest miners producing the invalid blocks. Behind the same
             // `palw_certification_rent` fence as the two rents it copies — `None` on every shipped
             // preset, and dormant this whole block is skipped.
+            // **ADR-0088 Decision 11's rent, actually collected** (audit 2026-09-19).
+            //
+            // `palw_object_rent_ceiling_v1` prices a line founding, a proposal and an evaluation at
+            // `PALW_MODEL_OBJECT_RENT_SOMPI_V1`, and the coinbase burns that much — but it burns
+            // `min(rent, fee)` (utxo_validation.rs), which is a CEILING on the burn and never a
+            // floor on the fee. A carrier paying one sompi burned one sompi, so the anti-spam price
+            // of the permissionless registry was not collected from anyone. The two objects above
+            // are refused by name when their carrier underpays; these three were not, and they are
+            // the three that fill a bounded table.
+            //
+            // Refused BEFORE the row is written, exactly as the two above are, and dropped with the
+            // block standing for the reason audit M-01 gives: admission on the lifecycle band is
+            // stateless, so invalidating would put honest miners on the losing side of somebody
+            // else's underpayment.
+            //
+            // On the same dormant fence as the other two: `palw_certification_rent` is `None` on
+            // every shipped preset, so this changes no block until an operator arms it.
+            if rent_armed
+                && matches!(
+                    &object,
+                    kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ModelLineFounded { .. }
+                        | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ModelProposalPosted { .. }
+                        | kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ModelEvaluationPosted { .. }
+                )
+            {
+                let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(&object);
+                if carrier_fee < owed {
+                    info!(
+                        "Block {block}: a model-registry object was dropped, and the block stands: its carrier paid \
+                         {carrier_fee} sompi and a row in a bounded registry table rents for {owed} (ADR-0088 Decision 11)"
+                    );
+                    continue;
+                }
+            }
             if rent_armed
                 && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::CourtCloseDeclared { session_id, count, .. } =
                     &object
