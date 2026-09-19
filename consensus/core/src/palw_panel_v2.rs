@@ -55,6 +55,14 @@ pub const PALW_PANEL_V2_DOMAIN_SEAT_TICKET: &[u8] = b"misaka-palw/panel-v2/seat-
 /// **ADR-0130: the operator's lottery entry.** Past the panel-economy fence an operator draws one
 /// ticket under this domain, over the anchor, the claim and its operator id — never over a bond.
 pub const PALW_PANEL_V2_DOMAIN_OPERATOR_TICKET: &[u8] = b"misaka-palw/panel-v2/operator-ticket/v1";
+/// **ADR-0147: the outsider seat's lottery entry.** An outsider-judged claim draws its first seat
+/// from the network's base-class population under THIS domain, so an operator's outsider ticket is
+/// independent of its ticket in the class's own draw — a single domain would hand the outsider seat
+/// to whichever operator already led the class draw.
+pub const PALW_PANEL_V2_DOMAIN_OUTSIDER_TICKET: &[u8] = b"misaka-palw/panel-v2/outsider-ticket/v1";
+/// **ADR-0147: the admission jury's lottery entry** — the jury a `Candidate` class meets at an
+/// audit boundary, drawn from the same network population under its own domain.
+pub const PALW_PANEL_V2_DOMAIN_ADMISSION_JURY_TICKET: &[u8] = b"misaka-palw/panel-v2/admission-jury-ticket/v1";
 /// **C-02 (mainnet audit 2026-09-11 deep fence): the ceiling on a bond's stake-weighted
 /// sub-tickets.** Past the fence a bond draws `floor(collateral / min_collateral)` sub-tickets, but
 /// a premine-scale bond would otherwise mint hundreds of thousands (t11's `min_collateral` is
@@ -89,6 +97,54 @@ pub struct PalwPanelDrawPolicyV1 {
     /// ADR-0135: under the registry a seat judges a class by a fresh possession proof, not by its
     /// declaration (`palw_bond_may_judge_class_v4`); `None` below the fence.
     pub readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+    /// **ADR-0147: independence by population** (`Params::palw_admission_independence`). `None`
+    /// where the fence is not configured, which is byte-identical to the draw before it existed.
+    pub independence: Option<PalwPanelIndependenceV1>,
+}
+
+/// **ADR-0147: what the draw needs to seat an outsider and to fix its population before its
+/// randomness.** Resolved by the processor at the claim's ANCHOR like every other policy field.
+///
+/// It governs a claim only when the claim's own `accepted_daa` is at or past `from_daa` — the
+/// fence's height, compared against the claim rather than against the anchor, because the licence
+/// rule reads the same height against the same claim and the two must agree about which claims
+/// have an outsider ([`crate::palw_state_v2::palw_claim_is_outsider_judged_v1`]).
+///
+/// For every governed claim, two rules:
+///
+/// 1. **The population is fixed before the anchor.** A bond may sit only if the chain block that
+///    registered it precedes the anchor (`registered_daa < anchor_daa`). The anchor's hash is the
+///    draw's randomness, and without this a party that has seen it grinds keys offline for an
+///    operator ticket below everyone else's and registers that bond before the binding — a seat for
+///    the price of a key search. `Params::palw_bond_maturity` closes the same hole with a window,
+///    and it is dormant on every preset; this closes it at the one DAA that matters for sortition,
+///    whatever the window says (the two combine as the stricter).
+/// 2. **A bought class is judged with an outsider.** The panel's first seat is drawn from the
+///    network's base-class population — every bond eligible to judge the liveness floor — under
+///    [`PALW_PANEL_V2_DOMAIN_OUTSIDER_TICKET`], and the remaining `seat_count - 1` from the class's
+///    own population as before, without the outsider's operator.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPanelIndependenceV1 {
+    /// `Params::palw_admission_independence`'s height.
+    pub from_daa: u64,
+    /// The liveness floor: its population is the network's.
+    pub base_class_id: Hash64,
+    /// The claim's anchor DAA — the draw's randomness, which every seated bond must predate.
+    pub anchor_daa: u64,
+}
+
+impl PalwPanelIndependenceV1 {
+    /// Whether this claim is drawn under ADR-0147 at all (its population cut at the anchor).
+    pub fn governs(&self, claim: &crate::palw_state_v2::PalwClaimStateV2) -> bool {
+        claim.accepted_daa >= self.from_daa
+    }
+
+    /// The registration floor a governed draw applies: the stricter of the maturity window's and
+    /// "registered by a chain block before the anchor".
+    pub fn registered_by_daa(&self, maturity_floor: Option<u64>) -> u64 {
+        let before_anchor = self.anchor_daa.saturating_sub(1);
+        maturity_floor.map_or(before_anchor, |floor| floor.min(before_anchor))
+    }
 }
 pub const PALW_RECEIPT_V2_DOMAIN_MESSAGE: &[u8] = b"misaka-palw/receipt-v2/message/v1";
 /// ML-DSA-87 signing context for a V2 seat receipt — its own family domain (audit P0-6).
@@ -100,6 +156,8 @@ pub const PALW_RECEIPT_V3_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/receipt-v3/mlds
 pub const PALW_PANEL_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_PANEL_V2_DOMAIN_SEAT_TICKET,
     PALW_PANEL_V2_DOMAIN_OPERATOR_TICKET,
+    PALW_PANEL_V2_DOMAIN_OUTSIDER_TICKET,
+    PALW_PANEL_V2_DOMAIN_ADMISSION_JURY_TICKET,
     PALW_RECEIPT_V2_DOMAIN_MESSAGE,
     PALW_RECEIPT_V2_MLDSA87_CONTEXT,
 ];
@@ -239,6 +297,16 @@ pub enum PalwPanelV2Error {
     InsufficientEligibleShardBonds { shard: u32, needed: u16, available: u16 },
     #[error("the stratified draw refused: {0}")]
     ShardDraw(String),
+    /// ADR-0147: no bond of the network's base-class population, other than the executor's and the
+    /// registrant's own, is eligible to sit as this claim's outsider. The claim waits, and voids at
+    /// its bind deadline if the network never offers one.
+    #[error("claim {0}: no bond outside the class's own population is eligible to sit as its outsider")]
+    NoOutsider(Hash64),
+    /// ADR-0147: the receipts reach the quorum but the outsider has not answered `Valid`. Not a
+    /// refusal of the set — an assembler keeps collecting, exactly as for `NoQuorum` — and not a
+    /// licence: the claim licenses when its outsider says `Valid`, or voids at its deadline.
+    #[error("claim {claim}: the quorum is reached but its outsider {seat:?} has not answered Valid")]
+    OutsiderHasNotAnswered { claim: Hash64, seat: PalwBondKeyV2 },
 }
 
 /// **ADR-0100 Decision 4: the stratified draw, from chain state.** The eligible bonds are the flat
@@ -493,6 +561,39 @@ pub fn palw_panel_eligible_bonds_v2<'a>(
     seat_count: u16,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    palw_panel_eligible_bonds_judging_v1(
+        state,
+        claim_id,
+        &claim.class_id,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        readiness,
+        economy,
+        seat_count,
+    )
+}
+
+/// [`palw_panel_eligible_bonds_v2`] over the population of `judged_class` rather than of the
+/// claim's own class — every other predicate (the executor's exclusions, the floor, the headroom
+/// priced by THIS claim, the maturity floor) exactly as the claim's own draw applies it.
+///
+/// ADR-0147 calls it with the liveness floor's id to list the network's population for an
+/// outsider seat: the bonds that serve the class every node runs, which is a set no registrant can
+/// make class-specific. Pure and public, like the function it generalises.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_panel_eligible_bonds_judging_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: &Hash64,
+    judged_class: &Hash64,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+    economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    seat_count: u16,
+) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
     let executor_operator = executor.operator_id;
@@ -551,7 +652,7 @@ pub fn palw_panel_eligible_bonds_v2<'a>(
         // or free-prompt claim on the class is the chain having seen this bond actually run it.
         // Silence stays unjudged — a bond that declared and never produced is simply not drawn,
         // never charged for the omission and never convicted of it (ADR-0065 D4).
-        if !crate::palw_state_v2::palw_bond_may_judge_class_v4(state, bond_key, bond, &claim.class_id, capability_proof, readiness) {
+        if !crate::palw_state_v2::palw_bond_may_judge_class_v4(state, bond_key, bond, judged_class, capability_proof, readiness) {
             continue;
         }
         eligible.push((bond_key, bond));
@@ -578,7 +679,7 @@ pub fn derive_panel_v2_with_capability_proof(
         min_collateral_sompi,
         registered_by_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None },
     )
 }
 
@@ -600,6 +701,31 @@ pub fn derive_panel_v2_with_policy(
     capability_proof: bool,
     policy: PalwPanelDrawPolicyV1,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    // **ADR-0147.** A governed claim's population is fixed before its anchor, and a governed claim
+    // of a BOUGHT class sits an outsider first. Neither applies to a claim accepted below the
+    // fence, so every panel such a claim can bind is the one it always had.
+    let independence = policy.independence.filter(|independence| independence.governs(claim));
+    let registered_by_daa = match independence {
+        Some(independence) => Some(independence.registered_by_daa(registered_by_daa)),
+        None => registered_by_daa,
+    };
+    let outsider = match independence {
+        Some(independence) if crate::palw_state_v2::palw_claim_is_outsider_judged_v1(state, claim, Some(independence.from_daa)) => {
+            Some(palw_panel_outsider_seat_v1(
+                state,
+                params,
+                claim_id,
+                anchor_block,
+                min_collateral_sompi,
+                registered_by_daa,
+                capability_proof,
+                &policy,
+                &independence,
+            )?)
+        }
+        _ => None,
+    };
     // Every eligible bond (`palw_panel_eligible_bonds_v2`: the exclusions per Decision 7 and every
     // seat predicate, spelled once for this draw and the stratified one).
     let eligible = palw_panel_eligible_bonds_v2(
@@ -612,14 +738,44 @@ pub fn derive_panel_v2_with_policy(
         policy.economy,
         params.seat_count,
     )?;
+    // The outsider's operator holds one seat, never two: an operator that serves the network AND
+    // proved it holds the class is drawn for the class's seats only when it is not the outsider.
+    let (eligible, needed) = match &outsider {
+        Some(outsider) => (
+            eligible.into_iter().filter(|(_, bond)| bond.operator_id != outsider.operator_id).collect::<Vec<_>>(),
+            params.seat_count.saturating_sub(1),
+        ),
+        None => (eligible, params.seat_count),
+    };
     // **ADR-0130: past the panel economy, one lottery entry per operator.** The eligibility is the
     // same list; only how it is ticketed changes.
-    if policy.economy.is_some() {
-        return palw_panel_operator_lottery_v1(params, claim_id, anchor_block, &eligible);
+    let mut seats = if policy.economy.is_some() {
+        palw_panel_operator_lottery_of_v1(needed, claim_id, anchor_block, &eligible)?
+    } else {
+        // ADR-0124 Decision 5: the panel economy retires stake weighting (see the policy's doc) —
+        // and below it `weighted` is the deep fence's.
+        palw_panel_bond_lottery_v1(needed, claim_id, anchor_block, &eligible, policy.weighted, min_collateral_sompi)?
+    };
+    // The canonical order: the outsider first, then the class's seats in lottery order. Position
+    // zero is how every licensing arm finds the outsider (`palw_licence_names_its_outsider_v1`),
+    // and `validate_panel_bound_v2_with_policy` compares this exact order.
+    if let Some(outsider) = outsider {
+        seats.insert(0, outsider);
     }
-    // ADR-0124 Decision 5: the panel economy retires stake weighting (see the policy's doc) — and
-    // below it `weighted` is the deep fence's.
-    let weighted = policy.weighted;
+    Ok(seats)
+}
+
+/// **The per-bond draw below the panel economy**: every eligible bond draws one ticket (C-02's
+/// `weighted` gives it one per `min_collateral` of stake, capped), tickets sort, one seat per
+/// operator, the first `needed` win.
+fn palw_panel_bond_lottery_v1(
+    needed: u16,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    weighted: bool,
+    min_collateral_sompi: u64,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
     let mut tickets: Vec<(Hash64, PalwBondKeyV2, Hash64)> = Vec::new();
     for (bond_key, bond) in eligible {
         // **C-02 (deep fence): stake-weighted sortition by bucketed sub-tickets.** Below the fence
@@ -645,16 +801,16 @@ pub fn derive_panel_v2_with_policy(
             if weighted {
                 ticket.update(&j.to_le_bytes());
             }
-            tickets.push((finish(ticket), *bond_key, bond.operator_id));
+            tickets.push((finish(ticket), **bond_key, bond.operator_id));
         }
     }
     tickets.sort();
 
-    // One seat per operator, in ticket order, first `seat_count` win.
+    // One seat per operator, in ticket order, first `needed` win.
     let mut seats: Vec<PalwPanelSeatV2> = Vec::new();
     let mut seated_operators: Vec<Hash64> = Vec::new();
     for (_, bond_key, operator_id) in tickets {
-        if seats.len() == params.seat_count as usize {
+        if seats.len() == needed as usize {
             break;
         }
         if seated_operators.contains(&operator_id) {
@@ -663,10 +819,96 @@ pub fn derive_panel_v2_with_policy(
         seated_operators.push(operator_id);
         seats.push(PalwPanelSeatV2 { bond: bond_key, operator_id });
     }
-    if seats.len() < params.seat_count as usize {
-        return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: params.seat_count, available: seats.len() as u16 });
+    if seats.len() < needed as usize {
+        return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed, available: seats.len() as u16 });
     }
     Ok(seats)
+}
+
+/// **ADR-0147: the outsider seat of an outsider-judged claim.**
+///
+/// The population is [`palw_panel_eligible_bonds_judging_v1`] for the liveness floor — every bond
+/// eligible to judge the class every node runs, under the same executor exclusions, floor,
+/// headroom and (already cut at the anchor by the caller) registration floor as the claim's own
+/// draw — minus the class registrant's own bond and operator. The one entry per operator is ranked
+/// by [`palw_panel_outsider_ticket_v1`], and the lowest sits.
+///
+/// **Excluding the registrant is not what makes the seat independent**, and must not be read as
+/// the rule. It is the one party the chain KNOWS holds this class, so leaving it in would only
+/// hand the registrant a draw it has not had to pay for; its other bonds are indistinguishable from
+/// anybody's, and what bounds them is that they are a share of the network's population rather
+/// than all of the class's.
+///
+/// Pure and public: a shadow reader can ask, against a state snapshot, which operator WOULD sit as
+/// a claim's outsider and how often the registrant's own would.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_panel_outsider_seat_v1(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    policy: &PalwPanelDrawPolicyV1,
+    independence: &PalwPanelIndependenceV1,
+) -> Result<PalwPanelSeatV2, PalwPanelV2Error> {
+    let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    let population = palw_panel_eligible_bonds_judging_v1(
+        state,
+        claim_id,
+        &independence.base_class_id,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy.readiness,
+        policy.economy,
+        params.seat_count,
+    )?;
+    let registrant = state.class(&claim.class_id).and_then(|record| record.registrant_bond);
+    let registrant_operator = registrant.and_then(|key| state.bond(&key)).map(|bond| bond.operator_id);
+    let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = population
+        .into_iter()
+        .filter(|(key, bond)| Some(**key) != registrant && Some(bond.operator_id) != registrant_operator)
+        .collect();
+    palw_panel_operator_entries_under_v1(claim_id, anchor_block, &population, palw_panel_outsider_ticket_v1)
+        .into_iter()
+        .next()
+        .map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id })
+        .ok_or(PalwPanelV2Error::NoOutsider(*claim_id))
+}
+
+/// **ADR-0147: an operator's ticket on a `Candidate` class's admission jury** —
+/// `H(jury domain ‖ seed ‖ operator_id)`, the seed being `palw_admission_jury_seed_v1`'s (which
+/// already names the class and the audit span).
+pub fn palw_admission_jury_ticket_v1(seed: &Hash64, operator_id: &Hash64) -> Hash64 {
+    let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_ADMISSION_JURY_TICKET);
+    ticket.update(seed.as_byte_slice());
+    ticket.update(operator_id.as_byte_slice());
+    finish(ticket)
+}
+
+/// **ADR-0147: the admission jury** — the `seats` operators of `population` with the lowest jury
+/// tickets, in ticket order, one entry per operator whatever it holds (ADR-0130's rule, so a
+/// registrant splitting collateral across bonds buys no second entry). Fewer operators than seats
+/// is a short jury, returned short: the caller admits nothing on it.
+pub fn palw_admission_jury_v1(seed: &Hash64, population: &[(&PalwBondKeyV2, &PalwBondStateV2)], seats: u16) -> Vec<Hash64> {
+    let operators: std::collections::BTreeSet<Hash64> = population.iter().map(|(_, bond)| bond.operator_id).collect();
+    let mut ranked: Vec<(Hash64, Hash64)> =
+        operators.into_iter().map(|operator| (palw_admission_jury_ticket_v1(seed, &operator), operator)).collect();
+    ranked.sort();
+    ranked.into_iter().take(seats as usize).map(|(_, operator)| operator).collect()
+}
+
+/// **ADR-0147: an operator's outsider ticket on a claim** —
+/// `H(outsider-ticket domain ‖ anchor ‖ claim ‖ operator_id)`. The operator's odds of sitting as the
+/// outsider are the same whether it holds one eligible bond or a thousand, as in ADR-0130's draw.
+pub fn palw_panel_outsider_ticket_v1(anchor_block: BlockHash, claim_id: &Hash64, operator_id: &Hash64) -> Hash64 {
+    let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_OUTSIDER_TICKET);
+    ticket.update(anchor_block.as_byte_slice());
+    ticket.update(claim_id.as_byte_slice());
+    ticket.update(operator_id.as_byte_slice());
+    finish(ticket)
 }
 
 /// `H(seat-ticket domain ‖ anchor ‖ claim ‖ bond)` before it is finished — the bond ticket's one
@@ -718,6 +960,19 @@ pub fn palw_panel_operator_entries_v1(
     anchor_block: BlockHash,
     eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
 ) -> Vec<PalwPanelOperatorEntryV1> {
+    palw_panel_operator_entries_under_v1(claim_id, anchor_block, eligible, palw_panel_operator_ticket_v1)
+}
+
+/// [`palw_panel_operator_entries_v1`] under any operator ticket — ADR-0130's for the class draw,
+/// ADR-0147's outsider ticket for the outsider seat. Each operator is entered once, with its
+/// eligible bond whose [`palw_panel_seat_ticket_v1`] is lowest (ties broken by the bond key), and
+/// the entries sort by `(operator ticket, operator id)`.
+pub fn palw_panel_operator_entries_under_v1(
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    operator_ticket: fn(BlockHash, &Hash64, &Hash64) -> Hash64,
+) -> Vec<PalwPanelOperatorEntryV1> {
     let mut candidates: std::collections::BTreeMap<Hash64, (Hash64, PalwBondKeyV2)> = std::collections::BTreeMap::new();
     for (bond_key, bond) in eligible {
         let ranked = (palw_panel_seat_ticket_v1(anchor_block, claim_id, bond_key), **bond_key);
@@ -733,7 +988,7 @@ pub fn palw_panel_operator_entries_v1(
     let mut entries: Vec<PalwPanelOperatorEntryV1> = candidates
         .into_iter()
         .map(|(operator_id, (_, bond))| PalwPanelOperatorEntryV1 {
-            operator_ticket: palw_panel_operator_ticket_v1(anchor_block, claim_id, &operator_id),
+            operator_ticket: operator_ticket(anchor_block, claim_id, &operator_id),
             operator_id,
             bond,
         })
@@ -753,12 +1008,26 @@ pub fn palw_panel_operator_lottery_v1(
     anchor_block: BlockHash,
     eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    palw_panel_operator_lottery_of_v1(params.seat_count, claim_id, anchor_block, eligible)
+}
+
+/// [`palw_panel_operator_lottery_v1`] for `needed` seats — the whole panel, or (ADR-0147) the
+/// class's `seat_count - 1` beside an outsider.
+pub fn palw_panel_operator_lottery_of_v1(
+    needed: u16,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
     let entries = palw_panel_operator_entries_v1(claim_id, anchor_block, eligible);
-    let needed = params.seat_count as usize;
-    if entries.len() < needed {
-        return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: params.seat_count, available: entries.len() as u16 });
+    if entries.len() < needed as usize {
+        return Err(PalwPanelV2Error::InsufficientEligibleBonds { needed, available: entries.len() as u16 });
     }
-    Ok(entries.into_iter().take(needed).map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id }).collect())
+    Ok(entries
+        .into_iter()
+        .take(needed as usize)
+        .map(|entry| PalwPanelSeatV2 { bond: entry.bond, operator_id: entry.operator_id })
+        .collect())
 }
 
 /// May THIS `PanelBound` object be accepted at THIS chain point? Everything is recomputed:
@@ -881,7 +1150,7 @@ pub fn validate_panel_bound_v2_with_shards(
         proposed_seats,
         bond_maturity_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None },
         stratified,
     )
 }
@@ -1101,7 +1370,18 @@ pub fn validate_receipt_quorum_v2<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
-    validate_receipt_quorum_v2_with_policy(state, params, state_params, ctx, network_domain, claim_id, receipts, verify_mldsa87, false)
+    validate_receipt_quorum_v2_with_policy(
+        state,
+        params,
+        state_params,
+        ctx,
+        network_domain,
+        claim_id,
+        receipts,
+        verify_mldsa87,
+        false,
+        None,
+    )
 }
 
 /// [`validate_receipt_quorum_v2`] with ADR-0065 D4's verdict policy.
@@ -1140,6 +1420,8 @@ pub fn validate_receipt_quorum_v2_with_policy<V>(
     receipts: &[PalwSeatReceiptV2],
     verify_mldsa87: V,
     unavailable_abstains: bool,
+    // ADR-0147: `Params::palw_admission_independence`'s height (`None` where it is not configured).
+    independence_daa: Option<u64>,
 ) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
@@ -1155,6 +1437,7 @@ where
         verify_mldsa87,
         unavailable_abstains,
         false,
+        independence_daa,
     )
 }
 
@@ -1176,6 +1459,8 @@ pub fn validate_receipt_quorum_v2_with_economy<V>(
     verify_mldsa87: V,
     unavailable_abstains: bool,
     panel_economy: bool,
+    // ADR-0147: `Params::palw_admission_independence`'s height (`None` where it is not configured).
+    independence_daa: Option<u64>,
 ) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
@@ -1186,6 +1471,7 @@ where
             return validate_supplementary_receipts_v1(state, state_params, ctx, network_domain, claim_id, receipts, verify_mldsa87);
         }
     }
+    let outsider = palw_panel_outsider_bond_v1(state, claim_id, independence_daa);
     receipt_quorum_over_seats_v2(
         state,
         state_params,
@@ -1204,7 +1490,25 @@ where
         receipts,
         verify_mldsa87,
         unavailable_abstains,
+        outsider,
     )
+}
+
+/// **ADR-0147: the bond whose `Valid` a licence of this claim must carry**, or `None` for a claim
+/// the rule does not reach. The bound panel's first seat, for exactly the claims
+/// [`crate::palw_state_v2::palw_claim_is_outsider_judged_v1`] names — the acceptance layer's half of
+/// the rule the fold states in `palw_licence_names_its_outsider_v1`, reading the same predicate so
+/// the two cannot disagree about which claims have an outsider.
+pub fn palw_panel_outsider_bond_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    independence_daa: Option<u64>,
+) -> Option<PalwBondKeyV2> {
+    let claim = state.claim(claim_id)?;
+    if !crate::palw_state_v2::palw_claim_is_outsider_judged_v1(state, claim, independence_daa) {
+        return None;
+    }
+    state.panel(claim_id).and_then(|panel| panel.seats.first()).map(|seat| seat.bond)
 }
 
 /// **ADR-0124 Decision 2: a seat carries its own receipt after the licence.** The licensing
@@ -1235,11 +1539,15 @@ pub fn validate_receipt_coverage_v2<V>(
     receipts: &[PalwSeatReceiptV3],
     verify_mldsa87: V,
     unavailable_abstains: bool,
+    // ADR-0147: `Params::palw_admission_independence`'s height (`None` where it is not configured).
+    independence_daa: Option<u64>,
 ) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
     use crate::palw_verification_v2::{PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT, palw_coverage_v2, palw_segment_assignment_v2};
+    let outsider = palw_panel_outsider_bond_v1(state, claim_id, independence_daa);
+    let mut outsider_valid = false;
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptCoverageV2" });
@@ -1288,6 +1596,7 @@ where
             PalwReceiptVerdictV2::Valid => {
                 valid += 1;
                 valid_masks.push(signed.segments);
+                outsider_valid |= outsider == Some(receipt.seat_bond);
             }
             PalwReceiptVerdictV2::Incapable => {
                 if !crate::palw_state_v2::palw_seat_may_plead_incapable_v2(claim.class_id, state_params.base_class_id()) {
@@ -1333,6 +1642,12 @@ where
         let coverage = palw_coverage_v2(assignment.segments, &valid_masks);
         if let Some((segment, have)) = coverage.short(PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT) {
             return Err(PalwPanelV2Error::CoverageShort { segment, have, need: PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT });
+        }
+        // ADR-0147: coverage by the class's own seats is still the class's own seats.
+        if let Some(seat) = outsider
+            && !outsider_valid
+        {
+            return Err(PalwPanelV2Error::OutsiderHasNotAnswered { claim: *claim_id, seat });
         }
         return Ok(PalwReceiptQuorumV2::Licensed { valid });
     }
@@ -1455,6 +1770,10 @@ where
         &part.receipts,
         verify_mldsa87,
         unavailable_abstains,
+        // ADR-0147: a stratified panel seats no outsider, and the fold refuses a part licence of an
+        // outsider-judged claim (`OutsiderJudgedClaimLicensedByParts`) — `validate_palw_v2` keeps
+        // the two fences from being armed together at all.
+        None,
     )
 }
 
@@ -1473,6 +1792,8 @@ fn receipt_quorum_over_seats_v2<V, S>(
     receipts: &[PalwSeatReceiptV2],
     verify_mldsa87: V,
     unavailable_abstains: bool,
+    // ADR-0147: the seat whose `Valid` a licence must carry, where the claim has one.
+    outsider: Option<PalwBondKeyV2>,
 ) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
@@ -1489,6 +1810,7 @@ where
 
     let mut answered: Vec<PalwBondKeyV2> = Vec::new();
     let mut valid: u16 = 0;
+    let mut outsider_valid = false;
     let mut unavailable: u16 = 0;
     for receipt in receipts {
         if receipt.claim != *claim_id {
@@ -1524,7 +1846,10 @@ where
 
         answered.push(receipt.seat_bond);
         match receipt.verdict {
-            PalwReceiptVerdictV2::Valid => valid += 1,
+            PalwReceiptVerdictV2::Valid => {
+                valid += 1;
+                outsider_valid |= outsider == Some(receipt.seat_bond);
+            }
             // **Answered, but not a vote.** The seat is on the record — so it is not a no-show and
             // is not charged — and it counts toward neither side, because a party that says it
             // cannot judge does not get to decide. Refused on the liveness floor, where the plea
@@ -1583,6 +1908,13 @@ where
         }
     }
     if valid >= quorum {
+        // ADR-0147: a quorum without the outsider's `Valid` is not yet a licence. Reported as its
+        // own error, which an assembler reads as "keep collecting" exactly like `NoQuorum`.
+        if let Some(seat) = outsider
+            && !outsider_valid
+        {
+            return Err(PalwPanelV2Error::OutsiderHasNotAnswered { claim: *claim_id, seat });
+        }
         return Ok(PalwReceiptQuorumV2::Licensed { valid });
     }
     // ADR-0065 D4: past the fence there is no second quorum to reach. Reported as `NoQuorum` with
@@ -1893,7 +2225,7 @@ mod tests {
             reward_multiple_permille: 0,
         };
         assert_eq!(economy.panel_floor_sompi, 1_000);
-        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy), readiness: None };
+        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy), readiness: None, independence: None };
 
         for i in 0..40u64 {
             let anchor = BlockHash::from_u64_word(0xB000 + i);
@@ -1909,7 +2241,7 @@ mod tests {
             }
             // One ticket a bond: the draw past the economy equals the legacy unweighted draw over the
             // same eligible set, whatever `weighted` says.
-            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy), readiness: None };
+            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy), readiness: None, independence: None };
             assert_eq!(
                 derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, unweighted).unwrap(),
                 seats,
@@ -2013,6 +2345,7 @@ mod tests {
                 max_exposure_ratio_permille: 500,
                 reward_multiple_permille,
             }),
+            independence: None,
         }
     }
 
@@ -2162,6 +2495,7 @@ mod tests {
                     max_exposure_ratio_permille: 1000,
                     reward_multiple_permille: 0,
                 }),
+                independence: None,
             };
             let lottery = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, economy).unwrap();
             let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104 };
@@ -3207,7 +3541,7 @@ mod tests {
         // its new position cannot show that anything changed.
         assert!(
             matches!(
-                validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &receipts, verify, true),
+                validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &receipts, verify, true, None),
                 Err(PalwPanelV2Error::NoQuorum { valid: 0, unavailable: 2, needed: 2 })
             ),
             "past the fence an Unavailable quorum licenses nothing, and the count is still visible"
@@ -3215,7 +3549,7 @@ mod tests {
         // And the licensing direction is untouched — D4 removes one verdict's power, not the panel's.
         let served = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], PalwReceiptVerdictV2::Valid)];
         assert_eq!(
-            validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &served, verify, true),
+            validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &served, verify, true, None),
             Ok(PalwReceiptQuorumV2::Licensed { valid: 2 })
         );
 
@@ -3234,7 +3568,7 @@ mod tests {
             "with the fence off it is an accusation, and a contentless one poisons the set"
         );
         assert_eq!(
-            validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &mixed, verify, true),
+            validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &mixed, verify, true, None),
             Ok(PalwReceiptQuorumV2::Licensed { valid: 2 }),
             "past the fence it accuses nobody, so it is not checked as an accusation and the claim licenses"
         );
@@ -3295,7 +3629,7 @@ mod tests {
             segments,
         };
         let check =
-            |r: Vec<PalwSeatReceiptV3>| validate_receipt_coverage_v2(&state, &p, &sp, &here, net, &claim_id, &r, verify, false);
+            |r: Vec<PalwSeatReceiptV3>| validate_receipt_coverage_v2(&state, &p, &sp, &here, net, &claim_id, &r, verify, false, None);
         let quorum = p.quorum() as usize;
         assert!(quorum >= 2 && seats.len() > quorum, "the fixture's panel has room for a missing seat");
 
@@ -3715,7 +4049,7 @@ mod tests {
         );
         let receipts: Vec<PalwSeatReceiptV2> = seats[..3].iter().map(receipt).collect();
         assert_eq!(
-            validate_receipt_quorum_v2_with_policy(&s4, &pp, &sp, &at, h64(999), &claim_id, &receipts, yes, false),
+            validate_receipt_quorum_v2_with_policy(&s4, &pp, &sp, &at, h64(999), &claim_id, &receipts, yes, false, None),
             Err(PalwPanelV2Error::LicensedByParts(claim_id)),
             "a claim drawn per shard has no whole-object licence"
         );

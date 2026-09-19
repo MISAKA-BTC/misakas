@@ -352,16 +352,66 @@ pub struct PalwLifecycleObservationV1 {
     pub window_fits_receipt: bool,
     /// Whether this span ran at or under the target utilization with no held claim.
     pub span_stable: bool,
-    /// **Ready seats this class's registrant does not hold** (ADR-0145 §7, past
-    /// `Params::palw_admission_independence`): the subset of `ready_seats` whose bond is neither
-    /// the registrant's bond nor shares its `operator_id` or its pubkey. Read ONLY by the
-    /// `Candidate` arm — a state nothing writes below the fence — so every other transition is the
-    /// one it was before this field existed, and a caller that leaves it `0` (the `Default`) can
-    /// never turn an admitted class back.
+    /// **ADR-0147: the class's admission jury sat at this boundary and a majority of it holds the
+    /// class** (past `Params::palw_admission_independence`).
     ///
-    /// Zero for a genesis class by construction: nobody registered it, so there is no registrant
-    /// for a seat to be independent OF, and the fold never puts such a class in `Candidate`.
-    pub independent_ready_seats: u32,
+    /// The jury is `seat_count` operators drawn from the NETWORK's base-class population — not
+    /// from the class's own — by a lottery whose seed is the execution lane's anchor of the span
+    /// before, over bonds registered before that span began, on the audit schedule
+    /// ([`palw_admission_audit_due_v1`]). A juror counts when one of its bonds is READY for the
+    /// class by the registry's own five-clause predicate. So the registrant passes alone only by
+    /// holding a majority of a jury the network drew, which it does with the probability that its
+    /// share of the network's operator lottery wins a majority of `seat_count` draws — once per
+    /// audit, not once per span.
+    ///
+    /// Read ONLY by the `Candidate` arm — a state nothing writes below the fence — so every other
+    /// transition is the one it was before this field existed, and a caller that leaves it `false`
+    /// (the `Default`) can never turn an admitted class back. `false` for a genesis class by
+    /// construction: the fold never puts one in `Candidate`.
+    pub admission_jury_seated: bool,
+}
+
+/// **ADR-0147: how often a `Candidate` class meets an admission jury**, in execution spans — one
+/// epoch's worth, at least one span.
+///
+/// The jury is a lottery, and a lottery that may be re-run every span is passed by waiting: at a
+/// five-DAA span a registrant whose share wins the jury one time in a thousand would be admitted
+/// in under an hour and a half. The rate the chain CAN bound is how often the draw is taken, and
+/// the epoch is the unit this chain already budgets everything else in (ADR-0039 D5). Stateless on
+/// purpose: an audit falls on the spans whose index is a multiple of the period, so no row records
+/// the last one and none can be written or rewound to run another.
+pub fn palw_admission_audit_period_spans_v1(epoch_length: u64, span_daa: u64) -> u64 {
+    (epoch_length / span_daa.max(1)).max(1)
+}
+
+/// Whether the span a boundary opens is an audit span ([`palw_admission_audit_period_spans_v1`]).
+/// Span zero never is: the jury's seed is the anchor of the span before, and there is none.
+pub fn palw_admission_audit_due_v1(span_now: u64, period_spans: u64) -> bool {
+    span_now > 0 && span_now.is_multiple_of(period_spans.max(1))
+}
+
+/// A strict majority of the jury: `seats / 2 + 1`, which is the panel's own quorum shape
+/// (`2·quorum > seat_count`) at its smallest.
+pub fn palw_admission_jury_quorum_v1(seats: u16) -> u16 {
+    seats / 2 + 1
+}
+
+pub const PALW_ADMISSION_JURY_SEED_DOMAIN: &[u8] = b"misaka-palw/admission-jury/seed/v1";
+
+/// **ADR-0147: the admission jury's seed** — the class, the audit span, and the execution lane's
+/// seed anchor of the span before (its chain block and its attempt's execution commitment).
+///
+/// The anchor is ADR-0130's randomness, and the reason it is used here rather than a block hash:
+/// re-rolling it costs a winning inference, where a boundary block's own hash can be re-rolled by
+/// its producer for the price of a header. The population the jury is drawn from is cut before the
+/// anchor's span began, so no bond in it was registered by a party that had seen the seed.
+pub fn palw_admission_jury_seed_v1(class_id: &Hash64, span: u64, anchor_block: &Hash64, execution_key: &Hash64) -> Hash64 {
+    let mut state = keyed64(PALW_ADMISSION_JURY_SEED_DOMAIN);
+    state.update(class_id.as_byte_slice());
+    state.update(&span.to_le_bytes());
+    state.update(anchor_block.as_byte_slice());
+    state.update(execution_key.as_byte_slice());
+    finish64(state)
 }
 
 /// `PalwManifestVerdictV1`, as a flag the observation carries (`Valid` or not).
@@ -386,18 +436,20 @@ pub fn palw_lifecycle_step_v1(
     // overloaded for ever — it admits nothing, and it re-enters Probation only once it fits.
     let overloaded = obs.utilization_permille >= 1_000 || !obs.window_fits_receipt;
     match state {
-        // **The one transition a registrant cannot make alone** (ADR-0145 §7, audit F3). A class
-        // leaves `Candidate` when the chain has seen at least one READY seat outside the
-        // registrant's own identity — not when the registrant says it is ready, and not when the
-        // registrant's own seats prove possession, because a panel drawn entirely from them is the
-        // registrant certifying itself. Until then the class exists and admits nothing.
+        // **The one transition a registrant cannot make alone** (ADR-0147, audit F3). A class
+        // leaves `Candidate` when a jury the NETWORK drew — `seat_count` operators of the
+        // liveness floor's population, not of the class's — finds a majority of itself holding
+        // the class. Not when the registrant says it is ready, and not when the registrant's own
+        // seats prove possession: the class's own population is a set the registrant fills first,
+        // and for a model nobody else runs it fills it entirely. Until then the class exists and
+        // admits nothing.
         //
         // It rejoins the ordinary walk exactly where a registration used to start, so nothing
         // downstream of `Prefetching` learns a new state: the manifest verdict still decides
         // whether there is any work to prefetch for, and `Registered` still means "no work derived
         // from the graph", which independence cannot cure.
         Candidate => {
-            if obs.independent_ready_seats == 0 {
+            if !obs.admission_jury_seated {
                 Candidate
             } else if obs.manifest == PalwManifestVerdictV1Flag::Valid {
                 Prefetching
@@ -1345,7 +1397,7 @@ mod tests {
             window_fits_receipt: fits,
             span_stable: true,
             // ADR-0145 §7: the `Candidate` arm's only input, and this fixture starts past it.
-            independent_ready_seats: 0,
+            admission_jury_seated: false,
         };
         for from in [Probation { probes_passed: 9 }, ActiveLimited { stable_epochs: 9 }, Active] {
             assert_eq!(palw_lifecycle_step_v1(from, &obs(false, true), &k, &G), Held, "{from:?}: does not fit → Held");
@@ -1453,9 +1505,9 @@ mod tests {
             window_fits_receipt: true,
             span_stable: true,
             // Every fixture below this line walks a class that is already past `Candidate`, and
-            // `independent_ready_seats` is read by that one arm: zero here says so, and says that
+            // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            independent_ready_seats: 0,
+            admission_jury_seated: false,
         };
         let mut s = Registered;
         s = palw_lifecycle_step_v1(s, &PalwLifecycleObservationV1 { manifest: PalwManifestVerdictV1Flag::Invalid, ..calm(0) }, &k, &G);
@@ -1590,9 +1642,9 @@ mod tests {
             window_fits_receipt: true,
             span_stable: true,
             // Every fixture below this line walks a class that is already past `Candidate`, and
-            // `independent_ready_seats` is read by that one arm: zero here says so, and says that
+            // `admission_jury_seated` is read by that one arm: `false` here says so, and says that
             // nothing else in the lifecycle learned to read it.
-            independent_ready_seats: 0,
+            admission_jury_seated: false,
         };
         assert_eq!(
             palw_lifecycle_step_v1(ActiveLimited { stable_epochs: 2 }, &obs(true), &k, &G),

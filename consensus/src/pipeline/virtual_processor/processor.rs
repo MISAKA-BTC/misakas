@@ -5632,13 +5632,17 @@ impl VirtualStateProcessor {
                 &attempt,
                 verify,
                 self.palw_unavailable_abstains_at(point.daa_score),
+                // ADR-0147: the same height the fold and the acceptance layer read.
+                self.palw_admission_independence_daa(),
             ) {
                 Ok(q) => {
                     kept = attempt;
                     verdict = Some(q);
                 }
-                Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => {
-                    // The set is clean but not yet a quorum — keep the receipt, keep collecting.
+                Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. })
+                | Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::OutsiderHasNotAnswered { .. }) => {
+                    // The set is clean but not yet a licence — no quorum, or (ADR-0147) a quorum
+                    // still waiting on its outsider's `Valid`. Keep the receipt, keep collecting.
                     kept.push(candidate.clone());
                 }
                 Err(_) => {
@@ -6523,6 +6527,8 @@ impl VirtualStateProcessor {
                         self.palw_unavailable_abstains_at(point.daa_score),
                         // ADR-0124 Decision 2: the supplementary door, at the carrying block's DAA.
                         self.palw_panel_economy_active_at(point.daa_score),
+                        // ADR-0147: a bought class's licence carries its outsider's `Valid`.
+                        self.palw_admission_independence_daa(),
                     )
                     .map_err(|e| format!("claim {claim}'s receipt set does not carry a quorum: {e}"))?;
                     use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
@@ -6839,6 +6845,8 @@ impl VirtualStateProcessor {
                         receipts,
                         Self::verify_mldsa87_with_context_bool,
                         self.palw_unavailable_abstains_at(point.daa_score),
+                        // ADR-0147: coverage by the class's own seats is still the class's own seats.
+                        self.palw_admission_independence_daa(),
                     )
                     .map_err(|e| format!("claim {claim}'s segment receipts do not license: {e}"))?;
                     match quorum {
@@ -7679,6 +7687,17 @@ impl VirtualStateProcessor {
             weighted: self.palw_audit_2026_09_11_deep_at(anchor_daa),
             economy,
             readiness: self.palw_readiness_policy_at(anchor_daa),
+            // ADR-0147: the fence's height, the floor's id and THIS anchor's DAA — the draw applies
+            // it to a claim accepted at or past the height, whatever the anchor's own DAA is, and
+            // cuts the population at the anchor it was handed.
+            independence: match (self.palw_admission_independence_daa(), self.palw_state_params_v2.as_ref()) {
+                (Some(from_daa), Some(state)) => Some(kaspa_consensus_core::palw_panel_v2::PalwPanelIndependenceV1 {
+                    from_daa,
+                    base_class_id: state.base_class_id(),
+                    anchor_daa,
+                }),
+                _ => None,
+            },
         }
     }
 
@@ -7767,7 +7786,10 @@ impl VirtualStateProcessor {
             // `accepted_daa` instead. Resolving it here would price one claim under two bases and
             // the node would refuse its own tip. `None` on every shipped preset.
             canonical_work_daa: self.palw_canonical_work_daa,
-            admission_independence_active: self.palw_admission_independence_at(daa_score),
+            // **ADR-0147: the HEIGHT.** The block-level rules ask it at this block
+            // (`admission_independence_at`); the claim-level one — the outsider seat and its veto on
+            // the licence — compares it against the CLAIM's own `accepted_daa`, as the draw does.
+            admission_independence_daa: self.palw_admission_independence_daa(),
             fp_derived_work_active: self.palw_fp_derived_work_at(daa_score),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
@@ -8076,10 +8098,19 @@ impl VirtualStateProcessor {
         self.palw_operator_id_unique.is_some_and(|fence| fence.is_active(daa_score))
     }
 
-    /// The 2026-09-19 audit (F3): whether a class must be judged by a seat its registrant does not
-    /// hold at `daa_score`.
+    /// ADR-0147 (the 2026-09-19 audit's F3): whether the block-level rules of independent admission
+    /// apply at `daa_score`.
     pub(super) fn palw_admission_independence_at(&self, daa_score: u64) -> bool {
         self.palw_admission_independence.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0147: the fence's HEIGHT, which the claim-level rule compares against a claim's own
+    /// `accepted_daa` — the draw, the binding and every licensing path read one claim at different
+    /// chain points and must give it one answer. `None` where the fence is not configured.
+    pub(super) fn palw_admission_independence_daa(&self) -> Option<u64> {
+        self.palw_admission_independence
+            .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+            .map(|fence| fence.daa_score())
     }
 
     /// ADR-0145 §5/§6 at the FOLDING block's DAA — candidate-scoped, like every rule on this lane:
@@ -8876,25 +8907,10 @@ impl VirtualStateProcessor {
             let Ok(seats) = drawn else {
                 continue;
             };
-            // **The 2026-09-19 audit's F3, past `palw_admission_independence`: do not propose a
-            // panel this node's own fold will refuse.** A panel of a registered class whose every
-            // seat is the registrant's own bond, operator or key is not a jury, and the transition
-            // rejects it — so binding it would put an object in this node's block that every node,
-            // this one included, then rejects. The claim simply waits, and voids at its bind
-            // deadline if no independent seat ever becomes eligible: the ending a class with too
-            // few capable bonds already has.
-            //
-            // Resolved at the CARRYING block's DAA and not at the anchor, unlike every draw input
-            // above it. Those decide which panel is derived and must therefore be the anchor's, or
-            // the derived panel would change block by block; this one decides whether the fold
-            // will take the object, and the fold resolves it at the block that carries it. Reading
-            // it at the anchor would open a window on the flag day where this node proposes what
-            // it is about to reject.
-            if self.palw_admission_independence_at(block_daa)
-                && !kaspa_consensus_core::palw_state_v2::palw_panel_has_independent_seat_v1(state, &claim.class_id, &seats)
-            {
-                continue;
-            }
+            // ADR-0147: nothing to ask here. The outsider is IN the derived panel — the draw policy
+            // carries the fence — and the acceptance layer demands that panel exactly, so a node
+            // proposes only what its own fold will take. The identity test that stood here
+            // compared fields a registrant writes for itself, and is gone with the rule it served.
             out.push(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
                 claim: *claim_id,
                 anchor: anchor.anchor_block,

@@ -570,74 +570,75 @@ pub fn palw_bond_may_judge_class_v4(
     }
 }
 
-/// **Is this bond one the class's registrant does not hold?** (the 2026-09-19 audit's F3,
-/// ADR-0145 I3, past `Params::palw_admission_independence`.)
+/// **Is this claim judged with an outsider seat?** (ADR-0147, the 2026-09-19 audit's F3, past
+/// `Params::palw_admission_independence`.)
 ///
-/// It starts from the identity triple `palw_panel_eligible_bonds_v2` already excludes the executor
-/// by — the bond key, the `operator_id`, the registered pubkey — asked of the class's
-/// `registrant_bond` instead of the claim's producer, because the chain has exactly one notion of
-/// "these two bonds are the same party" and a second one invented here would be a second answer
-/// waiting to disagree with the draw's.
+/// A claim of a class somebody BOUGHT — its record names a `registrant_bond` — accepted at or past
+/// the fence's height. For such a claim the panel's first seat is drawn from the network's
+/// base-class population rather than from the class's own (`derive_panel_v2_with_policy`), and no
+/// licence of the claim stands without that seat's `Valid` receipt
+/// ([`palw_licence_names_its_outsider_v1`]).
 ///
-/// **And it adds the PAYEE, because the triple alone answers nothing here.** When a registrant
-/// produces its own class's claims — the case the finding is about — the executor exclusion has
-/// ALREADY dropped the registrant's bond, operator and key from the draw, so every seat on every
-/// such panel passes the triple and the rule would be a fence that never fires. `payout_payload`
-/// is not a new notion of ownership: it is where the bond's rewards are paid, and the panel payout
-/// queue is keyed by it precisely because it names a PAYEE ("one row per payee", the transition's
-/// own `add_panel_payout`). Two bonds paying one payload are one beneficiary by the
-/// chain's own accounting, so asking it here reads a fact that is already there for a second
-/// purpose rather than inventing one.
+/// **Independence is a property of the DRAW, not of an identity.** The rule this replaces asked
+/// whether a seat's `operator_id`, `pubkey` and `payout_payload` differed from the registrant's,
+/// and every one of the three is a value the registrant writes into its own `BondRegistered`: a
+/// registrant paying each of its seats to a different address was, by that test, as many
+/// independent parties as it had addresses, for nothing. No comparison of registrant-written fields
+/// can do better, because there is no beneficial ownership on this chain to compare. What the
+/// registrant CANNOT write is the composition of a population it did not choose. The class's own
+/// population is exactly the bonds that proved (or declared) they hold the class — a set the
+/// registrant fills first and, for a model nobody else runs, fills entirely. The base class's
+/// population is the network's: every bond that serves the liveness floor, which the registrant
+/// joins only at the price of every other operator entry in it. So the outsider seat is the
+/// registrant's own with probability equal to its share of the NETWORK's operator lottery — a price
+/// that scales with the honest network, where the rule it replaces was a constant six keys.
 ///
-/// **A genesis class has no registrant, so every bond is independent of it.** `registrant_bond`
-/// is `None` exactly for the classes the assembly registered (ADR-0056 Decision 3), and the
-/// liveness floor is one of them — the shipped genesis registry is `seat_count + 1` bonds with
-/// zero slack, so a rule that made any of them dependent would void every claim on a fresh
-/// network. It is also the honest answer: there is nobody for them to be independent OF.
+/// **Keyed on the claim's own `accepted_daa`, never on the block reading it** — for the reason
+/// `canonical_work_daa` gives: the answer is read at the draw (resolved at the anchor), at the
+/// binding, at every licensing path and by every node replaying them, and one claim must get ONE
+/// answer at all of them. A flag resolved per block would let a claim accepted just below the fence
+/// be bound without an outsider and then refused a licence for not having one.
 ///
-/// **What it does not see, said plainly.** A registrant who funds several bonds under several
-/// operator keys AND several payout payloads is several parties by this test, because on this
-/// chain he is: there is no beneficial ownership here to read. What the rule prices is that
-/// self-certification must now hold a second identity (which `Params::palw_operator_id_unique`
-/// makes cost a second key) that is paid somewhere else, in the open, with its own collateral at
-/// stake. It is a price, not a proof, and the thing that makes the price matter is ADR-0145 §4's
-/// derived work — until a claim is worth the arithmetic it ran, a determined sybil still profits.
-///
-/// **The deployment fact this rule depends on**, and the one a flag-day drill must establish
-/// before it is armed anywhere: seats run by one operator into ONE payout address are one party
-/// here. On a fleet whose seats share a payout, no panel of a registered class would ever be
-/// independent and every such claim would void. That is a fact about a network, checkable on it,
-/// and it is why this fence is dormant on every preset.
-pub fn palw_bond_is_independent_of_registrant_v1(
-    state: &PalwChainStateV2,
-    bond_key: &PalwBondKeyV2,
-    bond: &PalwBondStateV2,
-    class_id: &Hash64,
-) -> bool {
-    let Some(registrant_key) = state.class(class_id).and_then(|record| record.registrant_bond) else {
-        return true;
-    };
-    if *bond_key == registrant_key {
-        return false;
-    }
-    // A registrant bond the chain no longer holds cannot be matched on identity, and the bond key
-    // above has already answered the only question that survives its removal.
-    let Some(registrant) = state.bond(&registrant_key) else { return true };
-    bond.operator_id != registrant.operator_id && bond.pubkey != registrant.pubkey && bond.payout_payload != registrant.payout_payload
+/// **A genesis class is never outsider-judged.** It has no registrant, so no party's own seats can
+/// be its whole population, and its panel is the one it always had — which is also what keeps the
+/// shipped registry's zero slack (`seat_count + 1` bonds) from voiding every claim on a fresh
+/// network.
+pub fn palw_claim_is_outsider_judged_v1(state: &PalwChainStateV2, claim: &PalwClaimStateV2, independence_daa: Option<u64>) -> bool {
+    independence_daa.is_some_and(|height| claim.accepted_daa >= height)
+        && state.class(&claim.class_id).is_some_and(|record| record.registrant_bond.is_some())
 }
 
-/// **Does this panel seat anyone the class's registrant does not hold?**
-/// ([`palw_bond_is_independent_of_registrant_v1`] over the drawn seats.)
+/// **Does this licence carry its outsider's `Valid`?** (ADR-0147.)
 ///
-/// The fold refuses a `PanelBound` that fails this past `Params::palw_admission_independence`, and
-/// the node's panel assembler asks it before proposing one, so a node never puts an object in its
-/// own block that every node — itself included — then rejects. A seat whose bond the state no
-/// longer holds is not counted independent: a panel's independence must be checkable from the
-/// chain at the block that reads it, not from a bond that has left.
-pub fn palw_panel_has_independent_seat_v1(state: &PalwChainStateV2, class_id: &Hash64, seats: &[PalwPanelSeatV2]) -> bool {
-    seats.iter().any(|seat| {
-        state.bond(&seat.bond).is_some_and(|bond| palw_bond_is_independent_of_registrant_v1(state, &seat.bond, bond, class_id))
-    })
+/// `true` for every claim the rule does not reach. For an outsider-judged claim, the bound panel's
+/// FIRST seat must be among the seats that answered `Served`: the draw put the outsider there, and
+/// the acceptance layer refused any `PanelBound` that was not exactly the derived panel, so position
+/// zero is the outsider on every chain that reached this licence. A panel with no seats is refused
+/// before it binds (`EmptyPanel`), and a claim with no bound panel cannot be licensing — both are
+/// answered `false` here rather than trusted.
+///
+/// **Why a veto and not a vote.** `2·quorum > seat_count` is satisfied by four seats of five, so a
+/// panel that merely CONTAINS an outsider is licensed by the four it does not need: the registrant
+/// holding the class's whole population holds every seat but the outsider's. The outsider's
+/// receipt is therefore a condition of the licence rather than one voice in it. An outsider that
+/// cannot judge the class says `Incapable` and the claim voids at its receipt deadline, which is
+/// where every other unreachable quorum ends — the cost of a model the network does not run lands
+/// on the claims of that model, never on the seat that declined to pretend.
+pub fn palw_licence_names_its_outsider_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    verdicts: &[PalwSeatVerdictV2],
+    independence_daa: Option<u64>,
+) -> Result<(), PalwStateV2Error> {
+    if !palw_claim_is_outsider_judged_v1(state, claim, independence_daa) {
+        return Ok(());
+    }
+    let outsider = state.panel(claim_id).and_then(|panel| panel.seats.first()).map(|seat| seat.bond);
+    let served = outsider.is_some_and(|outsider| {
+        verdicts.iter().any(|verdict| verdict.seat_bond == outsider && matches!(verdict.answer, PalwSeatAnswerV2::Served))
+    });
+    if served { Ok(()) } else { Err(PalwStateV2Error::LicenceWithoutOutsider { claim: *claim_id, class: claim.class_id, outsider }) }
 }
 
 /// **ADR-0124 Decision 6's unit, as a function of the state** — the dearest exposure pwu among
@@ -695,7 +696,7 @@ pub fn palw_work_price_unit_v1(
 /// registration would do to the incumbents is the reason this file keeps `palw_work_price_unit_v1`
 /// public at all, and a reader that did not know about this arm would answer the old question.
 pub fn palw_work_target_unit_v1(state: &PalwChainStateV2, canonical_work_daa: Option<u64>, accepted_daa: u64) -> Option<u64> {
-    if !canonical_work_daa.is_some_and(|height| accepted_daa >= height) {
+    if canonical_work_daa.is_none_or(|height| accepted_daa < height) {
         return None;
     }
     let target = state.work_target()?;
@@ -5156,17 +5157,20 @@ pub enum PalwStateV2Error {
     /// claims. One registration per operator identity, past the fence.
     #[error("operator {operator} is already registered by bond {holder:?}; one identity, one bond")]
     DuplicateOperator { operator: Hash64, holder: PalwBondKeyV2 },
-    /// The 2026-09-19 audit's F3, past `Params::palw_admission_independence`: every seat on this
-    /// claim's panel is the class registrant's own bond, operator or key, so the jury is the party
-    /// on trial. The claim waits for a panel that names somebody else and voids at its bind
-    /// deadline if none is ever drawn — the ending a class with too few capable bonds already has.
-    #[error("class {class} bound a panel of {seats} seats and its registrant holds every one of them")]
-    PanelWithoutIndependentSeat { claim: Hash64, class: Hash64, seats: usize },
-    /// The same rule at the licence: a quorum made only of the registrant's own seats is the
-    /// registrant certifying itself, and a panel that merely CONTAINS an independent seat does not
-    /// fix it — a strict majority of five can be reached by four of the registrant's.
-    #[error("class {class}: the {valid} Valid receipts licensing this claim are all the registrant's own seats")]
-    QuorumWithoutIndependentSeat { claim: Hash64, class: Hash64, valid: usize },
+    /// ADR-0147 (the 2026-09-19 audit's F3), past `Params::palw_admission_independence`: a claim
+    /// of a bought class licenses only with the `Valid` receipt of its outsider — the panel's first
+    /// seat, drawn from the network's base-class population and not from the class's own. A quorum
+    /// of the class's own seats is not a jury the registrant is outside of, however many addresses
+    /// it pays them to. The claim waits for its outsider and voids at the receipt deadline if the
+    /// outsider never says `Valid`. `outsider` is `None` when no panel with a first seat is bound.
+    #[error("class {class}: claim {claim} is licensed without its outsider seat {outsider:?} answering Valid")]
+    LicenceWithoutOutsider { claim: Hash64, class: Hash64, outsider: Option<PalwBondKeyV2> },
+    /// ADR-0147: a claim whose panel had to carry an outsider cannot be licensed BY PARTS — the
+    /// stratified draw seats no outsider, so a part licence would be the class's own population
+    /// judging itself shard by shard. `validate_palw_v2` refuses a build arming the bundle with
+    /// `palw_shard_licensing`; this is the fold's own statement of the same rule.
+    #[error("claim {0} is outsider-judged and a stratified panel seats no outsider")]
+    OutsiderJudgedClaimLicensedByParts(Hash64),
     /// ADR-0145 I4, past `Params::palw_admission_independence`: a bought class's share is funded by
     /// donation from every incumbent, so granting one at registration lets a stranger move the
     /// weight, the budget and the difficulty of classes that never heard of it. It registers at
@@ -9260,7 +9264,7 @@ impl<'a> TransitionBuilder<'a> {
         // genesis assembly registered, and it opens exactly as it always did — there is nobody for
         // its seats to be independent of, and the shipped registry has no slack for a new gate.
         let bought = self.state.classes.get(&class_id).is_some_and(|record| record.registrant_bond.is_some());
-        let state = if self.extras.admission_independence_active && bought {
+        let state = if self.extras.admission_independence_at(ctx.daa_score) && bought {
             registry::PalwModelLifecycleV1::Candidate
         } else if work.is_some_and(|w| w.ops_supported) {
             registry::PalwModelLifecycleV1::Prefetching
@@ -9299,23 +9303,27 @@ impl<'a> TransitionBuilder<'a> {
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> u32 {
-        self.model_registry_ready_seats_where(class_id, now_daa, fold, false)
+        let ready = self
+            .state
+            .bonds
+            .iter()
+            .filter(|(bond_key, bond)| self.model_registry_seat_is_ready(bond_key, bond, class_id, now_daa, fold))
+            .count();
+        ready.min(u32::MAX as usize) as u32
     }
 
-    /// **The same count, restricted to seats the class's registrant does not hold** when
-    /// `independent_only` (the 2026-09-19 audit's F3, ADR-0145 §7).
-    ///
-    /// One body rather than two, because "ready" is a five-clause predicate and a second copy of
-    /// it would drift: the admission gate must count exactly the seats the draw can seat, or a
-    /// class is admitted on seats no panel can use — or held out on seats a panel could. The flag
-    /// is `false` on every path below the fence, which is the count this function always returned.
-    fn model_registry_ready_seats_where(
+    /// **Is this bond READY for the class now** — the registry's five-clause predicate, spelled
+    /// once. The count above and ADR-0147's admission jury both read it, because "ready" must mean
+    /// one thing: a jury that admitted a class on seats the draw could not seat, or held one out on
+    /// seats it could, would be a second answer to the same question.
+    fn model_registry_seat_is_ready(
         &self,
+        bond_key: &PalwBondKeyV2,
+        bond: &PalwBondStateV2,
         class_id: &Hash64,
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
-        independent_only: bool,
-    ) -> u32 {
+    ) -> bool {
         // ADR-0133 §11.2: past readiness V2 a row stands for eight spans, not thirty, and a V1 row
         // does not stand at all — the challenge rotates every span and the rotation has to bite.
         let max_age_spans = if self.extras.readiness_v2_active {
@@ -9326,29 +9334,93 @@ impl<'a> TransitionBuilder<'a> {
         let max_age_daa = (max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
         let floor = self.params.min_collateral_sompi();
         let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
-        let mut ready = 0u32;
-        for (bond_key, bond) in self.state.bonds.iter() {
-            if !matches!(bond.status, PalwBondStatusV2::Active) || !palw_bond_may_take_work_v2(bond, floor) {
-                continue;
-            }
-            let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { continue };
-            if self.extras.readiness_v2_active && row.proof_version < 2 {
-                continue; // a one-leaf proof is not possession past the fence
-            }
-            if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
-                continue;
-            }
-            let held = self.state.reserved_exposure(bond_key).saturating_add(self.state.registration_exposure(bond_key));
-            let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
-            if free < needed {
-                continue;
-            }
-            if independent_only && !palw_bond_is_independent_of_registrant_v1(&self.state, bond_key, bond, class_id) {
-                continue;
-            }
-            ready = ready.saturating_add(1);
+        if !matches!(bond.status, PalwBondStatusV2::Active) || !palw_bond_may_take_work_v2(bond, floor) {
+            return false;
         }
-        ready
+        let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { return false };
+        if self.extras.readiness_v2_active && row.proof_version < 2 {
+            return false; // a one-leaf proof is not possession past the fence
+        }
+        if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
+            return false;
+        }
+        let held = self.state.reserved_exposure(bond_key).saturating_add(self.state.registration_exposure(bond_key));
+        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+        free >= needed
+    }
+
+    /// **ADR-0147: did this `Candidate` class's admission jury sit at this boundary, and does a
+    /// majority of it hold the class?**
+    ///
+    /// Four things make the jury independent of the registrant, and each is a structural fact
+    /// rather than an identity comparison:
+    ///
+    /// * **the population is the network's**: every active bond above the floor that serves the
+    ///   liveness floor (`palw_bond_may_judge_class_v2` for the base class) — the set every panel
+    ///   of the class every node runs is drawn from — minus the registrant's own bond and operator,
+    ///   the one party the chain KNOWS holds this class;
+    /// * **it is fixed before its randomness**: only bonds registered before the span whose anchor
+    ///   seeds the draw began, so no bond in it was registered by a party that had seen the seed —
+    ///   without this a registrant grinds keys offline for jury tickets below everyone else's;
+    /// * **the randomness costs inference**: the execution lane's seed anchor of the span before
+    ///   (ADR-0130), whose re-roll is a winning attempt, not a header;
+    /// * **the draw is rationed**: an audit falls once per period ([`palw_admission_audit_due_v1`]),
+    ///   so a registrant cannot wait out the odds span by span.
+    ///
+    /// No anchor for the span before — no attempt was admitted in it — is no audit: the class stays
+    /// `Candidate` until an audit span that has one. A short jury (fewer operators in the population
+    /// than seats) admits nothing. Both are the fail-closed direction.
+    fn admission_jury_seated(
+        &self,
+        class_id: &Hash64,
+        ctx: &PalwBlockContextV2,
+        span_now: u64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+    ) -> bool {
+        use crate::palw_model_registry_v1::{
+            palw_admission_audit_due_v1, palw_admission_audit_period_spans_v1, palw_admission_jury_quorum_v1,
+            palw_admission_jury_seed_v1,
+        };
+        let period = palw_admission_audit_period_spans_v1(self.params.epoch_length, fold.span_daa);
+        if !palw_admission_audit_due_v1(span_now, period) {
+            return false;
+        }
+        let Some(anchor) = self.state.round_seed_anchor.as_ref().filter(|anchor| anchor.span.saturating_add(1) == span_now) else {
+            return false;
+        };
+        let seed = palw_admission_jury_seed_v1(class_id, span_now, &anchor.block, &anchor.execution_key);
+        let cutoff = span_now.saturating_sub(1).saturating_mul(fold.span_daa.max(1));
+        let base = self.params.base_class_id;
+        let floor = self.params.min_collateral_sompi();
+        let registrant = self.state.classes.get(class_id).and_then(|record| record.registrant_bond);
+        let registrant_operator = registrant.and_then(|key| self.state.bonds.get(&key)).map(|bond| bond.operator_id);
+        let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = self
+            .state
+            .bonds
+            .iter()
+            .filter(|(key, bond)| {
+                matches!(bond.status, PalwBondStatusV2::Active)
+                    && palw_bond_may_take_work_v2(bond, floor)
+                    && palw_bond_may_judge_class_v2(bond, &base)
+                    && bond.registered_daa < cutoff
+                    && Some(**key) != registrant
+                    && Some(bond.operator_id) != registrant_operator
+            })
+            .collect();
+        let seats = fold.globals.seat_count.max(1);
+        let jury = crate::palw_panel_v2::palw_admission_jury_v1(&seed, &population, seats);
+        if jury.len() < seats as usize {
+            return false;
+        }
+        let ready = jury
+            .iter()
+            .filter(|operator| {
+                population.iter().any(|(key, bond)| {
+                    bond.operator_id == **operator && self.model_registry_seat_is_ready(key, bond, class_id, ctx.daa_score, fold)
+                })
+            })
+            .count();
+        ready >= palw_admission_jury_quorum_v1(seats) as usize
     }
 
     /// Attempt claims of a class still in flight (accepted and not terminal).
@@ -9586,7 +9658,7 @@ impl<'a> TransitionBuilder<'a> {
             // does, on completed claims. The base class and the classes the network was born with
             // are untouched, because neither is bought. Below the fence this is the old rule.
             let bought = self.state.classes.get(class_id).is_some_and(|record| record.registrant_bond.is_some());
-            let brake = self.extras.admission_independence_active && bought;
+            let brake = self.extras.admission_independence_at(ctx.daa_score) && bought;
             let state = if *class_id == base || (has_final && !brake) {
                 PalwModelLifecycleV1::Active
             } else if has_final {
@@ -9674,15 +9746,12 @@ impl<'a> TransitionBuilder<'a> {
                     window_fits_receipt: (profile.verification_window_spans as u64).saturating_mul(fold.span_daa.max(1))
                         <= self.params.window_receipt(),
                     span_stable: utilization < 1_000 && row.probes_failed_this_span == 0 && ready >= profile.required_ready_seats,
-                    // ADR-0145 §7: the only reading that moves a class out of `Candidate`, and
-                    // the only transition it is read by. Counted just for a row that IS in
-                    // `Candidate` — a state nothing writes below the fence — so no other class
-                    // pays for a second walk of the bond registry at every span boundary.
-                    independent_ready_seats: if matches!(row.state, PalwModelLifecycleV1::Candidate) {
-                        self.model_registry_ready_seats_where(class_id, ctx.daa_score, &fold, true)
-                    } else {
-                        0
-                    },
+                    // ADR-0147: the only reading that moves a class out of `Candidate`, and the
+                    // only transition it is read by. Drawn just for a row that IS in `Candidate`
+                    // — a state nothing writes below the fence — so no other class pays for a
+                    // walk of the bond registry at any boundary.
+                    admission_jury_seated: matches!(row.state, PalwModelLifecycleV1::Candidate)
+                        && self.admission_jury_seated(class_id, ctx, span_now, &fold),
                 };
                 (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
             };
@@ -10204,8 +10273,11 @@ impl<'a> TransitionBuilder<'a> {
             &self.state,
             &self.params.base_class_id,
             self.uncertified_weightless,
-            self.extras.admission_independence_active,
-            |id, record| self.canonical_per_draw(id, accepted_daa).unwrap_or_else(|| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule)),
+            // The claim's own era, like the work target arm above it: one claim, one basis.
+            self.extras.admission_independence_at(accepted_daa),
+            |id, record| {
+                self.canonical_per_draw(id, accepted_daa).unwrap_or_else(|| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule))
+            },
         )
     }
 
@@ -14177,6 +14249,13 @@ fn apply_object(
             let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
                 return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ShardReceiptLicensed" });
             };
+            // ADR-0147: the stratified draw seats no outsider, so an outsider-judged claim has no
+            // part that could carry the outsider's answer. `validate_palw_v2` refuses the bundle
+            // beside `palw_shard_licensing`; the fold says so too rather than licensing by a door
+            // the rule never reached.
+            if palw_claim_is_outsider_judged_v1(&builder.state, &claim, builder.extras.admission_independence_daa) {
+                return Err(PalwStateV2Error::OutsiderJudgedClaimLicensedByParts(claim_id));
+            }
             let plan =
                 crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(&builder.state, &claim_id, params.seats_per_shard)
                     .ok_or(PalwStateV2Error::NotLicensedByParts(claim_id))?;
@@ -14567,7 +14646,7 @@ fn apply_object(
             // exactly this arm. The zero still WRITES a share row (`Some(0)`), which is what keeps
             // the class eligible for the registry's later redistribution — a class with no row at
             // all is skipped by it for ever.
-            if builder.extras.admission_independence_active
+            if builder.extras.admission_independence_at(ctx.daa_score)
                 && *share_permille > 0
                 && admission.as_ref().is_some_and(|carriage| carriage.registrant_bond != palw_genesis_registrant_bond_v1())
             {
@@ -14982,29 +15061,21 @@ fn apply_object(
             let PalwClaimPhaseV2::Provisional = claim.phase else {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
             };
-            // **A class is not judged by its own registrant** (the 2026-09-19 audit's F3,
-            // ADR-0145 I3). The draw takes its candidates from the bonds that declared capability
-            // for the class — or, under the registry, proved possession of its artifact — and both
-            // are acts the registrant can perform for itself, so the price of certifying your own
-            // class was six operator keys rather than five. Past the fence a panel has to name at
-            // least one bond outside the registrant's own identity, or it is not a jury.
+            // **ADR-0147: the outsider is placed by the DRAW, and the draw is checked where it can
+            // be.** A bought class's panel carries its outsider at position zero, and whether the
+            // seat there is the one the anchor's lottery names over the network's base-class
+            // population is a question only the acceptance layer can answer: it needs the anchor's
+            // DAA (for maturity), the panel economy's floor and headroom and the readiness policy,
+            // none of which this pure transition holds — the same reason every other draw rule
+            // (maturity, capability, weighting, the operator lottery) is checked there and not here.
+            // `palw_v2_validate_objects` demands the derived panel exactly, in the derived order, and
+            // drops any other, so no chain reaches this arm with a panel the draw did not produce.
             //
-            // It belongs in the transition and not only in the acceptance layer's draw because the
-            // transition is what the sync walk runs: a panel this rule refuses must be refused when
-            // the chain is replayed, not only when it is built. Pure state — the class's registrant
-            // and the seats' bond records — so the block path, the rehearsal and the walk answer it
-            // identically. The node's assembler asks the same question before it proposes a panel
-            // (`palw_panel_has_independent_seat_v1`), so an honest producer never builds a block
-            // this arm then rejects.
-            if builder.extras.admission_independence_active
-                && !palw_panel_has_independent_seat_v1(&builder.state, &claim.class_id, seats)
-            {
-                return Err(PalwStateV2Error::PanelWithoutIndependentSeat {
-                    claim: *claim_id,
-                    class: claim.class_id,
-                    seats: seats.len(),
-                });
-            }
+            // What the transition DOES own is the licence, and that is where the outsider's answer
+            // is required (`palw_licence_names_its_outsider_v1`, on every licensing arm). The rule
+            // this replaces asked here whether some seat's identity differed from the registrant's;
+            // every field it compared is one the registrant writes, so it priced self-judgement at
+            // one payout address per seat and stopped nothing.
             builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
             // ADR-0124 Decision 3: past the fence the drawn seats go on duty — a duty row, and each
             // seat's exposure reserved for the claim's life. Below it nothing is written.
@@ -15044,41 +15115,20 @@ fn apply_object(
                 // them is refuted by the record. It pays what it tried to take: the same `reserved`
                 // the producer would have lost.
                 let verdicts = palw_seat_verdicts_of_v2(receipts);
-                // **The quorum, not merely the room** (the 2026-09-19 audit's F3, ADR-0145 I3).
-                // The panel rule above puts an outsider in the jury; it does not put one in the
-                // verdict, and it cannot: `2·quorum > seat_count` is satisfied by four of five, so
-                // a registrant holding four seats licenses its own claim with the fifth watching.
-                // Past the fence the receipts that license a claim must name at least one seat the
-                // registrant does not hold. A claim whose independent seat stays silent is not
-                // licensed here — it voids at the receipt deadline, which is what every other
-                // unreachable quorum already does, rather than being licensed by the party on trial.
-                //
-                // The genesis exemption is asked HERE and not left to the predicate, because the
-                // two are not the same question at zero: a class nobody bought has no registrant
-                // for a seat to be independent of, and a licence carrying no `Valid` receipt at all
-                // would otherwise be refused on a class this rule has no business touching.
-                if builder.extras.admission_independence_active
-                    && builder.state.classes.get(&claim.class_id).is_some_and(|record| record.registrant_bond.is_some())
-                {
-                    let served: Vec<PalwBondKeyV2> = verdicts
-                        .iter()
-                        .filter(|verdict| matches!(verdict.answer, PalwSeatAnswerV2::Served))
-                        .map(|verdict| verdict.seat_bond)
-                        .collect();
-                    let independent =
-                        served.iter().any(|seat| {
-                            builder.state.bonds.get(seat).is_some_and(|bond| {
-                                palw_bond_is_independent_of_registrant_v1(&builder.state, seat, bond, &claim.class_id)
-                            })
-                        });
-                    if !independent {
-                        return Err(PalwStateV2Error::QuorumWithoutIndependentSeat {
-                            claim: *claim_id,
-                            class: claim.class_id,
-                            valid: served.len(),
-                        });
-                    }
-                }
+                // **ADR-0147: the outsider's answer is a condition of the licence, not a vote in it.**
+                // `2·quorum > seat_count` is satisfied by four seats of five, so a registrant holding
+                // the class's whole population licenses its own claim with the outsider watching —
+                // unless the outsider's `Valid` is required. It is, here and on every other licensing
+                // arm, through the one function, so no path licenses by a rule another path refuses.
+                // A genesis class is never outsider-judged; neither is a claim accepted below the
+                // fence (the predicate reads the claim's own `accepted_daa`).
+                palw_licence_names_its_outsider_v1(
+                    &builder.state,
+                    claim_id,
+                    &claim,
+                    &verdicts,
+                    builder.extras.admission_independence_daa,
+                )?;
                 builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
                 // …and the seats that said nothing while their panel concluded without them (P0-7).
                 builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
@@ -15471,6 +15521,17 @@ fn apply_object(
             }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
             let verdicts = palw_seat_verdicts_of_v2(&inner);
+            // ADR-0147: the coverage licence is a licence, and it takes the outsider's `Valid`
+            // exactly as the V1 quorum does. Before this rule the V2 arm carried no independence
+            // check of any kind, so a network arming Verification V2 beside the bundle would have
+            // licensed a bought class through the one door the rule never looked at.
+            palw_licence_names_its_outsider_v1(
+                &builder.state,
+                claim_id,
+                &claim,
+                &verdicts,
+                builder.extras.admission_independence_daa,
+            )?;
             builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
@@ -16279,13 +16340,22 @@ pub struct PalwTransitionExtrasV1 {
     /// `None` by `Default` and on every preset, so a caller that does not set it keeps the
     /// declared basis exactly.
     pub canonical_work_daa: Option<u64>,
-    /// The 2026-09-19 audit (F3, ADR-0145 I3/I4): `Params::palw_admission_independence` resolved at
-    /// the block's DAA. Past it a registered class's panel and its licensing quorum must each name
-    /// a seat the registrant does not hold, a registered class opens `Candidate` and leaves it only
-    /// when an independent seat is ready, and a class that admits no claims neither enters the
-    /// work-price unit nor takes a seated class target. `false` by `Default`, so a caller that does
-    /// not set it keeps the behaviour every existing row was written under.
-    pub admission_independence_active: bool,
+    /// **ADR-0147 / ADR-0145 I3–I4: `Params::palw_admission_independence`'s HEIGHT, not a yes/no
+    /// at this block** (the 2026-09-19 audit's F3).
+    ///
+    /// It governs two kinds of rule, and the height serves both. The CLAIM-level one — a bought
+    /// class's claim is judged with an outsider seat and licensed only on that seat's `Valid` —
+    /// compares it against the claim's own `accepted_daa`
+    /// ([`palw_claim_is_outsider_judged_v1`]), because the draw, the binding and every licensing
+    /// arm read one claim at different chain points and must give it one answer. The BLOCK-level
+    /// ones — a registration opens `Candidate`, leaves it only on an admission jury drawn from the
+    /// network, asks for no share, and stays out of the work-price unit until it admits claims —
+    /// ask [`Self::admission_independence_at`] at the block. One field, so the two readings cannot
+    /// disagree about where the fence is.
+    ///
+    /// `None` by `Default` and on every preset, so a caller that does not set it keeps the
+    /// behaviour every existing row was written under.
+    pub admission_independence_daa: Option<u64>,
     /// **ADR-0145 §5/§6: `Params::palw_fp_derived_work` resolved at the block's DAA.** Past it a
     /// free-prompt lane certification records the class's graph, a class already certified may
     /// publish one, and a free-prompt commitment is priced on work the transition DERIVES from
@@ -16434,6 +16504,13 @@ pub struct PalwTransitionExtrasV1 {
 }
 
 impl PalwTransitionExtrasV1 {
+    /// Whether ADR-0147's block-level rules apply at `daa_score` (the registration, `Candidate`
+    /// and work-price rules of `Params::palw_admission_independence`). The claim-level rule reads
+    /// the height against the claim instead — see [`Self::admission_independence_daa`].
+    pub fn admission_independence_at(&self, daa_score: u64) -> bool {
+        self.admission_independence_daa.is_some_and(|height| daa_score >= height)
+    }
+
     /// The network's genesis prompt-ids form, from [`Self::prompt_ids_merkle`].
     pub fn prompt_ids_form_v1(&self) -> crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
         if self.prompt_ids_merkle {
@@ -21847,24 +21924,33 @@ pub(crate) mod tests {
             );
         }
 
-        /// **The 2026-09-19 reward audit's F3, and ADR-0145's I3 and I4** — behind
-        /// `Params::palw_admission_independence`, dormant on every preset.
+        /// **ADR-0147: independence by population** — the 2026-09-19 reward audit's F3 and ADR-0145's
+        /// I3 and I4, behind `Params::palw_admission_independence`, dormant on every preset.
         ///
-        /// The finding: `palw_panel_eligible_bonds_v2` draws a class's jury from the bonds that
-        /// declared capability — or, under the registry, proved possession — for that class, and
-        /// both are acts the class's own registrant can perform for itself. So a stranger's class
-        /// is normally judged by the party that registered it, and the price of certifying your
-        /// own work was a sixth operator key rather than a fifth.
+        /// The finding: a class's jury was drawn from the bonds that declared capability for the
+        /// class — or, under the registry, proved possession of its artifact — and both are acts the
+        /// class's own registrant performs for itself. The first repair asked whether a seat's
+        /// `operator_id`, `pubkey` and `payout_payload` differed from the registrant's; all three are
+        /// fields the registrant writes, so paying each sybil to its own address made the class
+        /// judge itself again for nothing. The re-audit measured that
+        /// (`a_registrant_paying_its_sybils_separately_...`), and it is the test this module now
+        /// inverts.
         ///
-        /// These fixtures are the attack: one registrant, its own bonds under distinct operator
-        /// keys and distinct bond keys — everything the chain's identity triple distinguishes —
-        /// all paying into ONE payout address, which is the one beneficiary fact the chain keeps.
+        /// What replaces it reads no field a registrant writes. A bought class's claim sits an
+        /// OUTSIDER drawn from the network's base-class population, and no licence stands without
+        /// that seat's `Valid`; a bought class leaves `Candidate` only when a JURY the network drew
+        /// finds a majority of itself holding the class. Both populations are fixed before their
+        /// randomness. The fixtures below are one network — twenty honest operators who serve the
+        /// liveness floor and never touched Kimi, and a registrant with seven sybils that serve the
+        /// floor AND hold Kimi — so every probability they measure is the registrant's share of THAT
+        /// network, which is the quantity the rule is designed to make it pay for.
         mod admission_independence {
             use super::*;
+            use crate::palw_panel_v2::{
+                PalwPanelDrawPolicyV1, PalwPanelIndependenceV1, PalwPanelParamsV2, derive_panel_v2_with_policy,
+            };
 
-            /// Where every bond the registrant funds is paid. The attack needs distinct operator
-            /// keys (panel dedup is per operator) and distinct bond keys (`DuplicateBondKey`), so
-            /// the payee is what is left for the chain to see them by.
+            /// Where every bond the registrant funds is paid, in the layouts that share a payee.
             fn registrant_payee() -> Hash64 {
                 h64(0x5B0B)
             }
@@ -21893,6 +21979,43 @@ pub(crate) mod tests {
                 }
             }
 
+            /// A bond that SERVES THE LIVENESS FLOOR — it declares the base class, which is what puts
+            /// it in the network's population — paying `payout`, and declaring Kimi as well when
+            /// `holds_kimi`. Declaring costs a signature; the registrant's sybils do both.
+            fn serving(n: u64, payout: Hash64, holds_kimi: bool) -> PalwConsensusObjectV2 {
+                let mut capable_classes = std::collections::BTreeSet::new();
+                capable_classes.insert(h64(1));
+                if holds_kimi {
+                    capable_classes.insert(kimi_id());
+                }
+                match bond(n, 1_000) {
+                    PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, signature, .. } => {
+                        PalwConsensusObjectV2::BondRegistered {
+                            bond,
+                            pubkey,
+                            operator_pubkey,
+                            collateral,
+                            payout_payload: payout,
+                            capable_classes,
+                            signature,
+                        }
+                    }
+                    _ => unreachable!("`bond` builds a BondRegistered"),
+                }
+            }
+
+            /// The registrant's seven sybils and the network's twenty honest operators.
+            const SYBILS: std::ops::RangeInclusive<u64> = 2..=8;
+            const HONEST: std::ops::RangeInclusive<u64> = 11..=30;
+
+            fn is_sybil(key: &PalwBondKeyV2) -> bool {
+                SYBILS.clone().any(|n| bond_key(n) == *key)
+            }
+
+            fn is_honest(key: &PalwBondKeyV2) -> bool {
+                HONEST.clone().any(|n| bond_key(n) == *key)
+            }
+
             /// The base-0 graph, which is the cheapest legal carriage this fixture can carry. The
             /// class it is attached to is not base-0 — the fold reads the carriage for the
             /// registrant and the work, and the id-to-profile check is the acceptance layer's.
@@ -21914,7 +22037,7 @@ pub(crate) mod tests {
             /// Kimi as a BOUGHT class: a carriage naming `registrant`, which is what makes the
             /// fold record a `registrant_bond` and so what separates it from a genesis class.
             /// `share_permille: 0` because past the fence a registration that asks for cadence is
-            /// refused, and the test below proves that separately.
+            /// refused.
             fn kimi_bought_by(artifact_root: Hash64, registrant: PalwBondKeyV2) -> PalwConsensusObjectV2 {
                 PalwConsensusObjectV2::ClassRegistered {
                     class_id: kimi_id(),
@@ -21930,8 +22053,8 @@ pub(crate) mod tests {
 
             /// The base class and bond 1; bond 9 the registrant; Kimi bought by bond 9; bonds
             /// 2..=8 — the registrant's own, one payee between them — and bond 10, a stranger.
-            /// Bond 10 exists from the start and proves nothing: what the admission gate waits for
-            /// is a READY independent seat, not a registered one.
+            /// None of them serves the floor: this is the registry-only network the admission
+            /// fixtures below the independence rules were written against.
             fn bought_network(root: Hash64) -> Vec<PalwConsensusObjectV2> {
                 let mut objects = register_class_and_bond();
                 objects.push(bond_paying(9, 1_000, registrant_payee()));
@@ -21941,8 +22064,26 @@ pub(crate) mod tests {
                 objects
             }
 
+            /// **The contested network.** The floor and its bond 1 (the producer in every fixture
+            /// here); bond 9 the registrant, Kimi bought by it; the seven sybils serving the floor
+            /// and declaring Kimi, paid to one payee or each to its own address; twenty honest
+            /// operators serving the floor who never declared Kimi.
+            fn contested_network(root: Hash64, one_payee: bool) -> Vec<PalwConsensusObjectV2> {
+                let mut objects = register_class_and_bond();
+                objects.push(bond_paying(9, 1_000, registrant_payee()));
+                objects.push(kimi_bought_by(root, bond_key(9)));
+                objects.extend(SYBILS.map(|n| serving(n, if one_payee { registrant_payee() } else { h64(0x9A00 + n) }, true)));
+                objects.extend(HONEST.map(|n| serving(n, h64(0x9A00 + n), false)));
+                objects
+            }
+
+            /// The fence armed from DAA zero.
             fn armed(fold: Option<PalwModelRegistryFoldV1>) -> PalwTransitionExtrasV1 {
-                PalwTransitionExtrasV1 { admission_independence_active: true, ..extras(fold) }
+                armed_from(0, fold)
+            }
+
+            fn armed_from(height: u64, fold: Option<PalwModelRegistryFoldV1>) -> PalwTransitionExtrasV1 {
+                PalwTransitionExtrasV1 { admission_independence_daa: Some(height), ..extras(fold) }
             }
 
             fn fold_step(
@@ -21958,65 +22099,178 @@ pub(crate) mod tests {
                 Ok(out)
             }
 
-            fn says(seat: PalwBondKeyV2, served: bool) -> crate::palw_panel_v2::PalwSeatReceiptV2 {
+            fn answers(
+                seat: PalwBondKeyV2,
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2,
+            ) -> crate::palw_panel_v2::PalwSeatReceiptV2 {
                 crate::palw_panel_v2::PalwSeatReceiptV2 {
                     claim: Hash64::default(),
-                    verdict: if served {
-                        crate::palw_panel_v2::PalwReceiptVerdictV2::Valid
-                    } else {
-                        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 0 }
-                    },
+                    verdict,
                     seat_bond: seat,
                     signed_daa: 0,
                     signature: Vec::new(),
                 }
             }
 
+            fn says(seat: PalwBondKeyV2, served: bool) -> crate::palw_panel_v2::PalwSeatReceiptV2 {
+                answers(
+                    seat,
+                    if served {
+                        crate::palw_panel_v2::PalwReceiptVerdictV2::Valid
+                    } else {
+                        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 0 }
+                    },
+                )
+            }
+
             fn seat(n: u64) -> PalwPanelSeatV2 {
                 PalwPanelSeatV2 { bond: bond_key(n), operator_id: op_id(20 + n) }
             }
 
-            /// **Kimi admitted the honest way**: the registrant's seven seats AND the stranger's,
-            /// all ready, walked to the state where the class admits claims. The same blocks on
-            /// both sides of the fence — past it the class spends one boundary in `Candidate` and
-            /// leaves it on the stranger's seat, below it there is no `Candidate` at all — so a
-            /// test comparing the two is comparing the rule and not the fixture.
+            /// The network's panel shape: five seats, three to license.
+            fn panel_params() -> PalwPanelParamsV2 {
+                PalwPanelParamsV2::new(5, 3, 2).expect("five seats, three of them a quorum")
+            }
+
+            /// The draw policy with ADR-0147 configured (`from_daa`) and the anchor's DAA.
+            fn independent(from_daa: u64, anchor_daa: u64) -> PalwPanelDrawPolicyV1 {
+                PalwPanelDrawPolicyV1 {
+                    independence: Some(PalwPanelIndependenceV1 { from_daa, base_class_id: h64(1), anchor_daa }),
+                    ..Default::default()
+                }
+            }
+
+            /// The contested network with one claim of Kimi Provisional at DAA 101, produced by
+            /// bond 1. No registry fold: the draw and the licence read the class's registrant and the
+            /// bonds, and nothing a registry row says — so they hold on a chain whose registry is
+            /// still dormant.
+            fn contested_claim(root: Hash64, one_payee: bool, extras: &PalwTransitionExtrasV1) -> (PalwChainStateV2, Hash64) {
+                let p = params();
+                let (s1, _) =
+                    fold_step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &contested_network(root, one_payee), None, extras)
+                        .unwrap();
+                let env = kimi_attempt(7, root);
+                let claim_id = attempt_id_v2(&env.attempt);
+                let (s2, _) = fold_step(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), extras).unwrap();
+                (s2, claim_id)
+            }
+
+            /// **A floor attempt a fixture can put in any block**: the base class is always
+            /// admitted, and an admitted attempt in a lane-bearing block is what makes that block the
+            /// span's seed anchor (ADR-0130). The first nonce the fold takes at this chain point.
+            fn seeding_attempt(
+                parent: &PalwChainStateV2,
+                c: &PalwBlockContextV2,
+                extras: &PalwTransitionExtrasV1,
+            ) -> PalwChainStateV2 {
+                let p = params();
+                for nonce in 1_000..1_200 {
+                    let env = attempt_for_class(40, nonce, h64(1), bond_key(1), vec![7; 4], op_id(21), h64(11));
+                    if let Ok((next, _)) = fold_step(parent, &p, c, &[], Some(&env), extras) {
+                        return next;
+                    }
+                }
+                panic!("no floor attempt admits at daa {}", c.daa_score)
+            }
+
+            /// **Kimi walked to its first admission audit.** The contested network at DAA 100;
+            /// possession proofs for span 98 from `holders` at DAA 985; a floor attempt in block
+            /// `seed_block` of span 99 at DAA 995 — the seed anchor, so the jury's randomness —
+            /// unless `seeded` is false; and the audit span's first block at DAA 1000
+            /// (`epoch_length` 1000 over ten-DAA spans puts an audit every hundred spans).
+            ///
+            /// Returns the state before the audit block and the state after it.
+            #[allow(clippy::too_many_arguments)]
+            fn to_first_audit(
+                root: Hash64,
+                operands: &[crate::palw_artifact::PalwArtifactOperandV1],
+                f: &PalwModelRegistryFoldV1,
+                holders: &[u64],
+                seed_block: u64,
+                seeded: bool,
+                with: &dyn Fn(Option<PalwModelRegistryFoldV1>) -> PalwTransitionExtrasV1,
+                one_payee: bool,
+            ) -> (PalwChainStateV2, PalwChainStateV2) {
+                let p = params();
+                let proofs: Vec<PalwConsensusObjectV2> = holders.iter().map(|n| proof(operands, bond_key(*n), 98)).collect();
+                let (s1, _) = fold_step(
+                    &PalwChainStateV2::genesis(),
+                    &p,
+                    &ctx(1, 100, 1),
+                    &contested_network(root, one_payee),
+                    None,
+                    &with(None),
+                )
+                .unwrap();
+                let (s2, _) = fold_step(&s1, &p, &ctx(2, 985, 2), &proofs, None, &with(Some(f.clone()))).unwrap();
+                let span_99 = ctx(seed_block, 995, 3);
+                let s3 = if seeded {
+                    seeding_attempt(&s2, &span_99, &with(Some(f.clone())))
+                } else {
+                    fold_step(&s2, &p, &span_99, &[], None, &with(Some(f.clone()))).unwrap().0
+                };
+                let (s4, _) = fold_step(&s3, &p, &ctx(4, 1_000, 4), &[], None, &with(Some(f.clone()))).unwrap();
+                (s3, s4)
+            }
+
+            /// **The jury the audit at span 100 draws, recomputed from outside the fold** — the
+            /// population the rule names (active, above the floor, serving the floor, registered
+            /// before span 99 began, not the registrant) and the seed off the state's own anchor.
+            /// Returns how many of the five jurors are the registrant's sybils.
+            fn sybils_on_the_jury(before_audit: &PalwChainStateV2) -> usize {
+                use crate::palw_model_registry_v1::palw_admission_jury_seed_v1;
+                let anchor = before_audit.round_seed_anchor().expect("span 99 recorded a seed anchor");
+                assert_eq!(anchor.span, 99, "the anchor of the span before the audit");
+                let seed = palw_admission_jury_seed_v1(&kimi_id(), 100, &anchor.block, &anchor.execution_key);
+                let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = before_audit
+                    .bonds_iter()
+                    .filter(|(key, bond)| {
+                        matches!(bond.status, PalwBondStatusV2::Active)
+                            && bond.capable_classes.contains(&h64(1))
+                            && bond.registered_daa < 990
+                            && **key != bond_key(9)
+                    })
+                    .collect();
+                let jury = crate::palw_panel_v2::palw_admission_jury_v1(&seed, &population, 5);
+                assert_eq!(jury.len(), 5, "twenty-seven operators seat a full jury");
+                jury.iter().filter(|operator| SYBILS.clone().any(|n| op_id(20 + n) == **operator)).count()
+            }
+
+            /// **Kimi admitted the honest way**: the network's honest operators hold it as well as
+            /// the registrant's sybils, a jury the network drew finds a majority holding it at the
+            /// audit, and one boundary later it has the ready seats probation asks for. The same
+            /// blocks on both sides of the fence — below it there is no `Candidate` and no jury at
+            /// all — so a test comparing the two compares the rule and not the fixture.
             fn kimi_admitted(
-                p: &PalwStateParamsV2,
                 root: Hash64,
                 operands: &[crate::palw_artifact::PalwArtifactOperandV1],
                 f: &PalwModelRegistryFoldV1,
                 fenced: bool,
             ) -> PalwChainStateV2 {
                 let with = |fold: Option<PalwModelRegistryFoldV1>| if fenced { armed(fold) } else { extras(fold) };
-                let proofs: Vec<PalwConsensusObjectV2> =
-                    (2..=8).chain(std::iter::once(10)).map(|n| proof(operands, bond_key(n), 10)).collect();
-                let (s1, _) =
-                    fold_step(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &bought_network(root), None, &with(None)).unwrap();
-                let (s2, _) = fold_step(&s1, p, &ctx(2, 101, 2), &proofs, None, &with(Some(f.clone()))).unwrap();
-                let (s3, _) = fold_step(&s2, p, &ctx(3, 110, 3), &[], None, &with(Some(f.clone()))).unwrap();
-                let (s4, _) = fold_step(&s3, p, &ctx(4, 120, 4), &[], None, &with(Some(f.clone()))).unwrap();
-                let row = s4.model_lifecycle(&kimi_id()).expect("a row");
+                let holders: Vec<u64> = SYBILS.chain(HONEST).collect();
+                let (_, audited) = to_first_audit(root, operands, f, &holders, 3, true, &with, false);
+                let p = params();
+                let (s5, _) = fold_step(&audited, &p, &ctx(5, 1_010, 5), &[], None, &with(Some(f.clone()))).unwrap();
+                let (s6, _) = fold_step(&s5, &p, &ctx(6, 1_020, 6), &[], None, &with(Some(f.clone()))).unwrap();
+                let row = s6.model_lifecycle(&kimi_id()).expect("a row");
                 assert!(row.state.admits_claims(), "the premise: Kimi admits claims on both chains, got {:?}", row.state);
-                s4
+                s6
             }
 
-            /// **THE TEST THAT FAILS TODAY: a class whose owner holds every seat that can judge it
-            /// must not be admissible.**
+            /// **A class whose owner holds every seat that can judge it is not admissible.**
             ///
             /// Below the fence the registrant's own seven seats carry it out of prefetching and
             /// into probation, where it admits claims — nobody outside the registrant ever looked
             /// at it. Past the fence it opens CANDIDATE and stays there: existence, no claims, no
-            /// weight. One stranger's ready seat is what moves it, and it then walks the ordinary
-            /// lifecycle unchanged.
+            /// weight. What the first repair let it out on — ONE ready seat outside the registrant's
+            /// identity — no longer moves it either: a stranger that proves possession is one juror's
+            /// worth of evidence at most, and only if a jury the network draws happens to seat it.
             #[test]
             fn a_class_whose_registrant_holds_every_ready_seat_is_not_admissible_past_the_fence() {
                 let p = params();
                 let (operands, root) = inventory();
                 let f = fold(kimi_work());
-                // The registration rides a block whose registry fold is absent, so the row opens at
-                // the boundary from the fold's own work — the geometry every fixture here uses
-                // (window 2, seven ready seats) rather than the carriage's base-0 graph.
                 let genesis = PalwChainStateV2::genesis();
                 let sybil_proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 10)).collect();
 
@@ -22054,78 +22308,411 @@ pub(crate) mod tests {
                     "{refused:?}"
                 );
 
-                // One stranger's ready seat, and the class rejoins the ordinary walk.
+                // One stranger's ready seat was what the first repair let it out on. It is not
+                // enough: nothing about bond 10 is checkable except that it is not the registrant's
+                // identity, which is exactly what a sybil also is.
                 let (s4, _) =
                     fold_step(&s3, &p, &ctx(4, 111, 4), &[proof(&operands, bond_key(10), 11)], None, &armed(Some(f.clone()))).unwrap();
                 let (s5, _) = fold_step(&s4, &p, &ctx(5, 120, 5), &[], None, &armed(Some(f.clone()))).unwrap();
-                assert_eq!(
-                    s5.model_lifecycle(&kimi_id()).unwrap().state,
-                    PalwModelLifecycleV1::Prefetching,
-                    "an independent ready seat is what admission costs — and it is all it costs"
-                );
                 let (s6, _) = fold_step(&s5, &p, &ctx(6, 130, 6), &[], None, &armed(Some(f))).unwrap();
                 assert_eq!(
                     s6.model_lifecycle(&kimi_id()).unwrap().state,
-                    PalwModelLifecycleV1::Probation { probes_passed: 0 },
-                    "…after which the lifecycle is the one every other class walks"
+                    PalwModelLifecycleV1::Candidate,
+                    "a stranger's possession proof is evidence for a jury, not a key out of Candidate"
                 );
             }
 
-            /// **The panel and the quorum, per claim.** The admission gate above is about a class;
-            /// this is about the jury that licenses one of its claims. Both are needed: a panel
-            /// that merely CONTAINS an independent seat can still be licensed without it, because
-            /// `2·quorum > seat_count` is satisfied by four seats of five.
+            /// **The outsider is drawn from the network, not from the class.**
+            ///
+            /// Kimi's own population is its seven Kimi-capable bonds — all the registrant's. Below
+            /// the rule every panel of a Kimi claim is five of them: the finding, reproduced at the
+            /// draw rather than asserted of it. Past the rule the first seat is drawn from the
+            /// floor's population of twenty-seven operators, and across four hundred anchors it is a
+            /// sybil about as often as seven in twenty-seven — the registrant's share of the
+            /// NETWORK, which is what the rule makes it pay for. And the draw reads no field the
+            /// registrant writes: the sybils paid to one payee and paid each to their own address
+            /// produce the same outsider at every anchor, which is precisely where the identity rule
+            /// it replaces flipped from refusing everything to admitting everything.
             #[test]
-            fn a_panel_and_a_quorum_of_the_registrants_own_seats_are_refused_past_the_fence() {
+            fn the_outsider_is_drawn_from_the_network_and_not_from_the_class() {
+                let (_, root) = inventory();
+                let pp = panel_params();
+                let draws = |one_payee: bool, policy: &dyn Fn() -> PalwPanelDrawPolicyV1| -> Vec<Vec<PalwPanelSeatV2>> {
+                    let (state, claim_id) = contested_claim(root, one_payee, &armed(None));
+                    (0..400u64)
+                        .map(|i| {
+                            derive_panel_v2_with_policy(&state, &pp, &claim_id, block(10_000 + i), 100, None, false, policy())
+                                .expect("the contested network seats a panel")
+                        })
+                        .collect()
+                };
+
+                // Below the rule: the class's own population, which is the registrant's.
+                for panel in draws(false, &PalwPanelDrawPolicyV1::default) {
+                    assert_eq!(panel.len(), 5);
+                    assert!(panel.iter().all(|seat| is_sybil(&seat.bond)), "the defect, at the draw: {panel:?}");
+                }
+
+                // Past it: the outsider first, the class's four after it.
+                let separate = draws(false, &|| independent(0, 150));
+                let shared = draws(true, &|| independent(0, 150));
+                assert_eq!(separate, shared, "the payout layout the registrant chooses moves no seat");
+                let mut sybil_outsiders = 0usize;
+                for panel in &separate {
+                    assert_eq!(panel.len(), 5, "an outsider REPLACES a class seat; the panel's shape is the network's");
+                    let outsider = panel[0].bond;
+                    assert!(
+                        is_sybil(&outsider) || is_honest(&outsider),
+                        "the outsider comes from the floor's population: {outsider:?}"
+                    );
+                    assert!(outsider != bond_key(9) && outsider != bond_key(1), "never the registrant, never the producer");
+                    assert!(panel[1..].iter().all(|seat| is_sybil(&seat.bond)), "the class's seats are still the class's population");
+                    assert!(!panel[1..].iter().any(|seat| seat.operator_id == panel[0].operator_id), "one operator, one seat");
+                    sybil_outsiders += is_sybil(&outsider) as usize;
+                }
+                // 7/27 of 400 is 103.7; the band is ±4σ of the binomial (σ ≈ 8.8).
+                assert!(
+                    (68..=140).contains(&sybil_outsiders),
+                    "the registrant sits as the outsider at its share of the network, measured {sybil_outsiders} of 400"
+                );
+            }
+
+            /// **A bond registered after the anchor cannot grind its way into a seat.**
+            ///
+            /// The anchor's hash is the draw's randomness. Once it exists, a party that wants the
+            /// outsider seat searches operator keys offline for one whose ticket beats every
+            /// eligible operator's — a few dozen hashes against twenty-seven — and registers that
+            /// bond before the panel binds. `palw_bond_maturity` closes this with a window, and it is
+            /// dormant on every preset. The rule closes it at the one DAA that matters to a
+            /// sortition: a seat must be held by a bond some chain block BEFORE the anchor
+            /// registered. The fixture runs the attack both ways.
+            #[test]
+            fn a_bond_registered_after_the_anchor_cannot_grind_its_way_into_the_outsider_seat() {
                 let p = params();
                 let (_, root) = inventory();
-                let genesis = PalwChainStateV2::genesis();
-                let env = kimi_attempt(3, root);
-                let claim_id = attempt_id_v2(&env.attempt);
-                // No registry fold: this rule reads the class's registrant and the seats' bonds,
-                // and nothing else — so it holds on a chain whose registry is still dormant.
-                let (s1, _) = fold_step(&genesis, &p, &ctx(1, 100, 1), &bought_network(root), None, &armed(None)).unwrap();
-                let (s2, _) = fold_step(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), &armed(None)).unwrap();
+                let pp = panel_params();
+                let (state, claim_id) = contested_claim(root, false, &armed(None));
+                let anchor = block(20_000);
+                // Every operator the honest draw would rank, and the ticket to beat.
+                let best = state
+                    .bonds_iter()
+                    .filter(|(_, bond)| bond.capable_classes.contains(&h64(1)))
+                    .map(|(_, bond)| crate::palw_panel_v2::palw_panel_outsider_ticket_v1(anchor, &claim_id, &bond.operator_id))
+                    .min()
+                    .expect("the floor has a population");
+                // The grind: the registrant looks for a key it can register that outranks them all.
+                let ground = (0u64..100_000)
+                    .map(|i| {
+                        let mut key = b"ground-operator-".to_vec();
+                        key.extend_from_slice(&i.to_le_bytes());
+                        key
+                    })
+                    .find(|key| {
+                        crate::palw_panel_v2::palw_panel_outsider_ticket_v1(anchor, &claim_id, &palw_operator_id_v2(key)) < best
+                    })
+                    .expect("a key that outranks twenty-seven operators is a short search");
+                let mut capable_classes = std::collections::BTreeSet::new();
+                capable_classes.insert(h64(1));
+                capable_classes.insert(kimi_id());
+                let late = PalwConsensusObjectV2::BondRegistered {
+                    bond: bond_key(99),
+                    pubkey: vec![0xEE; 4],
+                    operator_pubkey: ground.clone(),
+                    collateral: 1_000,
+                    payout_payload: h64(0x9AEE),
+                    capable_classes,
+                    signature: Vec::new(),
+                };
+                // Registered at DAA 160 — after the anchor at 150, before the panel binds.
+                let (after, _) = fold_step(&state, &p, &ctx(3, 160, 3), &[late], None, &armed(None)).unwrap();
+                let ground_operator = palw_operator_id_v2(&ground);
 
-                let captured =
-                    PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat(2), seat(3), seat(4)] };
-                let refused = fold_step(&s2, &p, &ctx(3, 102, 3), std::slice::from_ref(&captured), None, &armed(None))
-                    .expect_err("a jury of the registrant's own bonds is not a jury");
+                // With no cut at the anchor the grind works: the bond that did not exist when the
+                // randomness was drawn takes the one seat the registrant is not supposed to hold.
+                let uncut =
+                    derive_panel_v2_with_policy(&after, &pp, &claim_id, anchor, 100, None, false, independent(0, u64::MAX)).unwrap();
+                assert_eq!(uncut[0].operator_id, ground_operator, "the attack the cut exists for");
+
+                // With the cut it is not in the population at all — for the outsider or any seat.
+                let cut = derive_panel_v2_with_policy(&after, &pp, &claim_id, anchor, 100, None, false, independent(0, 150)).unwrap();
                 assert!(
-                    matches!(refused, PalwStateV2Error::PanelWithoutIndependentSeat { class, seats, .. } if class == kimi_id() && seats == 3),
+                    cut.iter().all(|seat| seat.operator_id != ground_operator),
+                    "a bond newer than the anchor sits nowhere: {cut:?}"
+                );
+                let before =
+                    derive_panel_v2_with_policy(&state, &pp, &claim_id, anchor, 100, None, false, independent(0, 150)).unwrap();
+                assert_eq!(cut, before, "and the panel is the one the chain would have drawn without it");
+            }
+
+            /// **A licence without the outsider's `Valid` is refused — on every licensing arm.**
+            ///
+            /// The panel is the drawn one (outsider first). Four of the class's own seats reach any
+            /// quorum the network could set, and they are all the registrant's; the rule is that
+            /// their agreement licenses nothing until the outsider agrees. `Incapable` is an honest
+            /// answer and a fatal one for this claim — the claim voids at its deadline, and the seat
+            /// that declined to pretend is not charged. The V2 coverage arm, which carried no
+            /// independence check of any kind before this rule, is held to the same. And the rule
+            /// reads the CLAIM's era: a claim accepted below the fence licenses as it always did, even
+            /// when its licence lands above it.
+            #[test]
+            fn a_licence_without_the_outsiders_valid_is_refused_on_every_licensing_arm() {
+                use crate::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV3};
+                use crate::palw_verification_v2::PalwSegmentMaskV2;
+                let p = params();
+                let (_, root) = inventory();
+                let pp = panel_params();
+                let (s2, claim_id) = contested_claim(root, false, &armed(None));
+                let seats =
+                    derive_panel_v2_with_policy(&s2, &pp, &claim_id, block(30_000), 100, None, false, independent(0, 150)).unwrap();
+                let outsider = seats[0].bond;
+                let (s3, _) = fold_step(
+                    &s2,
+                    &p,
+                    &ctx(3, 102, 3),
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: seats.clone() }],
+                    None,
+                    &armed(None),
+                )
+                .expect("the drawn panel binds");
+                let class_seats: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> =
+                    seats[1..].iter().map(|seat| says(seat.bond, true)).collect();
+
+                // V1: the class's four, unanimous, license nothing.
+                let refused = fold_step(
+                    &s3,
+                    &p,
+                    &ctx(4, 103, 4),
+                    &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: class_seats.clone() }],
+                    None,
+                    &armed(None),
+                )
+                .expect_err("four of the registrant's seats are not a jury it is outside of");
+                assert!(
+                    matches!(refused, PalwStateV2Error::LicenceWithoutOutsider { claim, class, outsider: Some(seat) } if claim == claim_id && class == kimi_id() && seat == outsider),
                     "{refused:?}"
                 );
-                // Below the fence the same object is taken — which is the finding.
-                let (below, _) = fold_step(&s2, &p, &ctx(3, 102, 3), &[captured], None, &extras(None))
-                    .expect("below the fence the registrant seats its own panel");
-                assert_eq!(below.panel(&claim_id).map(|panel| panel.seats.len()), Some(3));
+                // …nor with the outsider pleading it cannot judge.
+                let mut pleaded = class_seats.clone();
+                pleaded.push(answers(outsider, PalwReceiptVerdictV2::Incapable));
+                let refused = fold_step(
+                    &s3,
+                    &p,
+                    &ctx(4, 103, 4),
+                    &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: pleaded }],
+                    None,
+                    &armed(None),
+                )
+                .expect_err("an outsider that cannot judge has not said Valid");
+                assert!(matches!(refused, PalwStateV2Error::LicenceWithoutOutsider { .. }), "{refused:?}");
+                // With it, two of the class's seats and the outsider license.
+                let with_outsider = vec![says(seats[1].bond, true), says(seats[2].bond, true), says(outsider, true)];
+                let (licensed, _) = fold_step(
+                    &s3,
+                    &p,
+                    &ctx(4, 103, 4),
+                    &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: with_outsider.clone() }],
+                    None,
+                    &armed(None),
+                )
+                .expect("the outsider's Valid is what licenses it");
+                assert!(matches!(licensed.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
 
-                // With the stranger seated the panel binds, and then the LICENCE is asked the same
-                // question: two of the registrant's Valid receipts do not license it.
-                let seated =
-                    PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat(2), seat(3), seat(10)] };
-                let (s3, _) = fold_step(&s2, &p, &ctx(3, 102, 3), &[seated], None, &armed(None)).expect("one stranger is enough");
-                let own = PalwConsensusObjectV2::ReceiptLicensed {
+                // V2: coverage by the class's own seats is still the class's own seats.
+                let on =
+                    |fold: Option<PalwModelRegistryFoldV1>| PalwTransitionExtrasV1 { verification_v2_active: true, ..armed(fold) };
+                let v2 = |receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV2>| PalwConsensusObjectV2::ReceiptLicensedV2 {
                     claim: claim_id,
-                    receipts: vec![says(bond_key(2), true), says(bond_key(3), true)],
+                    receipts: receipts
+                        .into_iter()
+                        .map(|receipt| PalwSeatReceiptV3 { receipt, segments: PalwSegmentMaskV2::full(1) })
+                        .collect(),
                 };
-                let refused = fold_step(&s3, &p, &ctx(4, 103, 4), std::slice::from_ref(&own), None, &armed(None))
-                    .expect_err("a quorum of the registrant's own seats certifies the registrant");
-                assert!(
-                    matches!(refused, PalwStateV2Error::QuorumWithoutIndependentSeat { class, valid, .. } if class == kimi_id() && valid == 2),
-                    "{refused:?}"
+                let refused = fold_step(&s3, &p, &ctx(4, 103, 4), &[v2(class_seats)], None, &on(None))
+                    .expect_err("the V2 door is held to the same rule");
+                assert!(matches!(refused, PalwStateV2Error::LicenceWithoutOutsider { .. }), "{refused:?}");
+                let (licensed_v2, _) = fold_step(&s3, &p, &ctx(4, 103, 4), &[v2(with_outsider)], None, &on(None))
+                    .expect("and licenses on the outsider's Valid");
+                assert!(matches!(licensed_v2.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+
+                // The claim's era: fenced from DAA 102, a claim accepted at 101 needs no outsider
+                // even though its panel binds at 102 and its licence lands at 103 — the draw that
+                // bound its panel never seated one, and a rule read per block would refuse it for
+                // the want of a seat the chain never drew.
+                let late = |fold: Option<PalwModelRegistryFoldV1>| armed_from(102, fold);
+                let (e2, early_claim) = contested_claim(root, false, &late(None));
+                let old_panel =
+                    derive_panel_v2_with_policy(&e2, &pp, &early_claim, block(30_000), 100, None, false, independent(102, 150))
+                        .unwrap();
+                assert!(old_panel.iter().all(|seat| is_sybil(&seat.bond)), "a claim of the old era draws the old panel");
+                let (e3, _) = fold_step(
+                    &e2,
+                    &p,
+                    &ctx(3, 102, 3),
+                    &[PalwConsensusObjectV2::PanelBound { claim: early_claim, anchor: h64(77), seats: old_panel.clone() }],
+                    None,
+                    &late(None),
+                )
+                .unwrap();
+                let (e4, _) = fold_step(
+                    &e3,
+                    &p,
+                    &ctx(4, 103, 4),
+                    &[PalwConsensusObjectV2::ReceiptLicensed {
+                        claim: early_claim,
+                        receipts: old_panel[..3].iter().map(|seat| says(seat.bond, true)).collect(),
+                    }],
+                    None,
+                    &late(None),
+                )
+                .expect("a claim of the old era licenses by the old rule");
+                assert!(matches!(e4.claim(&early_claim).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+            }
+
+            /// **A `Candidate` leaves only on a jury the network drew.**
+            ///
+            /// Three audits of one chain, differing only in the block that seeds the jury (its hash
+            /// is half of the seed anchor): one where the jury the network drew seats fewer than three
+            /// sybils, one where it seats three or more, and — the honest case — one where the
+            /// network's honest operators hold Kimi too. The registrant's own seven proofs are the
+            /// same in all three; only the draw decides, and the draw is the network's.
+            #[test]
+            fn a_candidate_leaves_only_on_a_jury_the_network_drew() {
+                let (operands, root) = inventory();
+                let f = fold(kimi_work());
+                let sybils: Vec<u64> = SYBILS.collect();
+                let everyone: Vec<u64> = SYBILS.chain(HONEST).collect();
+                // Find one seed block of each kind. The jury is recomputed from outside the fold.
+                let mut minority = None;
+                let mut majority = None;
+                for seed_block in 40..400 {
+                    let (before, after) = to_first_audit(root, &operands, &f, &sybils, seed_block, true, &armed, false);
+                    let on_jury = sybils_on_the_jury(&before);
+                    let state = after.model_lifecycle(&kimi_id()).expect("a row").state;
+                    if on_jury >= 3 {
+                        assert_eq!(state, PalwModelLifecycleV1::Prefetching, "seed {seed_block}: {on_jury} sybils of five hold it");
+                        majority.get_or_insert(seed_block);
+                    } else {
+                        assert_eq!(state, PalwModelLifecycleV1::Candidate, "seed {seed_block}: only {on_jury} sybils of five");
+                        minority.get_or_insert(seed_block);
+                    }
+                    if minority.is_some() && majority.is_some() {
+                        break;
+                    }
+                }
+                let minority = minority.expect("a jury where the registrant is a minority");
+                majority.expect("a jury the registrant's share happens to win — the bound is a share, not a wall");
+
+                // The honest case, on the seed the registrant could not pass alone.
+                let (_, honest) = to_first_audit(root, &operands, &f, &everyone, minority, true, &armed, false);
+                assert_eq!(
+                    honest.model_lifecycle(&kimi_id()).unwrap().state,
+                    PalwModelLifecycleV1::Prefetching,
+                    "the network holds the model, the network's jury says so"
                 );
-                let (licensed_below, _) =
-                    fold_step(&s3, &p, &ctx(4, 103, 4), &[own], None, &extras(None)).expect("below the fence it licenses");
-                assert!(matches!(licensed_below.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
 
-                let with_stranger = PalwConsensusObjectV2::ReceiptLicensed {
-                    claim: claim_id,
-                    receipts: vec![says(bond_key(2), true), says(bond_key(3), true), says(bond_key(10), true)],
+                // No seed anchor in the span before — no attempt was admitted — is no audit.
+                let (_, unseeded) = to_first_audit(root, &operands, &f, &everyone, minority, false, &armed, false);
+                assert_eq!(
+                    unseeded.model_lifecycle(&kimi_id()).unwrap().state,
+                    PalwModelLifecycleV1::Candidate,
+                    "no randomness, no jury"
+                );
+
+                // Off the schedule there is no jury either: the span after an audit re-draws nothing.
+                let p = params();
+                let (_, stayed) = to_first_audit(root, &operands, &f, &sybils, minority, true, &armed, false);
+                let (next, _) = fold_step(&stayed, &p, &ctx(9, 1_010, 9), &[], None, &armed(Some(f.clone()))).unwrap();
+                assert_eq!(
+                    next.model_lifecycle(&kimi_id()).unwrap().state,
+                    PalwModelLifecycleV1::Candidate,
+                    "one draw per audit period"
+                );
+            }
+
+            /// **The registrant passes the jury alone at its network share — not by construction.**
+            ///
+            /// The pure jury over four thousand seeds, on the contested network's own population.
+            /// With only the seven sybils holding Kimi the jury seats a majority of them with the
+            /// hypergeometric probability `P(X ≥ 3)`, `X ~ Hyp(27, 7, 5)` = 7,371 / 80,730 ≈ 9.13 %;
+            /// the identity rule this replaces admitted that same class with probability ONE the
+            /// moment the sybils paid separate addresses. And the payout layout moves no juror.
+            #[test]
+            fn the_registrant_passes_the_jury_alone_at_its_network_share_not_by_construction() {
+                use crate::palw_model_registry_v1::palw_admission_jury_quorum_v1;
+                let (_, root) = inventory();
+                let p = params();
+                let population_of = |one_payee: bool| -> PalwChainStateV2 {
+                    fold_step(
+                        &PalwChainStateV2::genesis(),
+                        &p,
+                        &ctx(1, 100, 1),
+                        &contested_network(root, one_payee),
+                        None,
+                        &armed(None),
+                    )
+                    .unwrap()
+                    .0
                 };
-                let (s4, _) = fold_step(&s3, &p, &ctx(4, 103, 4), &[with_stranger], None, &armed(None))
-                    .expect("the stranger's Valid receipt is what licenses it");
-                assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+                let separate = population_of(false);
+                let shared = population_of(true);
+                let floor_population = |state: &PalwChainStateV2| -> Vec<(PalwBondKeyV2, PalwBondStateV2)> {
+                    state
+                        .bonds_iter()
+                        .filter(|(key, bond)| bond.capable_classes.contains(&h64(1)) && **key != bond_key(9))
+                        .map(|(key, bond)| (*key, bond.clone()))
+                        .collect()
+                };
+                let separate_population = floor_population(&separate);
+                let shared_population = floor_population(&shared);
+                assert_eq!(separate_population.len(), 27);
+                let as_refs = |v: &[(PalwBondKeyV2, PalwBondStateV2)]| -> Vec<(PalwBondKeyV2, PalwBondStateV2)> { v.to_vec() };
+                let separate_refs = as_refs(&separate_population);
+                let shared_refs = as_refs(&shared_population);
+                let separate_view: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = separate_refs.iter().map(|(k, b)| (k, b)).collect();
+                let shared_view: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = shared_refs.iter().map(|(k, b)| (k, b)).collect();
+                let quorum = palw_admission_jury_quorum_v1(5) as usize;
+                let sybil_operators: Vec<Hash64> = SYBILS.map(|n| op_id(20 + n)).collect();
+                let mut passes = 0usize;
+                const TRIALS: u64 = 4_000;
+                for trial in 0..TRIALS {
+                    let seed =
+                        crate::palw_model_registry_v1::palw_admission_jury_seed_v1(&kimi_id(), 100, &h64(trial), &h64(trial ^ 0xA5A5));
+                    let jury = crate::palw_panel_v2::palw_admission_jury_v1(&seed, &separate_view, 5);
+                    assert_eq!(
+                        jury,
+                        crate::palw_panel_v2::palw_admission_jury_v1(&seed, &shared_view, 5),
+                        "seed {trial}: payouts moved a juror"
+                    );
+                    let sybils = jury.iter().filter(|operator| sybil_operators.contains(operator)).count();
+                    passes += (sybils >= quorum) as usize;
+                }
+                let measured = passes as f64 / TRIALS as f64;
+                let expected = 7_371.0 / 80_730.0;
+                // σ of the mean over 4,000 trials is ≈ 0.46 %; the band is ±4σ.
+                assert!((measured - expected).abs() < 0.019, "measured {measured:.4} against the hypergeometric {expected:.4}");
+            }
+
+            /// **A registrant that IS the network is the network.** The bound is a share, and at a
+            /// share of one it is no bound: with nobody but its own seven serving the floor, the
+            /// jury is all sybils at every seed and the class is admitted at its first audit. Pinned
+            /// so the rule's promise is read at its real strength — it prices self-judgement in the
+            /// honest network's size, it does not make a network out of nobody.
+            #[test]
+            fn a_registrant_that_is_the_whole_network_is_admitted_by_it() {
+                let (operands, root) = inventory();
+                let f = fold(kimi_work());
+                let p = params();
+                // The contested network's first block, without the honest twenty.
+                let mut objects = register_class_and_bond();
+                objects.push(bond_paying(9, 1_000, registrant_payee()));
+                objects.push(kimi_bought_by(root, bond_key(9)));
+                objects.extend(SYBILS.map(|n| serving(n, h64(0x9A00 + n), true)));
+                let (s1, _) = fold_step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None, &armed(None)).unwrap();
+                let proofs: Vec<PalwConsensusObjectV2> = SYBILS.map(|n| proof(&operands, bond_key(n), 98)).collect();
+                let (s2, _) = fold_step(&s1, &p, &ctx(2, 985, 2), &proofs, None, &armed(Some(f.clone()))).unwrap();
+                let s3 = seeding_attempt(&s2, &ctx(3, 995, 3), &armed(Some(f.clone())));
+                let (s4, _) = fold_step(&s3, &p, &ctx(4, 1_000, 4), &[], None, &armed(Some(f))).unwrap();
+                assert_eq!(s4.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Prefetching);
             }
 
             /// **A genesis class is independent of everyone, and below the fence nothing moves.**
@@ -22171,7 +22758,7 @@ pub(crate) mod tests {
                 // at every block including the boundary that opens and steps the registry's rows.
                 let sybil_proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 10)).collect();
                 let dormant = |fold: Option<PalwModelRegistryFoldV1>| PalwTransitionExtrasV1 {
-                    admission_independence_active: false,
+                    admission_independence_daa: None,
                     ..extras(fold)
                 };
                 let (a1, _) = fold_step(&genesis, &p, &ctx(1, 100, 1), &bought_network(root), None, &dormant(None)).unwrap();
@@ -22205,8 +22792,8 @@ pub(crate) mod tests {
                 let f = fold(kimi_work());
                 // The incumbent is Kimi, admitted the honest way — a stranger's seat is ready for
                 // it, so past the fence it has left `Candidate` — and declaring a 160-leaf job.
-                let armed_state = kimi_admitted(&p, root, &operands, &f, true);
-                let open_state = kimi_admitted(&p, root, &operands, &f, false);
+                let armed_state = kimi_admitted(root, &operands, &f, true);
+                let open_state = kimi_admitted(root, &operands, &f, false);
                 let unit_before = palw_work_price_unit_v1(&armed_state, &base, false, true);
                 assert_eq!(unit_before, 160, "the incumbent's declared canonical job is the unit");
                 assert_eq!(palw_work_price_unit_v1(&open_state, &base, false, false), 160, "…on both chains");
@@ -22228,7 +22815,7 @@ pub(crate) mod tests {
                 // Below the fence, both halves move: the unit jumps a thousandfold and the share
                 // table is re-dealt. An incumbent's claim of 160 pwu against a 2,756 MSK escrow
                 // goes from the whole escrow to a thousandth of it, for nothing the incumbent did.
-                let (open, _) = fold_step(&open_state, &p, &ctx(9, 140, 9), &[heavy(1)], None, &extras(Some(f.clone())))
+                let (open, _) = fold_step(&open_state, &p, &ctx(9, 1_030, 9), &[heavy(1)], None, &extras(Some(f.clone())))
                     .expect("below the fence a stranger's registration lands, cadence and all");
                 let unit_open = palw_work_price_unit_v1(&open, &base, false, false);
                 assert_eq!(unit_open, 160_000, "the finding: the unit is whatever the newest registrant declared");
@@ -22250,14 +22837,14 @@ pub(crate) mod tests {
                 );
 
                 // Past it: the cadence grant is refused by name…
-                let refused = fold_step(&armed_state, &p, &ctx(9, 140, 9), &[heavy(1)], None, &armed(Some(f.clone())))
+                let refused = fold_step(&armed_state, &p, &ctx(9, 1_030, 9), &[heavy(1)], None, &armed(Some(f.clone())))
                     .expect_err("a registration buys existence, not cadence");
                 assert!(
                     matches!(refused, PalwStateV2Error::RegistrationTakesNoShare { class, requested } if class == h64(3) && requested == 1),
                     "{refused:?}"
                 );
                 // …and the registration that IS legal moves no incumbent's price, share or target.
-                let (after, _) = fold_step(&armed_state, &p, &ctx(9, 140, 9), &[heavy(0)], None, &armed(Some(f)))
+                let (after, _) = fold_step(&armed_state, &p, &ctx(9, 1_030, 9), &[heavy(0)], None, &armed(Some(f)))
                     .expect("at zero cadence it registers");
                 assert_eq!(
                     after.model_lifecycle(&h64(3)).map(|row| row.state),
@@ -22279,10 +22866,6 @@ pub(crate) mod tests {
                 }
             }
 
-            // =============================================================================
-            // 2026-09-19 RE-AUDIT (admission lane) — what the armed fence still permits
-            // =============================================================================
-
             /// The same network the fixtures above build, except that every bond the registrant
             /// funds pays its OWN address — `bond`'s default `payout_payload` is `0x9A00 + n`, one
             /// per bond — and there is no stranger on the chain at all.
@@ -22294,72 +22877,68 @@ pub(crate) mod tests {
                 objects
             }
 
-            /// **The fence's price, measured: eight keys and eight payout addresses — and then it
-            /// is a no-op.**
+            /// **The re-audit's attack, re-run against the rule that replaced the identity test.**
             ///
-            /// `palw_bond_is_independent_of_registrant_v1` (`palw_state_v2.rs:611-628`) asks
-            /// whether a seat's bond DIFFERS from the registrant's in `operator_id`, `pubkey` and
-            /// `payout_payload`. All three are values the registrant writes into its own
-            /// `BondRegistered`. The fixtures above make the attack fail by having the registrant
-            /// pay every sybil into ONE address; nothing on the chain requires that, and paying
-            /// them separately restores the attack whole — with the fence ARMED and with no
-            /// stranger anywhere on the chain:
+            /// The script that defeated the identity rule was: fund seven sybils under seven
+            /// operator keys, pay each to its own address, and let them prove possession, seat the
+            /// panel and license the claim. Every step reads a field the registrant writes, and each
+            /// step passed. On the contested network the same script meets the network instead:
             ///
-            /// * the admission gate lets the class out of `Candidate` on the registrant's own
-            ///   "independent" ready seats;
-            /// * `PanelBound` seats a jury of the registrant's own bonds;
-            /// * `ReceiptLicensed` licenses the claim on the registrant's own `Valid` receipts.
+            /// * the class does not leave `Candidate` on a jury where the sybils are a minority —
+            ///   and a jury is the network's draw, rationed to one per audit period;
+            /// * a claim's panel sits an outsider the network drew, and the sybils' unanimous
+            ///   `Valid` licenses nothing without it.
             ///
-            /// So the fence prices self-certification at one extra payout address per identity —
-            /// free — and does not prevent it. Its own doc says as much ("A registrant who funds
-            /// several bonds under several operator keys AND several payout payloads is several
-            /// parties by this test"); this is that sentence as an executable measurement.
+            /// The two dedicated tests above measure each half; this one runs them as the one attack
+            /// they were, so its name survives as a regression that now fails for the attacker.
             #[test]
-            fn a_registrant_paying_its_sybils_separately_defeats_the_armed_independence_fence() {
-                let p = params();
+            fn a_registrant_paying_its_sybils_separately_no_longer_judges_its_own_class() {
                 let (operands, root) = inventory();
                 let f = fold(kimi_work());
-                let genesis = PalwChainStateV2::genesis();
-                let sybil_proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 10)).collect();
+                let p = params();
+                let pp = panel_params();
+                let sybils: Vec<u64> = SYBILS.collect();
+                // Admission: every seed where the sybils do not hold a jury majority keeps it out.
+                let mut kept_out = 0;
+                for seed_block in 40..80 {
+                    let (before, after) = to_first_audit(root, &operands, &f, &sybils, seed_block, true, &armed, false);
+                    if sybils_on_the_jury(&before) < 3 {
+                        assert_eq!(after.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Candidate);
+                        kept_out += 1;
+                    }
+                }
+                assert!(kept_out >= 30, "the registrant alone is kept out at most seeds: {kept_out} of 40");
 
-                // ---- the admission gate ----
-                let (s1, _) =
-                    fold_step(&genesis, &p, &ctx(1, 100, 1), &bought_network_paying_separately(root), None, &armed(None)).unwrap();
-                let (s2, _) = fold_step(&s1, &p, &ctx(2, 101, 2), &sybil_proofs, None, &armed(Some(f.clone()))).unwrap();
-                let (s3, _) = fold_step(&s2, &p, &ctx(3, 110, 3), &[], None, &armed(Some(f.clone()))).unwrap();
-                let row = s3.model_lifecycle(&kimi_id()).expect("the boundary opens a row");
-                assert_eq!(
-                    (row.state, row.ready_seats),
-                    (PalwModelLifecycleV1::Prefetching, 7),
-                    "seven of the registrant's own seats, paid to seven of its own addresses, are \
-                     seven independent parties by this rule — the class leaves Candidate at the \
-                     first boundary, exactly as if a stranger had looked at it"
+                // Licensing: the panel the chain draws, and the sybils' unanimous Valid.
+                let (s2, claim_id) = contested_claim(root, false, &armed(None));
+                let seats =
+                    derive_panel_v2_with_policy(&s2, &pp, &claim_id, block(31_000), 100, None, false, independent(0, 150)).unwrap();
+                let (s3, _) = fold_step(
+                    &s2,
+                    &p,
+                    &ctx(3, 102, 3),
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: seats.clone() }],
+                    None,
+                    &armed(None),
+                )
+                .unwrap();
+                let sybil_receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> =
+                    seats.iter().filter(|seat| is_sybil(&seat.bond)).map(|seat| says(seat.bond, true)).collect();
+                assert!(sybil_receipts.len() >= 4, "the class's four seats are the registrant's");
+                let outcome = fold_step(
+                    &s3,
+                    &p,
+                    &ctx(4, 103, 4),
+                    &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: sybil_receipts }],
+                    None,
+                    &armed(None),
                 );
-                let (s4, _) = fold_step(&s3, &p, &ctx(4, 120, 4), &[], None, &armed(Some(f.clone()))).unwrap();
-                let row = s4.model_lifecycle(&kimi_id()).expect("a row");
-                assert_eq!(
-                    (row.state, row.ready_seats),
-                    (PalwModelLifecycleV1::Probation { probes_passed: 0 }, 7),
-                    "…and one boundary later it admits claims, judged by nobody but its owner"
-                );
-                assert!(row.state.admits_claims());
-
-                // ---- the panel, and then the quorum ----
-                let env = kimi_attempt(4, root);
-                let claim_id = attempt_id_v2(&env.attempt);
-                let (s5, _) = fold_step(&s4, &p, &ctx(5, 121, 5), &[], Some(&env), &armed(Some(f.clone()))).unwrap();
-                let panel =
-                    PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat(2), seat(3), seat(4)] };
-                let (s6, _) = fold_step(&s5, &p, &ctx(6, 122, 6), &[panel], None, &armed(Some(f.clone())))
-                    .expect("a jury of the registrant's own bonds passes the independence test");
-                assert_eq!(s6.panel(&claim_id).map(|panel| panel.seats.len()), Some(3));
-                let own = PalwConsensusObjectV2::ReceiptLicensed {
-                    claim: claim_id,
-                    receipts: vec![says(bond_key(2), true), says(bond_key(3), true)],
-                };
-                let (s7, _) = fold_step(&s6, &p, &ctx(7, 123, 7), &[own], None, &armed(Some(f)))
-                    .expect("and so does a quorum of the registrant's own Valid receipts");
-                assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+                if is_sybil(&seats[0].bond) {
+                    // The registrant won the outsider draw at this anchor — its share of the network.
+                    assert!(outcome.is_ok(), "an outsider the registrant holds is the registrant: {outcome:?}");
+                } else {
+                    assert!(matches!(outcome, Err(PalwStateV2Error::LicenceWithoutOutsider { .. })), "{outcome:?}");
+                }
             }
 
             /// **A self-licensed `Final` bought before the registry opened no longer buys
@@ -22398,8 +22977,7 @@ pub(crate) mod tests {
                 let (s2, _) = fold_step(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), &extras(None)).unwrap();
                 let panel = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: vec![seat(2), seat(3)] };
                 let (s3, _) = fold_step(&s2, &p, &ctx(3, 102, 3), &[panel], None, &extras(None)).unwrap();
-                let receipts =
-                    PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: vec![says(bond_key(2), true)] };
+                let receipts = PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: vec![says(bond_key(2), true)] };
                 let (s4, _) = fold_step(&s3, &p, &ctx(4, 103, 4), &[receipts], None, &extras(None)).unwrap();
                 // The challenge window (20) from licensing at 103 ends at 123.
                 let (s5, _) = fold_step(&s4, &p, &ctx(5, 124, 5), &[], None, &extras(None)).unwrap();
@@ -28840,7 +29418,7 @@ pub(crate) mod tests {
         let prompt: Vec<u32> = (0..8).collect();
         let commit = derived_commit(0xFC, &prompt, 2, 6_276 * 10);
 
-        let (shipped, shipped_delta) = apply(&certified, &p, &ctx(4, 103, 4), &[commit.clone()], None);
+        let (shipped, shipped_delta) = apply(&certified, &p, &ctx(4, 103, 4), std::slice::from_ref(&commit), None);
         let (dormant, dormant_delta) = apply_derived(&certified, &p, &ctx(4, 103, 4), &[commit], &PalwTransitionExtrasV1::default())
             .expect("the dormant fold applies");
         assert_eq!(shipped.state_root(), dormant.state_root(), "a dormant fence is the transition that has no fence");
@@ -28881,7 +29459,7 @@ pub(crate) mod tests {
         assert_eq!(certified.fp_lane_certification(&class).map(|c| c.family_digest), Some(digest));
         assert!(!certified.fp_work_profiles_are_written());
         assert_eq!(
-            apply_derived(&certified, &p, &ctx(4, 103, 4), &[honest.clone()], &armed).unwrap_err(),
+            apply_derived(&certified, &p, &ctx(4, 103, 4), std::slice::from_ref(&honest), &armed).unwrap_err(),
             PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: h64(0xFC), class },
             "a claim the chain cannot price is a claim it must not credit"
         );
@@ -29067,8 +29645,8 @@ pub(crate) mod tests {
         let long = derived_commit(0xB2, &ids, 8, leaves(32));
 
         // ASCENDING — 8 tokens, then the 32-token extension of them.
-        let (a1, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[short.clone()], &armed).expect("the short prompt");
-        let (a2, _) = apply_derived(&a1, &p, &ctx(5, 104, 5), &[long.clone()], &armed).expect("the extension");
+        let (a1, _) = apply_derived(&published, &p, &ctx(4, 103, 4), std::slice::from_ref(&short), &armed).expect("the short prompt");
+        let (a2, _) = apply_derived(&a1, &p, &ctx(5, 104, 5), std::slice::from_ref(&long), &armed).expect("the extension");
         let ascending = a2.claim(&h64(0xB1)).unwrap().pwu + a2.claim(&h64(0xB2)).unwrap().pwu;
 
         // DESCENDING — the same two runs, the same bond, the same class, long prompt first.
@@ -29077,10 +29655,7 @@ pub(crate) mod tests {
         let descending = d2.claim(&h64(0xB1)).unwrap().pwu + d2.claim(&h64(0xB2)).unwrap().pwu;
 
         assert_eq!(ascending, 32_000, "10 quanta for the short run, 22 for the extension it was not sold twice");
-        assert_eq!(
-            descending, ascending,
-            "the price of one conversation must not depend on the order its prompts were committed in"
-        );
+        assert_eq!(descending, ascending, "the price of one conversation must not depend on the order its prompts were committed in");
         // And the shorter claim really was priced as a cache hit, not merely refused: its decode
         // half is credited and its prefill is not.
         assert_eq!(d2.claim(&h64(0xB1)).unwrap().pwu, 5_000, "the prefix the chain already bought earns its decode calls only");
@@ -29208,7 +29783,7 @@ pub(crate) mod tests {
         // 5. REORG. The credit is candidate-scoped: undo the commitment and the row goes with it,
         //    so the same prompt on the reverted chain is priced exactly as it was the first time.
         let fresh = derived_commit_from(1, 0xE003, &ids[..16], 8, leaves(16));
-        let (with_it, delta) = apply_derived(&published, &p, &ctx(4, 103, 4), &[fresh.clone()], &armed).expect("applies");
+        let (with_it, delta) = apply_derived(&published, &p, &ctx(4, 103, 4), std::slice::from_ref(&fresh), &armed).expect("applies");
         let reverted = revert_delta_v2(&with_it, &delta, &p).expect("and reverts");
         assert_eq!(reverted.state_root(), published.state_root(), "the reorg takes the row with the commitment");
         let (again, _) = apply_derived(&reverted, &p, &ctx(4, 103, 4), &[fresh], &armed).expect("and the same block re-applies");
@@ -38101,7 +38676,7 @@ pub(crate) mod tests {
                 artifact_root_ownership_active: false,
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
-                admission_independence_active: false,
+                admission_independence_daa: None,
                 fp_derived_work_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -38337,7 +38912,7 @@ pub(crate) mod tests {
                 artifact_root_ownership_active: false,
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
-                admission_independence_active: false,
+                admission_independence_daa: None,
                 fp_derived_work_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,

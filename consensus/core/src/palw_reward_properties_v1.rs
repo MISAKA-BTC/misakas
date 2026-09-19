@@ -1069,24 +1069,83 @@ fn a_registrants_own_seats_may_judge_its_own_class() {
     assert_eq!(payees.len(), 1);
 }
 
-/// The property itself.
+/// **The property itself** — ADR-0145 §8, "a class whose owner controls 100 % of the seats
+/// declaring capability for it cannot be admitted", in the form ADR-0147 makes true.
+///
+/// The fixture above is the owner's fleet: seven seats, each declaring the class, one payee between
+/// them. Under the rule in force today that fleet IS the class's jury. Under ADR-0147 a `Candidate`
+/// meets a jury drawn from the NETWORK's floor population, and what this test pins is the exact
+/// strength of that:
+///
+/// 1. **Declaring the class buys no juror.** The jury is a function of the network's operators and
+///    the seed alone; the fleet declaring the class and the same fleet declaring nothing draw the
+///    identical jury at every seed. Holding "100 % of the seats declaring capability" is therefore
+///    worth exactly nothing beyond the fleet's operator count.
+/// 2. **Alone, the owner is admitted at its share of the network, not by construction.** With only
+///    its own seats holding the class it needs a majority of five jurors. Against twenty honest
+///    operators that is `P(Hyp(27, 7, 5) ≥ 3)` ≈ 9.13 %; against two hundred it is ≈ 0.036 %. The
+///    property does not say "never" — a party that IS a large share of the network is that share,
+///    and pretending otherwise would be a promise nobody can keep — it says the price is paid in
+///    the honest network's size.
 #[test]
-#[ignore = "needs fence `palw_admission_independence` (branch worktree-wf_8f1fb519-50c-2, commit \
-            b5fc03c2): past it a PanelBound of a class with a registrant_bond must seat at least \
-            one bond the registrant does not hold, the licensing quorum must NAME such a seat, and \
-            a class does not leave Candidate without one. This test needs the fold's predicate, \
-            which takes a PalwChainStateV2 and a class record this module does not build"]
 fn a_class_whose_owner_holds_every_capable_seat_cannot_be_admitted() {
-    // The shape the fence must make true, written against the only predicate that exists today so
-    // that it compiles: judging a class must depend on something other than the judge's own
-    // declaration. When the fence lands this is re-pointed at the fold's independence predicate,
-    // which takes the class's `registrant_bond` as its second input.
-    unimplemented!(
-        "the independence predicate takes (state, class record, seat) and has no pure form; \
-         palw_admission_independence's own test \
-         `a_class_whose_registrant_holds_every_ready_seat_is_not_admissible_past_the_fence` is the \
-         live version of this property"
-    );
+    use crate::palw_model_registry_v1::{palw_admission_jury_quorum_v1, palw_admission_jury_seed_v1};
+    use crate::palw_panel_v2::palw_admission_jury_v1;
+    use crate::palw_state_v2::{PalwBondKeyV2, PalwBondStateV2, PalwBondStatusV2, palw_operator_id_v2};
+    use crate::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+
+    let class_id = Hash64::from_bytes([7u8; 64]);
+    let floor = Hash64::from_bytes([1u8; 64]);
+    let seat = |tag: u8, i: u16, classes: &[Hash64]| {
+        let mut key = vec![tag; 30];
+        key.extend_from_slice(&i.to_le_bytes());
+        (
+            PalwBondKeyV2(TransactionOutpoint {
+                transaction_id: TransactionId::from_u64_word(((tag as u64) << 16) | i as u64),
+                index: 0,
+            }),
+            PalwBondStateV2 {
+                pubkey: key.clone(),
+                operator_id: palw_operator_id_v2(&key),
+                collateral: 1_000_000_000,
+                slashed: 0,
+                status: PalwBondStatusV2::Active,
+                registered_daa: 0,
+                payout_payload: Hash64::from_bytes([tag; 64]),
+                capable_classes: classes.iter().copied().collect(),
+            },
+        )
+    };
+    let with_class = [floor, class_id];
+    let floor_only = [floor];
+    let fleet = |declares_class: bool| -> Vec<(PalwBondKeyV2, PalwBondStateV2)> {
+        (0..7).map(|i| seat(0xAA, i, if declares_class { &with_class[..] } else { &floor_only[..] })).collect()
+    };
+    let honest = |n: u16| -> Vec<(PalwBondKeyV2, PalwBondStateV2)> { (0..n).map(|i| seat(0x11, i, &floor_only[..])).collect() };
+    let fleet_operators: Vec<Hash64> = fleet(true).iter().map(|(_, bond)| bond.operator_id).collect();
+    let quorum = palw_admission_jury_quorum_v1(5) as usize;
+
+    for (honest_operators, expected, tolerance) in [(20u16, 7_371.0 / 80_730.0, 0.019), (200u16, 0.000_36, 0.002)] {
+        let declaring: Vec<(PalwBondKeyV2, PalwBondStateV2)> = fleet(true).into_iter().chain(honest(honest_operators)).collect();
+        let silent: Vec<(PalwBondKeyV2, PalwBondStateV2)> = fleet(false).into_iter().chain(honest(honest_operators)).collect();
+        let declaring_view: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = declaring.iter().map(|(k, b)| (k, b)).collect();
+        let silent_view: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = silent.iter().map(|(k, b)| (k, b)).collect();
+        let mut admitted = 0usize;
+        const SEEDS: u64 = 4_000;
+        for n in 0..SEEDS {
+            let seed = palw_admission_jury_seed_v1(&class_id, 100, &Hash64::from_u64_word(n), &Hash64::from_u64_word(!n));
+            let jury = palw_admission_jury_v1(&seed, &declaring_view, 5);
+            assert_eq!(jury, palw_admission_jury_v1(&seed, &silent_view, 5), "(1) declaring the class moved a juror at seed {n}");
+            // Only the owner's seats hold the class, so only they can be ready.
+            admitted += (jury.iter().filter(|operator| fleet_operators.contains(operator)).count() >= quorum) as usize;
+        }
+        let measured = admitted as f64 / SEEDS as f64;
+        assert!(
+            (measured - expected).abs() < tolerance,
+            "(2) against {honest_operators} honest operators the owner alone is admitted at {measured:.5}, the network share predicts {expected:.5}"
+        );
+    }
 }
 
 /// **Registered is not eligible.** ADR-0145 §7.
@@ -1283,7 +1342,11 @@ fn the_difficulty_seed_reads_no_registrant_declaration() {
             "seeding site {n} still takes its pwu from the class's declared rule"
         );
     }
-    assert_eq!(fold.matches("self.class_seed_pwu(").count() + fold.matches("builder.class_seed_pwu(").count(), 2, "and both take it from one expression");
+    assert_eq!(
+        fold.matches("self.class_seed_pwu(").count() + fold.matches("builder.class_seed_pwu(").count(),
+        2,
+        "and both take it from one expression"
+    );
 }
 
 /// **Where a pwu is normalised and where it must not be.**

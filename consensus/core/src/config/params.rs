@@ -2868,6 +2868,21 @@ impl Params {
                 ));
             }
         }
+        // **ADR-0147: an outsider-judged claim cannot be licensed by parts.** The stratified draw
+        // (`palw_shard_licensing`, ADR-0100 Decision 4) seats each shard from the class's own
+        // population and has no outsider seat, so a bought class drawn per shard would be judged
+        // by the population its registrant fills — the defect this bundle exists to close, through
+        // a door it never looked at. Refused together until the stratified draw carries an
+        // outsider of its own.
+        if let Some(independence) = self.palw_admission_independence
+            && independence != ForkActivation::never()
+            && self.palw_shard_licensing.is_some_and(|f| f != ForkActivation::never())
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_admission_independence is armed beside palw_shard_licensing: a stratified panel seats no outsider, so \
+                 a bought class licensed by parts would be judged by its own population alone (ADR-0147)",
+            ));
+        }
         // **The 2026-09-19 audit's F3: admission independence is enforced through the registry's
         // rows, so it may not be armed without the registry.** Two of its four rules read a class's
         // lifecycle row — the `Candidate` state a registration opens in, and ADR-0145 I4's rule
@@ -4277,7 +4292,7 @@ impl Params {
         // has reached.
         if self.palw_canonical_work == Some(ForkActivation::never()) {
             self.palw_canonical_work = None;
-    }
+        }
         if self.palw_admission_independence == Some(ForkActivation::never()) {
             self.palw_admission_independence = None;
         }
@@ -4619,10 +4634,20 @@ impl Params {
         self.palw_operator_id_unique.is_some_and(|f| f.is_active(daa_score))
     }
 
-    /// The 2026-09-19 audit (F3, ADR-0145 I3/I4): whether a class must be judged — and admitted —
-    /// by at least one seat its registrant does not hold, at `daa_score`.
+    /// ADR-0147 (the 2026-09-19 audit's F3, ADR-0145 I3/I4): whether the block-level rules of
+    /// independent admission apply at `daa_score` — a registration opens `Candidate`, leaves it
+    /// only on a jury the network drew, asks for no share, and stays out of the work-price unit.
     pub fn palw_admission_independence_at(&self, daa_score: u64) -> bool {
         self.palw_admission_independence.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **ADR-0147: the HEIGHT of independent admission, if it is ever armed.** The claim-level rule
+    /// — a bought class's claim sits an outsider drawn from the network and licenses only on its
+    /// `Valid` — compares this against the CLAIM's own `accepted_daa`, never against a block, so a
+    /// claim gets one answer at its draw, its binding and every licensing path. `None` — every
+    /// shipped preset — is the draw and the licence exactly as they were.
+    pub fn palw_admission_independence_daa(&self) -> Option<u64> {
+        self.palw_admission_independence.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
     }
 
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
