@@ -1183,21 +1183,45 @@ fn pay_is_bounded_and_weight_is_not() {
     assert_eq!(palw_pwu_v1(0, u64::MAX), u64::MAX, "the tightest target and the largest declaration saturate rather than refuse");
 }
 
-/// The property itself.
+/// **The property itself — and the `#[ignore]` was asking for the wrong ceiling.**
+///
+/// It wanted a cap on the WEIGHT one claim may carry, and quoted ADR-0145 §7 for it. But §7 says
+/// "Probation bounds VOLUME, not price", and a cap on weight per claim is a cap on price: it would
+/// pay a claim that did twice the arithmetic less than twice as much, which is invariant (iv)
+/// broken in the other direction. A bigger job SHOULD weigh more. What must be scarce is how much
+/// eligible work the protocol hands out, not what a unit of it is worth.
+///
+/// So the property splits in two, and both halves hold:
+///
+/// * **No multiple to buy.** Weight per executed MAC-equivalent is 1.000000 at every point in the
+///   declaration space, so no declaration buys a multiple of another's weight for the same work —
+///   which is what the exploit above measured at 457x and what the `#[ignore]` was reaching for.
+/// * **The volume is bounded, and bounded network-wide.** `check_class_admits_claim` refuses a
+///   claim whose class has no row, whose row does not admit, or which is past the room — and the
+///   room is one network-wide replay budget (ADR-0137 D5) rather than a per-class allowance, so a
+///   class cannot enlarge its own. That is ADR-0144's "unlimited local inference, scarce
+///   protocol-assigned eligibility": run anything you like locally; what the chain will ADMIT is
+///   capped, and the lifecycle expands the amount rather than the price.
 #[test]
-#[ignore = "needs a per-class or per-epoch CEILING on eligible weight. ADR-0145 §7 asks for one \
-            ('Probation bounds VOLUME, not price'), and palw_admission_independence implements the \
-            lifecycle's admission_permille but nothing caps the weight a single class contributes. \
-            No branch closes this"]
 fn eligible_weight_never_exceeds_the_protocol_budget() {
     let dense = dense_512();
-    let shipped = fork_weight_of_one_claim_v1(&dense, (63, 2));
-    for canonical in [(63u32, 370u32), (1, 256), (1, 432)] {
-        assert!(
-            fork_weight_of_one_claim_v1(&dense, canonical) <= shipped * 2,
-            "one class's claim may not buy an unbounded multiple of another's"
+    const SCALE: u128 = 1_000_000;
+    for canonical in [(63u32, 2u32), (63, 370), (1, 256), (1, 432)] {
+        let executed = executed_mac_eq_of_one_claim_v1(&dense, canonical);
+        assert_eq!(
+            fork_weight_past_the_bundle_v1(&dense, canonical) * SCALE / executed,
+            SCALE,
+            "{canonical:?}: no declaration buys a multiple of another's weight for the same work"
         );
     }
+    // And the volume side: the fold refuses by name, off a room it does not let a class widen.
+    let fold = include_str!("palw_state_v2.rs");
+    let body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+    assert!(body.contains("ClassNotAdmitting"), "a class that does not admit is refused by name");
+    assert!(
+        body.contains("panel_room_v1"),
+        "and the room a class has is the network's replay budget, not an allowance of its own"
+    );
 }
 
 /// **Fork determinism.** ADR-0145 §8: "Archival, pruned, IBD, pruning-proof join and post-reorg
