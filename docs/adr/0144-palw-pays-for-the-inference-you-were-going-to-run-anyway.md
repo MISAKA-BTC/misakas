@@ -107,9 +107,14 @@ available answers are wrong, and saying otherwise would bless a number that cann
   put the admissible spread in pay-per-MAC-executed at **427x** on testnet-11's own dense graph, and
   a legal profile built from catalogued kernels reaches **1.00 MAC-eq per leaf** against the live
   classes' 3,957–22,077. That is P4 violated at the root.
-* **MAC-equivalents** — the proposed replacement — measured against the fleet's own replay times is
-  **13.7x** apart between the two live classes where leaves are 7.4x apart. Substituting it makes the
-  distortion *worse*, not better.
+* **MAC-equivalents** — the proposed replacement — carry no memory-traffic term, so they price a
+  dense GEMM and a KV read alike. **The first draft of this ADR cited a 13.7x fleet measurement here
+  and that citation was wrong**: the numbers came from `#[cfg(test)] mod tests` fixtures in
+  `palw_verification_profile_v1.rs`, and the production path overrides a measured p99 with a
+  reference-rate estimate anyway. The red-team refuted it, and the honest statement is weaker and
+  still disqualifying — MAC-equivalents have not been shown to track real cost, and the controlled
+  experiment that would settle it (both live classes' draw jobs replayed warm on one host, artifact
+  resident and then not) has not been run.
 
 The reason neither works is the same: **one scalar cannot price dense GEMM, routed experts,
 attention, KV traffic and quantised kernels at once**, because the hardware does not. The direction
