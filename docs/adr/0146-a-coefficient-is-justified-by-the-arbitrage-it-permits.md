@@ -217,3 +217,49 @@ program, a measured bound, and a comparison of that bound against real efficienc
 
 The test of this ADR is not whether the numbers look reasonable. It is whether, a year from now,
 somebody can re-run one command and find out whether they still are.
+
+---
+
+## 9. The bound was measured, and the answer was not a table (2026-09-20)
+
+This ADR was written expecting to need coefficients and a search that bounds what they permit.
+It got neither, because the spread it set out to bound turned out not to be a coefficient problem.
+
+§3's table recorded the basis in force: 427× over admissible canonical jobs, 101× over tilings
+(corrected by the red team to a 134.9× band — re-tiling the shipped row can only go DOWN, since
+tiles finer than 24 push the worst case past 2^26 and admission refuses them), and 6.8× across the
+four live classes. §2's first result was that most dimensions need no coefficient at all. The
+second result, which this section records, is that the collapse needed none either.
+
+**Measured past the ADR-0145 economic bundle**, across the whole declaration space of one class and
+across all four shipped classes:
+
+| quantity | before | after |
+|---|---|---|
+| fork-choice weight per executed MAC-equivalent | **24,572×** | **1.000000×** |
+| pay per giga-MAC-equivalent executed | 6.8× spread, monotone in width | **899,999,999 sompi, identical** |
+
+The pay figure is ADR-0132's `rate_sompi_per_giga` — one protocol constant, kept one by the
+operator's standing rule that there are no per-model multipliers.
+
+**Why there was no table to write.** Leaves count ACTIVATIONS and the cost table counts WEIGHTS, so
+the declared basis diverges from arithmetic monotonically in model width. A coefficient vector
+would have been an attempt to *correct* that divergence. Pricing on the arithmetic directly
+*removes* it. §4's fallback — keep the dimensions separate, give each its own budget — was written
+as the likely answer if no vector reached an acceptable bound. It is not needed, and not because a
+vector was found.
+
+**R2 and R7 are satisfied differently than they expected.** The bound is not the output of an
+adversarial search over a candidate table; it is a property of the derivation, asserted at every
+point of the admissible space by a test that runs in the suite
+(`the_better_model_is_paid_less_is_neutralised`, `no_registrant_writable_field_increases_the_weight`,
+`legal_representations_of_one_inference_must_price_identically`). The re-runnable program R7 demands
+exists; it is `cargo test`.
+
+**§6 stays open, and stays honest.** MAC-equivalents carry no memory-traffic term. Two classes
+running equal arithmetic against unequal residency cost their operators unequally, and on this
+fleet that is RAM against disk. §2's derived `real_bits_per_weight` distinguishes Q4 from W8 and
+does not distinguish resident from paged. What changed is the shape of the question: that residual
+is a difference between classes in COST, not a lever a registrant can pull in PRICE. An arbitrage
+would block the bundle. A cost asymmetry the protocol does not price is an open design question,
+and it is recorded here rather than closed.
