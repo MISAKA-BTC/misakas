@@ -3146,6 +3146,31 @@ pub enum PalwConsensusObjectV2 {
         work_leaves: u64,
         /// With `decode_tokens_executed` and the bond: the work identity (ADR-0074 Decision 4).
         prompt_token_ids_hash: Hash64,
+        /// **The run's prompt length, and the execution fact the extraction used to drop**
+        /// (ADR-0145 §5). It is `PalwFreePromptJobV3::prompt_tokens` — a JOB field, therefore
+        /// inside the claim id and signed, and bound to the carried ids by the payload's own
+        /// validation (`the carried prompt length is not the committed prompt length`). With
+        /// `decode_tokens_executed` beside it, the transition holds both halves of the job context
+        /// a leaf count reads, which is what makes `work_leaves` derivable instead of believed.
+        ///
+        /// Carried unconditionally rather than behind the fence, and that is safe because nothing
+        /// below the fence reads it: the object is built inside a node from a transaction it has
+        /// already decoded, never serialized to a peer and never hashed into a root
+        /// (`palw_lifecycle_object_may_ride_v2` refuses this variant a carriage by name), so the
+        /// field changes no wire, no fingerprint and no state root. Gating the CARRIAGE of a fact
+        /// on a fence would only give the transition two shapes of object to reason about.
+        prompt_tokens: u32,
+        /// The prompt ids as the commitment carried them, or empty where the privacy mode keeps
+        /// them off chain (`PALW_FP_PRIVACY_PANEL_DA`) or the prompt is derived rather than sent
+        /// (`PALW_FP_PROMPT_MODE_CANONICAL`). ADR-0145 §6's cache rule reads them and nothing else
+        /// does — the chain's own recomputation of which prefix of this prompt it has already paid
+        /// for, which is why the executor is never asked to declare one.
+        ///
+        /// Not hashed anywhere and not stored: the transition reads the ids, derives the accounted
+        /// prefix and keeps the ROOT. Carrying the list rather than a digest is what lets the
+        /// derivation be the chain's; a digest would only be checkable against the digest the
+        /// commitment already carries.
+        prompt_token_ids: Vec<u32>,
         decode_tokens_executed: u32,
         trace_root: Hash64,
         output_root: Hash64,
@@ -3809,6 +3834,27 @@ pub struct PalwCertifiedFamilyStateV2 {
 pub struct PalwClassLaneCertificationV2 {
     pub family_digest: Hash64,
     pub certified_daa: u64,
+}
+
+/// **What one live free-prompt claim's prompt was** (ADR-0145 §6), for the ONE question the cache
+/// rule asks: is a new prompt an extension of one this bond was already paid for on this class?
+///
+/// `prefix_root` is [`crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1`] over the claim's
+/// prompt ids — the running commitment, not the flat `prompt_token_ids_hash`, because a flat
+/// digest can only be compared against a prompt of exactly the same length.
+///
+/// The row lives exactly as long as the claim does: written when the commitment enters the state,
+/// dropped in `write_claim` where the work-id index is dropped. That is deliberate and it is a
+/// narrower window than "paid once, never again" — a prefix whose claim has RETIRED is not
+/// accounted, and so it is credited a second time. Widening it is not a matter of keeping the row:
+/// "one inference, one claim" is already scoped to live claims (`work_ids`), so a durable prefix
+/// ledger would make the cache rule stricter than the duplicate rule it rides beside, which is two
+/// answers to one question. Closing it properly is the receipt's prefix-STATE commitment (ADR-0145
+/// §6), which is a change to the commitment's wire.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpClaimPromptV1 {
+    pub prompt_tokens: u32,
+    pub prefix_root: Hash64,
 }
 
 /// The most fault vectors one `FamilyCertified` object may carry — the grading work one object
@@ -4738,6 +4784,49 @@ pub enum PalwStateV2Error {
         "free-prompt claim {claim} cannot be priced past ADR-0082 Decision 10's fence: the transition cannot enumerate its decode leaves — the object carries no prompt_tokens and class {class} carries no shape profile. Arming Params::palw_fp_decode_rules requires both (palw_step::decode_leaf_count_v1 is the arithmetic)"
     )]
     FreePromptDecodeLeavesUnavailable { claim: Hash64, class: Hash64 },
+    /// **ADR-0145 §5: the class has published no graph, so its work cannot be derived.**
+    ///
+    /// Past `Params::palw_fp_derived_work` a free-prompt claim is priced on leaves the chain
+    /// counts, and counting them needs the class's `PalwShapeProfileV3`. The chain kept none until
+    /// this fence: a registration's carriage carries one and a lane certification carries one, and
+    /// both were read and dropped. So a class certified BEFORE the fence has no row, and this is
+    /// what it meets.
+    ///
+    /// It is recoverable, which is the whole difference between this fence and
+    /// `palw_fp_decode_rules` above. The fix is one permissionless object anyone may carry: a
+    /// second `ClassLaneCertified` for the free-prompt lane, whose only effect past the fence is
+    /// to record the profile. A class id IS its profile's id, so the object is self-authenticating
+    /// and needs no authority; the message says so rather than leaving an operator to find it.
+    #[error(
+        "free-prompt claim {claim} cannot be priced: class {class} has published no shape profile, so its work cannot be derived (ADR-0145 §5). Carry a ClassLaneCertified for the FreePrompt lane naming this class — the profile must hash to the class id, and past Params::palw_fp_derived_work that records it"
+    )]
+    FreePromptClassHasNoWorkProfile { claim: Hash64, class: Hash64 },
+    /// **ADR-0145 §6: the chain holds no token list for this prompt, so it cannot tell how much of
+    /// it was already paid for.** A `PanelDa` commitment keeps the ids off chain and a canonical
+    /// claim derives them from its anchor; past the derived-work fence both are refused rather
+    /// than assumed uncached, because assuming uncached IS the lie the rule exists to refuse.
+    #[error(
+        "free-prompt claim {claim} carries {carried} prompt token ids, which is not its committed prompt length — past Params::palw_fp_derived_work the chain reads the prompt itself to see which prefix of it has already been paid for (ADR-0145 §6), and a commitment that carries no ids cannot be read"
+    )]
+    FreePromptPromptNotAccountable { claim: Hash64, carried: usize },
+    /// **ADR-0145 §5: the enumeration refused this job.** Past the ladder, or a graph
+    /// `validate_shape` rejects — the same refusals `step_leaf_count_capped_v1` makes about any
+    /// job, surfaced here rather than swallowed, because a job the court cannot walk to is a job
+    /// no conviction can reach.
+    #[error("free-prompt claim {claim} of class {class}: its work cannot be derived from the class's graph — {why}")]
+    FreePromptWorkUnderivable { claim: Hash64, class: Hash64, why: String },
+    /// **ADR-0145 I1: the declared work is not the derived work, and the claim is REFUSED.**
+    ///
+    /// Not corrected. The audit's F2 is that `work_leaves` is the executor's own field and nothing
+    /// recomputed it — the repo's own test multiplied it by ten and asserted the walk still passed
+    /// — and the fix is not to quietly substitute the right number: a chain that silently rewrites
+    /// a signed field has a wire format nobody reads, and a producer whose count is wrong has
+    /// either run a different job or holds a different graph. Both are facts the producer needs
+    /// told, and both are checkable before an inference is spent.
+    #[error(
+        "free-prompt claim {claim} declares {declared} work leaves; the class's graph and the run's committed token counts give {derived} (ADR-0145 I1 — the work is derived, never declared)"
+    )]
+    FreePromptWorkLeavesMismatch { claim: Hash64, declared: u64, derived: u64 },
     #[error("work {work_id} is already claimed by {claim} — one inference, one claim (ADR-0074 Decision 4)")]
     DuplicateWork { work_id: Hash64, claim: Hash64 },
     #[error("the free-prompt lane is unpriced on this network (no quanta per canonical job) — a commitment cannot enter the state")]
@@ -5295,6 +5384,20 @@ pub struct PalwChainStateV2 {
     /// state root is byte-identical to a state before the field. Decision 6's migration fills it
     /// once, at the fence, from the rows already on the chain.
     artifact_owners: BTreeMap<(Hash64, Hash64), crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
+    /// **ADR-0145 §5: the graph of every class whose free-prompt work the chain derives**, keyed by
+    /// class id — which IS the profile's id, so a row is self-authenticating and a wrong one cannot
+    /// be written.
+    ///
+    /// The chain never kept a profile before this: a post-genesis registration's carriage carries
+    /// one and a lane certification carries one, and both were read and dropped. Without a graph
+    /// the transition cannot enumerate a job's leaves, which is the whole reason `work_leaves` was
+    /// a self-report. Written only past `Params::palw_fp_derived_work`, so a chain with the fence
+    /// dormant holds an empty map, hashes nothing for it, and commits the root it always did.
+    fp_work_profiles: BTreeMap<Hash64, Box<crate::palw_step::PalwShapeProfileV3>>,
+    /// **ADR-0145 §6: the prompt of every live free-prompt claim**, keyed
+    /// `(class, bond, claim)` so the cache rule can range over one bond's claims of one class
+    /// without walking the claim table. Written and dropped with the claim; empty below the fence.
+    fp_claim_prompts: BTreeMap<(Hash64, PalwBondKeyV2, Hash64), PalwFpClaimPromptV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5437,6 +5540,8 @@ impl PalwChainStateV2 {
             final_work: BTreeMap::new(),
             work_target: None,
             artifact_owners: BTreeMap::new(),
+            fp_work_profiles: BTreeMap::new(),
+            fp_claim_prompts: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -6233,6 +6338,31 @@ impl PalwChainStateV2 {
         self.artifact_owners.iter()
     }
 
+    /// **ADR-0145 §5: the class's graph, if this chain holds one.** `None` below
+    /// `Params::palw_fp_derived_work` (nothing writes the index) and for a class that has not
+    /// published one past it — and the two are the same answer on purpose: the transition refuses a
+    /// free-prompt commitment of a class it cannot derive work for, whichever of the two is why.
+    pub fn fp_work_profile_of(&self, class_id: &Hash64) -> Option<&crate::palw_step::PalwShapeProfileV3> {
+        self.fp_work_profiles.get(class_id).map(|profile| profile.as_ref())
+    }
+
+    /// Whether any class has published a graph at all — how a reader tells "the fence is dormant"
+    /// from "this class has not published".
+    pub fn fp_work_profiles_are_written(&self) -> bool {
+        !self.fp_work_profiles.is_empty()
+    }
+
+    /// **ADR-0145 §6: what this bond has already been paid for on this class**, as
+    /// `(prompt_tokens, prefix_root)` pairs for
+    /// [`crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v1`]. Empty below the fence.
+    pub fn fp_claimed_prompts_of(&self, class_id: &Hash64, bond: &PalwBondKeyV2) -> Vec<(u32, Hash64)> {
+        self.fp_claim_prompts
+            .range((*class_id, *bond, Hash64::default())..)
+            .take_while(|((class, key, _), _)| class == class_id && key == bond)
+            .map(|(_, row)| (row.prompt_tokens, row.prefix_root))
+            .collect()
+    }
+
     pub fn work_target(&self) -> Option<&crate::palw_work_target_v1::PalwWorkTargetV2> {
         self.work_target.as_ref()
     }
@@ -6709,6 +6839,18 @@ impl PalwChainStateV2 {
             state.update(b"artifact_owners/v1");
             state.update(collection_root(b"artifact_owners", &self.artifact_owners).as_byte_slice());
         }
+        // ADR-0145 §5/§6: the class graphs the derivation reads and the live claims' prompts the
+        // cache rule reads, named, once they exist (past `Params::palw_fp_derived_work`). Empty
+        // hashes as nothing, so a chain with the fence dormant commits the root it always did —
+        // which is the property `a_dormant_derived_work_fence_moves_no_state_root` asserts.
+        if !self.fp_work_profiles.is_empty() {
+            state.update(b"fp_work_profiles/v1");
+            state.update(collection_root(b"fp_work_profiles", &self.fp_work_profiles).as_byte_slice());
+        }
+        if !self.fp_claim_prompts.is_empty() {
+            state.update(b"fp_claim_prompts/v1");
+            state.update(collection_root(b"fp_claim_prompts", &self.fp_claim_prompts).as_byte_slice());
+        }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
         state.update(&self.bounded_immature.to_le_bytes());
@@ -7055,6 +7197,22 @@ impl PalwChainStateV2 {
         let work_ids: BTreeMap<Hash64, Hash64> = self.claims.iter().filter_map(|(id, c)| c.work_id.map(|w| (w, *id))).collect();
         if work_ids != self.work_ids {
             return Err(PalwStateV2Error::CarriageInconsistent("work-id index differs from the claims".into()));
+        }
+        // **ADR-0145 §6: a prompt row may not outlive its claim.** The row is not derivable from
+        // the claim table — a claim record carries no prompt — so unlike the work-id index above
+        // this is a containment check rather than an equality: every row names a live claim of the
+        // class and bond it is filed under. A row that outlived its claim would discount every
+        // later prompt of that bond for as long as the state lived, and it would do it silently,
+        // which is the failure mode a carriage-supplied index is for.
+        for (class_id, bond, claim_id) in self.fp_claim_prompts.keys() {
+            match self.claims.get(claim_id) {
+                Some(claim) if claim.class_id == *class_id && claim.bond == *bond => {}
+                _ => {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "free-prompt prompt row names claim {claim_id}, which is not a live claim of class {class_id} on this bond"
+                    )));
+                }
+            }
         }
         if open_courts != self.open_courts_by_claim {
             return Err(PalwStateV2Error::CarriageInconsistent("open-court index differs from the sessions".into()));
@@ -7705,11 +7863,23 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
         new: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     },
-    /// ADR-0143: an artifact root's owner was written or dropped (57). Appended last.
+    /// ADR-0143: an artifact root's owner was written or dropped (57).
     ArtifactOwner {
         key: (Hash64, Hash64),
         old: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
         new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
+    },
+    /// ADR-0145 §5: a class published the graph its free-prompt work is derived from (58).
+    FpWorkProfile {
+        key: Hash64,
+        old: Option<Box<crate::palw_step::PalwShapeProfileV3>>,
+        new: Option<Box<crate::palw_step::PalwShapeProfileV3>>,
+    },
+    /// ADR-0145 §6: a live free-prompt claim's prompt was recorded or dropped (59). Appended last.
+    FpClaimPrompt {
+        key: (Hash64, PalwBondKeyV2, Hash64),
+        old: Option<PalwFpClaimPromptV1>,
+        new: Option<PalwFpClaimPromptV1>,
     },
 }
 
@@ -8094,6 +8264,19 @@ impl<'a> TransitionBuilder<'a> {
             && let Some(work_id) = record.work_id
         {
             self.state.work_ids.insert(work_id, key);
+        }
+        // **ADR-0145 §6: the prompt row leaves with the claim**, at the same door the work-id
+        // index leaves by — so the cache rule's window and the duplicate rule's window are the
+        // same window and cannot drift apart. Removal is NOT fence-gated: below the fence the map
+        // is empty and this is a no-op, and gating a REMOVAL on a fence would leave a row behind
+        // on a chain that reorged across the height.
+        if new.is_none()
+            && let Some(previous) = &old
+        {
+            let prompt_key = (previous.class_id, previous.bond, key);
+            if self.state.fp_claim_prompts.contains_key(&prompt_key) {
+                self.write_fp_claim_prompt(prompt_key, None);
+            }
         }
         // **ADR-0062 SA-1: the accuser's stake comes back HERE**, for the reason `write_court`
         // gives about the challenger's — one site that every door already passes through.
@@ -8481,6 +8664,35 @@ impl<'a> TransitionBuilder<'a> {
     /// ADR-0143 Decision 3: the ONE place a root's owner is written. Every entrance — the founding
     /// reservation, a line founding, a version publication and the activation migration — goes
     /// through here, so "who owns this root" has one writer as well as one reader.
+    /// **ADR-0145 §5: record a class's graph.** Only the lane certification calls this, and only
+    /// past the fence; the row is what makes a derivation possible at all, so it is written from a
+    /// profile the caller has already checked hashes to the class id.
+    fn write_fp_work_profile(&mut self, key: Hash64, new: Option<Box<crate::palw_step::PalwShapeProfileV3>>) {
+        let old = self.state.fp_work_profiles.get(&key).cloned();
+        if old == new {
+            return;
+        }
+        match &new {
+            Some(profile) => self.state.fp_work_profiles.insert(key, profile.clone()),
+            None => self.state.fp_work_profiles.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::FpWorkProfile { key, old, new });
+    }
+
+    /// **ADR-0145 §6: record (or drop) one live claim's prompt.** Dropped from `write_claim`, where
+    /// the work-id index is dropped, so the two windows are the same one.
+    fn write_fp_claim_prompt(&mut self, key: (Hash64, PalwBondKeyV2, Hash64), new: Option<PalwFpClaimPromptV1>) {
+        let old = self.state.fp_claim_prompts.get(&key).copied();
+        if old == new {
+            return;
+        }
+        match &new {
+            Some(row) => self.state.fp_claim_prompts.insert(key, *row),
+            None => self.state.fp_claim_prompts.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::FpClaimPrompt { key, old, new });
+    }
+
     fn write_artifact_owner(&mut self, key: (Hash64, Hash64), new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>) {
         let old = self.state.artifact_owners.get(&key).copied();
         if old == new {
@@ -14367,13 +14579,39 @@ fn apply_object(
                 .ok_or(PalwStateV2Error::NoCertifiedFamilyCovers { class: *class_id, lane: *lane })?;
             match lane {
                 PalwCertifiedLaneV1::FreePrompt => {
-                    if builder.state.fp_certified_classes.contains_key(class_id) {
+                    // **ADR-0145 §5: past the derived-work fence this object is also how a class
+                    // publishes the graph its work is derived from.**
+                    //
+                    // The graph is already in hand and already checked: `profile.validate_shape()`
+                    // ran above and `shape_profile_id() == class_id` — a class id IS its profile's
+                    // id — so the row cannot be wrong whoever carried it, which is why publishing
+                    // needs no authority and no signature.
+                    //
+                    // Recording it here rather than at registration is what makes arming the fence
+                    // possible at all. Every class the free-prompt lane can pay already has to
+                    // reach this object (`FreePromptLaneUncertified` above), and a class that
+                    // reached it BEFORE the fence left no row — so past the fence a certified class
+                    // may carry this object a second time for the sole purpose of publishing its
+                    // graph. That is the one relaxation of the "certify once" rule, it is fenced,
+                    // and it changes nothing else: the certification row itself is left exactly as
+                    // the first object wrote it, including its `certified_daa`, because a class's
+                    // certification date is a fact about when it was drilled and re-carrying a
+                    // profile is not a re-drill.
+                    let already = builder.state.fp_certified_classes.contains_key(class_id);
+                    let publishing_profile =
+                        builder.extras.fp_derived_work_active && !builder.state.fp_work_profiles.contains_key(class_id);
+                    if already && !publishing_profile {
                         return Err(PalwStateV2Error::ClassLaneAlreadyCertified { class: *class_id, lane: *lane });
                     }
-                    builder.write_fp_certified_class(
-                        *class_id,
-                        Some(PalwClassLaneCertificationV2 { family_digest: covering, certified_daa: ctx.daa_score }),
-                    );
+                    if !already {
+                        builder.write_fp_certified_class(
+                            *class_id,
+                            Some(PalwClassLaneCertificationV2 { family_digest: covering, certified_daa: ctx.daa_score }),
+                        );
+                    }
+                    if builder.extras.fp_derived_work_active {
+                        builder.write_fp_work_profile(*class_id, Some(profile.clone()));
+                    }
                 }
                 PalwCertifiedLaneV1::Attempt => {
                     // ADR-0069 Decision 6, as an object: the class registered weightless because
@@ -15402,6 +15640,9 @@ fn apply_object(
             executor_pubkey,
             work_leaves,
             prompt_token_ids_hash,
+            // ADR-0145 §5/§6's two execution facts. Read only past the derived-work fence.
+            prompt_tokens,
+            prompt_token_ids,
             // Audit H-4: the committed length is a field of the JOB and therefore of the claim id;
             // it is no longer part of the WORK IDENTITY, because a prefix of a run is that run.
             // Past `Params::palw_fp_da_pins` it is read for one other thing — the run's retained
@@ -15470,7 +15711,86 @@ fn apply_object(
             if decode_rules {
                 return Err(PalwStateV2Error::FreePromptDecodeLeavesUnavailable { claim: *claim_id, class: *class_id });
             }
-            let credited = crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, *work_leaves, 0);
+            // **ADR-0145 §5 and §6: the work is DERIVED, and a prefix already paid for is not paid
+            // again.** The 2026-09-19 reward audit's F2.
+            //
+            // Below the fence this is exactly the line it replaced — `credited = work_leaves` —
+            // and `derived` is `None`, so every arithmetic after it is byte for byte what it was.
+            // That is the whole of the dormant behaviour, and
+            // `a_dormant_derived_work_fence_moves_no_state_root` asserts it against a real fold.
+            //
+            // Past the fence three things happen in one place, because they are one accounting:
+            //
+            // 1. the chain recomputes the run's leaves from the class's GRAPH and the run's two
+            //    committed token counts, and refuses a commitment whose `work_leaves` disagrees.
+            //    Refused, not corrected: a silent correction is a wire format nobody reads, and a
+            //    producer whose number is wrong has either a different graph or a different run,
+            //    neither of which the chain should paper over (ADR-0145 I1);
+            // 2. the chain reads which prefix of this prompt this bond has already been paid for
+            //    on this class, from its own record, and credits only the NEW tokens (§6). Nothing
+            //    the executor writes is an input to that reading;
+            // 3. the claim's prompt is recorded so the next one can be read the same way.
+            //
+            // The refusals are BY NAME and every one of them is a thing a producer can check
+            // before it spends an inference: the class has published a graph, the run's leaves are
+            // the graph's answer, and the prompt is not one the chain already bought.
+            let derived = if builder.extras.fp_derived_work_active {
+                let profile = builder
+                    .state
+                    .fp_work_profiles
+                    .get(class_id)
+                    .ok_or(PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: *claim_id, class: *class_id })?
+                    .clone();
+                // **The ids are how the chain reads the cache, so a mode that carries none cannot
+                // be priced past this fence.** `PanelDa` keeps the prompt off chain and a canonical
+                // claim derives it from the anchor; in both the chain holds no token list, so the
+                // accounted prefix is unknowable and the only honest answer is to refuse rather
+                // than to assume zero — assuming zero is precisely the "declare it uncached" lie
+                // this rule exists to make unavailable. Both modes are dormant or unused on every
+                // shipped preset, and a network that arms one owes this rule a prefix-STATE
+                // commitment it can check instead (ADR-0145 §6).
+                if prompt_token_ids.len() != *prompt_tokens as usize {
+                    return Err(PalwStateV2Error::FreePromptPromptNotAccountable {
+                        claim: *claim_id,
+                        carried: prompt_token_ids.len(),
+                    });
+                }
+                // **The class's ladder, defaulted to the STRUCTURAL top rather than the network's.**
+                //
+                // The transition holds no bundle, so it cannot read `max_step_leaf_count`; the
+                // extraction walk can and does, and it has already refused any commitment whose
+                // `work_leaves` is past it. What this cap does here is bound the ENUMERATION, and
+                // the equality below binds the answer to a number the walk already bounded — so a
+                // wider default cannot admit a claim the network's ladder would have refused, it
+                // can only avoid refusing an honest one twice. The structural top is the widest a
+                // ruleset may ever freeze, which is the only honest default for a caller with no
+                // ruleset (the same reason `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` exists at all).
+                let ladder =
+                    builder.state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+                let already_paid = builder.state.fp_claimed_prompts_of(class_id, bond);
+                let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v1(prompt_token_ids, &already_paid);
+                let work =
+                    crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, *prompt_tokens, *decode_tokens_executed, accounted, ladder)
+                        .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
+                            claim: *claim_id,
+                            class: *class_id,
+                            why: e.to_string(),
+                        })?;
+                if work.total_leaves != *work_leaves {
+                    return Err(PalwStateV2Error::FreePromptWorkLeavesMismatch {
+                        claim: *claim_id,
+                        declared: *work_leaves,
+                        derived: work.total_leaves,
+                    });
+                }
+                Some(work)
+            } else {
+                None
+            };
+            let credited = match &derived {
+                Some(work) => work.credited_leaves,
+                None => crate::palw_freeprompt_v3::fp_credited_leaves_v1(decode_rules, *work_leaves, 0),
+            };
             let quantum = crate::palw_freeprompt_v3::fp_class_quantum_leaves_v1(class.pwu_rule.canonical_leaves_v1(), per_job);
             let quanta = crate::palw_freeprompt_v3::fp_quanta_v3(credited, quantum, cap);
             if quanta == 0 {
@@ -15582,6 +15902,21 @@ fn apply_object(
             builder.reserve_for_claim(&claim)?;
             let fp_pwu = claim.pwu;
             builder.write_claim(*claim_id, Some(claim));
+            // **ADR-0145 §6: what this claim bought, so the next one is not sold it twice.**
+            //
+            // Written after `write_claim` because `write_claim` is also where the row is DROPPED,
+            // and a row written before the claim exists would be swept by the drop of a claim that
+            // was never there. Only past the fence: below it the map stays empty, which is what
+            // keeps the state root where it was.
+            if derived.is_some() {
+                builder.write_fp_claim_prompt(
+                    (*class_id, *bond, *claim_id),
+                    Some(PalwFpClaimPromptV1 {
+                        prompt_tokens: *prompt_tokens,
+                        prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
+                    }),
+                );
+            }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
             // attributed to the class's founding line's current root until the job's v6.
             if let Some(line) = builder.state.model_line_or_founding(class_id)
@@ -15748,6 +16083,12 @@ pub struct PalwTransitionExtrasV1 {
     /// work-price unit nor takes a seated class target. `false` by `Default`, so a caller that does
     /// not set it keeps the behaviour every existing row was written under.
     pub admission_independence_active: bool,
+    /// **ADR-0145 §5/§6: `Params::palw_fp_derived_work` resolved at the block's DAA.** Past it a
+    /// free-prompt lane certification records the class's graph, a class already certified may
+    /// publish one, and a free-prompt commitment is priced on work the transition DERIVES from
+    /// that graph — refused if it disagrees with the declaration, and credited for the new tokens
+    /// only. `false` by `Default`, which is the lane exactly as every accepted claim was priced.
+    pub fp_derived_work_active: bool,
     /// ADR-0132 S: `Params::palw_single_lottery` resolved at the block's DAA. Past it the lottery
     /// reads `max(W₀, W)` — the chain's stepped work target — and the network draw is gone.
     pub single_lottery_active: bool,
@@ -17141,6 +17482,8 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             state.work_target = *install;
         }
         PalwDeltaEntryV2::ArtifactOwner { key, old, new } => swap_write!(state.artifact_owners, key, old, new),
+        PalwDeltaEntryV2::FpWorkProfile { key, old, new } => swap_write!(state.fp_work_profiles, key, old, new),
+        PalwDeltaEntryV2::FpClaimPrompt { key, old, new } => swap_write!(state.fp_claim_prompts, key, old, new),
         PalwDeltaEntryV2::FinalWork { key, old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             let current = state.final_work.get(&key.0).and_then(|classes| classes.get(&key.1)).copied();
@@ -17383,6 +17726,12 @@ pub struct PalwStateCarriageV2 {
     pub work_target: Option<crate::palw_work_target_v1::PalwWorkTargetV2>,
     /// ADR-0143. A seventeenth tagged tail (`0xAE`), encoded only when non-empty; rooted.
     pub artifact_owners: BTreeMap<(Hash64, Hash64), crate::palw_model_lines_v1::PalwArtifactOwnerV1>,
+    /// ADR-0145 §5. An eighteenth tagged tail (`0xAF`), encoded only when either map is non-empty;
+    /// both rooted. They share one tail because they are written by one fence and a state that
+    /// holds a prompt row without the graph to price it is not a state this transition can build.
+    pub fp_work_profiles: BTreeMap<Hash64, Box<crate::palw_step::PalwShapeProfileV3>>,
+    /// ADR-0145 §6. The same tail.
+    pub fp_claim_prompts: BTreeMap<(Hash64, PalwBondKeyV2, Hash64), PalwFpClaimPromptV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -17462,6 +17811,9 @@ const PALW_CARRIAGE_WORK_TARGET_SHADOW_TAIL_V1: u8 = 0xAC;
 const PALW_CARRIAGE_WORK_TARGET_TAIL_V1: u8 = 0xAD;
 /// ADR-0143: the artifact-root owners, once the index exists (past its fence). Rooted.
 const PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1: u8 = 0xAE;
+/// ADR-0145 §5/§6: the class graphs the free-prompt derivation reads and the live claims' prompts
+/// the cache rule reads, once either exists (past `Params::palw_fp_derived_work`). Rooted.
+const PALW_CARRIAGE_FP_DERIVED_WORK_TAIL_V1: u8 = 0xAF;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -17585,6 +17937,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1.serialize(writer)?;
             self.artifact_owners.serialize(writer)?;
         }
+        if !self.fp_work_profiles.is_empty() || !self.fp_claim_prompts.is_empty() {
+            PALW_CARRIAGE_FP_DERIVED_WORK_TAIL_V1.serialize(writer)?;
+            self.fp_work_profiles.serialize(writer)?;
+            self.fp_claim_prompts.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -17652,6 +18009,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_work_target = false;
         let mut artifact_owners = BTreeMap::new();
         let mut seen_artifact_owners = false;
+        let mut fp_work_profiles = BTreeMap::new();
+        let mut fp_claim_prompts = BTreeMap::new();
+        let mut seen_fp_derived_work = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -17738,6 +18098,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     seen_artifact_owners = true;
                     artifact_owners = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_FP_DERIVED_WORK_TAIL_V1 if !seen_fp_derived_work => {
+                    seen_fp_derived_work = true;
+                    fp_work_profiles = BTreeMap::deserialize_reader(reader)?;
+                    fp_claim_prompts = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
                     class_shard_plans = BTreeMap::deserialize_reader(reader)?;
@@ -17809,6 +18174,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             final_work,
             work_target,
             artifact_owners,
+            fp_work_profiles,
+            fp_claim_prompts,
         })
     }
 }
@@ -17866,6 +18233,8 @@ impl PalwStateCarriageV2 {
             final_work: state.final_work.clone(),
             work_target: state.work_target,
             artifact_owners: state.artifact_owners.clone(),
+            fp_work_profiles: state.fp_work_profiles.clone(),
+            fp_claim_prompts: state.fp_claim_prompts.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -17989,6 +18358,8 @@ impl PalwStateCarriageV2 {
             final_work: self.final_work,
             work_target: self.work_target,
             artifact_owners: self.artifact_owners,
+            fp_work_profiles: self.fp_work_profiles,
+            fp_claim_prompts: self.fp_claim_prompts,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -27148,6 +27519,12 @@ pub(crate) mod tests {
             work_leaves: pwu,
             // One prompt per claim word, so two fixtures are two works (ADR-0074 Decision 4).
             prompt_token_ids_hash: h64(0x7E00 ^ claim_word),
+            // ADR-0145 §5's two execution facts. Every fixture below folds with
+            // `PalwTransitionExtrasV1::default()` — the derived-work fence dormant — where nothing
+            // reads them; the tests that DO arm the fence build their prompts explicitly, because
+            // past it a commitment whose carried ids are not its committed prompt is refused.
+            prompt_tokens: 0,
+            prompt_token_ids: Vec::new(),
             decode_tokens_executed: quanta,
             trace_root: h64(41),
             output_root: h64(42),
@@ -27928,6 +28305,391 @@ pub(crate) mod tests {
             apply_palw_transition_v2(&s4, &p, &ctx(5, 104, 5), &[bind(PalwCertifiedLaneV1::Attempt)], None).unwrap_err(),
             PalwStateV2Error::ClassAlreadyWeighted { class, share: floor }
         );
+    }
+
+    // ---- ADR-0145 §5/§6: the lane's work is derived, and a paid prefix is not paid twice ----
+
+    /// The floor's own graph. A real shipped profile, so every leaf count below is the number the
+    /// seat and the court count — and a class whose id IS that graph, because past this fence a
+    /// class id is not a name, it is the commitment to the graph its work is derived from.
+    fn derived_profile() -> crate::palw_step::PalwShapeProfileV3 {
+        crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("the floor's profile")
+    }
+
+    /// The transition at a stated arming. The four policy flags are `apply`'s, so the only
+    /// difference between a fold here and a fold there is the fence under test.
+    fn apply_derived(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+        apply_palw_transition_v2_with_extras(parent, p, c, objects, None, false, false, true, false, extras)
+    }
+
+    fn derived_work_armed() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { fp_derived_work_active: true, ..Default::default() }
+    }
+
+    /// A free-prompt commitment of the floor's class carrying a REAL prompt and whatever leaf
+    /// count the caller states — so a test can hand the transition the graph's own answer, or ten
+    /// times it, and see the difference.
+    fn derived_commit(claim_word: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::FreePromptCommitted {
+            claim: h64(claim_word),
+            class_id: derived_profile().shape_profile_id(),
+            bond: bond_key(1),
+            executor_pubkey: vec![7; 4],
+            work_leaves,
+            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(prompt),
+            prompt_tokens: prompt.len() as u32,
+            prompt_token_ids: prompt.to_vec(),
+            decode_tokens_executed: decode,
+            trace_root: h64(41),
+            output_root: h64(42),
+            execution_root: h64(43),
+            trace_chunk_count: 4,
+            trace_retention_daa: 999_999,
+        }
+    }
+
+    /// The chain a derived-work test needs: the base class, a bond whose collateral can back a
+    /// real job's exposure, the floor's class registered weightless, and a chain-certified
+    /// free-prompt family covering its kernels. Stops one step short of the lane certification, so
+    /// a test can carry that object itself — below the fence or past it.
+    fn derived_work_chain() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, Hash64) {
+        use crate::palw_class_admission_v2::reachable_kernels_v1;
+        use crate::palw_e2e_adjudicability::{PalwE2eCoveringV1, PalwE2eFamilyV1, palw_e2e_family_id_v1};
+
+        let profile = derived_profile();
+        let class = profile.shape_profile_id();
+        // A retirement span, so `the_prompt_row_rides_its_delta_both_ways` can drive a claim off
+        // the live set and watch its prompt row go with it. Nothing else here folds far enough to
+        // reach a retirement deadline.
+        let p = params().with_claim_retirement_daa(50).expect("retirement is representable");
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: op_key(21),
+                // Big enough to back a real job: a 6,276-leaf run at the class's 8,000/8 quantum
+                // reserves 6,000 pwu × 5 sompi, and the ceiling is collateral × 1000‰.
+                collateral: 10_000_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: class,
+                artifact_root: h64(12),
+                // 8,000 leaves a canonical job, so the free-prompt quantum is 1,000 — small enough
+                // that the difference between a cached and an uncached prompt shows up in QUANTA
+                // and not only in the leaf count, which is the quantity that reaches weight.
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(8_000),
+                slash_value_per_pwu: 5,
+                initial_target: u128::MAX / 2,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            },
+        ];
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        let family = PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("TEST-DERIVED-WORK"),
+            drilled_class_id: class,
+            kernel_ids: reachable_kernels_v1(&profile),
+            covering: PalwE2eCoveringV1 { convicted_leaves: 6, ..Default::default() },
+        };
+        let digest = family.digest();
+        let delta = PalwStateDeltaV2 {
+            point: ctx(2, 101, 2),
+            entries: vec![PalwDeltaEntryV2::CertifiedFamily {
+                lane: PalwCertifiedLaneV1::FreePrompt,
+                key: digest,
+                old: None,
+                new: Some(PalwCertifiedFamilyStateV2 { family, certified_daa: 101 }),
+            }],
+        };
+        let s2 = apply_delta_v2(&s1, &delta, &p).expect("the family delta applies");
+        (p, s2, class, digest)
+    }
+
+    fn lane_certification(class: Hash64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ClassLaneCertified {
+            class_id: class,
+            lane: PalwCertifiedLaneV1::FreePrompt,
+            profile: Box::new(derived_profile()),
+        }
+    }
+
+    /// **Below ADR-0145's fence, nothing moves — and the proof is the state root.**
+    ///
+    /// The rule this fence arms changes what a free-prompt claim is paid for, so the one thing it
+    /// must not do while dormant is change what a claim is paid for. Three folds of the same
+    /// blocks: the default transition, the transition told the fence is dormant, and the same
+    /// again — identical roots, identical deltas, and neither of the two new indices written.
+    ///
+    /// `work_leaves` here is TEN TIMES the graph's answer, deliberately: below the fence that is
+    /// exactly what the lane accepts (the 2026-09-19 audit's F2), and a test that used an honest
+    /// number would pass whether the fence leaked or not.
+    #[test]
+    fn a_dormant_derived_work_fence_moves_no_state_root() {
+        let (p, base, class, _) = derived_work_chain();
+        let (certified, _) = apply(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], None);
+        let prompt: Vec<u32> = (0..8).collect();
+        let commit = derived_commit(0xFC, &prompt, 2, 6_276 * 10);
+
+        let (shipped, shipped_delta) = apply(&certified, &p, &ctx(4, 103, 4), &[commit.clone()], None);
+        let (dormant, dormant_delta) = apply_derived(&certified, &p, &ctx(4, 103, 4), &[commit], &PalwTransitionExtrasV1::default())
+            .expect("the dormant fold applies");
+        assert_eq!(shipped.state_root(), dormant.state_root(), "a dormant fence is the transition that has no fence");
+        assert_eq!(shipped_delta, dormant_delta, "…down to the delta a reorg would revert");
+        assert_eq!(shipped.claim(&h64(0xFC)).unwrap().work_leaves, 62_760, "and the executor's own number is what the lane records");
+        assert!(!shipped.fp_work_profiles_are_written(), "the graph index stays empty");
+        assert!(shipped.fp_claimed_prompts_of(&class, &bond_key(1)).is_empty(), "and so does the prompt index");
+        assert!(
+            !shipped_delta
+                .entries
+                .iter()
+                .any(|e| matches!(e, PalwDeltaEntryV2::FpWorkProfile { .. } | PalwDeltaEntryV2::FpClaimPrompt { .. })),
+            "a dormant fence writes no entry of its own"
+        );
+    }
+
+    /// **Arming the fence needs the class's graph on chain, and any stranger may put it there.**
+    ///
+    /// This is the difference between this fence and `palw_fp_decode_rules`, whose refusal
+    /// (`FreePromptDecodeLeavesUnavailable`) names two inputs no object can supply, so arming it
+    /// refuses every free-prompt claim forever. Here the missing input is the class's graph, the
+    /// object that carries one already exists, and it is self-authenticating — a class id IS its
+    /// profile's id — so publishing needs no authority and the refusal says what to carry.
+    ///
+    /// The relaxation is narrow and fenced: a class certified BEFORE the fence may carry the
+    /// object a second time, for the sole purpose of publishing its graph, and a third carry is
+    /// refused exactly as the second used to be.
+    #[test]
+    fn past_the_fence_a_class_publishes_its_graph_and_a_class_that_has_not_is_refused_by_name() {
+        let (p, base, class, digest) = derived_work_chain();
+        let armed = derived_work_armed();
+        let prompt: Vec<u32> = (0..8).collect();
+        let honest = derived_commit(0xFC, &prompt, 2, 6_276);
+
+        // Certified below the fence: the certification row exists, the graph row does not — which
+        // is the state every class on a running chain is in on the day the fence fires.
+        let (certified, _) = apply(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], None);
+        assert_eq!(certified.fp_lane_certification(&class).map(|c| c.family_digest), Some(digest));
+        assert!(!certified.fp_work_profiles_are_written());
+        assert_eq!(
+            apply_derived(&certified, &p, &ctx(4, 103, 4), &[honest.clone()], &armed).unwrap_err(),
+            PalwStateV2Error::FreePromptClassHasNoWorkProfile { claim: h64(0xFC), class },
+            "a claim the chain cannot price is a claim it must not credit"
+        );
+
+        // The fix is one more of the object that already carries the graph.
+        let (published, delta) =
+            apply_derived(&certified, &p, &ctx(4, 103, 4), &[lane_certification(class)], &armed).expect("publishing applies");
+        assert_eq!(published.fp_work_profile_of(&class), Some(&derived_profile()));
+        assert_eq!(
+            published.fp_lane_certification(&class).map(|c| c.certified_daa),
+            Some(102),
+            "the certification date is a fact about when the class was drilled — re-carrying a graph is not a re-drill"
+        );
+        assert_eq!(revert_delta_v2(&published, &delta, &p).unwrap().state_root(), certified.state_root(), "and it reverts");
+
+        // A third carry is refused, so the relaxation cannot become a way to re-certify at will.
+        assert_eq!(
+            apply_derived(&published, &p, &ctx(5, 104, 5), &[lane_certification(class)], &armed).unwrap_err(),
+            PalwStateV2Error::ClassLaneAlreadyCertified { class, lane: PalwCertifiedLaneV1::FreePrompt }
+        );
+        // And with the graph in hand the same claim folds.
+        let (priced, _) = apply_derived(&published, &p, &ctx(5, 104, 5), &[honest], &armed).expect("the priced fold applies");
+        assert!(priced.claim(&h64(0xFC)).is_some());
+    }
+
+    /// **ADR-0145 I1: the declared work must BE the derived work, and a disagreement is refused.**
+    ///
+    /// The audit's F2 in its sharpest form: `work_leaves` was the executor's own field and nothing
+    /// on the acceptance path recomputed it. Past the fence the transition counts the run's leaves
+    /// from the class's graph and the two token counts the commitment itself carries, and a claim
+    /// that disagrees in EITHER direction is refused — refused, not corrected, because a silent
+    /// correction is a wire format nobody reads.
+    #[test]
+    fn past_the_fence_the_declared_leaves_must_be_the_leaves_the_graph_counts() {
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let prompt: Vec<u32> = (0..8).collect();
+
+        // 6,276 is `step_leaf_count_of_tokens_capped_v1(base0, 8, 2, 2^26)` — the enumeration's own
+        // answer for this run, pinned so a change to the enumeration has to come here and explain
+        // itself rather than silently re-pricing every claim of this class.
+        let derived = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&derived_profile(), 8, 2, 1 << 26).unwrap();
+        assert_eq!(derived, 6_276, "the floor's graph counts this run at 6,276 leaves");
+
+        let (ok, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[derived_commit(0xFC, &prompt, 2, derived)], &armed)
+            .expect("the graph's own answer applies");
+        let claim = ok.claim(&h64(0xFC)).unwrap();
+        assert_eq!(claim.work_leaves, derived);
+        // 6,276 credited leaves over a 1,000-leaf quantum is six whole quanta; the remainder
+        // certifies and never draws (ADR-0074 Decision 5).
+        assert_eq!(claim.pwu, 6_000);
+
+        for wrong in [derived * 10, derived + 1, derived - 1, 1] {
+            assert_eq!(
+                apply_derived(&published, &p, &ctx(4, 103, 4), &[derived_commit(0xFD, &prompt, 2, wrong)], &armed).unwrap_err(),
+                PalwStateV2Error::FreePromptWorkLeavesMismatch { claim: h64(0xFD), declared: wrong, derived },
+                "neither overstating nor understating is the graph's answer"
+            );
+        }
+
+        // A commitment whose ids the chain does not hold cannot be priced at all: the cache rule
+        // reads the prompt, and assuming "uncached" for a prompt it cannot see is exactly the lie
+        // the rule exists to refuse. `PanelDa` and the canonical prompt mode are both dormant or
+        // unused on every shipped preset, and both land here.
+        let idless = match derived_commit(0xFE, &prompt, 2, derived) {
+            PalwConsensusObjectV2::FreePromptCommitted {
+                claim,
+                class_id,
+                bond,
+                executor_pubkey,
+                work_leaves,
+                prompt_token_ids_hash,
+                prompt_tokens,
+                decode_tokens_executed,
+                trace_root,
+                output_root,
+                execution_root,
+                trace_chunk_count,
+                trace_retention_daa,
+                ..
+            } => PalwConsensusObjectV2::FreePromptCommitted {
+                claim,
+                class_id,
+                bond,
+                executor_pubkey,
+                work_leaves,
+                prompt_token_ids_hash,
+                prompt_tokens,
+                prompt_token_ids: Vec::new(),
+                decode_tokens_executed,
+                trace_root,
+                output_root,
+                execution_root,
+                trace_chunk_count,
+                trace_retention_daa,
+            },
+            other => other,
+        };
+        assert_eq!(
+            apply_derived(&published, &p, &ctx(4, 103, 4), &[idless], &armed).unwrap_err(),
+            PalwStateV2Error::FreePromptPromptNotAccountable { claim: h64(0xFE), carried: 0 }
+        );
+    }
+
+    /// **ADR-0145 §6: cache is an execution fact, and the chain reads it off its own record.**
+    ///
+    /// The audit's C4: the same answer with a padded prefix moved `work_leaves` 62× while a
+    /// producer holding the prefix's KV cache spent about 3 % more. Past the fence a prompt that
+    /// extends a prompt this bond was already paid for on this class is credited for the
+    /// EXTENSION only — and nothing the executor writes says so, because the executor is not
+    /// asked. The row the chain compares against is its own, and it leaves with the claim.
+    #[test]
+    fn past_the_fence_a_prompt_the_chain_already_bought_is_credited_for_its_extension_only() {
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let profile = derived_profile();
+
+        let short: Vec<u32> = (0..8).collect();
+        let long: Vec<u32> = (0..32).collect();
+        let short_leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, 8, 2, 1 << 26).unwrap();
+        let long_leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, 32, 2, 1 << 26).unwrap();
+
+        // The long prompt alone, on a chain that has bought nothing of it.
+        let (alone, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[derived_commit(0xF2, &long, 2, long_leaves)], &armed)
+            .expect("an uncached long prompt applies");
+        let uncached_pwu = alone.claim(&h64(0xF2)).unwrap().pwu;
+
+        // The same long prompt after the chain has paid for its first eight tokens.
+        let (first, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[derived_commit(0xF1, &short, 2, short_leaves)], &armed)
+            .expect("the short prompt applies");
+        assert_eq!(
+            first.fp_claimed_prompts_of(&class, &bond_key(1)),
+            vec![(8, crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(&short))],
+            "the chain records what it bought, as the running commitment to the prompt's first k ids"
+        );
+        let (second, _) = apply_derived(&first, &p, &ctx(5, 104, 5), &[derived_commit(0xF2, &long, 2, long_leaves)], &armed)
+            .expect("the extension applies");
+        let cached = second.claim(&h64(0xF2)).unwrap();
+
+        assert_eq!(cached.work_leaves, long_leaves, "the RUN is the same run — what changes is what it is credited for");
+        assert!(cached.pwu < uncached_pwu, "the extension is credited, the prefix is not: {} vs {uncached_pwu}", cached.pwu);
+        // The credited leaves are the run minus the prefix's own prefill, which for eight tokens
+        // of the floor's graph is 5,560 — a difference of whole quanta and therefore of weight.
+        let prefix_prefill = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&profile, 8, 1 << 26).unwrap();
+        assert_eq!(prefix_prefill, 5_560);
+        let expected_quanta = ((long_leaves - prefix_prefill) / 1_000) as u32;
+        assert_eq!(cached.pwu, expected_quanta as u64 * 1_000);
+        // Exposure follows the credited work, so a claim that is paid less also stakes less —
+        // which is the direction that keeps `slash_value_per_pwu` honest.
+        assert_eq!(cached.reserved, cached.pwu as u128 * 5);
+
+        // A prompt of a DIFFERENT bond's, or of a different class, is not a prefix of anything
+        // here: the row is keyed by both, so one bond's history never discounts another's.
+        assert!(second.fp_claimed_prompts_of(&class, &bond_key(2)).is_empty());
+        assert!(second.fp_claimed_prompts_of(&h64(1), &bond_key(1)).is_empty());
+    }
+
+    /// **The prompt row leaves with the claim, and a reorg puts it back.**
+    ///
+    /// The row is not derivable from the claim table — the claim record carries no prompt — so
+    /// unlike the work-id index it rides its own delta entry, and the reorg walk is what proves
+    /// the entry is complete. A row that outlived its claim would discount every later prompt of
+    /// that bond forever; a row that failed to come back on a revert would charge twice for work
+    /// the chain had already bought.
+    #[test]
+    fn the_prompt_row_rides_its_delta_both_ways() {
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let prompt: Vec<u32> = (0..8).collect();
+        let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&derived_profile(), 8, 2, 1 << 26).unwrap();
+
+        let (committed, delta) = apply_derived(&published, &p, &ctx(4, 103, 4), &[derived_commit(0xFC, &prompt, 2, leaves)], &armed)
+            .expect("the commitment applies");
+        assert_eq!(committed.fp_claimed_prompts_of(&class, &bond_key(1)).len(), 1);
+        assert!(delta.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::FpClaimPrompt { new: Some(_), .. })));
+
+        let reverted = revert_delta_v2(&committed, &delta, &p).expect("the delta reverts");
+        assert_eq!(reverted.state_root(), published.state_root(), "the row goes back where it came from");
+        assert!(reverted.fp_claimed_prompts_of(&class, &bond_key(1)).is_empty());
+        let reapplied = apply_delta_v2(&published, &delta, &p).expect("and reapplies");
+        assert_eq!(reapplied.state_root(), committed.state_root());
+
+        // Retiring the claim drops the row at the same door the work-id index leaves by, so the
+        // cache rule's window and the duplicate rule's window stay the same window. Committed at
+        // 103 with a bind window of 10, so the deadline is 113 and the next block past it voids;
+        // the 50-DAA retirement then sweeps one block past 164. Driven through the lattice rather
+        // than poked into state, because the door under test is the one a real chain goes through.
+        let (voided, _) = apply_derived(&committed, &p, &ctx(5, 114, 5), &[], &armed).expect("the bind window closes");
+        assert!(matches!(voided.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
+        assert_eq!(voided.fp_claimed_prompts_of(&class, &bond_key(1)).len(), 1, "a voided claim still holds its row");
+        let (retired, sweep) = apply_derived(&voided, &p, &ctx(6, 165, 6), &[], &armed).expect("the retirement sweeps");
+        assert!(retired.claim(&h64(0xFC)).is_none(), "the claim retires");
+        assert!(retired.fp_claimed_prompts_of(&class, &bond_key(1)).is_empty(), "and the row leaves with it");
+        assert!(sweep.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::FpClaimPrompt { new: None, .. })), "by its own entry");
+        assert_eq!(revert_delta_v2(&retired, &sweep, &p).unwrap().state_root(), voided.state_root(), "and a reorg puts it back");
     }
 
     /// ADR-0075 Decision 2: evidence the court refuses records nothing, and the refusal names the
@@ -29767,6 +30529,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::FinalWork { .. } => "final_work",
                     PalwDeltaEntryV2::WorkTarget { .. } => "work_target",
                     PalwDeltaEntryV2::ArtifactOwner { .. } => "artifact_owner",
+                    PalwDeltaEntryV2::FpWorkProfile { .. } => "fp_work_profile",
+                    PalwDeltaEntryV2::FpClaimPrompt { .. } => "fp_claim_prompt",
                 });
             }
         }
@@ -29825,8 +30589,11 @@ pub(crate) mod tests {
             (54, PalwDeltaEntryV2::WorkTargetShadow { old: None, new: None }),
             (55, PalwDeltaEntryV2::FinalWork { key: (1, key), old: None, new: None }),
             (56, PalwDeltaEntryV2::WorkTarget { old: None, new: None }),
-            // ADR-0143, appended last.
+            // ADR-0143.
             (57, PalwDeltaEntryV2::ArtifactOwner { key: (key, key), old: None, new: None }),
+            // ADR-0145 §5/§6, appended last.
+            (58, PalwDeltaEntryV2::FpWorkProfile { key, old: None, new: None }),
+            (59, PalwDeltaEntryV2::FpClaimPrompt { key: (key, bond_key(1), key), old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -30384,6 +31151,13 @@ pub(crate) mod tests {
             pending_chunks: _,
             court_close_groups: _,
             derived_artifacts: _,
+            // ADR-0145 §5/§6. Like every conditional collection above them they hash as nothing
+            // while empty, and `m02_populated_state` leaves them empty because the derived-work
+            // fence is dormant on every preset — so the ADR-0043 list is unchanged and this
+            // fixture's root is the root it has always been. Named here so a later author who
+            // populates them has to decide their place in the list rather than discover it.
+            fp_work_profiles: _,
+            fp_claim_prompts: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -36634,6 +37408,7 @@ pub(crate) mod tests {
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_active: false,
+                fp_derived_work_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,
@@ -36869,6 +37644,7 @@ pub(crate) mod tests {
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_active: false,
+                fp_derived_work_active: false,
                 single_lottery_active: false,
                 verification_v2_active: false,
                 readiness_v2_active: false,

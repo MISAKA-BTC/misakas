@@ -1257,6 +1257,11 @@ mod chain_only_lattice_tests {
             executor_pubkey: pubkey.clone(),
             work_leaves: commitment.work_leaves,
             prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+            // ADR-0145 §5/§6's two execution facts, from the run's own job — below the
+            // derived-work fence nothing reads them, and a harness that invented them would be the
+            // one field here that is not the execution's.
+            prompt_tokens: commitment.job.prompt_tokens,
+            prompt_token_ids: prompt_ids.clone(),
             decode_tokens_executed: commitment.decode_tokens_executed,
             trace_root: commitment.trace_root,
             output_root: commitment.output_root,

@@ -992,6 +992,10 @@ mod tests {
             executor_pubkey: vec![7; 4],
             work_leaves: 8,
             prompt_token_ids_hash: h64(0x7E),
+            // Unread here: this test asks whether the object may ride a carriage, which is decided
+            // before any state, any height and any fence is consulted.
+            prompt_tokens: 0,
+            prompt_token_ids: Vec::new(),
             decode_tokens_executed: 2,
             trace_root: h64(41),
             output_root: h64(42),

@@ -482,6 +482,10 @@ fn fp_commit(claim_word: u64, work_leaves: u64) -> Obj {
         executor_pubkey: vec![7; 4],
         work_leaves,
         prompt_token_ids_hash: h(0x7E00 ^ claim_word),
+        // ADR-0145 §5's execution facts, unread below the derived-work fence — which this fold
+        // is: `apply_palw_transition_v2` takes `PalwTransitionExtrasV1::default()`.
+        prompt_tokens: 0,
+        prompt_token_ids: Vec::new(),
         decode_tokens_executed: 3,
         trace_root: h(41),
         output_root: h(42),

@@ -159,6 +159,11 @@ mod tests {
             executor_pubkey: vec![7; 4],
             work_leaves: pwu,
             prompt_token_ids_hash: h64(0x7E00 ^ claim),
+            // ADR-0145 §5's two execution facts. This walk folds with
+            // `PalwTransitionExtrasV1::default()` — the derived-work fence dormant — where nothing
+            // reads them.
+            prompt_tokens: 0,
+            prompt_token_ids: Vec::new(),
             decode_tokens_executed: quanta,
             trace_root: h64(41),
             output_root: h64(42),

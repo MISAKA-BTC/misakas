@@ -202,7 +202,7 @@ where
         freeprompt,
         accepted_block,
         panel_da_armed,
-        |_| PalwFpClassCapsV1 { step_ladder: max_step_leaf_count, held: false },
+        |_| PalwFpClassCapsV1 { step_ladder: max_step_leaf_count, held: false, derived_work: PalwFpDerivedWorkCapV1::Declared },
         ruleset_caps_armed,
         held_armed,
         prompt_ids_form,
@@ -212,12 +212,40 @@ where
 
 /// **What the walk bounds ONE commitment by, from its class** (ADR-0119 Decision 5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PalwFpClassCapsV1 {
+pub struct PalwFpClassCapsV1<'a> {
     /// The class's step ladder: the network's, or a held class's recorded `2^40`.
     pub step_ladder: u64,
     /// A class under the held regime — whose prompt cap, where the ruleset caps are armed, is the
     /// regime's (`PALW_FP_HELD_MAX_PROMPT_TOKENS_V1`) rather than the frame-bounded advertised one.
     pub held: bool,
+    /// **ADR-0145 §5: whether this walk prices the class's work or believes it.**
+    pub derived_work: PalwFpDerivedWorkCapV1<'a>,
+}
+
+/// **ADR-0145 §5, as the walk sees it** — three states, not two, because "the fence is dormant"
+/// and "the fence is armed and this class published no graph" are different facts with different
+/// fixes, and collapsing them would tell an operator whose class is simply unpublished that the
+/// lane is off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFpDerivedWorkCapV1<'a> {
+    /// Below `Params::palw_fp_derived_work`. The walk carries `work_leaves` exactly as it always
+    /// has — the executor's own number, which the audit of 2026-09-19 filed as F2 and which this
+    /// variant exists to keep byte-identical until the fence fires.
+    Declared,
+    /// Past the fence, with the class's published graph in hand. The walk recomputes the run's
+    /// leaves from the graph and the commitment's own two token counts and SKIPS a carrier that
+    /// disagrees.
+    ///
+    /// Skipped and not rejected, like every other refusal in this walk: a peer's payload must
+    /// never be able to invalidate the block that carried it. The transition refuses the same
+    /// commitment by name if one ever reaches it, which is the backstop for a caller that did not
+    /// come through this entry.
+    Derived(&'a crate::palw_step::PalwShapeProfileV3),
+    /// Past the fence, with no graph published for this class. Every commitment of it is skipped:
+    /// a claim the chain cannot price is a claim it must not credit, and the fix is one
+    /// permissionless `ClassLaneCertified` naming the class (see
+    /// `PalwStateV2Error::FreePromptClassHasNoWorkProfile`).
+    Unpublished,
 }
 
 /// The walk **with each commitment bounded by its own class** (ADR-0119 Decision 5).
@@ -229,7 +257,7 @@ pub struct PalwFpClassCapsV1 {
 /// class is read off the commitment's own job, so the bound a commitment meets is a function of the
 /// commitment and the chain, never of the carrier.
 #[allow(clippy::too_many_arguments)]
-pub fn palw_fp_objects_from_accepted_txs_by_class_v1<V, C>(
+pub fn palw_fp_objects_from_accepted_txs_by_class_v1<'a, V, C>(
     txs: &[Transaction],
     network_domain: Hash64,
     freeprompt: &PalwFreePromptParamsV3,
@@ -243,7 +271,7 @@ pub fn palw_fp_objects_from_accepted_txs_by_class_v1<V, C>(
 ) -> PalwFpExtractionV3
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
-    C: Fn(&Hash64) -> PalwFpClassCapsV1,
+    C: Fn(&Hash64) -> PalwFpClassCapsV1<'a>,
 {
     let mut out = PalwFpExtractionV3::default();
     for tx in txs {
@@ -285,6 +313,44 @@ where
             out.skipped.push((id, "commitment signature does not verify under the carried key"));
             continue;
         }
+        // **ADR-0145 §5: past the fence, the leaves are DERIVED here and a disagreement is
+        // skipped.**
+        //
+        // The audit of 2026-09-19 filed this as F2: `work_leaves` was the executor's own field and
+        // nothing in the acceptance path recomputed it — `an_inflated_work_leaf_count_rides_and_the_walk_carries_it`
+        // below multiplied it by ten and asserted the walk still passed. It still does below the
+        // fence, and it must: this walk decides what a block ALREADY ACCEPTED contributes, so a
+        // rule it applies at a height the chain has passed would re-price history.
+        //
+        // The derivation is the enumeration `palw_step` already performs for the seat and the
+        // court, over the graph the class published and the two token counts the commitment
+        // itself carries — both inside the claim id, so neither can move after the fact.
+        match class_caps(&payload.commitment.job.class_id).derived_work {
+            PalwFpDerivedWorkCapV1::Declared => {}
+            PalwFpDerivedWorkCapV1::Unpublished => {
+                out.skipped.push((id, "the class has published no shape profile, so this commitment's work cannot be derived"));
+                continue;
+            }
+            PalwFpDerivedWorkCapV1::Derived(profile) => {
+                let commitment = &payload.commitment;
+                match crate::palw_step::step_leaf_count_of_tokens_capped_v1(
+                    profile,
+                    commitment.job.prompt_tokens,
+                    commitment.decode_tokens_executed,
+                    caps.step_ladder,
+                ) {
+                    Ok(derived) if derived == commitment.work_leaves => {}
+                    Ok(_) => {
+                        out.skipped.push((id, "the declared work leaves are not the leaves the class's graph counts for this run"));
+                        continue;
+                    }
+                    Err(_) => {
+                        out.skipped.push((id, "the class's graph cannot enumerate this run's leaves at the class's ladder"));
+                        continue;
+                    }
+                }
+            }
+        }
         // **Priced by the TRANSITION, against the class's own canonical job** (ADR-0074
         // Decision 5). Extraction holds no class state, so it carries the leaves and the facts
         // the work identity is made of; the state derives quanta and pwu where the class rule
@@ -299,6 +365,22 @@ where
                 executor_pubkey: commitment.job.executor_pubkey.clone(),
                 work_leaves: commitment.work_leaves,
                 prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+                // **ADR-0145 §5/§6: the two execution facts the walk used to drop.**
+                //
+                // `prompt_tokens` is the job's own, already checked equal to the carried list's
+                // length by `validate_stateless_under_ruleset_v3` above; the ids are the list
+                // itself, and they are empty under the two modes that carry none. Together with
+                // `decode_tokens_executed` they are the whole job context a leaf count reads
+                // (`palw_step::kv_aux_leaf_count` reads the same pair and nothing else), so past
+                // the derived-work fence the transition can recompute `work_leaves` instead of
+                // believing it — and recompute WHICH PREFIX of the prompt this bond has already
+                // been paid for, instead of asking the executor.
+                //
+                // Carried at every height. The object never leaves the node that built it and is
+                // hashed into nothing, so this is not a rule change; the rule is in the
+                // transition, behind the fence, where a height can be resolved.
+                prompt_tokens: commitment.job.prompt_tokens,
+                prompt_token_ids: payload.prompt_token_ids.clone(),
                 decode_tokens_executed: commitment.decode_tokens_executed,
                 trace_root: commitment.trace_root,
                 output_root: commitment.output_root,
@@ -523,6 +605,10 @@ mod tests {
                     PalwFpClassCapsV1 {
                         step_ladder: if held { crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1 } else { 1 << 26 },
                         held,
+                        // This test is about ADR-0119's ladder, so ADR-0145's derivation is off:
+                        // its fixture's `work_leaves` is a bare power of two chosen to sit either
+                        // side of a ladder, which no graph would ever count.
+                        derived_work: PalwFpDerivedWorkCapV1::Declared,
                     }
                 },
                 false,
@@ -881,6 +967,13 @@ mod tests {
         // An inflated leaf count WITHIN the cap passes the door and the walk alike: neither holds
         // the capture, and the price is verified by the seats against it (ADR-0074 Decision 5).
         // Above the cap, the door itself refuses — that much it can know.
+        //
+        // **This is the assertion the 2026-09-19 reward audit filed as F2, and it is still
+        // correct — below ADR-0145's derived-work fence.** Past that fence the walk holds the
+        // class's published graph and refuses the same carrier by name; both behaviours and the
+        // reason they coexist are pinned in
+        // `ten_times_the_work_leaves_rides_below_the_fence_and_the_walk_refuses_it_past_it`. The
+        // door's own answer never changes: it holds no graph at any height.
         let mut inflated = payload(96, 256);
         inflated.commitment.work_leaves *= 10;
         let inflated = borsh::to_vec(&inflated).unwrap();
@@ -954,5 +1047,130 @@ mod tests {
         );
         assert!(at_executor_constant.objects.is_empty(), "a ruleset that froze 2^22 refuses it");
         assert_eq!(at_executor_constant.skipped, vec![(carrier.id(), "payload is not stateless-admissible")]);
+    }
+
+    // ---- ADR-0145 §5: past the fence the walk prices the run instead of believing it ----
+
+    /// The floor's own graph, and a payload whose class IS that graph — because past the fence a
+    /// class id is not a name, it is the commitment to the graph the work is derived from.
+    fn floor_profile() -> crate::palw_step::PalwShapeProfileV3 {
+        crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("the floor's profile")
+    }
+
+    /// A payload of `profile`'s class whose `work_leaves` is the number the graph actually counts
+    /// for the run it declares. Everything else is `payload`'s.
+    fn derived_payload(
+        profile: &crate::palw_step::PalwShapeProfileV3,
+        prompt_tokens: u32,
+        decode: u32,
+    ) -> PalwFpCommitmentTxPayloadV3 {
+        let mut p = payload(prompt_tokens, decode);
+        p.commitment.job.class_id = profile.shape_profile_id();
+        p.commitment.work_leaves =
+            crate::palw_step::step_leaf_count_of_tokens_capped_v1(profile, prompt_tokens, decode, 1 << 26).expect("inside the ladder");
+        p
+    }
+
+    /// **The 2026-09-19 reward audit's F2, inverted into a regression fixture.**
+    ///
+    /// The audit's evidence for "the free-prompt lane's work is a self-report" was this repo's own
+    /// test: `admission_never_refuses_what_the_walk_would_credit` multiplies `work_leaves`
+    /// by ten and asserts the walk still credits the carrier. That assertion is still there and
+    /// still passes, and BOTH are correct at once — which is the thing to understand before
+    /// changing either.
+    ///
+    /// Below the fence the walk holds no graph. It cannot count leaves, so it carries the
+    /// executor's number and the seats judge it; a walk that refused what it cannot check would be
+    /// refusing on a guess. Past the fence the walk holds the class's published graph, so it
+    /// counts, and a carrier whose number is not the graph's answer is SKIPPED — skipped, not
+    /// rejected, because this walk must stay total over whatever a block already accepted (a
+    /// refusal that invalidated the block would be a remote denial of service wearing a consensus
+    /// rule's clothes).
+    ///
+    /// So the old assertion is "what a node that cannot price does" and this one is "what a node
+    /// that can price does", and the fence is exactly the difference between them.
+    #[test]
+    fn ten_times_the_work_leaves_rides_below_the_fence_and_the_walk_refuses_it_past_it() {
+        let fp = freeprompt();
+        let profile = floor_profile();
+        let class = profile.shape_profile_id();
+        let honest = derived_payload(&profile, 96, 8);
+        let mut inflated = honest.clone();
+        inflated.commitment.work_leaves *= 10;
+
+        let walk = |p: &PalwFpCommitmentTxPayloadV3, derived: PalwFpDerivedWorkCapV1<'_>| {
+            palw_fp_objects_from_accepted_txs_by_class_v1(
+                &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(p).unwrap())],
+                net(),
+                &fp,
+                h64(1),
+                false,
+                |class_id| {
+                    assert_eq!(*class_id, class, "the class is the commitment's own");
+                    PalwFpClassCapsV1 { step_ladder: 1 << 26, held: false, derived_work: derived }
+                },
+                false,
+                true,
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                |_, _, _, _| true,
+            )
+        };
+
+        // Below the fence: both ride, and the inflated one rides exactly as the audit found it.
+        assert_eq!(walk(&honest, PalwFpDerivedWorkCapV1::Declared).objects.len(), 1);
+        assert_eq!(
+            walk(&inflated, PalwFpDerivedWorkCapV1::Declared).objects.len(),
+            1,
+            "a walk that cannot count leaves carries the executor's number — the F2 behaviour, kept below the fence"
+        );
+
+        // Past it: the honest one rides and the inflated one is skipped BY NAME.
+        assert_eq!(walk(&honest, PalwFpDerivedWorkCapV1::Derived(&profile)).objects.len(), 1, "the graph's own answer is admitted");
+        let refused = walk(&inflated, PalwFpDerivedWorkCapV1::Derived(&profile));
+        assert!(refused.objects.is_empty(), "ten times the leaves is not what the graph counts");
+        assert_eq!(refused.skipped.len(), 1, "and it is skipped with a reason, not silently dropped");
+        assert!(refused.skipped[0].1.contains("work leaves"), "got {}", refused.skipped[0].1);
+
+        // Understating is refused by the same equality, in the same place. Equality and not a
+        // bound: an under-declared claim is still a claim whose price nobody derived, and one
+        // rule with two directions is one rule to keep true.
+        let mut understated = honest.clone();
+        understated.commitment.work_leaves -= 1;
+        assert!(walk(&understated, PalwFpDerivedWorkCapV1::Derived(&profile)).objects.is_empty());
+
+        // And a class that has published no graph has every commitment of it skipped: a claim the
+        // chain cannot price is a claim it must not credit. That is the whole cost of arming the
+        // fence, and it is recoverable by one permissionless `ClassLaneCertified`.
+        let unpublished = walk(&honest, PalwFpDerivedWorkCapV1::Unpublished);
+        assert!(unpublished.objects.is_empty());
+        assert!(unpublished.skipped[0].1.contains("shape profile"), "got {}", unpublished.skipped[0].1);
+    }
+
+    /// **The two execution facts the walk used to drop now reach the object** (ADR-0145 §5/§6).
+    ///
+    /// Without them the transition holds one half of the job context a leaf count reads and none
+    /// of the prompt the cache rule reads, which is precisely why `palw_fp_decode_rules` could
+    /// never be armed: its refusal names "the object carries no prompt_tokens". They are carried
+    /// at every height, because the object never leaves the node that built it.
+    #[test]
+    fn the_walk_carries_the_prompt_length_and_the_prompt_itself() {
+        let fp = freeprompt();
+        let p = payload(96, 8);
+        let out = palw_fp_objects_from_accepted_txs_v3(
+            &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
+            net(),
+            &fp,
+            h64(1),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            |_, _, _, _| true,
+        );
+        let crate::palw_state_v2::PalwConsensusObjectV2::FreePromptCommitted { prompt_tokens, prompt_token_ids, .. } =
+            &out.objects[0].object
+        else {
+            panic!("the walk produced something else")
+        };
+        assert_eq!(*prompt_tokens, 96, "the job's own committed length");
+        assert_eq!(prompt_token_ids.len(), 96, "and the ids the payload's validation already bound to it");
+        assert_eq!(prompt_token_ids, &(0..96u32).collect::<Vec<_>>());
     }
 }

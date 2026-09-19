@@ -269,6 +269,11 @@ mod tests {
             executor_pubkey: vec![7; 4],
             work_leaves: 60,
             prompt_token_ids_hash: h64(0x7E),
+            // ADR-0145 §5's two execution facts. This fixture folds below the derived-work fence
+            // (`PalwTransitionExtrasV1::default()`), where nothing reads them, so they are the
+            // honest placeholders a pre-fence object carries and not a claim about this prompt.
+            prompt_tokens: 0,
+            prompt_token_ids: Vec::new(),
             decode_tokens_executed: 8,
             trace_root: h64(41),
             output_root: h64(42),
@@ -360,6 +365,11 @@ mod tests {
             executor_pubkey: vec![7; 4],
             work_leaves: 60,
             prompt_token_ids_hash: h64(0x7E),
+            // ADR-0145 §5's two execution facts. This fixture folds below the derived-work fence
+            // (`PalwTransitionExtrasV1::default()`), where nothing reads them, so they are the
+            // honest placeholders a pre-fence object carries and not a claim about this prompt.
+            prompt_tokens: 0,
+            prompt_token_ids: Vec::new(),
             decode_tokens_executed: 8,
             trace_root: h64(41),
             output_root: h64(42),

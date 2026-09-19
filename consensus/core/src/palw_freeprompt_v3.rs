@@ -123,6 +123,9 @@ pub const PALW_FP_V3_DOMAIN_WORK_ID: &[u8] = b"misaka-palw/fp-v3/work-id/v1";
 /// ADR-0073 SA-1: the fold of the first `k` attempt blocks at or after a draw slot (see
 /// [`fp_beacon_fold_v3`]).
 pub const PALW_FP_V3_DOMAIN_BEACON_FOLD: &[u8] = b"misaka-palw/fp-v3/beacon-fold/v1";
+/// ADR-0145 §6: the running commitment to a prompt's first `k` token ids (see
+/// [`fp_prompt_prefix_roots_at_v1`]).
+pub const PALW_FP_V3_DOMAIN_PROMPT_PREFIX: &[u8] = b"misaka-palw/fp-v3/prompt-prefix/v1";
 
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
@@ -140,6 +143,7 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_CANONICAL_ANCHOR,
     PALW_FP_V3_DOMAIN_WORK_ID,
     PALW_FP_V3_DOMAIN_BEACON_FOLD,
+    PALW_FP_V3_DOMAIN_PROMPT_PREFIX,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -497,6 +501,172 @@ pub fn fp_quanta_v3(work_leaves: u64, quantum_leaves: u64, max_quanta_per_receip
 /// cached, so there is no replay to subsidise and nothing to remove.
 pub fn fp_credited_leaves_v1(decode_rules: bool, work_leaves: u64, decode_leaves: u64) -> u64 {
     if decode_rules { decode_leaves } else { work_leaves }
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0145 §5/§6 — the work is DERIVED, and the cache is an execution fact
+// ---------------------------------------------------------------------------------------------
+
+/// **How much of this run's prefill the executor actually had to compute** (ADR-0145 §6).
+///
+/// The mode is DERIVED by the chain, never declared. ADR-0145 asks for it to be explicit —
+/// "a mode the protocol cannot name is a mode it cannot price" — and the temptation is to put a
+/// field on the commitment for the executor to fill in. That is the defect this whole ADR exists
+/// to remove: a miner's word for "that was a cache hit" would be an input to its own price. So the
+/// mode is a *reading* of facts the chain already holds — which prompt prefixes this bond has
+/// already been paid for on this class — and an executor cannot write it, only be caught by it.
+///
+/// The asymmetry that makes a derived mode sufficient: declaring MORE cache only ever lowers the
+/// pay, so nobody lies in that direction; the lie worth telling is "none of this was cached", and
+/// that is the one the chain refutes from its own record rather than believes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwFpExecutionModeV1 {
+    /// Every position of the prompt was evaluated for this claim. The chain holds no paid prefix
+    /// of it from this bond on this class.
+    Uncached = 0,
+    /// The prompt extends a prompt this bond has already been paid for on this class, so the
+    /// shared prefix's leaves are not credited again. `prefix_tokens` says how many.
+    PrefixReused = 1,
+    /// **Not reachable yet, and named rather than implied.** A run that consumed a KV state the
+    /// receipt commits to, which is neither the prompt-prefix case above nor an uncached run: the
+    /// producer holds the state but the chain never paid for the tokens that built it. Deriving it
+    /// needs the receipt to carry a prefix-STATE commitment a seat can replay to, which is a
+    /// change to the commitment's wire (a new object family, per this module's own golden-vector
+    /// rule) and is the half of ADR-0145 §6 this pass does not close. The variant exists so the
+    /// accounting has somewhere to put the answer the moment the evidence arrives; nothing
+    /// constructs it today and `fp_derive_work_v1` never returns it.
+    KvReused = 2,
+}
+
+/// **The work of one free-prompt run, derived** (ADR-0145 I1): what the enumeration says the run
+/// cost, and what the chain will credit once the prefix it has already paid for is removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwFpDerivedWorkV1 {
+    /// `palw_step::step_leaf_count_of_tokens_capped_v1` over the class's graph and the run's two
+    /// committed token counts — the number `work_leaves` must equal.
+    pub total_leaves: u64,
+    /// `total_leaves` minus the prefill of the accounted prefix: the NEW work only.
+    pub credited_leaves: u64,
+    /// The longest prompt prefix this bond has already been paid for on this class, in tokens.
+    pub accounted_prefix_tokens: u32,
+    pub mode: PalwFpExecutionModeV1,
+}
+
+/// **The running commitment to a prompt's first `k` token ids**, evaluated at several `k` in one
+/// pass (ADR-0145 §6: "which KV state was consumed, which token range was newly evaluated").
+///
+/// `c_0 = H_domain(())`, `c_k = H_domain(c_{k-1} ‖ id_k)`. A CHAIN rather than the flat
+/// `prompt_token_ids_hash_v2` for one reason, and it is the reason the whole cache rule is
+/// affordable: a flat digest can only be recomputed from all the ids, so asking "is this prompt an
+/// extension of one I already paid for" at `m` candidate lengths would cost `m` passes over the
+/// prompt, and a peer's carrier decides both `m` and the prompt's length. The chain gives every
+/// prefix's commitment in ONE pass, so the work a carrier can make every node do is bounded by the
+/// prompt length the ruleset already caps — never by how many claims its author is holding open.
+///
+/// `lengths` is answered positionally; a length past `ids.len()` answers the whole prompt's root,
+/// because a prefix longer than the prompt is the prompt. The empty prefix (`k == 0`) answers the
+/// domain's own state, which is the same value for every prompt — a caller comparing roots must
+/// therefore never treat `k == 0` as a match, and [`fp_accounted_prefix_tokens_v1`] does not.
+pub fn fp_prompt_prefix_roots_at_v1(ids: &[u32], lengths: &[u32]) -> Vec<Hash64> {
+    let mut wanted: Vec<(u32, usize)> = lengths.iter().enumerate().map(|(i, k)| (*k, i)).collect();
+    wanted.sort_unstable();
+    let mut out = vec![Hash64::default(); lengths.len()];
+    let mut state = keyed(PALW_FP_V3_DOMAIN_PROMPT_PREFIX);
+    let mut consumed = 0u32;
+    for (k, slot) in wanted {
+        let take = (k as usize).min(ids.len());
+        while (consumed as usize) < take {
+            state.update(&ids[consumed as usize].to_le_bytes());
+            consumed += 1;
+        }
+        out[slot] = finish(state.clone());
+    }
+    out
+}
+
+/// [`fp_prompt_prefix_roots_at_v1`] at the whole prompt — what a claim records so a LATER prompt
+/// of the same bond and class can be recognised as extending it.
+pub fn fp_prompt_prefix_root_v1(ids: &[u32]) -> Hash64 {
+    fp_prompt_prefix_roots_at_v1(ids, &[ids.len().min(u32::MAX as usize) as u32])[0]
+}
+
+/// **The longest prompt this bond has already been paid for on this class that is a prefix of
+/// `ids`** (ADR-0145 §6), or `0` for a run the chain has no paid prefix of.
+///
+/// `already_paid` is `(prompt_tokens, prefix_root)` for every free-prompt claim of the same class
+/// and bond the chain still holds. The comparison is the chain's own record against the chain's own
+/// recomputation from the ids the commitment carries — no field of the commitment says "this was a
+/// cache hit", which is ADR-0145's rule that a miner's word is never an input.
+///
+/// A row whose length is not SHORTER than this prompt is skipped: an equal-length match is the same
+/// prompt, which `DuplicateWork` already refuses, and a longer one is not a prefix of this one.
+pub fn fp_accounted_prefix_tokens_v1(ids: &[u32], already_paid: &[(u32, Hash64)]) -> u32 {
+    let candidates: Vec<u32> =
+        already_paid.iter().filter(|(len, _)| *len > 0 && (*len as usize) < ids.len()).map(|(len, _)| *len).collect();
+    if candidates.is_empty() {
+        return 0;
+    }
+    let roots = fp_prompt_prefix_roots_at_v1(ids, &candidates);
+    let mut best = 0u32;
+    for (i, len) in candidates.iter().enumerate() {
+        if already_paid.iter().any(|(l, root)| l == len && *root == roots[i]) && *len > best {
+            best = *len;
+        }
+    }
+    best
+}
+
+/// **Derive one free-prompt run's work from the class's graph and the run's committed facts.**
+///
+/// `prompt_tokens` and `decode_tokens_executed` are both inside the claim id — the first is a JOB
+/// field bound to the carried ids by `PalwFpCommitmentTxPayloadV3::validate_v3`, the second is the
+/// commitment's own — so neither can be moved after the fact without moving the claim.
+/// `accounted_prefix_tokens` is the chain's reading, not the executor's (see
+/// [`PalwFpExecutionModeV1`]).
+///
+/// `cap` is the class's step ladder, the same one the extraction walk bounds `work_leaves` by: a
+/// derivation that ran past the ladder would be pricing work the court cannot walk to, and
+/// `step_leaf_count_of_tokens_capped_v1` refuses it there rather than here.
+///
+/// An accounted prefix at or above the prompt itself is clamped to the prompt's own length rather
+/// than refused: that is a prompt this bond was already paid for in full, and the honest credit
+/// for re-submitting it is the decode half alone. It cannot be used to make `credited_leaves`
+/// exceed `total_leaves` in either direction, which `the_accounted_prefix_never_pays_more` pins.
+pub fn fp_derive_work_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    accounted_prefix_tokens: u32,
+    cap: u64,
+) -> Result<PalwFpDerivedWorkV1, crate::palw_step::PalwStepError> {
+    let total_leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(profile, prompt_tokens, decode_tokens_executed, cap)?;
+    let prefix = accounted_prefix_tokens.min(prompt_tokens);
+    if prefix == 0 {
+        return Ok(PalwFpDerivedWorkV1 {
+            total_leaves,
+            credited_leaves: total_leaves,
+            accounted_prefix_tokens: 0,
+            mode: PalwFpExecutionModeV1::Uncached,
+        });
+    }
+    // The prefix's own prefill, evaluated at the same ladder and by the same enumeration. It is a
+    // DIFFERENCE of two exact evaluations rather than a proportion, for the reason
+    // `job_leaf_split_capped_v1` gives about the aux series: a `⌈positions / c⌉` term is not
+    // additive, and a proportional split of a non-additive term is a price nobody can reproduce.
+    let prefix_prefill = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(profile, prefix, cap)?;
+    // Saturating: `prefix_prefill` is bounded by the whole job's prefill, which is bounded by
+    // `total_leaves` — but both are `u64` saturations of `u128` sums, so at an unbounded ladder the
+    // two could in principle meet. Crediting zero is the fail-closed direction for a job that large
+    // and no ladder this chain admits reaches it.
+    let credited_leaves = total_leaves.saturating_sub(prefix_prefill);
+    Ok(PalwFpDerivedWorkV1 {
+        total_leaves,
+        credited_leaves,
+        accounted_prefix_tokens: prefix,
+        mode: PalwFpExecutionModeV1::PrefixReused,
+    })
 }
 
 /// The quantum's lottery draw: leading 128 bits (big-endian, matching `palw_ticket_v1`'s reading)
@@ -3079,5 +3249,190 @@ mod fp_answer_tests {
             "an empty seam answer is no answer"
         );
         assert_eq!(palw_fp_committed_output_ids_decode_v1(&fpc, |_| None, crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat), None);
+    }
+
+    // ---- ADR-0145 §5/§6: the work is derived, and a cached prefix is not paid twice ----
+
+    /// The floor's own graph — a real shipped profile, so the numbers below are the numbers the
+    /// seat and the court count and not a synthetic shape chosen to make the arithmetic tidy.
+    fn floor_profile() -> crate::palw_step::PalwShapeProfileV3 {
+        crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("the floor's profile")
+    }
+
+    /// The shipped ruleset's ladder. Pinned because a derivation is only meaningful against the
+    /// ladder the court can actually walk: a run past it must be refused rather than priced, and
+    /// every assertion below is about jobs inside it.
+    const DERIVED_LADDER: u64 = 1 << 26;
+
+    /// A job context carrying only what a leaf count reads, for the one assertion below that needs
+    /// to call `job_leaf_split_capped_v1` directly. Everything else is zero, which is exactly why
+    /// `palw_step` keeps this shape private and exposes counts instead.
+    fn counting_context(prefill: u32, decode: u32) -> crate::palw_v2::PalwJobContextV2 {
+        crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: Vec::new(),
+            job_id: Hash64::default(),
+            job_nullifier: Hash64::default(),
+            assignment_id: Hash64::default(),
+            execution_seed: [0u8; 32],
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: Hash64::default(),
+            trace_scheme_id: Hash64::default(),
+            cu_ruleset_id: Hash64::default(),
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: Hash64::default(),
+            declared_prefill_tokens: prefill,
+            exact_decode_tokens: decode,
+            max_context_tokens: prefill.saturating_add(decode),
+        }
+    }
+
+    /// **ADR-0145 I2: the derivation reads the graph and the two token counts, and nothing else.**
+    ///
+    /// The point of the whole change is that a registrant supplies no number to it — so the
+    /// assertion that matters is that the answer IS the enumeration `palw_step` already performs
+    /// for the seat and the court. A second spelling here would be a second price waiting to
+    /// disagree with the first, which is the defect class this module keeps closing.
+    #[test]
+    fn the_derived_work_is_the_step_enumeration_and_nothing_else() {
+        let profile = floor_profile();
+        for (prompt, decode) in [(1u32, 1u32), (8, 1), (63, 2), (96, 8), (200, 16)] {
+            let work = fp_derive_work_v1(&profile, prompt, decode, 0, DERIVED_LADDER).expect("a floor-sized job enumerates");
+            assert_eq!(
+                work.total_leaves,
+                crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, prompt, decode, DERIVED_LADDER).unwrap(),
+                "the derivation IS the enumeration for ({prompt}, {decode})"
+            );
+            assert_eq!(work.credited_leaves, work.total_leaves, "with no paid prefix, every leaf is new work");
+            assert_eq!(work.mode, PalwFpExecutionModeV1::Uncached);
+            assert_eq!(work.accounted_prefix_tokens, 0);
+        }
+    }
+
+    /// **ADR-0145 §6: what the chain has already bought is not sold again — and can never be sold
+    /// at a LOSS either.**
+    ///
+    /// The upper bound is the one an attacker probes: if an accounted prefix could push
+    /// `credited_leaves` above `total_leaves`, or wrap it, a producer would pad the prefix rather
+    /// than avoid it and the rule would invert. Both directions are pinned, over the degenerate
+    /// prefixes as well (zero, the whole prompt, past the whole prompt).
+    #[test]
+    fn the_accounted_prefix_never_pays_more() {
+        let profile = floor_profile();
+        let (prompt, decode) = (200u32, 8u32);
+        let full = fp_derive_work_v1(&profile, prompt, decode, 0, DERIVED_LADDER).unwrap();
+        let mut previous = full.credited_leaves;
+        for prefix in [1u32, 8, 50, 199, 200, 201, u32::MAX] {
+            let work = fp_derive_work_v1(&profile, prompt, decode, prefix, DERIVED_LADDER).unwrap();
+            assert_eq!(work.total_leaves, full.total_leaves, "the RUN is the same run whatever was cached");
+            assert!(work.credited_leaves <= work.total_leaves, "a cached prefix may never be credited MORE than the run");
+            assert!(work.credited_leaves <= previous, "a longer accounted prefix credits no more than a shorter one");
+            assert_eq!(work.accounted_prefix_tokens, prefix.min(prompt), "a prefix past the prompt IS the prompt");
+            assert_eq!(work.mode, PalwFpExecutionModeV1::PrefixReused);
+            previous = work.credited_leaves;
+        }
+        // A fully cached prompt leaves exactly the decode calls — ADR-0082 Decision 10's numerator
+        // reached from the other side, which is how this pins that the cut is the same cut
+        // `job_leaf_split_capped_v1` makes and not a second one.
+        let all_cached = fp_derive_work_v1(&profile, prompt, decode, prompt, DERIVED_LADDER).unwrap();
+        let (prefill_leaves, decode_leaves) =
+            crate::palw_step::job_leaf_split_capped_v1(&profile, &counting_context(prompt, decode), DERIVED_LADDER).unwrap();
+        assert_eq!(prefill_leaves + decode_leaves, all_cached.total_leaves);
+        assert_eq!(all_cached.credited_leaves, decode_leaves, "a fully cached prompt earns its decode calls and nothing else");
+    }
+
+    /// **ADR-0145 §6: the chain reads the cache off its own record, and a stranger's prompt is not
+    /// a prefix of anything.**
+    ///
+    /// `fp_accounted_prefix_tokens_v1` is that reading. It takes what the chain already paid this
+    /// bond for on this class and the prompt in front of it, and answers the longest prefix that
+    /// matches — never a number anybody declared.
+    #[test]
+    fn a_paid_prefix_is_read_from_the_chains_own_record_and_only_from_it() {
+        let ids: Vec<u32> = (0..64).collect();
+        let short = fp_prompt_prefix_root_v1(&ids[..8]);
+        let long = fp_prompt_prefix_root_v1(&ids[..40]);
+        assert_eq!(fp_accounted_prefix_tokens_v1(&ids, &[]), 0, "nothing paid, nothing accounted");
+        assert_eq!(fp_accounted_prefix_tokens_v1(&ids, &[(8, short)]), 8);
+        assert_eq!(fp_accounted_prefix_tokens_v1(&ids, &[(8, short), (40, long)]), 40, "the LONGEST paid prefix");
+        // A row whose root is not this prompt's prefix is not a prefix of it, however plausible its
+        // length — this is what keeps the rule from becoming "a bond holding one long claim gets a
+        // discount on every later one".
+        assert_eq!(fp_accounted_prefix_tokens_v1(&ids, &[(40, short)]), 0, "the length must be matched by the commitment");
+        let stranger: Vec<u32> = (1000..1064).collect();
+        assert_eq!(fp_accounted_prefix_tokens_v1(&stranger, &[(8, short), (40, long)]), 0, "a different prompt shares no prefix");
+        // A row of the SAME length as the prompt is the same prompt, which `DuplicateWork` already
+        // refuses; accounting it here would price a claim the duplicate rule is about to refuse, so
+        // it is skipped and the two rules keep one answer between them.
+        assert_eq!(fp_accounted_prefix_tokens_v1(&ids[..8], &[(8, short)]), 0);
+        // And a row longer than the prompt cannot be a prefix of it.
+        assert_eq!(fp_accounted_prefix_tokens_v1(&ids[..20], &[(40, long)]), 0);
+    }
+
+    /// **The 2026-09-19 audit's C4, priced under the new rule.**
+    ///
+    /// The audit measured the padded-prefix claim: the same answer with a longer prefix moved
+    /// `work_leaves` 965,104 → 51,645,040 — 62× — while a producer holding the prefix's KV cache
+    /// spent 3.09 G MAC-eq in every row. This asserts the SHAPE of the fix rather than the audit's
+    /// figures, which were measured on the A16 class at its own geometry while this runs on the
+    /// floor's: a second claim over a prompt whose prefix the chain already bought is credited for
+    /// the extension only.
+    #[test]
+    fn a_padded_prefix_the_chain_already_bought_is_credited_for_the_extension_only() {
+        let profile = floor_profile();
+        let ids: Vec<u32> = (0..300).collect();
+        let paid = [(250u32, fp_prompt_prefix_root_v1(&ids[..250]))];
+        let accounted = fp_accounted_prefix_tokens_v1(&ids, &paid);
+        assert_eq!(accounted, 250);
+        let naive = fp_derive_work_v1(&profile, 300, 4, 0, DERIVED_LADDER).unwrap();
+        let honest = fp_derive_work_v1(&profile, 300, 4, accounted, DERIVED_LADDER).unwrap();
+        assert_eq!(naive.total_leaves, honest.total_leaves, "the same run, priced two ways");
+        assert!(
+            honest.credited_leaves * 4 < naive.credited_leaves,
+            "crediting the extension only must be a large cut, not a rounding: {} vs {}",
+            honest.credited_leaves,
+            naive.credited_leaves
+        );
+        assert_eq!(honest.mode, PalwFpExecutionModeV1::PrefixReused);
+    }
+
+    /// **The prefix commitment is a CHAIN, and the chain is what makes the rule affordable.**
+    ///
+    /// One pass over the prompt answers every candidate length, so the work a peer's carrier can
+    /// make every node do is bounded by the prompt length the ruleset already caps. Two properties
+    /// are pinned: the multi-length read agrees with the single-length one at every length and in
+    /// any order, and the empty prefix is a constant — which is why
+    /// `fp_accounted_prefix_tokens_v1` never treats a zero-length row as a match, since every
+    /// prompt would match it.
+    #[test]
+    fn the_prefix_commitment_is_one_pass_and_the_empty_prefix_is_not_a_match() {
+        let ids: Vec<u32> = (7..71).collect();
+        let lengths: Vec<u32> = vec![64, 1, 33, 0, 17];
+        let batch = fp_prompt_prefix_roots_at_v1(&ids, &lengths);
+        for (i, k) in lengths.iter().enumerate() {
+            assert_eq!(batch[i], fp_prompt_prefix_root_v1(&ids[..*k as usize]), "length {k} read out of order");
+        }
+        let other: Vec<u32> = (100..164).collect();
+        assert_eq!(
+            fp_prompt_prefix_roots_at_v1(&other, &[0])[0],
+            fp_prompt_prefix_roots_at_v1(&ids, &[0])[0],
+            "the empty prefix is the domain's own state, so it can never distinguish two prompts"
+        );
+        assert_eq!(fp_accounted_prefix_tokens_v1(&ids, &[(0, fp_prompt_prefix_roots_at_v1(&ids, &[0])[0])]), 0);
+    }
+
+    /// **The `KvReused` mode exists and nothing derives it**, which is the honest state of
+    /// ADR-0145 §6 after this pass: the chain can see a prompt that extends one it has paid for,
+    /// and it cannot see a KV state the receipt never committed to. Pinned so the gap cannot close
+    /// by accident, and so whoever makes it derivable has to come here and say what changed.
+    #[test]
+    fn nothing_derives_the_kv_reused_mode_yet() {
+        let profile = floor_profile();
+        for prefix in [0u32, 1, 100] {
+            let work = fp_derive_work_v1(&profile, 100, 4, prefix, DERIVED_LADDER).unwrap();
+            assert_ne!(work.mode, PalwFpExecutionModeV1::KvReused);
+        }
     }
 }

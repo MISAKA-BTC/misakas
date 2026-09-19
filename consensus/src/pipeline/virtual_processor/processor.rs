@@ -433,6 +433,10 @@ pub struct VirtualStateProcessor {
     /// it a registered class's panel and its licensing quorum must each name a seat the registrant
     /// does not hold, and a registered class is a `Candidate` until one is ready for it.
     pub(super) palw_admission_independence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0145 §5/§6: `Params::palw_fp_derived_work` — dormant everywhere; past it a free-prompt
+    /// claim's work is derived from the class's graph and a prefix already paid for is not paid
+    /// again.
+    pub(super) palw_fp_derived_work: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
@@ -950,6 +954,7 @@ impl VirtualStateProcessor {
             palw_artifact_root_ownership: params.palw_artifact_root_ownership,
             palw_operator_id_unique: params.palw_operator_id_unique,
             palw_admission_independence: params.palw_admission_independence,
+            palw_fp_derived_work: params.palw_fp_derived_work,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
             palw_readiness_v2: params.palw_readiness_v2,
@@ -7763,6 +7768,7 @@ impl VirtualStateProcessor {
             // the node would refuse its own tip. `None` on every shipped preset.
             canonical_work_daa: self.palw_canonical_work_daa,
             admission_independence_active: self.palw_admission_independence_at(daa_score),
+            fp_derived_work_active: self.palw_fp_derived_work_at(daa_score),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
@@ -8067,6 +8073,12 @@ impl VirtualStateProcessor {
     /// hold at `daa_score`.
     pub(super) fn palw_admission_independence_at(&self, daa_score: u64) -> bool {
         self.palw_admission_independence.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// ADR-0145 §5/§6 at the FOLDING block's DAA — candidate-scoped, like every rule on this lane:
+    /// two nodes folding one block must price it identically however far either has synced.
+    pub(super) fn palw_fp_derived_work_at(&self, daa_score: u64) -> bool {
+        self.palw_fp_derived_work.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// ADR-0137: `W₀` for a block of `daa_score` paying `subsidy`, where the work target is in
@@ -8931,6 +8943,20 @@ impl VirtualStateProcessor {
             |class_id| kaspa_consensus_core::palw_fp_objects_v3::PalwFpClassCapsV1 {
                 step_ladder: state.class_step_ladder_v1(class_id, ladder),
                 held: state.class_is_held_v1(class_id),
+                // **ADR-0145 §5: past the fence the walk prices the run itself** (the 2026-09-19
+                // reward audit's F2). Three states, at the ACCEPTING block's DAA like every rule
+                // on this lane: below the fence the declared leaves ride as they always have;
+                // past it the class's published graph is what counts them; past it with no graph
+                // published the commitment is skipped and the carrier says so, which is the
+                // operator's cue to carry one `ClassLaneCertified` for the class.
+                derived_work: if self.palw_fp_derived_work_at(block_daa) {
+                    match state.fp_work_profile_of(class_id) {
+                        Some(profile) => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Derived(profile),
+                        None => kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Unpublished,
+                    }
+                } else {
+                    kaspa_consensus_core::palw_fp_objects_v3::PalwFpDerivedWorkCapV1::Declared
+                },
             },
             // **ADR-0044 Decision 9's two advertised caps, at the same block's DAA** (mainnet audit
             // 2026-09-06, L-2). The bundle's `max_prompt_tokens` and `max_decode_tokens` are inside

@@ -1850,6 +1850,10 @@ mod certification_object_tests {
             executor_pubkey: pubkey.clone(),
             work_leaves: run.facts.step_leaf_count,
             prompt_token_ids_hash: job.prompt_token_ids_hash,
+            // ADR-0145 §5/§6's two execution facts, from the run's own job. Below the derived-work
+            // fence nothing reads them; carried honestly so this drill stays a drill.
+            prompt_tokens: job.prompt_tokens,
+            prompt_token_ids: ids.clone(),
             decode_tokens_executed: run.facts.decode_tokens_executed,
             trace_root: run.outcome.trace_root,
             output_root: run.outcome.output_root,

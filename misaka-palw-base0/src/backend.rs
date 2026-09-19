@@ -2375,6 +2375,12 @@ mod end_to_end_tests {
             executor_pubkey: pubkey.clone(),
             work_leaves: commitment.work_leaves,
             prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+            // ADR-0145 §5/§6's two execution facts, carried from the run like every other field
+            // here. This fold is below the derived-work fence so nothing reads them, but a fixture
+            // that made them up would be the one place on the end-to-end path where a field is not
+            // the execution's.
+            prompt_tokens: commitment.job.prompt_tokens,
+            prompt_token_ids: prompt.iter().map(|t| *t as u32).collect(),
             decode_tokens_executed: commitment.decode_tokens_executed,
             trace_root: commitment.trace_root,
             output_root: commitment.output_root,

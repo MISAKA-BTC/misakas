@@ -1922,6 +1922,41 @@ pub struct Params {
     /// decode half and an engine implements `decode_token_select_v2`.
     pub palw_fp_decode_rules: Option<ForkActivation>,
 
+    /// **ADR-0145 §5/§6: the free-prompt lane's work is DERIVED, and a cached prefix is not paid
+    /// twice.** The 2026-09-19 reward audit's F2, which is CRITICAL for the lane ADR-0144 makes the
+    /// product.
+    ///
+    /// Dormant — every shipped preset — `work_leaves` is the executor's own field and the
+    /// acceptance walk never recomputes it; the repo's own test multiplied it by ten and asserted
+    /// the walk still passed. Active, three things move together because they are one accounting
+    /// move:
+    ///
+    /// * the extraction walk carries the run's PROMPT LENGTH onto the consensus object, which it
+    ///   already holds and used to drop — without it the transition has one of the two execution
+    ///   facts a derivation needs;
+    /// * the transition recomputes `work_leaves` from the class's graph and those two facts
+    ///   (`palw_freeprompt_v3::fp_derive_work_v1`) and REFUSES a commitment that disagrees. Not a
+    ///   silent correction: a silent correction is a wire format nobody reads (ADR-0145 I1);
+    /// * the credited leaves are NEW WORK ONLY — a prompt that extends a prompt this bond has
+    ///   already been paid for on this class is credited for the extension, not for the prefix
+    ///   (ADR-0145 §6).
+    ///
+    /// **What arming it requires, and why it is not the `palw_fp_decode_rules` shape.** The
+    /// derivation needs the class's graph, and the chain did not keep one: a registration's
+    /// carriage and a lane certification both CARRY a profile and neither was stored. Past this
+    /// fence a free-prompt lane certification writes the profile into the rooted
+    /// `fp_work_profiles` index, and a class already certified may carry a second
+    /// `ClassLaneCertified` for the sole purpose of publishing it — permissionless, signature-free
+    /// and checkable, because a class id IS its profile's id. A commitment of a class with no
+    /// profile row is refused BY NAME and the refusal says what to carry. That is the difference
+    /// from `palw_fp_decode_rules` above, which arms a numerator whose inputs no object can ever
+    /// supply: this one is fail-closed and openable by anyone, and the drill that crosses the fence
+    /// publishes the profiles before the first commitment.
+    ///
+    /// A bare fence, top level, `None` on every shipped preset; hashed Some-only, so a build with
+    /// it unset fingerprints byte-identically to a build without the field.
+    pub palw_fp_derived_work: Option<ForkActivation>,
+
     /// **ADR-0096 Decisions 6–8's fence: a free-prompt job may carry a DECODE CONSTRAINT, and the
     /// committed token is the argmax over the lanes the constraint admits.**
     ///
@@ -4268,6 +4303,13 @@ impl Params {
         if self.palw_fp_decode_rules == Some(ForkActivation::never()) {
             self.palw_fp_decode_rules = None;
         }
+        // ADR-0145 §5/§6's derived-work fence, likewise. It is hashed Some-only, so without this
+        // collapse a normalised `Some(never())` writes bytes a build without the field never
+        // writes, and the two builds refuse each other on deploy day over a height neither has
+        // reached.
+        if self.palw_fp_derived_work == Some(ForkActivation::never()) {
+            self.palw_fp_derived_work = None;
+        }
         // ADR-0096 Decisions 6–8, likewise.
         if self.palw_fp_decode_constraint == Some(ForkActivation::never()) {
             self.palw_fp_decode_constraint = None;
@@ -4875,6 +4917,25 @@ impl Params {
         self.palw_fp_decode_rules_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// **ADR-0145 §5/§6's fence with the mode condition already folded in** — `Some` only on a
+    /// `ConsensusV2` network that has armed it. The ONE place derived free-prompt work is decided;
+    /// the extraction walk and the transition switch on this and never on the raw field.
+    ///
+    /// The mode condition is not decoration: the derivation reads a class's graph out of chain
+    /// state, and a network not running `ConsensusV2` has no class state to read.
+    pub fn palw_fp_derived_work_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_fp_derived_work) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0145's derived free-prompt work in force at `daa_score`? `false` on every shipped
+    /// preset.
+    pub fn palw_fp_derived_work_active_at(&self, daa_score: u64) -> bool {
+        self.palw_fp_derived_work_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0096 Decisions 6–8's fence with the mode condition already folded in — `Some` only on
     /// a `ConsensusV2` network that has armed it. The ONE place a decode constraint is decided;
     /// the transition, the court and the entrance switch on this and never on the raw field.
@@ -5240,6 +5301,7 @@ impl Params {
             palw_kary_court,
             palw_court_responder_coverage,
             palw_fp_decode_rules,
+            palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_shard_licensing,
@@ -5357,6 +5419,7 @@ impl Params {
             ("palw_kary_court", *palw_kary_court),
             ("palw_court_responder_coverage", *palw_court_responder_coverage),
             ("palw_fp_decode_rules", *palw_fp_decode_rules),
+            ("palw_fp_derived_work", *palw_fp_derived_work),
             ("palw_fp_decode_constraint", *palw_fp_decode_constraint),
             ("palw_shard_court", *palw_shard_court),
             ("palw_shard_licensing", *palw_shard_licensing),
@@ -5543,6 +5606,12 @@ impl Params {
         if let Some(decode) = self.palw_fp_decode_rules {
             h.write(b"palw_fp_decode_rules");
             h.write(decode.daa_score().to_le_bytes());
+        }
+        // ADR-0145 §5/§6's derived-work fence, NAMED for the same reason: it changes what a claim
+        // is paid for and what a class must publish before it may be paid at all.
+        if let Some(derived) = self.palw_fp_derived_work {
+            h.write(b"palw_fp_derived_work");
+            h.write(derived.daa_score().to_le_bytes());
         }
         // ADR-0096 Decisions 6–8's fence, NAMED for the same reason: it changes what token a
         // class may commit and how the answer is rendered, so an operator reading the schedule
@@ -5804,6 +5873,7 @@ impl Params {
             palw_kary_court,
             palw_court_responder_coverage,
             palw_fp_decode_rules,
+            palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_shard_licensing,
@@ -6234,6 +6304,10 @@ impl Params {
         if let Some(activation) = palw_fp_decode_rules.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0145 §5/§6's derived-work fence. Some-only, likewise.
+        if let Some(activation) = palw_fp_derived_work.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0096 Decisions 6–8. Some-only, likewise.
         if let Some(activation) = palw_fp_decode_constraint.as_mut() {
             fork(activation, visit);
@@ -6569,6 +6643,7 @@ impl Params {
             palw_kary_court,
             palw_court_responder_coverage,
             palw_fp_decode_rules,
+            palw_fp_derived_work,
             palw_fp_decode_constraint,
             palw_shard_court,
             palw_shard_licensing,
@@ -6987,6 +7062,13 @@ impl Params {
         // fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_fp_decode_rules {
             h.write(b"palw_fp_decode_rules");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0145 §5/§6, Some-only for the same reason: arming it changes what a claim is paid
+        // for, and every shipped preset leaves it `None` and fingerprints byte-identically to a
+        // build without the field.
+        if let Some(activation) = palw_fp_derived_work {
+            h.write(b"palw_fp_derived_work");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0096 Decisions 6–8, Some-only for the same reason: arming it changes what token a
@@ -7492,6 +7574,7 @@ impl Params {
             palw_kary_court: self.palw_kary_court,
             palw_court_responder_coverage: self.palw_court_responder_coverage,
             palw_fp_decode_rules: self.palw_fp_decode_rules,
+            palw_fp_derived_work: self.palw_fp_derived_work,
             palw_fp_decode_constraint: self.palw_fp_decode_constraint,
             palw_shard_court: self.palw_shard_court,
             palw_shard_licensing: self.palw_shard_licensing,
@@ -8443,6 +8526,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_kary_court: None,
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
+    palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
@@ -8644,6 +8728,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_kary_court: None,
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
+    palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
@@ -8827,6 +8912,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_kary_court: None,
     palw_court_responder_coverage: None,
     palw_fp_decode_rules: None,
+    palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
@@ -13520,6 +13606,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // `PalwClassStateV2`. A fence armed without a shipping thing to obey it is the ADR-0065 D1
     // mistake.
     palw_fp_decode_rules: None,
+    palw_fp_derived_work: None,
     palw_fp_decode_constraint: None,
     palw_shard_court: None,
     palw_shard_licensing: None,
@@ -16188,6 +16275,66 @@ mod consensus_params_id_tests {
             crate::palw_mode_v2::palw_ruleset_id_v2(flat),
             "the form is inside the ruleset id"
         );
+    }
+
+    /// **ADR-0145 §5/§6's derived-work fence is dormant on every shipped preset, and all four
+    /// places a fence has to reach are checked here.**
+    ///
+    /// The four are a set, not a list: the field, the `for_each_fence` arm, the Some-only write
+    /// into the identity, and the `never()` collapse. Miss the collapse and a build that
+    /// normalises `Some(never())` writes bytes a build without the field never writes, so the two
+    /// refuse each other on deploy day over a height neither has reached. Miss the `for_each_fence`
+    /// arm and a re-pin silently leaves the fence where it was. Both are caught below.
+    ///
+    /// The sharper reason this fence needs it: past it a free-prompt claim is paid for work the
+    /// chain DERIVES, so a node that disagreed about the fence would compute a different state
+    /// root from a block it had accepted.
+    #[test]
+    fn the_fp_derived_work_fence_is_dormant_and_visible_the_moment_it_is_not() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_fp_derived_work.is_none(), "{name} must leave ADR-0145 §5/§6 dormant");
+            assert!(!shipped.palw_fp_derived_work_active_at(u64::MAX), "{name}: a dormant fence is never active");
+        }
+        // The ACTIVATION half needs a ConsensusV2 network — the fence folds the mode in, because
+        // the derivation reads a class's graph out of chain state and a network with no class
+        // state has none to read.
+        let shipped = devnet_shipped_params();
+        assert!(shipped.palw_fp_derived_work.is_none(), "the bundled devnet leaves it dormant too");
+        let mut armed = shipped.clone();
+        armed.palw_fp_derived_work = Some(ForkActivation::new(9_000_000));
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming derived work must move the fingerprint");
+        assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
+        assert!(armed.palw_fp_derived_work_active_at(9_000_000));
+        assert!(!armed.palw_fp_derived_work_active_at(8_999_999));
+        // It assembles: unlike `palw_fp_decode_rules` above, the rule this fence arms is one this
+        // build can reach — the transition derives the work, the walk skips a carrier that
+        // disagrees, and a class that has published no graph is refused by a name that says what
+        // to carry. A fence whose only reachable effect is a refusal is the mistake that one is
+        // kept dormant by; this one is not that shape, and the assembly gate agrees.
+        armed.validate_palw_v2().expect("the derived-work fence is armable by a build that carries its rule");
+        // The collapse, observable through `consensus_identity_id`, which is where the normalizer
+        // runs (`consensus_params_id` hashes the raw field and never normalizes).
+        let mut never_armed = shipped.clone();
+        never_armed.palw_fp_derived_work = Some(ForkActivation::never());
+        assert_eq!(
+            never_armed.consensus_identity_id(),
+            shipped.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+        let mut at_genesis = shipped.clone();
+        at_genesis.palw_fp_derived_work = Some(ForkActivation::always());
+        assert_ne!(
+            at_genesis.consensus_identity_id(),
+            shipped.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about what a claim is paid for"
+        );
+        // And the fence's HEIGHT reaches `for_each_fence`: two builds scheduling it at different
+        // heights must be two different fingerprints, or a re-pin would move nothing.
+        let mut later = shipped.clone();
+        later.palw_fp_derived_work = Some(ForkActivation::new(9_000_001));
+        assert_ne!(armed.consensus_params_id(), later.consensus_params_id(), "the height is inside the fingerprint");
     }
 
     /// **ADR-0082 Decisions 10/11's fence is dormant on every shipped preset and visible the

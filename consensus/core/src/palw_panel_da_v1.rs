@@ -521,6 +521,11 @@ mod tests {
             work_leaves: 60,
             // The whole of what a `PanelDa` claim publishes about its prompt.
             prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(&prompt()),
+            // A `PanelDa` claim's ids are exactly what does NOT ride, which is why past ADR-0145's
+            // derived-work fence such a claim is refused by name rather than assumed uncached.
+            // This fixture folds below that fence, where the lane prices the carried leaves.
+            prompt_tokens: prompt().len() as u32,
+            prompt_token_ids: Vec::new(),
             decode_tokens_executed: 8,
             trace_root: h64(41),
             output_root: h64(42),

@@ -13452,6 +13452,10 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
             executor_pubkey: harness_pubkey.clone(),
             work_leaves: 60,
             prompt_token_ids_hash: h64(0x7E),
+            // ADR-0145 §5's two execution facts, unread below the derived-work fence — which this
+            // harness is, since it drives `apply_palw_transition_v2` directly.
+            prompt_tokens: 0,
+            prompt_token_ids: Vec::new(),
             decode_tokens_executed: 3,
             trace_root: h64(41),
             output_root: h64(42),

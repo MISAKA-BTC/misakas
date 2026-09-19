@@ -1462,6 +1462,75 @@ pub fn prefill_leaf_count_v1(profile: &PalwShapeProfileV3, context: &PalwJobCont
     job_leaf_split_v1(profile, context).map(|(prefill, _)| prefill)
 }
 
+/// **The two numbers a leaf count actually reads**, as a context the enumeration accepts.
+///
+/// `step_leaf_count_capped_v1` and `job_leaf_split_capped_v1` read exactly
+/// `declared_prefill_tokens` and `exact_decode_tokens` off the context — `kv_aux_leaf_count` reads
+/// the same pair and nothing else — so a caller holding only the two counts can ask the shipped
+/// enumeration for its answer without inventing identities it does not have.
+///
+/// Private on purpose. Every other field is zero here, and a context with a zeroed `job_id`,
+/// `execution_seed` and `prompt_token_ids_hash` is not a binding anything may be checked against;
+/// handing one out would be an invitation to bind evidence to it. The public entries below return
+/// counts, which is the only thing this shape can honestly answer.
+fn leaf_count_context_v1(prefill_tokens: u32, decode_tokens: u32) -> PalwJobContextV2 {
+    PalwJobContextV2 {
+        version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+        network_id: Vec::new(),
+        job_id: Hash64::default(),
+        job_nullifier: Hash64::default(),
+        assignment_id: Hash64::default(),
+        execution_seed: [0u8; 32],
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: Hash64::default(),
+        trace_scheme_id: Hash64::default(),
+        cu_ruleset_id: Hash64::default(),
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: Hash64::default(),
+        declared_prefill_tokens: prefill_tokens,
+        exact_decode_tokens: decode_tokens,
+        // Unread by every leaf count in this module; carried at the sum so a future reader that
+        // DOES consult it sees a value consistent with the two counts rather than a zero that
+        // silently means "no budget".
+        max_context_tokens: prefill_tokens.saturating_add(decode_tokens),
+    }
+}
+
+/// **[`step_leaf_count_capped_v1`] from the two token counts alone** — the derivation a validating
+/// node runs when it holds a class's graph and the execution facts a commitment states, and holds
+/// no job envelope to build a context from.
+///
+/// It is the same function, not a second one: the whole point of deriving work instead of reading
+/// a declared field is that the derivation a producer, a seat and the chain run is ONE
+/// enumeration. A second spelling here would recreate exactly the disagreement the derivation
+/// exists to remove.
+pub fn step_leaf_count_of_tokens_capped_v1(
+    profile: &PalwShapeProfileV3,
+    prefill_tokens: u32,
+    decode_tokens: u32,
+    cap: u64,
+) -> Result<u64, PalwStepError> {
+    step_leaf_count_capped_v1(profile, &leaf_count_context_v1(prefill_tokens, decode_tokens), cap)
+}
+
+/// **The PREFILL call's leaves for a prompt of `prefill_tokens`**, at a stated ladder.
+///
+/// The decode count is `1` — zero decode CALLS (`exact_decode_tokens.saturating_sub(1)`) — so this
+/// is `job_leaf_split_capped_v1`'s prefill half evaluated on the prefill alone, which is what
+/// [`job_leaf_split_capped_v1`] itself computes it as. It answers "what did the first `k` tokens of
+/// this prompt cost", which is the quantity a cached prefix must be subtracted at: the prefix's
+/// positions and the logits row its last position carries are precisely the leaves a producer
+/// holding that prefix's KV state does not recompute.
+pub fn prefill_leaf_count_of_tokens_capped_v1(
+    profile: &PalwShapeProfileV3,
+    prefill_tokens: u32,
+    cap: u64,
+) -> Result<u64, PalwStepError> {
+    job_leaf_split_capped_v1(profile, &leaf_count_context_v1(prefill_tokens, 1), cap).map(|(prefill, _)| prefill)
+}
+
 /// The pinned enumeration: main leaves ordered call-major → position → global node slot →
 /// tile; the KV aux series appended after all main leaves, ordered (attention layer, kv head,
 /// K then V, chunk). Returns the coordinates of a main leaf, or `None` for aux leaves (they

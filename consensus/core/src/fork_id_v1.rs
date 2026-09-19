@@ -636,6 +636,7 @@ mod tests {
             "palw_kary_court" => params.palw_kary_court = Some(at),
             "palw_court_responder_coverage" => params.palw_court_responder_coverage = Some(at),
             "palw_fp_decode_rules" => params.palw_fp_decode_rules = Some(at),
+            "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),
             "palw_fp_decode_constraint" => params.palw_fp_decode_constraint = Some(at),
             "palw_shard_court" => params.palw_shard_court = Some(at),
             "palw_shard_licensing" => params.palw_shard_licensing = Some(at),
