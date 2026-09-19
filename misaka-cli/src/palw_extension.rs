@@ -73,6 +73,53 @@ fn leak(s: &str) -> &'static str {
     Box::leak(s.to_owned().into_boxed_str())
 }
 
+/// **The class a manifest describes, as the entry `misaka model add` walks** — for a model this
+/// build's catalog does not carry, which is what makes the operator's own command permissionless
+/// rather than only the chain.
+///
+/// `model add` used to resolve its argument against the compiled-in catalog and nothing else, so a
+/// model the build did not ship needed a new build before its owner could use the command — while
+/// the chain itself admitted the class from its carriage all along, and `extension submit` built the
+/// same registration from a manifest. This is that path's front half, shared rather than restated:
+/// the manifest is verified at `Full` depth at the node's DAA and must classify `Expressible` with
+/// no refusal, exactly what `submit` requires, so `model add` cannot register what `submit` would
+/// refuse. Returns the entry, the root the manifest pins, and whether the build's catalog also
+/// carries the class (a manifest for a catalogued model is legal and decides the root the same way).
+pub(crate) fn manifest_class_entry_v1(
+    path: &Path,
+    network: NetworkId,
+    daa_score: u64,
+) -> Result<(misaka_palw_sdk::PalwClassEntryV1, kaspa_consensus_core::Hash64, bool), CliError> {
+    let mf = read_manifest(path)?;
+    let net = network_of(&mf)?;
+    if net != network {
+        return Err(CliError::new(
+            exit::NETWORK_MISMATCH,
+            format!("the manifest is for {net} and this profile's network is {network}"),
+        ));
+    }
+    if !matches!(mf.parsed.manifest.kind, PalwExtensionKindV1::ModelClass | PalwExtensionKindV1::ContextProfile) {
+        return Err(CliError::new(
+            exit::EXTENSION_REFUSED,
+            format!("a {} manifest describes no class to register — `misaka palw extension submit` files it", mf.parsed.manifest.kind),
+        ));
+    }
+    let env = PalwExtensionEnvV1 { network_id: net, daa_score: Some(daa_score), chain_terms: None };
+    let report = verify_parsed_v1(&mf.parsed, &mf.dir, &env, PalwExtensionDepthV1::Full)
+        .map_err(|e| CliError::new(exit::EXTENSION_REFUSED, format!("{}: {e}", mf.path.display())))?;
+    exit_for(&report)?;
+    let inputs =
+        class_registration_inputs_v1(&mf.parsed, &mf.dir, &env).map_err(|e| CliError::new(exit::EXTENSION_REFUSED, e.to_string()))?;
+    let entry = misaka_palw_sdk::PalwClassEntryV1 {
+        model_id: leak(&inputs.model_id),
+        lineage_id: leak(&inputs.lineage_id),
+        profile: inputs.profile.clone(),
+        canonical_job: inputs.canonical_job,
+        needs_artifact_file: inputs.needs_artifact_file,
+    };
+    Ok((entry, inputs.artifact_root, inputs.in_build_table))
+}
+
 fn print_report(ctx: &Ctx, json: bool, report: &PalwExtensionReportV1, extra: serde_json::Value) {
     if json_mode(ctx, json) {
         let mut value = serde_json::to_value(report).unwrap_or(serde_json::Value::Null);
@@ -634,4 +681,57 @@ pub fn receipt_verify(ctx: &Ctx, receipt: &Path, manifest: Option<&Path>, json: 
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc_manifest(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../docs/extension-manifests").join(name)
+    }
+
+    /// `model add --manifest` refuses what `extension submit` would refuse, before any node is asked
+    /// for anything: a manifest written for another network, and a manifest that is not a class.
+    #[test]
+    fn a_manifest_names_its_network_and_must_describe_a_class() {
+        let t11: NetworkId = "testnet-11".parse().expect("a network id");
+        let devnet: NetworkId = "devnet".parse().expect("a network id");
+        let wrong_net = manifest_class_entry_v1(&doc_manifest("context-profile.json"), devnet, 0).expect_err("another network");
+        assert_eq!(wrong_net.code, exit::NETWORK_MISMATCH, "{}", wrong_net.msg);
+        let not_a_class =
+            manifest_class_entry_v1(&doc_manifest("family-certification.json"), t11, 0).expect_err("a family is not a class");
+        assert_eq!(not_a_class.code, exit::EXTENSION_REFUSED, "{}", not_a_class.msg);
+        assert!(not_a_class.msg.contains("extension submit"), "and it says which command files it: {}", not_a_class.msg);
+    }
+
+    /// **A model the build's catalog does not carry becomes a `model add` entry** — the A16 dense
+    /// row projected at a width no catalog row spells, verified at Full depth against the artifact.
+    /// Needs the 1.7 GiB published artifact, so it runs where the file is:
+    /// `MISAKA_QWEN25_A16_ARTIFACT=/path/to/qwen25-1.5b.palwart cargo test -p misaka-cli -- --ignored`.
+    #[test]
+    #[ignore = "needs the published Qwen2.5-1.5B A16 artifact; set MISAKA_QWEN25_A16_ARTIFACT"]
+    fn a_model_the_catalog_does_not_carry_is_added_from_its_manifest() {
+        let Ok(artifact) = std::env::var("MISAKA_QWEN25_A16_ARTIFACT") else { return };
+        let dir = std::env::temp_dir().join(format!("misaka-model-add-manifest-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(doc_manifest("context-profile.json")).unwrap()).unwrap();
+        // SA-2: a manifest reads nothing but files beside it, and a symlink resolves to where it
+        // points, so the artifact is HARD-linked in (same volume; no copy of 1.7 GiB).
+        let _ = std::fs::remove_file(dir.join("artifact.palwart"));
+        std::fs::hard_link(&artifact, dir.join("artifact.palwart")).expect("the temp dir is on the artifact's volume");
+        manifest["artifact"]["path"] = serde_json::Value::String("artifact.palwart".to_string());
+        manifest["artifact"]["bytes"] = serde_json::json!(std::fs::metadata(&artifact).unwrap().len());
+        let path = dir.join("context-profile.json");
+        std::fs::write(&path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let t11: NetworkId = "testnet-11".parse().unwrap();
+        let (entry, root, in_catalog) = manifest_class_entry_v1(&path, t11, 1).expect("the manifest verifies at Full depth");
+        let projected = kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v1(24).unwrap();
+        assert_eq!(entry.profile, projected, "the entry is the projection the manifest names");
+        assert_eq!(entry.class_id(), projected.shape_profile_id());
+        assert!(!in_catalog, "no catalog row spells this width — which is the point");
+        assert_eq!(root.to_string(), manifest["artifact"]["root"].as_str().unwrap(), "and the root is the one the manifest pins");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

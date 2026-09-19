@@ -553,6 +553,11 @@ enum ModelCmd {
         /// The model's artifact file (a model that is not derived needs it to register).
         #[arg(long, value_name = "FILE")]
         artifact: Option<String>,
+        /// A model this build's catalog does not carry: an ADR-0108 class manifest (inline profile,
+        /// canonical job, artifact root). Verified at Full depth first, exactly as `misaka palw
+        /// extension submit` verifies it — no new build is needed to add a model.
+        #[arg(long, value_name = "FILE", conflicts_with = "model")]
+        manifest: Option<std::path::PathBuf>,
         /// Also certify the free-prompt lane.
         #[arg(long)]
         prompt_lane: bool,
@@ -2304,15 +2309,23 @@ async fn main() -> std::process::ExitCode {
             Ok(p) => operator::market::model_status(&ctx, p, &model).await,
             Err(e) => Err(e),
         },
-        Command::Model(ModelCmd::Add { model, artifact, prompt_lane, seat_ms_per_position, yes, no_wait, profile: args }) => {
-            match profile(&args) {
-                Ok(p) => {
-                    let a = operator::model_add::ModelAddArgs { model, artifact, prompt_lane, seat_ms_per_position, yes, no_wait };
-                    operator::model_add::run(&ctx, p, a).await
-                }
-                Err(e) => Err(e),
+        Command::Model(ModelCmd::Add {
+            model,
+            artifact,
+            manifest,
+            prompt_lane,
+            seat_ms_per_position,
+            yes,
+            no_wait,
+            profile: args,
+        }) => match profile(&args) {
+            Ok(p) => {
+                let a =
+                    operator::model_add::ModelAddArgs { model, artifact, manifest, prompt_lane, seat_ms_per_position, yes, no_wait };
+                operator::model_add::run(&ctx, p, a).await
             }
-        }
+            Err(e) => Err(e),
+        },
         Command::Model(ModelCmd::Market(MarketCmd::Open { model, line, seed, yes, no_wait, profile: args })) => match profile(&args) {
             Ok(p) => operator::market::market_open(&ctx, p, &model, line, seed, yes, no_wait).await,
             Err(e) => Err(e),

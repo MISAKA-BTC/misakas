@@ -39,6 +39,8 @@ pub(crate) struct ModelAddArgs {
     /// A catalog model id (or a unique part of one); `None` lists the catalog.
     pub(crate) model: Option<String>,
     pub(crate) artifact: Option<String>,
+    /// A class manifest for a model this build's catalog does not carry (`--manifest`).
+    pub(crate) manifest: Option<PathBuf>,
     /// Also certify the free-prompt lane.
     pub(crate) prompt_lane: bool,
     /// The slowest fleet seat's measured replay cost, for the seat-window bound.
@@ -209,6 +211,9 @@ struct Walk<'a> {
     node: NodeRead,
     params: kaspa_consensus_core::config::params::Params,
     workdir: PathBuf,
+    /// The root a `--manifest` pins. `None` for a catalog model, whose root is computed from its
+    /// artifact file by the lineage that pairs it.
+    manifest_root: Option<Hash64>,
 }
 
 impl Walk<'_> {
@@ -299,13 +304,14 @@ pub(crate) async fn run(ctx: &crate::node::Ctx, profile: Profile, args: ModelAdd
     let mut flow = Flow::new(ctx.output, args.yes);
     let mut doc = serde_json::Map::new();
     let result = walk(ctx, &profile, &args, &mut flow, &mut doc).await;
-    if args.model.is_none() && result.is_ok() {
+    if args.model.is_none() && args.manifest.is_none() && result.is_ok() {
         // The catalog listing: nothing was added, so there is no "done" line to print.
         return Ok(());
     }
-    let resume = match &args.model {
-        Some(m) => format!("misaka model add {m}"),
-        None => "misaka model add <model>".to_string(),
+    let resume = match (&args.model, &args.manifest) {
+        (Some(m), _) => format!("misaka model add {m}"),
+        (None, Some(path)) => format!("misaka model add --manifest {}", path.display()),
+        (None, None) => "misaka model add <model>".to_string(),
     };
     flow.finish(result, "misaka.model.add.v1", "LIVE — weight-bearing from the next epoch", &resume, doc)
 }
@@ -336,8 +342,9 @@ async fn walk(
     let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), net.to_string().into_bytes());
     let ledger = sdk.ledger();
 
-    // No model named: the catalog, and which of it the chain already holds.
-    let Some(selector) = args.model.clone() else {
+    // No model named and no manifest: the catalog, and which of it the chain already holds.
+    let selector = args.model.clone();
+    if selector.is_none() && args.manifest.is_none() {
         let node = snapshot::connect_to(&profile.network, profile.rpc.as_deref(), Duration::from_secs(5)).await.ok();
         let held: Vec<String> = match &node {
             Some(n) if n.ops_0122 => {
@@ -366,28 +373,25 @@ async fn walk(
         flow.ui.say(&paint::dim(
             "  misaka model add <model>   registers one and certifies its lanes; misaka model status <class> reads one",
         ));
+        flow.ui.say(&paint::dim("  misaka model add --manifest <file>   a model this catalog does not carry — no new build needed"));
         return Ok(());
-    };
-    let entry = resolve_catalog(&ledger, &selector)
-        .map_err(|why| {
-            Halt::Blocked(Finding::error("E-MODEL-UNKNOWN", exit::MODEL, why).fix("misaka model add   (lists this build's catalog)"))
-        })?
-        .clone();
-    let class_id = entry.class_id();
-    let class_hex = class_id.to_string();
-    doc.insert("model_id".into(), entry.model_id.into());
-    doc.insert("class_id".into(), class_hex.clone().into());
-    flow.row(
-        Severity::Ok,
-        "model",
-        format!(
-            "{} · {} · class {}… · {}",
-            entry.model_id,
-            entry.lineage_id,
-            &class_hex[..16],
-            if entry.needs_artifact_file { "runs from an artifact file" } else { "derived — no file" }
-        ),
-    );
+    }
+    // A catalog model resolves before the node is asked anything, so a mistyped name costs no
+    // connection. A manifest is verified AT THE NODE'S DAA (the shape the chain would judge), so it
+    // resolves once the node answers, below.
+    let catalog_entry =
+        match &selector {
+            Some(selector) => Some(
+                resolve_catalog(&ledger, selector)
+                    .map_err(|why| {
+                        Halt::Blocked(Finding::error("E-MODEL-UNKNOWN", exit::MODEL, why).fix(
+                            "misaka model add   (lists this build's catalog), or --manifest <file> for a model it does not carry",
+                        ))
+                    })?
+                    .clone(),
+            ),
+            None => None,
+        };
 
     // The node, and the terms it reads from its tip.
     let node = snapshot::connect_to(&profile.network, profile.rpc.as_deref(), Duration::from_secs(ctx.timeout_secs.clamp(2, 15)))
@@ -420,6 +424,42 @@ async fn walk(
     }
     let (terms, families) =
         decode_terms(&terms_resp).map_err(|e| Halt::Blocked(Finding::error("E-NODE-TERMS", exit::COMPONENT_DOWN, e)))?;
+    let (entry, manifest_root) = match (catalog_entry, &args.manifest) {
+        (Some(entry), _) => (entry, None),
+        (None, Some(path)) => {
+            let (entry, root, in_catalog) = crate::palw_extension::manifest_class_entry_v1(path, net, node.daa()).map_err(|e| {
+                Halt::Blocked(
+                    Finding::error("E-MODEL-MANIFEST", exit::MODEL, "The manifest does not describe a class this chain would admit")
+                        .current(e.msg)
+                        .fix("misaka palw extension verify <manifest> --depth full   (names the field)"),
+                )
+            })?;
+            if in_catalog {
+                flow.ui.sub(&paint::dim("this build's catalog also carries the class; the manifest's root is the one registered"));
+            }
+            (entry, Some(root))
+        }
+        (None, None) => unreachable!("the listing returned above when neither a model nor a manifest was given"),
+    };
+    let class_id = entry.class_id();
+    let class_hex = class_id.to_string();
+    doc.insert("model_id".into(), entry.model_id.into());
+    doc.insert("class_id".into(), class_hex.clone().into());
+    flow.row(
+        Severity::Ok,
+        "model",
+        format!(
+            "{} · {} · class {}… · {}",
+            entry.model_id,
+            entry.lineage_id,
+            &class_hex[..16],
+            match (manifest_root.is_some(), entry.needs_artifact_file) {
+                (true, _) => "from a manifest — not in this build's catalog",
+                (false, true) => "runs from an artifact file",
+                (false, false) => "derived — no file",
+            }
+        ),
+    );
     let walk = Walk {
         ctx,
         profile,
@@ -427,6 +467,7 @@ async fn walk(
         workdir: dirs::home_dir().unwrap_or_default().join(".misaka").join(&profile.network).join("model-add").join(&class_hex[..16]),
         params: params.clone(),
         node,
+        manifest_root,
     };
 
     // REGISTERED.
@@ -494,8 +535,13 @@ async fn register(
 ) -> Step {
     let class_hex = entry.class_id().to_string();
     // The root: the artifact's own, computed from the file — the chain pins it, and a class whose
-    // root is someone else's weights is a mispairing the admission gate refuses.
-    let artifact_root = if entry.needs_artifact_file {
+    // root is someone else's weights is a mispairing the admission gate refuses. A manifest states
+    // its root (verified at Full depth against the artifact it names, where this machine holds it),
+    // and no lineage of this build can pair a model its catalog does not carry.
+    let artifact_root = if let Some(root) = walk.manifest_root {
+        flow.row(Severity::Ok, "artifact", format!("root {}… · from the manifest", &root.to_string()[..16]));
+        root
+    } else if entry.needs_artifact_file {
         let named = walk.args.artifact.clone().map(|a| PathBuf::from(crate::operator::procs::expand_home(&a)));
         let candidates: Vec<PathBuf> = match named {
             Some(p) => vec![p],
