@@ -9509,13 +9509,31 @@ impl<'a> TransitionBuilder<'a> {
             // every class the network was already running; sending one of those back to Candidate
             // would stop a live class at a flag day until somebody else's seat proves possession.
             // The finding this fence closes is about what permissionless registration INVITES, and
-            // the release's own safety property is that existing classes are unaffected. What it
-            // costs is stated plainly: a class that self-certified its way to a Final BEFORE the
-            // fence keeps that standing, and only a re-registration would be judged by this rule.
+            // the release's own safety property is that existing classes are unaffected.
+            //
+            // **But a BOUGHT class does not grandfather to `Active`** — the 2026-09-19 re-audit's
+            // item 7, which the paragraph above used to concede in its last sentence and which a
+            // fixture now measures. `has_final` is any claim in phase `Final`, and on a chain whose
+            // registry is still dormant a registrant can license its own claim with its own panel
+            // and its own receipts (which the independence fence does not stop — see
+            // `a_registrant_paying_its_sybils_separately_defeats_the_armed_independence_fence`).
+            // One such claim, bought for a transaction fee, used to open the row at `Active` with
+            // `admission_permille` 1,000 — skipping `Candidate`, `Prefetching`, `Probation` and
+            // `ActiveLimited` in a single step. That is the whole lifecycle brake, bypassed by the
+            // thing it exists to brake.
+            //
+            // The liveness argument above is honoured exactly and no further: a bought class with a
+            // Final opens at `Probation`, which ADMITS CLAIMS, so nothing live stops at the flag
+            // day — it simply does so at 50 permille and has to earn `Active` the way a stranger
+            // does, on completed claims. The base class and the classes the network was born with
+            // are untouched, because neither is bought. Below the fence this is the old rule.
             let bought = self.state.classes.get(class_id).is_some_and(|record| record.registrant_bond.is_some());
-            let state = if *class_id == base || has_final {
+            let brake = self.extras.admission_independence_active && bought;
+            let state = if *class_id == base || (has_final && !brake) {
                 PalwModelLifecycleV1::Active
-            } else if self.extras.admission_independence_active && bought {
+            } else if has_final {
+                PalwModelLifecycleV1::Probation { probes_passed: 0 }
+            } else if brake {
                 PalwModelLifecycleV1::Candidate
             } else if work.ops_supported {
                 PalwModelLifecycleV1::Prefetching
@@ -22281,20 +22299,29 @@ pub(crate) mod tests {
                 assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
             }
 
-            /// **Grandfathering: one self-licensed `Final` before the registry's first boundary
-            /// buys `Active` for ever** (`palw_state_v2.rs:9389` — `if *class_id == base ||
-            /// has_final { Active }`, asked BEFORE the `Candidate` arm).
+            /// **A self-licensed `Final` bought before the registry opened no longer buys
+            /// `Active`** — the 2026-09-19 re-audit's item 7, fixed, and this is the attack it was
+            /// found by, re-run.
             ///
             /// The registrant drives one claim of its own class to `Final` on a chain whose
-            /// registry is not open yet — every seat its own, which is what the test above shows
-            /// the armed fence does not stop either — and the registry's first boundary then writes
-            /// the row `Active` rather than `Candidate`, at 1,000‰ admission, skipping
-            /// `Prefetching`, `Probation` and `ActiveLimited` entirely. ADR-0145 I4's filter in
-            /// `palw_work_price_unit_of_v1` asks `row.state.admits_claims()`, and `Active` answers
-            /// yes — so the class is inside the work-price unit past the fence, which is the one
-            /// quantity a registration was not supposed to be able to move.
+            /// registry is not open yet — every seat its own, which the test above shows the armed
+            /// fence does not stop either. The first boundary used to write that row `Active` at
+            /// 1,000‰, skipping `Candidate`, `Prefetching`, `Probation` and `ActiveLimited` in one
+            /// step: the whole lifecycle brake bypassed by the thing it exists to brake, for a
+            /// transaction fee.
+            ///
+            /// It now opens at `Probation`, 50‰. The liveness argument that motivated
+            /// grandfathering is honoured exactly and no further — `Probation` ADMITS CLAIMS, so
+            /// nothing live stops at the flag day; it produces at a twentieth of the admission and
+            /// earns `Active` on completed claims, the way a stranger does. The base class and the
+            /// classes the network was born with are untouched, because neither is bought.
+            ///
+            /// The class is still inside the work-price unit — `Probation.admits_claims()` is
+            /// true — and that is correct: I4's filter separates REGISTERED from ADMITTED, and a
+            /// class that has completed a claim is admitted. What it no longer gets is the full
+            /// eligibility of a class that earned its way there.
             #[test]
-            fn a_final_won_before_the_registry_opens_grandfathers_a_bought_class_active() {
+            fn a_final_bought_before_the_registry_opens_no_longer_grandfathers_active() {
                 let p = params();
                 let (operands, root) = inventory();
                 let f = fold(kimi_work());
@@ -22328,15 +22355,19 @@ pub(crate) mod tests {
                 let row = s6.model_lifecycle(&kimi_id()).expect("the first boundary opens every class's row");
                 assert_eq!(
                     (row.state, row.state.admission_permille()),
-                    (PalwModelLifecycleV1::Active, 1_000),
-                    "a bought class with one self-licensed Final opens ACTIVE past the fence, not Candidate"
+                    (PalwModelLifecycleV1::Probation { probes_passed: 0 }, 50),
+                    "a bought class's self-licensed Final buys Probation, not Active — it keeps producing and earns the rest"
                 );
-                assert!(row.state.admits_claims(), "so ADR-0145 I4's filter admits it…");
-                // …and therefore it is inside the work-price unit, the quantity I4 exists to protect.
+                assert!(row.state.admits_claims(), "it admits claims, so nothing live stops at the flag day…");
+                assert!(
+                    row.state.admission_permille() < PalwModelLifecycleV1::Active.admission_permille(),
+                    "…at a fraction of the eligible AMOUNT, which is the only thing the lifecycle expands"
+                );
+                // A genesis class is not bought, and is not touched by the brake.
                 assert_eq!(
-                    palw_work_price_unit_v1(&s6, &h64(1), false, true),
-                    160,
-                    "…and its registrant-declared pwu IS the unit every other class's reward divides by"
+                    s6.model_lifecycle(&h64(1)).map(|base_row| base_row.state),
+                    Some(PalwModelLifecycleV1::Active),
+                    "the base class keeps Active — the liveness argument for grandfathering is about these"
                 );
             }
         }
