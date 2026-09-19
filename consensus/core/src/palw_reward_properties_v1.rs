@@ -1300,10 +1300,23 @@ fn the_price_unit_stays_raw_because_it_is_a_denominator() {
     let source = include_str!("palw_state_v2.rs");
     let fold = &source[..source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
     let at = fold.find("fn work_price_unit_at(").expect("the work price is still here");
-    let body = &fold[at..at + 600];
+    let end = fold[at..].find("\n    /// ").map(|n| at + n).unwrap_or(fold.len());
+    let body = &fold[at..end];
     assert!(body.contains("self.canonical_per_draw(id, accepted_daa)"), "the price unit reads the derived work RAW");
     assert!(
         !body.contains("exposure_basis") && !body.contains("palw_exposure_pwu_v3"),
         "and it must not be normalised: it is a denominator, and the numerator is not"
+    );
+    // And past the bundle it is not a statistic over the registered set at all — see item 6.
+    assert!(
+        body.contains("palw_work_target_unit_v1("),
+        "past the bundle the denominator is the chain's work target, which a registration cannot move"
+    );
+    // …and that arm has ONE body, shared with the public reader, so a shadow reader asking what a
+    // registration would cost the incumbents is answered by the rule the fold actually runs.
+    assert_eq!(fold.matches("pub fn palw_work_target_unit_v1(").count(), 1, "one definition");
+    assert!(
+        fold.contains("fn palw_work_target_unit_v1(state: &PalwChainStateV2, canonical_work_daa: Option<u64>, accepted_daa: u64)"),
+        "and it is pure — it takes the state and the fence rather than reaching for either"
     );
 }

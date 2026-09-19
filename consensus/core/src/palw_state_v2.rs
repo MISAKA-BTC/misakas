@@ -667,6 +667,42 @@ pub fn palw_work_price_unit_v1(
     })
 }
 
+/// **The work-price denominator past the ADR-0145 bundle: the chain's own work target.**
+///
+/// The 2026-09-19 re-audit's item 6, and the operator's invariant — *registering a model must not
+/// change an unrelated incumbent's canonical-work price*. ADR-0124's unit was a `max` over the
+/// admitted classes, so the registration SET entered every incumbent's pay: one registration of a
+/// re-tiled copy of a shipped geometry, declaring the deepest legal canonical job, moved the unit
+/// from 9,000,776 to 62,476,288 and divided every incumbent's work-priced reward by 6.94, for a
+/// transaction fee and no mining at all. Choosing a different statistic over the set does not help;
+/// ANY statistic over the set has that shape.
+///
+/// `PalwWorkTargetV2::work` is ADR-0137's `W`, "the economic compute one block buys at the class
+/// ticket", in MAC-equivalents — the unit the numerator is in past the fence, so the ratio stays
+/// arithmetic against arithmetic. It is a controller output stepped at epoch boundaries from the
+/// closed epoch's MODEL BLOCKS against the cadence: a class that registers and produces nothing
+/// does not move it at all, and a class that produces moves it for everybody equally and slowly,
+/// which is real use and is the channel the design wants open. `floor` is `W₀ = escrow / rate_max`
+/// and `W` is defined never to fall below it, so the max of the two reads the field's own
+/// invariant rather than adding a rule.
+///
+/// `None` below the bundle, and in the one-epoch window after arming before the first boundary has
+/// stepped a target — the ADR-0124 unit stands in there, the same shape as the registry's own "no
+/// row yet" window. `validate_palw_v2` requires `palw_work_target` armed at or below the bundle, so
+/// it can never be a permanent fallback.
+///
+/// It is public and pure so that the quantity can be READ — the shadow reader asking what a
+/// registration would do to the incumbents is the reason this file keeps `palw_work_price_unit_v1`
+/// public at all, and a reader that did not know about this arm would answer the old question.
+pub fn palw_work_target_unit_v1(state: &PalwChainStateV2, canonical_work_daa: Option<u64>, accepted_daa: u64) -> Option<u64> {
+    if !canonical_work_daa.is_some_and(|height| accepted_daa >= height) {
+        return None;
+    }
+    let target = state.work_target()?;
+    let w = target.work.max(target.floor);
+    (w > 0).then(|| w.min(u64::MAX as u128) as u64)
+}
+
 /// **The same unit, over any per-class measure** — the one body both bases share.
 ///
 /// There are two measures a class can be priced by: the DECLARED one
@@ -10137,6 +10173,11 @@ impl<'a> TransitionBuilder<'a> {
     /// Both fences are asked in ONE body ([`palw_work_price_unit_of_v1`]); this method supplies
     /// only the measure.
     fn work_price_unit_at(&self, accepted_daa: u64) -> u64 {
+        // **Past the bundle the denominator is not a statistic over the registered set at all** —
+        // see [`palw_work_target_unit_v1`] for item 6 and why the chain's work target is the answer.
+        if let Some(w) = palw_work_target_unit_v1(&self.state, self.extras.canonical_work_daa, accepted_daa) {
+            return w;
+        }
         palw_work_price_unit_of_v1(
             &self.state,
             &self.params.base_class_id,
