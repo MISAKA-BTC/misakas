@@ -78,3 +78,53 @@ fn arming_one_fence_of_the_bundle_on_the_release_is_refused() {
     three.palw_artifact_root_ownership = Some(ForkActivation::new(registry));
     three.validate_palw_v2().expect("with ADR-0143 at or below it, the bundle assembles");
 }
+
+/// **Where the new denominator reaches, and where it does not** — a self-red-team of the item 6
+/// fix, pinned so the reasoning survives the commit that made it.
+///
+/// `work_price_unit_at` feeds two callers, and moving it from "a MAX over the registered classes"
+/// to "the chain's work target" is a large change in magnitude. That is safe only because of where
+/// the two callers sit:
+///
+/// * **The work-priced escrow is not the payer past the bundle.** The fold picks the escrow as
+///   `economics.priced_reward(..)` when a claim carries an ADR-0132 snapshot and falls back to
+///   `work_priced_escrow` only when it does not. `validate_palw_v2` requires `palw_work_target`
+///   armed for the bundle, and the work target in turn requires `palw_economic_payout` at or below
+///   ITSELF — so every claim accepted past the bundle carries a snapshot, and the fallback is
+///   unreachable there. The denominator's magnitude therefore does not move anybody's pay.
+/// * **The execution lane's credit is a CLAMP, not a ratio.** `palw_execution_credit_v1` is
+///   `exposure_pwu.min(unit)`, and under the old unit — a max over the same classes — the clamp
+///   was a no-op for every `DerivedV1` class by construction. A larger unit keeps it a no-op.
+///   What changes is only that a class whose single draw exceeds a whole block's compute budget is
+///   now clamped at that budget, which is the honest answer rather than a regression.
+///
+/// If a later branch makes the work-priced escrow reachable past the bundle, this test goes red
+/// and the magnitude question has to be answered again rather than inherited.
+#[test]
+fn the_work_price_denominator_cannot_reach_the_payer_past_the_bundle() {
+    let fold = include_str!("../src/palw_state_v2.rs");
+    let body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+    assert!(
+        body.contains("None if self.extras.work_priced_reward_active => self.work_priced_escrow(claim)"),
+        "the work-priced escrow is still only the fallback for a claim with no economics snapshot"
+    );
+
+    let params = include_str!("../src/config/params.rs");
+    assert!(
+        params.contains("palw_work_target is armed without palw_model_registry and palw_economic_payout armed at or below"),
+        "and the work target still requires the payout at or below it, which is what makes the snapshot always present"
+    );
+    assert!(
+        params.contains("economic bundle is armed without palw_model_registry and palw_work_target armed at ONE height"),
+        "and the bundle still requires the work target, which is what carries the payout with it"
+    );
+
+    // The lane's credit is a clamp, so a larger unit cannot reduce anyone's credit.
+    use kaspa_consensus_core::palw_execution_lane_v1::palw_execution_credit_v1;
+    let draw = 83_102_171_136u64; // one draw of the shipped dense row, in MAC-equivalents
+    let old_unit = 9_000_776u64; // the live MAX over declared per-inference values
+    let big_unit = 306_000_000_000u64; // a block's worth of compute, the order W sits at
+    assert_eq!(palw_execution_credit_v1(draw, big_unit), draw, "a unit above the draw does not clamp it");
+    assert_eq!(palw_execution_credit_v1(old_unit, big_unit), old_unit, "nor a smaller measure");
+    assert_eq!(palw_execution_credit_v1(draw, old_unit), old_unit, "the OLD unit is what clamped");
+}
