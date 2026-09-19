@@ -43,6 +43,11 @@ CLASS_ARTIFACT="${CLASS_ARTIFACT:-}"
 PRODUCER_NODE="${PRODUCER_NODE:-3}"
 STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-1800}"
+# The DAA a step is allowed to spend. 120 covers this drill's longest documented wait -- the 60-DAA
+# readiness staleness of step 1 -- with the same margin again for the chain to observe it. 0 restores
+# the wall-clock-only behaviour.
+STEP_WAIT_DAA="${STEP_WAIT_DAA:-120}"
+STEP_WAIT_CEILING="${STEP_WAIT_CEILING:-43200}"
 P2P_BASE="${P2P_BASE:-16710}"
 RPC_BASE="${RPC_BASE:-18010}"
 # ADR-0138: past `palw_anchor_clock` only a block `bits` priced advances the DAA score, so a devnet
@@ -69,13 +74,42 @@ cli() { local i="$1"; shift; "$CLI_BIN" --network devnet --rpc "127.0.0.1:$((RPC
 reg() { local i="$1" expr="$2"; cli "$i" palw registry --output json 2>/dev/null | python3 -c "import json,sys; v=json.load(sys.stdin)['registry']; print($expr)" 2>/dev/null || true; }
 eco() { local i="$1" expr="$2"; cli "$i" palw economics --output json 2>/dev/null | python3 -c "import json,sys; v=json.load(sys.stdin); print($expr)" 2>/dev/null || true; }
 daa_of() { cli "$1" palw round-lane --output json 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin).get('virtualDaa',''))" 2>/dev/null || true; }
-step_start() { step_began=$SECONDS; last_daa=""; last_move=$SECONDS; }
+# **A step that waits for a DAA-denominated event needs a DAA-denominated budget.**
+# Every wait in this drill is for something the RULES measure in DAA — a readiness probe goes stale
+# after `readinessProbeMaxAgeSpans x spanDaa` (60 DAA here), a claim licenses `window_bind +
+# window_receipt` after it lands, a challenge window is `window_challenge`. None of them is measured
+# in seconds by anything on the chain. STEP_WAIT alone therefore encodes an assumption about how
+# fast this particular devnet happens to be minting, and run 20 measured 206 s/DAA where earlier
+# runs saw 120 -- so a 4-hour budget that covered 120 DAA covers 70, and the step dies mid-wait on a
+# chain that is behaving perfectly. That is the "a loop counter is not a clock" failure with the
+# units the other way round.
+#
+# So: STEP_WAIT_DAA is the budget that matters when it is set. The wall clock stops being the thing
+# that ends a healthy step and goes back to being a backstop for the case the DAA reading itself
+# stops answering. The chain STOPPING is still caught, immediately, by STALL_WAIT -- which is the
+# real liveness failure and is the one that should be measured in seconds, because a stopped clock
+# produces no DAA to count.
+step_start() { step_began=$SECONDS; step_began_daa="$(daa_of 1)"; last_daa="$step_began_daa"; last_move=$SECONDS; }
 step_expired() {
   local daa; daa="$(daa_of 1)"
   if [ -n "$daa" ] && [ "$daa" != "$last_daa" ]; then last_daa="$daa"; last_move=$SECONDS; fi
-  [ $((SECONDS - step_began)) -ge "$STEP_WAIT" ] || [ $((SECONDS - last_move)) -ge "$STALL_WAIT" ]
+  # The chain stopped: always fatal, and fast.
+  [ $((SECONDS - last_move)) -ge "$STALL_WAIT" ] && return 0
+  if [ "$STEP_WAIT_DAA" -gt 0 ] && [ -n "${step_began_daa:-}" ] && [ -n "$last_daa" ]; then
+    [ $((last_daa - step_began_daa)) -ge "$STEP_WAIT_DAA" ] && return 0
+    # A healthy, moving chain is given the wall clock it needs to deliver that many DAA, up to a
+    # generous ceiling that exists only so a wedged script cannot run for ever.
+    [ $((SECONDS - step_began)) -ge "$STEP_WAIT_CEILING" ] && return 0
+    return 1
+  fi
+  [ $((SECONDS - step_began)) -ge "$STEP_WAIT" ]
 }
-gave_up() { die "gave up waiting for: $1 (virtual DAA ${last_daa:-unanswered}, unmoved for $((SECONDS - last_move))s, $((SECONDS - step_began))s into the step)"; }
+gave_up() {
+  local spent_daa="?"
+  [ -n "${step_began_daa:-}" ] && [ -n "${last_daa:-}" ] && spent_daa=$((last_daa - step_began_daa))
+  die "gave up waiting for: $1 (virtual DAA ${last_daa:-unanswered}, ${spent_daa} DAA into a ${STEP_WAIT_DAA}-DAA budget, \
+unmoved for $((SECONDS - last_move))s, $((SECONDS - step_began))s into the step)"
+}
 wait_for() {
   local node="$1" kind="$2" expr="$3" what="$4"
   step_start

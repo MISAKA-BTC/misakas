@@ -57,6 +57,11 @@ FLOOR_ONLY="${FLOOR_ONLY:-$([ -n "$CLASS_ARTIFACT" ] && echo 0 || echo 1)}"
 REGISTER_CLASS="${REGISTER_CLASS:-0}"
 STEP_WAIT="${STEP_WAIT:-14400}"
 STALL_WAIT="${STALL_WAIT:-900}"
+# The DAA a step is allowed to spend. 120 covers this drill's longest documented wait -- the 60-DAA
+# readiness staleness of step 1 -- with the same margin again for the chain to observe it. 0 restores
+# the wall-clock-only behaviour.
+STEP_WAIT_DAA="${STEP_WAIT_DAA:-120}"
+STEP_WAIT_CEILING="${STEP_WAIT_CEILING:-43200}"
 ATTACH="${ATTACH:-0}"
 P2P_BASE="${P2P_BASE:-16710}"
 RPC_BASE="${RPC_BASE:-18010}"
@@ -196,13 +201,42 @@ if [ "$ATTACH" = 1 ]; then attach_nodes; else start_nodes; fi
 start_miner
 
 alive() { for p in "${pids[@]}"; do [ -z "$p" ] || kill -0 "$p" 2>/dev/null || die "a node exited (see $WORK_DIR/node-*.log)"; done; }
-step_start() { step_began=$SECONDS; last_daa=""; last_move=$SECONDS; }
+# **A step that waits for a DAA-denominated event needs a DAA-denominated budget.**
+# Every wait in this drill is for something the RULES measure in DAA — a readiness probe goes stale
+# after `readinessProbeMaxAgeSpans x spanDaa` (60 DAA here), a claim licenses `window_bind +
+# window_receipt` after it lands, a challenge window is `window_challenge`. None of them is measured
+# in seconds by anything on the chain. STEP_WAIT alone therefore encodes an assumption about how
+# fast this particular devnet happens to be minting, and run 20 measured 206 s/DAA where earlier
+# runs saw 120 -- so a 4-hour budget that covered 120 DAA covers 70, and the step dies mid-wait on a
+# chain that is behaving perfectly. That is the "a loop counter is not a clock" failure with the
+# units the other way round.
+#
+# So: STEP_WAIT_DAA is the budget that matters when it is set. The wall clock stops being the thing
+# that ends a healthy step and goes back to being a backstop for the case the DAA reading itself
+# stops answering. The chain STOPPING is still caught, immediately, by STALL_WAIT -- which is the
+# real liveness failure and is the one that should be measured in seconds, because a stopped clock
+# produces no DAA to count.
+step_start() { step_began=$SECONDS; step_began_daa="$(daa_of 1)"; last_daa="$step_began_daa"; last_move=$SECONDS; }
 step_expired() {
   local daa; daa="$(daa_of 1)"
   if [ -n "$daa" ] && [ "$daa" != "$last_daa" ]; then last_daa="$daa"; last_move=$SECONDS; fi
-  [ $((SECONDS - step_began)) -ge "$STEP_WAIT" ] || [ $((SECONDS - last_move)) -ge "$STALL_WAIT" ]
+  # The chain stopped: always fatal, and fast.
+  [ $((SECONDS - last_move)) -ge "$STALL_WAIT" ] && return 0
+  if [ "$STEP_WAIT_DAA" -gt 0 ] && [ -n "${step_began_daa:-}" ] && [ -n "$last_daa" ]; then
+    [ $((last_daa - step_began_daa)) -ge "$STEP_WAIT_DAA" ] && return 0
+    # A healthy, moving chain is given the wall clock it needs to deliver that many DAA, up to a
+    # generous ceiling that exists only so a wedged script cannot run for ever.
+    [ $((SECONDS - step_began)) -ge "$STEP_WAIT_CEILING" ] && return 0
+    return 1
+  fi
+  [ $((SECONDS - step_began)) -ge "$STEP_WAIT" ]
 }
-gave_up() { die "gave up waiting for: $1 (virtual DAA ${last_daa:-unanswered}, unmoved for $((SECONDS - last_move))s, $((SECONDS - step_began))s into the step)"; }
+gave_up() {
+  local spent_daa="?"
+  [ -n "${step_began_daa:-}" ] && [ -n "${last_daa:-}" ] && spent_daa=$((last_daa - step_began_daa))
+  die "gave up waiting for: $1 (virtual DAA ${last_daa:-unanswered}, ${spent_daa} DAA into a ${STEP_WAIT_DAA}-DAA budget, \
+unmoved for $((SECONDS - last_move))s, $((SECONDS - step_began))s into the step)"
+}
 wait_reg() {
   local node="$1" expr="$2" what="$3"
   step_start
