@@ -618,6 +618,43 @@ pub fn fp_accounted_prefix_tokens_v1(ids: &[u32], already_paid: &[(u32, Hash64)]
     best
 }
 
+/// **The longest prefix of `ids` this bond has already been paid for on this class, in EITHER
+/// direction** (ADR-0145 §6, re-audit 2026-09-19).
+///
+/// [`fp_accounted_prefix_tokens_v1`] answers only the BACKWARD half: it keeps paid rows strictly
+/// shorter than the prompt in front of it and compares their full-prompt roots. A producer that
+/// commits its conversation LONG PROMPT FIRST therefore never meets a shorter row, and every
+/// prefix it commits afterwards is priced as uncached — while it recomputes nothing, because the
+/// KV state of a prefix of a prompt it has already run is the state it already holds. Measured on
+/// the floor's graph: four rungs of one 32-token prompt were paid 57,000 pwu for ~25,416 leaves of
+/// real prefill, and the two-claim case moved 23,000 → 29,000 purely by reversing the order.
+///
+/// The fix is not another rule but the same rule made symmetric: the chain holds the paid prompts'
+/// own ids, so "what has this bond already been paid to evaluate on this lineage" is the longest
+/// COMMON PREFIX of this prompt and any paid one — which is order-free by construction.
+///
+/// A paid row EQUAL to `ids` is excluded: that is the same prompt, which `DuplicateWork` refuses,
+/// and accounting it here would price a claim the duplicate rule is about to reject — two answers
+/// to one question. Every other row contributes `min(common_prefix, ids.len())`.
+///
+/// Cost: `O(rows × common_prefix)`, early-exiting on the first differing id, so an unrelated
+/// prompt costs one comparison per row. The only input that makes it linear in the prompt is a
+/// row that genuinely shares a long prefix, which is a row the same bond paid for and is therefore
+/// bounded by its own exposure ceiling — never by a stranger's carrier.
+pub fn fp_accounted_prefix_tokens_v2(ids: &[u32], already_paid: &[&[u32]]) -> u32 {
+    let mut best = 0usize;
+    for paid in already_paid {
+        if *paid == ids {
+            continue;
+        }
+        let shared = paid.iter().zip(ids.iter()).take_while(|(a, b)| a == b).count();
+        if shared > best {
+            best = shared;
+        }
+    }
+    best.min(ids.len()).min(u32::MAX as usize) as u32
+}
+
 /// **Derive one free-prompt run's work from the class's graph and the run's committed facts.**
 ///
 /// `prompt_tokens` and `decode_tokens_executed` are both inside the claim id — the first is a JOB
@@ -3433,36 +3470,6 @@ mod fp_answer_tests {
         for prefix in [0u32, 1, 100] {
             let work = fp_derive_work_v1(&profile, 100, 4, prefix, DERIVED_LADDER).unwrap();
             assert_ne!(work.mode, PalwFpExecutionModeV1::KvReused);
-        }
-    }
-}
-
-#[cfg(test)]
-mod audit_e2e_probe_2026_09_19 {
-    /// AUDIT SCRATCH — prints the shipped fences at RUNTIME, from `palw_rc_shipped_params()`.
-    #[test]
-    fn print_shipped_fences() {
-        let p = crate::config::params::palw_rc_shipped_params();
-        println!("network                         = {:?}", p.net);
-        println!("palw_fp_derived_work (raw)      = {:?}", p.palw_fp_derived_work);
-        println!("palw_fp_derived_work_fence()    = {:?}", p.palw_fp_derived_work_fence());
-        for daa in [0u64, 1, 6_000, 6_001, 6_700, 6_702, 6_901, 1_000_000, u64::MAX / 2] {
-            println!("  active_at({daa:>12}) = {}", p.palw_fp_derived_work_active_at(daa));
-        }
-        println!("palw_fp_decode_rules (raw)      = {:?}", p.palw_fp_decode_rules);
-        println!("palw_fp_decode_rules_fence()    = {:?}", p.palw_fp_decode_rules_fence());
-        println!("palw_canonical_work (raw?)      = {:?}", p.palw_uncertified_weightless);
-        println!("palw_held_context               = {:?}", p.palw_held_context);
-        println!("palw_panel_da                   = {:?}", p.palw_panel_da);
-        println!("palw_prompt_ids_merkle          = {:?}", p.palw_prompt_ids_merkle);
-        // Every other preset that ships.
-        for (name, q) in [
-            ("MAINNET", crate::config::params::MAINNET_PARAMS),
-            ("TESTNET", crate::config::params::TESTNET_PARAMS),
-            ("DEVNET", crate::config::params::DEVNET_PARAMS),
-            ("SIMNET", crate::config::params::SIMNET_PARAMS),
-        ] {
-            println!("{name:<8} palw_fp_derived_work = {:?}  fence = {:?}", q.palw_fp_derived_work, q.palw_fp_derived_work_fence());
         }
     }
 }
