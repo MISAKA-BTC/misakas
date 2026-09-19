@@ -197,10 +197,19 @@ fn fork_weight_of_one_claim_v1(profile: &PalwShapeProfileV3, canonical: (u32, u3
 /// **The same claim's fork-choice weight PAST the ADR-0145 economic bundle** — the activation
 /// reading every `_is_neutralised` property below is stated against.
 ///
-/// The chain's rule is `palw_claim_canonical_pwu_v1(claim.pwu, declared_per_inference, derived)`,
-/// and `claim.pwu` is `expected_attempts × declared_per_inference`, so the declared factor cancels
-/// and what is left is `expected_attempts × derived_per_draw`. That is this function, and the two
-/// factors are the two halves F1 lived in:
+/// **The chain's rule is an EQUALITY AT ADMISSION, not an algebraic cancellation** — corrected
+/// 2026-09-20 after a parallel session landed the fold half. Past the fence,
+/// `check_palw_attempt_admission_v2` requires `attempt.pwu` to EQUAL
+/// `palw_attempt_derived_pwu_v1(class target, palw_canonical_per_draw_v1)`, refusing
+/// `PwuClaimNotDerived` otherwise — and `palw_claim_canonical_weight_v1` is then the identity on
+/// `claim.pwu`. The ratio `palw_claim_canonical_pwu_v1` is no longer read by the fold.
+///
+/// The number this function computes is the same either way, which is why it reads as it does. The
+/// mechanism is stronger than cancellation: a cancellation holds only while the two factors agree
+/// at two different chain points, and an equality at admission means a declared value that differs
+/// from the derived one is not priced at all — it is refused at the door.
+///
+/// The two factors are the two halves F1 lived in:
 ///
 /// * `expected_attempts` follows the class target, which `class_target_v1` already derives from one
 ///   draw's MAC-equivalents rather than from anything declared — and past the bundle the chain

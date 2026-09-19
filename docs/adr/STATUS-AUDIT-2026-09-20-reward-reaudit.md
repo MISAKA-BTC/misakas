@@ -28,7 +28,7 @@ ON THE NETWORK, and the gap between those two words is a flag day this document 
 | 7 | a bought `Final` grandfathers `Active` at 1,000 ‰ | LIVE | **CLOSED** | a bought class opens at `Probation`, 50 ‰, and earns the rest |
 | KV | the cache credit is directional, per-bond, and dies with its claim | latent | **CLOSED** | credit is a pure function of (this prompt, the prompts committed in this chain) |
 | (b) | `palw_canonical_per_draw_v1` reads only `model_lifecycles` | — | **REFUTED** | `step_model_registry` backfills every class; the ordering guard makes rows precede claims |
-| — | the cancellation in `palw_claim_canonical_pwu_v1` can be desynced | — | **REFUTED** | `pwu_rule` is written once; re-registration forces the same graph, hence the same count |
+| — | the cancellation in `palw_claim_canonical_pwu_v1` can be desynced | — | **MOOT** | the fold no longer cancels: admission requires `attempt.pwu` to EQUAL the derived value (`PwuClaimNotDerived`) and the weight is then the identity. The refutation stood while the ratio was the rule; the rule was replaced. See ADR-0149 |
 | — | the `is_none_or` branch admits a row-less class to the unit | — | **REFUTED** | unreachable on the block path; the window is under one span |
 | — | `ZeroQuanta` is a remote block-invalidation DoS | — | **REFUTED** | `palw_v2_accepted_objects` drops the object and the block stands |
 
@@ -53,6 +53,13 @@ that never pays for compute that may not have happened.
 unequal residency cost their operators unequally — on this fleet, RAM against disk. That is a
 difference between classes in COST, not a lever a registrant can pull in PRICE, which is why it is
 an open design question (ADR-0146 §6) and not an arbitrage.
+
+**A correction to this document's own first draft.** It said MISAKA Studio has no PALW path and
+that its chat reaches its own llama.cpp with nothing committed. That repeated an operations record
+that is out of date: Studio carries `BackendKind::Gateway`, a mining queue and a prompt-mining API,
+and `gateway_follows_the_slot` is one of its tests. The chat → gateway → commitment → rail path
+exists. Verified 2026-09-20 against `/Users/wata/MISAKA-Studio`; the E2E work belongs to the
+session that raised it.
 
 **`prompt_mode` is not read by the fold.** The chain cannot tell a user's inference from the
 network's own synthetic job and prices them identically. This is deliberate: pricing them
