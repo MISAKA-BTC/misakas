@@ -2827,6 +2827,31 @@ impl Params {
                 (Some(registry), Some(target)) => registry.daa_score() == target.daa_score() && registry.daa_score() <= height,
                 _ => false,
             };
+            // **And one owner per artifact root** (ADR-0143), which is the bundle's other
+            // precondition and the one that makes "a relabelled copy is not a new model"
+            // structural rather than a hope.
+            //
+            // `shape_profile_id` includes representation choices the canonical descriptor strips —
+            // `tile_len`, a thread count — so a registrant can mint a DIFFERENT class id for the
+            // SAME model by re-tiling it, and each copy takes its own registration, its own row and
+            // its own share grant. Past ADR-0143 it cannot: a re-tiling does not change the
+            // weights, so the copy must name the artifact root it is a tiling OF, and a root has
+            // exactly one owner on the chain. A copy that names a root it does not own is refused
+            // at the entrance; one that invents a root has no artifact behind it and no seat can
+            // prove possession of it.
+            //
+            // Without this the economic bundle would derive one canonical work per model and still
+            // let one model hold N classes' worth of grants — which is the same finding the
+            // denominator fix closed from the other side.
+            let one_owner_per_root =
+                self.palw_artifact_root_ownership.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= height);
+            if !one_owner_per_root {
+                return Err(PalwModeV2Error::Invalid(
+                    "the ADR-0145 economic bundle is armed without palw_artifact_root_ownership at or below it: without one \
+                     owner per artifact root, a registrant mints a fresh class id for the same model by re-tiling it, and \
+                     each copy takes its own registration, its own lifecycle row and its own share grant",
+                ));
+            }
             if !one_height_below {
                 return Err(PalwModeV2Error::Invalid(
                     "the ADR-0145 economic bundle is armed without palw_model_registry and palw_work_target armed at ONE height \
@@ -16406,6 +16431,10 @@ mod consensus_params_id_tests {
         bundled.palw_fp_derived_work = Some(ForkActivation::new(height));
         bundled.palw_canonical_work = Some(ForkActivation::new(height));
         bundled.palw_admission_independence = Some(ForkActivation::new(height));
+        // ADR-0143, the bundle's other precondition — see the bundle rule's note on why a
+        // relabelled copy is not a new model.
+        bundled.palw_artifact_root_ownership =
+            Some(ForkActivation::new(release.palw_model_registry.expect("the release arms the registry").daa_score()));
         bundled.validate_palw_v2().expect("the derived-work fence is armable by a build that carries its rule, with its bundle");
         assert!(bundled.palw_fp_derived_work_active_at(height));
         // The collapse, observable through `consensus_identity_id`, which is where the normalizer
@@ -16549,6 +16578,10 @@ mod consensus_params_id_tests {
             p.palw_canonical_work = Some(ForkActivation::new(daa));
             p.palw_admission_independence = Some(ForkActivation::new(daa));
             p.palw_fp_derived_work = Some(ForkActivation::new(daa));
+            // ADR-0143 is a precondition of the bundle and the shipped card leaves it commented
+            // out, so a build that arms the economy has to arm it too — at the registry's height,
+            // which is the lowest the other preconditions already sit at.
+            p.palw_artifact_root_ownership = Some(ForkActivation::new(registry_daa));
             p
         };
         let refusal = bundled(registry_daa - 1).validate_palw_v2().expect_err("the basis cannot precede the rows it reads");

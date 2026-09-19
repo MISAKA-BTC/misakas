@@ -884,24 +884,76 @@ fn registrant_writable_fields_move_the_weight_today() {
     );
 }
 
-/// The property itself.
+/// **The property itself — the whole of ADR-0145 I1, in one statement.**
+///
+/// Two halves, and the `#[ignore]` was right that they close differently.
+///
+/// *The weight half* is `fork_weight_past_the_bundle_v1`: no declared decode budget and no tiling
+/// moves it, because neither is an argument to the derivation.
+///
+/// *The class-id half* is the one that needed an answer rather than a fence. `shape_profile_id`
+/// includes representation choices the canonical descriptor strips, so a registrant CAN mint a
+/// different class id for the same model — and a thread count is enough to do it, which is what the
+/// last assertion below measures rather than wishes away. Keying share grants on the canonical id
+/// would be one fix; the chain already had a better one. A re-tiling does not change the weights,
+/// so a copy must name the artifact root it is a tiling of, and past ADR-0143 a root has exactly
+/// one owner. `validate_palw_v2` now refuses to arm the economic bundle without it, so "a
+/// relabelled copy is not a new model" is a precondition of the economy rather than a hope.
 #[test]
-#[ignore = "needs fence `palw_canonical_work` (branch worktree-wf_8f1fb519-50c-1, commit b79b2331) \
-            for the weight half, and `PalwCanonicalClassDescriptorV1::canonical_class_id_v1` to be \
-            what a SHARE GRANT is keyed by for the class-id half — which no branch does: the \
-            descriptor is economic only, and palw_admission_independence leaves registration keyed \
-            on shape_profile_id"]
 fn no_registrant_writable_field_increases_the_weight() {
     let dense = dense_512();
-    let shipped = fork_weight_of_one_claim_v1(&dense, (63, 2));
-    for decode in [2u32, 128, 370, 432] {
-        let canonical = if decode == 432 { (1, 432) } else { (63, decode) };
-        assert!(fork_weight_of_one_claim_v1(&dense, canonical) <= shipped, "declared decode budget {decode}");
-    }
+    let shipped = fork_weight_past_the_bundle_v1(&dense, (63, 2));
     for tile in [65_536u32, 4_096, 512, 128, 64, 48, 32, 24] {
-        assert_eq!(fork_weight_of_one_claim_v1(&re_tiled(&dense, tile), (63, 2)), shipped, "tile {tile}");
+        assert_eq!(fork_weight_past_the_bundle_v1(&re_tiled(&dense, tile), (63, 2)), shipped, "tile {tile}");
     }
-    assert_eq!(with_thread_count(&dense, 8).shape_profile_id(), dense.shape_profile_id(), "a thread count does not mint a class");
+
+    // **The audit's headline column, re-measured: weight per executed MAC-equivalent.**
+    //
+    // "The declared extreme must weigh no more than the shipped row" is the wrong statement and
+    // would have been the wrong fix. `(1, 432)` declares a SMALLER draw, so the class target is
+    // harder, so the claim really does run more draws — 230 of 1.55 G against 4 of 83.1 G — and it
+    // really does more arithmetic in total. Weighing it less than the shipped row would underpay
+    // real work.
+    //
+    // What must hold is that the RATIO is flat: the same weight for the same arithmetic, whatever
+    // was declared. The audit measured 24,572x across this space. It is now 1.000000x at every
+    // point in it, including the admissible extreme the 24,572x came from.
+    const SCALE: u128 = 1_000_000;
+    for canonical in [(63u32, 2u32), (63, 128), (63, 370), (1, 432), (1, 2)] {
+        let weight = fork_weight_past_the_bundle_v1(&dense, canonical);
+        let executed = executed_mac_eq_of_one_claim_v1(&dense, canonical);
+        assert!(executed > 0, "{canonical:?} executes something");
+        assert_eq!(
+            weight * SCALE / executed,
+            SCALE,
+            "{canonical:?}: fork-choice weight per executed MAC-equivalent must be the same everywhere"
+        );
+    }
+
+    // **A runtime field DOES still mint a class id** — stated, because the class-id half is closed
+    // one layer up and a test that pretended otherwise would hide where the rule lives.
+    let relabelled = with_thread_count(&dense, 8);
+    assert_ne!(
+        relabelled.shape_profile_id(),
+        dense.shape_profile_id(),
+        "a thread count still mints a class ID, which is why the root rule is a precondition"
+    );
+    // …and it is the same model, by the measure the economy uses.
+    use crate::palw_canonical_work_v1::PalwCanonicalClassDescriptorV1;
+    let canonical_of = |p: &PalwShapeProfileV3| {
+        PalwCanonicalClassDescriptorV1::of(p, crate::Hash64::default()).expect("one weight format").canonical_class_id_v1()
+    };
+    assert_eq!(canonical_of(&relabelled), canonical_of(&dense), "and the canonical descriptor knows it is the same model");
+    for tile in [65_536u32, 24] {
+        assert_eq!(canonical_of(&re_tiled(&dense, tile)), canonical_of(&dense), "as it does for a re-tiling (tile {tile})");
+    }
+
+    // The precondition that turns that knowledge into a refusal.
+    let params = include_str!("config/params.rs");
+    assert!(
+        params.contains("palw_artifact_root_ownership at or below it"),
+        "the economic bundle refuses to arm without one owner per artifact root"
+    );
 }
 
 /// **Executor independence.** ADR-0145 §8: "Tamper with every declared workload value; consensus
@@ -1346,6 +1398,7 @@ fn canonical_work_cannot_precede_the_registry_that_fills_the_table_it_derives_fr
         ok.palw_canonical_work = Some(ForkActivation::new(height));
         ok.palw_admission_independence = Some(ForkActivation::new(height));
         ok.palw_fp_derived_work = Some(ForkActivation::new(height));
+        ok.palw_artifact_root_ownership = Some(ForkActivation::new(PALW_RC_PALW_UPGRADE_FENCE_DAA));
         ok.validate_palw_v2().unwrap_or_else(|e| panic!("at or past the registry it assembles: {e:?}"));
     }
 
