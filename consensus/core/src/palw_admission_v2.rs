@@ -169,6 +169,11 @@ pub enum PalwAdmissionV2Error {
     PwuExceedsClassRule { claimed: u64, ceiling: u64 },
     #[error("claimed pwu {claimed} is not the derived {derived} — pwu is chain state, not a miner input (ADR-0045 Decision 1)")]
     PwuClaimNotDerived { claimed: u64, derived: u64 },
+    /// ADR-0149: past the canonical-work fence an attempt's pwu is the chain's derivation, and the
+    /// class has no derived draw to derive it from (no registry row). A class the chain cannot price
+    /// does not produce; below the fence it would have been priced on its registrant's declaration.
+    #[error("class {class}: past the canonical-work fence an attempt's pwu is derived, and this class has no derived draw")]
+    PwuUnderivable { class: Hash64 },
     #[error("the trace retention {claimed} is not the derived obligation {derived} (the block's DAA plus the lattice windows)")]
     TraceRetentionNotDerived { claimed: u64, derived: u64 },
     #[error("the trace chunk count {claimed} is not the canonical {canonical}")]
@@ -326,34 +331,22 @@ pub fn check_palw_attempt_admission_v2(
     check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, None, budget_fences)
 }
 
-/// [`check_palw_attempt_admission_v2`] with ADR-0064's mergeset bond view. See
-/// [`check_palw_producer_entitlement_v2_with_bootstrap`] for what `bootstrap_bond` is and, more
-/// importantly, for what deliberately does NOT read it.
-///
-/// **This is the envelope-only list.** Everything in it is decidable from the chain state and the
-/// envelope, which is why the state machine can re-run it as a transition guard with no header in
-/// hand. What it does NOT contain, since ADR-0072, is the class lottery: that ticket is a function
-/// of the header position too, and it is checked beside the position in
-/// [`check_palw_class_lottery_v3`] — from the composed entry point, the way the network lottery is
-/// checked in the finalizer and never here.
-pub fn check_palw_attempt_admission_v2_with_bootstrap(
+/// **ADR-0149: the ONE pwu an attempt may carry past the canonical-work fence** —
+/// `palw_pwu_v1(class target, the derived work of one draw)`, the expected attempts a win costs at
+/// the target times what one attempt executes. Pure, and the single spelling every reader uses: the
+/// admission above, the producer's facts, and any shadow reader asking what a class's claim weighs.
+pub fn palw_attempt_derived_pwu_v1(class_target: u128, derived_per_draw: u128) -> u64 {
+    crate::palw_pwu::palw_pwu_v1(class_target, derived_per_draw.min(u64::MAX as u128) as u64)
+}
+
+/// Item 6 below the canonical-work fence: the class's own rule, as it always was.
+fn palw_attempt_pwu_below_the_unit_v1(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
-    admission: &PalwAdmissionParamsV2,
-    ctx: &PalwBlockContextV2,
-    envelope: &PalwAttemptEnvelopeV2,
-    bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
+    class: &crate::palw_state_v2::PalwClassStateV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
     budget_fences: PalwEpochBudgetFencesV1,
-) -> Result<Hash64, PalwAdmissionV2Error> {
-    let attempt = &envelope.attempt;
-
-    // Items 1–5: the producer's entitlement, shared verbatim with the coinbase's question.
-    check_palw_producer_entitlement_v2_with_bootstrap(state, attempt, bootstrap_bond)?;
-    let bond_key = PalwBondKeyV2(attempt.executor_bond);
-    let bond = state.bond(&bond_key).or(bootstrap_bond).expect("entitlement resolved this bond");
-    let class = state.class(&attempt.class_id).expect("entitlement resolved this class");
-
-    // 6. The pwu claim against the class rule (pwu ≥ 1 is stateless).
+) -> Result<(), PalwAdmissionV2Error> {
     match class.pwu_rule {
         PalwPwuRuleV2::MaxPerAttempt(ceiling) => {
             if attempt.pwu > ceiling {
@@ -382,6 +375,67 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
                 return Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: attempt.pwu, derived });
             }
         }
+    }
+
+    Ok(())
+}
+
+/// [`check_palw_attempt_admission_v2`] with ADR-0064's mergeset bond view. See
+/// [`check_palw_producer_entitlement_v2_with_bootstrap`] for what `bootstrap_bond` is and, more
+/// importantly, for what deliberately does NOT read it.
+///
+/// **This is the envelope-only list.** Everything in it is decidable from the chain state and the
+/// envelope, which is why the state machine can re-run it as a transition guard with no header in
+/// hand. What it does NOT contain, since ADR-0072, is the class lottery: that ticket is a function
+/// of the header position too, and it is checked beside the position in
+/// [`check_palw_class_lottery_v3`] — from the composed entry point, the way the network lottery is
+/// checked in the finalizer and never here.
+pub fn check_palw_attempt_admission_v2_with_bootstrap(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    admission: &PalwAdmissionParamsV2,
+    ctx: &PalwBlockContextV2,
+    envelope: &PalwAttemptEnvelopeV2,
+    bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
+    budget_fences: PalwEpochBudgetFencesV1,
+) -> Result<Hash64, PalwAdmissionV2Error> {
+    let attempt = &envelope.attempt;
+
+    // Items 1–5: the producer's entitlement, shared verbatim with the coinbase's question.
+    check_palw_producer_entitlement_v2_with_bootstrap(state, attempt, bootstrap_bond)?;
+    let bond_key = PalwBondKeyV2(attempt.executor_bond);
+    let bond = state.bond(&bond_key).or(bootstrap_bond).expect("entitlement resolved this bond");
+    let class = state.class(&attempt.class_id).expect("entitlement resolved this class");
+
+    // 6. The pwu claim against the class rule (pwu ≥ 1 is stateless).
+    //
+    //    **ADR-0149 (the 2026-09-19 audit's F1), past the canonical-work fence: ONE legal pwu, and it
+    //    is the chain's.** `claim.pwu` carries 90-99 % of fork-choice weight, and below the fence it is
+    //    `expected_attempts × pwu_per_inference` with the second factor the registrant's declared leaf
+    //    count (or, under `MaxPerAttempt`, any number up to a ceiling the registrant also chose). The
+    //    re-pricing that followed the fence (`claim.pwu × derived / declared`) cancelled the
+    //    declaration out of the WEIGHT, but left it on the wire, in the claim record and in every
+    //    reader that is not the weight. Past the fence it is not an input at all: the only admissible
+    //    value is `palw_pwu_v1(the class's effective target, the derived work of the draw the class
+    //    really runs)`, for every class and both rule forms, so a claim's pwu IS the derivation and
+    //    the weight reads it directly. Checked here, at the attempt's own point, like the rule it
+    //    replaces — the fold applies merged attempts at later points whose targets may have moved.
+    if budget_fences.canonical_work_daa.is_some_and(|height| ctx.daa_score >= height) {
+        let target = palw_effective_class_target_v1(
+            state,
+            state_params,
+            &attempt.class_id,
+            palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery),
+        )?;
+        let per_draw = state
+            .palw_canonical_per_draw_v1(&attempt.class_id, ctx.daa_score, budget_fences.canonical_work_daa)
+            .ok_or(PalwAdmissionV2Error::PwuUnderivable { class: attempt.class_id })?;
+        let derived = palw_attempt_derived_pwu_v1(target, per_draw);
+        if attempt.pwu != derived {
+            return Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: attempt.pwu, derived });
+        }
+    } else {
+        palw_attempt_pwu_below_the_unit_v1(state, state_params, class, attempt, budget_fences)?;
     }
 
     // 7. **The epoch budget, in BLOCKS, from the chain's own derived table (ADR-0045 Decision 2).**

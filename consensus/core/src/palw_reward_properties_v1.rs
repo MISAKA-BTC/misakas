@@ -194,6 +194,32 @@ fn fork_weight_of_one_claim_v1(profile: &PalwShapeProfileV3, canonical: (u32, u3
     palw_pwu_v1(class_target_v1(profile, canonical), declared_leaves)
 }
 
+/// **The same claim's fork-choice weight PAST the ADR-0145 economic bundle** — the activation
+/// reading every `_is_neutralised` property below is stated against.
+///
+/// The chain's rule is `palw_claim_canonical_pwu_v1(claim.pwu, declared_per_inference, derived)`,
+/// and `claim.pwu` is `expected_attempts × declared_per_inference`, so the declared factor cancels
+/// and what is left is `expected_attempts × derived_per_draw`. That is this function, and the two
+/// factors are the two halves F1 lived in:
+///
+/// * `expected_attempts` follows the class target, which `class_target_v1` already derives from one
+///   draw's MAC-equivalents rather than from anything declared — and past the bundle the chain
+///   seeds it the same way (`class_seed_pwu` in the fold);
+/// * `derived_per_draw` is `palw_canonical_draw_work_v1`, which runs the canonical job through
+///   `palw_attempt_job_v1` so a declared decode budget never reaches it, over a descriptor that
+///   strips `tile_len` so a re-tiling is not a different price.
+///
+/// Neither factor is a field a registrant writes. That is the whole claim of ADR-0145 I1, and the
+/// properties below are the counterexamples that used to disprove it, re-run against it.
+fn fork_weight_past_the_bundle_v1(profile: &PalwShapeProfileV3, canonical: (u32, u32)) -> u128 {
+    use crate::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
+    let descriptor = PalwCanonicalClassDescriptorV1::of(profile, crate::Hash64::default()).expect("one weight format");
+    let derived = palw_canonical_draw_work_v1(&descriptor, &job(profile, canonical.0, canonical.1), PREFILL_DRAW_ARMED)
+        .expect("the fixture's canonical job derives")
+        .provisional_scalar_v1();
+    (palw_expected_attempts_v1(class_target_v1(profile, canonical)) as u128).saturating_mul(derived)
+}
+
 /// **What that claim actually cost its producer**, in ADR-0131 MAC-equivalents: `expected_attempts`
 /// draws, each an execution of `palw_attempt_v2::palw_attempt_job_v1` — the job the chain really
 /// runs, which past `palw_prefill_draw` is `(declared_prefill, 1)` whatever decode budget the
@@ -334,20 +360,32 @@ fn the_decode_declaration() {
     }
 }
 
-/// The neutralisation counterexample 1 must reach.
+/// **The neutralisation counterexample 1 must reach — and now does.**
+///
+/// The exploit above is re-run against the rule the bundle installs. Below the fence the three rows
+/// buy 26,522,176 / 88,022,272 / 206,141,504 of fork-choice weight for byte-identical execution —
+/// 7.77x, the audit's headline. Past it they are one number, because the declared decode budget is
+/// not in the expression at all: `palw_canonical_draw_work_v1` derives the draw's work from the job
+/// `palw_attempt_job_v1` really runs.
 #[test]
-#[ignore = "needs fence `palw_canonical_work` (branch worktree-wf_8f1fb519-50c-1, commit b79b2331) \
-            AND `fork_weight_of_one_claim_v1` repointed at palw_canonical_work_v1::palw_canonical_draw_work_v1"]
 fn the_decode_declaration_is_neutralised() {
     let dense = dense_512();
-    let shipped = fork_weight_of_one_claim_v1(&dense, (63, 2));
+    let shipped = fork_weight_past_the_bundle_v1(&dense, (63, 2));
+    assert!(shipped > 0, "the shipped row still bears weight");
     for decode in [2u32, 128, 370] {
         assert_eq!(
-            fork_weight_of_one_claim_v1(&dense, (63, decode)),
+            fork_weight_past_the_bundle_v1(&dense, (63, decode)),
             shipped,
             "a declared decode budget the draw never runs must not be in the weight"
         );
     }
+    // And the exploit is still an exploit on the basis it was measured on, so this is a comparison
+    // and not a fixture that would pass against anything.
+    assert_ne!(
+        fork_weight_of_one_claim_v1(&dense, (63, 370)),
+        fork_weight_of_one_claim_v1(&dense, (63, 2)),
+        "the declared basis still moves, which is why the fence exists"
+    );
 }
 
 /// **Counterexample 2 — the re-tiled dense row.** Audit family (a), F1's `tile_len` lever.
@@ -419,20 +457,30 @@ fn the_re_tiled_dense_row() {
     );
 }
 
-/// The neutralisation counterexample 2 must reach.
+/// **The neutralisation counterexample 2 must reach — and now does.**
+///
+/// `tile_len` decides how many committed tiles one output row is cut into and changes no
+/// arithmetic whatsoever. On the declared basis it moves the weight across a 134.9x band (the
+/// audit's 101x, corrected by the red team: re-tiling the shipped row can only go DOWN, because
+/// tiles finer than 24 push `worst_case_step_leaf_count_capped_v1` past the 2^26 ladder and
+/// admission refuses them). Past the bundle every legal tiling is one number, because
+/// `PalwCanonicalClassDescriptorV1` strips `tile_len` before anything is priced.
 #[test]
-#[ignore = "needs fence `palw_canonical_work` (branch worktree-wf_8f1fb519-50c-1, commit b79b2331) \
-            AND `fork_weight_of_one_claim_v1` repointed at palw_canonical_work_v1::palw_canonical_draw_work_v1"]
 fn the_re_tiled_dense_row_is_neutralised() {
     let dense = dense_512();
-    let shipped = fork_weight_of_one_claim_v1(&dense, (63, 2));
+    let shipped = fork_weight_past_the_bundle_v1(&dense, (63, 2));
+    assert!(shipped > 0, "the shipped row still bears weight");
     for tile in [65_536u32, 4_096, 512, 128, 64, 48, 32, 24] {
         assert_eq!(
-            fork_weight_of_one_claim_v1(&re_tiled(&dense, tile), (63, 2)),
+            fork_weight_past_the_bundle_v1(&re_tiled(&dense, tile), (63, 2)),
             shipped,
-            "the commitment's block size is not work and must not be paid as work"
+            "the commitment's block size is not work and must not be paid as work (tile {tile})"
         );
     }
+    // The declared basis still spreads, so this is a comparison and not a fixture that would pass
+    // against anything: the band is what the fence exists to close.
+    let declared: Vec<u64> = [65_536u32, 24].iter().map(|t| fork_weight_of_one_claim_v1(&re_tiled(&dense, *t), (63, 2))).collect();
+    assert!(declared[1] > declared[0], "the declared basis still pays a finer tiling more: {declared:?}");
 }
 
 /// **Counterexample 3 — the better model is paid less.** Audit F5, live, no registration needed.

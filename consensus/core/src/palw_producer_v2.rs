@@ -241,6 +241,28 @@ pub fn palw_producer_facts_v2(
     bond: Option<&PalwBondKeyV2>,
     work_target_floor: Option<u128>,
 ) -> Option<PalwProducerFactsV2> {
+    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None)
+}
+
+/// [`palw_producer_facts_v2`] with **ADR-0149's derived pwu**: `canonical_work_daa` is
+/// `Params::palw_canonical_work_daa()`, and at or past it the producer is handed the ONE pwu the
+/// admission will accept — `palw_attempt_derived_pwu_v1(target, derived draw)` — and the exposure
+/// the admission will reserve for it (the derived draw in the collateral unit), so a producer never
+/// builds an attempt its own chain refuses and never mispredicts its own headroom. A class the chain
+/// has no derived draw for has no facts past the fence: it cannot produce, and saying so is the
+/// producer holding rather than mining into a refusal.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_producer_facts_v3(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    admission: &PalwAdmissionParamsV2,
+    chain_point: BlockHash,
+    daa_score: u64,
+    class_id: Hash64,
+    bond: Option<&PalwBondKeyV2>,
+    work_target_floor: Option<u128>,
+    canonical_work_daa: Option<u64>,
+) -> Option<PalwProducerFactsV2> {
     let class = state.class(&class_id)?;
     // ADR-0137: past the work target a model class draws against `MAX · min(1, CCU / W₀)` from
     // its registry row — no row, no price, no facts (the producer holds); the floor keeps its
@@ -249,10 +271,22 @@ pub fn palw_producer_facts_v2(
     // producer's ticket AND its pwu are the ones the chain will derive (2026-09-18 audit, C-2).
     let class_target =
         crate::palw_admission_v2::palw_effective_class_target_v1(state, state_params, &class_id, work_target_floor).ok()?;
-    let pwu = match class.pwu_rule {
-        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(class_target, pwu_per_inference),
-        PalwPwuRuleV2::MaxPerAttempt(cap) => cap,
+    let derived_draw = state.palw_canonical_per_draw_v1(&class_id, daa_score, canonical_work_daa);
+    let past_the_unit = canonical_work_daa.is_some_and(|height| daa_score >= height);
+    let pwu = if past_the_unit {
+        crate::palw_admission_v2::palw_attempt_derived_pwu_v1(class_target, derived_draw?)
+    } else {
+        match class.pwu_rule {
+            PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(class_target, pwu_per_inference),
+            PalwPwuRuleV2::MaxPerAttempt(cap) => cap,
+        }
     };
+    let exposure_pwu = crate::palw_state_v2::palw_exposure_pwu_v3(
+        class,
+        pwu,
+        derived_draw.map(|work| work.min(u64::MAX as u128) as u64),
+        state.palw_exposure_basis_v1(&state_params.base_class_id(), daa_score, canonical_work_daa),
+    );
     let epoch_index = daa_score / state_params.epoch_length();
     let epoch_budget_blocks = state
         .epoch_budgets()
@@ -280,8 +314,9 @@ pub fn palw_producer_facts_v2(
             exposure_ceiling: (bond_state.collateral as u128).saturating_mul(admission.max_exposure_ratio_permille() as u128) / 1000,
             // The SAME derivation admission applies, or the producer's own headroom prediction
             // disagrees with the rule that refuses it.
-            claim_exposure: (crate::palw_state_v2::palw_exposure_pwu_v1(class, pwu) as u128)
-                .saturating_mul(class.slash_value_per_pwu as u128),
+            // ADR-0149: the admission's own expression (`palw_exposure_pwu_v3`), which below the
+            // fence is `palw_exposure_pwu_v1` of the claimed pwu byte for byte.
+            claim_exposure: (exposure_pwu as u128).saturating_mul(class.slash_value_per_pwu as u128),
         })
     });
     Some(PalwProducerFactsV2 {

@@ -1054,12 +1054,14 @@ mod tests {
                 );
             }
         }
-        // Armed, the `DerivedV1` arm really moves — and `MaxPerAttempt` really does not, because
-        // it is bounded by a registered ceiling rather than derived from a graph.
+        // Armed, both arms read the derived draw. `MaxPerAttempt` used not to, on the ground that its
+        // pwu was bounded by a registered ceiling rather than derived — ADR-0149 made that pwu the
+        // chain's derivation (the statistical work of a win), so its one-inference measure is the
+        // derived draw like every other class's, or the reservation would scale with difficulty.
         let derived = class(PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 6_630_544 });
         assert_eq!(palw_exposure_pwu_v2(&derived, 0, Some(83_102_171_136)), 83_102_171_136);
         let capped = class(PalwPwuRuleV2::MaxPerAttempt(4_096));
-        assert_eq!(palw_exposure_pwu_v2(&capped, 4_096, Some(83_102_171_136)), 4_096);
+        assert_eq!(palw_exposure_pwu_v2(&capped, 4_096, Some(83_102_171_136)), 83_102_171_136);
 
         // Audit family (b), at the site that decides fork choice. Both declarations run the same
         // job, so both must weigh the same — and on the basis in force they differ by 7.8x.

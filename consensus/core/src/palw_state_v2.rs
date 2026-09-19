@@ -1969,7 +1969,11 @@ pub fn palw_exposure_pwu_v1(class: &PalwClassStateV2, claimed_pwu: u64) -> u64 {
 pub fn palw_exposure_pwu_v2(class: &PalwClassStateV2, claimed_pwu: u64, canonical: Option<u64>) -> u64 {
     match class.pwu_rule {
         PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => canonical.unwrap_or(pwu_per_inference),
-        PalwPwuRuleV2::MaxPerAttempt(_) => claimed_pwu,
+        // ADR-0149: past the fence a `MaxPerAttempt` claim's pwu is the derivation too (the
+        // statistical work of a win, not one inference), so its one-inference measure is the
+        // derived draw like every other class's. Below the fence `canonical` is `None` and the
+        // claimed value stands, as before.
+        PalwPwuRuleV2::MaxPerAttempt(_) => canonical.unwrap_or(claimed_pwu),
     }
 }
 
@@ -2020,15 +2024,19 @@ pub fn palw_exposure_pwu_v3(
     basis: Option<PalwExposureBasisV1>,
 ) -> u64 {
     match (canonical, basis) {
-        (Some(canonical), Some(basis)) if basis.base_canonical > 0 && basis.base_declared > 0 => match class.pwu_rule {
-            // u128 throughout: the largest shipped draw is ~8.3 × 10^10 MAC-eq and the floor's
-            // declared leaves are 7,708, so the product passes 6 × 10^14 before the divide.
-            PalwPwuRuleV2::DerivedV1 { .. } => {
-                let scaled = (canonical as u128) * (basis.base_declared as u128) / (basis.base_canonical as u128);
-                scaled.min(u64::MAX as u128) as u64
-            }
-            PalwPwuRuleV2::MaxPerAttempt(_) => claimed_pwu,
-        },
+        // u128 throughout: the largest shipped draw is ~8.3 × 10^10 MAC-eq and the floor's declared
+        // leaves are 7,708, so the product passes 6 × 10^14 before the divide.
+        //
+        // ADR-0149: both rule forms. Past the fence a `MaxPerAttempt` claim's pwu is the derived
+        // statistical work of a win, which is not what a defaulting producer owes (one inference),
+        // so its reservation is the derived draw in the collateral unit like every other class's —
+        // the admission ceiling and the fold's ledger read this one expression, so they move
+        // together.
+        (Some(canonical), Some(basis)) if basis.base_canonical > 0 && basis.base_declared > 0 => {
+            let _ = class;
+            let scaled = (canonical as u128) * (basis.base_declared as u128) / (basis.base_canonical as u128);
+            scaled.min(u64::MAX as u128) as u64
+        }
         _ => palw_exposure_pwu_v2(class, claimed_pwu, None),
     }
 }
@@ -6533,10 +6541,18 @@ impl PalwChainStateV2 {
     /// re-pricing of `claim.pwu` rather than a fresh product: the lottery factor is a fact about
     /// the chain the claim really paid and must survive; the per-inference factor is the
     /// registrant's number and must not.
+    ///
+    /// **ADR-0149: past the fence the ratio is the identity.** The admission now demands that an
+    /// attempt's `pwu` EQUAL `palw_pwu_v1(target, derived draw)`, so a claim accepted past the fence
+    /// carries the derivation itself and re-pricing it would divide a derived quantity by a declared
+    /// one. Its weight is its pwu. A claim accepted below the fence keeps the declared basis
+    /// (`None`), exactly as before.
     pub fn palw_claim_canonical_weight_v1(&self, claim: &PalwClaimStateV2, canonical_work_daa: Option<u64>) -> Option<u128> {
-        let derived = self.palw_canonical_per_draw_v1(&claim.class_id, claim.accepted_daa, canonical_work_daa)?;
-        let declared = self.classes.get(&claim.class_id)?.pwu_rule.canonical_leaves_v1();
-        crate::palw_canonical_work_v1::palw_claim_canonical_pwu_v1(claim.pwu, declared, derived)
+        canonical_work_daa?;
+        if !matches!(claim.source, PalwClaimSourceV2::Attempt) || claim.accepted_daa < canonical_work_daa? {
+            return None;
+        }
+        Some(claim.pwu as u128)
     }
 
     /// ADR-0135: a seat's last possession proof for a class.

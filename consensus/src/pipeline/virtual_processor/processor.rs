@@ -4174,7 +4174,7 @@ impl VirtualStateProcessor {
         let candidate_daa = virtual_read.state.get().ok()?.daa_score;
         drop(virtual_read);
         let budget_fences = self.palw_epoch_budget_fences_at(candidate_daa);
-        let mut facts = kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v2(
+        let mut facts = kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v3(
             &state,
             state_params,
             admission,
@@ -4187,6 +4187,8 @@ impl VirtualStateProcessor {
                 budget_fences.work_target_floor,
                 budget_fences.single_lottery,
             ),
+            // ADR-0149: the height the admission compares the candidate against.
+            budget_fences.canonical_work_daa,
         )?;
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
