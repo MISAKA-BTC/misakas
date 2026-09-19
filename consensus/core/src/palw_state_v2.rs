@@ -28981,6 +28981,72 @@ pub(crate) mod tests {
         assert!(total <= honest, "the chain must never pay more than the run cost: {total} vs {honest}");
     }
 
+    /// **RE-AUDIT 2026-09-19 — a commitment the fold refuses is DROPPED, and the block stands.**
+    ///
+    /// The attack, exactly as an executor would run it past the derived-work fence: E commits its
+    /// 32-token prompt, then commits an 8-token PREFIX of the same prompt, and a miner puts both
+    /// in ONE block in that order. The prefix's prefill is work the chain has already bought, so
+    /// `fp_accounted_prefix_tokens_v2` credits only its decode half — 716 leaves against the
+    /// class's 1,000-leaf quantum — and the fold raises `ZeroQuanta`.
+    ///
+    /// `apply_palw_transition_v2` applies objects with `apply_object(..)?`
+    /// (`palw_state_v2.rs:11433`), so that error would take the whole block with it. It does not,
+    /// because the object list the transition folds is not the walk's output: the virtual
+    /// processor's `palw_v2_accepted_objects` (`consensus/src/pipeline/virtual_processor/processor.rs:4850`)
+    /// sits between them and filters SEQUENTIALLY, trial-applying each object with
+    /// `palw_v2_apply_one_object_v1` against the state the previous one left and, on `Err`,
+    /// dropping it and carrying on — *"a PALW lifecycle object was dropped, and the block stands"*
+    /// (`processor.rs:5414`). That loop is reproduced here with the same two functions the
+    /// processor calls, so this is the production predicate and not a model of it.
+    ///
+    /// Both halves are asserted, because only the pair is the property: the unfiltered list
+    /// fails, the filtered list applies, and what the filter returned is exactly the honest claim.
+    #[test]
+    fn audit_a_sub_quantum_commitment_is_dropped_and_the_block_stands() {
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let profile = derived_profile();
+        let leaves = |n: u32| crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, n, 2, 1 << 26).unwrap();
+        let ids: Vec<u32> = (0..32).collect();
+        let long = derived_commit(0xD1, &ids, 2, leaves(32));
+        let short = derived_commit(0xD2, &ids[..8], 2, leaves(8));
+        let point = ctx(4, 103, 4);
+
+        // The prefix alone, on a chain that has bought nothing of it, is an ordinary claim — so
+        // what follows is about the PAIR and not about the prefix being malformed.
+        apply_derived(&published, &p, &point, std::slice::from_ref(&short), &armed).expect("the prefix alone is a claim");
+
+        // Unfiltered, the pair takes the block down.
+        assert_eq!(
+            apply_derived(&published, &p, &point, &[long.clone(), short.clone()], &armed).unwrap_err(),
+            PalwStateV2Error::ZeroQuanta,
+            "the fold refuses the second commitment: its decode half is under one quantum"
+        );
+
+        // The filter the virtual processor actually runs, with the processor's own arguments.
+        let mut folded = palw_v2_pre_object_base_v1(&published, &p, &point, false, false, true, false, &armed)
+            .expect("the pre-object base is what the real fold runs before any object");
+        let mut accepted = Vec::new();
+        let mut dropped = Vec::new();
+        for object in [long.clone(), short.clone()] {
+            match palw_v2_apply_one_object_v1(&folded, &p, &point, &object, false, false, true, false, &armed) {
+                Ok(next) => {
+                    folded = next;
+                    accepted.push(object);
+                }
+                Err(why) => dropped.push(why),
+            }
+        }
+        assert_eq!(accepted, vec![long], "the prefix commitment is dropped and the 32-token claim rides");
+        assert_eq!(dropped, vec![PalwStateV2Error::ZeroQuanta], "…dropped by name, and only it");
+
+        // **The filter's one contract**: what it returns, the transition applies without error.
+        let (stands, _) = apply_derived(&published, &p, &point, &accepted, &armed).expect("the block stands");
+        assert!(stands.claim(&h64(0xD1)).is_some(), "the honest claim is on the chain");
+        assert!(stands.claim(&h64(0xD2)).is_none(), "and the prefix bought nothing");
+    }
+
     /// **The prompt row leaves with the claim, and a reorg puts it back.**
     ///
     /// The row is not derivable from the claim table — the claim record carries no prompt — so

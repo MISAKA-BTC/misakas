@@ -1102,4 +1102,195 @@ mod tests {
         // Saturating, not wrapping: the heaviest claim must never become the lightest.
         assert_eq!(palw_claim_canonical_pwu_v1(u64::MAX, 1, u128::MAX), Some(u128::MAX));
     }
+
+    /// **ACCOUNTING RE-AUDIT 2026-09-19 — ADR-0145 §8's property, mass-generated.**
+    ///
+    /// The audit's F1 is not one counterexample, it is a CLASS of them: everything a registrant
+    /// may write down about a class that changes no arithmetic. This enumerates that class rather
+    /// than sampling it, over ONE effective inference — the executed job is held fixed at
+    /// `(prefill 63, decode 1)`, which is exactly what `palw_attempt_job_v1` runs past
+    /// `Params::palw_prefill_draw` (armed at DAA 4,000 on `palw_rc_shipped_params()`) whatever the
+    /// class declared — and varies only the representation:
+    ///
+    /// * **`tile_len`**, the commitment splitting, across its whole legal range
+    ///   `[PALW_STEP_MIN_TILE_LEN, PALW_STEP_MAX_TILE_LEN]` = `[4, 65536]`;
+    /// * **the declared canonical `(prefill, decode)` split**, decode from 1 to 370 at fixed
+    ///   prefill — every one of which executes the same single decode call;
+    /// * **runtime metadata / serialization** (`n_threads`), which moves `shape_profile_id` and
+    ///   therefore the class id, and no arithmetic.
+    ///
+    /// Three quantities must be invariant across the whole cross-product: the **derived canonical
+    /// work**, the **reward**, and the **fork-choice weight**.
+    ///
+    /// Only variations the chain would really admit are counted: `tile_len` is NOT free in
+    /// `[4, 65536]` as the audit wrote — `palw_class_admission_v2` stores
+    /// `worst_case_step_leaf_count_capped_v1(profile, ladder)` and that call refuses a profile
+    /// whose worst case clears the court's ladder, so the finest admissible uniform tile is 24 and
+    /// the sub-24 rows below are skipped rather than counted as attacks.
+    #[test]
+    fn legal_representations_of_one_inference_must_price_identically() {
+        use crate::palw_class_daa::attempt_target_seed_v1;
+        use crate::palw_panel_economy_v1::palw_work_priced_reward_v1;
+        use crate::palw_pwu::{palw_expected_attempts_v1, palw_pwu_v1};
+        use crate::palw_step::{
+            PALW_STEP_MAX_TILE_LEN, PALW_STEP_MIN_TILE_LEN, step_leaf_count_capped_v1, worst_case_step_leaf_count_capped_v1,
+        };
+
+        /// `court.max_step_leaf_count()` on the shipped preset (2^26), read off the ladder probe.
+        const LADDER: u64 = 67_108_864;
+        /// The dense row's held share (`palw_class_daa.rs:672`'s own table).
+        const SHARE: u16 = 489;
+        /// The 72 % worker carve the audit priced against.
+        const ESCROW: u64 = 320_084_640_000;
+        /// The ADR-0124 unit over the shipped weight-bearing classes (redteam probe R6).
+        const UNIT_DECLARED: u64 = 9_000_776;
+        /// The effective inference. Prefill is part of WHAT IS RUN, so it is held fixed; decode is
+        /// not, because the draw executes exactly one decode call whatever was declared.
+        const PREFILL: u32 = 63;
+
+        let tiles: [u32; 13] =
+            [PALW_STEP_MIN_TILE_LEN, 8, 16, 24, 32, 48, 64, 128, 256, 512, 4096, 16_384, PALW_STEP_MAX_TILE_LEN];
+        let decodes: [u32; 11] = [1, 2, 3, 4, 8, 16, 32, 64, 128, 256, 370];
+        let threads: [u32; 3] = [1, 2, 4];
+
+        struct Row {
+            tile: u32,
+            decode: u32,
+            threads: u32,
+            declared: u64,
+            derived: u128,
+            weight_today: u128,
+            weight_derived: u128,
+            executed_total: u128,
+            reward_today: u64,
+            class_id: Hash64,
+        }
+        let mut rows: Vec<Row> = Vec::new();
+        let (mut generated, mut refused) = (0usize, 0usize);
+
+        for &tile in tiles.iter() {
+            for &decode in decodes.iter() {
+                for &n_threads in threads.iter() {
+                    generated += 1;
+                    let mut profile = dense();
+                    for table in
+                        [&mut profile.pre_nodes, &mut profile.gdn_nodes, &mut profile.attn_nodes, &mut profile.post_nodes]
+                    {
+                        for node in table.iter_mut() {
+                            node.tile_len = tile;
+                        }
+                    }
+                    profile.n_threads = n_threads;
+                    if profile.validate_shape().is_err() {
+                        refused += 1;
+                        continue;
+                    }
+                    // Admission's own two gates, in admission's own order.
+                    let Ok(worst) = worst_case_step_leaf_count_capped_v1(&profile, LADDER) else {
+                        refused += 1;
+                        continue;
+                    };
+                    let job = rc_job_context(&profile, PREFILL, decode);
+                    let Ok(declared) = step_leaf_count_capped_v1(&profile, &job, LADDER) else {
+                        refused += 1;
+                        continue;
+                    };
+                    if declared > worst {
+                        refused += 1;
+                        continue;
+                    }
+
+                    // The work the chain DERIVES for the job a draw really runs.
+                    let d = descriptor(&profile);
+                    let derived = palw_canonical_draw_work_v1(&d, &job, true).expect("a shipped profile derives").provisional_scalar_v1();
+
+                    // The chain's own pipeline: the declaration seeds the difficulty
+                    // (`attempt_target_seed_v1`, live at `palw_state_v2.rs:9595` and `:14676`),
+                    // the difficulty sets the expected draws, and the product is `claim.pwu`.
+                    let target = attempt_target_seed_v1(SHARE, declared);
+                    let pwu = palw_pwu_v1(target, declared);
+                    let attempts = palw_expected_attempts_v1(target).max(1) as u128;
+
+                    rows.push(Row {
+                        tile,
+                        decode,
+                        threads: n_threads,
+                        declared,
+                        derived,
+                        weight_today: pwu as u128,
+                        weight_derived: palw_claim_canonical_pwu_v1(pwu, declared, derived).expect("declared is non-zero"),
+                        executed_total: attempts * derived,
+                        reward_today: palw_work_priced_reward_v1(ESCROW, declared, UNIT_DECLARED),
+                        class_id: d.canonical_class_id_v1(),
+                    });
+                }
+            }
+        }
+
+        assert!(rows.len() > 100, "the generator must actually enumerate the class, got {}", rows.len());
+        let first = &rows[0];
+
+        // ---- P1. The derived canonical work is invariant. This is ADR-0145 §1's whole claim. ----
+        for r in rows.iter() {
+            assert_eq!(
+                r.derived, first.derived,
+                "canonical work moved for a pure representation change: tile_len {} decode {} n_threads {}",
+                r.tile, r.decode, r.threads
+            );
+            assert_eq!(r.class_id, first.class_id, "the canonical class identity moved for a representation change");
+        }
+
+        // ---- P2. On the DERIVED basis the weight is exactly the arithmetic really executed. ----
+        for r in rows.iter() {
+            assert_eq!(
+                r.weight_derived, r.executed_total,
+                "derived weight is not the executed arithmetic at tile_len {} decode {}",
+                r.tile, r.decode
+            );
+        }
+
+        // ---- P3. What the SHIPPED basis actually does with the same set. -------------------
+        //
+        // `weight_today / executed_total` is fork-choice weight bought per unit of arithmetic
+        // really performed. It must be flat. It is not: the declared leaf count is a direct
+        // multiplier on it, which is audit finding F1.
+        let ratio = |r: &Row| r.weight_today as f64 / r.executed_total as f64;
+        let worst_row = rows.iter().max_by(|a, b| ratio(a).total_cmp(&ratio(b))).unwrap();
+        let best_row = rows.iter().min_by(|a, b| ratio(a).total_cmp(&ratio(b))).unwrap();
+        let spread = ratio(worst_row) / ratio(best_row);
+        let reward_spread = rows.iter().map(|r| r.reward_today).max().unwrap() as f64
+            / rows.iter().map(|r| r.reward_today).min().unwrap() as f64;
+
+        println!(
+            "variations generated {generated}, admissible {} (refused by the ladder {refused})\n\
+             derived work per draw, invariant across all of them = {} MAC-eq\n\
+             SHIPPED basis  weight/executed-MAC-eq spread = {spread:.1}x  \
+             (worst tile_len {} decode {} declared {} ; best tile_len {} decode {} declared {})\n\
+             SHIPPED basis  reward spread                 = {reward_spread:.1}x\n\
+             DERIVED basis  weight/executed-MAC-eq        = 1.0x for every row (P2)",
+            rows.len(),
+            first.derived,
+            worst_row.tile,
+            worst_row.decode,
+            worst_row.declared,
+            best_row.tile,
+            best_row.decode,
+            best_row.declared,
+        );
+
+        // The reward half really is representation-independent past ADR-0132's snapshot only
+        // because `palw_work_priced_reward_v1` saturates at the unit; below it, it is linear in
+        // the declaration. Both halves are recorded rather than asserted flat, because asserting
+        // flatness here would assert a fix that `palw_rc_shipped_params().palw_canonical_work`
+        // (None — dormant on every shipped preset) has not made.
+        assert!(
+            spread > 1.0,
+            "the shipped basis priced every representation alike — the canonical-work fence must have been armed; \
+             re-point this assertion at equality and delete the F1 finding"
+        );
+        assert!(
+            reward_spread > 1.0,
+            "the shipped reward basis priced every representation alike — see above"
+        );
+    }
 }
