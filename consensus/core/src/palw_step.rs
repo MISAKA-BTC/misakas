@@ -1277,6 +1277,86 @@ fn worst_case_step_leaf_count_capped_counted_v1(
     Ok(total)
 }
 
+/// **The largest leaf count any LEGAL job of this class can produce** — the quantity
+/// [`worst_case_step_leaf_count_capped_v1`] is named for and does not compute (2026-09-19 reward
+/// audit, F4).
+///
+/// # What the older function counts, and why it is not a worst case
+///
+/// It enumerates `n_ctx - 1` prefill positions and **one** decode call, so it pays the post table
+/// exactly twice: once for the logits row the last prefill position produces, once for that single
+/// decode call. A real job pays `Post(k)` at EVERY decode call. The job `(P = 1, D = n_ctx - 1)` —
+/// one prompt token and a full context of decode calls — is legal by the only rule that bounds a
+/// job's length (`palw_step_leg`'s `JobExceedsClassContext`: `P + exact_decode_tokens - 1 ≤ n_ctx`),
+/// and on the shipped graph-v5 A16 geometry it is **18.4 % deeper** than the declared worst case at
+/// every width. It also drops the aux series entirely, which a job pays over its own positions.
+///
+/// A class whose DECLARED worst case clears the ruleset's ladder while its deepest legal job does
+/// not is admitted and then unprosecutable: every opening a court walks is verified against the
+/// ladder (`step_merkle_path_verify_capped_v1` and friends refuse `leaf_count > max_step_leaf_count`
+/// with `LeafCountOutOfRange`), so no dispute over a claim on such a job can be opened at all.
+///
+/// # The maximisation, in closed form
+///
+/// With `S = P + D ≤ n_ctx` the enumeration is
+///
+/// ```text
+///   Σ_{k=1}^{S} B(k)  +  [P ≥ 1]·Post(P)  +  Σ_{k=P+1}^{S} Post(k)  +  aux(S)
+/// ```
+///
+/// The body sum depends only on `S`, and the logits sum is `Σ_{k=P}^{S} Post(k)` for `P ≥ 1` and
+/// `Σ_{k=1}^{S} Post(k)` for `P = 0` — both maximised by taking the prefill as short as the lane
+/// admits and `S` as long as the context does. `Post` is non-decreasing in `k`, so the maximum is
+/// at `S = n_ctx`, `P ∈ {0, 1}`, and both give the same number. `aux` is monotone in `S` for the
+/// same reason. So the answer is `Σ_{k=1}^{n_ctx} B(k) + Σ_{k=1}^{n_ctx} Post(k) + aux(n_ctx)`,
+/// evaluated with the SAME [`palw_leaf_shape_v1`] terms the job counter uses — one derivation, so
+/// the bound and the thing it bounds cannot drift.
+///
+/// Cost is [`worst_case_step_leaf_count_capped_v1`]'s: `O(pre + gdn + attn + post)` node visits,
+/// with no `n_ctx` and no `layer_count` factor.
+///
+/// **This does not replace the older function's VALUE anywhere a value is committed.**
+/// `PalwClassCatalogEntryV2::max_step_leaf_count` is built from it and its root is inside
+/// `palw_ruleset_id_v2`, so changing that number is a flag day. This is the predicate an admission
+/// gate should compare against the ladder; see the audit note on `palw_class_admission_v2`.
+pub fn worst_case_step_leaf_count_deepest_job_capped_v1(profile: &PalwShapeProfileV3, cap: u64) -> Result<u64, PalwStepError> {
+    worst_case_step_leaf_count_deepest_job_counted_v1(profile, cap, &mut 0)
+}
+
+/// [`worst_case_step_leaf_count_deepest_job_capped_v1`] with the node-visit counter its cost test reads.
+fn worst_case_step_leaf_count_deepest_job_counted_v1(
+    profile: &PalwShapeProfileV3,
+    cap: u64,
+    visits: &mut u64,
+) -> Result<u64, PalwStepError> {
+    profile.validate_shape()?;
+    let shape = palw_leaf_shape_v1(profile, visits);
+    let steps = profile.n_ctx as u128;
+    if steps == 0 {
+        return Ok(0);
+    }
+    // `Σ_{k=1}^{n_ctx} B(k)`, then a logits pass at every one of those positions — which is what
+    // `palw_job_running_total_v1` sums for `(P = 1, D = n_ctx - 1)`: `Post(1)` from the prefill's
+    // last position and `Σ_{k=2}^{n_ctx} Post(k)` from the decode window.
+    let mut total = palw_body_prefix_v1(&shape, steps, visits);
+    total = total.saturating_add(palw_logits_window_v1(&shape, 0, steps, visits));
+    let total = palw_saturate_u64(total).saturating_add(kv_aux_leaf_count_at_positions_v1(profile, profile.n_ctx as u64));
+    if total > cap {
+        return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+    }
+    Ok(total)
+}
+
+/// [`kv_aux_leaf_count`] over a position count rather than a job — the same expression, so the
+/// worst case and the job counter cannot answer differently about the aux series.
+fn kv_aux_leaf_count_at_positions_v1(profile: &PalwShapeProfileV3, positions: u64) -> u64 {
+    if profile.kv_chunk_calls == 0 {
+        return 0;
+    }
+    let attn_layers = (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::Attention).count() as u64;
+    attn_layers * profile.attn_kv_heads as u64 * 2 * positions.div_ceil(profile.kv_chunk_calls as u64)
+}
+
 /// Total step-leg leaves for `(profile, context)`: the main enumeration then the aux series.
 /// Errors when the job shape exceeds the cap.
 pub fn step_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV2) -> Result<u64, PalwStepError> {

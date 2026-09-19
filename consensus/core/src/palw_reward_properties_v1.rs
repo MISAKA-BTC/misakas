@@ -650,6 +650,75 @@ fn the_over_ladder_class_is_refused_at_admission() {
     }
 }
 
+/// **The fix for counterexample 5: a worst case that is one** —
+/// [`crate::palw_step::worst_case_step_leaf_count_deepest_job_capped_v1`].
+///
+/// Invariant (vii), stated as the audit states it: *a class's declared worst case must bound EVERY
+/// legal job*. The predicate under test is the new closed form; the thing it must bound is
+/// `step_leaf_count_capped_v1` at every `(P, D)` the class's own footprint rule admits
+/// (`palw_step_leg`'s `JobExceedsClassContext`: `P + exact_decode_tokens - 1 ≤ n_ctx`).
+///
+/// Three properties, and the third is the one that closes F4:
+///
+/// * it EQUALS the deepest legal job's own count, so it is a bound that is attained and not a
+///   margin somebody guessed;
+/// * it DOMINATES every job in a sweep over the admissible `(P, D)` lattice, on all four shipped
+///   profiles and on the whole 512..=640 A16 band;
+/// * the 576..=640 band — admitted today — is REFUSED against the shipped `2^26` ladder, while the
+///   shipped @512 row still clears it, so the fix refuses exactly the classes whose legal jobs the
+///   court cannot walk and no shipped class is lost.
+#[test]
+fn the_deepest_legal_job_is_the_worst_case() {
+    use crate::palw_step::worst_case_step_leaf_count_deepest_job_capped_v1 as deepest;
+    let ladder = shipped_ladder();
+    assert_eq!(ladder, 67_108_864, "2^26, the shipped ruleset's bisection ladder");
+
+    // (1) and (2), on every shipped profile.
+    for (name, profile) in
+        [("base0", base0_floor()), ("dense@512", dense_512()), ("hybrid35B", hybrid_35b()), ("dense27B", dense_27b())]
+    {
+        let n_ctx = profile.n_ctx;
+        let bound = deepest(&profile, u64::MAX).expect("the closed form evaluates");
+        assert_eq!(
+            bound,
+            step_leaf_count_capped_v1(&profile, &job(&profile, 1, n_ctx), u64::MAX).unwrap(),
+            "{name}: the bound is the deepest legal job's own count, attained"
+        );
+        // …and it is never below the OLD function, which is the half the old one got right.
+        assert!(bound >= worst_case_step_leaf_count_capped_v1(&profile, u64::MAX).unwrap(), "{name}: a worst case never shrinks");
+        // The sweep: every `(P, D)` the footprint rule admits, at the corners and across the band.
+        for p in [0u32, 1, 2, 7, 63, n_ctx / 4, n_ctx / 2, n_ctx - 1, n_ctx] {
+            for d in [1u32, 2, 8, 64, n_ctx / 2, n_ctx] {
+                // `JobExceedsClassContext`: `P + exact_decode_tokens − 1 ≤ n_ctx`.
+                if p as u64 + d.max(1) as u64 - 1 > n_ctx as u64 {
+                    continue;
+                }
+                let counted = step_leaf_count_capped_v1(&profile, &job(&profile, p, d), u64::MAX).unwrap();
+                assert!(counted <= bound, "{name}: job ({p}, {d}) counts {counted} leaves, above the worst case {bound}");
+            }
+        }
+    }
+
+    // (3) The band the audit measured, priced against the shipped ladder.
+    // (n_ctx, the OLD declared worst, the deepest legal job).
+    let rows: [(u32, u64, u64); 4] =
+        [(512, 52_778_128, 62_476_288), (576, 59_370_640, 70_285_824), (608, 62_666_896, 74_190_592), (640, 65_963_152, 78_095_360)];
+    for (n_ctx, old_worst, deepest_legal) in rows {
+        let profile = crate::palw_context_ladder::palw_a16_context_row_profile_v5(n_ctx).expect("the row projects");
+        assert_eq!(worst_case_step_leaf_count_capped_v1(&profile, ladder).unwrap(), old_worst, "n_ctx {n_ctx}: the old number");
+        assert_eq!(deepest(&profile, u64::MAX).unwrap(), deepest_legal, "n_ctx {n_ctx}: the new number is the deepest legal job");
+        if n_ctx == 512 {
+            assert_eq!(deepest(&profile, ladder), Ok(deepest_legal), "the SHIPPED row still clears the ladder under the fix");
+        } else {
+            assert_eq!(
+                deepest(&profile, ladder),
+                Err(crate::palw_step::PalwStepError::TooManyLeaves { got: deepest_legal, max: ladder }),
+                "n_ctx {n_ctx} is refused: its legal jobs are above the ladder the court walks at"
+            );
+        }
+    }
+}
+
 // =============================================================================================
 // PART 2 — ADR-0145 §8's properties
 // =============================================================================================
