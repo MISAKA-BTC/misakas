@@ -402,7 +402,7 @@ else
 fi
 
 for n in 1 2; do cli "$n" palw registry --output json > "$WORK_DIR/out/registry-node-$n.json" 2>/dev/null || true; done
-# **1d/6 the ECONOMIC BUNDLE is crossed and the chain keeps producing.**
+# **5b/6 the ECONOMIC BUNDLE is crossed and the chain keeps producing.**
 #
 # The repo's first working rule: a build that arms a fence does not ship without a drill that
 # CROSSES it. The ADR-0145 bundle arms three fences at once — canonical work, independent
@@ -415,7 +415,7 @@ for n in 1 2; do cli "$n" palw registry --output json > "$WORK_DIR/out/registry-
 # Evidence must postdate the crossing, so the tip is read AFTER the fence height and the chain is
 # then required to advance again from there.
 if [ -n "$ECONOMY_AT" ]; then
-  log "1d/6 the ADR-0145 economic bundle is crossed and the chain keeps producing"
+  log "5b/6 the ADR-0145 economic bundle is crossed and the chain keeps producing"
   eco_t0=$SECONDS
   eco_daa=""
   while [ $((SECONDS - eco_t0)) -lt "${ECONOMY_WAIT:-900}" ]; do
@@ -445,7 +445,7 @@ regression this step is here to separate from crossing it."
     [ -n "$n_daa" ] && [ "$n_daa" -gt "$ECONOMY_AT" ] 2>/dev/null \
       || die "node-$i is at daa ${n_daa:-?}, not past the bundle at $ECONOMY_AT: the fence partitioned the fleet"
   done
-  log "1d/6 the bundle at $ECONOMY_AT is crossed; tip $eco_daa then $moved, and all $NODES nodes are past it"
+  log "5b/6 the bundle at $ECONOMY_AT is crossed; tip $eco_daa then $moved, and all $NODES nodes are past it"
 fi
 
 log "6/6 PASS — the registry armed at $REGISTRY_AT$([ -n "$ECONOMY_AT" ] && echo ", the ADR-0145 economic bundle crossed at $ECONOMY_AT with the chain still producing" || echo ""), the rows opened at the boundary, the grace passed with the base class ACTIVE and the chain producing, and a restarted node holds the same rows$([ -n "$CLASS_ID" ] && echo "; the second class was registered and proved" || echo " (no second class: the proof path was not exercised)")"
