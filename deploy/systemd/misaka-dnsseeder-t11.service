@@ -1,0 +1,15 @@
+[Unit]
+Description=MISAKA DNS seeder (testnet-11)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/default/misaka-dnsseeder-t11
+ExecStart=/usr/local/bin/misaka-dnsseeder --network-id testnet-11 --listen ${MISAKA_SEEDER_LISTEN} --anchors ${MISAKA_SEEDER_ANCHORS} --anchors-only --node-wrpc-borsh ${MISAKA_SEEDER_NODE_RPC}
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
