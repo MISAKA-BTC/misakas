@@ -8,13 +8,13 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Current status (2026-09-20).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde`** (the build that schedules
-> ADR-0138 / ADR-0142's DAA clock at 8,000 — attempts leave the DAA, a heartbeat merging parallel
-> tips no longer jumps `+N`; previous `731e9d3a…`). The held regime and the audit's deep fixes are
-> at DAA 7,100; the DAA 7,101 flag day carries ADR-0130's operator lottery and 5-DAA spans, the
-> model registry, the economic payout, the work target and the short challenge window; ADR-0133's
-> Verification V2 (S1) is at 7,200; ADR-0134's compute-overlay retirement is at 7,301; the 7,000
-> release prints `ae1d6162…`.
+> **`400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8`** (the build that shortens
+> the execution lane's schedule span 5 DAA → 1 DAA at 7,300, keeping ADR-0130's f+2 seed delay;
+> previous `137b9c50…`). The held regime and the audit's deep fixes are at DAA 7,100; the DAA 7,101
+> flag day carries ADR-0130's operator lottery and 5-DAA spans, the model registry, the economic
+> payout, the work target and the short challenge window; ADR-0133's Verification V2 (S1) is at
+> 7,200; ADR-0130's span-short is at 7,300; ADR-0134's compute-overlay retirement is at 7,301; the
+> 7,000 release prints `ae1d6162…`.
 > The network produces PALW blocks at a frozen 120-second cadence. Testnet-10 and older relaunches
 > are not supported entry points. ADR-0123's epoch-budget release is implemented but remains
 > dormant on every shipped preset (`palw_epoch_budget_release: None`).
@@ -217,15 +217,14 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000 (schedule id …)
+Consensus params fingerprint: 400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8 (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7300, 7301, 8000, 2125000 (schedule id …)
 ```
 
-> **The fingerprint moved on 2026-09-20 (ADR-0150).** The consensus rule manifest is hashed into it now, so a build that
-> redefines what a fence ADMITS — at a height nobody moved — stops fingerprinting like one that does not. testnet-11 is the
-> only preset whose number changed, and it changed for `palw_readiness` R2 (the possession proof is the prefix of its draw a
-> carrier's budget buys). The build before it printed `c3a5e91dfc9336b0…`; the IDENTITY did not move, so an
-> un-updated node still peers.
+> **The fingerprint moved on 2026-09-20 (execution span-short at 7,300).** The identity did not:
+> a node on `137b9c50…` still peers until DAA 7,300. One without `7300` in the schedule is refused
+> from that height. The 8,000 clock build printed `137b9c50…`; ADR-0150's readiness-R2 build printed
+> `c3a5e91d…`.
 
 A build from `891a1a14` up to `a5f1bdf7` prints `060e3597cd2950bc…` on the first line and the same
 second line. It runs the same ruleset: until 2026-09-11 the fingerprint left ADR-0095's fence at 2400
@@ -234,7 +233,7 @@ The two stay peers — the handshake logs `schedules a FUTURE fence differently`
 than refusing — but rebuilding is how the first line becomes a check again. The second line is the
 one that names heights: a build without `3500` in it forks off at 3,500, one without `4000` at 4,000,
 one without `6000` at 7,100 (the 7,000 release, `ae1d6162…`, which names 6,900 and 7,000 instead),
-one without `6001` at 7,101, one without `6201` at 7,301. One case the second line cannot show:
+one without `6001` at 7,101, one without `7300` at 7,300, one without `6201` at 7,301. One case the second line cannot show:
 `4000`, `6000` and `6001` each carry more
 than one fence, and a build with only some of them (at 4,000, the audit's
 alone prints `09efd285…`) shows the same line and parts silently at that height — the first

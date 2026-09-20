@@ -25,13 +25,13 @@
 > [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
 > [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
-**Fingerprint of current `main`: `137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde`.** It replaced
-`c3a5e91dfc9336b0…` on 2026-09-20, when ADR-0150 hashed the consensus rule manifest into the
-fingerprint so a redefined rule no longer looks like the rule it replaced.
+**Fingerprint of current `main`: `400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8`.** It replaced
+`137b9c50aac6c8aabb…` on 2026-09-20, when the execution lane's schedule span shortened 5 DAA → 1 DAA
+at 7,300 (ADR-0130's f+2 seed delay is kept). The identity did not move.
 
 The dated deployment deadlines above are historical. The live schedule is: held/deep-audit fixes at
-7,100; the `6001`-named PALW upgrade bundle at 7,101; Verification V2/readiness V2 at 7,200; and
-overlay retirement at 7,301.
+7,100; the `6001`-named PALW upgrade bundle at 7,101; Verification V2/readiness V2 at 7,200;
+execution-span short at 7,300; and overlay retirement at 7,301.
 
 ```bash
 kaspad --testnet --netsuffix=11   # the first log lines print the fingerprint and the fence schedule
@@ -108,6 +108,11 @@ refused from 7,200, and a seat re-proves every few spans instead of every thirty
 the artifact needs no change beyond running this build; a seat that was answering with one window
 will stop counting. ADR-0133 §11.2.
 
+**DAA 7,300 — the execution span shortens 5 DAA → 1 DAA.** The 7,101 lane keeps five-DAA spans for
+every fold below this height. Past it, one span is one DAA (~120 s), so Final → snapshot → future
+seed → permit is two spans (~4 min) instead of ~20. The two-span seed delay itself is kept
+(ADR-0130 Decision 4). LLM activity is still the only source of execution capacity.
+
 **DAA 7,301 — the compute overlay retires** (ADR-0134). **DAA 6,900 — the market's least seed** (ADR-0120).
 
 ## What the two audits found before this was armed
@@ -131,7 +136,7 @@ This bundle was audited twice against the code, not the design, and both reports
 ## What an operator has to do
 
 1. Build current `main` and check the startup schedule:
-   `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`.
+   `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7300, 7301, 8000, 2125000`.
 2. Keep every producer, panel seat and pool slot on this ruleset. A normal ruleset update does not
    require a datadir move or resync.
 3. After 7,101, read the registry and the economics:

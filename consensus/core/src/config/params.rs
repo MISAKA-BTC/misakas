@@ -434,6 +434,20 @@ pub struct PalwExecutionLaneV1 {
     /// of its anchor's span, and a merging block accepts round blocks anchored in its own span or the
     /// one before.
     pub schedule_span_daa: u64,
+    /// **A later, shorter schedule span** (testnet-11: 5 DAA → 1 DAA at
+    /// [`PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA`]). Unused is [`PalwExecSpanShortV1::NONE`]. The
+    /// two-span seed delay (ADR-0130 Decision 4) is kept: participants are fixed, then a future
+    /// attempt-carrying anchor seeds them. Only the wall-clock of one span shrinks. Historical
+    /// folds below this height still read [`Self::schedule_span_daa`].
+    pub short_span: PalwExecSpanShortV1,
+}
+
+/// **One later shortening of the execution lane's schedule span.** Height is a fence (fork-id
+/// visible); the new span length is a companion value. `NONE` is unused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwExecSpanShortV1 {
+    pub activation: ForkActivation,
+    pub schedule_span_daa: u64,
 }
 
 /// **One widening of the execution lane** (ADR-0125 §7.2): from the first span that opens at or past
@@ -453,20 +467,45 @@ impl PalwExecWideningV1 {
     }
 }
 
+impl PalwExecSpanShortV1 {
+    /// No shortening scheduled.
+    pub const NONE: Self = Self { activation: ForkActivation::never(), schedule_span_daa: 0 };
+
+    pub fn is_used(&self) -> bool {
+        self.activation != ForkActivation::never()
+    }
+}
+
 impl PalwExecutionLaneV1 {
     /// No widening scheduled.
     pub const NO_WIDENINGS: [PalwExecWideningV1; crate::palw_execution_lane_v1::PALW_EXEC_MAX_WIDENINGS_V1] =
         [PalwExecWideningV1::NONE; crate::palw_execution_lane_v1::PALW_EXEC_MAX_WIDENINGS_V1];
 
-    /// The DAA score span `span` opens with.
+    /// The DAA score span `span` opens with under the lane's opening span length.
     pub fn span_opening_daa(&self, span: u64) -> u64 {
         span.saturating_mul(self.schedule_span_daa.max(1))
+    }
+
+    /// The schedule span in force at `daa_score` — the opening length, or the shortened length
+    /// past [`Self::short_span`].
+    pub fn schedule_span_daa_at(&self, daa_score: u64) -> u64 {
+        if self.short_span.is_used() && self.short_span.activation.is_active(daa_score) {
+            self.short_span.schedule_span_daa.max(1)
+        } else {
+            self.schedule_span_daa.max(1)
+        }
     }
 
     /// **The width of span `span`**: the widest stage in force at the DAA score the span opens with.
     /// Stages only widen and are in height order, so this is the last used stage at or below it.
     pub fn width_of_span(&self, span: u64) -> u16 {
-        let opening = self.span_opening_daa(span);
+        self.width_of_span_len(span, self.schedule_span_daa)
+    }
+
+    /// [`Self::width_of_span`] under an explicit span length — the shortened numbering past
+    /// [`Self::short_span`].
+    pub fn width_of_span_len(&self, span: u64, span_daa: u64) -> u16 {
+        let opening = span.saturating_mul(span_daa.max(1));
         self.widenings
             .iter()
             .filter(|stage| stage.is_used() && stage.activation.is_active(opening))
@@ -476,7 +515,11 @@ impl PalwExecutionLaneV1 {
 
     /// The width of the span `daa_score` falls in.
     pub fn width_at_daa(&self, daa_score: u64) -> u16 {
-        self.width_of_span(crate::palw_execution_lane_v1::palw_execution_span_v1(daa_score, self.schedule_span_daa))
+        let span_daa = self.schedule_span_daa_at(daa_score);
+        self.width_of_span_len(
+            crate::palw_execution_lane_v1::palw_execution_span_v1(daa_score, span_daa),
+            span_daa,
+        )
     }
 
     /// The widest round any stage of this lane configures.
@@ -3764,6 +3807,26 @@ impl Params {
             if lane.schedule_span_daa == 0 {
                 return Err(PalwModeV2Error::Invalid("palw_execution_lane declares a zero schedule span"));
             }
+            if lane.short_span.is_used() {
+                if lane.short_span.schedule_span_daa == 0 {
+                    return Err(PalwModeV2Error::Invalid("palw_execution_lane's short span is zero"));
+                }
+                if lane.short_span.schedule_span_daa >= lane.schedule_span_daa {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_execution_lane's short span must be shorter than the opening span",
+                    ));
+                }
+                if lane.short_span.activation.daa_score() <= lane.activation.daa_score() {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_execution_lane's short span must fire after the lane opens",
+                    ));
+                }
+                if lane.widenings.iter().any(|stage| stage.is_used() && stage.activation == lane.short_span.activation) {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_execution_lane's short span must have a height of its own, not a widening's",
+                    ));
+                }
+            }
         }
         if let Some(attempt_work) = self.palw_attempt_work
             && attempt_work.activation != ForkActivation::never()
@@ -4496,6 +4559,9 @@ impl Params {
                 if stage.activation == ForkActivation::never() {
                     *stage = PalwExecWideningV1::NONE;
                 }
+            }
+            if lane.short_span.activation == ForkActivation::never() {
+                lane.short_span = PalwExecSpanShortV1::NONE;
             }
         }
         // ADR-0126, the lane's shape again: the whole option collapses, so the two numbers beside a
@@ -5513,6 +5579,10 @@ impl Params {
                 "palw_execution_lane_widening_9",
                 palw_execution_lane.and_then(|lane| lane.widenings[8].is_used().then_some(lane.widenings[8].activation)),
             ),
+            (
+                "palw_execution_lane_span_short",
+                palw_execution_lane.and_then(|lane| lane.short_span.is_used().then_some(lane.short_span.activation)),
+            ),
             ("palw_overlay_carve", palw_overlay_carve.map(|carve| carve.activation)),
             ("palw_panel_exposure_floor", palw_panel_exposure_floor.map(|floor| floor.activation)),
             ("palw_fp_ruleset_caps", *palw_fp_ruleset_caps),
@@ -5657,6 +5727,11 @@ impl Params {
             for stage in lane.widenings.iter().filter(|stage| stage.is_used()) {
                 h.write(b"widening");
                 h.write(stage.permits_per_round.to_le_bytes());
+            }
+            // The shortened length is a companion; its height is visited as a fence.
+            if lane.short_span.is_used() {
+                h.write(b"span_short");
+                h.write(lane.short_span.schedule_span_daa.to_le_bytes());
             }
         }
         if let Some(attempt) = self.palw_attempt_work {
@@ -6495,11 +6570,14 @@ impl Params {
         }
         // ADR-0125: the activation and each widening's height — the lane's shape and the widths are
         // values beside the fences, not fences. An unused slot's `never()` is visited like any unset
-        // height and normalises to itself.
+        // height and normalises to itself. The span-short height is Some-only: unused writes nothing.
         if let Some(lane) = palw_execution_lane.as_mut() {
             fork(&mut lane.activation, visit);
             for stage in lane.widenings.iter_mut() {
                 fork(&mut stage.activation, visit);
+            }
+            if lane.short_span.is_used() {
+                fork(&mut lane.short_span.activation, visit);
             }
         }
         // ADR-0126: the height only — the validator share and the escrow carve are values beside it.
@@ -7348,6 +7426,11 @@ impl Params {
                 h.write(b"widening");
                 h.write(stage.activation.daa_score().to_le_bytes());
                 h.write(stage.permits_per_round.to_le_bytes());
+            }
+            if lane.short_span.is_used() {
+                h.write(b"span_short");
+                h.write(lane.short_span.activation.daa_score().to_le_bytes());
+                h.write(lane.short_span.schedule_span_daa.to_le_bytes());
             }
         }
         // ADR-0126: Some-only, so every preset that leaves the carve unset fingerprints exactly as a
@@ -12741,6 +12824,14 @@ pub const PALW_RC_PALW_UPGRADE_FENCE_DAA: u64 = 7_101;
 /// and the two DAA of separation are what make the difference checkable rather than silent.
 pub const PALW_RC_ARTIFACT_ROOT_OWNERSHIP_FENCE_DAA: u64 = 7_102;
 
+/// **ADR-0130 latency: the execution lane's schedule span shortens 5 DAA → 1 DAA at DAA 7,300.**
+///
+/// The 7,101 lane keeps `schedule_span_daa = 5` for every fold below this height. Past it, one span
+/// is one DAA (~120 s), so Final → snapshot → future seed → permit is two spans (~4 min) instead of
+/// ~20. The two-span seed delay itself is kept (ADR-0130 Decision 4). 7,300 is a height no released
+/// schedule names and is one before ADR-0134's retirement at 7,301, so the fork-id gate can see it.
+pub const PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA: u64 = 7_300;
+
 /// **ADR-0134's height on testnet-11: the compute overlay retires at DAA 6,201** — its own height,
 /// two hundred past the 6,001 flag day (7,201 past 7,001 until the flag day moved on 2026-09-17; the
 /// two hundred is kept), so the fork-id gate separates a build that carries the retirement from one
@@ -13253,7 +13344,9 @@ pub fn palw_rc_base_params() -> Params {
     // * ADR-0125 — the execution lane at one permit a round, one execution block a second, no widening
     //   scheduled (the next stage is its own height); with ADR-0130's scheduler (one parity an
     //   operator, participants fixed a span before a future anchor seeds them) and spans of 5 DAA, ten
-    //   minutes at 120 s, so a span's producers are public ten minutes ahead rather than an hour;
+    //   minutes at 120 s, so a span's producers are public ten minutes ahead rather than an hour.
+    //   Past [`PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA`] (7,300) the same scheduler runs at 1 DAA a
+    //   span — two future spans, ~4 min — without rewriting the 7,101 folds;
     // * ADR-0126 (revised) — the validator pool falls from 30 % to 20 % of a block's subsidy and the
     //   tenth is escrowed for the block's PALW claim (72 % instead of 62 %);
     // * ADR-0128 — validators vote BFT by bonded stake and the DNS-final anchor decides the stake reorg
@@ -13270,6 +13363,10 @@ pub fn palw_rc_base_params() -> Params {
         widenings: PalwExecutionLaneV1::NO_WIDENINGS,
         max_per_mergeset: 600,
         schedule_span_daa: 5,
+        short_span: PalwExecSpanShortV1 {
+            activation: ForkActivation::new(PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA),
+            schedule_span_daa: 1,
+        },
     });
     params.palw_overlay_carve =
         Some(PalwOverlayCarveV1 { activation: flag_day_6001, subsidy_validator_bps: 2_000, worker_carve_permille: 720 });
@@ -17981,12 +18078,11 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                // **Re-pinned 2026-09-20 for ADR-0138 / ADR-0142 at DAA 8,000** (`palw_single_lottery`,
-                // `palw_anchor_clock`, `palw_clock_cursor`): the live DAA was still vanilla GHOSTDAG
-                // (7,210 for an hour of parallel QWEN tips, then heartbeat `df80394b` at 7,219 with
-                // nine parents). 8,000 is past the tip and unnamed on any released schedule. Previous:
-                // 731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6.
-                "137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde",
+                // **Re-pinned 2026-09-20 for ADR-0130's span-short at DAA 7,300** (`palw_execution_lane_span_short`,
+                // 5 DAA → 1 DAA, f+2 kept): the schedule gains a height, so the fork-id gate separates this
+                // build from `137b9c50…`. The identity does not move. Previous:
+                // 137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde.
+                "400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -19604,6 +19700,8 @@ mod consensus_params_id_tests {
                 PALW_RC_PALW_UPGRADE_FENCE_DAA,
                 // ADR-0133 Verification V2's own day, a hundred past the flag day.
                 PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                // ADR-0130 latency: the execution span shortens 5 DAA → 1 DAA.
+                PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                 // ADR-0134's retirement, after the flag day.
                 PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 // ADR-0138 / ADR-0142: the DAA clock, past the live tip.
@@ -20684,6 +20782,7 @@ mod palw_execution_lane_stage_tests {
             widenings: table,
             max_per_mergeset: 600,
             schedule_span_daa: 100,
+            short_span: PalwExecSpanShortV1::NONE,
         }
     }
 
@@ -20756,6 +20855,44 @@ mod palw_execution_lane_stage_tests {
             none.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_execution_lane_widening_1" && fence.is_none()),
             "an unused slot names no height"
         );
+    }
+
+    #[test]
+    fn a_short_span_is_a_scheduled_fence_and_keeps_the_identity() {
+        let opening = lane(&[]);
+        let shortened = PalwExecutionLaneV1 {
+            short_span: PalwExecSpanShortV1 { activation: ForkActivation::new(1_000), schedule_span_daa: 1 },
+            ..opening
+        };
+        let later = PalwExecutionLaneV1 {
+            short_span: PalwExecSpanShortV1 { activation: ForkActivation::new(1_100), schedule_span_daa: 1 },
+            ..opening
+        };
+        let longer = PalwExecutionLaneV1 {
+            short_span: PalwExecSpanShortV1 { activation: ForkActivation::new(1_000), schedule_span_daa: 2 },
+            ..opening
+        };
+        let base = armed(shortened);
+        assert_eq!(shortened.schedule_span_daa_at(999), 100);
+        assert_eq!(shortened.schedule_span_daa_at(1_000), 1);
+        assert_ne!(base.consensus_params_id(), armed(opening).consensus_params_id(), "the shortening reaches the fingerprint");
+        assert_ne!(base.consensus_params_id(), armed(later).consensus_params_id(), "its height reaches the fingerprint");
+        assert_ne!(base.consensus_params_id(), armed(longer).consensus_params_id(), "so does its length");
+        assert_ne!(base.consensus_schedule_id(), armed(later).consensus_schedule_id(), "the schedule names the height");
+        assert_eq!(base.consensus_identity_id(), armed(opening).consensus_identity_id(), "a scheduled shortening leaves the identity");
+        assert_eq!(base.consensus_identity_id(), armed(later).consensus_identity_id());
+        assert!(base.fence_schedule_v1().contains(&1_000));
+        assert!(base
+            .palw_fences_v1()
+            .iter()
+            .any(|(name, fence)| *name == "palw_execution_lane_span_short" && *fence == Some(ForkActivation::new(1_000))));
+        armed(shortened).validate_palw_v2().expect("a shorter span after the opening is runnable");
+        let mut too_wide = shortened;
+        too_wide.short_span.schedule_span_daa = 100;
+        assert!(armed(too_wide).validate_palw_v2().is_err(), "not a shortening");
+        let mut too_early = shortened;
+        too_early.short_span.activation = ForkActivation::new(500);
+        assert!(armed(too_early).validate_palw_v2().is_err(), "at the opening height");
     }
 }
 
@@ -21066,6 +21203,11 @@ mod palw_overlay_carve_tests {
         assert!(!rc.palw_compute_overlay_retired_at(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA - 1));
         assert!(rc.palw_compute_overlay_retired_at(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA));
         assert_ne!(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA, PALW_RC_PALW_UPGRADE_FENCE_DAA, "its own height, so the gate sees it");
+        assert_ne!(
+            PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
+            PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+            "the span-short fence is one before retirement, so each failure names its cause"
+        );
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_compute_overlay_retired" && fence.is_some()));
         for (name, preset) in [
             ("mainnet", MAINNET_PARAMS.clone()),
@@ -21242,6 +21384,7 @@ mod palw_model_registry_fence_tests {
         let later: &[(&str, u64)] = &[
             ("palw_verification_v2", PALW_RC_VERIFICATION_V2_FENCE_DAA),
             ("palw_readiness_v2", PALW_RC_VERIFICATION_V2_FENCE_DAA),
+            ("palw_execution_lane_span_short", PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA),
             ("palw_compute_overlay_retired", PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA),
             ("palw_model_seed_v2", PALW_RC_MODEL_SEED_V2_FENCE_DAA),
             ("palw_single_lottery", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),

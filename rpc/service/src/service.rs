@@ -1529,7 +1529,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         );
         let mut response = GetPalwRoundLaneResponse {
             armed: true,
-            schedule_span_daa: lane.schedule_span_daa,
+            schedule_span_daa: lane.schedule_span_daa_at(virtual_daa),
             max_per_mergeset: lane.max_per_mergeset,
             stages,
             virtual_daa,

@@ -24,9 +24,10 @@ can be found again.
 > **Current testnet-11 activation map (reconciled 2026-09-20).** `Params` is the executable
 > source of truth: DAA **7,100** activates the held regime and deep-audit fixes; DAA **7,101**
 > activates the PALW upgrade bundle, including ADR-0125's one-permit-per-one-second execution lane;
-> DAA **7,200** activates ADR-0133 Verification V2 and readiness multiproofs; DAA **7,301** retires
-> the compute overlay. Historical **`6000` / `6001` / `6100` / `6201`** rollout labels do not name
-> current DAA heights; `6001` is the 7,101 bundle's internal label, not an independent fence.
+> DAA **7,200** activates ADR-0133 Verification V2 and readiness multiproofs; DAA **7,300** shortens
+> the execution lane's schedule span 5 DAA → 1 DAA (ADR-0130's f+2 seed delay is kept); DAA **7,301**
+> retires the compute overlay. Historical **`6000` / `6001` / `6100` / `6201`** rollout labels do not
+> name current DAA heights; `6001` is the 7,101 bundle's internal label, not an independent fence.
 
 ## The direction that governs the PALW lineage (2026-09-02)
 
@@ -214,7 +215,7 @@ this table being re-read.**
 
 The long testnet-11 table row immediately below is retained as the pre-fourth-move release record;
 its `7000` / `7001` / `7201` values are historical and must not be used as a live activation map.
-Use the 7,100 / 7,101 / 7,200 / 7,301 map above and the startup fence schedule for current operation.
+Use the 7,100 / 7,101 / 7,200 / 7,300 / 7,301 map above and the startup fence schedule for current operation.
 
 | Preset | PALW mode | Armed from genesis | Scheduled | Not armed |
 | --- | --- | --- | --- | --- |

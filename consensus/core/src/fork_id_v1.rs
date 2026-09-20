@@ -543,6 +543,8 @@ mod tests {
                 // One for 6,001: ADR-0124, 0125, 0126, 0128 and 0130 share it.
                 crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                // ADR-0130 latency: 5 DAA → 1 DAA, its own height before ADR-0134.
+                crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
@@ -674,6 +676,7 @@ mod tests {
                     widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
                     max_per_mergeset: 600,
                     schedule_span_daa: 5,
+                    short_span: crate::config::params::PalwExecSpanShortV1::NONE,
                 })
             }
             widening if widening.starts_with("palw_execution_lane_widening_") => {
@@ -686,9 +689,21 @@ mod tests {
                     widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
                     max_per_mergeset: 600,
                     schedule_span_daa: 5,
+                    short_span: crate::config::params::PalwExecSpanShortV1::NONE,
                 });
                 lane.widenings[slot - 1] =
                     crate::config::params::PalwExecWideningV1 { activation: at, permits_per_round: 1 + slot as u16 };
+            }
+            "palw_execution_lane_span_short" => {
+                let lane = params.palw_execution_lane.get_or_insert(crate::config::params::PalwExecutionLaneV1 {
+                    activation: ForkActivation::new(1_000),
+                    permits_per_round: 1,
+                    widenings: crate::config::params::PalwExecutionLaneV1::NO_WIDENINGS,
+                    max_per_mergeset: 600,
+                    schedule_span_daa: 5,
+                    short_span: crate::config::params::PalwExecSpanShortV1::NONE,
+                });
+                lane.short_span = crate::config::params::PalwExecSpanShortV1 { activation: at, schedule_span_daa: 1 };
             }
             other => panic!("{other} is a PALW fence `palw_fences_v1` returns and this probe cannot set — add it here"),
         }
@@ -821,6 +836,7 @@ mod tests {
                         crate::config::params::PALW_RC_AUDIT_DEEP_FENCE_DAA,
                         crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                        crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                         crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                         crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                         2_125_000
@@ -886,6 +902,7 @@ mod tests {
                         HELD_AND_AUDIT_DEEP,
                         PALW_UPGRADE_DAY,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                        crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                         RETIRED_6201,
                         crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                     ],
@@ -919,6 +936,7 @@ mod tests {
                 HELD_AND_AUDIT_DEEP,
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                 RETIRED_6201,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 CRESCENDO_T11
@@ -1416,11 +1434,12 @@ mod tests {
                 HELD_AND_DEEP,
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
+                crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                 RETIRED_6201,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 CRESCENDO_T11
             ],
-            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0134 two hundred past, ADR-0138/0142 at 8,000, ADR-0120 where it was"
+            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0130's span-short at 7,300, ADR-0134 two hundred past, ADR-0138/0142 at 8,000, ADR-0120 where it was"
         );
 
         // **The deployment window.** The heights moved twice: to 6,000 on 2026-09-17 with the tip at
@@ -1485,13 +1504,17 @@ mod tests {
         let mut without_the_set = upgraded.clone();
         crate::config::params::palw_rc_clear_flag_day_6001_for_tests(&mut without_the_set);
         let mut at_6000 = upgraded.clone();
-        // The counterfactual is about the flag day's height; ADR-0134's later retirement is not part of it.
+        // The counterfactual is about the flag day's height; ADR-0134's later retirement and
+        // ADR-0130's later span-short are not part of it.
         at_6000.palw_compute_overlay_retired = None;
         let six_thousand = crate::config::params::ForkActivation::new(HELD_AND_DEEP);
         at_6000.palw_panel_economy = Some(six_thousand);
         at_6000.palw_work_priced_reward = Some(six_thousand);
-        at_6000.palw_execution_lane =
-            at_6000.palw_execution_lane.map(|lane| crate::config::params::PalwExecutionLaneV1 { activation: six_thousand, ..lane });
+        at_6000.palw_execution_lane = at_6000.palw_execution_lane.map(|lane| crate::config::params::PalwExecutionLaneV1 {
+            activation: six_thousand,
+            short_span: crate::config::params::PalwExecSpanShortV1::NONE,
+            ..lane
+        });
         at_6000.palw_overlay_carve =
             at_6000.palw_overlay_carve.map(|carve| crate::config::params::PalwOverlayCarveV1 { activation: six_thousand, ..carve });
         at_6000.dns_bft_gate =

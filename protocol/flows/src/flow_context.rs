@@ -832,7 +832,10 @@ impl FlowContext {
             Ok(ghostdag) => consensus.async_get_header(ghostdag.selected_parent).await.map(|h| h.daa_score).unwrap_or_default(),
             Err(_) => 0,
         };
-        let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(anchor_daa, lane.schedule_span_daa);
+        let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(
+            anchor_daa,
+            lane.schedule_span_daa_at(anchor_daa),
+        );
         match self.palw_round_relay.observe(hash, &block.header, span) {
             V::NotRound | V::First => true,
             V::Repeat => false,

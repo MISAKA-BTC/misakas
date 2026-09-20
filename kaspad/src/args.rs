@@ -2337,7 +2337,7 @@ fn arg_match_many_unwrap_or<T: Clone + Send + Sync + 'static>(m: &clap::ArgMatch
 
 /// `activation,width,span[,daa:width…]` — the execution lane's devnet spec (ADR-0125).
 pub fn parse_palw_execution_lane_devnet(spec: &str) -> Result<kaspa_consensus_core::config::params::PalwExecutionLaneV1, String> {
-    use kaspa_consensus_core::config::params::{ForkActivation, PalwExecWideningV1, PalwExecutionLaneV1};
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwExecSpanShortV1, PalwExecWideningV1, PalwExecutionLaneV1};
     let mut parts = spec.split(',').map(str::trim);
     let mut number = |what: &str| -> Result<u64, String> {
         parts.next().ok_or_else(|| format!("missing {what}"))?.parse::<u64>().map_err(|e| format!("{what}: {e}"))
@@ -2359,6 +2359,7 @@ pub fn parse_palw_execution_lane_devnet(spec: &str) -> Result<kaspa_consensus_co
         widenings,
         max_per_mergeset: kaspa_consensus_core::palw_execution_lane_v1::PALW_EXEC_MAX_PER_MERGESET_BOUND_V1.min(600),
         schedule_span_daa: span,
+        short_span: PalwExecSpanShortV1::NONE,
     })
 }
 

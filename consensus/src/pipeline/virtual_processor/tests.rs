@@ -13865,7 +13865,7 @@ fn adr0125_config() -> (kaspa_consensus_core::config::Config, kaspa_consensus_co
 fn adr0125_config_funded_for(
     claims: u64,
 ) -> (kaspa_consensus_core::config::Config, kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2) {
-    use kaspa_consensus_core::config::params::{ForkActivation, PalwExecutionLaneV1};
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwExecSpanShortV1, PalwExecutionLaneV1};
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     let catalog = palw_v2_test_catalog();
     let bundle = palw_v2_test_bundle_funded_for(&catalog, claims);
@@ -13880,6 +13880,7 @@ fn adr0125_config_funded_for(
                 widenings: PalwExecutionLaneV1::NO_WIDENINGS,
                 max_per_mergeset: 600,
                 schedule_span_daa: 1_000,
+                short_span: PalwExecSpanShortV1::NONE,
             });
         })
         .build();

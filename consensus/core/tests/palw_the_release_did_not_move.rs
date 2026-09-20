@@ -12,14 +12,14 @@
 
 use kaspa_consensus_core::config::params::{MAINNET_PARAMS, palw_rc_shipped_params};
 
-/// **The shipped release's fingerprint, moved 2026-09-20 by ADR-0138 / ADR-0142 at DAA 8,000.**
+/// **The shipped release's fingerprint, moved 2026-09-20 by ADR-0130's span-short fence at DAA 7,300.**
 ///
-/// Previous (`731e9d3a…`) was the ADR-0150 / readiness-R2 pin. Arming `palw_single_lottery`,
-/// `palw_anchor_clock` and `palw_clock_cursor` at 8,000 writes three Some-only rows, so the
-/// params id and the schedule id move; the identity does not (a scheduled fence normalises out).
-const T11_CONSENSUS_PARAMS_ID: &str = "137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde";
+/// Previous (`137b9c50…`) was ADR-0138 / ADR-0142 at 8,000. Shortening the execution lane's schedule
+/// span 5 DAA → 1 DAA behind a new height writes a Some-only companion onto the lane, so the params
+/// id and the schedule id move; the identity does not (a scheduled fence normalises out).
+const T11_CONSENSUS_PARAMS_ID: &str = "400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
-const T11_CONSENSUS_SCHEDULE_ID: &str = "f19aacec90f792f9afbe38089045739cf27e32dda02f01fa95c1f229f1eaafa2";
+const T11_CONSENSUS_SCHEDULE_ID: &str = "0c6c7a59fb945d290abb088e48097bcfd804548fadaa82fdf4ba2671fc8c10d1";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
 
 #[test]

@@ -127,6 +127,7 @@ pub(crate) fn kaspad_args(p: &Profile, role: Role) -> Result<Vec<String>, Findin
     })?;
     if role == Role::Miner {
         args.push("--palw-produce".to_string());
+        args.push("--palw-round-lane".to_string());
     }
     args.push("--palw-panel".to_string());
     args.push(format!("--palw-producer-key={}", key.display()));
@@ -1293,6 +1294,7 @@ mod tests {
             "--utxoindex",
             "--addpeer=169.58.39.220:26311",
             "--palw-produce",
+            "--palw-round-lane",
             "--palw-panel",
             "--palw-producer-key=/h/.misaka/miner.seed",
             "--palw-producer-bond=aa:0",
@@ -1320,6 +1322,7 @@ mod tests {
         assert!(kaspad_args(&p, Role::Miner).unwrap_err().title.contains("funds the panel"), "kaspad would panic: said here instead");
         let verifier = kaspad_args(&p, Role::Verifier).expect("a verifier without a fee outpoint files receipts only");
         assert!(!verifier.contains(&"--palw-produce".to_string()) && verifier.contains(&"--palw-panel".to_string()));
+        assert!(!verifier.contains(&"--palw-round-lane".to_string()), "only the miner spends execution permits");
         let mut p = profile(MiningToml::default());
         p.network = "testnet-x".into();
         assert_eq!(kaspad_args(&p, Role::Miner).unwrap_err().code, "E-CONFIG-NETWORK");
@@ -1356,6 +1359,7 @@ mod tests {
         };
         let drained = without_produce(&cmd);
         assert!(!drained.args.contains(&"--palw-produce".to_string()));
+        assert!(drained.args.contains(&"--palw-round-lane".to_string()), "draining LLM mining does not drop acquired capacity");
         assert!(drained.args.contains(&"--palw-panel".to_string()));
         assert!(drained.args.iter().any(|a| a.starts_with("--palw-class-artifact")), "the artifacts serve the claims' openings");
         assert_eq!(drained.args.len(), cmd.args.len() - 1);

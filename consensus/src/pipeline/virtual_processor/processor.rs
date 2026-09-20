@@ -7222,7 +7222,8 @@ impl VirtualStateProcessor {
                     let lane = self
                         .palw_execution_lane_at(point.daa_score)
                         .ok_or_else(|| "round equivocation evidence where the execution lane is not open (ADR-0125)".to_string())?;
-                    let span_now = palw_execution_span_v1(point.daa_score, lane.schedule_span_daa);
+                    let span_daa = lane.schedule_span_daa_at(point.daa_score);
+                    let span_now = palw_execution_span_v1(point.daa_score, span_daa);
                     if evidence.span > span_now || evidence.span + 1 < span_now {
                         return Err(format!(
                             "round equivocation names span {}, which the chain does not keep at span {span_now}",
@@ -7235,7 +7236,7 @@ impl VirtualStateProcessor {
                     palw_execution_permit_of_v1(
                         schedule,
                         evidence.round,
-                        lane.width_of_span(evidence.span),
+                        lane.width_of_span_len(evidence.span, span_daa),
                         evidence.permit_index,
                         &evidence.bond,
                     )
@@ -7695,7 +7696,8 @@ impl VirtualStateProcessor {
             PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v1, palw_execution_span_v1,
         };
         let lane = self.palw_execution_lane_at(daa_score)?;
-        let span_now = palw_execution_span_v1(daa_score, lane.schedule_span_daa);
+        let span_daa = lane.schedule_span_daa_at(daa_score);
+        let span_now = palw_execution_span_v1(daa_score, span_daa);
         let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 {
             round_blocks: self.palw_round_blocks_of(ghostdag_data),
             ..Default::default()
@@ -7707,7 +7709,7 @@ impl VirtualStateProcessor {
                 let header = self.headers_store.get_header(block).ok()?;
                 let envelope = PalwExecEnvelopeV1::decode(&header.palw_commitment).ok()?;
                 let anchor = self.ghostdag_store.get_selected_parent(block).ok()?;
-                let span = palw_execution_span_v1(self.headers_store.get_daa_score(anchor).ok()?, lane.schedule_span_daa);
+                let span = palw_execution_span_v1(self.headers_store.get_daa_score(anchor).ok()?, span_daa);
                 if span > span_now || span + 1 < span_now {
                     return None;
                 }
@@ -7720,7 +7722,7 @@ impl VirtualStateProcessor {
                 palw_execution_permit_of_v1(
                     schedule,
                     envelope.round,
-                    lane.width_of_span(span),
+                    lane.width_of_span_len(span, span_daa),
                     envelope.permit_index,
                     &envelope.bond,
                 )?;
@@ -7844,7 +7846,9 @@ impl VirtualStateProcessor {
             // ADR-0125: the lane's span, where it is open. The permits a block accepted are the
             // chain walk's to add — it is the only caller holding the verdicts.
             round_lane: self.palw_execution_lane_at(daa_score).map(|lane| {
-                kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: lane.schedule_span_daa }
+                kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 {
+                    schedule_span_daa: lane.schedule_span_daa_at(daa_score),
+                }
             }),
             round_permit_uses: Vec::new(),
             // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
@@ -11235,16 +11239,17 @@ impl VirtualStateProcessor {
             .get_selected_parent(sink)
             .ok()
             .filter(|anchor| !kaspa_consensus_core::blockhash::BlockHashExtensions::is_origin(anchor))?;
+        let span_daa = lane.schedule_span_daa_at(virtual_state.daa_score);
         let span = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_span_v1(
             self.headers_store.get_daa_score(anchor).ok()?,
-            lane.schedule_span_daa,
+            span_daa,
         );
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         if tip != sink {
             return None;
         }
-        let width = lane.width_of_span(span);
+        let width = lane.width_of_span_len(span, span_daa);
         let permits = state
             .round_schedule(span)
             .map(|schedule| kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, width))
