@@ -1185,10 +1185,11 @@ pub struct Params {
     /// the Layer-0 digest against `bits`, and only the first is credited: testnet-11's measured
     /// producer threw away 79 % of the forwards it had already run. Past this fence a PALW attempt
     /// header's digest is admitted unconditionally, the class ticket is the whole lottery, the
-    /// header derives no block level, and its row does not price the difficulty window. `None` on
-    /// every shipped preset; hashed `Some`-only; refused without `palw_work_target` at or below its
-    /// height — with the network draw gone the work target is the only thing left holding the
-    /// cadence (ADR-0137 §22 finding 1).
+    /// header derives no block level, and its row does not price the difficulty window. `Some` on
+    /// testnet-11 at [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] with the anchor clock (one setter); `None`
+    /// elsewhere; hashed `Some`-only; refused without `palw_work_target` at or below its height —
+    /// with the network draw gone the work target is the only thing left holding the cadence
+    /// (ADR-0137 §22 finding 1).
     pub palw_single_lottery: Option<ForkActivation>,
     /// **ADR-0132 §7.6 — the short challenge window, as a fence.** `6fdf6ba7` (2026-09-14) shortened
     /// a licensed claim's challenge window from `window_challenge` (1,200 DAA) to 120 DAA past a
@@ -1224,8 +1225,10 @@ pub struct Params {
     /// and folded. Without it the work target's expectation — 900 model blocks per 1,000-DAA epoch —
     /// is stated in a clock the model lane itself advances, and every DAA-denominated window
     /// (`t_leak_daa`, the receipt and challenge windows, a bond's withdrawal) runs ten times faster
-    /// than it was sized (`docs/palw-daa-clock-audit-2026-09-18.md`). `Some(6,001)` on testnet-11,
-    /// the single lottery's own day and never a different one; `None` elsewhere; hashed Some-only.
+    /// than it was sized (`docs/palw-daa-clock-audit-2026-09-18.md`). `Some` on testnet-11 at
+    /// [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] with the single lottery (one setter) — a height past the
+    /// live tip so already-committed `daaScore` values are not recomputed; `None` elsewhere; hashed
+    /// Some-only.
     pub palw_anchor_clock: Option<ForkActivation>,
     /// **ADR-0142: the consensus clock cursor.** Past it a heartbeat is admissible iff its timestamp
     /// is at or after the cursor, and only a heartbeat moves the cursor — so a chain producing
@@ -1236,7 +1239,8 @@ pub struct Params {
     /// anchor clock leaves the heartbeat as the only lane that can advance the score, and under the
     /// old rule an attempt block postponed the next beat — measured on the drill as a DAA frozen at
     /// its own flag day with zero beats minted. Arming one without the other is that failure.
-    /// `None` on every shipped preset; hashed Some-only.
+    /// `Some` on testnet-11 at [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] with the anchor clock; `None`
+    /// elsewhere; hashed Some-only.
     pub palw_clock_cursor: Option<ForkActivation>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
@@ -12752,6 +12756,20 @@ pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 7_301;
 /// zero-knowledge proof is used or planned.
 pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 
+/// **ADR-0138 + ADR-0142 — the DAA clock and its cursor, on testnet-11 at DAA 8,000.**
+///
+/// The 6,001 / 7,101 flag day left both dormant: past the anchor clock only a heartbeat can
+/// advance the score, and under the selected-parent slot rule an attempt block postponed the next
+/// beat (the registry drill froze at its own flag day). ADR-0142's cursor is in this tree; the
+/// live chain's DAA is still vanilla GHOSTDAG, so a heartbeat that merges *N* parallel attempt
+/// tips jumps `+N` (measured 2026-09-20: DAA 7,210 for an hour of QWEN siblings, then heartbeat
+/// `df80394b` at 7,219 with nine parents).
+///
+/// 8,000 is a height no released schedule names and is past the live tip (~7,231 on 2026-09-20),
+/// so already-committed `daaScore` values stay valid and the fork-id gate can see the fence. The
+/// single lottery arms with the clock (one setter); the cursor arms at the same height.
+pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 8_000;
+
 /// **The build before the 6,001 flag day**, for the tests that reconstruct an earlier release: the
 /// fences [`PALW_RC_PALW_UPGRADE_FENCE_DAA`] schedules, cleared (the held regime and the deep audit
 /// stay at THIS build's 6,000; [`palw_rc_deployed_7000_release_for_tests`] is the fleet's build).
@@ -12775,6 +12793,7 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     params.palw_verification_v2 = None;
     params.palw_readiness_v2 = None;
     params.palw_anchor_clock = None;
+    params.palw_clock_cursor = None;
     // ADR-0143's own day is two past the flag day and later than every release this reconstructs.
     params.palw_artifact_root_ownership = None;
     params.palw_canonical_work = None;
@@ -13283,25 +13302,23 @@ pub fn palw_rc_base_params() -> Params {
     // network-wide verification budget replaces the per-class in-flight cap. The reward is
     // unchanged: the payout's `min(escrow, attempted × rate)` is what a block buys at `W₀`.
     params.palw_work_target = Some(flag_day_6001);
-    // **ADR-0132 S and ADR-0138 are NOT on this flag day. Both stay dormant** (2026-09-18).
+    // **ADR-0132 S, ADR-0138 and ADR-0142 ride their own later day** ([`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`]).
     //
-    // They arm together — one setter, so the pair can never be spelled at two heights — and arming
-    // either needs ADR-0142's clock cursor, which `validate_palw_v2` now refuses to ship without.
-    // The reason is a measurement, not a preference: past the anchor clock only a heartbeat can
-    // advance the score, and under the slot rule they were written against, an attempt block
-    // postponed the next beat. The registry drill froze at its own flag day with the miner running
-    // and nothing minted, at a 21-second cadence; testnet-11's 302 seconds survives today, and the
-    // burst this very bundle is built to enable is 3.3 seconds, which does not.
-    //
-    // So the rest of the day ships and these two wait for ADR-0142 to land with its own fence, its
-    // own properties, and a drill that CROSSES it at a fast cadence. See
-    // `docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md`.
+    // They arm together — one setter for the lottery and the clock, the cursor at the same height
+    // — because `validate_palw_v2` refuses the clock without the cursor and the pair at two
+    // heights. They are not on 7,101: that day already passed on the live chain, and arming the
+    // clock behind a committed tip would recompute `daaScore` for headers the fleet already
+    // stores. 8,000 is past the tip and unnamed on any released schedule, so the fork-id gate can
+    // see it. See `docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md`.
     //
     // The work target above does not depend on them: the dependency runs the other way
     // (`palw_single_lottery` needs `palw_work_target` at or below it, never the reverse), so the
-    // class economy arrives on the flag day as designed and the lottery joins it later.
-    // ADR-0132 §7.6: the short challenge window, on the same day — explicit, in the schedule and
-    // the fork id, mirrored into the bundle by the setter.
+    // class economy arrived on the flag day as designed and the lottery joins it here.
+    let clock_day = ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA);
+    params.palw_clock_cursor = Some(clock_day);
+    params.set_palw_single_lottery(Some(clock_day));
+    // ADR-0132 §7.6: the short challenge window, on the 6,001 / 7,101 flag day — explicit, in the
+    // schedule and the fork id, mirrored into the bundle by the setter.
     params.set_palw_short_challenge_window(Some(flag_day_6001));
     // ADR-0133 Verification V2: its own day, a hundred DAA past the flag day.
     params.palw_verification_v2 = Some(ForkActivation::new(PALW_RC_VERIFICATION_V2_FENCE_DAA));
@@ -17964,7 +17981,12 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                "731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6",
+                // **Re-pinned 2026-09-20 for ADR-0138 / ADR-0142 at DAA 8,000** (`palw_single_lottery`,
+                // `palw_anchor_clock`, `palw_clock_cursor`): the live DAA was still vanilla GHOSTDAG
+                // (7,210 for an hour of parallel QWEN tips, then heartbeat `df80394b` at 7,219 with
+                // nine parents). 8,000 is past the tip and unnamed on any released schedule. Previous:
+                // 731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6.
+                "137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -18785,9 +18807,11 @@ mod consensus_params_id_tests {
         // * `palw_model_registry` and `palw_economic_payout` (ADR-0135 Upgrade A, ADR-0132 Upgrade C)
         //   ride testnet-11's 6,001 flag day; a card states the registry's globals and the payout's
         //   rate from genesis once the operator has calibrated them on the testnet.
-        // * `palw_work_target`, `palw_single_lottery` and `palw_short_challenge_window` (ADR-0137,
-        //   ADR-0132 S and §7.6) ride the same day — the operator's rule of 2026-09-18 is that the
-        //   PALW upgrade has one flag day — and a card states them with the payout's rate.
+        // * `palw_work_target` and `palw_short_challenge_window` (ADR-0137, ADR-0132 §7.6) ride the
+        //   6,001 / 7,101 flag day; a card states them with the payout's rate.
+        // * `palw_single_lottery`, `palw_anchor_clock` and `palw_clock_cursor` (ADR-0132 S, ADR-0138,
+        //   ADR-0142) ride testnet-11's own 8,000 day, past the live tip so committed `daaScore`
+        //   values stay valid; a card states them with the work target.
         // * `palw_verification_v2` (ADR-0133 S1) rides testnet-11's own 6,100 day; a card states its
         //   verification rule when it states the registry.
         assert_eq!(
@@ -18797,9 +18821,12 @@ mod consensus_params_id_tests {
                 "palw_model_registry",
                 "palw_economic_payout",
                 "palw_work_target",
+                "palw_single_lottery",
                 "palw_short_challenge_window",
                 "palw_verification_v2",
                 "palw_readiness_v2",
+                "palw_anchor_clock",
+                "palw_clock_cursor",
                 "palw_execution_lane",
                 "palw_overlay_carve",
                 "palw_model_market",
@@ -19579,6 +19606,8 @@ mod consensus_params_id_tests {
                 PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement, after the flag day.
                 PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+                // ADR-0138 / ADR-0142: the DAA clock, past the live tip.
+                PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );
@@ -21106,9 +21135,11 @@ mod palw_model_registry_fence_tests {
         assert!(format!("{refusal:?}").contains("palw_model_registry"), "{refusal:?}");
     }
 
-    /// **ADR-0132 S: the single lottery is dormant on every shipped preset; armed at or above the
-    /// work target it moves the identity and the schedule; without the work target at or below it
-    /// is refused — with the network draw gone, `W` is the only rule left holding the cadence.**
+    /// **ADR-0132 S: the single lottery is dormant on mainnet and devnet; on testnet-11 it is
+    /// scheduled at [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] with the anchor clock and the cursor.**
+    /// Armed at or above the work target it moves the identity and the schedule; without the work
+    /// target at or below it is refused — with the network draw gone, `W` is the only rule left
+    /// holding the cadence.
     #[test]
     fn adr0132_the_single_lottery_fence_is_dormant_everywhere_arms_by_height_and_needs_the_work_target() {
         use crate::palw_economic_payout_v1::PALW_ECONOMIC_PAYOUT_DEVNET_V1;
@@ -21116,13 +21147,14 @@ mod palw_model_registry_fence_tests {
             assert!(preset.palw_single_lottery.is_none(), "{name}: the single lottery is not scheduled");
             assert!(!preset.palw_single_lottery_at(u64::MAX - 1), "{name}: never active while dormant");
         }
-        // **testnet-11 does NOT arm it on the flag day**, and that is deliberate (2026-09-18): it
-        // arms with `palw_anchor_clock`, which `validate_palw_v2` refuses without ADR-0142's clock
-        // cursor, because past the anchor clock an attempt block postponed the next heartbeat and
-        // the drill froze at its own flag day. It joins a later fence with the cursor.
+        // **testnet-11 arms it at [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`]**, with `palw_anchor_clock` and
+        // ADR-0142's clock cursor, because past the anchor clock an attempt block postponed the
+        // next heartbeat and the drill froze at its own flag day. It is not on 7,101: that height
+        // already committed vanilla `daaScore` values.
         let shipped = palw_rc_shipped_params();
-        assert!(shipped.palw_single_lottery.is_none(), "the single lottery waits for ADR-0142's cursor");
-        assert!(shipped.palw_anchor_clock.is_none(), "and so does the anchor clock — one setter arms both");
+        assert_eq!(shipped.palw_single_lottery, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
+        assert_eq!(shipped.palw_anchor_clock, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
+        assert_eq!(shipped.palw_clock_cursor, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
         let mut rc = shipped.clone();
         rc.set_palw_single_lottery(None);
         // Verification V2 (6,100) follows the registry; this test moves the registry past it.
@@ -21212,6 +21244,9 @@ mod palw_model_registry_fence_tests {
             ("palw_readiness_v2", PALW_RC_VERIFICATION_V2_FENCE_DAA),
             ("palw_compute_overlay_retired", PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA),
             ("palw_model_seed_v2", PALW_RC_MODEL_SEED_V2_FENCE_DAA),
+            ("palw_single_lottery", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_anchor_clock", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_clock_cursor", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
         ];
         for name in UPGRADE_6001 {
             assert_eq!(by_name.get(name).copied().flatten(), Some(PALW_RC_PALW_UPGRADE_FENCE_DAA), "{name}: on the flag day");
@@ -21282,8 +21317,11 @@ mod palw_model_registry_fence_tests {
         for daa in [day, day + 1] {
             assert!(rc.palw_model_registry_at(daa) && rc.palw_economic_payout_at(daa).is_some(), "registry/payout on at {daa}");
             assert!(rc.palw_work_target_at(daa), "work target on at {daa}");
-            assert!(!rc.palw_single_lottery_at(daa), "the single lottery waits for ADR-0142's cursor, at {daa} too");
+            assert!(!rc.palw_single_lottery_at(daa), "the single lottery waits for DAA {PALW_RC_ANCHOR_CLOCK_FENCE_DAA}, at {daa} too");
             assert!(rc.palw_short_challenge_window_at(daa), "short window on at {daa}");
+        }
+        for daa in [PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1] {
+            assert!(rc.palw_single_lottery_at(daa) && rc.palw_anchor_clock_at(daa), "clock/lottery on at {daa}");
         }
         // The bundle's copy of the short window follows the fence, not a constant.
         let PalwConsensusMode::ConsensusV2(bundle) = &rc.palw_consensus_mode else { panic!("testnet-11 runs V2") };
@@ -21295,6 +21333,7 @@ mod palw_model_registry_fence_tests {
         assert!(
             schedule.contains(&PALW_RC_VERIFICATION_V2_FENCE_DAA)
                 && schedule.contains(&PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA)
+                && schedule.contains(&PALW_RC_ANCHOR_CLOCK_FENCE_DAA)
                 && !schedule.contains(&7_000),
             "{schedule:?}: 7,000 is nobody's height any more"
         );
@@ -21450,7 +21489,8 @@ mod palw_model_registry_fence_tests {
 mod adr0142_release_probe {
     /// **What the shipped preset actually schedules at or past the boundary**, printed so a release
     /// is checked against the build rather than against a page. Named as a probe, not a rule: it
-    /// asserts only that the two fences ADR-0142 holds back are absent, and prints the rest.
+    /// asserts the DAA-clock trio (ADR-0138 / ADR-0142) is scheduled at
+    /// [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`], and prints the rest.
     #[test]
     fn the_flag_day_carries_what_the_announcement_says_it_carries() {
         let p = super::palw_rc_shipped_params();
@@ -21464,8 +21504,16 @@ mod adr0142_release_probe {
         for (n, h) in &rows {
             println!("PROBE {h:>6}  {n}");
         }
-        for held in ["palw_single_lottery", "palw_anchor_clock", "palw_clock_cursor"] {
-            assert!(!rows.iter().any(|(n, _)| *n == held), "{held} is armed, and ADR-0142 holds it back");
+        for (held, height) in [
+            ("palw_single_lottery", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_anchor_clock", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_clock_cursor", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+        ] {
+            assert_eq!(
+                rows.iter().find(|(n, _)| *n == held).map(|(_, h)| *h),
+                Some(height),
+                "{held} is scheduled at {height}"
+            );
         }
         assert!(rows.iter().any(|(n, _)| *n == "palw_work_target"), "the work target keeps the day");
         assert!(rows.iter().any(|(n, _)| *n == "palw_model_registry"), "and so does the registry");

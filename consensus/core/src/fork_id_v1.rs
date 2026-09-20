@@ -545,8 +545,9 @@ mod tests {
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+                crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, and ADR-0134's 6,201), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, and ADR-0138/0142's 8,000), and deriving the list must not widen it"
         );
     }
 
@@ -821,6 +822,7 @@ mod tests {
                         crate::config::params::PALW_RC_PALW_UPGRADE_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                         crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+                        crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                         2_125_000
                     ]
                 ),
@@ -884,9 +886,10 @@ mod tests {
                         HELD_AND_AUDIT_DEEP,
                         PALW_UPGRADE_DAY,
                         crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
-                        RETIRED_6201
+                        RETIRED_6201,
+                        crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                     ],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0143's own day two past it, ADR-0133's 6,100, and ADR-0134's 6,201, and nothing else"
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's 8,000, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -917,6 +920,7 @@ mod tests {
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 RETIRED_6201,
+                crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 CRESCENDO_T11
             ]
         );
@@ -932,8 +936,9 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past every height it schedules (6,900 the last of them below crescendo).
-        let past = fork_id_v1(&t11, 8_000);
+        // A node on this build past every height it schedules below crescendo (the DAA clock at 8,000
+        // is the last of them).
+        let past = fork_id_v1(&t11, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
 
@@ -1412,9 +1417,10 @@ mod tests {
                 PALW_UPGRADE_DAY,
                 crate::config::params::PALW_RC_VERIFICATION_V2_FENCE_DAA,
                 RETIRED_6201,
+                crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 CRESCENDO_T11
             ],
-            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0134 two hundred past, ADR-0120 where it was"
+            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0134 two hundred past, ADR-0138/0142 at 8,000, ADR-0120 where it was"
         );
 
         // **The deployment window.** The heights moved twice: to 6,000 on 2026-09-17 with the tip at
@@ -1500,6 +1506,7 @@ mod tests {
         at_6000.palw_work_target = Some(six_thousand);
         at_6000.palw_single_lottery = Some(six_thousand);
         at_6000.palw_anchor_clock = Some(six_thousand);
+        at_6000.palw_clock_cursor = Some(six_thousand);
         at_6000.set_palw_short_challenge_window(Some(six_thousand));
         // ADR-0133 V2 has its own day (6,100); the counterfactual moves it with the rest so the
         // schedule reads as a build without the whole upgrade.

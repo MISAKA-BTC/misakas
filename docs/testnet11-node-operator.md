@@ -48,10 +48,10 @@ wRPC is disabled until its listener flag is supplied. Keep RPC on loopback unles
 
 ## Identity
 
-The current Testnet-11 fingerprint is (the build that schedules the DAA 7,101 flag day; the 7,000 release printed `ae1d6162…` and is refused from 7,100, the moved height it does not schedule):
+The current Testnet-11 fingerprint is (the build that schedules ADR-0138 / ADR-0142's DAA clock at 8,000; previous `731e9d3a…`):
 
 ```text
-731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6
+137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde
 ```
 
 **This number moved on 2026-09-20 and the one it replaced is not wrong, it is older.** ADR-0150 hashes the consensus rule

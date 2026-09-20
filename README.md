@@ -8,15 +8,13 @@ The node binary is still named `kaspad` and the crates keep their upstream `kasp
 > **Current status (2026-09-17).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6`** (the build that moves the held
-> regime and the audit's deep fixes to DAA 7,100 — from the 7,000 the deployed release scheduled; the
-> operator, 2026-09-17: the wait was too long — and schedules the DAA 7,101 flag day with ADR-0130's
-> operator lottery and 5-DAA spans, the model registry, the economic payout, the work target and
-> the short challenge window (one PALW upgrade day, 2026-09-18 — ADR-0132 S's single lottery and
-> ADR-0138's anchor clock left it and wait for ADR-0142), ADR-0133's
-> Verification V2 (S1) at 7,200, and ADR-0134's compute-overlay retirement at 7,301; the 7,000
-> release prints `ae1d6162…`; the earlier builds `4787b92a…`, `ab4e7b9c…` and `dd805c9f…`, which
-> scheduled 7,001, were never deployed).
+> **`137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde`** (the build that schedules
+> ADR-0138 / ADR-0142's DAA clock at 8,000 — attempts leave the DAA, a heartbeat merging parallel
+> tips no longer jumps `+N`; previous `731e9d3a…`). The held regime and the audit's deep fixes are
+> at DAA 7,100; the DAA 7,101 flag day carries ADR-0130's operator lottery and 5-DAA spans, the
+> model registry, the economic payout, the work target and the short challenge window; ADR-0133's
+> Verification V2 (S1) is at 7,200; ADR-0134's compute-overlay retirement is at 7,301; the 7,000
+> release prints `ae1d6162…`.
 > The network produces PALW blocks at a frozen 120-second cadence. Testnet-10 and older relaunches
 > are not supported entry points. ADR-0123's epoch-budget release is implemented but remains
 > dormant on every shipped preset (`palw_epoch_budget_release: None`).
@@ -219,8 +217,8 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6 (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, 2125000 (schedule id …)
+Consensus params fingerprint: 137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000 (schedule id …)
 ```
 
 > **The fingerprint moved on 2026-09-20 (ADR-0150).** The consensus rule manifest is hashed into it now, so a build that
