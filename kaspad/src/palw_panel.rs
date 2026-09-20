@@ -881,18 +881,38 @@ impl PalwPanelService {
             // and signs the leaves it opened. Below the fence it is V1's single leaf, unchanged.
             if self.consensus_config.params.palw_readiness_v2_at(current_daa) {
                 use kaspa_consensus_core::palw_model_registry_v1::{
-                    PALW_READINESS_V2_OPERAND_MAX_BYTES_V1, PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
-                    palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_leaves_v1, palw_seat_readiness_message_v2,
+                    PALW_READINESS_V2_BUDGET_BYTES_V1, PALW_READINESS_V2_LEAF_MAX_BYTES_V1, PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
+                    palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1, palw_readiness_v2_opening_is_the_challenge_v1,
+                    palw_seat_readiness_message_v2,
                 };
                 let leaves: Vec<kaspa_hashes::Hash64> = digest.rows().iter().map(|row| row.leaf_hash).collect();
                 let seed_v2 = palw_readiness_v2_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
-                let wanted = palw_readiness_v2_leaves_v1(&seed_v2, digest.leaf_count());
+                // **The draw is spent in bytes, in the draw's own order** — the prover opens leaves
+                // until the budget is reached and stops there, because the whole proof has to ride
+                // ONE carrier. Opening all sixteen made a 184,037-byte object for the shipped A16
+                // class (the 2026-09-20 measurement): no transaction carried it, and this seat then
+                // proved nothing at all in that span.
+                let draw = palw_readiness_v2_draw_v1(&seed_v2, digest.leaf_count());
                 let mut opened: Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)> =
-                    Vec::with_capacity(wanted.len());
+                    Vec::with_capacity(draw.len());
+                let mut bytes = 0usize;
                 let mut failed = None;
-                for index in &wanted {
+                for index in &draw {
+                    if bytes >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
+                        break;
+                    }
                     match backend.artifact_row_opening(*index) {
-                        Ok(opening) => opened.push((*index, opening.operand)),
+                        Ok(opening) => {
+                            if opening.operand.bytes.len() > PALW_READINESS_V2_LEAF_MAX_BYTES_V1 {
+                                failed = Some(format!(
+                                    "leaf {index} is {} bytes and no leaf above {PALW_READINESS_V2_LEAF_MAX_BYTES_V1} can ride a                                      proof — this class's inventory cannot be proved as it is built",
+                                    opening.operand.bytes.len()
+                                ));
+                                break;
+                            }
+                            bytes += opening.operand.bytes.len();
+                            opened.push((*index, opening.operand));
+                        }
                         Err(e) => {
                             failed = Some(format!("leaf {index} cannot be opened ({e})"));
                             break;
@@ -903,14 +923,15 @@ impl PalwPanelService {
                     self.readiness_note(class.class_id, format!("no proof — {why}"));
                     continue;
                 }
-                let bytes: usize = opened.iter().map(|(_, operand)| operand.bytes.len()).sum();
-                if bytes > PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
-                    self.readiness_note(
-                        class.class_id,
-                        format!("no proof — the challenged leaves carry {bytes} bytes, above the {PALW_READINESS_V2_OPERAND_MAX_BYTES_V1} a proof may ride with"),
-                    );
+                // The same rule every validator applies, applied before a fee is spent on it.
+                if let Err(why) = palw_readiness_v2_opening_is_the_challenge_v1(
+                    &draw,
+                    &opened.iter().map(|(index, operand)| (*index, operand.bytes.len())).collect::<Vec<_>>(),
+                ) {
+                    self.readiness_note(class.class_id, format!("no proof — {why}"));
                     continue;
                 }
+                opened.sort_by_key(|(index, _)| *index);
                 let Some(proof) = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened) else {
                     self.readiness_note(class.class_id, "no proof — the opened leaves are not the inventory's".to_string());
                     continue;
@@ -924,7 +945,7 @@ impl PalwPanelService {
                 self.readiness_note(
                     class.class_id,
                     format!(
-                        "proving {} leaves of {} for span {span_now} ({bytes} bytes, {} siblings)",
+                        "proving {} leaves of {} for span {span_now} ({bytes} of {PALW_READINESS_V2_BUDGET_BYTES_V1} budgeted                          bytes, {} siblings)",
                         proof.opened.len(),
                         digest.leaf_count(),
                         proof.siblings.len()

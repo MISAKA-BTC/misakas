@@ -9465,7 +9465,7 @@ impl<'a> TransitionBuilder<'a> {
         }
         if proof.operand_bytes() > registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
             return Err(PalwStateV2Error::ReadinessProofRefused(format!(
-                "the proof carries {} bytes of operands, above the {} a proof may ride with",
+                "the proof carries {} bytes of operands, above the {} one carrier holds",
                 proof.operand_bytes(),
                 registry::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1
             )));
@@ -9481,21 +9481,20 @@ impl<'a> TransitionBuilder<'a> {
         }
         let bond_bytes = borsh::to_vec(bond).expect("a bond key is borsh-serializable");
         let seed = registry::palw_readiness_v2_challenge_seed_v1(class_id, &bond_bytes, span);
-        let wanted = registry::palw_readiness_v2_leaves_v1(&seed, proof.leaf_count);
-        if proof.opened_indices() != wanted {
-            return Err(PalwStateV2Error::ReadinessProofRefused(format!(
-                "the proof opens {:?} of {} leaves; this span's challenge names {:?}",
-                proof.opened_indices(),
-                proof.leaf_count,
-                wanted
-            )));
-        }
+        // **The draw in its own order, and the prefix of it the carrier pays for** (the 2026-09-20
+        // measurement): sixteen leaves of the shipped A16 class serialize to between 53,096 and
+        // 184,037 bytes, so half the spans named a proof no transaction could carry and the seat
+        // proved nothing in them. The challenge is spent in BYTES now, and the rule that says which
+        // leaves it bought is one function three readers share.
+        let draw = registry::palw_readiness_v2_draw_v1(&seed, proof.leaf_count);
+        let opened: Vec<(u32, usize)> = proof.opened.iter().map(|(index, operand)| (*index, operand.bytes.len())).collect();
+        registry::palw_readiness_v2_opening_is_the_challenge_v1(&draw, &opened).map_err(PalwStateV2Error::ReadinessProofRefused)?;
         self.write_seat_readiness(
             (*bond, *class_id),
             Some(registry::PalwSeatReadinessRowV1 {
                 proved_daa: span.saturating_mul(span_daa.max(1)),
                 proved_span: span,
-                leaf_index: wanted.first().copied().unwrap_or(0),
+                leaf_index: draw.first().copied().unwrap_or(0),
                 proof_version: 2,
                 chunks: proof.opened.len().min(u32::MAX as usize) as u32,
             }),
@@ -21139,6 +21138,79 @@ pub(crate) mod tests {
                 palw_seat_readiness_message_v2(net, &bond_bytes, &kimi_id(), span, &forged),
                 "the signed message carries the leaves it opened"
             );
+        }
+
+        /// **A proof stops where the carrier does, and the fold is what says so** (the 2026-09-20
+        /// measurement). With leaves a real class's size the challenge's sixteen do not fit one
+        /// transaction, so the prover owes the prefix the budget buys: four leaves here. The proof
+        /// that opens four is possession; the one that opens all sixteen is a proof nobody could
+        /// carry, and the one that stops at three is a seat proving less than it was asked for.
+        #[test]
+        fn adr0133_a_possession_proof_stops_at_the_budget_and_the_fold_checks_where() {
+            use crate::palw_artifact::{artifact_leaf_v1, palw_artifact_multiproof_v1};
+            use crate::palw_model_registry_v1::{
+                PALW_READINESS_V2_BUDGET_BYTES_V1, palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1,
+            };
+            let p = params();
+            // 8,192-byte rows: four reach the 26,272-byte budget, three do not.
+            let operands: Vec<PalwArtifactOperandV1> = (0..40u32)
+                .map(|i| PalwArtifactOperandV1 {
+                    tensor_name: "w".to_string(),
+                    layer: None,
+                    row_start: i * 8_192,
+                    bytes: vec![i as u8; 8_192],
+                })
+                .collect();
+            let root = PalwArtifactInventoryV1::new(operands.clone()).expect("a well-formed inventory").root();
+            let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let (s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            let seat = bond_key(2);
+            let bond_bytes = borsh::to_vec(&seat).unwrap();
+            let span = 11u64;
+            let draw = palw_readiness_v2_draw_v1(&palw_readiness_v2_challenge_seed_v1(&kimi_id(), &bond_bytes, span), 40);
+            let owed = PALW_READINESS_V2_BUDGET_BYTES_V1.div_ceil(8_192);
+            assert_eq!(owed, 4, "the budget buys four 8,192-byte rows");
+            let sorted_prefix = |count: usize| {
+                let mut picked: Vec<(u32, PalwArtifactOperandV1)> =
+                    draw[..count].iter().map(|i| (*i, operands[*i as usize].clone())).collect();
+                picked.sort_by_key(|(index, _)| *index);
+                palw_artifact_multiproof_v1(&leaves, &picked).expect("the seat holds the artifact")
+            };
+            let v2 = |proof: crate::palw_artifact::PalwArtifactMultiproofV1| PalwConsensusObjectV2::SeatReadinessProvedV2 {
+                bond: seat,
+                class_id: kimi_id(),
+                span,
+                proof: Box::new(proof),
+                signature: vec![1],
+            };
+            let on = PalwTransitionExtrasV1 { readiness_v2_active: true, ..extras(Some(f.clone())) };
+            let apply = |proof: crate::palw_artifact::PalwArtifactMultiproofV1| {
+                apply_palw_transition_v2_with_extras(&s2, &p, &ctx(3, 111, 3), &[v2(proof)], None, false, false, false, false, &on)
+            };
+
+            let (s3, _) = apply(sorted_prefix(owed)).expect("the prefix the budget buys is possession");
+            let row = s3.seat_readiness(&seat, &kimi_id()).expect("the row exists");
+            assert_eq!((row.proof_version, row.chunks), (2, owed as u32), "the row records what was opened");
+
+            // All sixteen is 131,072 bytes of operands: refused at the cheap ceiling, which is the
+            // carrier's own number — the object never reaches the prefix rule because no carrier
+            // would have reached the chain with it.
+            let whole = apply(sorted_prefix(draw.len()));
+            assert!(
+                matches!(&whole, Err(PalwStateV2Error::ReadinessProofRefused(why)) if why.contains("one carrier holds")),
+                "{whole:?}"
+            );
+            // One leaf past the budget, still inside the ceiling: this is the prefix rule itself,
+            // refusing a leaf the challenge did not ask for.
+            let one_too_many = apply(sorted_prefix(owed + 1));
+            assert!(
+                matches!(&one_too_many, Err(PalwStateV2Error::ReadinessProofRefused(why)) if why.contains("did not owe")),
+                "{one_too_many:?}"
+            );
+            let short = apply(sorted_prefix(owed - 1));
+            assert!(matches!(&short, Err(PalwStateV2Error::ReadinessProofRefused(why)) if why.contains("under the")), "{short:?}");
         }
 
         #[test]

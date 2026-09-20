@@ -720,8 +720,29 @@ pub const PALW_READINESS_V2_CHUNKS_V1: u32 = 16;
 /// rotates every span (the seed carries it); this is what makes the rotation bite — a proof stands
 /// for eight spans, not the thirty a V1 row was given.
 pub const PALW_READINESS_V2_MAX_AGE_SPANS_V1: u32 = 8;
-/// The bytes a V2 proof's opened operands may carry in total, before the object's own cap.
-pub const PALW_READINESS_V2_OPERAND_MAX_BYTES_V1: usize = 1 << 20;
+/// **The frame a V2 proof carries besides its operands**: the Merkle siblings, the ML-DSA-87
+/// signature and the object's own framing. 32 KiB covers sixteen paths of a tree up to 2^27 leaves
+/// (16 x 27 x 64 = 27,648) plus a 4,627-byte signature; the shipped A16 class measures 19,789.
+pub const PALW_READINESS_V2_FRAME_BYTES_V1: usize = 32 << 10;
+/// **The largest leaf a possession proof may open.** An inventory row above this cannot be proved
+/// and its class cannot seat — said here, once, so an artifact builder has a number to refuse at
+/// rather than a chain that silently never admits the class. The shipped A16 class's largest row is
+/// 35,840 bytes (p50 1,536, mean 4,204).
+pub const PALW_READINESS_V2_LEAF_MAX_BYTES_V1: usize = 40 << 10;
+/// **The operand budget one challenge spends**, derived from the carrier and nothing else:
+/// `PALW_OBJECT_CHUNK_MAX_BYTES` is what one transaction carries, the frame and one maximal leaf
+/// are what a proof must have room for beside the budget, and what is left is the budget. The
+/// prover opens the drawn leaves, in the draw's own order, until the bytes reach it — so a class
+/// whose rows are small is sampled in many places and one whose rows are large in few, and either
+/// proof fits the carrier that takes it to the chain.
+pub const PALW_READINESS_V2_BUDGET_BYTES_V1: usize =
+    crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES - PALW_READINESS_V2_FRAME_BYTES_V1 - PALW_READINESS_V2_LEAF_MAX_BYTES_V1;
+/// **The bytes a V2 proof's opened operands may carry in total.** The budget plus the one leaf that
+/// may cross it — the worst case the stop rule admits, and with the frame it is exactly one
+/// carrier. It was `1 << 20` (ten carriers) and derived from nothing: a seat built proofs no
+/// transaction could hold, four spans in eight for the shipped class, and the seat then proved
+/// nothing at all in those spans — silently, because a carrier refusal is not a chain event.
+pub const PALW_READINESS_V2_OPERAND_MAX_BYTES_V1: usize = PALW_READINESS_V2_BUDGET_BYTES_V1 + PALW_READINESS_V2_LEAF_MAX_BYTES_V1;
 pub const PALW_SEAT_READINESS_V2_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v2/message/v1";
 pub const PALW_SEAT_READINESS_V2_CHALLENGE_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v2/challenge/v1";
 pub const PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/seat-readiness-v2/mldsa87/v1";
@@ -752,6 +773,18 @@ pub fn palw_readiness_challenge_seed_v1(class_id: &Hash64, bond: &[u8], span: u6
 /// [`palw_readiness_v2_challenge_seed_v1`], so the prover, every validator and the court draw the
 /// same set, and no seat learns its leaves before the span it must prove them in.
 pub fn palw_readiness_v2_leaves_v1(seed: &Hash64, leaf_count: u32) -> Vec<u32> {
+    let mut picked = palw_readiness_v2_draw_v1(seed, leaf_count);
+    picked.sort_unstable();
+    picked
+}
+
+/// **The same challenge, in the order it was drawn** — which is the order the proof opens in.
+///
+/// The set alone cannot say how much of it a proof owes: the operands have to fit one carrier
+/// (`PALW_READINESS_V2_OPERAND_MAX_BYTES_V1`), so the prover opens a PREFIX of this order and stops
+/// at [`PALW_READINESS_V2_BUDGET_BYTES_V1`]. A sorted set would let a prover choose which leaves to
+/// count as "the prefix", and choosing is the one thing a possession challenge must not allow.
+pub fn palw_readiness_v2_draw_v1(seed: &Hash64, leaf_count: u32) -> Vec<u32> {
     if leaf_count == 0 {
         return Vec::new();
     }
@@ -774,8 +807,71 @@ pub fn palw_readiness_v2_leaves_v1(seed: &Hash64, leaf_count: u32) -> Vec<u32> {
         }
         counter += 1;
     }
-    picked.sort_unstable();
     picked
+}
+
+/// **What a V2 proof owes the challenge** (ADR-0133 §11.2, as the carrier bounds it): the opened
+/// leaves are the first `m` of `draw`, in draw order, where `m` is the FEWEST leaves whose bytes
+/// reach [`PALW_READINESS_V2_BUDGET_BYTES_V1`] — or the whole draw where it never does.
+///
+/// Every clause is decided from what the proof itself carries, which is what makes it a rule and
+/// not a request: the draw is the chain's, the prefix is the draw's, and the two byte conditions
+/// are read off the operands. A prover that stops early carries less than the budget with leaves
+/// left in the draw; one that stops late carries a prefix whose last leaf was not needed. Neither
+/// is accepted, so the only proof that verifies is the one the challenge named.
+///
+/// `opened` is `(leaf_index, operand_bytes)` as the proof carries it, in any order.
+pub fn palw_readiness_v2_opening_is_the_challenge_v1(draw: &[u32], opened: &[(u32, usize)]) -> Result<(), String> {
+    if opened.is_empty() {
+        return Err(format!("the proof opens no leaf; this span's challenge names {}", draw.len()));
+    }
+    if opened.len() > draw.len() {
+        return Err(format!("the proof opens {} leaves; this span's challenge names {}", opened.len(), draw.len()));
+    }
+    let prefix = &draw[..opened.len()];
+    let mut carried: Vec<u32> = opened.iter().map(|(index, _)| *index).collect();
+    carried.sort_unstable();
+    let mut wanted: Vec<u32> = prefix.to_vec();
+    wanted.sort_unstable();
+    if carried != wanted {
+        return Err(format!(
+            "the proof opens {carried:?}; this span's challenge names {wanted:?} (the first {} of {draw:?})",
+            opened.len()
+        ));
+    }
+    let size = |leaf: u32| opened.iter().find(|(index, _)| *index == leaf).map(|(_, bytes)| *bytes).unwrap_or(0);
+    let mut total = 0usize;
+    for (index, bytes) in opened {
+        if *bytes > PALW_READINESS_V2_LEAF_MAX_BYTES_V1 {
+            return Err(format!(
+                "leaf {index} carries {bytes} bytes and no leaf above {PALW_READINESS_V2_LEAF_MAX_BYTES_V1} can ride a proof"
+            ));
+        }
+        total = total.saturating_add(*bytes);
+    }
+    if total > PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
+        return Err(format!(
+            "the proof carries {total} bytes of operands, above the {PALW_READINESS_V2_OPERAND_MAX_BYTES_V1} one carrier holds"
+        ));
+    }
+    // The last leaf of the PREFIX is the one the budget had to reach for; without it the proof is
+    // under budget, or the leaf was not needed and the prover opened more than the challenge asked.
+    let last = *prefix.last().expect("a non-empty prefix has a last leaf");
+    if total.saturating_sub(size(last)) >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
+        return Err(format!(
+            "the proof opens {} leaves and its first {} already carry {} bytes, at or above the {PALW_READINESS_V2_BUDGET_BYTES_V1}              the challenge budgets — a leaf it did not owe",
+            opened.len(),
+            opened.len() - 1,
+            total - size(last)
+        ));
+    }
+    if total < PALW_READINESS_V2_BUDGET_BYTES_V1 && opened.len() < draw.len() {
+        return Err(format!(
+            "the proof carries {total} bytes, under the {PALW_READINESS_V2_BUDGET_BYTES_V1} the challenge budgets, and the draw              still names {} more leaves",
+            draw.len() - opened.len()
+        ));
+    }
+    Ok(())
 }
 
 /// The V2 challenge's seed: the class, the bond and the span, under the V2 domain (so a V1 seed is
@@ -1512,6 +1608,79 @@ mod tests {
         assert_eq!(palw_manifest_verdict_v1(&manifest(0, 7), &dense()), PalwManifestVerdictV1::EmptyArtifact);
         assert_eq!(palw_manifest_verdict_v1(&manifest(1, 0), &dense()), PalwManifestVerdictV1::EmptyJob);
         assert_eq!(palw_manifest_verdict_v1(&manifest(1, 7), &work(0, 0, 1)), PalwManifestVerdictV1::ZeroWork);
+    }
+
+    /// **A possession proof owes the challenge a prefix, and the carrier decides how long it is**
+    /// (the 2026-09-20 measurement: sixteen leaves of the shipped A16 class serialized to 184,037
+    /// bytes against a 100,000-byte carrier, so four spans in eight proved nothing).
+    ///
+    /// The rule is decided from the proof alone, which is what makes stopping early and stopping
+    /// late both refusals rather than preferences.
+    #[test]
+    fn a_possession_proof_opens_the_prefix_the_budget_buys() {
+        let draw = [7u32, 3, 9, 1, 5];
+        let budget = PALW_READINESS_V2_BUDGET_BYTES_V1;
+        // Four leaves of a quarter-budget each: the fourth is the one that reaches it, so the
+        // proof owes exactly four — the draw's first four, whatever order they are carried in.
+        let quarter = budget / 4 + 1;
+        let four: Vec<(u32, usize)> = vec![(1, quarter), (3, quarter), (7, quarter), (9, quarter)];
+        palw_readiness_v2_opening_is_the_challenge_v1(&draw, &four).expect("the prefix that reaches the budget");
+
+        // Three of them are under budget while the draw still names leaves: stopping there is a
+        // seat proving less than it was asked for.
+        let three: Vec<(u32, usize)> = vec![(3, quarter), (7, quarter), (9, quarter)];
+        let why = palw_readiness_v2_opening_is_the_challenge_v1(&draw, &three).expect_err("under budget with leaves left");
+        assert!(why.contains("under the"), "{why}");
+
+        // Five of them: the fifth was not owed, and a proof that opens what it likes is a proof
+        // that chooses its own challenge.
+        let five: Vec<(u32, usize)> = vec![(1, quarter), (3, quarter), (5, quarter), (7, quarter), (9, quarter)];
+        let why = palw_readiness_v2_opening_is_the_challenge_v1(&draw, &five).expect_err("one leaf too many");
+        assert!(why.contains("did not owe"), "{why}");
+
+        // The right NUMBER of leaves, from the wrong place in the draw.
+        let wrong: Vec<(u32, usize)> = vec![(1, quarter), (3, quarter), (5, quarter), (7, quarter)];
+        let why = palw_readiness_v2_opening_is_the_challenge_v1(&draw, &wrong).expect_err("not the draw's prefix");
+        assert!(why.contains("challenge names"), "{why}");
+
+        // One leaf big enough to reach the budget by itself ends the prefix at one.
+        let one: Vec<(u32, usize)> = vec![(7, budget)];
+        palw_readiness_v2_opening_is_the_challenge_v1(&draw, &one).expect("a leaf that fills the budget alone");
+
+        // A draw that never reaches the budget is owed whole — the small-artifact case.
+        let crumbs: Vec<(u32, usize)> = draw.iter().map(|leaf| (*leaf, 8usize)).collect();
+        palw_readiness_v2_opening_is_the_challenge_v1(&draw, &crumbs).expect("the whole draw, under budget");
+        let short: Vec<(u32, usize)> = crumbs[..4].to_vec();
+        assert!(palw_readiness_v2_opening_is_the_challenge_v1(&draw, &short).is_err(), "four of five, under budget");
+
+        // A row no carrier could take is refused by the leaf ceiling, not by the total.
+        let huge: Vec<(u32, usize)> = vec![(7, PALW_READINESS_V2_LEAF_MAX_BYTES_V1 + 1)];
+        let why = palw_readiness_v2_opening_is_the_challenge_v1(&draw, &huge).expect_err("a leaf above the ceiling");
+        assert!(why.contains("can ride a proof"), "{why}");
+
+        // Nothing opened proves nothing.
+        assert!(palw_readiness_v2_opening_is_the_challenge_v1(&draw, &[]).is_err());
+    }
+
+    /// **The ceilings are the carrier's, by arithmetic.** `1 << 20` was ten carriers and derived
+    /// from nothing; these three add up to exactly what one transaction holds, and the draw's own
+    /// order is what a prefix can be taken from.
+    #[test]
+    fn the_readiness_ceilings_are_derived_from_the_carrier() {
+        assert_eq!(
+            PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 + PALW_READINESS_V2_FRAME_BYTES_V1,
+            crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES,
+            "the operands and the frame must be exactly one carrier"
+        );
+        assert_eq!(PALW_READINESS_V2_OPERAND_MAX_BYTES_V1, PALW_READINESS_V2_BUDGET_BYTES_V1 + PALW_READINESS_V2_LEAF_MAX_BYTES_V1);
+        assert!(PALW_READINESS_V2_BUDGET_BYTES_V1 > 0, "a budget the frame and one leaf have eaten buys no possession at all");
+        // The sorted set is the draw's own leaves and nothing else: the two readers see one
+        // challenge, one in the order it was drawn and one in the order a proof carries it.
+        let seed = Hash64::from_u64_word(0x5EED);
+        let mut sorted = palw_readiness_v2_draw_v1(&seed, 10_000);
+        sorted.sort_unstable();
+        assert_eq!(sorted, palw_readiness_v2_leaves_v1(&seed, 10_000));
+        assert_eq!(palw_readiness_v2_draw_v1(&seed, 10_000).len(), PALW_READINESS_V2_CHUNKS_V1 as usize);
     }
 
     /// **Readiness is evidence, not a declaration.** A seat that only says "I have it" is not

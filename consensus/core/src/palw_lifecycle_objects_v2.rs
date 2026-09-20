@@ -413,6 +413,13 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 // A tree of `u32` leaves is 32 levels, so one leaf needs at most 32 siblings and the
                 // whole challenge at most 32 × k. Sixty-four × k is twice that: generous, and finite.
                 Err("a V2 possession proof carries more siblings than a thirty-two-level tree can need")
+            } else if proof.opened.iter().any(|(_, operand)| {
+                operand.bytes.len() > crate::palw_model_registry_v1::PALW_READINESS_V2_LEAF_MAX_BYTES_V1
+            }) {
+                // **A leaf no carrier can hold is malformed wherever it is read** (the 2026-09-20
+                // measurement). The stateful rule decides WHICH leaves this span's challenge bought;
+                // this one decides that none of them is a row the transport could never take.
+                Err("a V2 possession proof opens a leaf above the largest a proof may carry")
             } else {
                 Ok(())
             }
