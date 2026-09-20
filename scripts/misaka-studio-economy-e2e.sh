@@ -40,6 +40,10 @@
 #                ready seats, and a bond nobody runs can be drawn as a bought class's OUTSIDER, whose
 #                silence voids the claim (ADR-0147 §2.1). Eight nodes at ~0.2 GiB each (ADR-0136).
 #   ECONOMY_AT [30]  REGISTRY_AT/WORK_TARGET_AT/PAYOUT_AT/OWNERSHIP_AT [= ECONOMY_AT]  LANE [0,2,2]
+#   READINESS_V2_AT [= REGISTRY_AT] — the possession proof testnet-11 arms at 7,200, armed here at
+#                the registry's own height so every run proves possession the way that chain will:
+#                the draw's prefix, stopped at the carrier's budget (the 2026-09-20 measurement —
+#                all sixteen leaves of this class serialize to 184,037 bytes and no carrier takes it)
 #   RAM_SCALE [0.3]  MIN_FREE_GB [4] (the run stops itself below it)  WORK_DIR  P2P_BASE  RPC_BASE
 #   PROMPT, MAX_TOKENS [16]  STEP_WAIT_DAA [400]  STALL_WAIT [1200]
 #   GATEWAY_PUBLIC_BUDGET_PERMILLE [1000] — the share of bond 0's room the gateway's jobs may reserve
@@ -66,6 +70,7 @@ REGISTRY_AT="${REGISTRY_AT:-$ECONOMY_AT}"
 WORK_TARGET_AT="${WORK_TARGET_AT:-$REGISTRY_AT}"
 PAYOUT_AT="${PAYOUT_AT:-$REGISTRY_AT}"
 OWNERSHIP_AT="${OWNERSHIP_AT:-$ECONOMY_AT}"
+READINESS_V2_AT="${READINESS_V2_AT:-$REGISTRY_AT}"
 LANE="${LANE:-0,2,2}"
 RAM_SCALE="${RAM_SCALE:-0.3}"
 MIN_FREE_GB="${MIN_FREE_GB:-4}"
@@ -99,7 +104,8 @@ done
 [ -n "${MISAKA_PALW_TOKENIZER:-}" ] && [ -f "$MISAKA_PALW_TOKENIZER" ] || die "MISAKA_PALW_TOKENIZER must name the artifact's tokenizer.json"
 command -v python3 >/dev/null || die "python3 is required"
 for knob in palw-model-registry-devnet palw-work-target-devnet palw-economic-payout-devnet palw-artifact-root-ownership-devnet \
-            palw-canonical-work-devnet palw-admission-independence-devnet palw-fp-derived-work-devnet palw-execution-lane-devnet; do
+            palw-canonical-work-devnet palw-admission-independence-devnet palw-fp-derived-work-devnet palw-execution-lane-devnet \
+            palw-readiness-v2-devnet; do
   "$KASPAD_BIN" --help 2>/dev/null | grep -q -- "--$knob" || die "this kaspad has no --$knob: the binary is older than the source tree"
 done
 free_gb() { df -g "$(dirname "$WORK_DIR")" | awk 'NR==2 {print $4}'; }
@@ -139,7 +145,7 @@ node_args() {
         --utxoindex --nodnsseed --disable-upnp --nogrpc --enable-unsynced-mining --palw-devnet-floor-only --ram-scale="$RAM_SCALE"
         --palw-execution-lane-devnet="$LANE" --palw-model-registry-devnet="$REGISTRY_AT"
         --palw-economic-payout-devnet="$PAYOUT_AT" --palw-work-target-devnet="$WORK_TARGET_AT"
-        --palw-artifact-root-ownership-devnet="$OWNERSHIP_AT"
+        --palw-artifact-root-ownership-devnet="$OWNERSHIP_AT" --palw-readiness-v2-devnet="$READINESS_V2_AT"
         --palw-canonical-work-devnet="$ECONOMY_AT" --palw-admission-independence-devnet="$ECONOMY_AT"
         --palw-fp-derived-work-devnet="$ECONOMY_AT")
   if [ "$producer" = 1 ]; then
@@ -242,8 +248,8 @@ log "2/9 OK — ${CLASS_ID:0:16}… is on the chain with a row, opened as $first
 req="$(reg 1 "[c['requiredReadySeats'] for c in v['classes'] if c['classId'] == '$CLASS_ID'][0]")"
 [ -n "$req" ] && [ "$req" -le "$NODES" ] || die "the class needs $req ready seats and this run has $NODES nodes: it can never leave PREFETCHING"
 case "$first_state" in
-  Candidate*) log "3/9 waiting for the network-drawn jury (the first audit is at the first epoch boundary) and PROBATION (needs $req ready seats)" ;;
-  *) log "3/9 waiting for PROBATION (needs $req ready seats; a grandfathered class sits no jury)" ;;
+  Candidate*) log "3/9 waiting for the network-drawn jury (the first audit is at the first epoch boundary) and PROBATION (needs $req ready seats, V2 possession proofs armed at $READINESS_V2_AT)" ;;
+  *) log "3/9 waiting for PROBATION (needs $req ready seats, V2 possession proofs armed at $READINESS_V2_AT; a grandfathered class sits no jury)" ;;
 esac
 if [[ "$first_state" == Candidate* ]]; then
   # Only an audit moves a CANDIDATE: once per period (epoch_length / span_daa spans), seeded by the
@@ -254,6 +260,11 @@ if [[ "$first_state" == Candidate* ]]; then
 fi
 wait_reg "any(c['classId'] == '$CLASS_ID' and c['state'].startswith(('Probation', 'ActiveLimited', 'Active')) for c in v['classes'])" "$MODEL_ID to reach PROBATION"
 log "3/9 OK — $(reg 1 "[(c['state'], c['readySeatsNow'], c['admissionMilli']) for c in v['classes'] if c['classId'] == '$CLASS_ID'][0]") (state, ready seats, admission milli)"
+# **What the seats actually carried.** A V2 proof opens the prefix of its draw the carrier's budget
+# buys; a run where every seat still opened all sixteen would be a run on the old rule.
+proof_line="$(grep -h "proving .* leaves of" "$WORK_DIR"/node-*.log | tail -1 | sed -E 's/.*(proving )/\1/' | cut -c1-160)"
+[ -n "$proof_line" ] && log "    possession: $proof_line"
+grep -qh "budgeted bytes" "$WORK_DIR"/node-*.log || die "no seat proved possession under the budget rule — readiness V2 did not arm at $READINESS_V2_AT"
 
 # ---------------------------------------------------------------------------------------------
 # 4/9  The free-prompt lane certified for the class's family.
