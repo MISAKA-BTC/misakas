@@ -743,6 +743,21 @@ pub const PALW_READINESS_V2_BUDGET_BYTES_V1: usize =
 /// transaction could hold, four spans in eight for the shipped class, and the seat then proved
 /// nothing at all in those spans — silently, because a carrier refusal is not a chain event.
 pub const PALW_READINESS_V2_OPERAND_MAX_BYTES_V1: usize = PALW_READINESS_V2_BUDGET_BYTES_V1 + PALW_READINESS_V2_LEAF_MAX_BYTES_V1;
+/// The effective one-carrier ceiling for the first readiness-V2 producer. Its logical operand
+/// bound was 1 MiB, but a block could only carry one 100 KB lifecycle object. Blocks mined before
+/// the carrier-bounded form shipped contain complete sixteen-leaf proofs below this real ceiling.
+/// Those historical proofs must keep their original meaning when a node replays or IBDs the chain;
+/// otherwise an upgrade changes already-accepted PALW state.
+pub const PALW_READINESS_V2_LEGACY_FULL_CHALLENGE_OPERAND_MAX_BYTES_V1: usize = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES;
+
+/// Whether a proof is the only historical V2 form which may exceed the current one-carrier
+/// operand ceiling. It is deliberately narrow: exactly the old full sixteen-leaf challenge,
+/// bounded by its former ceiling. New proofs always use the carrier-bounded prefix rule.
+pub fn palw_readiness_v2_is_legacy_full_challenge_v1(opened_count: usize, operand_bytes: usize) -> bool {
+    opened_count == PALW_READINESS_V2_CHUNKS_V1 as usize
+        && operand_bytes > PALW_READINESS_V2_OPERAND_MAX_BYTES_V1
+        && operand_bytes <= PALW_READINESS_V2_LEGACY_FULL_CHALLENGE_OPERAND_MAX_BYTES_V1
+}
 pub const PALW_SEAT_READINESS_V2_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v2/message/v1";
 pub const PALW_SEAT_READINESS_V2_CHALLENGE_DOMAIN: &[u8] = b"misaka-palw/seat-readiness-v2/challenge/v1";
 pub const PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/seat-readiness-v2/mldsa87/v1";
@@ -776,6 +791,7 @@ pub fn palw_readiness_v2_rule_tag_v1() -> Hash64 {
     state.update(&(PALW_READINESS_V2_LEAF_MAX_BYTES_V1 as u64).to_le_bytes());
     state.update(&(PALW_READINESS_V2_FRAME_BYTES_V1 as u64).to_le_bytes());
     state.update(&(PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 as u64).to_le_bytes());
+    state.update(&(PALW_READINESS_V2_LEGACY_FULL_CHALLENGE_OPERAND_MAX_BYTES_V1 as u64).to_le_bytes());
     finish64(state)
 }
 
@@ -1699,6 +1715,7 @@ mod tests {
             PALW_READINESS_V2_LEAF_MAX_BYTES_V1 as u64,
             PALW_READINESS_V2_FRAME_BYTES_V1 as u64,
             PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 as u64,
+            PALW_READINESS_V2_LEGACY_FULL_CHALLENGE_OPERAND_MAX_BYTES_V1 as u64,
         ] {
             state.update(&n.to_le_bytes());
         }

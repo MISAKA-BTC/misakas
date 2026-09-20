@@ -394,9 +394,13 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
             }
         }
         PalwConsensusObjectV2::SeatReadinessProvedV2 { signature, proof, .. } => {
+            let legacy_full_challenge = crate::palw_model_registry_v1::palw_readiness_v2_is_legacy_full_challenge_v1(
+                proof.opened.len(),
+                proof.operand_bytes(),
+            );
             if signature.is_empty() {
                 Err("a possession proof must carry the seat's signature — unsigned, a relayer could volunteer another bond's collateral")
-            } else if proof.operand_bytes() > crate::palw_model_registry_v1::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 {
+            } else if proof.operand_bytes() > crate::palw_model_registry_v1::PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 && !legacy_full_challenge {
                 Err("a V2 possession proof opens the challenged leaves within the operand cap")
             } else if proof.opened.is_empty() {
                 Err("a possession proof that opens nothing shows nothing")
@@ -413,7 +417,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
                 // A tree of `u32` leaves is 32 levels, so one leaf needs at most 32 siblings and the
                 // whole challenge at most 32 × k. Sixty-four × k is twice that: generous, and finite.
                 Err("a V2 possession proof carries more siblings than a thirty-two-level tree can need")
-            } else if proof.opened.iter().any(|(_, operand)| {
+            } else if !legacy_full_challenge && proof.opened.iter().any(|(_, operand)| {
                 operand.bytes.len() > crate::palw_model_registry_v1::PALW_READINESS_V2_LEAF_MAX_BYTES_V1
             }) {
                 // **A leaf no carrier can hold is malformed wherever it is read** (the 2026-09-20
@@ -908,6 +912,48 @@ mod tests {
         let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
             .expect("a lifecycle payload is borsh-serializable");
         carrier(SUBNETWORK_ID_PALW_LIFECYCLE, payload)
+    }
+
+    #[test]
+    fn an_historical_full_v2_possession_proof_still_rides_and_reaches_the_fold() {
+        use crate::palw_artifact::{PalwArtifactMultiproofV1, PalwArtifactOperandV1};
+
+        // The first V2 producer opened its complete sixteen-leaf draw under the former 1 MiB
+        // ceiling. Eighty KiB is a valid historical carrier but exceeds the current 67,232-byte
+        // prefix ceiling, which is the exact replay/IBD compatibility boundary.
+        let proof = PalwArtifactMultiproofV1 {
+            leaf_count: 16,
+            opened: (0..16)
+                .map(|index| {
+                    (
+                        index,
+                        PalwArtifactOperandV1 {
+                            tensor_name: "legacy".into(),
+                            layer: None,
+                            row_start: index,
+                            bytes: vec![index as u8; 5_000],
+                        },
+                    )
+                })
+                .collect(),
+            siblings: Vec::new(),
+        };
+        assert!(crate::palw_model_registry_v1::palw_readiness_v2_is_legacy_full_challenge_v1(
+            proof.opened.len(),
+            proof.operand_bytes()
+        ));
+        let object = PalwConsensusObjectV2::SeatReadinessProvedV2 {
+            bond: bond(1),
+            class_id: h64(2),
+            span: 3,
+            proof: Box::new(proof),
+            signature: vec![1],
+        };
+        let tx = lifecycle_tx(object);
+        validate_palw_lifecycle_tx(&tx.payload, true).expect("the historical carrier remains block-valid");
+        let extracted = palw_lifecycle_objects_from_accepted_txs_v2(&[tx]);
+        assert_eq!(extracted.objects.len(), 1, "the historical proof reaches stateful validation rather than being skipped");
+        assert!(extracted.skipped.is_empty());
     }
 
     fn panel_bound() -> PalwConsensusObjectV2 {
