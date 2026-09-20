@@ -1,6 +1,6 @@
 # Running a Testnet-11 node
 
-Verified against current `main` on 2026-09-13.
+Verified against current `main` on 2026-09-20.
 
 ## Roles
 
@@ -67,14 +67,13 @@ before that height.
 The fence schedule this build prints on start:
 
 ```text
-1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, 2125000
+1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000
 ```
 
-**7,100** is the compatibility boundary (no PALW rule fires there; it exists so the fleet is on one
-binary first), **7,101** is the one PALW upgrade day, **7,200** carries ADR-0133's Verification V2
-and the whole-artifact possession proof, **7,301** retires the compute overlay, **6,900** is the
-market's least seed. The first four moved up 300 on 2026-09-18, when holding the release to fix the
-DAA clock took the tip past the boundary they had been pinned to. What each one changes:
+**7,100** activates the held regime and deep-audit fixes. **7,101** is the one PALW upgrade day
+(the internal `6001` bundle), including ADR-0125's 1-BPS execution lane. **7,200** carries
+ADR-0133's Verification V2 and the whole-artifact possession proof, **7,301** retires the compute
+overlay, and **6,900** is the market's least seed. What each one changes:
 [docs/testnet11-7101-upgrade-announcement.md](testnet11-7101-upgrade-announcement.md).
 
 A different fingerprint or fork-id schedule is a ruleset mismatch, not an ordinary connectivity problem. Testnet-11 Relaunch 5f uses a different genesis from prior relaunches; old datadirs cannot be continued.
@@ -116,3 +115,17 @@ Do not wipe a healthy current-5f appdir for a routine binary update. Move only t
 ## Producing blocks
 
 An external hash miner cannot produce Testnet-11 blocks. Follow [testnet11-join-mining.md](testnet11-join-mining.md); the ADR-0122 wizard starts `kaspad --palw-produce` with the required Bond and class data.
+
+## Execution-lane diagnosis
+
+At DAA 7,101 and above, the consensus rule accepts ADR-0125 round blocks at one permit per
+one-second round. That does not guarantee a round block every second: a bond must first be scheduled
+from finalized attempts, and its producer must explicitly run `kaspad --palw-round-lane` with that
+bond and its producer key.
+
+For a one-minute window, query `getPalwRoundLane` (or `misaka --network testnet-11 palw round-lane`)
+to confirm scheduled permits, count `[palw-round-producer]` logs for produced blocks, then count
+`[palw-round-lane]` logs for merged/granted/accepted blocks. No permit indicates the
+scheduler/finalized-attempt path; a permit without production indicates producer configuration; a
+produced block without merge indicates peer acceptance or anchor merging. Merges absent from an
+Explorer point to its indexer/display path, not the consensus lane.

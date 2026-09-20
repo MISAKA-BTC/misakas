@@ -3,8 +3,9 @@
 * Status: **IMPLEMENTED 2026-09-17** on `feat/palw-exec-lane-and-validator-retirement` (from `main` at
   `6fdf6ba7`, after ADR-0124), including the stage table (§7.2), equivocation evidence and relay
   de-duplication (§7.3), the RPC read and the operator's status line (§7.4), and the devnet drill
-  (§7.1). **testnet-11 schedules it at DAA 6,001 at one permit a round** (the operator's flag day, §7
-  item 5); `None` on every other shipped preset.
+  (§7.1). **testnet-11 schedules it at DAA 7,101 at one permit per one-second round**. `6001` is the
+  bundle's retained logical label in historical audit and test material, not a second activation
+  height; `None` on every other shipped preset.
 * Operator's request: "testnet では BPS 1 から実装して最終目標を BPS 10 とする", with the design
   quoted in §1.
 * Builds on: [0060](0060-the-liveness-doctrine.md) / [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)

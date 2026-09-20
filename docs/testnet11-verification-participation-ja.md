@@ -46,8 +46,8 @@ DNS が使えない場合は、公開エントリポイントを追加します�
 起動ログで次を確認してください。
 
 ```text
-Consensus params fingerprint: c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6501, 6900, 2125000
+Consensus params fingerprint: 137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000
 ```
 
 ### 4. 検証席をセットアップする

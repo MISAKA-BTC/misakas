@@ -5,7 +5,7 @@
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
 > [!IMPORTANT]
-> **Current status (2026-09-17).** The live public network is **`testnet-11`**, Relaunch 5f.
+> **Current status (2026-09-20).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
 > **`137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde`** (the build that schedules

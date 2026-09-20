@@ -25,12 +25,13 @@
 > [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
 > [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
-**Fingerprint of the release: `731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6`.** (It was `c3a5e91dfc9336b0…` until 2026-09-20, when
-ADR-0150 hashed the consensus rule manifest into the fingerprint so that a redefined rule stops looking like the rule it
-replaced. The identity is unchanged, so a node on the older build still peers — it forks at the readiness fence, not at the
-handshake.)
-Every node on testnet-11 must run this build **before DAA 7,000** (see the note above). The build currently deployed prints
-`ae1d6162…` and is refused from 7,100.
+**Fingerprint of current `main`: `137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde`.** It replaced
+`c3a5e91dfc9336b0…` on 2026-09-20, when ADR-0150 hashed the consensus rule manifest into the
+fingerprint so a redefined rule no longer looks like the rule it replaced.
+
+The dated deployment deadlines above are historical. The live schedule is: held/deep-audit fixes at
+7,100; the `6001`-named PALW upgrade bundle at 7,101; Verification V2/readiness V2 at 7,200; and
+overlay retirement at 7,301.
 
 ```bash
 kaspad --testnet --netsuffix=11   # the first log lines print the fingerprint and the fence schedule
@@ -57,6 +58,10 @@ of it fires without the rest:
 | one work target `W` — a block draws against `CCU / W`; no class share, class DAA, epoch budget or seat price is read | 0137 |
 | the short challenge window: a claim licensed past 7,101 is challengeable for 120 DAA, not 1,200 | 0132 §7.6 |
 | the execution lane's gas: one 3 M budget per permitted round a chain block merges, under a 390 M ceiling (O13 decided) | 0139 |
+
+`6001` is the upgrade bundle's retained logical label, not a separate DAA height. At DAA 7,101 the
+execution lane opens with one permit per one-second round; it produces blocks only for scheduled,
+configured bonds, and an anchor must merge and grant a permit before the block's transactions apply.
 
 **Two rules left this day, and why.** ADR-0132 S's single lottery and ADR-0138's anchor clock are
 **not** in the list above. They arm together — one setter, so they can never be spelled at two
@@ -125,9 +130,10 @@ This bundle was audited twice against the code, not the design, and both reports
 
 ## What an operator has to do
 
-1. Build this release and check the fingerprint and the schedule on start:
-   `1150, 1900, 2150, 2400, 3500, 4000, 6300, 6301, 6400, 6501, 6900, …`.
-2. Restart every node — producers, panel seats, pool slots — before DAA 7,100. No datadir move, no resync.
+1. Build current `main` and check the startup schedule:
+   `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`.
+2. Keep every producer, panel seat and pool slot on this ruleset. A normal ruleset update does not
+   require a datadir move or resync.
 3. After 7,101, read the registry and the economics:
    ```bash
    misaka --network testnet-11 palw registry

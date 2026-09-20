@@ -6,7 +6,7 @@ The code, current `main` CLI `--help` and ADR decisions are authoritative. This 
 
 - [Join as a PALW producer](testnet11-join-mining.md)
 - [Run a full node](testnet11-node-operator.md)
-- [The DAA 7,101 PALW upgrade and Verification V2 at 7,200](testnet11-7101-upgrade-announcement.md) — what fires at 7,100, 6,001, 6,100, 6,201 and 6,900, and what an operator must do before 6,000
+- [The DAA 7,101 PALW upgrade and Verification V2 at 7,200](testnet11-7101-upgrade-announcement.md) — what fires at 7,100, 7,101, 7,200, 7,301 and 6,900, and how to diagnose the execution lane
 - [Pre-arming security audit of the DAA 7,101 bundle (2026-09-18)](palw-audit-2026-09-18-6001.md) — two Critical and six High findings, the seven release blockers and their fixes, and what is left as residual risk
 - [The DAA clock under the 7,101 bundle (2026-09-18)](palw-daa-clock-audit-2026-09-18.md) — every lane's effect on the DAA score, `bits` and blue work; the window arithmetic at 120 s / measured / max lane load; the blocker and its fix (ADR-0138)
 - [Run a DNS-finality validator](validator-runbook.md)
@@ -40,7 +40,7 @@ When a historical report conflicts with a current operator document, use the cur
 ## Current invariants worth checking
 
 - network: `testnet-11`
-- fingerprint: `c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f` (schedules the DAA 7,101 flag day: ADR-0124, 0125, 0126, 0128, 0130 M1/M2, ADR-0135's permissionless model registry, ADR-0132 Upgrade C's economic payout, ADR-0137's work target, ADR-0132 S's single lottery and §7.6's short challenge window — one PALW upgrade day, pinned by `t11_daa_6000_is_the_compatibility_boundary_and_6001_the_one_palw_upgrade_flag_day` — ADR-0133's Verification V2 (S1) at 7,200, and ADR-0134's retirement at 7,301)
+- fingerprint: `137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde` (the current main build; DAA 7,100 is the held/deep-audit boundary, 7,101 is the `6001`-named PALW upgrade bundle including ADR-0125's 1-BPS execution lane, 7,200 arms ADR-0133 Verification V2/readiness multiproofs, and 7,301 retires the compute overlay)
 - PALW cadence: 120 seconds per block
 - class shares at Relaunch 5f genesis: Floor 22‰, A16 489‰, QWEN36 489‰
 - DNS Testnet-11 minimum stake Bond: 10 MSK
