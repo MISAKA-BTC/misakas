@@ -716,6 +716,35 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         config.params.fence_schedule_v1().iter().map(|fence| fence.to_string()).collect::<Vec<_>>().join(", "),
         config.params.consensus_schedule_id()
     );
+    // **ADR-0150: the rules this build carries, beside the id they now move.** The fingerprint
+    // hashes the manifest's revisions for every ruleset this network can run, so a build that
+    // redefined one stops looking like a build that did not; this line is for what a digest cannot
+    // say, which is WHICH ruleset differs when two operators compare.
+    info!(
+        "Consensus rule manifest: {} (digest {})",
+        kaspa_consensus_core::palw_rule_manifest_v1::palw_rule_manifest_line_v1(),
+        kaspa_consensus_core::palw_rule_manifest_v1::palw_rule_manifest_digest_v1()
+    );
+    // **The rule's own numbers, and the deadline they arrive on** (2026-09-20).
+    //
+    // `consensus_params_id` hashes a fence's HEIGHT and never the rule it turns on, so two builds
+    // that disagree about what a valid possession proof is are one network by fork-id and two the
+    // moment the fence fires. The possession rule changed on 2026-09-20 — the V2 challenge opens
+    // the prefix of its draw that one carrier's budget buys, because all sixteen of its leaves did
+    // not fit a transaction for the shipped class — and testnet-11 arms that fence at a height it
+    // has not reached. So the operator's question is "does every node carry this rule", and the
+    // answer is two lines a person can compare without a peer.
+    if let Some(activation) = config.params.palw_readiness_v2 {
+        info!(
+            "PALW possession rule (readiness V2): tag {} — {} leaves at most, {} bytes budgeted, leaf ≤ {}. Arms at DAA {}; the fingerprint above moves with this rule (ADR-0150) but the HANDSHAKE does not, because a scheduled fence is normalised out of the identity — so an un-updated node still peers and forks at the height. Every node must carry this build before DAA {}.",
+            kaspa_consensus_core::palw_model_registry_v1::palw_readiness_v2_rule_tag_v1(),
+            kaspa_consensus_core::palw_model_registry_v1::PALW_READINESS_V2_CHUNKS_V1,
+            kaspa_consensus_core::palw_model_registry_v1::PALW_READINESS_V2_BUDGET_BYTES_V1,
+            kaspa_consensus_core::palw_model_registry_v1::PALW_READINESS_V2_LEAF_MAX_BYTES_V1,
+            activation.daa_score(),
+            activation.daa_score()
+        );
+    }
     info!("Application directory: {}", app_dir.display());
     info!("Data directory: {}", db_dir.display());
     match runtime.log_dir.as_ref() {

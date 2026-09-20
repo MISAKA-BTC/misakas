@@ -51,8 +51,18 @@ wRPC is disabled until its listener flag is supplied. Keep RPC on loopback unles
 The current Testnet-11 fingerprint is (the build that schedules the DAA 7,101 flag day; the 7,000 release printed `ae1d6162…` and is refused from 7,100, the moved height it does not schedule):
 
 ```text
-c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f
+731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6
 ```
+
+**This number moved on 2026-09-20 and the one it replaced is not wrong, it is older.** ADR-0150 hashes the consensus rule
+manifest into the fingerprint, so a build that redefines what a fence ADMITS — at a height nobody moved — no longer
+fingerprints like the build it disagrees with. Testnet-11 is the only preset that moved, for `palw_readiness` R2: the
+possession proof a seat carries is now the prefix of its draw that one carrier's budget buys, because all sixteen leaves of
+the shipped class did not fit a transaction. The build before it printed `c3a5e91d…`.
+
+What did **not** move is the identity two nodes compare at the handshake, so a node on the older build still peers with this
+one. It will fork at DAA 7,200, where the readiness rule takes effect — which is why every node must carry this build
+before that height.
 
 The fence schedule this build prints on start:
 

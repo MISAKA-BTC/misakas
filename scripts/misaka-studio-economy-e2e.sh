@@ -264,7 +264,9 @@ log "3/9 OK — $(reg 1 "[(c['state'], c['readySeatsNow'], c['admissionMilli']) 
 # buys; a run where every seat still opened all sixteen would be a run on the old rule.
 proof_line="$(grep -h "proving .* leaves of" "$WORK_DIR"/node-*.log | tail -1 | sed -E 's/.*(proving )/\1/' | cut -c1-160)"
 [ -n "$proof_line" ] && log "    possession: $proof_line"
-grep -qh "budgeted bytes" "$WORK_DIR"/node-*.log || die "no seat proved possession under the budget rule — readiness V2 did not arm at $READINESS_V2_AT"
+# Matched on the one word the line cannot lose: the phrase was "budgeted bytes" and the node's own
+# format broke it across a continuation, so the gate failed on a run whose seats had just proved.
+grep -qh "byte budget" "$WORK_DIR"/node-*.log || die "no seat proved possession under the budget rule — readiness V2 did not arm at $READINESS_V2_AT"
 
 # ---------------------------------------------------------------------------------------------
 # 4/9  The free-prompt lane certified for the class's family.

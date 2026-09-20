@@ -12,8 +12,21 @@
 
 use kaspa_consensus_core::config::params::{MAINNET_PARAMS, palw_rc_shipped_params};
 
-/// The shipped release's identity, unchanged since the 2026-09-19 roll.
-const T11_CONSENSUS_PARAMS_ID: &str = "c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f";
+/// **The shipped release's fingerprint, moved once by ADR-0150 and by nothing else** (2026-09-20).
+///
+/// `c3a5e91d…` was this number from the 2026-09-19 roll until the rule manifest landed. The
+/// manifest hashes the semantic revision of each ruleset a network can run, so that a build which
+/// redefines what a fence ADMITS — at a height nobody moved — stops fingerprinting like the build
+/// it disagrees with. testnet-11 is the only shipped preset whose number moves, and it moves for
+/// the one ruleset that has changed: `palw_readiness` R2, the possession proof that is now the
+/// prefix of its draw a carrier's budget buys (9ef0d326). Mainnet, testnet, simnet and devnet are
+/// byte-identical, because a manifest at R1 writes nothing at all.
+///
+/// **The IDENTITY below did not move, and must not**: the handshake normalises a scheduled fence
+/// to "not yet", which drops the ruleset riding it, so a fleet still rolls this build out without
+/// partitioning. That is the line to watch on deploy day — the fingerprint differing between an
+/// updated and an un-updated node is expected here; the identity differing is not.
+const T11_CONSENSUS_PARAMS_ID: &str = "731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
 const T11_CONSENSUS_SCHEDULE_ID: &str = "7494fb6a98c0467b7a7baf1be0e2614a85a6c7762f14bd621a209c7a268b596e";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";

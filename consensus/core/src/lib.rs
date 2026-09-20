@@ -309,6 +309,7 @@ pub mod palw_reward_v2;
 /// computed and logged only; no verdict, credit or acceptance path reads any of it, and the
 /// module exposes no crediting API at all (`FINALIZED_WITHOUT_REPLAY` is untypable).
 pub mod palw_routing;
+pub mod palw_rule_manifest_v1;
 /// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.

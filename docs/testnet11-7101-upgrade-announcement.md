@@ -25,7 +25,10 @@
 > [The clock audit §2](palw-daa-clock-audit-2026-09-18.md) has the measurement and
 > [the release report](palw-release-6001-verdict-2026-09-18.md) §7 has the fix.
 
-**Fingerprint of the release: `c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f`.**
+**Fingerprint of the release: `731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6`.** (It was `c3a5e91dfc9336b0…` until 2026-09-20, when
+ADR-0150 hashed the consensus rule manifest into the fingerprint so that a redefined rule stops looking like the rule it
+replaced. The identity is unchanged, so a node on the older build still peers — it forks at the readiness fence, not at the
+handshake.)
 Every node on testnet-11 must run this build **before DAA 7,000** (see the note above). The build currently deployed prints
 `ae1d6162…` and is refused from 7,100.
 

@@ -6663,6 +6663,32 @@ impl Params {
     ///
     /// Not an identifier to persist, publish, or compare across versions — a value for separating
     /// nodes at handshake, and nothing more.
+    /// **ADR-0150: what each fenced ruleset's gate says on THIS network** — absent, scheduled for a
+    /// height above genesis, or in force now. The identity hashes the revisions of the rulesets in
+    /// force and leaves the scheduled ones out, exactly as it does with their heights, so a fleet
+    /// can still roll a build out before the height its new rule takes effect at.
+    pub fn palw_rule_manifest_gates_v1(&self) -> crate::palw_rule_manifest_v1::PalwRuleManifestGatesV1 {
+        use crate::palw_rule_manifest_v1::{PalwGateStateV1, PalwRuleManifestGatesV1};
+        let state = |fence: Option<ForkActivation>| match fence {
+            None => PalwGateStateV1::Absent,
+            Some(activation) if activation == ForkActivation::never() => PalwGateStateV1::Absent,
+            Some(activation) if activation.daa_score() == 0 => PalwGateStateV1::InForce,
+            Some(_) => PalwGateStateV1::Scheduled,
+        };
+        PalwRuleManifestGatesV1 {
+            readiness_v2: state(self.palw_readiness_v2),
+            verification_v2: state(self.palw_verification_v2),
+            model_registry: state(self.palw_model_registry),
+            economic_payout: state(self.palw_economic_payout.map(|payout| payout.activation)),
+            work_target: state(self.palw_work_target),
+            canonical_work: state(self.palw_canonical_work),
+            admission_independence: state(self.palw_admission_independence),
+            fp_derived_work: state(self.palw_fp_derived_work),
+            anchor_clock: state(self.palw_anchor_clock),
+            da_court: state(self.palw_da_court),
+        }
+    }
+
     pub fn consensus_params_id(&self) -> Hash {
         // Exhaustive on purpose. If this stops compiling because `Params` gained a field, decide
         // whether that field changes block validity: if it does, hash it; if it does not, bind it
@@ -7386,6 +7412,27 @@ impl Params {
                 // fingerprints byte-identically to before.
                 h.write(crate::palw_state_v2::PALW_STATE_V2_VERSION.to_le_bytes());
             }
+        }
+
+        // **ADR-0150: the rules, beside the heights.** The arms above hash a fenced rule's HEIGHT
+        // and never the rule it turns on, so a build that redefines what a fence admits — at a
+        // height nobody moved — fingerprints identically to one that does not, peers with it, and
+        // splits from it the moment the fence fires. The line above is the same idea applied once,
+        // by hand, to the state machine's version; this is that idea as a list, so the next rule
+        // change is a manifest entry a reviewer reads rather than a silence nobody can see.
+        //
+        // Gated, not unconditional: a ruleset whose fence this network does not set contributes
+        // nothing, and the identity's normalisation (a scheduled fence becomes "not yet", which
+        // reads as absent) is what keeps a rollout across a FUTURE rule change a rollout.
+        // Silent where every ruleset is still R1 (see the module): a build that has changed no
+        // rule writes no bytes here and fingerprints exactly as the build before the manifest did,
+        // so landing this partitions nobody. testnet-11 is the one preset that moves today, and it
+        // moves because its readiness rule really did.
+        if let Some(manifest) =
+            crate::palw_rule_manifest_v1::palw_rule_manifest_digest_for_gates_v1(&self.palw_rule_manifest_gates_v1())
+        {
+            h.write(b"palw_rule_manifest");
+            h.write(manifest.as_byte_slice());
         }
 
         h.finalize()
@@ -17917,7 +17964,7 @@ mod consensus_params_id_tests {
                 // the hash; the schedule's height set is unchanged, so the fork id does not move and a
                 // node on the 135b6ee0… build is told apart by the fingerprint alone). The previous pin
                 // (135b6ee0…) was not deployed.
-                "c3a5e91dfc9336b02d2280ccb10327e19058123b8589da2d0aa0754f719e9a5f",
+                "731e9d3a5be048bfc948c1f5a70e3e0de1e134124903b207abefe0ceaa696ea6",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -17959,6 +18006,47 @@ mod consensus_params_id_tests {
         })
         .collect();
         assert!(changed.is_empty(), "consensus fingerprint changed for {} preset(s):\n{}", changed.len(), changed.join("\n"));
+    }
+
+    /// **ADR-0150: the fingerprint sees the rule, and the handshake still lets a fleet roll out.**
+    ///
+    /// The manifest speaks only for a ruleset this network can run and only above R1, so the two
+    /// halves are testable on the one preset that has such a ruleset: testnet-11, whose
+    /// `palw_readiness_v2` is scheduled and whose readiness rule is R2.
+    ///
+    /// * a network that can run the changed rule fingerprints differently from one that cannot —
+    ///   the property `1 << 20`'s silent redefinition did not have;
+    /// * their IDENTITIES are the same, because the identity normalises a scheduled fence to "not
+    ///   yet" and the ruleset riding it drops out — which is what makes a rollout a rollout.
+    #[test]
+    fn a_rule_this_network_can_run_is_in_the_fingerprint_and_not_in_the_handshake() {
+        let speaks = palw_rc_shipped_params();
+        assert_eq!(
+            speaks.palw_rule_manifest_gates_v1().readiness_v2,
+            crate::palw_rule_manifest_v1::PalwGateStateV1::Scheduled,
+            "the premise: testnet-11 schedules the rule that changed"
+        );
+        assert!(
+            crate::palw_rule_manifest_v1::palw_rule_manifest_digest_for_gates_v1(&speaks.palw_rule_manifest_gates_v1()).is_some(),
+            "and the manifest has something to say about it"
+        );
+        let mut silent = speaks.clone();
+        silent.palw_readiness_v2 = None;
+        assert_eq!(
+            crate::palw_rule_manifest_v1::palw_rule_manifest_digest_for_gates_v1(&silent.palw_rule_manifest_gates_v1()),
+            None,
+            "a network that cannot run the rule hears nothing about it"
+        );
+        assert_ne!(
+            speaks.consensus_params_id(),
+            silent.consensus_params_id(),
+            "a build that redefined a rule this network will run must not fingerprint like one that did not"
+        );
+        assert_eq!(
+            speaks.consensus_identity_id(),
+            silent.consensus_identity_id(),
+            "…and must still peer with it until the height, or landing the rule partitions the fleet on deploy day"
+        );
     }
 
     #[test]

@@ -756,6 +756,29 @@ fn finish64(state: blake2b_simd::State) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
+/// **What this build believes a V2 possession proof IS**, as a value two operators can compare.
+///
+/// `consensus_params_id` hashes the fence's HEIGHT and never the rule the fence turns on
+/// (`params.rs`: "ADR-0133 §11.2 readiness V2: the height only, Some-only"), so a build carrying
+/// one possession rule and a build carrying another are the same network by fork-id and different
+/// networks the moment the fence fires. That is the shape this tree calls a silent fork, and the
+/// 2026-09-20 rule change — sixteen leaves became the prefix a carrier's budget buys — is one:
+/// nothing in the identity moved, because nothing in `Params` moved.
+///
+/// It cannot be fixed by hashing this into the identity (that would re-mint every network that has
+/// the fence scheduled, for a rule none of them has run yet). What it can do is be VISIBLE: the
+/// node prints this beside its fingerprint, so "are we running the same possession rule" is a
+/// question two operators can answer by reading two lines, before the height rather than after it.
+pub fn palw_readiness_v2_rule_tag_v1() -> Hash64 {
+    let mut state = keyed64(b"misaka-palw/seat-readiness-v2/rule-tag/v1");
+    state.update(&(PALW_READINESS_V2_CHUNKS_V1 as u64).to_le_bytes());
+    state.update(&(PALW_READINESS_V2_BUDGET_BYTES_V1 as u64).to_le_bytes());
+    state.update(&(PALW_READINESS_V2_LEAF_MAX_BYTES_V1 as u64).to_le_bytes());
+    state.update(&(PALW_READINESS_V2_FRAME_BYTES_V1 as u64).to_le_bytes());
+    state.update(&(PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 as u64).to_le_bytes());
+    finish64(state)
+}
+
 /// **The challenge seed of (class, bond, span)**: every node derives it, the prover cannot choose it.
 pub fn palw_readiness_challenge_seed_v1(class_id: &Hash64, bond: &[u8], span: u64) -> Hash64 {
     let mut state = keyed64(PALW_SEAT_READINESS_V1_CHALLENGE_DOMAIN);
@@ -1660,6 +1683,26 @@ mod tests {
 
         // Nothing opened proves nothing.
         assert!(palw_readiness_v2_opening_is_the_challenge_v1(&draw, &[]).is_err());
+    }
+
+    /// **The rule the fingerprint cannot see has a value of its own.** Change any ceiling and the
+    /// tag moves; the network identity does not, which is exactly why the node prints it.
+    #[test]
+    fn the_possession_rule_has_a_tag_an_operator_can_compare() {
+        let tag = palw_readiness_v2_rule_tag_v1();
+        assert_eq!(tag, palw_readiness_v2_rule_tag_v1(), "the same build answers the same value");
+        // The numbers it is made of are the ones a reader would have to compare by hand.
+        let mut state = keyed64(b"misaka-palw/seat-readiness-v2/rule-tag/v1");
+        for n in [
+            PALW_READINESS_V2_CHUNKS_V1 as u64,
+            PALW_READINESS_V2_BUDGET_BYTES_V1 as u64,
+            PALW_READINESS_V2_LEAF_MAX_BYTES_V1 as u64,
+            PALW_READINESS_V2_FRAME_BYTES_V1 as u64,
+            PALW_READINESS_V2_OPERAND_MAX_BYTES_V1 as u64,
+        ] {
+            state.update(&n.to_le_bytes());
+        }
+        assert_eq!(tag, finish64(state));
     }
 
     /// **The ceilings are the carrier's, by arithmetic.** `1 << 20` was ten carriers and derived

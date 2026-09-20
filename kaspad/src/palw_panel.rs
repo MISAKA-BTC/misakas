@@ -945,7 +945,7 @@ impl PalwPanelService {
                 self.readiness_note(
                     class.class_id,
                     format!(
-                        "proving {} leaves of {} for span {span_now} ({bytes} of {PALW_READINESS_V2_BUDGET_BYTES_V1} budgeted                          bytes, {} siblings)",
+                        "proving {} leaves of {} for span {span_now} ({bytes} bytes against a {PALW_READINESS_V2_BUDGET_BYTES_V1}-byte budget, {} siblings)",
                         proof.opened.len(),
                         digest.leaf_count(),
                         proof.siblings.len()
@@ -7928,7 +7928,7 @@ mod seat_reask_tests {
         assert_eq!(seat_reask_daa_v1(600), 25, "a long window re-asks exactly as before");
         for window in 4..=2_000u64 {
             let reask = seat_reask_daa_v1(window);
-            assert!(reask >= 1 && reask <= 25);
+            assert!((1..=25).contains(&reask));
             assert!(reask < window / 2, "window {window}: the second ask at +{reask} is not before the accusation at +{}", window / 2);
         }
     }
