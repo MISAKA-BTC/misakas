@@ -10,16 +10,16 @@
 //! change is meant to ARM, this file is the one to update deliberately, in the commit that arms it,
 //! with the new height and the new fingerprint written down together.
 
-use kaspa_consensus_core::config::params::{MAINNET_PARAMS, palw_rc_shipped_params};
+use kaspa_consensus_core::config::params::{MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, palw_rc_shipped_params};
 
-/// **The shipped release's fingerprint, moved 2026-09-20 by ADR-0130's span-short fence at DAA 7,300.**
+/// **The shipped release's fingerprint, moved 2026-09-21 by bringing the DAA clock from 8,000 to 7,900.**
 ///
-/// Previous (`137b9c50…`) was ADR-0138 / ADR-0142 at 8,000. Shortening the execution lane's schedule
-/// span 5 DAA → 1 DAA behind a new height writes a Some-only companion onto the lane, so the params
-/// id and the schedule id move; the identity does not (a scheduled fence normalises out).
-const T11_CONSENSUS_PARAMS_ID: &str = "400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8";
+/// Previous (`400403b8…` / `12e975ef…` / `0c6c7a59…`) was ADR-0130's span-short at 7,300 with the
+/// clock still at 8,000. A scheduled future fence writes Some-only into the params id and the
+/// schedule id; the identity does not move (the fence normalises out until it fires).
+const T11_CONSENSUS_PARAMS_ID: &str = "6a728e47a116819b1fc1c221336461f932d15163d5d6bba3d6eaca74686bb388";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
-const T11_CONSENSUS_SCHEDULE_ID: &str = "0c6c7a59fb945d290abb088e48097bcfd804548fadaa82fdf4ba2671fc8c10d1";
+const T11_CONSENSUS_SCHEDULE_ID: &str = "8ba715517107d6de70bfcb7e62df62d741615339396ddabc8ef2ef89ee87f894";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
 
 #[test]
@@ -131,4 +131,22 @@ fn the_work_price_denominator_cannot_reach_the_payer_past_the_bundle() {
     assert_eq!(palw_execution_credit_v1(draw, big_unit), draw, "a unit above the draw does not clamp it");
     assert_eq!(palw_execution_credit_v1(old_unit, big_unit), old_unit, "nor a smaller measure");
     assert_eq!(palw_execution_credit_v1(draw, old_unit), old_unit, "the OLD unit is what clamped");
+}
+
+/// **The DAA-clock trio sits past the 2026-09-21 BASE-0 stall**, so a bonded attempt parent
+/// no longer buys an hour of heartbeat silence once the fence fires. Lottery, clock and
+/// cursor stay one height (`validate_palw_v2`).
+#[test]
+fn the_daa_clock_fence_is_past_the_stalled_tip() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    let rc = palw_rc_shipped_params();
+    assert_eq!(PALW_RC_ANCHOR_CLOCK_FENCE_DAA, 7_900);
+    assert!(PALW_RC_ANCHOR_CLOCK_FENCE_DAA > 7_680, "past the 2026-09-21 BASE-0 stall at DAA 7,680");
+    assert_eq!(rc.palw_anchor_clock, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
+    assert_eq!(rc.palw_clock_cursor, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
+    assert_eq!(rc.palw_single_lottery, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
+    assert!(!rc.palw_anchor_clock_at(PALW_RC_ANCHOR_CLOCK_FENCE_DAA - 1));
+    assert!(rc.palw_anchor_clock_at(PALW_RC_ANCHOR_CLOCK_FENCE_DAA));
+    assert!(!rc.palw_single_lottery_at(PALW_RC_ANCHOR_CLOCK_FENCE_DAA - 1));
+    assert!(rc.palw_single_lottery_at(PALW_RC_ANCHOR_CLOCK_FENCE_DAA));
 }

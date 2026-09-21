@@ -549,7 +549,7 @@ mod tests {
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, and ADR-0138/0142's 8,000), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, and ADR-0138/0142's clock), and deriving the list must not widen it"
         );
     }
 
@@ -609,6 +609,11 @@ mod tests {
             "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
+            "palw_objective_offence" => params.palw_objective_offence = Some(at),
+            "palw_public_model_source_required" => {
+                params.palw_public_model_source_required =
+                    Some(crate::config::params::PalwPublicModelSourceRuleV1 { activation: at })
+            }
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
             "palw_economic_payout" => {
@@ -906,7 +911,7 @@ mod tests {
                         RETIRED_6201,
                         crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                     ],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's 8,000, and nothing else"
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -954,8 +959,8 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past every height it schedules below crescendo (the DAA clock at 8,000
-        // is the last of them).
+        // A node on this build past every height it schedules below crescendo (the DAA clock at
+        // [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] is the last of them).
         let past = fork_id_v1(&t11, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
@@ -1439,7 +1444,7 @@ mod tests {
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 CRESCENDO_T11
             ],
-            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0130's span-short at 7,300, ADR-0134 two hundred past, ADR-0138/0142 at 8,000, ADR-0120 where it was"
+            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0130's span-short at 7,300, ADR-0134 two hundred past, ADR-0138/0142 at the clock fence, ADR-0120 where it was"
         );
 
         // **The deployment window.** The heights moved twice: to 6,000 on 2026-09-17 with the tip at
@@ -1540,7 +1545,7 @@ mod tests {
             without_the_set.fence_schedule_v1(),
             "at 6,000 the set would advertise the schedule of a build without it"
         );
-        for local_daa in [HELD_AND_DEEP, PALW_UPGRADE_DAY, 8_000] {
+        for local_daa in [HELD_AND_DEEP, PALW_UPGRADE_DAY, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA] {
             let (hidden, bare) = (fork_id_v1(&at_6000, local_daa), fork_id_v1(&without_the_set, local_daa));
             assert_eq!(
                 (hidden.fired, hidden.next),

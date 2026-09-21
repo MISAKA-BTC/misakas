@@ -162,6 +162,10 @@ pub fn heartbeat_interval_ms_v2(selected_parent_algo_id: u8, anchor_clock_active
 /// Is the selected parent pacing the chain's clock? Below `palw_anchor_clock` a bonded PALW-v2
 /// parent is (every lane advanced the DAA then); past it, only a parent that advances the DAA is.
 /// One block deep, a pure function of its arguments, and the single place the two regimes differ.
+///
+/// The below-fence reading is the 2026-09-21 stall: a BASE-0 win is a bonded parent, so the lane
+/// waited the nominal hour, and the lottery did not produce a next block either. Past the fence
+/// an attempt that advances no DAA is not pacing, and the recovery cadence is the clock.
 #[inline]
 pub fn heartbeat_parent_paces_the_clock_v1(selected_parent_algo_id: u8, anchor_clock_active: bool, parent_advances_daa: bool) -> bool {
     if anchor_clock_active { parent_advances_daa } else { is_palw_v2_algo_id(selected_parent_algo_id) }
@@ -389,8 +393,9 @@ mod tests {
 
         // Past the fence, a parent that advances the DAA is pacing the clock: stay out of the way.
         assert_eq!(heartbeat_interval_ms_v2(anchor, true, true), HEARTBEAT_NOMINAL_INTERVAL_MS);
-        // ...and one that does not is NOT, however bonded it is. This is the testnet-11 case: the
-        // whole selected chain is attempt blocks, every one of them exempt from the DAA score.
+        // ...and one that does not is NOT, however bonded it is. testnet-11 2026-09-21: BASE-0 at
+        // DAA 7,680 was bonded, the old rule slept an hour, and the lottery produced nothing next.
+        // Past the fence that parent does not pace the DAA, so the recovery cadence is the clock.
         assert_eq!(heartbeat_interval_ms_v2(attempt, true, false), HEARTBEAT_RECOVERY_INTERVAL_MS);
         assert_eq!(heartbeat_interval_ms_v2(receipt, true, false), HEARTBEAT_RECOVERY_INTERVAL_MS);
         assert_eq!(heartbeat_interval_ms_v2(beat, true, false), HEARTBEAT_RECOVERY_INTERVAL_MS);
@@ -403,6 +408,22 @@ mod tests {
         assert!(check_heartbeat_slot_v2(t, attempt, false, false, t + HEARTBEAT_NOMINAL_INTERVAL_MS).is_ok());
         // Overflow still fails CLOSED under the new rule.
         assert!(check_heartbeat_slot_v2(u64::MAX, attempt, true, false, u64::MAX).is_err());
+    }
+
+    /// 2026-09-21 testnet-11: BASE-0 at DAA 7,680 was a bonded selected parent, so the old slot
+    /// rule treated the chain as producing and held the heartbeat for an hour. The class lottery
+    /// did not produce the next block either. Past the fence that parent does not pace the DAA,
+    /// and a beat one recovery interval later is admissible.
+    #[test]
+    fn a_bonded_attempt_that_does_not_advance_the_daa_does_not_silence_the_clock() {
+        let attempt = POW_ALGO_ID_PALW_COMMITTED_V2;
+        let t = 1_700_000_000_000u64;
+        assert_eq!(heartbeat_interval_ms_v2(attempt, true, false), HEARTBEAT_RECOVERY_INTERVAL_MS);
+        assert!(check_heartbeat_slot_v2(t, attempt, true, false, t + HEARTBEAT_RECOVERY_INTERVAL_MS).is_ok());
+        assert!(check_heartbeat_slot_v2(t, attempt, true, false, t + HEARTBEAT_RECOVERY_INTERVAL_MS - 1).is_err());
+        // Below the fence the history-preserving rule is still the hour.
+        assert_eq!(heartbeat_interval_ms_v2(attempt, false, false), HEARTBEAT_NOMINAL_INTERVAL_MS);
+        assert!(check_heartbeat_slot_v2(t, attempt, false, false, t + HEARTBEAT_RECOVERY_INTERVAL_MS).is_err());
     }
 
     /// The miner has to agree with the rule, or it sleeps through the regime the lane exists for.

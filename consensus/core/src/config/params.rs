@@ -582,6 +582,13 @@ pub struct PalwEconomicPayoutV1 {
     pub cap_utilization_max_permille: u16,
 }
 
+/// **A public, immutable source URI on new model registrations.** `None` on every preset;
+/// hashed Some-only. Prefix policy is applied at arming; the dormant chain stores no prefixes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPublicModelSourceRuleV1 {
+    pub activation: ForkActivation,
+}
+
 impl PalwEconomicPayoutV1 {
     /// The fold's reading of this fence at a block whose compact `bits` are `block_bits`.
     pub fn fold_v1(&self, block_bits: u32) -> crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1 {
@@ -1314,6 +1321,13 @@ pub struct Params {
     ///
     /// `None` on every preset; hashed Some-only.
     pub palw_operator_id_unique: Option<ForkActivation>,
+    /// **ADR-0144 §9: an objective offence debits the accused PALW bond.** Past it a verified
+    /// `ObjectiveOffence` is consumed into the ledger and a false-Valid signer is slashable.
+    /// `None` on every preset; hashed Some-only. Do not arm until the colluding-quorum lock
+    /// covers `palw_max_fraud_gain_v1` on the live fold.
+    pub palw_objective_offence: Option<ForkActivation>,
+    /// A public source URI on new model registrations. `None` on every preset; hashed Some-only.
+    pub palw_public_model_source_required: Option<PalwPublicModelSourceRuleV1>,
     /// **ADR-0145 §1–§5: a claim's work is DERIVED, not declared** (the 2026-09-19 reward audit,
     /// finding F1 — CRITICAL and live). `claim.pwu` is `expected_attempts(class_target) ×
     /// pwu_per_inference`, and `pwu_per_inference` is the step-leaf count of a canonical job the
@@ -4378,6 +4392,12 @@ impl Params {
         if self.palw_operator_id_unique == Some(ForkActivation::never()) {
             self.palw_operator_id_unique = None;
         }
+        if self.palw_objective_offence == Some(ForkActivation::never()) {
+            self.palw_objective_offence = None;
+        }
+        if self.palw_public_model_source_required.is_some_and(|r| r.activation == ForkActivation::never()) {
+            self.palw_public_model_source_required = None;
+        }
         // ADR-0145's canonical-work fence: Some-only in the fingerprint, so the same collapse for
         // the same reason — a normalised `Some(never())` writes bytes a build without the field
         // never writes, and the two builds refuse each other on deploy day over a height neither
@@ -4727,6 +4747,16 @@ impl Params {
     /// The 2026-09-19 audit: whether one operator identity backs one bond at `daa_score`.
     pub fn palw_operator_id_unique_at(&self, daa_score: u64) -> bool {
         self.palw_operator_id_unique.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0144 §9: whether a verified objective offence debits PalwBond at `daa_score`.
+    pub fn palw_objective_offence_at(&self, daa_score: u64) -> bool {
+        self.palw_objective_offence.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The HEIGHT of the objective-offence fence, if scheduled. `None` on every shipped preset.
+    pub fn palw_objective_offence_daa(&self) -> Option<u64> {
+        self.palw_objective_offence.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
     }
 
     /// ADR-0147 (the 2026-09-19 audit's F3, ADR-0145 I3/I4): whether the block-level rules of
@@ -5446,6 +5476,8 @@ impl Params {
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
+            palw_objective_offence,
+            palw_public_model_source_required,
             palw_canonical_work,
             palw_admission_independence,
             palw_context_ladder,
@@ -5528,6 +5560,8 @@ impl Params {
             ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
+            ("palw_objective_offence", *palw_objective_offence),
+            ("palw_public_model_source_required", palw_public_model_source_required.map(|r| r.activation)),
             ("palw_canonical_work", *palw_canonical_work),
             ("palw_admission_independence", *palw_admission_independence),
             ("palw_context_ladder", *palw_context_ladder),
@@ -6037,6 +6071,8 @@ impl Params {
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
+            palw_objective_offence,
+            palw_public_model_source_required,
             palw_canonical_work,
             palw_admission_independence,
             palw_context_ladder,
@@ -6315,6 +6351,20 @@ impl Params {
         // The 2026-09-19 audit's operator-identity fence.
         match palw_operator_id_unique.as_mut() {
             Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_objective_offence.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_public_model_source_required.as_mut() {
+            Some(rule) => fork(&mut rule.activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -6836,6 +6886,8 @@ impl Params {
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
+            palw_objective_offence,
+            palw_public_model_source_required,
             palw_canonical_work,
             palw_admission_independence,
             palw_context_ladder,
@@ -7096,6 +7148,14 @@ impl Params {
         if let Some(activation) = palw_operator_id_unique {
             h.write(b"palw_operator_id_unique");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_objective_offence {
+            h.write(b"palw_objective_offence");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(rule) = palw_public_model_source_required {
+            h.write(b"palw_public_model_source_required");
+            h.write(rule.activation.daa_score().to_le_bytes());
         }
         // ADR-0145 the canonical-work fence, Some-only for the same reason: every shipped preset
         // leaves it unset and therefore fingerprints byte-identically to a build without the field.
@@ -7793,6 +7853,8 @@ impl Params {
             palw_clock_cursor: None,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
+            palw_objective_offence: None,
+            palw_public_model_source_required: None,
             palw_canonical_work: None,
             palw_admission_independence: None,
             palw_context_ladder: self.palw_context_ladder,
@@ -8742,6 +8804,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_objective_offence: None,
+    palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
     palw_context_ladder: None,
@@ -8944,6 +9008,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_objective_offence: None,
+    palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
     palw_context_ladder: None,
@@ -9128,6 +9194,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_objective_offence: None,
+    palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
     palw_context_ladder: None,
@@ -12847,7 +12915,7 @@ pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 7_301;
 /// zero-knowledge proof is used or planned.
 pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 
-/// **ADR-0138 + ADR-0142 — the DAA clock and its cursor, on testnet-11 at DAA 8,000.**
+/// **ADR-0138 + ADR-0142 — the DAA clock and its cursor, on testnet-11 at DAA 7,900.**
 ///
 /// The 6,001 / 7,101 flag day left both dormant: past the anchor clock only a heartbeat can
 /// advance the score, and under the selected-parent slot rule an attempt block postponed the next
@@ -12856,10 +12924,15 @@ pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 /// tips jumps `+N` (measured 2026-09-20: DAA 7,210 for an hour of QWEN siblings, then heartbeat
 /// `df80394b` at 7,219 with nine parents).
 ///
-/// 8,000 is a height no released schedule names and is past the live tip (~7,231 on 2026-09-20),
-/// so already-committed `daaScore` values stay valid and the fork-id gate can see the fence. The
-/// single lottery arms with the clock (one setter); the cursor arms at the same height.
-pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 8_000;
+/// The old slot rule treats a bonded PALW parent as "the chain is producing" and holds the
+/// heartbeat for an hour. On a PALW-only network that is a misread: a BASE-0 (or any attempt)
+/// win advances one DAA and then the class lottery goes silent, so nothing produces the next
+/// block either (measured 2026-09-21: DAA 7,680 BASE-0 tip, ~30 minutes of no blocks, next beat
+/// an hour later). 7,900 is past that tip (~7,681) and unnamed on any released schedule, so
+/// already-committed `daaScore` values stay valid and the fork-id gate can see the fence. The
+/// single lottery arms with the clock (one setter); the cursor arms at the same height. A fleet
+/// still advertising 8,000 must roll before 7,900.
+pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 7_900;
 
 /// **The build before the 6,001 flag day**, for the tests that reconstruct an earlier release: the
 /// fences [`PALW_RC_PALW_UPGRADE_FENCE_DAA`] schedules, cleared (the held regime and the deep audit
@@ -13405,8 +13478,9 @@ pub fn palw_rc_base_params() -> Params {
     // — because `validate_palw_v2` refuses the clock without the cursor and the pair at two
     // heights. They are not on 7,101: that day already passed on the live chain, and arming the
     // clock behind a committed tip would recompute `daaScore` for headers the fleet already
-    // stores. 8,000 is past the tip and unnamed on any released schedule, so the fork-id gate can
-    // see it. See `docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md`.
+    // stores. [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] is past the tip and unnamed on any released
+    // schedule, so the fork-id gate can see it. See
+    // `docs/adr/0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md`.
     //
     // The work target above does not depend on them: the dependency runs the other way
     // (`palw_single_lottery` needs `palw_work_target` at or below it, never the reverse), so the
@@ -13812,6 +13886,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
+    palw_objective_offence: None,
+    palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
@@ -18082,7 +18158,10 @@ mod consensus_params_id_tests {
                 // 5 DAA → 1 DAA, f+2 kept): the schedule gains a height, so the fork-id gate separates this
                 // build from `137b9c50…`. The identity does not move. Previous:
                 // 137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde.
-                "400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8",
+                // **Re-pinned 2026-09-21: DAA clock 8,000 → 7,900** so a BASE-0 tip no longer
+                // buys an hour of heartbeat silence (measured stall at DAA 7,680). Identity unmoved.
+                // Previous: 400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8.
+                "6a728e47a116819b1fc1c221336461f932d15163d5d6bba3d6eaca74686bb388",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -18906,8 +18985,8 @@ mod consensus_params_id_tests {
         // * `palw_work_target` and `palw_short_challenge_window` (ADR-0137, ADR-0132 §7.6) ride the
         //   6,001 / 7,101 flag day; a card states them with the payout's rate.
         // * `palw_single_lottery`, `palw_anchor_clock` and `palw_clock_cursor` (ADR-0132 S, ADR-0138,
-        //   ADR-0142) ride testnet-11's own 8,000 day, past the live tip so committed `daaScore`
-        //   values stay valid; a card states them with the work target.
+        //   ADR-0142) ride testnet-11's own [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] day, past the live
+        //   tip so committed `daaScore` values stay valid; a card states them with the work target.
         // * `palw_verification_v2` (ADR-0133 S1) rides testnet-11's own 6,100 day; a card states its
         //   verification rule when it states the registry.
         assert_eq!(
