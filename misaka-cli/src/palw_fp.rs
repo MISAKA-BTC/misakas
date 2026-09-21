@@ -281,7 +281,7 @@ pub async fn submit(
 /// chunked object goes out as one chained burst; every fee is sized from its carrier's own
 /// compute mass, because a drill's chunk is a hundred kilobytes and a send-sized fee would be
 /// refused by the mempool as insufficient.
-pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std::path::PathBuf], yes: bool) -> Result<(), CliError> {
+pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std::path::PathBuf], yes: bool) -> Result<Vec<String>, CliError> {
     use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
     use kaspa_consensus_core::tx::UtxoEntry;
 
@@ -413,7 +413,7 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
                 println!("dry run — nothing was sent. Re-run with --yes to submit.");
             }
         }
-        return Ok(());
+        return Ok(Vec::new());
     }
     let mut submitted = Vec::with_capacity(carriers.len());
     for (path, summary, tx, _, fee) in &carriers {
@@ -444,7 +444,7 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
         OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "submitted": true, "carriers": submitted })),
         _ => println!("the chain grades them when the carriers are accepted; a chunked object applies in the block that completes it"),
     }
-    Ok(())
+    Ok(submitted.iter().filter_map(|v| v.get("txid").and_then(|t| t.as_str()).map(|s| s.to_string())).collect())
 }
 
 // =================================================================================================

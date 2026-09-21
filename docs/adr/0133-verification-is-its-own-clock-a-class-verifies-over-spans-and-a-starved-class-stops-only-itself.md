@@ -415,12 +415,28 @@ Pinned by `adr0133_a_class_whose_replay_does_not_fit_the_receipt_deadline_is_hel
 (registry) and the heavy half of `adr0135_the_inflight_cap_refuses_the_claim_after_the_cap` (state:
 the heavy graph is HELD and admits nothing; the cap itself is shown on a class that fits).
 
-**Not built, its own fence when it comes:** a class-specific receipt deadline — `window_receipt`
-replaced by the class's `verification_window_spans × span_daa` at bind time, so a heavy class gets
-the window its graph needs instead of being held out. It changes a claim's deadline arithmetic and
-must be fenced on its own (`palw_class_receipt_window`, reserved here, not in `Params`); until then
-the network's receipt window is the ceiling and a class that needs more is refused rather than
-admitted and voided.
+**Built 2026-09-21, on the fence reserved above:** `Params::palw_class_receipt_window`, testnet-11
+at DAA 8,160 (sixty past §7's seat gate, which has to open before a class can reach the deadline
+this widens). Past it a claim's receipt deadline is
+`bound_daa + max(window_receipt, verification_window_spans × span_daa)` — the network's window as a
+FLOOR, the class's own where its graph derives more. So the global deadline is untouched for every
+class that already fits (the `max` cannot tighten one), and the class §11.3 held gets the window it
+needs instead of being held out. `window_fits_receipt` is then asked against the deadline the claim
+is actually judged by, so the observation and the deadline are one number rather than two that can
+drift.
+
+The rule lives on `PalwStateParamsV2` (`receipt_window_for_claim_v1`) and not on the transition's
+extras, because the deadline index is not carried: `rebuild_deadline_index_v2` re-derives every
+claim's deadline from the claims and the state at each restart, and a rule the rebuild cannot see
+is a deadline two runs of the same node disagree about. For the same reason the fence is asked
+against the claim's `bound_daa` rather than the block being folded, and the only state it reads is
+`verification_window_spans`, which a class's registered work fixes for its whole life — a row's
+state, ready seats and utilization all move, and a deadline derived from those would move under a
+claim already bound. The bundle carries the lane's span beside the height
+(`set_palw_class_receipt_window` / `sync_palw_class_receipt_window`), and `validate_palw_v2`
+refuses both a bundle whose copy disagrees with the fence and a schedule that arms the fence
+without a lane to measure spans in. Pinned by
+`adr0133_a_class_past_the_receipt_window_fence_is_judged_by_its_own_window_and_no_other_class_moves`.
 
 ## 12. Number hygiene
 

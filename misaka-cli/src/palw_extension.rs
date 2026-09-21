@@ -459,7 +459,7 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
                 }
                 Err(e) => return Err(CliError::generic(format!("{}: cannot be chunked: {e}", path.display()))),
             };
-            crate::palw_fp::submit_objects(ctx, ks, &carriers, yes).await
+            crate::palw_fp::submit_objects(ctx, ks, &carriers, yes).await.map(|_| ())
         }
         PalwExtensionKindV1::ModelClass | PalwExtensionKindV1::ContextProfile => {
             let bond = bond.ok_or_else(|| {
@@ -621,7 +621,7 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
                     }
                 }
             }
-            crate::palw_fp::submit_objects(ctx, ks, &carriers, yes).await
+            crate::palw_fp::submit_objects(ctx, ks, &carriers, yes).await.map(|_| ())
         }
     }
 }

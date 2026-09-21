@@ -549,11 +549,13 @@ mod tests {
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
                 crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, and ADR-0144's lock ledger), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, ADR-0133 §7's seat gate, and ADR-0144's lock ledger), and deriving the list must not widen it"
         );
     }
 
@@ -620,8 +622,11 @@ mod tests {
             "palw_public_model_source_required" => {
                 params.palw_public_model_source_required = Some(crate::config::params::PalwPublicModelSourceRuleV1 { activation: at })
             }
+            "palw_kimi_k3" => params.palw_kimi_k3 = Some(at),
             "palw_canonical_work" => params.palw_canonical_work = Some(at),
             "palw_admission_independence" => params.palw_admission_independence = Some(at),
+            "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),
+            "palw_class_receipt_window" => params.palw_class_receipt_window = Some(at),
             "palw_economic_payout" => {
                 params.palw_economic_payout = Some(crate::config::params::PalwEconomicPayoutV1 {
                     activation: at,
@@ -851,6 +856,8 @@ mod tests {
                         crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                         crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                         crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                        crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                        crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
                         crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
@@ -921,6 +928,8 @@ mod tests {
                         RETIRED_6201,
                         crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                         crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                        crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                        crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
                         crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
                         crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
@@ -959,6 +968,8 @@ mod tests {
                 RETIRED_6201,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
                 crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
@@ -982,7 +993,11 @@ mod tests {
         let past_clock = fork_id_v1(&t11, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1);
         assert_eq!(past_clock.next, crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA);
         let past_quanta = fork_id_v1(&t11, crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA + 1);
-        assert_eq!(past_quanta.next, crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA);
+        assert_eq!(past_quanta.next, crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA);
+        let past_seat_gate = fork_id_v1(&t11, crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA + 1);
+        assert_eq!(past_seat_gate.next, crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA);
+        let past_receipt_window = fork_id_v1(&t11, crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA + 1);
+        assert_eq!(past_receipt_window.next, crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA);
         let past_lock = fork_id_v1(&t11, crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA + 1);
         assert_eq!(past_lock.next, crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA);
         let past_s3 = fork_id_v1(&t11, crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA + 1);
@@ -1469,6 +1484,8 @@ mod tests {
                 RETIRED_6201,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
                 crate::config::params::PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                crate::config::params::PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                crate::config::params::PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
                 crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_S3_FENCE_DAA,
                 crate::config::params::PALW_RC_VERIFICATION_S2_FENCE_DAA,
@@ -1570,8 +1587,11 @@ mod tests {
         // schedule reads as a build without the whole upgrade.
         at_6000.palw_verification_v2 = Some(six_thousand);
         at_6000.palw_readiness_v2 = Some(six_thousand);
-        // ADR-0144's lock ledger and ADR-0133 S3/S2 are later unused heights, not part of the 6,000 counterfactual.
+        // ADR-0144's lock ledger, ADR-0133 §7's seat gate and ADR-0133 S3/S2 are later unused
+        // heights, not part of the 6,000 counterfactual.
         at_6000.palw_objective_offence = None;
+        at_6000.palw_seat_gate_possession = None;
+        at_6000.palw_class_receipt_window = None;
         at_6000.palw_execution_quanta = None;
         at_6000.palw_verification_s3 = None;
         at_6000.palw_verification_s2 = None;

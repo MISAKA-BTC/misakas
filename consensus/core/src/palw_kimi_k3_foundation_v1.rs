@@ -44,7 +44,11 @@ pub fn kimi_k3_derived_work_v1() -> Result<PalwModelWorkV1, PalwStepError> {
 }
 
 pub fn kimi_k3_derived_profile_v1() -> Result<PalwDerivedProfileV1, PalwStepError> {
-    Ok(palw_derive_profile_v1(&kimi_k3_derived_work_v1()?, &PALW_REGISTRY_GLOBALS_V1))
+    // The pre-fence derivation: this is the foundation card's own arithmetic, quoted in ADR-0133
+    // §7 and in `kimi_k3_ibd_identity_v1`'s hash, and it answers "what would this class cost" —
+    // not "what does this chain gate on today". A height would make the card depend on where a
+    // reader stands.
+    Ok(palw_derive_profile_v1(&kimi_k3_derived_work_v1()?, &PALW_REGISTRY_GLOBALS_V1, false))
 }
 
 /// `verification_window_spans × span_daa ≤ window_receipt`. False means refuse the class, not
@@ -59,7 +63,9 @@ pub fn kimi_k3_ibd_identity_v1() -> Result<Hash64, PalwStepError> {
     let profile = kimi_k3_profile_v1(KIMI_K3_CARD)?;
     let kernels = crate::palw_class_admission_v2::reachable_kernels_v1(&profile);
     let work = kimi_k3_derived_work_v1()?;
-    let derived = palw_derive_profile_v1(&work, &PALW_REGISTRY_GLOBALS_V1);
+    // Fence-free on purpose: this hash is an identity two nodes at different heights must agree
+    // on, so the seat gate's height must not enter it.
+    let derived = palw_derive_profile_v1(&work, &PALW_REGISTRY_GLOBALS_V1, false);
     let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/kimi-k3-ibd-identity/v1").to_state();
     h.update(profile.shape_profile_id().as_byte_slice());
     h.update(kimi_k3_tokenizer_id_card_v1().as_byte_slice());

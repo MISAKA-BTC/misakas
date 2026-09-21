@@ -1547,6 +1547,61 @@ mod tests {
         assert!(canonical_classes_v1(&court()).iter().any(|c| c.model_id == A16_GRAPH_V7_2M_MODEL_ID));
     }
 
+    /// **The held 2M row is the class that showed `required_ready_seats` was asking two questions**
+    /// (ADR-0133 §7). Its canonical job is `n_ctx / 8 = 262,143` prefill by ADR-0103 Decision 14, so
+    /// one replay is 3.36e15 MAC — 1,998 reference seat-spans at the 70 % target, ~13.9 days of one
+    /// seat. Priced as five whole replays a claim that is 9,992 ready seats, and testnet-11 has
+    /// seven bonds: below the fence the class cannot leave `Prefetching` no matter how many seats
+    /// prove possession, which is a refusal, not a gate.
+    ///
+    /// Past the fence the gate is possession — the panel plus the spare — and the weight lands
+    /// where it is answerable: `max_inflight_claims` falls to one, so the panel is never committed
+    /// to a second 2M claim before the first is Final, and the admission rate is the smallest
+    /// representable one rather than the zero that integer thousandths would floor it to.
+    #[test]
+    fn the_2m_held_row_asks_possession_past_the_seat_gate_fence() {
+        use kaspa_consensus_core::palw_base0_profile::rc_job_context;
+        use kaspa_consensus_core::palw_model_registry_v1::{
+            PALW_REGISTRY_GLOBALS_V1, palw_derive_profile_v1, palw_model_work_from_carriage_v1,
+        };
+        let row = a16_graph_v7_2m_row_v1().expect("the held 2M projection is canonical");
+        assert_eq!(row.canonical_job, (262_143, 2), "Decision 14's floor is an eighth of the 2M context");
+        let canonical = rc_job_context(&row.profile, row.canonical_job.0, row.canonical_job.1);
+        let work = palw_model_work_from_carriage_v1(&row.profile, &canonical).expect("work");
+        assert_eq!(work.verification_ccu, 3_357_306_292_151_296);
+
+        let before = palw_derive_profile_v1(&work, &PALW_REGISTRY_GLOBALS_V1, false);
+        assert_eq!(before.required_ready_seats, 9_992, "five whole replays a claim, against a seven-bond network");
+
+        let after = palw_derive_profile_v1(&work, &PALW_REGISTRY_GLOBALS_V1, true);
+        assert_eq!(after.required_ready_seats, 7, "the panel plus the spare — who must hold it to verify it");
+        assert_eq!(after.max_inflight_claims, 1, "seven seats hold one 2M claim at a time, and the cap says so");
+        assert!(after.admission_claims_per_span_milli >= 1, "a heavy class claims rarely; it is not refused a rate");
+        assert_eq!(
+            (after.verification_window_spans, after.artifact_prefetch_spans),
+            (before.verification_window_spans, before.artifact_prefetch_spans),
+            "the fence moves the seat question only: the window and the prefetch are the same work"
+        );
+    }
+
+    /// The fence is a gate, not a discount: a class the panel can already carry is unmoved by it.
+    /// The dense row's seats are the panel-plus-spare floor on both sides, so arming the fence
+    /// cannot be read as lowering a bar the network was meeting.
+    #[test]
+    fn the_seat_gate_fence_does_not_move_a_class_the_panel_already_carries() {
+        use kaspa_consensus_core::palw_base0_profile::rc_job_context;
+        use kaspa_consensus_core::palw_model_registry_v1::{
+            PALW_REGISTRY_GLOBALS_V1, palw_derive_profile_v1, palw_model_work_from_carriage_v1,
+        };
+        let row = a16_graph_v5_row_v1().expect("the dense row is canonical");
+        let canonical = rc_job_context(&row.profile, row.canonical_job.0, row.canonical_job.1);
+        let work = palw_model_work_from_carriage_v1(&row.profile, &canonical).expect("work");
+        let before = palw_derive_profile_v1(&work, &PALW_REGISTRY_GLOBALS_V1, false);
+        let after = palw_derive_profile_v1(&work, &PALW_REGISTRY_GLOBALS_V1, true);
+        assert_eq!(before.required_ready_seats, 7);
+        assert_eq!(before, after, "a light class's profile is byte-identical across the fence");
+    }
+
     /// **The genesis row's graph is the graph-v3 row with the attention site fused — one class,
     /// one spelling.**
     ///

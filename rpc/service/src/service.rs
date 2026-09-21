@@ -431,6 +431,64 @@ impl RpcCoreService {
             && !session.async_is_consensus_in_transitional_ibd_state().await
     }
 
+    async fn palw_model_preflight_report(
+        &self,
+        session: ConsensusSessionOwned,
+        bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        tip_daa: u64,
+    ) -> RpcResult<(
+        kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightReportV1,
+        Option<kaspa_consensus_core::palw_state_v2::PalwClassRowV2>,
+    )> {
+        let class_id = match object {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, .. } => *class_id,
+            _ => return Err(RpcError::General("the object is not a ClassRegistered".into())),
+        };
+        let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
+        let class_row = rows.into_iter().find(|r| r.class_id == class_id);
+        let already = class_row.is_some();
+        let registered_root = class_row.as_ref().map(|r| r.artifact_root);
+        let families = session.spawn_blocking(|c| c.palw_certified_families_v1()).await;
+        let chain_certified: Vec<_> = families
+            .into_iter()
+            .filter(|(lane, _, _)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt)
+            .map(|(_, _, record)| record.family)
+            .collect();
+        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        let report = kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1(
+            &self.config.params,
+            bundle,
+            object,
+            &certified,
+            &chain_certified,
+            tip_daa,
+            already,
+            registered_root,
+        )
+        .map_err(RpcError::General)?;
+        Ok((report, class_row))
+    }
+
+    async fn fill_registration_from_tx(&self, registration: &mut RpcPalwModelRegistration, txid: &str) -> RpcResult<()> {
+        let txid = parse_hash64(txid, "transaction id")?;
+        registration.transaction_id = txid.to_string();
+        registration.submitted = true;
+        let in_mempool = self.mining_manager.clone().get_transaction(txid, TransactionQuery::All).await.is_some();
+        if in_mempool {
+            registration.accepted = true;
+            registration.mempool_accepted = true;
+        } else if !registration.included && !registration.folded {
+            registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
+                .code()
+                .to_string();
+            if registration.processor_verdict.is_empty() {
+                registration.processor_verdict = registration.reject_code.clone();
+            }
+        }
+        Ok(())
+    }
+
     pub const IDENT: &'static str = "rpc-core-service";
 
     #[allow(clippy::too_many_arguments)]
@@ -2166,7 +2224,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let session = self.consensus_manager.consensus().unguarded_session();
         let tip_daa = session.get_virtual_daa_score();
         let object = decode_class_registered_hex(&request.object_hex)?;
-        let (report, _) = self.palw_model_preflight_report(&session, bundle, &object, tip_daa).await?;
+        let (report, _) = self.palw_model_preflight_report(session, bundle, &object, tip_daa).await?;
         Ok(rpc_preflight_response(true, tip_daa, &report))
     }
 
@@ -2191,7 +2249,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             let bytes = borsh::to_vec(object).unwrap_or_default();
             registration.object_id =
                 kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1(&bytes).to_string();
-            let (report, class_row) = self.palw_model_preflight_report(&session, bundle, object, tip_daa).await?;
+            let (report, class_row) = self.palw_model_preflight_report(session.clone(), bundle, object, tip_daa).await?;
             registration.class_id = report.class_id.to_string();
             registration.processor_verdict = report.processor_verdict.clone();
             registration.reject_code = report.reject_code.clone();
@@ -2227,11 +2285,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if !request.class_id.trim().is_empty() {
             let class_id = parse_class_id_or_alias(&request.class_id)?;
             registration.class_id = class_id.to_string();
-            let rows = session.spawn_blocking(|c| c.palw_v2_class_table()).await;
+            let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
             if let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) {
                 fill_registration_from_class(&mut registration, &row);
             }
-            if let Some(read) = session.spawn_blocking(|c| c.palw_model_registry_v1()).await {
+            if let Some(read) = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await {
                 if let Some(class) = read.classes.iter().find(|c| c.class_id == class_id) {
                     registration.registry_state = class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
                     if class.row.is_some() {
@@ -2269,19 +2327,20 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let class_id = parse_class_id_or_alias(&request.class_id)?;
         let session = self.consensus_manager.consensus().unguarded_session();
         let tip_daa = session.get_virtual_daa_score();
-        let rows = session.spawn_blocking(|c| c.palw_v2_class_table()).await;
+        let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
         let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) else {
             return Ok(GetPalwModelResponse { available: true, tip_daa, found: false, class_id: class_id.to_string(), ..Default::default() });
         };
         let n_ctx = session
-            .spawn_blocking(|c| c.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile.n_ctx))
+            .clone()
+            .spawn_blocking(move |c| c.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile.n_ctx))
             .await
             .unwrap_or(0);
-        let registry = session.spawn_blocking(|c| c.palw_model_registry_v1()).await;
-        let panel = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await;
+        let registry = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await;
+        let panel = session.clone().spawn_blocking(|c| c.palw_panel_network_view_v1()).await;
         let class_reg = registry.as_ref().and_then(|r| r.classes.iter().find(|c| c.class_id == class_id));
         let panel_class = panel.as_ref().and_then(|v| v.classes.iter().find(|c| c.class_id == class_id));
-        let families = session.spawn_blocking(|c| c.palw_certified_families_v1()).await;
+        let families = session.clone().spawn_blocking(|c| c.palw_certified_families_v1()).await;
         let certified_family = session
             .spawn_blocking(move |c| {
                 let Some((profile, _)) = c.palw_registered_class_carriage_v1(class_id) else { return String::new() };
@@ -2311,7 +2370,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             ready_seats: class_reg.map(|c| c.ready_seats_now).or_else(|| panel_class.map(|c| c.ready_seats)).unwrap_or(0),
             required_ready_seats: class_reg.and_then(|c| c.row.as_ref().map(|r| r.profile.required_ready_seats)).or_else(|| panel_class.map(|c| c.required_ready_seats)).unwrap_or(0),
             inflight_claims: class_reg.map(|c| c.inflight_now).or_else(|| panel_class.map(|c| c.inflight_claims)).unwrap_or(0),
-            admission_permille: class_reg.and_then(|c| c.row.as_ref().map(|r| r.admission_milli as u32)).or_else(|| panel_class.map(|c| c.admission_permille)).unwrap_or(0),
+            admission_permille: class_reg
+                .and_then(|c| c.row.as_ref().map(|r| r.admission_milli as u32))
+                .or_else(|| panel_class.map(|c| c.admission_permille as u32))
+                .unwrap_or(0),
             share_permille: row.share_permille.unwrap_or(0),
             certified_family,
             fence_active: registry.as_ref().map(|r| r.active).unwrap_or(false),
@@ -2409,7 +2471,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         let class_id = parse_class_id_or_alias(&request.class_id)?;
         let session = self.consensus_manager.consensus().unguarded_session();
         let tip_daa = session.get_virtual_daa_score();
-        let Some((profile, _)) = session.spawn_blocking(move |c| c.palw_registered_class_carriage_v1(class_id)).await else {
+        let Some((profile, _)) = session.clone().spawn_blocking(move |c| c.palw_registered_class_carriage_v1(class_id)).await else {
             return Ok(GetPalwModelCertificationResponse {
                 available: true,
                 tip_daa,
@@ -2443,69 +2505,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             end_to_end_certified,
             families,
         })
-    }
-
-    async fn palw_model_preflight_report(
-        &self,
-        session: &ConsensusSessionOwned,
-        bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
-        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-        tip_daa: u64,
-    ) -> RpcResult<(
-        kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightReportV1,
-        Option<kaspa_consensus_core::palw_state_v2::PalwClassRowV2>,
-    )> {
-        let class_id = match object {
-            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, .. } => *class_id,
-            _ => return Err(RpcError::General("the object is not a ClassRegistered".into())),
-        };
-        let rows = session.spawn_blocking(|c| c.palw_v2_class_table()).await;
-        let class_row = rows.into_iter().find(|r| r.class_id == class_id);
-        let already = class_row.is_some();
-        let registered_root = class_row.as_ref().map(|r| r.artifact_root);
-        let families = session.spawn_blocking(|c| c.palw_certified_families_v1()).await;
-        let chain_certified: Vec<_> = families
-            .into_iter()
-            .filter(|(lane, _, _)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt)
-            .map(|(_, _, record)| record.family)
-            .collect();
-        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
-        let report = kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1(
-            &self.config.params,
-            bundle,
-            object,
-            &certified,
-            &chain_certified,
-            tip_daa,
-            already,
-            registered_root,
-        )
-        .map_err(RpcError::General)?;
-        Ok((report, class_row))
-    }
-
-    async fn fill_registration_from_tx(&self, registration: &mut RpcPalwModelRegistration, txid: &str) -> RpcResult<()> {
-        let txid = parse_hash64(txid, "transaction id")?;
-        registration.transaction_id = txid.to_string();
-        registration.submitted = true;
-        let in_mempool = self
-            .mining_manager
-            .clone()
-            .get_transaction(txid, TransactionQuery::All)
-            .await
-            .is_some();
-        if in_mempool {
-            registration.accepted = true;
-            registration.mempool_accepted = true;
-        } else if !registration.included && !registration.folded {
-            registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
-                .code()
-                .to_string();
-            if registration.processor_verdict.is_empty() {
-                registration.processor_verdict = registration.reject_code.clone();
-            }
-        }
-        Ok(())
     }
 
     async fn get_palw_producer_facts_call(

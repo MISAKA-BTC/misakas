@@ -242,7 +242,7 @@ impl Walk<'_> {
 
     /// Write objects in order and submit them as one chained run (`palw submit-object`'s path:
     /// one funding output, every later carrier funded by the previous one's change).
-    async fn submit(&self, flow: &Flow, name: &str, objects: &[PalwConsensusObjectV2]) -> Step {
+    async fn submit(&self, flow: &Flow, name: &str, objects: &[PalwConsensusObjectV2]) -> Result<Vec<String>, Halt> {
         if flow.ui.json {
             return Err(Halt::Declined(format!(
                 "{name}: filing pays fees — run `misaka model add` without --output json to be asked, or file {} yourself",
@@ -268,7 +268,7 @@ impl Walk<'_> {
         crate::palw_fp::submit_objects(&self.submit_ctx(), &ks, &paths, true).await.map_err(|e| {
             Halt::Blocked(
                 Finding::error("E-OBJECT-REFUSED", exit::FUNDS, format!("The {name} carrier(s) were refused"))
-                    .current(e.msg)
+                    .current(e.msg.clone())
                     .fix("the key's largest spendable output funds every carrier of one filing: consolidate, then re-run"),
             )
         })
@@ -666,10 +666,55 @@ async fn register(
         "share     0 ‰ — weightless until its block lane is certified (the next step)".to_string()
     });
     flow.ask("Register it?", false, "the class was not registered").await?;
-    walk.submit(flow, "class-registered", std::slice::from_ref(&object)).await?;
+    let object_bytes = borsh::to_vec(&object).unwrap_or_default();
+    let object_id = kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1(&object_bytes).to_string();
+    flow.ui.sub(&format!("constructed ✅  object {object_id}"));
+    let txids = match walk.submit(flow, "class-registered", std::slice::from_ref(&object)).await {
+        Ok(ids) => ids,
+        Err(Halt::Blocked(finding)) => {
+            let text = finding.current.first().cloned().unwrap_or_default();
+            let code = kaspa_consensus_core::palw_model_registration_v1::palw_model_reject_from_submit_text_v1(&text)
+                .map(|c| c.code().to_string())
+                .unwrap_or_default();
+            flow.ui.sub("submitted  ✅");
+            flow.ui.sub(&format!(
+                "accepted   ❌{}",
+                if code.is_empty() { String::new() } else { format!("  {code}") }
+            ));
+            return Err(Halt::Blocked(finding));
+        }
+        Err(other) => return Err(other),
+    };
+    let txid = txids.first().cloned().unwrap_or_default();
+    crate::palw_model_ops::write_registration_journal(&walk.workdir, &class_hex, &object_id, &txid);
+    flow.ui.sub(&format!("submitted  ✅  tx {}", if txid.len() > 16 { &txid[..16] } else { &txid }));
     let node = &walk.node;
-    walk.wait_for(flow, "the registration to be mined", 20, || async { Ok(class_row(node, &class_hex).await?.is_some()) }).await?;
-    flow.row(Severity::Ok, "registered", format!("class {}… · share {share} ‰", &class_hex[..16]));
+    let tracked = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
+    crate::palw_model_ops::print_pipeline(&tracked);
+    if !tracked.accepted && !tracked.reject_code.is_empty() {
+        return Err(Halt::Blocked(
+            Finding::error("E-OBJECT-REFUSED", exit::FUNDS, "The registration was not accepted")
+                .current(tracked.reject_code),
+        ));
+    }
+    walk.wait_for(flow, "the registration to be mined", 20, || async {
+        let now = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
+        Ok(now.folded || now.included)
+    })
+    .await?;
+    let included = crate::palw_model_ops::track_after_submit(node.client(), &class_hex, &object_id, &txid, None).await;
+    if included.included {
+        flow.row(
+            Severity::Ok,
+            "registered",
+            format!("class {}… · share {share} ‰ · included DAA {}", &class_hex[..16], included.included_daa),
+        );
+    } else {
+        return Err(Halt::Blocked(
+            Finding::error("E-OBJECT-REFUSED", exit::NOT_READY, "The registration was not included")
+                .current(kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded.code().to_string()),
+        ));
+    }
     Ok(())
 }
 

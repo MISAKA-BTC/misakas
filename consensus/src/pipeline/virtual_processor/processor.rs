@@ -442,6 +442,9 @@ pub struct VirtualStateProcessor {
     /// ADR-0144 §9: `Params::palw_objective_offence` — dormant everywhere until the live gates
     /// are met; past it a verified `ObjectiveOffence` debits the accused PALW bond.
     pub(super) palw_objective_offence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0133 §7: `Params::palw_seat_gate_possession` — past it `required_ready_seats` is the
+    /// possession floor and a class heavier than its fleet is admitted rarely, not refused.
+    pub(super) palw_seat_gate_possession: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Spend-once execution-round quanta: `Params::palw_execution_quanta`. Past it a Final mints
     /// N unique 1-second permits from CanonicalWork instead of drawing the ADR-0125 lottery.
     pub(super) palw_execution_quanta: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -969,6 +972,7 @@ impl VirtualStateProcessor {
             palw_admission_independence: params.palw_admission_independence,
             palw_fp_derived_work: params.palw_fp_derived_work,
             palw_objective_offence: params.palw_objective_offence,
+            palw_seat_gate_possession: params.palw_seat_gate_possession,
             palw_execution_quanta: params.palw_execution_quanta,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
@@ -8338,6 +8342,9 @@ impl VirtualStateProcessor {
             // ADR-0144 §9: the HEIGHT, not this block's yes/no. Written explicitly so an unwritten
             // default cannot silently leave the lock ledger off on a network that has armed it.
             objective_offence_daa: self.palw_objective_offence_daa(),
+            // ADR-0133 §7: the HEIGHT, so the profile a row is derived with is a function of the
+            // block that derived it and a resync folds what the live chain folded.
+            seat_gate_possession_daa: self.palw_seat_gate_possession_daa(),
         }
     }
 
@@ -8359,6 +8366,12 @@ impl VirtualStateProcessor {
 
     fn palw_objective_offence_daa(&self) -> Option<u64> {
         self.palw_objective_offence
+            .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+            .map(|fence| fence.daa_score())
+    }
+
+    fn palw_seat_gate_possession_daa(&self) -> Option<u64> {
+        self.palw_seat_gate_possession
             .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
             .map(|fence| fence.daa_score())
     }

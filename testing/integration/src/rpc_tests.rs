@@ -15,7 +15,6 @@ use kaspa_notify::{
         BlockAddedScope, FinalityConflictScope, NewBlockTemplateScope, PalwClassReadinessChangedScope, PalwPanelAssignmentScope,
         PalwPanelEligibilityChangedScope, PalwPanelReceiptScope, PruningPointUtxoSetOverrideScope, Scope, SinkBlueScoreChangedScope,
         UtxosChangedScope, VirtualChainChangedScope, VirtualDaaScoreChangedScope,
-        SinkBlueScoreChangedScope, UtxosChangedScope, VirtualChainChangedScope, VirtualDaaScoreChangedScope,
     },
 };
 use kaspa_rpc_core::{Notification, api::rpc::RpcApi, model::*};
@@ -1029,6 +1028,74 @@ async fn sanity_test() {
                         .await
                         .unwrap();
                     assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelPreflight => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    assert!(rpc_client
+                        .get_palw_model_preflight_call(None, GetPalwModelPreflightRequest { object_hex: String::new(), class_id: String::new() })
+                        .await
+                        .is_err());
+                })
+            }
+            KaspadPayloadOps::SubmitPalwModelRegistration => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .submit_palw_model_registration_call(
+                            None,
+                            SubmitPalwModelRegistrationRequest { object_hex: String::new(), transaction_id: String::new() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModelRegistrationStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_model_registration_status_call(
+                            None,
+                            GetPalwModelRegistrationStatusRequest { class_id: String::new(), object_id: String::new(), transaction_id: String::new() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwModel => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let malformed = GetPalwModelRequest { class_id: "not-hex".to_string() };
+                    assert!(rpc_client.get_palw_model_call(None, malformed).await.is_err());
+                })
+            }
+            KaspadPayloadOps::GetPalwModelReadiness => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let malformed = GetPalwModelReadinessRequest { class_id: "not-hex".to_string() };
+                    assert!(rpc_client.get_palw_model_readiness_call(None, malformed).await.is_err());
+                })
+            }
+            KaspadPayloadOps::GetPalwModelAdmission => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    assert!(rpc_client
+                        .get_palw_model_admission_call(
+                            None,
+                            GetPalwModelAdmissionRequest { class_id: String::new(), object_hex: String::new() },
+                        )
+                        .await
+                        .is_err());
+                })
+            }
+            KaspadPayloadOps::GetPalwModelCertification => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let malformed = GetPalwModelCertificationRequest { class_id: "not-hex".to_string() };
+                    assert!(rpc_client.get_palw_model_certification_call(None, malformed).await.is_err());
                 })
             }
             KaspadPayloadOps::GetPalwFreePromptClaim => {

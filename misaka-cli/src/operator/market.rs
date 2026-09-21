@@ -115,12 +115,18 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
     // The context each class runs at (`getPalwClassContexts`), as this connection's LAST read: a node
     // built before the op closes the WebSocket on it, and then the list prints without the column.
     let contexts = reader.client.get_palw_class_contexts().await.ok().map(|r| class_contexts_by_id(r.classes));
+    let registry = reader.client.get_palw_model_registry().await.ok();
+    let lifecycle: std::collections::HashMap<String, String> = registry
+        .as_ref()
+        .map(|r| r.classes.iter().map(|c| (c.class_id.clone(), c.state.clone())).collect())
+        .unwrap_or_default();
     if ctx.output == OutputFormat::Json {
         let doc: Vec<serde_json::Value> = rows
             .iter()
             .map(|(c, name, n_lines, m)| {
                 json!({
                     "class_id": c.class_id, "name": name, "lines": n_lines, "base": c.is_base_class, "status": c.status,
+                    "registry_state": lifecycle.get(&c.class_id),
                     "share_permille": c.share_permille, "budget_blocks": c.budget_blocks, "fp_certified": c.fp_certified,
                     "held": c.held, "artifact_root": c.artifact_root, "canonical_leaves": c.canonical_leaves,
                     "market_open": m.as_ref().map(|m| market_from_response(m).is_open()), "seed_pledged_sompi": m.as_ref().map(|m| m.seed_pledged_sompi), "price_sompi_per_position": m.as_ref().map(|m| m.price_sompi_per_position),
@@ -157,11 +163,22 @@ pub(crate) async fn model_list(ctx: &crate::node::Ctx, profile: Profile) -> CliR
         if c.is_base_class {
             label.push_str(" (base)");
         }
+        let status = lifecycle
+            .get(&c.class_id)
+            .cloned()
+            .unwrap_or_else(|| c.status.split([' ', '{']).next().unwrap_or(&c.status).to_string());
+        let context = contexts.as_ref().map(|all| format!("{:<11}", context_cell(all.get(&c.class_id)))).unwrap_or_default();
         if c.held {
             label.push_str(" (held)");
         }
-        let status = c.status.split([' ', '{']).next().unwrap_or(&c.status).to_string();
-        let context = contexts.as_ref().map(|all| format!("{:<11}", context_cell(all.get(&c.class_id)))).unwrap_or_default();
+        let n_ctx = contexts.as_ref().and_then(|all| all.get(&c.class_id)).filter(|c| c.source != "unknown").map(|c| c.n_ctx);
+        if let Some(n_ctx) = n_ctx {
+            if n_ctx >= 1_000_000 {
+                label.push_str(&format!(" ctx{}M", n_ctx / 1_000_000));
+            } else {
+                label.push_str(&format!(" ctx{n_ctx}"));
+            }
+        }
         println!(
             "  {}{:<22}{:<10}{:<8}{:<10}{:<8}{context}{market}",
             paint::cyan(&format!("{:<11}", format!("{}…", &c.class_id[..8.min(c.class_id.len())]))),

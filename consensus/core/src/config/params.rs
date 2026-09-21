@@ -1338,6 +1338,19 @@ pub struct Params {
     /// liability, withdraw-before-expiry is refused, PanelFalseValid debits the lock, and
     /// eligibility is `available >= required(claim)` (`gain/3+1`). Hashed Some-only.
     pub palw_objective_offence: Option<ForkActivation>,
+    /// **ADR-0133 §7: the seat gate asks possession only.** Past it `required_ready_seats` is the
+    /// panel plus the spare — what a claim's verification actually needs held — and the capacity
+    /// question it used to swallow is answered by `max_inflight_claims` and
+    /// `admission_claims_per_span_milli` against the seats that exist. `None` on mainnet and every
+    /// other preset. Testnet-11 schedules it at [`PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA`].
+    /// Hashed Some-only.
+    pub palw_seat_gate_possession: Option<ForkActivation>,
+    /// **ADR-0133 §11.3: the receipt deadline a class's own window derives.** Past it a bound
+    /// panel is judged against `max(window_receipt, verification_window_spans × span_daa)` — the
+    /// network's floor for a class that already fits, its own window for one that does not.
+    /// `None` on mainnet and every other preset. Testnet-11 schedules it at
+    /// [`PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA`]. Hashed Some-only.
+    pub palw_class_receipt_window: Option<ForkActivation>,
     /// **Spend-once execution-round quanta** (1 CanonicalWork → N unique 1-second permits). Past
     /// this fence a span's schedule mints tickets instead of drawing the ADR-0125 credit lottery.
     /// `None` on mainnet. Testnet-11 schedules it at [`PALW_RC_EXECUTION_QUANTA_FENCE_DAA`]. Hashed
@@ -3025,6 +3038,36 @@ impl Params {
                 ));
             }
         }
+        // ADR-0133 §11.3: the class receipt-window fence and the V2 bundle's copy are one value,
+        // for the reason the short challenge window's are — a bundle that disagreed would arm
+        // receipt deadlines the fork id never advertised, and the deadline index is rebuilt from
+        // the bundle at every restart, so the disagreement would surface as one node sweeping a
+        // claim another still holds live.
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            let fence = self.palw_class_receipt_window.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+            if bundle.state.class_receipt_window_daa() != fence {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_class_receipt_window and the V2 bundle's class receipt window disagree: arm the fence through \
+                     Params::set_palw_class_receipt_window, which writes both",
+                ));
+            }
+        }
+        // ADR-0133 §11.3 needs a span to measure a class's window in, and the lane is what states
+        // one. Arming the deadline rule without the lane would multiply every class's
+        // `verification_window_spans` by the fallback span, which is a different number from the
+        // one the `window_fits_receipt` observation uses — the two would disagree about the same
+        // class.
+        if let Some(receipt_window) = self.palw_class_receipt_window.filter(|f| *f != ForkActivation::never()) {
+            let lane_below = self.palw_execution_lane.is_some_and(|lane| {
+                lane.activation != ForkActivation::never() && lane.activation.daa_score() <= receipt_window.daa_score()
+            });
+            if !lane_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_class_receipt_window is armed without palw_execution_lane armed at or below its height: a class's \
+                     derived window is counted in spans, and without the lane there is no span length to measure it in",
+                ));
+            }
+        }
         // ADR-0133 Verification V2 never precedes the registry: segment-scoped licensing is the
         // model economy's capacity rule, and it has nothing to count before the registry seats a
         // panel by evidence.
@@ -4454,6 +4497,12 @@ impl Params {
         if self.palw_objective_offence == Some(ForkActivation::never()) {
             self.palw_objective_offence = None;
         }
+        if self.palw_seat_gate_possession == Some(ForkActivation::never()) {
+            self.palw_seat_gate_possession = None;
+        }
+        if self.palw_class_receipt_window == Some(ForkActivation::never()) {
+            self.set_palw_class_receipt_window(None);
+        }
         if self.palw_execution_quanta == Some(ForkActivation::never()) {
             self.palw_execution_quanta = None;
         }
@@ -4824,6 +4873,26 @@ impl Params {
         self.palw_objective_offence.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
     }
 
+    /// ADR-0133 §7: whether the seat gate asks possession alone at `daa_score`.
+    pub fn palw_seat_gate_possession_at(&self, daa_score: u64) -> bool {
+        self.palw_seat_gate_possession.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The HEIGHT of the possession seat-gate fence, if scheduled. `None` on mainnet.
+    pub fn palw_seat_gate_possession_daa(&self) -> Option<u64> {
+        self.palw_seat_gate_possession.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
+    }
+
+    /// ADR-0133 §11.3: whether a class's receipt deadline is its own derived window at `daa_score`.
+    pub fn palw_class_receipt_window_at(&self, daa_score: u64) -> bool {
+        self.palw_class_receipt_window.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The HEIGHT of the class receipt-window fence, if scheduled. `None` on mainnet.
+    pub fn palw_class_receipt_window_daa(&self) -> Option<u64> {
+        self.palw_class_receipt_window.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
+    }
+
     /// Whether a span's schedule mints spend-once execution quanta at `daa_score`.
     pub fn palw_execution_quanta_at(&self, daa_score: u64) -> bool {
         self.palw_execution_quanta.is_some_and(|f| f.is_active(daa_score))
@@ -4907,6 +4976,31 @@ impl Params {
         let from_daa = at.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_short_challenge_window_from_daa(from_daa);
+        }
+    }
+
+    /// **Arm ADR-0133 §11.3's class-derived receipt deadline, fence and bundle together.**
+    ///
+    /// The bundle's copy carries the lane's schedule span beside the height, because the window a
+    /// class derives is counted in SPANS and the deadline has to be stated in DAA. Call it after
+    /// the lane is configured — `validate_palw_v2` refuses a schedule that arms this fence
+    /// without one, so a call in the wrong order is a startup refusal rather than a network that
+    /// measures its deadlines against the fallback span.
+    /// Re-mirror ADR-0133 §11.3's height and span onto a bundle assembled after the fence was
+    /// armed — `sync_palw_short_challenge_window`'s job for §11.3's rule.
+    pub fn sync_palw_class_receipt_window(&mut self) {
+        self.set_palw_class_receipt_window(self.palw_class_receipt_window);
+    }
+
+    pub fn set_palw_class_receipt_window(&mut self, at: Option<ForkActivation>) {
+        self.palw_class_receipt_window = at;
+        let from_daa = at.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            let span = self.palw_execution_lane.map_or(1, |lane| lane.schedule_span_daa.max(1));
+            bundle.state = match from_daa {
+                Some(daa) => bundle.state.clone().with_class_receipt_window(daa, span).expect("the span is floored at one"),
+                None => bundle.state.clone().without_class_receipt_window(),
+            };
         }
     }
 
@@ -5576,6 +5670,8 @@ impl Params {
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
+            palw_seat_gate_possession,
+            palw_class_receipt_window,
             palw_execution_quanta,
             palw_public_model_source_required,
             palw_canonical_work,
@@ -5664,6 +5760,8 @@ impl Params {
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
+            ("palw_seat_gate_possession", *palw_seat_gate_possession),
+            ("palw_class_receipt_window", *palw_class_receipt_window),
             ("palw_execution_quanta", *palw_execution_quanta),
             ("palw_public_model_source_required", palw_public_model_source_required.map(|r| r.activation)),
             ("palw_canonical_work", *palw_canonical_work),
@@ -6183,6 +6281,8 @@ impl Params {
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
+            palw_seat_gate_possession,
+            palw_class_receipt_window,
             palw_execution_quanta,
             palw_public_model_source_required,
             palw_canonical_work,
@@ -6484,6 +6584,20 @@ impl Params {
             }
         }
         match palw_objective_offence.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_class_receipt_window.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_seat_gate_possession.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -7026,6 +7140,8 @@ impl Params {
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
+            palw_seat_gate_possession,
+            palw_class_receipt_window,
             palw_execution_quanta,
             palw_public_model_source_required,
             palw_canonical_work,
@@ -7300,6 +7416,14 @@ impl Params {
         }
         if let Some(activation) = palw_objective_offence {
             h.write(b"palw_objective_offence");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_seat_gate_possession {
+            h.write(b"palw_seat_gate_possession");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_class_receipt_window {
+            h.write(b"palw_class_receipt_window");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_execution_quanta {
@@ -8013,6 +8137,8 @@ impl Params {
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
+            palw_seat_gate_possession: self.palw_seat_gate_possession,
+            palw_class_receipt_window: self.palw_class_receipt_window,
             palw_execution_quanta: self.palw_execution_quanta,
             palw_public_model_source_required: None,
             palw_canonical_work: None,
@@ -8968,6 +9094,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_seat_gate_possession: None,
+    palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
@@ -9176,6 +9304,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_seat_gate_possession: None,
+    palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
@@ -9366,6 +9496,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_seat_gate_possession: None,
+    palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
@@ -13125,6 +13257,30 @@ pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 7_780;
 /// fence. Mainnet stays `None`.
 pub const PALW_RC_EXECUTION_QUANTA_FENCE_DAA: u64 = 7_800;
 
+/// **ADR-0133 §7: `required_ready_seats` asks possession, and capacity answers elsewhere.**
+/// Past this height the seat gate is the panel plus the spare, and a class whose replay outruns
+/// its fleet is admitted rarely (one claim in flight) instead of refused. The shipped rule
+/// returned the larger of possession and "seats to sustain one claim a span", which for the held
+/// 2M Qwen2.5 row — canonical job `n_ctx / 8 = 262,143` prefill by ADR-0103 Decision 14, 1,998
+/// reference seat-spans a replay — asked 9,992 ready seats of a seven-bond network and closed
+/// `Prefetching` for good. 8,100 is past the clock (7,780) and the live tip (~7,861) and unnamed
+/// on any released schedule, so the fork-id gate can see the fence and every row already written
+/// keeps the profile it was derived with. Mainnet stays `None`.
+pub const PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA: u64 = 8_100;
+
+/// **ADR-0133 §11.3: a class's receipt deadline is the window its own graph derives.** The
+/// network's `window_receipt` is one number for every class, and §11.3 already refuses to stretch
+/// it — a class whose derived window does not fit is `overloaded` and goes to `Held`. Past this
+/// height the deadline a bound panel is judged against is
+/// `max(window_receipt, verification_window_spans × span_daa)`: the network's floor for every
+/// class that already fits, and its own window for one that does not, so the 2M Qwen2.5 row
+/// (1,399 spans × 10 DAA against a 600-DAA receipt window) can leave `Probation` without the
+/// global deadline being weakened for anybody. Never SHORTER than `window_receipt`, so no claim
+/// alive under the old rule has its window tightened by the fence. 8,160 is past
+/// [`PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA`] — the seat gate has to open before a class can
+/// reach the deadline this widens — and unnamed on any released schedule. Mainnet stays `None`.
+pub const PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA: u64 = 8_160;
+
 /// **ADR-0144 §9: the live lock ledger, as one future bundle.** Past this height a Valid
 /// receipt locks `required = palw_max_fraud_gain_v1(claim)/3+1`, Final keeps a liability,
 /// BondRetire while locked is refused, and a PanelFalseValid debit spends the lock once.
@@ -13165,6 +13321,8 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     params.palw_artifact_root_ownership = None;
     params.palw_canonical_work = None;
     params.palw_objective_offence = None;
+    params.palw_seat_gate_possession = None;
+    params.palw_class_receipt_window = None;
     params.palw_execution_quanta = None;
 }
 
@@ -13696,6 +13854,14 @@ pub fn palw_rc_base_params() -> Params {
     // ADR-0144 §9: the lock ledger, Final liability, and PanelFalseValid debit — one future
     // height, after the clock, so already-committed Valid receipts are not retroactively locked.
     params.palw_objective_offence = Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA));
+    // ADR-0133 §7: the seat gate asks possession, and capacity answers through the admission rate
+    // — one future height, after the clock, so every profile already folded keeps its derivation.
+    params.palw_seat_gate_possession = Some(ForkActivation::new(PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA));
+    // ADR-0133 §11.3: the receipt deadline a class's own window derives — sixty DAA after the seat
+    // gate, because the gate has to open before a class can reach the deadline this widens. The
+    // setter, not the field: the bundle carries the lane's span beside the height, and the lane
+    // above is already configured.
+    params.set_palw_class_receipt_window(Some(ForkActivation::new(PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA)));
     params.palw_execution_quanta = Some(ForkActivation::new(PALW_RC_EXECUTION_QUANTA_FENCE_DAA));
     // ADR-0132 §7.6: the short challenge window, on the 6,001 / 7,101 flag day — explicit, in the
     // schedule and the fork id, mirrored into the bundle by the setter.
@@ -13952,6 +14118,9 @@ pub fn palw_v2_params_on_base(
     // arms on `LegacyTn11` and assembles here) mirrors the short window's height into the bundle
     // now — the one place a V2 bundle is assembled, so the one place the copy can be re-made.
     params.sync_palw_short_challenge_window();
+    // ADR-0133 §11.3, for the same reason and in the same place: the height and the lane's span
+    // are re-mirrored onto the bundle this function just built.
+    params.sync_palw_class_receipt_window();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -14101,6 +14270,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_seat_gate_possession: None,
+    palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
@@ -18377,7 +18548,13 @@ mod consensus_params_id_tests {
                 // **Re-pinned 2026-09-21: DAA clock 7,900 → 7,780** so the live BASE-0 tip at
                 // 7,732 is not another hour of heartbeat silence. Identity unmoved.
                 // Previous: 20bf662f012ecb226005f8b915fd744b440b5c37c876c6066163b74f10827eeb.
-                "8854b190978bbabd92381810a3183eb1c74864c97011b2adcda7ac714f625e23",
+                // **Re-pinned 2026-09-21: ADR-0133 §7's seat gate at 8,100** — `required_ready_seats`
+                // becomes the possession floor and the capacity it used to swallow is answered by
+                // the in-flight cap and the admission rate, so the held 2M class is admitted rarely
+                // instead of asking a seven-bond network for 9,992 ready seats. The schedule gains a
+                // height; the identity does not move.
+                // Previous: 8854b190978bbabd92381810a3183eb1c74864c97011b2adcda7ac714f625e23.
+                "79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -19205,6 +19382,13 @@ mod consensus_params_id_tests {
         //   tip so committed `daaScore` values stay valid; a card states them with the work target.
         // * `palw_verification_v2` (ADR-0133 S1) rides testnet-11's own 6,100 day; a card states its
         //   verification rule when it states the registry.
+        // * `palw_objective_offence` (ADR-0144 §9), `palw_execution_quanta` and
+        //   `palw_seat_gate_possession` (ADR-0133 §7) are testnet-11's own later days, each past the
+        //   DAA clock: a lock ledger's slashing amounts, a permit mint's rate, and a registry's
+        //   choice to admit a heavy class rarely rather than refuse it are all calibrations the
+        //   operator takes on the testnet first, and no card states them.
+        // * `palw_execution_lane_span_short` (ADR-0130) is the lane's own latency day at 7,300; a
+        //   card states one span, not a schedule that shortens it.
         assert_eq!(
             missing,
             vec![
@@ -19220,7 +19404,12 @@ mod consensus_params_id_tests {
                 "palw_readiness_v2",
                 "palw_anchor_clock",
                 "palw_clock_cursor",
+                "palw_objective_offence",
+                "palw_seat_gate_possession",
+                "palw_class_receipt_window",
+                "palw_execution_quanta",
                 "palw_execution_lane",
+                "palw_execution_lane_span_short",
                 "palw_overlay_carve",
                 "palw_model_market",
                 "palw_model_lines",
@@ -20003,6 +20192,15 @@ mod consensus_params_id_tests {
                 PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 // ADR-0138 / ADR-0142: the DAA clock, past the live tip.
                 PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                // The days past the clock, in height order: the permit mint, ADR-0133 §7's seat
+                // gate, §11.3's class receipt window, ADR-0144's lock ledger, and ADR-0133's S3
+                // and S2.
+                PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+                PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA,
+                PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA,
+                PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
+                PALW_RC_VERIFICATION_S3_FENCE_DAA,
+                PALW_RC_VERIFICATION_S2_FENCE_DAA,
             ],
             "…and a schedule lists every scheduled gate fence's height"
         );
@@ -21696,6 +21894,8 @@ mod palw_model_registry_fence_tests {
             ("palw_anchor_clock", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_clock_cursor", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_execution_quanta", PALW_RC_EXECUTION_QUANTA_FENCE_DAA),
+            ("palw_seat_gate_possession", PALW_RC_SEAT_GATE_POSSESSION_FENCE_DAA),
+            ("palw_class_receipt_window", PALW_RC_CLASS_RECEIPT_WINDOW_FENCE_DAA),
             ("palw_objective_offence", PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA),
             ("palw_verification_s3", PALW_RC_VERIFICATION_S3_FENCE_DAA),
             ("palw_verification_s2", PALW_RC_VERIFICATION_S2_FENCE_DAA),

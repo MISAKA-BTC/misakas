@@ -218,9 +218,12 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             .filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16))
             .find(|c| c.class_id() == class_id)
         {
-            if let Some(artifact) =
-                holdings.iter().filter_map(artifact_of).find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
-            {
+            if let Some(artifact) = holdings.iter().filter_map(artifact_of).find(|a| {
+                // Shape first. `artifact_root` for a court-capable A16 is a full inventory walk
+                // (~17 min at 2M). A 512-class resolve against a 2M holding used to pay that walk
+                // and then disagree on the root.
+                entry.shape_matches(a).is_ok() && entry.artifact_root(a).is_ok_and(|root| root == artifact_root)
+            }) {
                 // **The compile IS the resolve's answer** (ADR-0082 audit E, H-1). `::new` now
                 // compiles the class's declaration into the program it executes — one authority,
                 // the same one `from_registered_profile` uses — so a graph this build cannot serve

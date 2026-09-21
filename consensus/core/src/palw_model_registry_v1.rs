@@ -165,10 +165,30 @@ pub fn palw_artifact_prefetch_spans_v1(work: &PalwModelWorkV1, g: &PalwRegistryG
     spans.max(1).min(u32::MAX as u128) as u32
 }
 
-/// The seats a class needs before it is live: the panel plus the spare, or more where one claim a
-/// span at the target utilization already needs more replay time than that many seats offer.
-pub fn palw_required_ready_seats_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1) -> u32 {
+/// The seats a class needs before it is live.
+///
+/// **Two questions wore one name here, and on a heavy class they give answers four orders of
+/// magnitude apart.** *Possession*: how many seats must have proved they hold the artifact before
+/// the class may admit anything — the panel plus the spare, because that is who verifies a claim.
+/// *Capacity*: how many seats it would take to sustain one claim a span — `seat_count` whole
+/// replays divided by what one seat offers in a span. The shipped rule returned the larger, so a
+/// class heavier than the fleet was REFUSED rather than admitted rarely: the held 2M Qwen2.5 row,
+/// whose canonical job is `n_ctx / 8 = 262,143` prefill by ADR-0103 Decision 14, prices one replay
+/// at 1,998 reference seat-spans and so asked for 9,992 ready seats against a seven-bond network.
+/// No number of possession proofs reaches it and `Prefetching` never ends.
+///
+/// Past `possession_gate` (`Params::palw_seat_gate_possession`) this returns the possession
+/// question only, and the capacity question moves to where it was always expressed —
+/// [`palw_max_inflight_claims_v1`] and [`palw_admission_claims_per_span_v1`], which now divide the
+/// work by the seats that EXIST rather than by the seats the refusal imagined. That is ADR-0133
+/// §7's own answer to this case: "0.05 claims a span on seven — at which point the class's share,
+/// not its price, is the answer". It admits no claim a seat has not proved it can verify; it only
+/// stops a heavy class from being refused for arithmetic about hosts nobody has.
+pub fn palw_required_ready_seats_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1, possession_gate: bool) -> u32 {
     let floor = g.seat_count as u128 + g.spare_seats as u128;
+    if possession_gate {
+        return floor.min(u32::MAX as u128) as u32;
+    }
     let per_claim = work.verification_ccu.saturating_mul(g.seat_count as u128);
     let offered_per_seat = g.reference_work_per_span.saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
     let for_one_a_span = ceil_div_u128(per_claim, offered_per_seat.max(1));
@@ -177,9 +197,13 @@ pub fn palw_required_ready_seats_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlob
 
 /// Little's law at the target utilization over the required seats: the claims that may be in
 /// flight over the window, one at least.
-pub fn palw_max_inflight_claims_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1) -> u32 {
+///
+/// Past `possession_gate` the seat count this divides by is the possession floor — the seats a
+/// class actually has — so a class whose replay outruns its panel gets `1`, and the panel is never
+/// committed to more claims at once than it can hold.
+pub fn palw_max_inflight_claims_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1, possession_gate: bool) -> u32 {
     let window = palw_verification_window_spans_v1(work, g) as u128;
-    let seats = palw_required_ready_seats_v1(work, g) as u128;
+    let seats = palw_required_ready_seats_v1(work, g, possession_gate) as u128;
     let offered = seats
         .saturating_mul(window)
         .saturating_mul(g.reference_work_per_span)
@@ -193,27 +217,44 @@ pub fn palw_max_inflight_claims_v1(work: &PalwModelWorkV1, g: &PalwRegistryGloba
 /// `budget / economic compute a claim` — a heavy class claims rarely and is paid much per claim, a
 /// light class often and little, and the budget is what is constant. Capped at what the window
 /// can hold (`max_inflight / window`). In thousandths.
-pub fn palw_admission_claims_per_span_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1) -> u64 {
+pub fn palw_admission_claims_per_span_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1, possession_gate: bool) -> u64 {
     if work.economic_ccu_per_claim == 0 {
         return 0;
     }
     let by_budget = g.budget_ccu_per_span.saturating_mul(1_000) / work.economic_ccu_per_claim;
-    let by_capacity = (palw_max_inflight_claims_v1(work, g) as u128).saturating_mul(1_000)
-        / palw_verification_window_spans_v1(work, g).max(1) as u128;
-    by_budget.min(by_capacity).min(u64::MAX as u128) as u64
+    let inflight = palw_max_inflight_claims_v1(work, g, possession_gate) as u128;
+    let by_capacity = inflight.saturating_mul(1_000) / palw_verification_window_spans_v1(work, g).max(1) as u128;
+    let rate = by_budget.min(by_capacity);
+    // **A rate of zero here is the UNIT running out, not the network refusing.** Both terms are
+    // thousandths, and the held 2M row's honest rate is 0.357‰ — one claim per 2,799 spans by the
+    // window, and about the same by the budget, because one such claim costs the network's whole
+    // verification budget for those spans. Thousandths cannot say that, so both floor to `0`, and
+    // a class admitting `0‰` holds no share, is never drawn, is never probed, and therefore can
+    // never leave `Probation` — the refusal the seat gate just stopped making, made again one
+    // field over.
+    //
+    // Past the fence the rate is at least the smallest the unit can express. It cannot over-commit
+    // the panel: `max_inflight_claims` is `1` for exactly these classes, so a second claim is
+    // refused until the first is Final, and the verification window — not the rate — is what
+    // paces them. A class with no work, or one the panel cannot hold a single claim of, still
+    // admits nothing.
+    if possession_gate && inflight > 0 {
+        return rate.max(1).min(u64::MAX as u128) as u64;
+    }
+    rate.min(u64::MAX as u128) as u64
 }
 
 /// The whole profile.
-pub fn palw_derive_profile_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1) -> PalwDerivedProfileV1 {
+pub fn palw_derive_profile_v1(work: &PalwModelWorkV1, g: &PalwRegistryGlobalsV1, possession_gate: bool) -> PalwDerivedProfileV1 {
     let verification_window_spans = palw_verification_window_spans_v1(work, g);
     PalwDerivedProfileV1 {
         version: PALW_MODEL_REGISTRY_VERSION_V1,
         verification_window_spans,
         artifact_prefetch_spans: palw_artifact_prefetch_spans_v1(work, g),
-        max_inflight_claims: palw_max_inflight_claims_v1(work, g),
-        required_ready_seats: palw_required_ready_seats_v1(work, g),
+        max_inflight_claims: palw_max_inflight_claims_v1(work, g, possession_gate),
+        required_ready_seats: palw_required_ready_seats_v1(work, g, possession_gate),
         registration_bond_sompi: g.registration_bond_per_span_sompi.saturating_mul(verification_window_spans as u64),
-        admission_claims_per_span_milli: palw_admission_claims_per_span_v1(work, g),
+        admission_claims_per_span_milli: palw_admission_claims_per_span_v1(work, g, possession_gate),
     }
 }
 
@@ -602,12 +643,13 @@ pub fn palw_lifecycle_profile_v1(
     work: &PalwModelWorkV1,
     expected_attempts_q32: u128,
     g: &PalwRegistryGlobalsV1,
+    possession_gate: bool,
 ) -> PalwDerivedProfileV1 {
     let per_claim = crate::palw_economic_compute_v1::palw_attempted_compute_q32_per_claim_v1(
         expected_attempts_q32.max(crate::palw_economic_compute_v1::PALW_EXPECTED_ATTEMPTS_Q32_ONE_V1),
         work.economic_ccu_per_claim,
     );
-    palw_derive_profile_v1(&PalwModelWorkV1 { economic_ccu_per_claim: per_claim, ..*work }, g)
+    palw_derive_profile_v1(&PalwModelWorkV1 { economic_ccu_per_claim: per_claim, ..*work }, g, possession_gate)
 }
 
 /// **A class's row in the registry** — the state machine's position, the work its registration
@@ -1579,7 +1621,7 @@ mod tests {
             ops_supported: true,
             ..Default::default()
         };
-        let k = palw_lifecycle_profile_v1(&work, 1 << 32, &G);
+        let k = palw_lifecycle_profile_v1(&work, 1 << 32, &G, false);
         let obs = |fits: bool, state_ok: bool| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: 7,
@@ -1607,13 +1649,13 @@ mod tests {
 
     #[test]
     fn adr0135_the_profile_is_derived_from_work_alone() {
-        let a = palw_derive_profile_v1(&dense(), &G);
-        let b = palw_derive_profile_v1(&dense(), &G);
+        let a = palw_derive_profile_v1(&dense(), &G, false);
+        let b = palw_derive_profile_v1(&dense(), &G, false);
         assert_eq!(a, b, "deterministic");
         assert_eq!((a.verification_window_spans, a.artifact_prefetch_spans, a.required_ready_seats), (2, 1, 7));
         assert_eq!(a.registration_bond_sompi, 2 * 1_000 * 100_000_000);
         assert_eq!(a.admission_claims_per_span_milli, 10_000, "the budget is ten of its own claims a span");
-        let k = palw_derive_profile_v1(&kimi(), &G);
+        let k = palw_derive_profile_v1(&kimi(), &G, false);
         assert_eq!(k.verification_window_spans, 2, "2 × 1 T MAC-eq is under one reference span (2.4 T), plus the allowance");
         assert_eq!(k.artifact_prefetch_spans, 2, "2 × 300 GiB at 600 GB a span");
         assert_eq!(k.required_ready_seats, 7);
@@ -1622,14 +1664,14 @@ mod tests {
         // A registrant's declaration changes nothing: the manifest carries no window and no rate,
         // and a heavier graph gets a wider window from the same code.
         let heavier = work(10_000_000_000_000, 20_000_000_000_000, 300 << 30);
-        assert!(palw_derive_profile_v1(&heavier, &G).verification_window_spans > k.verification_window_spans);
+        assert!(palw_derive_profile_v1(&heavier, &G, false).verification_window_spans > k.verification_window_spans);
         assert_eq!(
-            palw_derive_profile_v1(&heavier, &G).verification_window_spans,
+            palw_derive_profile_v1(&heavier, &G, false).verification_window_spans,
             9 + 1,
             "2 × 10 T over 2.4 T a span: nine, plus the allowance"
         );
         assert!(
-            palw_derive_profile_v1(&heavier, &G).required_ready_seats > 7,
+            palw_derive_profile_v1(&heavier, &G, false).required_ready_seats > 7,
             "one such claim a span at 70 % needs more than seven seats"
         );
     }
@@ -1780,8 +1822,8 @@ mod tests {
     #[test]
     fn adr0135_the_lifecycle_walks_on_facts_and_a_held_class_stops_only_itself() {
         use PalwModelLifecycleV1::*;
-        let k = palw_derive_profile_v1(&kimi(), &G);
-        let q = palw_derive_profile_v1(&dense(), &G);
+        let k = palw_derive_profile_v1(&kimi(), &G, false);
+        let q = palw_derive_profile_v1(&dense(), &G, false);
         let calm = |ready: u32| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: ready,
@@ -1863,8 +1905,11 @@ mod tests {
     /// admission is zero holds nothing; the budget is what stays constant.
     #[test]
     fn adr0135_shares_follow_admission_and_no_one_sets_them() {
-        let (d, hy, k) =
-            (palw_derive_profile_v1(&dense(), &G), palw_derive_profile_v1(&hybrid(), &G), palw_derive_profile_v1(&kimi(), &G));
+        let (d, hy, k) = (
+            palw_derive_profile_v1(&dense(), &G, false),
+            palw_derive_profile_v1(&hybrid(), &G, false),
+            palw_derive_profile_v1(&kimi(), &G, false),
+        );
         assert!(hy.admission_claims_per_span_milli > d.admission_claims_per_span_milli, "the lighter claim is admitted more often");
         let two = palw_class_shares_from_admission_v1(&[
             (h(1), d.admission_claims_per_span_milli),
@@ -1918,7 +1963,7 @@ mod tests {
     #[test]
     fn adr0132_a_cap_saturated_class_is_not_activated_and_an_active_one_falls_to_a_tenth() {
         use PalwModelLifecycleV1::*;
-        let k = palw_derive_profile_v1(&kimi(), &G);
+        let k = palw_derive_profile_v1(&kimi(), &G, false);
         let obs = |cap_ok: bool| PalwLifecycleObservationV1 {
             manifest: PalwManifestVerdictV1Flag::Valid,
             ready_seats: 7,

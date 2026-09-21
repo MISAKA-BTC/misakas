@@ -45,6 +45,7 @@ mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
+mod palw_model_ops;
 mod palw_panel;
 mod palw_registry;
 mod palw_service;
@@ -571,6 +572,38 @@ enum ModelCmd {
         /// Do not wait for blocks: say what is pending and exit.
         #[arg(long)]
         no_wait: bool,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Local inspection of an artifact: class id, roots, graph, ctx, CanonicalWork, fit walls. No submit.
+    Inspect {
+        artifact: std::path::PathBuf,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Would the live chain's processor admit this artifact (same reason codes).
+    Preflight {
+        artifact: std::path::PathBuf,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// constructed / submitted / accepted / included / folded for a class id, object, or tx.
+    Registration {
+        id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// Possession proofs for a class: expiry, collateral, ready/non-ready reason.
+    Readiness {
+        class_id: String,
+        #[command(flatten)]
+        profile: ProfileArgs,
+    },
+    /// File a FamilyCertified candidate from this build's e2e drill. Not activation, not a fence.
+    Certify {
+        class_id: String,
+        #[arg(long)]
+        yes: bool,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -2380,7 +2413,27 @@ async fn main() -> std::process::ExitCode {
             Err(e) => Err(e),
         },
         Command::Model(ModelCmd::Status { model, profile: args }) => match profile(&args) {
-            Ok(p) => operator::market::model_status(&ctx, p, &model).await,
+            Ok(p) => palw_model_ops::status(&ctx, p, model).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Inspect { artifact, profile: args }) => match profile(&args) {
+            Ok(p) => palw_model_ops::inspect(&ctx, p, artifact).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Preflight { artifact, profile: args }) => match profile(&args) {
+            Ok(p) => palw_model_ops::preflight(&ctx, p, artifact).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Registration { id, profile: args }) => match profile(&args) {
+            Ok(p) => palw_model_ops::registration(&ctx, p, id).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Readiness { class_id, profile: args }) => match profile(&args) {
+            Ok(p) => palw_model_ops::readiness(&ctx, p, class_id).await,
+            Err(e) => Err(e),
+        },
+        Command::Model(ModelCmd::Certify { class_id, yes, profile: args }) => match profile(&args) {
+            Ok(p) => palw_model_ops::certify(&ctx, p, class_id, yes).await,
             Err(e) => Err(e),
         },
         Command::Model(ModelCmd::Add {
@@ -2471,7 +2524,7 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
-        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await.map(|_| ()),
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Inspect { manifest, json })) => palw_extension::inspect(&ctx, &manifest, json),
         Command::Palw(PalwCmd::Extension(ExtensionCmd::Verify { manifest, depth, receipt_out, key, json })) => {
             palw_extension::verify(&ctx, &manifest, depth.depth(), receipt_out.as_deref(), key.source_opt(), json)

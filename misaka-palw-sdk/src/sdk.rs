@@ -241,6 +241,15 @@ impl PalwClassSdk {
         holdings: &[PalwLoadedArtifactV1],
         terms: &PalwRegistrationTermsV2,
     ) -> Vec<PalwRegistrationCandidateV1> {
+        self.candidate_classes_for(holdings, terms, None)
+    }
+
+    fn candidate_classes_for(
+        &self,
+        holdings: &[PalwLoadedArtifactV1],
+        terms: &PalwRegistrationTermsV2,
+        wanted_model_id: Option<&str>,
+    ) -> Vec<PalwRegistrationCandidateV1> {
         let mut out: Vec<PalwRegistrationCandidateV1> = Vec::new();
         for artifact in holdings {
             let Some(lineage) = self.lineage_by_id(artifact.lineage_id) else {
@@ -270,6 +279,11 @@ impl PalwClassSdk {
                 entries
                     .iter()
                     .filter(|e| terms.registered_class_ids.contains(&e.class_id()))
+                    .filter(|e| {
+                        wanted_model_id.filter(|s| !s.is_empty()).is_none_or(|w| {
+                            e.model_id == w || base_model_id(e.model_id) == base_model_id(w)
+                        })
+                    })
                     .filter(|e| lineage.pair(&self.court, e, artifact).is_ok())
                     .map(|e| base_model_id(e.model_id))
                     .collect()
@@ -282,6 +296,11 @@ impl PalwClassSdk {
                 continue;
             }
             for entry in entries {
+                if let Some(wanted) = wanted_model_id.filter(|s| !s.is_empty()) {
+                    if entry.model_id != wanted {
+                        continue;
+                    }
+                }
                 if weights_on_chain && !owner_models.contains(&base_model_id(entry.model_id)) {
                     // Registered weights may seed only their own model's revisions — a same-shape
                     // SIBLING still pairs, and letting it through would re-open the mispairing.
@@ -306,9 +325,15 @@ impl PalwClassSdk {
         terms: &PalwRegistrationTermsV2,
         wanted_model_id: Option<&str>,
     ) -> Result<PalwRegistrationCandidateV1, PalwCandidateError> {
-        let mut candidates = self.candidate_classes(holdings, terms);
+        // Pair only the operator's pick when they named one. A court-capable A16 inventory walk
+        // is tens of minutes; doing it for every sibling row and then throwing the result away is
+        // how a `--palw-register-class=…@2097152` node never reached submit.
+        let mut candidates = self.candidate_classes_for(holdings, terms, wanted_model_id);
         if candidates.is_empty() {
-            return Err(PalwCandidateError::NoMatch);
+            return Err(match wanted_model_id.filter(|s| !s.is_empty()) {
+                Some(wanted) => PalwCandidateError::FilterMatchesNothing { wanted: wanted.to_string() },
+                None => PalwCandidateError::NoMatch,
+            });
         }
         candidates.retain(|c| !terms.registered_class_ids.contains(&c.entry.class_id()));
         if candidates.is_empty() {
@@ -1505,6 +1530,15 @@ mod revision_row_tests {
             ..terms_rest()
         };
         assert_eq!(models(&s.candidate_classes(&[holding()], &terms)), vec!["SiblingS"]);
+    }
+
+    #[test]
+    fn a_named_register_class_picks_that_row_alone() {
+        let s = sdk();
+        let terms =
+            PalwRegistrationTermsV2 { registered_class_ids: Vec::new(), registered_artifact_roots: Vec::new(), ..terms_rest() };
+        let got = s.registration_candidate(&[holding()], &terms, Some("SiblingS")).expect("the named row pairs");
+        assert_eq!(got.entry.model_id, "SiblingS");
     }
 
     /// The suffix rule is exact: only a wholly numeric `/graph-vN` is a revision.

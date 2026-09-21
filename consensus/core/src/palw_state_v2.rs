@@ -1119,6 +1119,32 @@ pub struct PalwStateParamsV2 {
     /// deserialised bundle, say) is refused rather than quietly long.
     #[borsh(skip)]
     short_challenge_window_from_daa: Option<u64>,
+    /// **ADR-0133 §11.3's class-derived receipt deadline** (`Params::palw_class_receipt_window`),
+    /// as the height it fires at and the span length its window is measured in. `None` is the
+    /// rule as it stood before the fence: one `window_receipt` for every class.
+    ///
+    /// It has to live HERE rather than on the transition's extras because the deadline index is
+    /// not carried — [`rebuild_deadline_index_v2`] derives every claim's deadline from the claims
+    /// and the state alone at load. A rule the rebuild cannot see is a rule that arms a deadline
+    /// the next restart disagrees with, and a node that loads a different deadline set sweeps a
+    /// different claim.
+    ///
+    /// Skipped by borsh for `short_challenge_window_from_daa`'s reason: the fence is what
+    /// `Params::consensus_params_id` hashes, and a dormant preset's fingerprint must not move for
+    /// a field that is `None`.
+    #[borsh(skip)]
+    class_receipt_window: Option<PalwClassReceiptWindowV1>,
+}
+
+/// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
+///
+/// `activation_daa` is `Params::palw_class_receipt_window`'s height and `span_daa` the lane's
+/// schedule span — the same multiplier the `window_fits_receipt` observation turns
+/// `verification_window_spans` into DAA with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwClassReceiptWindowV1 {
+    pub activation_daa: u64,
+    pub span_daa: u64,
 }
 
 /// ADR-0132 §7.6: the challenge window, in DAA, for a claim licensed past
@@ -1227,7 +1253,63 @@ impl PalwStateParamsV2 {
             // `with_class_share_growth_v1`.
             class_growth_permille: 0,
             fp_decode_rules_daa: None,
+            class_receipt_window: None,
         })
+    }
+
+    /// Set ADR-0133 §11.3's class-derived receipt deadline. Refuses a zero span, which would make
+    /// every class's derived window zero and quietly hand the whole network back the global one.
+    pub fn with_class_receipt_window(mut self, activation_daa: u64, span_daa: u64) -> Result<Self, PalwStateV2Error> {
+        if span_daa == 0 {
+            return Err(PalwStateV2Error::InvalidParams("a zero schedule span derives a zero window for every class"));
+        }
+        self.class_receipt_window = Some(PalwClassReceiptWindowV1 { activation_daa, span_daa });
+        Ok(self)
+    }
+
+    /// **ADR-0133 §11.3: the receipt window a claim of `class_id`, bound at `bound_daa`, is
+    /// judged against, in DAA.**
+    ///
+    /// Below the fence — and for a class the registry holds no row for — this is the network's
+    /// `window_receipt` unchanged, so every claim already on the chain keeps the deadline it was
+    /// bound under. Past it a rowed class is judged against the LARGER of that and the window its
+    /// own graph derives, `verification_window_spans × span_daa`.
+    ///
+    /// **Larger, never smaller.** A class that already fits the global deadline (§11.3's
+    /// `window_fits_receipt`) derives a window at or under `window_receipt`, so the `max` leaves
+    /// it exactly where it was. The fence cannot tighten anybody's window; it widens only the
+    /// class whose replay the one global number was never sized for, and it widens that class's
+    /// claims ALONE — the global deadline is untouched, which is the whole reason §11.3 refused
+    /// to stretch it.
+    ///
+    /// **The fence is asked against `bound_daa`, not the block being folded**, because this
+    /// answer has to be the same one every time it is computed: at bind, at each receipt, at the
+    /// sweep, and at the rebuild after a restart, where no block DAA exists. For the same reason
+    /// the only state it reads is `verification_window_spans`, which a class's registered work
+    /// fixes for its whole life — a row's `state`, `ready_seats` and utilization all move, and a
+    /// deadline derived from those would move under a claim that had already been bound.
+    pub fn receipt_window_for_claim_v1(&self, state: &PalwChainStateV2, class_id: &Hash64, bound_daa: u64) -> u64 {
+        let Some(rule) = self.class_receipt_window else {
+            return self.window_receipt;
+        };
+        if bound_daa < rule.activation_daa {
+            return self.window_receipt;
+        }
+        let Some(row) = state.model_lifecycle(class_id) else {
+            return self.window_receipt;
+        };
+        self.window_receipt.max((row.profile.verification_window_spans as u64).saturating_mul(rule.span_daa.max(1)))
+    }
+
+    /// Disarm ADR-0133 §11.3's rule — every class back on the network's `window_receipt`.
+    pub fn without_class_receipt_window(mut self) -> Self {
+        self.class_receipt_window = None;
+        self
+    }
+
+    /// ADR-0133 §11.3's fence height, if the network arms it.
+    pub fn class_receipt_window_daa(&self) -> Option<u64> {
+        self.class_receipt_window.map(|rule| rule.activation_daa)
     }
 
     /// Set the rung window (P0-9). Refuses zero for the reason `PalwCourtParamsV2::new` does, and
@@ -1749,18 +1831,6 @@ impl Ord for PalwBondKeyV2 {
 /// no preimage, and `index` 0 is the first output of it.
 pub const PALW_BOND_KEY_V2_MIN: PalwBondKeyV2 =
     PalwBondKeyV2(TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([0u8; 64]), index: 0 });
-
-impl Ord for PalwBondKeyV2 {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.0.transaction_id, self.0.index).cmp(&(other.0.transaction_id, other.0.index))
-    }
-}
-
-impl PartialOrd for PalwBondKeyV2 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwBondStatusV2 {
@@ -7846,7 +7916,9 @@ impl PalwChainStateV2 {
                 }
                 PalwClaimPhaseV2::PanelBound { bound_daa } => {
                     expected.insert((
-                        bound_daa.checked_add(params.window_receipt).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
+                        bound_daa
+                            .checked_add(params.receipt_window_for_claim_v1(self, &claim.class_id, bound_daa))
+                            .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
                         *id,
                     ));
                 }
@@ -9861,6 +9933,7 @@ impl<'a> TransitionBuilder<'a> {
     /// speak for the class and what the row does with the number.
     fn apply_class_manifest(
         &mut self,
+        ctx: &PalwBlockContextV2,
         class_id: &Hash64,
         artifact_bytes: u64,
         registrant_bond: &PalwBondKeyV2,
@@ -9904,7 +9977,12 @@ impl<'a> TransitionBuilder<'a> {
         }
         let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
         let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
-        row.profile = registry::palw_lifecycle_profile_v1(&row.work, expected, &fold.globals);
+        row.profile = registry::palw_lifecycle_profile_v1(
+            &row.work,
+            expected,
+            &fold.globals,
+            self.extras.seat_gate_possession_at(ctx.daa_score),
+        );
         self.write_model_lifecycle(*class_id, Some(row));
         Ok(())
     }
@@ -10029,7 +10107,8 @@ impl<'a> TransitionBuilder<'a> {
         };
         let work = work.unwrap_or_default();
         let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(initial_target.max(1));
-        let profile = registry::palw_lifecycle_profile_v1(&work, expected, &fold.globals);
+        let profile =
+            registry::palw_lifecycle_profile_v1(&work, expected, &fold.globals, self.extras.seat_gate_possession_at(ctx.daa_score));
         self.write_model_lifecycle(
             class_id,
             Some(registry::PalwModelLifecycleRowV1 {
@@ -10367,6 +10446,7 @@ impl<'a> TransitionBuilder<'a> {
                                 &crate::palw_model_registry_v1::PalwModelWorkV1::default(),
                                 0,
                                 &fold.globals,
+                                self.extras.seat_gate_possession_at(ctx.daa_score),
                             ),
                             since_span: span_now,
                             probes_passed: 0,
@@ -10428,7 +10508,8 @@ impl<'a> TransitionBuilder<'a> {
             };
             let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
             let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
-            let profile = palw_lifecycle_profile_v1(&work, expected, &fold.globals);
+            let profile =
+                palw_lifecycle_profile_v1(&work, expected, &fold.globals, self.extras.seat_gate_possession_at(ctx.daa_score));
             self.write_model_lifecycle(
                 *class_id,
                 Some(PalwModelLifecycleRowV1 {
@@ -10460,7 +10541,8 @@ impl<'a> TransitionBuilder<'a> {
             let row = self.state.model_lifecycles.get(class_id).cloned().expect("just listed");
             let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
             let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
-            let profile = palw_lifecycle_profile_v1(&row.work, expected, &fold.globals);
+            let profile =
+                palw_lifecycle_profile_v1(&row.work, expected, &fold.globals, self.extras.seat_gate_possession_at(ctx.daa_score));
             let ready = self.model_registry_ready_seats(class_id, ctx.daa_score, &fold);
             let inflight = self.model_registry_inflight(class_id);
             // ADR-0132 Upgrade C / ADR-0133 Fence 3: the class's cap utilization at this boundary,
@@ -10498,9 +10580,18 @@ impl<'a> TransitionBuilder<'a> {
                     utilization_permille: utilization,
                     collateral_ok: ready >= profile.required_ready_seats,
                     cap_ok,
-                    // ADR-0133 §11.3: the derived window against the global receipt deadline, in DAA.
+                    // ADR-0133 §11.3: the derived window against the deadline a claim of this
+                    // class is actually judged by. Below the class receipt-window fence that is
+                    // the global `window_receipt` — one number for every class, and a class whose
+                    // replay outruns it is `overloaded` and `Held`, because stretching the global
+                    // deadline would slow every claim on the chain to carry one. Past the fence
+                    // the heavy class carries its OWN deadline instead
+                    // (`receipt_window_for_claim_v1`), so the question this observation asks is
+                    // answered by construction and the class is no longer held for it. Asked
+                    // through the same helper the deadline is armed from, so the verdict and the
+                    // deadline cannot disagree.
                     window_fits_receipt: (profile.verification_window_spans as u64).saturating_mul(fold.span_daa.max(1))
-                        <= self.params.window_receipt(),
+                        <= self.params.receipt_window_for_claim_v1(&self.state, class_id, ctx.daa_score),
                     span_stable: utilization < 1_000 && row.probes_failed_this_span == 0 && ready >= profile.required_ready_seats,
                     // ADR-0147: the only reading that moves a class out of `Candidate`, and the
                     // only transition it is read by. Drawn just for a row that IS in `Candidate`
@@ -10946,7 +11037,9 @@ impl<'a> TransitionBuilder<'a> {
             .ok_or_else(|| refused("the claim's panel holds no duty row".into()))?;
         let bound_daa =
             self.state.panels.get(&claim_id).map(|panel| panel.bound_daa).ok_or_else(|| refused("no bound panel".into()))?;
-        let deadline = bound_daa.checked_add(self.params.window_receipt).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
+        let deadline = bound_daa
+            .checked_add(self.params.receipt_window_for_claim_v1(&self.state, &claim.class_id, bound_daa))
+            .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
         if receipts.is_empty() {
             return Err(refused("it carries no receipt".into()));
         }
@@ -13013,7 +13106,9 @@ fn rearm_claim_after_da_session(
             builder.arm_deadline(at, claim_id);
         }
         PalwClaimPhaseV2::PanelBound { bound_daa } => {
-            let at = bound_daa.checked_add(builder.params.window_receipt).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
+            let at = bound_daa
+                .checked_add(builder.params.receipt_window_for_claim_v1(&builder.state, &claim.class_id, bound_daa))
+                .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(at, claim_id);
         }
         // The court gates `Final` while any session is open, exactly as it does after a close;
@@ -15941,10 +16036,13 @@ fn apply_object(
             }
             let mut bound = claim;
             bound.phase = PalwClaimPhaseV2::PanelBound { bound_daa: ctx.daa_score };
+            let class_id = bound.class_id;
             builder.write_claim(*claim_id, Some(bound));
             builder.disarm_deadline(*claim_id);
-            let deadline =
-                ctx.daa_score.checked_add(builder.params.window_receipt).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
+            let deadline = ctx
+                .daa_score
+                .checked_add(builder.params.receipt_window_for_claim_v1(&builder.state, &class_id, ctx.daa_score))
+                .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?;
             builder.arm_deadline(deadline, *claim_id);
         }
         PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts } => {
@@ -16365,7 +16463,7 @@ fn apply_object(
             builder.consume_objective_offence(ctx, *kind, *accused, *evidence_id, evidence)?;
         }
         PalwConsensusObjectV2::ClassManifestV2 { class_id, artifact_bytes, registrant_bond, signature: _ } => {
-            builder.apply_class_manifest(class_id, *artifact_bytes, registrant_bond)?;
+            builder.apply_class_manifest(ctx, class_id, *artifact_bytes, registrant_bond)?;
         }
         PalwConsensusObjectV2::ReceiptLicensedV2 { claim: claim_id, receipts } => {
             // ADR-0133 Verification V2: the acceptance layer proved the coverage; the fold licenses
@@ -17649,6 +17747,14 @@ pub struct PalwTransitionExtrasV1 {
     /// live, and a verified `ObjectiveOffence` debits the accused PALW bond. `None` by `Default`
     /// and on every shipped preset until the live gates are met.
     pub objective_offence_daa: Option<u64>,
+    /// **ADR-0133 §7: `Params::palw_seat_gate_possession`'s HEIGHT.** Past it
+    /// `required_ready_seats` is the possession question alone — the panel plus the spare — and a
+    /// class heavier than its fleet is admitted RARELY (one claim in flight, the smallest
+    /// representable rate) instead of refused for wanting hosts nobody has. Every rule it governs
+    /// is derived at a block, so it is asked through [`Self::seat_gate_possession_at`]. `None` by
+    /// `Default` and on every shipped preset, which derives each profile exactly as the rows on
+    /// chain were written.
+    pub seat_gate_possession_daa: Option<u64>,
 }
 
 impl PalwTransitionExtrasV1 {
@@ -17667,6 +17773,11 @@ impl PalwTransitionExtrasV1 {
     /// Whether ADR-0144 §9's objective-offence ledger governs this block.
     pub fn objective_offence_at(&self, daa_score: u64) -> bool {
         self.objective_offence_daa.is_some_and(|height| daa_score >= height)
+    }
+
+    /// Whether ADR-0133 §7's possession-only seat gate derives this block's profiles.
+    pub fn seat_gate_possession_at(&self, daa_score: u64) -> bool {
+        self.seat_gate_possession_daa.is_some_and(|height| daa_score >= height)
     }
 
     /// The network's genesis prompt-ids form, from [`Self::prompt_ids_merkle`].
@@ -19008,7 +19119,9 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
             }
             PalwClaimPhaseV2::PanelBound { bound_daa } => {
                 deadlines.insert((
-                    bound_daa.checked_add(params.window_receipt).ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
+                    bound_daa
+                        .checked_add(params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
+                        .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
                     *id,
                 ));
             }
@@ -21625,6 +21738,83 @@ pub(crate) mod tests {
                     signature: vec![1],
                 });
             assert!(classified.is_err(), "the ride list refuses a wider proof too: {classified:?}");
+        }
+
+        /// **ADR-0133 §11.3: the heavy class gets its own deadline, and nobody else moves.**
+        ///
+        /// The fixture's global `window_receipt` is 40 DAA over 10-DAA spans, so the deadline
+        /// admits a four-span window. A class deriving MORE than that is the one §11.3 held —
+        /// past the fence it is judged against its own window instead, and a class already
+        /// inside four spans is judged against the global one exactly as before. The fence is
+        /// asked against the claim's `bound_daa`, so a claim bound one DAA below it keeps the
+        /// window it was bound under however long it lives.
+        #[test]
+        fn adr0133_a_class_past_the_receipt_window_fence_is_judged_by_its_own_window_and_no_other_class_moves() {
+            use crate::palw_model_registry_v1::{PalwDerivedProfileV1, PalwModelLifecycleRowV1};
+            const FENCE: u64 = 100;
+            let p = params();
+            assert_eq!((p.window_receipt(), SPAN), (40, 10), "the fixture: a forty-DAA receipt window over ten-DAA spans");
+            let row = |spans: u32| PalwModelLifecycleRowV1 {
+                state: PalwModelLifecycleV1::Probation { probes_passed: 0 },
+                work: kimi_work(),
+                profile: PalwDerivedProfileV1 { verification_window_spans: spans, ..Default::default() },
+                since_span: 0,
+                probes_passed: 0,
+                probes_failed: 0,
+                probes_passed_this_span: 0,
+                probes_failed_this_span: 0,
+                ready_seats: 0,
+                inflight_claims: 0,
+                utilization_permille: 0,
+                admission_milli: 0,
+                cap_utilization_permille: 0,
+                priced_share_permille: 0,
+            };
+            // The 2M row's shape: a window far outside the global deadline. And a light one
+            // inside it, which is every class the chain carries today.
+            let (heavy, light, unrowed) = (h64(21), h64(22), h64(23));
+            let mut state = PalwChainStateV2::genesis();
+            state.set_model_lifecycle_for_tests(heavy, row(1_399));
+            state.set_model_lifecycle_for_tests(light, row(3));
+
+            let off = p.clone();
+            for class in [heavy, light, unrowed] {
+                assert_eq!(
+                    off.receipt_window_for_claim_v1(&state, &class, FENCE + 1),
+                    40,
+                    "below the fence every class is judged by the one global window, whatever it derives"
+                );
+            }
+
+            let on = p.with_class_receipt_window(FENCE, SPAN).expect("a ten-DAA span is a legal span");
+            assert_eq!(
+                on.receipt_window_for_claim_v1(&state, &heavy, FENCE - 1),
+                40,
+                "a claim bound one DAA below the fence keeps the window it was bound under"
+            );
+            assert_eq!(
+                on.receipt_window_for_claim_v1(&state, &heavy, FENCE),
+                1_399 * SPAN,
+                "past it the heavy class is judged by the window its own graph derives"
+            );
+            assert!(on.receipt_window_for_claim_v1(&state, &heavy, FENCE) > off.window_receipt(), "which is the point: wider");
+            assert_eq!(
+                on.receipt_window_for_claim_v1(&state, &light, FENCE),
+                40,
+                "a class already inside the global deadline is not TIGHTENED to its own three spans"
+            );
+            assert_eq!(
+                on.receipt_window_for_claim_v1(&state, &unrowed, FENCE),
+                40,
+                "a class the registry holds no row for has no derived window, so it keeps the global one"
+            );
+            assert!(
+                PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0)
+                    .unwrap()
+                    .with_class_receipt_window(FENCE, 0)
+                    .is_err(),
+                "a zero span would derive a zero window for every class and hand the network back the global one silently"
+            );
         }
 
         #[test]
@@ -41234,6 +41424,7 @@ pub(crate) mod tests {
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_daa: None,
+                seat_gate_possession_daa: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -41473,6 +41664,7 @@ pub(crate) mod tests {
                 operator_id_unique_active: false,
                 canonical_work_daa: None,
                 admission_independence_daa: None,
+                seat_gate_possession_daa: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,

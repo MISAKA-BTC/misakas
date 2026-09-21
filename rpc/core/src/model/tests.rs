@@ -2163,6 +2163,213 @@ mod mockery {
     }
     test!(GetPalwPanelAssignmentsResponse);
 
+    impl Mock for RpcPalwModelPreflightCheck {
+        fn mock() -> Self {
+            RpcPalwModelPreflightCheck { code: "FitsGlobalWindow".into(), ok: mock(), message: "fits".into() }
+        }
+    }
+    test!(RpcPalwModelPreflightCheck);
+
+    impl Mock for RpcPalwModelRegistration {
+        fn mock() -> Self {
+            RpcPalwModelRegistration {
+                object_id: mock_hex(),
+                class_id: mock_hex(),
+                constructed: mock(),
+                submitted: mock(),
+                accepted: mock(),
+                included: mock(),
+                folded: mock(),
+                submission_state: "folded".into(),
+                processor_verdict: "ADMISSION_OK".into(),
+                reject_code: String::new(),
+                mempool_accepted: mock(),
+                included_block: mock_hex(),
+                included_daa: mock(),
+                registry_state: "Probation".into(),
+                transaction_id: mock_hex(),
+            }
+        }
+    }
+    test!(RpcPalwModelRegistration);
+
+    impl Mock for GetPalwModelPreflightRequest {
+        fn mock() -> Self {
+            GetPalwModelPreflightRequest { object_hex: "00".into(), class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelPreflightRequest);
+
+    impl Mock for GetPalwModelPreflightResponse {
+        fn mock() -> Self {
+            GetPalwModelPreflightResponse {
+                available: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                artifact_root: mock_hex(),
+                n_ctx: mock(),
+                layer_count: mock(),
+                admissible: mock(),
+                processor_verdict: "ADMISSION_OK".into(),
+                reject_code: String::new(),
+                checks: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelPreflightResponse);
+
+    impl Mock for SubmitPalwModelRegistrationRequest {
+        fn mock() -> Self {
+            SubmitPalwModelRegistrationRequest { object_hex: "00".into(), transaction_id: mock_hex() }
+        }
+    }
+    test!(SubmitPalwModelRegistrationRequest);
+
+    impl Mock for SubmitPalwModelRegistrationResponse {
+        fn mock() -> Self {
+            SubmitPalwModelRegistrationResponse { available: mock(), tip_daa: mock(), registration: mock(), checks: mock() }
+        }
+    }
+    test!(SubmitPalwModelRegistrationResponse);
+
+    impl Mock for GetPalwModelRegistrationStatusRequest {
+        fn mock() -> Self {
+            GetPalwModelRegistrationStatusRequest { class_id: mock_hex(), object_id: mock_hex(), transaction_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelRegistrationStatusRequest);
+
+    impl Mock for GetPalwModelRegistrationStatusResponse {
+        fn mock() -> Self {
+            GetPalwModelRegistrationStatusResponse { available: mock(), tip_daa: mock(), found: mock(), registration: mock() }
+        }
+    }
+    test!(GetPalwModelRegistrationStatusResponse);
+
+    impl Mock for GetPalwModelRequest {
+        fn mock() -> Self {
+            GetPalwModelRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelRequest);
+
+    impl Mock for GetPalwModelResponse {
+        fn mock() -> Self {
+            GetPalwModelResponse {
+                available: mock(),
+                tip_daa: mock(),
+                found: mock(),
+                class_id: mock_hex(),
+                model_name: "qwen".into(),
+                n_ctx: mock(),
+                artifact_root: mock_hex(),
+                class_status: "Active".into(),
+                registry_state: "Probation".into(),
+                ready_seats: mock(),
+                required_ready_seats: mock(),
+                inflight_claims: mock(),
+                admission_permille: mock(),
+                share_permille: mock(),
+                certified_family: mock_hex(),
+                fence_active: mock(),
+                reason: "probing".into(),
+            }
+        }
+    }
+    test!(GetPalwModelResponse);
+
+    impl Mock for GetPalwModelReadinessRequest {
+        fn mock() -> Self {
+            GetPalwModelReadinessRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelReadinessRequest);
+
+    impl Mock for RpcPalwModelSeatReadiness {
+        fn mock() -> Self {
+            RpcPalwModelSeatReadiness {
+                seat_id: format!("{}:0", mock_hex()),
+                bond_txid: mock_hex(),
+                bond_index: mock(),
+                proved_daa: mock(),
+                proved_span: mock(),
+                expires_daa: mock(),
+                fresh: mock(),
+                ready: mock(),
+                collateral_sompi: mock(),
+                needed_collateral_sompi: mock(),
+                not_ready_reason: String::new(),
+            }
+        }
+    }
+    test!(RpcPalwModelSeatReadiness);
+
+    impl Mock for GetPalwModelReadinessResponse {
+        fn mock() -> Self {
+            GetPalwModelReadinessResponse {
+                available: mock(),
+                tip_daa: mock(),
+                found: mock(),
+                class_id: mock_hex(),
+                registry_state: "Prefetching".into(),
+                ready_seats: mock(),
+                required_ready_seats: mock(),
+                seats: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelReadinessResponse);
+
+    impl Mock for GetPalwModelAdmissionRequest {
+        fn mock() -> Self {
+            GetPalwModelAdmissionRequest { class_id: mock_hex(), object_hex: "00".into() }
+        }
+    }
+    test!(GetPalwModelAdmissionRequest);
+
+    impl Mock for GetPalwModelAdmissionResponse {
+        fn mock() -> Self {
+            GetPalwModelAdmissionResponse {
+                available: mock(),
+                tip_daa: mock(),
+                class_id: mock_hex(),
+                admissible: mock(),
+                processor_verdict: "ADMISSION_OK".into(),
+                reject_code: String::new(),
+                checks: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelAdmissionResponse);
+
+    impl Mock for GetPalwModelCertificationRequest {
+        fn mock() -> Self {
+            GetPalwModelCertificationRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwModelCertificationRequest);
+
+    impl Mock for RpcPalwModelCertifiedFamily {
+        fn mock() -> Self {
+            RpcPalwModelCertifiedFamily { lane: "attempt".into(), digest: mock_hex(), covers: mock() }
+        }
+    }
+    test!(RpcPalwModelCertifiedFamily);
+
+    impl Mock for GetPalwModelCertificationResponse {
+        fn mock() -> Self {
+            GetPalwModelCertificationResponse {
+                available: mock(),
+                tip_daa: mock(),
+                found: mock(),
+                class_id: mock_hex(),
+                end_to_end_certified: mock(),
+                families: mock(),
+            }
+        }
+    }
+    test!(GetPalwModelCertificationResponse);
+
     impl Mock for RpcPalwModelLifecycle {
         fn mock() -> Self {
             RpcPalwModelLifecycle {

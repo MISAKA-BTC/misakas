@@ -15,14 +15,16 @@ use kaspa_consensus_core::config::params::{
     PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
 };
 
-/// **The shipped release's fingerprint, moved 2026-09-21 by ADR-0133 S3 at DAA 8,600 and S2 at DAA 8,700.**
+/// **The shipped release's fingerprint, moved 2026-09-21 by ADR-0133 §7's seat gate at DAA 8,100
+/// and §11.3's class receipt window at DAA 8,160.**
 ///
-/// Previous (`d0ea15c3…`) was execution quanta at 7,800 plus ADR-0144 §9 at 8,500. A scheduled
-/// future fence writes Some-only into the params id and the schedule id; the identity does not
-/// move (the fence normalises out until it fires).
-const T11_CONSENSUS_PARAMS_ID: &str = "8e1970ddbbc1a565f586329a224cf8e68b1a00bb77235698772937663e6c4288";
+/// Previous (`8e1970dd…`) was ADR-0133 S3 at 8,600 and S2 at 8,700, over execution quanta at 7,800
+/// and ADR-0144 §9 at 8,500. A scheduled future fence writes Some-only into the params id and the
+/// schedule id; the identity does not move (the fence normalises out until it fires), which is why
+/// only two of the three constants below change with this pair.
+const T11_CONSENSUS_PARAMS_ID: &str = "79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
-const T11_CONSENSUS_SCHEDULE_ID: &str = "c66bbb77d3ade3d5df4f8103c80b6f2728cda974c5105f4d6a84dac0b75b8f4b";
+const T11_CONSENSUS_SCHEDULE_ID: &str = "b212d3b1efa892609d6779f9b047a51938ec1189d6a98cc813d8730a677c1e1a";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
 
 #[test]

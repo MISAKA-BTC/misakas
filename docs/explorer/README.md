@@ -7,6 +7,8 @@ product of this tree, so the tree keeps the two things that decide what a reader
   live before it (`?v=llmview2`, now `?v=da2`).
 * `jobs_textify.py` — the step between `misaka-palw-jobs-export` and the published
   `llm-jobs.json`, which turns the anchor-derived prompt's ids into text and adds nothing else.
+* `2026-09-21-ctx2m-verifier-seats.md` — LLM Jobs matrix column `QWEN25-A16` `@512` replaced
+  by `QWEN25-A16-2M` (`74c67e63…`, graph-v7@2097152); live `app.js?v=ctx2m1`.
 
 ## The rule
 

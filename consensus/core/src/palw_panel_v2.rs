@@ -1555,7 +1555,7 @@ where
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptCoverageV2" });
     };
     let receipt_deadline = bound_daa
-        .checked_add(state_params.window_receipt())
+        .checked_add(state_params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
         .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
     let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
     if crate::palw_shard_licensing_v1::palw_claim_licenses_by_parts_v1(state, claim_id, params.seat_count()).is_some() {
@@ -1689,7 +1689,7 @@ where
     let duties = state.panel_duties_of(claim_id).ok_or(PalwPanelV2Error::NotOnDuty(*claim_id))?;
     let bound_daa = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?.bound_daa;
     let receipt_deadline = bound_daa
-        .checked_add(state_params.window_receipt())
+        .checked_add(state_params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
         .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
     if receipts.is_empty() {
         return Err(PalwPanelV2Error::SupplementaryRefused("no receipt"));
@@ -1817,7 +1817,7 @@ where
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge });
     };
     let receipt_deadline = bound_daa
-        .checked_add(state_params.window_receipt())
+        .checked_add(state_params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
         .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
     let seats = seats_of()?;
 
