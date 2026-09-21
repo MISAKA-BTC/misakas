@@ -4559,6 +4559,69 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// PALW V2 state as-of `at` — the same reconstruction `calculate_utxo_state_relatively` uses,
+    /// so a template cannot commit a root the virtual walk will then refuse.
+    ///
+    /// The stored tip and virtual's selected parent agree between rounds. They disagree after an
+    /// unclean shutdown (tip written, virtual not) and whenever this template's selected parent is
+    /// not the store tip. Walking is a no-op when they agree. testnet-11 2026-09-21 `df80394b`
+    /// committed the store tip `a9a629…` while validators compared the selected-parent root
+    /// `7d36f3…` and disqualified a UTXO-valid chain block on that mismatch alone.
+    fn palw_v2_state_at(&self, at: BlockHash) -> Option<(BlockHash, Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>)> {
+        let params = self.palw_state_params_v2.as_ref()?;
+        let store = self.palw_state_v2_store.read();
+        let (tip_block, tip_state) = store.load_tip_cached(params).ok().flatten()?;
+        if tip_block == at {
+            return Some((tip_block, tip_state));
+        }
+        let path = self.dag_traversal_manager.calculate_chain_path(tip_block, at, None);
+        let removed: Vec<BlockHash> = path.removed.to_vec();
+        let added: Vec<BlockHash> = path.added.to_vec();
+        match crate::processes::palw_state_walk::walk_chain_path(&store, params, (*tip_state).clone(), &removed, &added) {
+            Ok(state) => {
+                warn!(
+                    "PALW V2 state tip stood at {tip_block} while the template selected parent is {at}; re-derived the parent state over {} reverted and {} applied deltas so the committed root matches the validating walk",
+                    removed.len(),
+                    added.len()
+                );
+                Some((at, Arc::new(state)))
+            }
+            Err(e) => match store.load_pruning_snapshot(params) {
+                Ok(Some((snap_block, snap_state))) => {
+                    let snap_path = self.dag_traversal_manager.calculate_chain_path(snap_block, at, None);
+                    let snap_removed: Vec<BlockHash> = snap_path.removed.to_vec();
+                    let snap_added: Vec<BlockHash> = snap_path.added.to_vec();
+                    match crate::processes::palw_state_walk::walk_chain_path(&store, params, snap_state, &snap_removed, &snap_added) {
+                        Ok(state) => {
+                            warn!(
+                                "PALW V2 state tip stands at {tip_block}, template selected parent is {at}, and the path between them cannot be walked ({e}); rebuilt the parent state from the pruning snapshot at {snap_block}"
+                            );
+                            Some((at, Arc::new(state)))
+                        }
+                        Err(snap_err) => {
+                            warn!(
+                                "PALW V2 template cannot establish the state at selected parent {at}: tip {tip_block} does not walk here ({e}) and neither does the pruning snapshot at {snap_block} ({snap_err}); leaving palw_state_root unset rather than committing the store tip"
+                            );
+                            None
+                        }
+                    }
+                }
+                Ok(None) => {
+                    warn!(
+                        "PALW V2 template cannot establish the state at selected parent {at}: tip {tip_block} does not walk here ({e}) and this store holds no pruning snapshot; leaving palw_state_root unset rather than committing the store tip"
+                    );
+                    None
+                }
+                Err(snap_err) => {
+                    warn!(
+                        "PALW V2 template cannot establish the state at selected parent {at}: tip {tip_block} does not walk here ({e}) and the pruning snapshot cannot be read ({snap_err}); leaving palw_state_root unset rather than committing the store tip"
+                    );
+                    None
+                }
+            },
+        }
+    }
+
     pub(super) fn palw_v2_unentitled_blues(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -11831,11 +11894,12 @@ impl VirtualStateProcessor {
         // (Stage 3) selected by DAA, identically to the validation path — and past ADR-0126's fence
         // the full split lowered, through the one reader both paths call.
         let carve = self.fee_split_at(virtual_state.daa_score);
-        // **A template build is six PALW-state materializations, and `getBlockTemplate` is an
-        // unauthenticated wRPC method miners poll** (mainnet audit H-1's sibling sweep). The five
-        // reads below and the existence probe at the header assembly all ask about the SAME tip
-        // row; through the shared materialization they cost one, and the answers cannot differ
-        // from each other any more than they could before.
+        // **One PALW state, at the selected parent** (mainnet audit H-1 + testnet-11 2026-09-21).
+        // The five reads below and the header root all ask about the SAME block the validator
+        // reconstructs — virtual's selected parent — not the store tip. Walking from the tip is
+        // empty when they agree (the common case, one cached materialization); when they do not,
+        // stamping the tip would mine a block this node then disqualifies from virtual.
+        let palw_at_selected_parent = self.palw_v2_state_at(virtual_state.ghostdag_data.selected_parent);
         let validator_pool = carve.as_ref().map_or(0, |fs| {
             // The template computes the SAME set the validator will, from the same state it is
             // building on — a template whose pool disagreed with validation would build a coinbase
@@ -11843,13 +11907,11 @@ impl VirtualStateProcessor {
             // No params means no V2 bundle, which means no entitlement question — and an `expect`
             // here panics every hash-only network's template, because the DNS carve this closure
             // computes exists on networks PALW does not.
-            let unentitled = self
-                .palw_state_params_v2
+            let unentitled = palw_at_selected_parent
                 .as_ref()
-                .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
                 .map(|(_, state)| {
                     self.palw_v2_unentitled_blues(
-                        &state,
+                        state,
                         &virtual_state.ghostdag_data,
                         &virtual_state.mergeset_non_daa,
                         &self.palw_v2_template_point(&virtual_state),
@@ -11888,42 +11950,27 @@ impl VirtualStateProcessor {
             );
             validator_reward_outputs.extend(drip_outputs);
         }
-        // ADR-0042 Decision 10, construction side. The tip IS the block being built on, so its
-        // queue is the same one the validating walk will read; appended last, matching
+        // ADR-0042 Decision 10, construction side. The selected parent is the block being built
+        // on, so its queue is the same one the validating walk will read; appended last, matching
         // `verify_expected_utxo_state`'s order exactly. A template that got this wrong would mine
         // blocks its own node rejects.
-        if let Some(state_params) = self.palw_state_params_v2.as_ref() {
-            let payouts = self
-                .palw_state_v2_store
-                .read()
-                .load_tip_cached(state_params)
-                .ok()
-                .flatten()
-                .map(|(_, state)| self.palw_v2_payout_outputs(&state))
-                .unwrap_or_default();
+        if palw_at_selected_parent.is_some() {
+            let payouts = palw_at_selected_parent.as_ref().map(|(_, state)| self.palw_v2_payout_outputs(state)).unwrap_or_default();
             validator_reward_outputs.extend(payouts);
         }
-        // ADR-0042 Decision 10's funding side, construction path. The tip IS the block being built
-        // on, so its escrow is the one the validating walk will withhold. Computed from the same
-        // state the payouts came from, so the two halves cannot disagree.
-        let palw_escrow_withheld = self
-            .palw_state_params_v2
-            .as_ref()
-            .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
-            .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
-            .map(|(block, state)| self.palw_v2_escrow_withheld_at(&state, block))
-            .unwrap_or(0);
+        // ADR-0042 Decision 10's funding side, construction path. The selected parent is the block
+        // being built on, so its escrow is the one the validating walk will withhold. Computed from
+        // the same state the payouts came from, so the two halves cannot disagree.
+        let palw_escrow_withheld =
+            palw_at_selected_parent.as_ref().map(|(block, state)| self.palw_v2_escrow_withheld_at(state, *block)).unwrap_or(0);
         // Launch blockers §8, construction side: the merged blues this template may not pay. Same
         // state, same question, same answer as the validating walk — a template that disagreed
         // would mine blocks its own node rejects.
-        let palw_unentitled_blues = self
-            .palw_state_params_v2
+        let palw_unentitled_blues = palw_at_selected_parent
             .as_ref()
-            .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
-            .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
             .map(|(_, state)| {
                 self.palw_v2_unentitled_blues(
-                    &state,
+                    state,
                     &virtual_state.ghostdag_data,
                     &virtual_state.mergeset_non_daa,
                     &self.palw_v2_template_point(&virtual_state),
@@ -11931,17 +11978,14 @@ impl VirtualStateProcessor {
             })
             .unwrap_or_default();
         // B-1 (deep fence), construction side: the carve withheld from each OTHER merged block.
-        // Same tip state, same virtual ghostdag/non-DAA and same template point as the validating
-        // walk resolves for the block this template becomes — so the withheld map, and thus the
-        // coinbase, are byte-identical on both paths. Empty below the fence.
-        let palw_merged_escrow_withheld = self
-            .palw_state_params_v2
+        // Same selected-parent state, same virtual ghostdag/non-DAA and same template point as the
+        // validating walk resolves for the block this template becomes — so the withheld map, and
+        // thus the coinbase, are byte-identical on both paths. Empty below the fence.
+        let palw_merged_escrow_withheld = palw_at_selected_parent
             .as_ref()
-            .and_then(|params| self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten())
-            .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
             .map(|(_, state)| {
                 self.palw_v2_merged_escrow_withheld(
-                    &state,
+                    state,
                     &virtual_state.ghostdag_data,
                     &virtual_state.mergeset_non_daa,
                     &self.palw_v2_template_point(&virtual_state),
@@ -12044,36 +12088,22 @@ impl VirtualStateProcessor {
         } else {
             header
         };
-        // ADR-0042 Unit C step 5: the template commits to the state root this block's transition
-        // will produce, computed from the SAME walked state the validation path holds — so a block
-        // mined from this template reproduces the root byte-for-byte (construction == validation,
-        // the `overlay_commitment_root` discipline). Inert (header unchanged, root stays zero)
-        // wherever the mode carries no V2 bundle, where the preimage gate reads zero as absent.
-        let header = match (self.palw_state_params_v2.as_ref(), self.palw_state_v2_store.read().tip_key().ok().flatten()) {
-            (Some(state_params), Some(_)) => {
-                let (_, parent_state) = self
-                    .palw_state_v2_store
-                    .read()
-                    .load_tip_cached(state_params)
-                    .expect("a stored V2 tip must load under its own committed root")
-                    .expect("the tip record exists");
-                let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                    block: header.hash,
-                    daa_score: header.daa_score,
-                    blue_score: header.blue_score,
-                    subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
-                };
-                // The template's own transactions are not accepted yet — acceptance is a
-                // chain-context fact this block's own validation produces — so the objects are
-                // empty here for the same reason the coinbase cannot commit to its own acceptance.
-                // A template that guessed would be a template whose block fails its own check.
-                let _ = (state_params, point);
+        // ADR-0042 Unit C step 5: the template commits the PARENT's root — the state this block's
+        // transition starts from — computed from the SAME walked state the validation path holds
+        // at the selected parent, so a block mined from this template reproduces the root
+        // byte-for-byte (construction == validation). Inert (header unchanged, root stays zero)
+        // wherever the mode carries no V2 bundle or the parent state cannot be established,
+        // where the preimage gate reads zero as absent.
+        let header = match palw_at_selected_parent.as_ref() {
+            Some((_, parent_state)) => {
                 // The PARENT's root: what this block's transition starts from. Non-circular by
-                // construction — it is fixed before this header exists, so stamping it cannot
-                // move the hash it would then have to match.
+                // construction — it is the selected parent's post-transition state, fixed before
+                // this header exists, so stamping it cannot move the hash it would then have to
+                // match. Not the store tip: that row can stand one or more blocks away from this
+                // template's selected parent (testnet-11 2026-09-21 `df80394b`).
                 header.with_palw_state_root(parent_state.state_root())
             }
-            _ => header,
+            None => header,
         };
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
         let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();

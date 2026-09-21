@@ -1617,6 +1617,61 @@ async fn a_block_committing_to_the_wrong_palw_state_root_is_disqualified() {
     assert_eq!(ctx.consensus.get_sink(), honest_hash, "the honest commitment advances the chain");
 }
 
+/// **A template commits the selected parent's PALW root, not the store tip's** (testnet-11 2026-09-21).
+///
+/// `df80394b` was UTXO-valid and then disqualified from virtual: the producer stamped
+/// `load_tip_cached().state_root()` while the validator compared the state reconstructed at the
+/// candidate's selected parent. The two are the same block between rounds; they are not the same
+/// block after an unclean shutdown, and the existing repair for that window only covered the
+/// validating walk (`palw_v2_a_tip_that_does_not_stand_at_the_sink_is_re_derived`). That test had
+/// to BUILD the template before moving the tip, "or it would corrupt the template's own state
+/// root" — which is this bug, named as a test fixture constraint instead of a property.
+#[tokio::test]
+async fn palw_v2_a_template_commits_the_selected_parent_root_even_when_the_tip_does_not_stand_there() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor().clone();
+    let (sink, sink_state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let expected_root = sink_state.state_root();
+    let parent = vp.ghostdag_store.get_selected_parent(sink).expect("the sink has a selected parent");
+    let parent_state = {
+        let store = vp.palw_state_v2_store.read();
+        let (_, delta) = store.delta_of(sink).expect("the sink has a delta");
+        kaspa_consensus_core::palw_state_v2::revert_delta_v2(&sink_state, &delta, &bundle.state)
+            .expect("reverting the sink's own delta yields its parent's state")
+    };
+    let parent_root = parent_state.state_root();
+    assert_ne!(parent_root, expected_root, "the fixture is vacuous unless parent and sink hash to different roots");
+
+    // The crash window: PALW tip stands one block BEHIND the sink, which is the next template's
+    // selected parent. Stamping the store tip would write `parent_root`; the validator will
+    // compare `expected_root`.
+    vp.palw_state_v2_store.write().set_tip_for_tests(parent, &parent_state).unwrap();
+    assert_eq!(vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().block, parent);
+
+    let template = ctx.build_block_template(7, ctx.simulated_time + 1);
+    assert_eq!(
+        template.block.header.palw_state_root, expected_root,
+        "the template must commit the selected parent's state, which is the sink, not the store tip"
+    );
+    assert_ne!(template.block.header.palw_state_root, parent_root, "stamping the store tip is the df80394b producer/validator split");
+}
+
 /// **Unit C step 4: the beacon is derived from the candidate's chain, and a block cannot name
 /// its own.**
 ///
@@ -2340,9 +2395,10 @@ async fn palw_v2_a_tip_that_does_not_stand_at_the_sink_is_re_derived() {
     }
 
     // The apply leg, through the real pipeline. The template is built BEFORE the tip is moved,
-    // which is what the crash window really looks like: the block on the wire is honest and commits
-    // the right root — it is this node's own tip row that no longer stands where the walk starts.
-    // Moving the tip first would instead corrupt the template's own state root and test nothing.
+    // which is what the crash window really looks like for VALIDATION: the block on the wire is
+    // honest and commits the right root — it is this node's own tip row that no longer stands
+    // where the walk starts. (The producer-side twin — a template built AFTER the tip moved —
+    // is `palw_v2_a_template_commits_the_selected_parent_root_even_when_the_tip_does_not_stand_there`.)
     ctx.build_block_template_row(0..1);
     vp.palw_state_v2_store.write().set_tip_for_tests(parent, &parent_state).unwrap();
     assert_eq!(vp.palw_state_v2_store.read().tip_record().unwrap().unwrap().block, parent, "the tip really moved");
