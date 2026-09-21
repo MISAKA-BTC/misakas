@@ -10,16 +10,18 @@
 //! change is meant to ARM, this file is the one to update deliberately, in the commit that arms it,
 //! with the new height and the new fingerprint written down together.
 
-use kaspa_consensus_core::config::params::{MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, palw_rc_shipped_params};
+use kaspa_consensus_core::config::params::{
+    MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA, palw_rc_shipped_params,
+};
 
-/// **The shipped release's fingerprint, moved 2026-09-21 by bringing the DAA clock from 8,000 to 7,900.**
+/// **The shipped release's fingerprint, moved 2026-09-21 by ADR-0144 §9 at DAA 8,500.**
 ///
-/// Previous (`400403b8…` / `12e975ef…` / `0c6c7a59…`) was ADR-0130's span-short at 7,300 with the
-/// clock still at 8,000. A scheduled future fence writes Some-only into the params id and the
-/// schedule id; the identity does not move (the fence normalises out until it fires).
-const T11_CONSENSUS_PARAMS_ID: &str = "6a728e47a116819b1fc1c221336461f932d15163d5d6bba3d6eaca74686bb388";
+/// Previous (`6a728e47…` / `12e975ef…` / `8ba71551…`) was the DAA clock at 7,900. A scheduled
+/// future fence writes Some-only into the params id and the schedule id; the identity does not
+/// move (the fence normalises out until it fires).
+const T11_CONSENSUS_PARAMS_ID: &str = "20bf662f012ecb226005f8b915fd744b440b5c37c876c6066163b74f10827eeb";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
-const T11_CONSENSUS_SCHEDULE_ID: &str = "8ba715517107d6de70bfcb7e62df62d741615339396ddabc8ef2ef89ee87f894";
+const T11_CONSENSUS_SCHEDULE_ID: &str = "554c98151e9e473f6db133855226435e3009415a0d1b1c7ef1c14394c54f9f76";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
 
 #[test]
@@ -149,4 +151,18 @@ fn the_daa_clock_fence_is_past_the_stalled_tip() {
     assert!(rc.palw_anchor_clock_at(PALW_RC_ANCHOR_CLOCK_FENCE_DAA));
     assert!(!rc.palw_single_lottery_at(PALW_RC_ANCHOR_CLOCK_FENCE_DAA - 1));
     assert!(rc.palw_single_lottery_at(PALW_RC_ANCHOR_CLOCK_FENCE_DAA));
+}
+
+/// **ADR-0144 §9 rides a later unused height**, so already-committed Valid receipts are not
+/// retroactively locked. Mainnet stays unset. Identity does not move (scheduled fence).
+#[test]
+fn the_objective_offence_fence_is_past_the_clock() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    let rc = palw_rc_shipped_params();
+    assert_eq!(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA, 8_500);
+    assert!(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA > PALW_RC_ANCHOR_CLOCK_FENCE_DAA);
+    assert_eq!(rc.palw_objective_offence, Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA)));
+    assert!(!rc.palw_objective_offence_at(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA - 1));
+    assert!(rc.palw_objective_offence_at(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA));
+    assert_eq!(MAINNET_PARAMS.palw_objective_offence, None);
 }

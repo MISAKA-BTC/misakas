@@ -282,6 +282,12 @@ pub mod palw_panel_da_v1;
 /// judges, and a claim is paid for the compute it certifies: the three pure rules, and nothing
 /// that reads a fence.
 pub mod palw_panel_economy_v1;
+/// ADR-0144 §9: objective-offence identity, PanelFalseValid payloads, and the processor's
+/// cryptographic gate. Consensus-inert until `Params::palw_objective_offence` is Some.
+pub mod palw_offence_v1;
+/// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
+/// facts; the fold in `palw_state_v2` is the writer, behind the same fence.
+pub mod palw_panel_var_v1;
 pub mod palw_panel_v2;
 pub mod palw_producer_v2;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the

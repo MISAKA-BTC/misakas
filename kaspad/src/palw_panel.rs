@@ -5759,6 +5759,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::DefaultAccusedHeld { .. } => "DefaultAccusedHeld",
         PalwConsensusObjectV2::MaterialDisclosedHeld { .. } => "MaterialDisclosedHeld",
         PalwConsensusObjectV2::RoundPermitEquivocated { .. } => "RoundPermitEquivocated",
+        PalwConsensusObjectV2::ObjectiveOffence { .. } => "ObjectiveOffence",
     }
 }
 

@@ -556,6 +556,7 @@ somebody should be able to verify:
 | free-prompt COMMITMENT (0x4a) | **open, unclienced** | consensus admits and routes the band (`palw_fp_objects_v3`), so anyone can carry one and have a claim created and licensed — but nothing in this tree BUILDS the transaction, so no first-party client offers it |
 | the EVM lane | **live** | active at DAA 0 and in the default build — no `--features evm` to forget |
 | lifecycle objects (0x4b) | **live** | the receipt quorum rides one |
+| ADR-0144 §9 objective offence (Valid lock, Final liability, PanelFalseValid debit) | **armed at DAA 8,500** | `Params::palw_objective_offence` is `Some(8_500)` on this build. Identity is unmoved, so hosts roll before that height; after the clock at 7,900 the next fork-id height is 8,500. Genesis 10,000 MSK covers one dense-row lock (`required = max_gain/3+1` ≈ 997 MSK). The 400k sompi registry floor is unchanged. Mainnet is `None`. |
 | **free-prompt receipt SPEND (algo 7)** | **not producible** | see below |
 
 **The one gap, stated plainly.** ADR-0044's receipt lane is fully implemented in consensus — the

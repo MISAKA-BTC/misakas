@@ -548,8 +548,9 @@ mod tests {
                 // ADR-0134's retirement of the compute overlay: its own height, after the flag day.
                 crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
             ],
-            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, and ADR-0138/0142's clock), and deriving the list must not widen it"
+            "testnet-11's gate set is its flag days (ADR-0083, ADR-0062, ADR-0084 U-08, ADR-0095, ADR-0114, the audit's shallow fence, the held regime with the audit's deep fence, 6,001, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, and ADR-0144's lock ledger), and deriving the list must not widen it"
         );
     }
 
@@ -844,6 +845,7 @@ mod tests {
                         crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                         crate::config::params::PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
                         crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                        crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                         2_125_000
                     ]
                 ),
@@ -910,8 +912,9 @@ mod tests {
                         crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                         RETIRED_6201,
                         crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                        crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                     ],
-                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, and nothing else"
+                    "{name}: armed by ADR-0083's fence, ADR-0062's, ADR-0084 U-08's, ADR-0095's, ADR-0114's, the audit's shallow one, ADR-0120's, the held regime's with the audit's deep one, 6,001's, ADR-0133's 6,100, ADR-0134's 6,201, ADR-0138/0142's clock, ADR-0144's lock ledger, and nothing else"
                 );
                 assert!(fork_id_gate_armed_v1(&params));
                 continue;
@@ -944,6 +947,7 @@ mod tests {
                 crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                 RETIRED_6201,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                 CRESCENDO_T11
             ]
         );
@@ -959,9 +963,11 @@ mod tests {
             (stale_fired, ADR_0083),
             "same empty prefix as the stale build; the next fence is what tells them apart"
         );
-        // A node on this build past every height it schedules below crescendo (the DAA clock at
-        // [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] is the last of them).
-        let past = fork_id_v1(&t11, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1);
+        // A node on this build past the DAA clock still has ADR-0144's lock ledger ahead;
+        // past that, crescendo is next.
+        let past_clock = fork_id_v1(&t11, crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1);
+        assert_eq!(past_clock.next, crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA);
+        let past = fork_id_v1(&t11, crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA + 1);
         assert_eq!(past.next, CRESCENDO_T11);
         let stranger = &[0u8; 32][..];
 
@@ -1442,9 +1448,10 @@ mod tests {
                 crate::config::params::PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
                 RETIRED_6201,
                 crate::config::params::PALW_RC_ANCHOR_CLOCK_FENCE_DAA,
+                crate::config::params::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
                 CRESCENDO_T11
             ],
-            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0130's span-short at 7,300, ADR-0134 two hundred past, ADR-0138/0142 at the clock fence, ADR-0120 where it was"
+            "the held regime and the deep audit at 6,000, the flag day one past, ADR-0133's V2 a hundred past, ADR-0130's span-short at 7,300, ADR-0134 two hundred past, ADR-0138/0142 at the clock fence, ADR-0144's lock ledger, ADR-0120 where it was"
         );
 
         // **The deployment window.** The heights moved twice: to 6,000 on 2026-09-17 with the tip at
@@ -1540,6 +1547,8 @@ mod tests {
         // schedule reads as a build without the whole upgrade.
         at_6000.palw_verification_v2 = Some(six_thousand);
         at_6000.palw_readiness_v2 = Some(six_thousand);
+        // ADR-0144's lock ledger is a later unused height, not part of the 6,000 counterfactual.
+        at_6000.palw_objective_offence = None;
         assert_eq!(
             at_6000.fence_schedule_v1(),
             without_the_set.fence_schedule_v1(),

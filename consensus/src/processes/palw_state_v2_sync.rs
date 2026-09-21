@@ -124,6 +124,9 @@ pub struct PalwStateSyncV2 {
     /// ADR-0130's seat exposure floor, carried for the same reason: past it a bound panel's duty row
     /// stores, and its seats reserve, a floored exposure.
     panel_exposure_floor: Option<kaspa_consensus_core::config::params::PalwPanelExposureFloorV1>,
+    /// ADR-0144 §9: the HEIGHT of the objective-offence lock ledger. A height, not a per-block
+    /// answer, so a replay that left it to `Default` would skip Valid locks the live fold wrote.
+    objective_offence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     // **`palw_kary_court` is deliberately NOT carried here, and that is not the gap the three
     // fences above are** (ADR-0082 Decision 2, audit A C-5).
     //
@@ -162,6 +165,7 @@ impl PalwStateSyncV2 {
         panel_economy: Option<kaspa_consensus_core::config::params::ForkActivation>,
         work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
         panel_exposure_floor: Option<kaspa_consensus_core::config::params::PalwPanelExposureFloorV1>,
+        objective_offence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Result<Self, PalwSyncV2Error> {
         let tip = store.load_tip(&params)?;
         Ok(Self {
@@ -179,6 +183,7 @@ impl PalwStateSyncV2 {
             panel_economy,
             work_priced_reward,
             panel_exposure_floor,
+            objective_offence,
         })
     }
 
@@ -274,6 +279,10 @@ impl PalwStateSyncV2 {
                         .panel_exposure_floor
                         .filter(|floor| floor.activation.is_active(step.ctx.daa_score))
                         .map_or(0, |floor| floor.reward_multiple_permille),
+                    objective_offence_daa: self
+                        .objective_offence
+                        .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+                        .map(|fence| fence.daa_score()),
                     // The model-registry and EVM fences are NOT resolved here, and that is the
                     // pre-existing behaviour rather than a decision taken with this patch: this
                     // walk passed `PalwTransitionExtrasV1::default()` before it, and it is a REAL
@@ -468,7 +477,7 @@ mod tests {
 
         // The subject: sync + store + batches.
         let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         assert!(sync.tip().is_none(), "a fresh database has no tip");
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
@@ -481,7 +490,7 @@ mod tests {
 
         // A restart resumes at the same tip, root-verified.
         let resumed =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let (r_block, r_state) = resumed.tip().unwrap();
         assert_eq!((r_block, r_state), (tip_block, tip_state));
 
@@ -512,7 +521,7 @@ mod tests {
         store.reindex_if_stale().unwrap();
 
         let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         db.write(batch).unwrap();
@@ -539,7 +548,7 @@ mod tests {
         // what answers (the carriage store's crash-window lesson, applied to a refusal).
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
         let resumed =
-            PalwStateSyncV2::load(&fresh, params(), None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&fresh, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         assert_eq!(*resumed.tip().unwrap().0, genesis_block(), "and neither did the durable one");
         assert!(!fresh.has_delta(bad_steps[0].ctx.block).unwrap(), "no row of the refused walk was committed");
     }
@@ -554,7 +563,7 @@ mod tests {
 
         let steps = steps();
         let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         sync.advance(&mut store, &mut batch, &steps).unwrap();

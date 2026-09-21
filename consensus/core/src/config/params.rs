@@ -1323,8 +1323,10 @@ pub struct Params {
     pub palw_operator_id_unique: Option<ForkActivation>,
     /// **ADR-0144 §9: an objective offence debits the accused PALW bond.** Past it a verified
     /// `ObjectiveOffence` is consumed into the ledger and a false-Valid signer is slashable.
-    /// `None` on every preset; hashed Some-only. Do not arm until the colluding-quorum lock
-    /// covers `palw_max_fraud_gain_v1` on the live fold.
+    /// `None` on mainnet and every other preset. Testnet-11 schedules it at
+    /// [`PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA`] as one bundle: lock at Valid, Final keeps
+    /// liability, withdraw-before-expiry is refused, PanelFalseValid debits the lock, and
+    /// eligibility is `available >= required(claim)` (`gain/3+1`). Hashed Some-only.
     pub palw_objective_offence: Option<ForkActivation>,
     /// A public source URI on new model registrations. `None` on every preset; hashed Some-only.
     pub palw_public_model_source_required: Option<PalwPublicModelSourceRuleV1>,
@@ -7853,7 +7855,7 @@ impl Params {
             palw_clock_cursor: None,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
-            palw_objective_offence: None,
+            palw_objective_offence: self.palw_objective_offence,
             palw_public_model_source_required: None,
             palw_canonical_work: None,
             palw_admission_independence: None,
@@ -12934,6 +12936,14 @@ pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 /// still advertising 8,000 must roll before 7,900.
 pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 7_900;
 
+/// **ADR-0144 §9: the live lock ledger, as one future bundle.** Past this height a Valid
+/// receipt locks `required = palw_max_fraud_gain_v1(claim)/3+1`, Final keeps a liability,
+/// BondRetire while locked is refused, and a PanelFalseValid debit spends the lock once.
+/// 8,500 is past the clock (7,900) and unnamed on any released schedule. Genesis 10k MSK
+/// covers one dense-row seat (~997 MSK); the 400k sompi registry floor is unchanged.
+/// Mainnet stays `None`.
+pub const PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA: u64 = 8_500;
+
 /// **The build before the 6,001 flag day**, for the tests that reconstruct an earlier release: the
 /// fences [`PALW_RC_PALW_UPGRADE_FENCE_DAA`] schedules, cleared (the held regime and the deep audit
 /// stay at THIS build's 6,000; [`palw_rc_deployed_7000_release_for_tests`] is the fleet's build).
@@ -12961,6 +12971,7 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     // ADR-0143's own day is two past the flag day and later than every release this reconstructs.
     params.palw_artifact_root_ownership = None;
     params.palw_canonical_work = None;
+    params.palw_objective_offence = None;
 }
 
 /// **The fleet's release as deployed (`13520042`, fingerprint `ae1d6162…`)**: no flag-day set, no
@@ -13488,6 +13499,9 @@ pub fn palw_rc_base_params() -> Params {
     let clock_day = ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA);
     params.palw_clock_cursor = Some(clock_day);
     params.set_palw_single_lottery(Some(clock_day));
+    // ADR-0144 §9: the lock ledger, Final liability, and PanelFalseValid debit — one future
+    // height, after the clock, so already-committed Valid receipts are not retroactively locked.
+    params.palw_objective_offence = Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA));
     // ADR-0132 §7.6: the short challenge window, on the 6,001 / 7,101 flag day — explicit, in the
     // schedule and the fork id, mirrored into the bundle by the setter.
     params.set_palw_short_challenge_window(Some(flag_day_6001));
@@ -18161,7 +18175,10 @@ mod consensus_params_id_tests {
                 // **Re-pinned 2026-09-21: DAA clock 8,000 → 7,900** so a BASE-0 tip no longer
                 // buys an hour of heartbeat silence (measured stall at DAA 7,680). Identity unmoved.
                 // Previous: 400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8.
-                "6a728e47a116819b1fc1c221336461f932d15163d5d6bba3d6eaca74686bb388",
+                // **Re-pinned 2026-09-21 for ADR-0144 §9** (`palw_objective_offence` at 8,500):
+                // Valid lock, Final liability, PanelFalseValid debit, one future bundle. Identity
+                // unmoved. Previous: 6a728e47a116819b1fc1c221336461f932d15163d5d6bba3d6eaca74686bb388.
+                "20bf662f012ecb226005f8b915fd744b440b5c37c876c6066163b74f10827eeb",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -21469,6 +21486,7 @@ mod palw_model_registry_fence_tests {
             ("palw_single_lottery", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_anchor_clock", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_clock_cursor", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_objective_offence", PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA),
         ];
         for name in UPGRADE_6001 {
             assert_eq!(by_name.get(name).copied().flatten(), Some(PALW_RC_PALW_UPGRADE_FENCE_DAA), "{name}: on the flag day");
@@ -21556,6 +21574,7 @@ mod palw_model_registry_fence_tests {
             schedule.contains(&PALW_RC_VERIFICATION_V2_FENCE_DAA)
                 && schedule.contains(&PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA)
                 && schedule.contains(&PALW_RC_ANCHOR_CLOCK_FENCE_DAA)
+                && schedule.contains(&PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA)
                 && !schedule.contains(&7_000),
             "{schedule:?}: 7,000 is nobody's height any more"
         );
@@ -21730,6 +21749,7 @@ mod adr0142_release_probe {
             ("palw_single_lottery", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_anchor_clock", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_clock_cursor", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_objective_offence", super::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA),
         ] {
             assert_eq!(
                 rows.iter().find(|(n, _)| *n == held).map(|(_, h)| *h),

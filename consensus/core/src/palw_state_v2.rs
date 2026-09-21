@@ -3887,6 +3887,19 @@ pub enum PalwConsensusObjectV2 {
         proof: Box<crate::palw_artifact::PalwArtifactMultiproofV1>,
         signature: Vec<u8>,
     },
+    /// **ADR-0144 §9: an objectively attributable offence against a PALW bond.**
+    ///
+    /// Appended last (tag 51). Borsh discriminant is positional. The processor is the
+    /// cryptographic gate; the fold re-checks every state-bound fact so the sync walk and the
+    /// live path cannot disagree. Refused while `PalwTransitionExtrasV1::objective_offence_daa`
+    /// is dormant, so a chain that has not armed the fence is byte-identical to a chain before
+    /// this variant existed.
+    ObjectiveOffence {
+        kind: crate::palw_offence_v1::PalwOffenceKindV1,
+        accused: PalwBondKeyV2,
+        evidence_id: Hash64,
+        evidence: Vec<u8>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4838,6 +4851,18 @@ pub enum PalwStateV2Error {
     DuplicateBond(PalwBondKeyV2),
     #[error("bond {0:?} is already retiring")]
     BondAlreadyRetiring(PalwBondKeyV2),
+    #[error(
+        "bond {bond:?} still holds {locked} sompi of slashable panel locks; withdraw is refused until liability expiry"
+    )]
+    BondRetireWhileSlashableLocked { bond: PalwBondKeyV2, locked: u128 },
+    #[error(
+        "seat {seat:?} cannot lock {required} sompi of slashable collateral on claim {claim} (available {available})"
+    )]
+    SeatValidLockRefused { seat: PalwBondKeyV2, claim: Hash64, required: u128, available: u128 },
+    #[error("objective offence is not armed at this chain point (ADR-0144 §9)")]
+    ObjectiveOffenceDormant,
+    #[error("objective offence {0} is refused: {1}")]
+    ObjectiveOffenceRefused(Hash64, String),
     #[error("bond {0:?} is retiring and may take no new claims")]
     RetiringBond(PalwBondKeyV2),
     #[error("bond {0:?} did not register the key that signed this commitment")]
@@ -5636,6 +5661,16 @@ pub struct PalwChainStateV2 {
     /// `(class, bond, claim)` so the cache rule can range over one bond's claims of one class
     /// without walking the claim table. Written and dropped with the claim; empty below the fence.
     fp_claim_prompts: BTreeMap<(Hash64, PalwBondKeyV2, Hash64), PalwFpClaimPromptV1>,
+    /// **ADR-0144 §9: consumed objective offences**, keyed by `offence_id`. Written only past
+    /// `Params::palw_objective_offence`. Empty hashes as nothing, so a dormant chain commits the
+    /// root it always did.
+    consumed_offences: BTreeMap<Hash64, crate::palw_offence_v1::PalwConsumedOffenceV1>,
+    /// **ADR-0144 §9: live slashable locks**, keyed `(seat, claim)`. One Valid, one lock, until
+    /// liability expiry. Empty hashes as nothing.
+    slashable_locks: BTreeMap<(PalwBondKeyV2, Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1>,
+    /// **ADR-0144 §9: panel liability after Final or void.** Final does not erase who signed Valid.
+    /// Empty hashes as nothing.
+    panel_liabilities: BTreeMap<Hash64, crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
     /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
@@ -5780,6 +5815,9 @@ impl PalwChainStateV2 {
             artifact_owners: BTreeMap::new(),
             fp_work_profiles: BTreeMap::new(),
             fp_claim_prompts: BTreeMap::new(),
+            consumed_offences: BTreeMap::new(),
+            slashable_locks: BTreeMap::new(),
+            panel_liabilities: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
             certified_families: BTreeMap::new(),
@@ -6876,6 +6914,29 @@ impl PalwChainStateV2 {
         self.claims.get(id)
     }
 
+    pub fn consumed_offence(&self, id: &Hash64) -> Option<&crate::palw_offence_v1::PalwConsumedOffenceV1> {
+        self.consumed_offences.get(id)
+    }
+
+    pub fn slashable_lock(&self, seat: PalwBondKeyV2, claim: Hash64) -> Option<&crate::palw_panel_var_v1::PalwSlashableLockV1> {
+        self.slashable_locks.get(&(seat, claim))
+    }
+
+    pub fn panel_liability(&self, claim: &Hash64) -> Option<&crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1> {
+        self.panel_liabilities.get(claim)
+    }
+
+    pub fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        let posted = self.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
+        let locked = self
+            .slashable_locks
+            .iter()
+            .filter(|((b, _), lock)| b == bond && lock.is_live(now_daa))
+            .map(|(_, lock)| lock.amount)
+            .fold(0u128, u128::saturating_add);
+        crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
+    }
+
     /// The escrows this state released — what the NEXT block's coinbase must pay, in claim-id
     /// order. Empty on every state whose last block finalized nothing, which is most of them.
     pub fn pending_payouts_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwPayoutV2)> {
@@ -7209,6 +7270,20 @@ impl PalwChainStateV2 {
         if !self.fp_claim_prompts.is_empty() {
             state.update(b"fp_claim_prompts/v1");
             state.update(collection_root(b"fp_claim_prompts", &self.fp_claim_prompts).as_byte_slice());
+        }
+        // ADR-0144 §9: consumed offences, live locks and post-Final liability. Empty hashes as
+        // nothing, so a chain with the fence dormant commits the root it always did.
+        if !self.consumed_offences.is_empty() {
+            state.update(b"consumed_offences/v1");
+            state.update(collection_root(b"consumed_offences", &self.consumed_offences).as_byte_slice());
+        }
+        if !self.slashable_locks.is_empty() {
+            state.update(b"slashable_locks/v1");
+            state.update(collection_root(b"slashable_locks", &self.slashable_locks).as_byte_slice());
+        }
+        if !self.panel_liabilities.is_empty() {
+            state.update(b"panel_liabilities/v1");
+            state.update(collection_root(b"panel_liabilities", &self.panel_liabilities).as_byte_slice());
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -8248,6 +8323,24 @@ pub enum PalwDeltaEntryV2 {
         old: Option<PalwFpClaimPromptV1>,
         new: Option<PalwFpClaimPromptV1>,
     },
+    /// ADR-0144 §9: an objective offence was consumed or dropped (60).
+    ConsumedOffence {
+        key: Hash64,
+        old: Option<crate::palw_offence_v1::PalwConsumedOffenceV1>,
+        new: Option<crate::palw_offence_v1::PalwConsumedOffenceV1>,
+    },
+    /// ADR-0144 §9: a slashable Valid lock was written or dropped (61).
+    SlashableLock {
+        key: (PalwBondKeyV2, Hash64),
+        old: Option<crate::palw_panel_var_v1::PalwSlashableLockV1>,
+        new: Option<crate::palw_panel_var_v1::PalwSlashableLockV1>,
+    },
+    /// ADR-0144 §9: a panel liability record was written or dropped (62).
+    PanelLiability {
+        key: Hash64,
+        old: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
+        new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -9059,6 +9152,367 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.fp_claim_prompts.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::FpClaimPrompt { key, old, new });
+    }
+
+    fn write_consumed_offence(&mut self, key: Hash64, new: Option<crate::palw_offence_v1::PalwConsumedOffenceV1>) {
+        let old = self.state.consumed_offences.get(&key).cloned();
+        if old == new {
+            return;
+        }
+        match &new {
+            Some(row) => {
+                self.state.consumed_offences.insert(key, row.clone());
+            }
+            None => {
+                self.state.consumed_offences.remove(&key);
+            }
+        };
+        self.entries.push(PalwDeltaEntryV2::ConsumedOffence { key, old, new });
+    }
+
+    fn write_slashable_lock(
+        &mut self,
+        key: (PalwBondKeyV2, Hash64),
+        new: Option<crate::palw_panel_var_v1::PalwSlashableLockV1>,
+    ) {
+        let old = self.state.slashable_locks.get(&key).copied();
+        if old == new {
+            return;
+        }
+        match new {
+            Some(lock) => {
+                self.state.slashable_locks.insert(key, lock);
+            }
+            None => {
+                self.state.slashable_locks.remove(&key);
+            }
+        };
+        self.entries.push(PalwDeltaEntryV2::SlashableLock { key, old, new });
+    }
+
+    fn write_panel_liability(&mut self, key: Hash64, new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>) {
+        let old = self.state.panel_liabilities.get(&key).cloned();
+        if old == new {
+            return;
+        }
+        match &new {
+            Some(row) => {
+                self.state.panel_liabilities.insert(key, row.clone());
+            }
+            None => {
+                self.state.panel_liabilities.remove(&key);
+            }
+        };
+        self.entries.push(PalwDeltaEntryV2::PanelLiability { key, old, new });
+    }
+
+    fn panel_valid_lock_required(&self, claim: &PalwClaimStateV2) -> u128 {
+        let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
+        let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash);
+        crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts)
+    }
+
+    fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        let posted = self.state.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
+        let locked = self
+            .state
+            .slashable_locks
+            .iter()
+            .filter(|((b, _), lock)| b == bond && lock.is_live(now_daa))
+            .map(|(_, lock)| lock.amount)
+            .fold(0u128, u128::saturating_add);
+        crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
+    }
+
+    fn slashable_live_locked(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        self.state
+            .slashable_locks
+            .iter()
+            .filter(|((b, _), lock)| b == bond && lock.is_live(now_daa))
+            .map(|(_, lock)| lock.amount)
+            .fold(0u128, u128::saturating_add)
+    }
+
+    fn lock_valid_seat(
+        &mut self,
+        seat: PalwBondKeyV2,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.extras.objective_offence_at(now_daa) {
+            return Ok(());
+        }
+        if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
+            return Ok(());
+        }
+        let required = self.panel_valid_lock_required(claim);
+        let available = self.slashable_available(&seat, now_daa);
+        if available < required {
+            return Err(PalwStateV2Error::SeatValidLockRefused { seat, claim: claim_id, required, available });
+        }
+        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
+        self.write_slashable_lock(
+            (seat, claim_id),
+            Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { claim: claim_id, amount: required, expiry_daa }),
+        );
+        Ok(())
+    }
+
+    fn lock_valid_receipts(
+        &mut self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.extras.objective_offence_at(now_daa) {
+            return Ok(());
+        }
+        for receipt in receipts {
+            if matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
+                self.lock_valid_seat(receipt.seat_bond, claim_id, claim, now_daa)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn require_panel_lock_eligible(
+        &self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        seats: &[PalwPanelSeatV2],
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.extras.objective_offence_at(now_daa) {
+            return Ok(());
+        }
+        let required = self.panel_valid_lock_required(claim);
+        for seat in seats {
+            let available = self.slashable_available(&seat.bond, now_daa);
+            if available < required {
+                return Err(PalwStateV2Error::SeatValidLockRefused {
+                    seat: seat.bond,
+                    claim: claim_id,
+                    required,
+                    available,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn persist_panel_liability(
+        &mut self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        now_daa: u64,
+        voided: Option<(u64, PalwVoidReasonV2)>,
+    ) -> Result<(), PalwStateV2Error> {
+        if !self.extras.objective_offence_at(now_daa) {
+            return Ok(());
+        }
+        let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
+        let mut valid_signers: Vec<(crate::tx::TransactionOutpoint, Hash64)> = Vec::new();
+        let mut locked_sompi = 0u128;
+        let keys: Vec<(PalwBondKeyV2, Hash64)> =
+            self.state.slashable_locks.keys().filter(|(_, c)| *c == claim_id).copied().collect();
+        for key in keys {
+            if let Some(lock) = self.state.slashable_locks.get(&key).copied() {
+                locked_sompi = locked_sompi.saturating_add(lock.amount);
+                valid_signers.push((key.0 .0, key.1));
+                if lock.expiry_daa < expiry_daa {
+                    self.write_slashable_lock(key, Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa, ..lock }));
+                }
+            }
+        }
+        if valid_signers.is_empty() {
+            if let Some(panel) = self.state.panels.get(&claim_id) {
+                for seat in &panel.seats {
+                    valid_signers.push((seat.bond.0, claim_id));
+                }
+            }
+        }
+        let (voided_daa, void_reason) = match voided {
+            Some((daa, reason)) => (Some(daa), Some(reason)),
+            None => (None, None),
+        };
+        self.write_panel_liability(
+            claim_id,
+            Some(crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 {
+                claim_id,
+                work_id: claim.work_id.unwrap_or(claim.execution_root),
+                class_id: claim.class_id,
+                execution_root: claim.execution_root,
+                output_root: claim.output_root,
+                executor_bond: claim.bond,
+                voided_daa,
+                void_reason,
+                valid_signers,
+                locked_sompi,
+                expiry_daa,
+            }),
+        );
+        Ok(())
+    }
+
+    fn consume_objective_offence(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        kind: crate::palw_offence_v1::PalwOffenceKindV1,
+        accused: PalwBondKeyV2,
+        evidence_id: Hash64,
+        evidence: &[u8],
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_offence_v1::{
+            palw_offence_id_v1, palw_panel_contradiction_convicts_execution_v1, PalwConsumedOffenceV1, PalwOffenceKindV1,
+            PalwPanelFalseValidEvidenceV1,
+        };
+        if !self.extras.objective_offence_at(ctx.daa_score) {
+            return Err(PalwStateV2Error::ObjectiveOffenceDormant);
+        }
+        if matches!(kind, PalwOffenceKindV1::CourtExecutorGuilty) {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                evidence_id,
+                "CourtExecutorGuilty is filed by CourtClosed, not as a standalone object".into(),
+            ));
+        }
+        if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                evidence_id,
+                "evidence_id is not the digest of the evidence bytes".into(),
+            ));
+        }
+        let offence_id = palw_offence_id_v1(kind, &accused.0, &evidence_id);
+        if self.state.consumed_offences.contains_key(&offence_id) {
+            return Ok(());
+        }
+        let amount = match kind {
+            PalwOffenceKindV1::ExecutorEquivocation => {
+                self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0)
+            }
+            PalwOffenceKindV1::PanelFalseValid => {
+                let payload: PalwPanelFalseValidEvidenceV1 = borsh::from_slice(evidence).map_err(|_| {
+                    PalwStateV2Error::ObjectiveOffenceRefused(offence_id, "PanelFalseValid evidence does not decode".into())
+                })?;
+                if payload.accused_seat != accused.0 {
+                    return Err(PalwStateV2Error::ObjectiveOffenceRefused(offence_id, "the Valid receipt does not name this accused seat".into()));
+                }
+                self.bind_panel_false_valid(ctx, &payload)?;
+                let class_id = self
+                    .state
+                    .claims
+                    .get(&payload.claim_id)
+                    .map(|c| c.class_id)
+                    .or_else(|| self.state.panel_liabilities.get(&payload.claim_id).map(|r| r.class_id));
+                let ladder = class_id.and_then(|id| self.state.class_step_ladders.get(&id).copied()).unwrap_or(64);
+                let (execution_root, artifact_root) = self.false_valid_execution_roots(&payload)?;
+                palw_panel_contradiction_convicts_execution_v1(&payload.contradiction, execution_root, artifact_root, ladder)
+                    .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
+                if let Some(lock) = self.state.slashable_locks.get(&(accused, payload.claim_id)).copied() {
+                    self.write_slashable_lock((accused, payload.claim_id), None);
+                    u64::try_from(lock.amount.min(u128::from(u64::MAX))).unwrap_or(u64::MAX)
+                } else if self
+                    .state
+                    .panel_liabilities
+                    .get(&payload.claim_id)
+                    .is_some_and(|row| row.valid_signers.iter().any(|(seat, _)| *seat == accused.0))
+                {
+                    0
+                } else {
+                    self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0)
+                }
+            }
+            PalwOffenceKindV1::CourtExecutorGuilty => 0,
+        };
+        self.slash_bond(accused, amount as u128)?;
+        self.write_consumed_offence(
+            offence_id,
+            Some(PalwConsumedOffenceV1 { kind, accused: accused.0, amount, accepted_daa: ctx.daa_score }),
+        );
+        Ok(())
+    }
+
+    fn false_valid_execution_roots(
+        &self,
+        payload: &crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1,
+    ) -> Result<(Hash64, Hash64), PalwStateV2Error> {
+        if let Some(claim) = self.state.claims.get(&payload.claim_id) {
+            let artifact = self.state.classes.get(&claim.class_id).map(|c| c.artifact_root).unwrap_or(Hash64::default());
+            return Ok((claim.execution_root, artifact));
+        }
+        if let Some(row) = self.state.panel_liabilities.get(&payload.claim_id) {
+            let artifact = self.state.classes.get(&row.class_id).map(|c| c.artifact_root).unwrap_or(Hash64::default());
+            return Ok((row.execution_root, artifact));
+        }
+        Err(PalwStateV2Error::ObjectiveOffenceRefused(
+            payload.claim_id,
+            "PanelFalseValid names neither a live claim nor a liability row".into(),
+        ))
+    }
+
+    fn bind_panel_false_valid(
+        &self,
+        ctx: &PalwBlockContextV2,
+        payload: &crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_offence_v1::PalwPanelContradictionV1;
+        use crate::palw_panel_var_v1::palw_liability_matches_void_v1;
+        let refused = |why: String| PalwStateV2Error::ObjectiveOffenceRefused(payload.claim_id, why);
+        match &payload.contradiction {
+            PalwPanelContradictionV1::ProducerWithholding { voided_daa } => {
+                let live = self.state.claims.get(&payload.claim_id).is_some_and(|c| {
+                    matches!(c.phase, PalwClaimPhaseV2::Voided { voided_daa: d, reason: PalwVoidReasonV2::ProducerWithholding } if d == *voided_daa)
+                });
+                let liability = self
+                    .state
+                    .panel_liabilities
+                    .get(&payload.claim_id)
+                    .is_some_and(|row| palw_liability_matches_void_v1(row, PalwVoidReasonV2::ProducerWithholding, *voided_daa));
+                if !(live || liability) {
+                    return Err(refused("ProducerWithholding does not bind this claim or its liability".into()));
+                }
+            }
+            PalwPanelContradictionV1::CourtFraud { voided_daa } => {
+                let live = self.state.claims.get(&payload.claim_id).is_some_and(|c| {
+                    matches!(c.phase, PalwClaimPhaseV2::Voided { voided_daa: d, reason: PalwVoidReasonV2::CourtFraud } if d == *voided_daa)
+                });
+                let liability = self
+                    .state
+                    .panel_liabilities
+                    .get(&payload.claim_id)
+                    .is_some_and(|row| palw_liability_matches_void_v1(row, PalwVoidReasonV2::CourtFraud, *voided_daa));
+                if !(live || liability) {
+                    return Err(refused("CourtFraud does not bind this claim or its liability".into()));
+                }
+            }
+            PalwPanelContradictionV1::CourtExecutorGuilty { offence_id } => {
+                let consumed = self.state.consumed_offences.get(offence_id).ok_or_else(|| {
+                    refused("CourtExecutorGuilty names an offence this chain has not consumed".into())
+                })?;
+                let executor = self
+                    .state
+                    .claims
+                    .get(&payload.claim_id)
+                    .map(|c| c.bond)
+                    .or_else(|| self.state.panel_liabilities.get(&payload.claim_id).map(|r| r.executor_bond));
+                if executor != Some(PalwBondKeyV2(consumed.accused)) {
+                    return Err(refused("CourtExecutorGuilty does not name this claim's executor".into()));
+                }
+            }
+            PalwPanelContradictionV1::ConflictingPermit { span, round, permit_index } => {
+                if !self.state.round_equivocated(*span, *round, *permit_index) {
+                    return Err(refused("ConflictingPermit names a permit this chain has not burned".into()));
+                }
+            }
+            PalwPanelContradictionV1::ExecutorEquivocation(_)
+            | PalwPanelContradictionV1::StepArithmetic { .. }
+            | PalwPanelContradictionV1::StepStructural(_)
+            | PalwPanelContradictionV1::Legs(_)
+            | PalwPanelContradictionV1::ForgedOutput { .. } => {}
+        }
+        let _ = ctx;
+        Ok(())
     }
 
     fn write_artifact_owner(&mut self, key: (Hash64, Hash64), new: Option<crate::palw_model_lines_v1::PalwArtifactOwnerV1>) {
@@ -10490,6 +10944,7 @@ impl<'a> TransitionBuilder<'a> {
         // object's, already written.
         let _ = claim;
         self.credit_seat_receipts(claim_id, receipts, ctx.daa_score);
+        self.lock_valid_receipts(claim_id, claim, receipts, ctx.daa_score)?;
         Ok(())
     }
 
@@ -11220,6 +11675,7 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0124 Decision 3: the seats leave duty with their exposure — before the phase write
         // below drops the row this reads.
         self.release_seat_duties(&id)?;
+        self.persist_panel_liability(id, claim, final_daa, None)?;
         // ADR-0125: past the lane's fence a finalized attempt is a credit in its span's schedule.
         if let Some(lane) = self.extras.round_lane {
             self.record_round_final(id, claim, final_daa, lane.schedule_span_daa)?;
@@ -11252,6 +11708,7 @@ impl<'a> TransitionBuilder<'a> {
         // claim — before the phase write drops the row this reads. A seat's fault is the court's
         // and the quorum's business, charged where it is proven, never here.
         self.release_seat_duties(&id)?;
+        self.persist_panel_liability(id, claim, voided_daa, Some((voided_daa, reason)))?;
         // Audit C5, free-prompt half: an abandoned commitment holds its reservation for the
         // configured span instead of releasing it here, so a redraw costs collateral rather than
         // a transaction fee. The hold is a DELAY, never a confiscation — `release_abandon_hold`
@@ -14799,6 +15256,12 @@ fn apply_object(
             match record.status {
                 PalwBondStatusV2::Retiring { .. } => return Err(PalwStateV2Error::BondAlreadyRetiring(*bond)),
                 PalwBondStatusV2::Active => {
+                    if builder.extras.objective_offence_at(ctx.daa_score) {
+                        let locked = builder.slashable_live_locked(bond, ctx.daa_score);
+                        if locked > 0 {
+                            return Err(PalwStateV2Error::BondRetireWhileSlashableLocked { bond: *bond, locked });
+                        }
+                    }
                     let mut retiring = record;
                     retiring.status = PalwBondStatusV2::Retiring { since_daa: ctx.daa_score };
                     // **ADR-0071 SA-2: retirement releases the declaration's reservation.** A
@@ -15435,6 +15898,7 @@ fn apply_object(
             // this replaces asked here whether some seat's identity differed from the registrant's;
             // every field it compared is one the registrant writes, so it priced self-judgement at
             // one payout address per seat and stopped nothing.
+            builder.require_panel_lock_eligible(*claim_id, &claim, seats, ctx.daa_score)?;
             builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
             // ADR-0124 Decision 3: past the fence the drawn seats go on duty — a duty row, and each
             // seat's exposure reserved for the claim's life. Below it nothing is written.
@@ -15494,6 +15958,7 @@ fn apply_object(
                 // ADR-0124 Decision 2: the seats whose `Valid` receipts this object carries are
                 // credited — the licensing object is the first carrier of who answered.
                 builder.credit_seat_receipts(*claim_id, receipts, ctx.daa_score);
+                builder.lock_valid_receipts(*claim_id, &claim, receipts, ctx.daa_score)?;
                 builder.license_claim(*claim_id, claim, ctx.daa_score)?;
             }
         }
@@ -15862,6 +16327,9 @@ fn apply_object(
         PalwConsensusObjectV2::SeatReadinessProvedV2 { bond, class_id, span, proof, signature: _ } => {
             builder.apply_seat_readiness_v2(ctx, bond, class_id, *span, proof)?;
         }
+        PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
+            builder.consume_objective_offence(ctx, *kind, *accused, *evidence_id, evidence)?;
+        }
         PalwConsensusObjectV2::ClassManifestV2 { class_id, artifact_bytes, registrant_bond, signature: _ } => {
             builder.apply_class_manifest(class_id, *artifact_bytes, registrant_bond)?;
         }
@@ -15894,6 +16362,7 @@ fn apply_object(
             builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
+            builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score)?;
             builder.license_claim(*claim_id, claim, ctx.daa_score)?;
         }
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
@@ -17055,6 +17524,11 @@ pub struct PalwTransitionExtrasV1 {
     /// rate, the panel-share constants, the cap ceiling and this block's `bits`; `None` leaves the
     /// fold byte-identical.
     pub economic_payout: Option<crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1>,
+    /// **ADR-0144 §9: `Params::palw_objective_offence`'s HEIGHT.** Past it a Valid receipt locks
+    /// slashable collateral, Final keeps a liability row, withdraw is refused while any lock is
+    /// live, and a verified `ObjectiveOffence` debits the accused PALW bond. `None` by `Default`
+    /// and on every shipped preset until the live gates are met.
+    pub objective_offence_daa: Option<u64>,
 }
 
 impl PalwTransitionExtrasV1 {
@@ -17068,6 +17542,11 @@ impl PalwTransitionExtrasV1 {
     /// Whether ADR-0145 §5/§6's derivation governs the free-prompt lane at `daa_score`.
     pub fn fp_derived_work_at(&self, daa_score: u64) -> bool {
         self.fp_derived_work_daa.is_some_and(|height| daa_score >= height)
+    }
+
+    /// Whether ADR-0144 §9's objective-offence ledger governs this block.
+    pub fn objective_offence_at(&self, daa_score: u64) -> bool {
+        self.objective_offence_daa.is_some_and(|height| daa_score >= height)
     }
 
     /// The network's genesis prompt-ids form, from [`Self::prompt_ids_merkle`].
@@ -18330,6 +18809,9 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::ArtifactOwner { key, old, new } => swap_write!(state.artifact_owners, key, old, new),
         PalwDeltaEntryV2::FpWorkProfile { key, old, new } => swap_write!(state.fp_work_profiles, key, old, new),
         PalwDeltaEntryV2::FpClaimPrompt { key, old, new } => swap_write!(state.fp_claim_prompts, key, old, new),
+        PalwDeltaEntryV2::ConsumedOffence { key, old, new } => swap_write!(state.consumed_offences, key, old, new),
+        PalwDeltaEntryV2::SlashableLock { key, old, new } => swap_write!(state.slashable_locks, key, old, new),
+        PalwDeltaEntryV2::PanelLiability { key, old, new } => swap_write!(state.panel_liabilities, key, old, new),
         PalwDeltaEntryV2::FinalWork { key, old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             let current = state.final_work.get(&key.0).and_then(|classes| classes.get(&key.1)).copied();
@@ -18578,6 +19060,11 @@ pub struct PalwStateCarriageV2 {
     pub fp_work_profiles: BTreeMap<Hash64, Box<crate::palw_step::PalwShapeProfileV3>>,
     /// ADR-0145 §6. The same tail.
     pub fp_claim_prompts: BTreeMap<(Hash64, PalwBondKeyV2, Hash64), PalwFpClaimPromptV1>,
+    /// ADR-0144 §9. A nineteenth tagged tail (`0xB2`), encoded only when any of the three is
+    /// non-empty; all three rooted.
+    pub consumed_offences: BTreeMap<Hash64, crate::palw_offence_v1::PalwConsumedOffenceV1>,
+    pub slashable_locks: BTreeMap<(PalwBondKeyV2, Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1>,
+    pub panel_liabilities: BTreeMap<Hash64, crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -18660,6 +19147,10 @@ const PALW_CARRIAGE_ARTIFACT_OWNERS_TAIL_V1: u8 = 0xAE;
 /// ADR-0145 §5/§6: the class graphs the free-prompt derivation reads and the live claims' prompts
 /// the cache rule reads, once either exists (past `Params::palw_fp_derived_work`). Rooted.
 const PALW_CARRIAGE_FP_DERIVED_WORK_TAIL_V1: u8 = 0xAF;
+/// ADR-0144 §9: consumed offences, live slashable locks and post-Final panel liability, once
+/// any exists (past `Params::palw_objective_offence`). Rooted. Empty is omitted, so a dormant
+/// chain's carriage is byte-identical to a carriage before this tail existed.
+const PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1: u8 = 0xB2;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -18788,6 +19279,12 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.fp_work_profiles.serialize(writer)?;
             self.fp_claim_prompts.serialize(writer)?;
         }
+        if !self.consumed_offences.is_empty() || !self.slashable_locks.is_empty() || !self.panel_liabilities.is_empty() {
+            PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1.serialize(writer)?;
+            self.consumed_offences.serialize(writer)?;
+            self.slashable_locks.serialize(writer)?;
+            self.panel_liabilities.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -18858,6 +19355,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut fp_work_profiles = BTreeMap::new();
         let mut fp_claim_prompts = BTreeMap::new();
         let mut seen_fp_derived_work = false;
+        let mut consumed_offences = BTreeMap::new();
+        let mut slashable_locks = BTreeMap::new();
+        let mut panel_liabilities = BTreeMap::new();
+        let mut seen_objective_offence = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -18949,6 +19450,12 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     fp_work_profiles = BTreeMap::deserialize_reader(reader)?;
                     fp_claim_prompts = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
+                    seen_objective_offence = true;
+                    consumed_offences = BTreeMap::deserialize_reader(reader)?;
+                    slashable_locks = BTreeMap::deserialize_reader(reader)?;
+                    panel_liabilities = BTreeMap::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_SHARDS_TAIL_V1 if !seen_shards && !seen_held && !seen_demands && !seen_class_ladders => {
                     seen_shards = true;
                     class_shard_plans = BTreeMap::deserialize_reader(reader)?;
@@ -19022,6 +19529,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             artifact_owners,
             fp_work_profiles,
             fp_claim_prompts,
+            consumed_offences,
+            slashable_locks,
+            panel_liabilities,
         })
     }
 }
@@ -19081,6 +19591,9 @@ impl PalwStateCarriageV2 {
             artifact_owners: state.artifact_owners.clone(),
             fp_work_profiles: state.fp_work_profiles.clone(),
             fp_claim_prompts: state.fp_claim_prompts.clone(),
+            consumed_offences: state.consumed_offences.clone(),
+            slashable_locks: state.slashable_locks.clone(),
+            panel_liabilities: state.panel_liabilities.clone(),
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -19206,6 +19719,9 @@ impl PalwStateCarriageV2 {
             artifact_owners: self.artifact_owners,
             fp_work_profiles: self.fp_work_profiles,
             fp_claim_prompts: self.fp_claim_prompts,
+            consumed_offences: self.consumed_offences,
+            slashable_locks: self.slashable_locks,
+            panel_liabilities: self.panel_liabilities,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -33439,6 +33955,9 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ArtifactOwner { .. } => "artifact_owner",
                     PalwDeltaEntryV2::FpWorkProfile { .. } => "fp_work_profile",
                     PalwDeltaEntryV2::FpClaimPrompt { .. } => "fp_claim_prompt",
+                    PalwDeltaEntryV2::ConsumedOffence { .. } => "consumed_offence",
+                    PalwDeltaEntryV2::SlashableLock { .. } => "slashable_lock",
+                    PalwDeltaEntryV2::PanelLiability { .. } => "panel_liability",
                 });
             }
         }
@@ -33502,6 +34021,9 @@ pub(crate) mod tests {
             // ADR-0145 §5/§6, appended last.
             (58, PalwDeltaEntryV2::FpWorkProfile { key, old: None, new: None }),
             (59, PalwDeltaEntryV2::FpClaimPrompt { key: (key, bond_key(1), key), old: None, new: None }),
+            (60, PalwDeltaEntryV2::ConsumedOffence { key, old: None, new: None }),
+            (61, PalwDeltaEntryV2::SlashableLock { key: (bond_key(1), key), old: None, new: None }),
+            (62, PalwDeltaEntryV2::PanelLiability { key, old: None, new: None }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -34066,6 +34588,9 @@ pub(crate) mod tests {
             // populates them has to decide their place in the list rather than discover it.
             fp_work_profiles: _,
             fp_claim_prompts: _,
+            consumed_offences: _,
+            slashable_locks: _,
+            panel_liabilities: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -40347,6 +40872,7 @@ pub(crate) mod tests {
                 round_lane: None,
                 round_permit_uses: Vec::new(),
                 escrow_carve: None,
+                objective_offence_daa: None,
             }
         }
 
@@ -40581,6 +41107,7 @@ pub(crate) mod tests {
                 round_lane: None,
                 round_permit_uses: Vec::new(),
                 escrow_carve: None,
+                objective_offence_daa: None,
             };
             let (s_off, _) =
                 apply_palw_transition_v2_with_extras(&s, &p, &ctx(3, 251, 3), &[], None, false, false, false, false, &dormant)
@@ -40605,6 +41132,405 @@ pub(crate) mod tests {
             assert_eq!(revert_delta_v2(&s3, &d3, &p).unwrap().state_root(), s.state_root());
         }
     }
+
+    // ---- ADR-0144 §9: live lock ledger, Final liability, IBD, reorg --------------------------
+
+    fn armed_offence_extras() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { objective_offence_daa: Some(0), ..Default::default() }
+    }
+
+    fn apply_armed(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        att: Option<&PalwAttemptEnvelopeV2>,
+    ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+        let extras = armed_offence_extras();
+        let (state, delta) =
+            apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras)
+                .expect("armed transition applies");
+        state.assert_internal_consistency(p).expect("internal consistency after armed apply");
+        (state, delta)
+    }
+
+    fn seat_bond_reg(n: u64, collateral: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(n),
+            // Bond 1's key is `[7; 4]` (`register_class_and_bond`); seats start at 0x41.
+            pubkey: vec![0x40 + n as u8; 4],
+            operator_pubkey: op_key(20 + n),
+            collateral,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A00 + n),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        }
+    }
+
+    fn three_valid_receipts(claim: Hash64, signed_daa: u64) -> Vec<crate::palw_panel_v2::PalwSeatReceiptV2> {
+        (2..=4)
+            .map(|n| crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim,
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                seat_bond: bond_key(n),
+                signed_daa,
+                signature: Vec::new(),
+            })
+            .collect()
+    }
+
+    fn sybil_seats() -> Vec<PalwPanelSeatV2> {
+        (2..=6)
+            .map(|n| PalwPanelSeatV2 { bond: bond_key(n), operator_id: op_id(20 + n) })
+            .collect()
+    }
+
+    fn register_sybil_panel(collateral: u64) -> Vec<PalwConsensusObjectV2> {
+        let mut objects = register_class_and_bond();
+        objects.extend((2..=6).map(|n| seat_bond_reg(n, collateral)));
+        objects
+    }
+
+    fn license_sybil_claim(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        pwu: u64,
+        nonce: u64,
+        daa: u64,
+        collateral: u64,
+    ) -> (PalwChainStateV2, Hash64, PalwStateDeltaV2) {
+        let env = attempt(pwu, nonce);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s1, _) = apply_armed(parent, p, &ctx(nonce, daa, daa), &[], Some(&env));
+        let (s2, _) = apply_armed(
+            &s1,
+            p,
+            &ctx(nonce + 1, daa + 1, daa + 1),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: sybil_seats() }],
+            None,
+        );
+        let (s3, d3) = apply_armed(
+            &s2,
+            p,
+            &ctx(nonce + 2, daa + 2, daa + 2),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: three_valid_receipts(claim_id, daa + 2) }],
+            None,
+        );
+        let _ = collateral;
+        (s3, claim_id, d3)
+    }
+
+    #[test]
+    fn live_fold_does_not_reuse_the_same_posted_amount_across_two_valids() {
+        let p = params();
+        let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+            reserved: 200,
+            escrowed_reward: 0,
+            pwu: 40,
+            slash_value_per_pwu: 5,
+            extra_economic_rights_sompi: 0,
+        };
+        let required = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        let posted = required.max(p.min_collateral_sompi() as u128) as u64;
+        let (s0, _) = apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
+        let (s1, claim_a, _) = license_sybil_claim(&s0, &p, 40, 1, 101, posted);
+        assert_eq!(s1.slashable_lock(bond_key(2), claim_a).unwrap().amount, required);
+        assert!(s1.slashable_available(&bond_key(2), 103) < required);
+        let env = attempt(40, 2);
+        let claim_b = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply_armed(&s1, &p, &ctx(10, 110, 110), &[], Some(&env));
+        let extras = armed_offence_extras();
+        let err = apply_palw_transition_v2_with_extras(
+            &s2,
+            &p,
+            &ctx(11, 111, 111),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_b, anchor: h64(77), seats: sybil_seats() }],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &extras,
+        )
+        .expect_err("a seat already locked cannot bind a second claim");
+        assert!(
+            matches!(err, PalwStateV2Error::SeatValidLockRefused { required: got, .. } if got == required),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn live_fold_n_search_one_ten_and_one_hundred_cannot_reuse_a_lock() {
+        let p = params();
+        let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+            reserved: 200,
+            escrowed_reward: 0,
+            pwu: 40,
+            slash_value_per_pwu: 5,
+            extra_economic_rights_sompi: 0,
+        };
+        let required = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        let posted = required.max(p.min_collateral_sompi() as u128) as u64;
+        for n in [1u64, 10, 100] {
+            let (mut state, _) =
+                apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
+            let (licensed, first, delta) = license_sybil_claim(&state, &p, 40, 1, 101, posted);
+            assert_eq!(licensed.slashable_lock(bond_key(2), first).map(|l| l.amount), Some(required));
+            let reverted = revert_delta_v2(&licensed, &delta, &p).expect("Valid lock reverts");
+            assert!(reverted.slashable_lock(bond_key(2), first).is_none(), "N={n}: reorg drops the lock");
+            state = licensed;
+            let (finalized, d_final) = apply_armed(&state, &p, &ctx(5, 124, 124), &[], None);
+            assert!(finalized.panel_liability(&first).is_some(), "N={n}: Final keeps liability");
+            assert!(finalized.slashable_lock(bond_key(2), first).is_some(), "N={n}: Final does not unlock");
+            let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&finalized)).unwrap();
+            let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            let loaded = decoded.into_state(&p, Some(finalized.state_root())).expect("IBD loads");
+            assert_eq!(loaded.slashable_lock(bond_key(2), first).map(|l| l.amount), Some(required), "N={n}: IBD");
+            let back = revert_delta_v2(&finalized, &d_final, &p).expect("Final reverts");
+            assert!(back.panel_liability(&first).is_none(), "N={n}: reorg of Final drops liability");
+            let extras = armed_offence_extras();
+            let err = apply_palw_transition_v2_with_extras(
+                &finalized,
+                &p,
+                &ctx(20, 125, 125),
+                &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(2), signature: vec![1] }],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect_err("withdraw before expiry is refused");
+            assert!(matches!(err, PalwStateV2Error::BondRetireWhileSlashableLocked { .. }), "N={n}: {err:?}");
+            let _ = n;
+        }
+    }
+
+    #[test]
+    fn live_fold_required_lock_tracks_the_claims_own_facts() {
+        let p = params();
+        let light = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+            reserved: 200,
+            escrowed_reward: 0,
+            pwu: 40,
+            slash_value_per_pwu: 5,
+            extra_economic_rights_sompi: 0,
+        };
+        let heavy = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+            reserved: 800,
+            escrowed_reward: 0,
+            pwu: 160,
+            slash_value_per_pwu: 5,
+            extra_economic_rights_sompi: 0,
+        };
+        let req_light = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&light);
+        let req_heavy = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&heavy);
+        assert!(req_heavy > req_light);
+        let posted = (req_light + req_heavy).max(p.min_collateral_sompi() as u128) as u64;
+        let (s0, _) = apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
+        let (s1, light_id, _) = license_sybil_claim(&s0, &p, 40, 1, 101, posted);
+        assert_eq!(s1.slashable_lock(bond_key(2), light_id).unwrap().amount, req_light);
+        let (s2, heavy_id, _) = license_sybil_claim(&s1, &p, 160, 3, 130, posted);
+        assert_eq!(s2.slashable_lock(bond_key(2), heavy_id).unwrap().amount, req_heavy);
+    }
+
+    #[test]
+    fn live_fold_false_valid_after_final_debits_the_lock_once() {
+        let p = params();
+        let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+            reserved: 200,
+            escrowed_reward: 0,
+            pwu: 40,
+            slash_value_per_pwu: 5,
+            extra_economic_rights_sompi: 0,
+        };
+        let required = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        let posted = required.max(p.min_collateral_sompi() as u128) as u64;
+        let (s0, _) = apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
+        let (s1, claim_id, _) = license_sybil_claim(&s0, &p, 40, 1, 101, posted);
+        let (s2, _) = apply_armed(&s1, &p, &ctx(5, 124, 124), &[], None);
+        assert!(matches!(s2.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+        let payload = crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1 {
+            version: crate::palw_offence_v1::PALW_PANEL_FALSE_VALID_VERSION_V1,
+            claim_id,
+            network_domain: h64(999),
+            accused_seat: bond_key(2).0,
+            valid_receipt: crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: claim_id,
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                seat_bond: bond_key(2),
+                signed_daa: 103,
+                signature: Vec::new(),
+            },
+            executor_pubkey: vec![7; 4],
+            contradiction: crate::palw_offence_v1::PalwPanelContradictionV1::ProducerWithholding { voided_daa: 124 },
+        };
+        // Honest Final has no void; a ProducerWithholding payload must not bind.
+        let evidence = borsh::to_vec(&payload).unwrap();
+        let evidence_id = crate::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence);
+        let extras = armed_offence_extras();
+        let refused = apply_palw_transition_v2_with_extras(
+            &s2,
+            &p,
+            &ctx(6, 125, 125),
+            &[PalwConsensusObjectV2::ObjectiveOffence {
+                kind: crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
+                accused: bond_key(2),
+                evidence_id,
+                evidence,
+            }],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &extras,
+        )
+        .expect_err("a Final without a void does not convict withholding");
+        assert!(matches!(refused, PalwStateV2Error::ObjectiveOffenceRefused(..)), "{refused:?}");
+        let before = s2.bond(&bond_key(2)).unwrap().collateral;
+        assert_eq!(before, posted);
+    }
+
+    #[test]
+    fn live_fold_da_while_valid_survives_void_retire_and_ibd() {
+        let p = params();
+        let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+            reserved: 200,
+            escrowed_reward: 0,
+            pwu: 40,
+            slash_value_per_pwu: 5,
+            extra_economic_rights_sompi: 0,
+        };
+        let required = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        let posted = required.max(p.min_collateral_sompi() as u128) as u64;
+        let (s0, _) = apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
+        let (s3, claim_id, _) = license_sybil_claim(&s0, &p, 40, 1, 101, posted);
+        assert_eq!(s3.slashable_lock(bond_key(2), claim_id).unwrap().amount, required);
+        let receipts = vec![
+            crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: claim_id,
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 104 },
+                seat_bond: bond_key(3),
+                signed_daa: 104,
+                signature: Vec::new(),
+            },
+            crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: claim_id,
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 104 },
+                seat_bond: bond_key(4),
+                signed_daa: 104,
+                signature: Vec::new(),
+            },
+            crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: claim_id,
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 104 },
+                seat_bond: bond_key(5),
+                signed_daa: 104,
+                signature: Vec::new(),
+            },
+        ];
+        let (s4, _) = apply_armed(
+            &s3,
+            &p,
+            &ctx(5, 104, 104),
+            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts }],
+            None,
+        );
+        assert!(matches!(
+            s4.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+        ));
+        let liability = s4.panel_liability(&claim_id).expect("void keeps liability");
+        assert_eq!(liability.void_reason, Some(PalwVoidReasonV2::ProducerWithholding));
+        let payload = crate::palw_offence_v1::PalwPanelFalseValidEvidenceV1 {
+            version: crate::palw_offence_v1::PALW_PANEL_FALSE_VALID_VERSION_V1,
+            claim_id,
+            network_domain: h64(999),
+            accused_seat: bond_key(2).0,
+            valid_receipt: crate::palw_panel_v2::PalwSeatReceiptV2 {
+                claim: claim_id,
+                verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                seat_bond: bond_key(2),
+                signed_daa: 103,
+                signature: Vec::new(),
+            },
+            executor_pubkey: vec![7; 4],
+            contradiction: crate::palw_offence_v1::PalwPanelContradictionV1::ProducerWithholding { voided_daa: 104 },
+        };
+        let evidence = borsh::to_vec(&payload).unwrap();
+        let evidence_id = crate::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence);
+        let (s5, _) = apply_armed(
+            &s4,
+            &p,
+            &ctx(6, 105, 105),
+            &[PalwConsensusObjectV2::ObjectiveOffence {
+                kind: crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
+                accused: bond_key(2),
+                evidence_id,
+                evidence: evidence.clone(),
+            }],
+            None,
+        );
+        let after = s5.bond(&bond_key(2)).unwrap().collateral;
+        assert_eq!(after as u128, posted as u128 - required, "the lock is the debit");
+        assert!(s5.slashable_lock(bond_key(2), claim_id).is_none(), "the lock is spent");
+        let (s6, _) = apply_armed(
+            &s5,
+            &p,
+            &ctx(7, 106, 106),
+            &[PalwConsensusObjectV2::ObjectiveOffence {
+                kind: crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
+                accused: bond_key(2),
+                evidence_id,
+                evidence,
+            }],
+            None,
+        );
+        assert_eq!(s6.bond(&bond_key(2)).unwrap().collateral, after, "1 offence = 1 penalty");
+        let (s7, _) = apply_armed(&s6, &p, &ctx(8, 175, 175), &[], None);
+        assert!(s7.claim(&claim_id).is_none() || matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }));
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s6)).unwrap();
+        let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+        let loaded = decoded.into_state(&p, Some(s6.state_root())).expect("IBD after DA slash");
+        assert_eq!(loaded.bond(&bond_key(2)).unwrap().collateral, after);
+        assert!(loaded.consumed_offence(&crate::palw_offence_v1::palw_offence_id_v1(
+            crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
+            &bond_key(2).0,
+            &evidence_id,
+        ))
+        .is_some());
+        let _ = s7;
+    }
+
+    #[test]
+    fn a_dormant_objective_offence_fence_locks_nothing() {
+        let p = params();
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) = apply(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+            None,
+        );
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        assert!(s4.slashable_lock(bond_key(1), claim_id).is_none());
+        let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).unwrap();
+        assert!(!bytes.contains(&PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1));
+    }
+
 }
 
 /// ADR-0123's release rule, tested as the pure function admission and the producer both call.

@@ -437,6 +437,9 @@ pub struct VirtualStateProcessor {
     /// claim's work is derived from the class's graph and a prefix already paid for is not paid
     /// again.
     pub(super) palw_fp_derived_work: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0144 §9: `Params::palw_objective_offence` — dormant everywhere until the live gates
+    /// are met; past it a verified `ObjectiveOffence` debits the accused PALW bond.
+    pub(super) palw_objective_offence: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
@@ -955,6 +958,7 @@ impl VirtualStateProcessor {
             palw_operator_id_unique: params.palw_operator_id_unique,
             palw_admission_independence: params.palw_admission_independence,
             palw_fp_derived_work: params.palw_fp_derived_work,
+            palw_objective_offence: params.palw_objective_offence,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
             palw_readiness_v2: params.palw_readiness_v2,
@@ -6976,6 +6980,54 @@ impl VirtualStateProcessor {
                         return Err(format!("bond {registrant_bond:?}'s manifest is not signed by the key it registered"));
                     }
                 }
+                Obj::ObjectiveOffence { kind, accused, evidence_id, evidence } => {
+                    if !self.palw_objective_offence_at(point.daa_score) {
+                        return Err("an objective offence is not armed on this network (ADR-0144 §9)".into());
+                    }
+                    let record = state
+                        .bond(accused)
+                        .ok_or_else(|| "an objective offence names a PALW bond this chain does not have".to_string())?;
+                    let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_v1(
+                        *kind,
+                        &accused.0,
+                        evidence_id,
+                        evidence,
+                        &record.pubkey,
+                        matches!(
+                            record.status,
+                            kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active
+                                | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
+                        ),
+                        domain.as_byte_slice(),
+                        |pk, msg, sig, ctx| Self::verify_mldsa87_with_context_bool(pk, msg, sig, ctx),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid = kind {
+                        let payload: kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1 =
+                            borsh::from_slice(evidence).map_err(|_| "PanelFalseValid evidence does not decode".to_string())?;
+                        let (execution_root, artifact_root, class_id) = if let Some(claim) = state.claim(&payload.claim_id) {
+                            let artifact = state.class(&claim.class_id).map(|c| c.artifact_root).unwrap_or_default();
+                            (claim.execution_root, artifact, claim.class_id)
+                        } else if let Some(row) = state.panel_liability(&payload.claim_id) {
+                            let artifact = state.class(&row.class_id).map(|c| c.artifact_root).unwrap_or_default();
+                            (row.execution_root, artifact, row.class_id)
+                        } else {
+                            return Err("PanelFalseValid names neither a live claim nor a liability row".into());
+                        };
+                        let ladder = state.class_step_ladder_v1(&class_id, 64);
+                        kaspa_consensus_core::palw_offence_v1::palw_panel_contradiction_convicts_execution_v1(
+                            &payload.contradiction,
+                            execution_root,
+                            artifact_root,
+                            ladder,
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                }
                 Obj::ReceiptLicensedV2 { claim, receipts } => {
                     if !self.palw_verification_v2_at(point.daa_score) {
                         return Err(format!("claim {claim}: a segment-scoped receipt set below Verification V2's fence (ADR-0133)"));
@@ -7990,6 +8042,9 @@ impl VirtualStateProcessor {
             // gives: on a network minted flat a tile of a non-held claim has no answer.
             prompt_ids_merkle: self.palw_prompt_ids_form_at(daa_score)
                 == kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            // ADR-0144 §9: the HEIGHT, not this block's yes/no. Written explicitly so an unwritten
+            // default cannot silently leave the lock ledger off on a network that has armed it.
+            objective_offence_daa: self.palw_objective_offence_daa(),
         }
     }
 
@@ -7999,6 +8054,16 @@ impl VirtualStateProcessor {
     /// beside this one reads the block's score and not the tip's.
     fn palw_fp_da_pins_at(&self, daa_score: u64) -> bool {
         self.palw_fp_da_pins.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    fn palw_objective_offence_at(&self, daa_score: u64) -> bool {
+        self.palw_objective_offence.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    fn palw_objective_offence_daa(&self) -> Option<u64> {
+        self.palw_objective_offence
+            .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
+            .map(|fence| fence.daa_score())
     }
 
     /// **ADR-0107, resolved in exactly one place, at the BLOCK's own DAA** — the block that
@@ -12960,6 +13025,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
+        O::ObjectiveOffence { .. } => "ObjectiveOffence",
         O::ModelBuy { .. } => "ModelBuy",
         O::ModelSeed { .. } => "ModelSeed",
         O::ShardCourtAccused { .. } => "ShardCourtAccused",
