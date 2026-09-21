@@ -12917,7 +12917,7 @@ pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 7_301;
 /// zero-knowledge proof is used or planned.
 pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 
-/// **ADR-0138 + ADR-0142 — the DAA clock and its cursor, on testnet-11 at DAA 7,900.**
+/// **ADR-0138 + ADR-0142 — the DAA clock and its cursor, on testnet-11 at DAA 7,780.**
 ///
 /// The 6,001 / 7,101 flag day left both dormant: past the anchor clock only a heartbeat can
 /// advance the score, and under the selected-parent slot rule an attempt block postponed the next
@@ -12929,17 +12929,19 @@ pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 /// The old slot rule treats a bonded PALW parent as "the chain is producing" and holds the
 /// heartbeat for an hour. On a PALW-only network that is a misread: a BASE-0 (or any attempt)
 /// win advances one DAA and then the class lottery goes silent, so nothing produces the next
-/// block either (measured 2026-09-21: DAA 7,680 BASE-0 tip, ~30 minutes of no blocks, next beat
-/// an hour later). 7,900 is past that tip (~7,681) and unnamed on any released schedule, so
-/// already-committed `daaScore` values stay valid and the fork-id gate can see the fence. The
-/// single lottery arms with the clock (one setter); the cursor arms at the same height. A fleet
-/// still advertising 8,000 must roll before 7,900.
-pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 7_900;
+/// block either (measured 2026-09-21: DAA 7,680 then again 7,732 BASE-0 tip, ~45 minutes of no
+/// blocks, next beat an hour later). 7,900 was past the first stall and unnamed, but the chain
+/// has not reached it: every BASE-0 win before the fence restarts the hour. 7,780 is past the
+/// live tip (~7,732) and unnamed on any released schedule, so already-committed `daaScore`
+/// values stay valid and the fork-id gate can see the fence. The single lottery arms with the
+/// clock (one setter); the cursor arms at the same height. A fleet still advertising 7,900
+/// must roll before 7,780.
+pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 7_780;
 
 /// **ADR-0144 §9: the live lock ledger, as one future bundle.** Past this height a Valid
 /// receipt locks `required = palw_max_fraud_gain_v1(claim)/3+1`, Final keeps a liability,
 /// BondRetire while locked is refused, and a PanelFalseValid debit spends the lock once.
-/// 8,500 is past the clock (7,900) and unnamed on any released schedule. Genesis 10k MSK
+/// 8,500 is past the clock (7,780) and unnamed on any released schedule. Genesis 10k MSK
 /// covers one dense-row seat (~997 MSK); the 400k sompi registry floor is unchanged.
 /// Mainnet stays `None`.
 pub const PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA: u64 = 8_500;
@@ -18172,13 +18174,10 @@ mod consensus_params_id_tests {
                 // 5 DAA → 1 DAA, f+2 kept): the schedule gains a height, so the fork-id gate separates this
                 // build from `137b9c50…`. The identity does not move. Previous:
                 // 137b9c50aac6c8aabb872519a48a8066bc14867d84b3a64e6bb081e094788fde.
-                // **Re-pinned 2026-09-21: DAA clock 8,000 → 7,900** so a BASE-0 tip no longer
-                // buys an hour of heartbeat silence (measured stall at DAA 7,680). Identity unmoved.
-                // Previous: 400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8.
-                // **Re-pinned 2026-09-21 for ADR-0144 §9** (`palw_objective_offence` at 8,500):
-                // Valid lock, Final liability, PanelFalseValid debit, one future bundle. Identity
-                // unmoved. Previous: 6a728e47a116819b1fc1c221336461f932d15163d5d6bba3d6eaca74686bb388.
-                "20bf662f012ecb226005f8b915fd744b440b5c37c876c6066163b74f10827eeb",
+                // **Re-pinned 2026-09-21: DAA clock 7,900 → 7,780** so the live BASE-0 tip at
+                // 7,732 is not another hour of heartbeat silence. Identity unmoved.
+                // Previous: 20bf662f012ecb226005f8b915fd744b440b5c37c876c6066163b74f10827eeb.
+                "8854b190978bbabd92381810a3183eb1c74864c97011b2adcda7ac714f625e23",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the

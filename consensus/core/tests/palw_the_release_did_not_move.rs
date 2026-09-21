@@ -16,12 +16,12 @@ use kaspa_consensus_core::config::params::{
 
 /// **The shipped release's fingerprint, moved 2026-09-21 by ADR-0144 §9 at DAA 8,500.**
 ///
-/// Previous (`6a728e47…` / `12e975ef…` / `8ba71551…`) was the DAA clock at 7,900. A scheduled
-/// future fence writes Some-only into the params id and the schedule id; the identity does not
-/// move (the fence normalises out until it fires).
-const T11_CONSENSUS_PARAMS_ID: &str = "20bf662f012ecb226005f8b915fd744b440b5c37c876c6066163b74f10827eeb";
+/// Previous (`20bf662f…` / `12e975ef…` / `554c9815…`) was the DAA clock at 7,900 plus ADR-0144 §9
+/// at 8,500. A scheduled future fence writes Some-only into the params id and the schedule id;
+/// the identity does not move (the fence normalises out until it fires).
+const T11_CONSENSUS_PARAMS_ID: &str = "8854b190978bbabd92381810a3183eb1c74864c97011b2adcda7ac714f625e23";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
-const T11_CONSENSUS_SCHEDULE_ID: &str = "554c98151e9e473f6db133855226435e3009415a0d1b1c7ef1c14394c54f9f76";
+const T11_CONSENSUS_SCHEDULE_ID: &str = "7f0e6d9f2724c33c604a78286a825f83989d3ba9d5892f4e36d6dc97ce66e267";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
 
 #[test]
@@ -142,8 +142,9 @@ fn the_work_price_denominator_cannot_reach_the_payer_past_the_bundle() {
 fn the_daa_clock_fence_is_past_the_stalled_tip() {
     use kaspa_consensus_core::config::params::ForkActivation;
     let rc = palw_rc_shipped_params();
-    assert_eq!(PALW_RC_ANCHOR_CLOCK_FENCE_DAA, 7_900);
+    assert_eq!(PALW_RC_ANCHOR_CLOCK_FENCE_DAA, 7_780);
     assert!(PALW_RC_ANCHOR_CLOCK_FENCE_DAA > 7_680, "past the 2026-09-21 BASE-0 stall at DAA 7,680");
+    assert!(PALW_RC_ANCHOR_CLOCK_FENCE_DAA > 7_732, "past the second BASE-0 stall at DAA 7,732");
     assert_eq!(rc.palw_anchor_clock, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
     assert_eq!(rc.palw_clock_cursor, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
     assert_eq!(rc.palw_single_lottery, Some(ForkActivation::new(PALW_RC_ANCHOR_CLOCK_FENCE_DAA)));
