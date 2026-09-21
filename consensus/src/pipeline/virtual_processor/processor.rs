@@ -93,8 +93,10 @@ use kaspa_consensus_core::{
 };
 use kaspa_consensus_notify::{
     notification::{
-        NewBlockTemplateNotification, Notification, SinkBlueScoreChangedNotification, UtxosChangedNotification,
-        VirtualChainChangedNotification, VirtualDaaScoreChangedNotification,
+        NewBlockTemplateNotification, Notification, PalwClassReadinessChangedNotification, PalwPanelAssignmentNotification,
+        PalwPanelAssignmentSeatNotification, PalwPanelEligibilityChangedNotification, PalwPanelReceiptNotification,
+        SinkBlueScoreChangedNotification, UtxosChangedNotification, VirtualChainChangedNotification,
+        VirtualDaaScoreChangedNotification,
     },
     root::ConsensusNotificationRoot,
 };
@@ -440,10 +442,15 @@ pub struct VirtualStateProcessor {
     /// ADR-0144 §9: `Params::palw_objective_offence` — dormant everywhere until the live gates
     /// are met; past it a verified `ObjectiveOffence` debits the accused PALW bond.
     pub(super) palw_objective_offence: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// Spend-once execution-round quanta: `Params::palw_execution_quanta`. Past it a Final mints
+    /// N unique 1-second permits from CanonicalWork instead of drawing the ADR-0125 lottery.
+    pub(super) palw_execution_quanta: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 Verification V2: `Params::palw_verification_v2` — past it a segment-scoped receipt set licenses by coverage.
     pub(super) palw_verification_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_verification_s3: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    pub(super) palw_verification_s2: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0133 §11.2: `Params::palw_readiness_v2` — past it a possession proof is a whole-artifact
     /// multiproof, the one-leaf object is refused, and only a V2 row counts a seat ready.
     pub(super) palw_readiness_v2: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -463,6 +470,7 @@ pub struct VirtualStateProcessor {
     pub(super) palw_model_work_cache: std::sync::Mutex<
         std::collections::BTreeMap<kaspa_hashes::Hash64, Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelWorkV1>>,
     >,
+    palw_panel_notify_snapshot: std::sync::Mutex<Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNotifySnapshotV1>>,
     /// **ADR-0089 Decision 9's fence, `None` on every shipped preset.** Past it the EVM's
     /// window and hand exist and the block's EVM actions reach its transition. Resolved at the
     /// BLOCK's DAA.
@@ -516,6 +524,8 @@ pub struct VirtualStateProcessor {
     /// Resolved in ONE place, [`Self::palw_token_lift_at`], at the block the registration is
     /// judged in.
     pub(super) palw_token_lift: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_kimi_k3`: may a registration reach the fenced Kimi K3 kernels.
+    pub(super) palw_kimi_k3: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_fused_dissectable` (ADR-0093 Decision 6): must a fused registration's output
     /// tile be one head's. Resolved in ONE place, [`Self::palw_fused_dissectable_at`].
     pub(super) palw_fused_dissectable: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -959,8 +969,11 @@ impl VirtualStateProcessor {
             palw_admission_independence: params.palw_admission_independence,
             palw_fp_derived_work: params.palw_fp_derived_work,
             palw_objective_offence: params.palw_objective_offence,
+            palw_execution_quanta: params.palw_execution_quanta,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
+            palw_verification_s3: params.palw_verification_s3,
+            palw_verification_s2: params.palw_verification_s2,
             palw_readiness_v2: params.palw_readiness_v2,
             palw_economic_payout: params.palw_economic_payout_fence(),
             palw_genesis_model_works: match &params.palw_consensus_mode {
@@ -970,6 +983,7 @@ impl VirtualStateProcessor {
                 _ => Default::default(),
             },
             palw_model_work_cache: std::sync::Mutex::new(std::collections::BTreeMap::new()),
+            palw_panel_notify_snapshot: std::sync::Mutex::new(None),
             palw_model_evm: params.palw_model_evm_fence(),
             palw_context_ladder: params.palw_context_ladder,
             palw_epoch_boundary_budget: params.palw_epoch_boundary_budget,
@@ -981,6 +995,7 @@ impl VirtualStateProcessor {
             palw_shard_court: params.palw_shard_court_fence(),
             palw_shard_licensing: params.palw_shard_licensing_fence(),
             palw_token_lift: params.palw_token_lift_fence(),
+            palw_kimi_k3: params.palw_kimi_k3_fence(),
             palw_fused_dissectable: params.palw_fused_dissectable_fence(),
             palw_attn_anchored_root: params.palw_attn_anchored_root_fence(),
             palw_held_context: params.palw_held_context_fence(),
@@ -1275,6 +1290,7 @@ impl VirtualStateProcessor {
         self.notification_root
             .notify(Notification::VirtualDaaScoreChanged(VirtualDaaScoreChangedNotification::new(new_virtual_state.daa_score)))
             .expect("expecting an open unbounded channel");
+        self.emit_palw_panel_notifications();
         if self.notification_root.has_subscription(EventType::VirtualChainChanged) {
             // check for subscriptions before the heavy lifting
             let added_chain_blocks_acceptance_data =
@@ -3957,6 +3973,109 @@ impl VirtualStateProcessor {
         ))
     }
 
+    /// Class panel status, bonded seats, and per-claim assignments at the tip.
+    pub fn palw_panel_network_view_v1_impl(&self) -> Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNetworkViewV1> {
+        let registry = self.palw_model_registry_v1_impl()?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let tip_daa = self.headers_store.get_header(tip).map(|h| h.daa_score).unwrap_or(0);
+        let schedule = kaspa_consensus_core::palw_panel_view_v1::PalwVerificationScheduleV1 {
+            v2: self.palw_verification_v2,
+            s3: self.palw_verification_s3,
+            s2: self.palw_verification_s2,
+        };
+        Some(kaspa_consensus_core::palw_panel_view_v1::palw_panel_network_view_v1(
+            &state,
+            state_params,
+            tip_daa,
+            &registry,
+            schedule,
+        ))
+    }
+
+    fn emit_palw_panel_notifications(&self) {
+        let want = self.notification_root.has_subscription(EventType::PalwClassReadinessChanged)
+            || self.notification_root.has_subscription(EventType::PalwPanelAssignment)
+            || self.notification_root.has_subscription(EventType::PalwPanelReceipt)
+            || self.notification_root.has_subscription(EventType::PalwPanelEligibilityChanged);
+        if !want {
+            return;
+        }
+        let Some(view) = self.palw_panel_network_view_v1_impl() else {
+            return;
+        };
+        let mut snap = self.palw_panel_notify_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        let (next, diff) = kaspa_consensus_core::palw_panel_view_v1::palw_panel_notify_diff_v1(snap.as_ref(), &view);
+        *snap = Some(next);
+        drop(snap);
+        for row in diff.readiness {
+            self.notification_root
+                .notify(Notification::PalwClassReadinessChanged(PalwClassReadinessChangedNotification {
+                    class_id: row.class_id.to_string(),
+                    model_name: row.model_name,
+                    registry_state: row.registry_state,
+                    previous_registry_state: row.previous_registry_state,
+                    ready_seats: row.ready_seats,
+                    previous_ready_seats: row.previous_ready_seats,
+                    required_ready_seats: row.required_ready_seats,
+                    bonded_seats: row.bonded_seats,
+                }))
+                .expect("expecting an open unbounded channel");
+        }
+        for row in diff.assignments {
+            self.notification_root
+                .notify(Notification::PalwPanelAssignment(PalwPanelAssignmentNotification {
+                    claim_id: row.claim_id.to_string(),
+                    class_id: row.class_id.to_string(),
+                    licensed_state: row.licensed_state.to_string(),
+                    deadline_daa: row.deadline_daa,
+                    coverage_mask: row.coverage_mask,
+                    full_seat: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(row.full_seat),
+                    valid_receipt_seats: row.valid_receipt_seats,
+                    selected_panel_seats: row.selected_panel_seats,
+                    seats: row
+                        .seats
+                        .into_iter()
+                        .map(|s| PalwPanelAssignmentSeatNotification {
+                            seat_id: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id),
+                            seat_index: s.seat_index,
+                            full_seat: s.full_seat,
+                            segment_index: s.segment_index,
+                            mask: s.mask,
+                            receipt_status: s.receipt_status.to_string(),
+                        })
+                        .collect(),
+                }))
+                .expect("expecting an open unbounded channel");
+        }
+        for row in diff.receipts {
+            self.notification_root
+                .notify(Notification::PalwPanelReceipt(PalwPanelReceiptNotification {
+                    claim_id: row.claim_id.to_string(),
+                    class_id: row.class_id.to_string(),
+                    coverage_mask: row.coverage_mask,
+                    previous_coverage_mask: row.previous_coverage_mask,
+                    valid_receipt_seats: row.valid_receipt_seats,
+                    previous_valid_receipt_seats: row.previous_valid_receipt_seats,
+                    selected_panel_seats: row.selected_panel_seats,
+                }))
+                .expect("expecting an open unbounded channel");
+        }
+        for row in diff.eligibility {
+            let (hold_code, hold_message) = row.hold.map(|h| (h.code().to_string(), h.message().to_string())).unwrap_or_default();
+            self.notification_root
+                .notify(Notification::PalwPanelEligibilityChanged(PalwPanelEligibilityChangedNotification {
+                    seat_id: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(row.seat_id),
+                    class_id: row.class_id.to_string(),
+                    eligible: row.eligible,
+                    ready: row.ready,
+                    hold_code,
+                    hold_message,
+                }))
+                .expect("expecting an open unbounded channel");
+        }
+    }
+
     /// ADR-0132: the attempt-lane claims of the tip state as the end-to-end ledger observes them.
     pub fn palw_claim_ledger_observations_v1_impl(
         &self,
@@ -5811,6 +5930,128 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// ADR-0133 S1: assemble a `ReceiptLicensedV2` from V3 receipts by coverage, past the fence.
+    pub fn palw_v2_receipt_coverage_assemble_impl(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
+        if !self.palw_verification_v2_at(self.lkg_virtual_state.load().daa_score) {
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let panel_params = self.palw_panel_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
+            Self::verify_mldsa87_with_context_bool(key, message, sig, context)
+        };
+        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3> = Vec::new();
+        let mut verdict: Option<Q> = None;
+        for candidate in candidates {
+            let mut attempt = kept.clone();
+            attempt.push(candidate.clone());
+            match kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
+                &state,
+                panel_params,
+                state_params,
+                &point,
+                network_domain,
+                &claim,
+                &attempt,
+                verify,
+                self.palw_unavailable_abstains_at(point.daa_score),
+                self.palw_admission_independence_daa(),
+            ) {
+                Ok(q) => {
+                    kept = attempt;
+                    verdict = Some(q);
+                }
+                Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. })
+                | Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::OutsiderHasNotAnswered { .. }) => {
+                    kept.push(candidate.clone());
+                }
+                Err(_) => {}
+            }
+        }
+        match verdict? {
+            Q::Licensed { .. } => {
+                Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: kept })
+            }
+            _ => None,
+        }
+    }
+
+    /// ADR-0133 S2: assemble an `OptimisticLicensed` from V3 receipts when the full-replay seat's
+    /// `Valid` is present, past the fence.
+    pub fn palw_v2_optimistic_assemble_impl(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        if !self.palw_verification_s2_at(self.lkg_virtual_state.load().daa_score) {
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let panel_params = self.palw_panel_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
+            Self::verify_mldsa87_with_context_bool(key, message, sig, context)
+        };
+        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3> = Vec::new();
+        for candidate in candidates {
+            let mut attempt = kept.clone();
+            attempt.push(candidate.clone());
+            match kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
+                &state,
+                panel_params,
+                state_params,
+                &point,
+                network_domain,
+                &claim,
+                &attempt,
+                verify,
+                self.palw_unavailable_abstains_at(point.daa_score),
+                self.palw_admission_independence_daa(),
+            ) {
+                Ok(_) | Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => kept = attempt,
+                Err(_) => {}
+            }
+        }
+        let panel = state.panel(&claim)?;
+        let seats: Vec<_> = panel.seats.iter().map(|s| s.bond).collect();
+        kaspa_consensus_core::palw_optimistic_licence_v2::palw_optimistic_receipts_license_v2(
+            panel.anchor,
+            claim,
+            &seats,
+            &kept,
+        )
+        .ok()?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed { claim, receipts: kept })
+    }
+
     pub(crate) fn palw_v2_validate_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -6616,7 +6857,7 @@ impl VirtualStateProcessor {
                             bundle.court.max_step_leaf_count(),
                         )
                     });
-                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v8(
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
@@ -6646,6 +6887,7 @@ impl VirtualStateProcessor {
                             armed: self.palw_held_context_at(point.daa_score),
                             panel_da: self.palw_panel_da_at(point.daa_score),
                         },
+                        self.palw_kimi_k3_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -7057,6 +7299,42 @@ impl VirtualStateProcessor {
                         kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Supplementary { .. } => {
                             return Err(format!("claim {claim}: supplementary receipts ride the V1 object"));
                         }
+                    }
+                }
+                Obj::OptimisticLicensed { claim, receipts } => {
+                    if !self.palw_verification_s2_at(point.daa_score) {
+                        return Err(format!("claim {claim}: an optimistic licence below Verification S2's fence (ADR-0133)"));
+                    }
+                    let Some(panel) = state.panel(claim) else {
+                        return Err(format!("claim {claim}: an optimistic licence names a claim with no panel"));
+                    };
+                    let seats: Vec<_> = panel.seats.iter().map(|s| s.bond).collect();
+                    kaspa_consensus_core::palw_optimistic_licence_v2::palw_optimistic_receipts_license_v2(
+                        panel.anchor,
+                        *claim,
+                        &seats,
+                        receipts,
+                    )
+                    .map_err(|e| format!("claim {claim}'s optimistic receipts do not license: {e}"))?;
+                    let coverage = kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
+                        state,
+                        panel_params,
+                        state_params,
+                        point,
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        claim,
+                        receipts,
+                        Self::verify_mldsa87_with_context_bool,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_admission_independence_daa(),
+                    );
+                    // Signatures and seats must still be real; the door does not require coverage.
+                    match coverage {
+                        Ok(_) | Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => {}
+                        Err(e) => return Err(format!("claim {claim}'s optimistic receipts do not verify: {e}")),
                     }
                 }
                 Obj::DefaultAccused { claim, missing_event_index, accuser, signature } => {
@@ -7963,6 +8241,19 @@ impl VirtualStateProcessor {
             round_lane: self.palw_execution_lane_at(daa_score).map(|lane| {
                 kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 {
                     schedule_span_daa: lane.schedule_span_daa_at(daa_score),
+                    execution_quantum: if self.palw_execution_quanta_at(daa_score) {
+                        kaspa_consensus_core::palw_execution_quanta_v1::PALW_EXECUTION_QUANTUM_V1
+                    } else {
+                        0
+                    },
+                    span_open_round: self
+                        .headers_store
+                        .get_timestamp(point.block)
+                        .ok()
+                        .map(|ts| {
+                            kaspa_consensus_core::palw_execution_lane_v1::palw_execution_round_v1(ts, self.genesis.timestamp)
+                        })
+                        .unwrap_or(0),
                 }
             }),
             round_permit_uses: Vec::new(),
@@ -8001,6 +8292,8 @@ impl VirtualStateProcessor {
                 .map(|fence| fence.daa_score()),
             single_lottery_active: self.palw_single_lottery_at(daa_score),
             verification_v2_active: self.palw_verification_v2_at(daa_score),
+            verification_s3_active: self.palw_verification_s3_at(daa_score),
+            verification_s2_active: self.palw_verification_s2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
             evm_actions: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
@@ -8060,6 +8353,10 @@ impl VirtualStateProcessor {
         self.palw_objective_offence.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    fn palw_execution_quanta_at(&self, daa_score: u64) -> bool {
+        self.palw_execution_quanta.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     fn palw_objective_offence_daa(&self) -> Option<u64> {
         self.palw_objective_offence
             .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
@@ -8115,6 +8412,14 @@ impl VirtualStateProcessor {
     /// ADR-0132 S: whether the single lottery is in force at `daa_score`.
     pub(super) fn palw_verification_v2_at(&self, daa_score: u64) -> bool {
         self.palw_verification_v2.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    pub(super) fn palw_verification_s3_at(&self, daa_score: u64) -> bool {
+        self.palw_verification_s3.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    pub(super) fn palw_verification_s2_at(&self, daa_score: u64) -> bool {
+        self.palw_verification_s2.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// ADR-0133 §11.2: whether the whole-artifact possession proof is in force at `daa_score`.
@@ -8193,6 +8498,10 @@ impl VirtualStateProcessor {
     /// **ADR-0102, resolved in exactly one place.**
     fn palw_token_lift_at(&self, daa_score: u64) -> bool {
         self.palw_token_lift.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    fn palw_kimi_k3_at(&self, daa_score: u64) -> bool {
+        self.palw_kimi_k3.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0093 Decision 6, resolved in exactly one place.**
@@ -11342,14 +11651,14 @@ impl VirtualStateProcessor {
         Ok((template, earliest))
     }
 
-    /// **ADR-0125: the permits of one round, as the sink's state grants them to a round block built
-    /// now.** The anchor such a block hangs from is the sink's selected parent — the chain block the
-    /// next chain block can merge it beside — so the schedule is that anchor's span's.
+    /// **ADR-0125: the permits of one round, as the selected-parent snapshot grants them to a round
+    /// block built now.** The anchor such a block hangs from is the sink's selected parent — the chain
+    /// block the next chain block can merge it beside — so the schedule is that anchor's span's.
     pub fn palw_round_view_v1(&self, round: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecRoundViewV1> {
         self.palw_round_lane_status_v1(round).map(|status| status.view)
     }
 
-    /// **ADR-0125 §7.4: the round's view, and the span it belongs to as the sink's state holds it.**
+    /// **ADR-0125 §7.4: the round's view from the selected-parent PALW snapshot**, never the store tip.
     ///
     /// The schedule reported is the one in force for the view's span — the state's `round_schedule`,
     /// written at the span's first chain block. A pending snapshot (ADR-0130: the next span's
@@ -11372,11 +11681,7 @@ impl VirtualStateProcessor {
             self.headers_store.get_daa_score(anchor).ok()?,
             span_daa,
         );
-        let state_params = self.palw_state_params_v2.as_ref()?;
-        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
-        if tip != sink {
-            return None;
-        }
+        let (_at, state) = self.palw_v2_state_at(sink)?;
         let width = lane.width_of_span_len(span, span_daa);
         let permits = state
             .round_schedule(span)
@@ -13024,6 +13329,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::SeatReadinessProved { .. } => "SeatReadinessProved",
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        O::OptimisticLicensed { .. } => "OptimisticLicensed",
         O::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         O::ObjectiveOffence { .. } => "ObjectiveOffence",
         O::ModelBuy { .. } => "ModelBuy",

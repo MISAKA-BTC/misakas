@@ -4,6 +4,7 @@
   Decisions 2–5 ride testnet-11's DAA 6,001 flag day with ADR-0124/0125/0126/0128. Decision 1 is built
   dormant and computed in shadow (Decision 8); the operator decided (2026-09-17) that λ is off at 6,001 and
   gets a height only once the shadow shows the capacity and a shorter liability lifetime exists (§3).
+* **ADR-0144 alignment (2026-09-21).** §5 deferred widenings stay deferred under 0144 item 0. See the end section.
 * Operator's direction, in the operator's words: "BPSは当分1で固定するなら、今は高速化ではなく『BPS1でも壊れ
   ない経済性・選出・settlement』を固める段階"; "一番大きい変更を1つだけ選ぶなら、まず
   `panel_exposure = max(3×claim.reserved, λ×seat_reward)`"; "その次が BPS1でのcross-round operator連続禁止、
@@ -239,3 +240,17 @@ carries one pin or it forks silently at 6,001.
 ## 8. Number hygiene
 
 0130 was free when written; the next free number is 0131.
+
+## ADR-0144 alignment (2026-09-21)
+
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) §6 item 0: do not widen
+the current economy until accounting and admission land.
+
+§5's deferred list stays deferred, and is no longer "after BPS 1 is hardened":
+
+* widths 2–10, a rolling schedule, a derived panel share, a DA/availability reward, tighter domain
+  caps, Decision 7's slash — each extends reward, admission or throughput. They wait on ADR-0144
+  items 2–3 (and on 0146 before any new economic scalar). Decision 8's λ shadow may keep measuring;
+  it does not arm a new pay table.
+* Decisions 2–6 as already implemented (width 1, the scheduler, the snapshot/seed split) stand.
+  Width stays 1.

@@ -18,6 +18,8 @@ door this ADR builds and does not walk through.
 
 > **Security amendment appended (2026-09-02)** — see the last section (SA-1…SA-6): model-written code runs on an ephemeral EVM state under a gas ceiling in a confined process; every transformer declares input/output bounds; uploaded inputs and the DSL DA election are bounded and authenticated; a `kind` with no published manifest is not storable; task graphs are never executed here.
 
+> **ADR-0144 alignment (2026-09-21).** Decision 7's door — a derivation transformer registers as a class and earns PALW leaf weight — is withdrawn unless that transformer **is** the user's local inference (P3). The derivation object stays weightless. See the end section.
+
 ## 1. The line, and why it has to be drawn
 
 ADR-0077's scope is exactly this chain of objects:
@@ -446,3 +448,20 @@ an unverifiable statement should not be storable — Decision 5's promise depend
 **SA-6 — `agent` (kind 19) and Decision 10's planning mode produce artifacts only**; ADR-0079
 Decision 8 governs. Nothing in this ADR's tooling executes a task graph, and the drill asserts it
 (ADR-0079 S10).
+
+## ADR-0144 alignment (2026-09-21)
+
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P3: the answer the user
+reads and the work the chain rewards are the same execution — not a second run, not a proof job
+beside it.
+
+* **Kept.** Decisions 1–6, 8–10: a derivation is committed; the artifact never rides; a derivation
+  credits no weight, no payment and no exposure. That is already the honest weight of a computation
+  the court cannot try, and it is the product layer this ADR exists to name.
+* **Decision 7 withdrawn as a PALW-reward door.** A mesh builder, rasterizer, simulator or hermetic
+  toolchain that runs *after* the user's inference is a second purpose. Registering it as a PALW
+  class so that "its leaves are counted work exactly as an inference does" would pay for work the
+  user did not ask the model for. The door re-opens only if the transformer **is** the user's local
+  inference — the thing they ran, on their machine, for their own use — not a derivation of its
+  output. Q-08 (which transformer becomes a family first) is therefore not an implementation item
+  for PALW weight. The object layer may still land later as a weightless product; it does not earn.

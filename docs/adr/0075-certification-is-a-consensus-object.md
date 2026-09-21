@@ -344,3 +344,10 @@ bytes decode to a `FamilyCertified` but do not hash to its declared group id is 
 slot, and the transition then refuses it — so the two are armed together or the rent is armed
 knowing that.
 
+## ADR-0144 alignment (2026-09-21)
+
+The remaining gap — `misaka-palw-gateway` still cannot read the chain's certified set — is the
+localhost `/v1` surface [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md)
+P1 puts in scope (and ADR-0077 Decision 3 already required). It is not a GPU marketplace and it
+does not wait on ADR-0101. The SDK half is already closed.
+

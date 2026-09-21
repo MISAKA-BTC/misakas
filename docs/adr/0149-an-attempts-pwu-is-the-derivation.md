@@ -132,3 +132,10 @@ finding (a) — the ceiling and the ledger pricing one claim differently — for
     `MaxPerAttempt` floor, from the gate to `safe_weight`.
 * The counterexamples — F1's decode declaration and re-tiled row, and I1's 24,572× — run in
   `palw_reward_properties_v1` against `fork_weight_past_the_bundle_v1`, which models this rule.
+
+---
+
+## Implementation (2026-09-21)
+
+ADR-0146's search reports 1.000000× — P4 does not forbid this fence. It stays `None` on every
+shipped preset. Choosing a height is a different commit (0144 item 0).

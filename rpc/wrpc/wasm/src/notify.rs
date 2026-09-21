@@ -25,6 +25,10 @@ export enum RpcEventType {
     VirtualDaaScoreChanged = "virtual-daa-score-changed",
     PruningPointUtxoSetOverride = "pruning-point-utxo-set-override",
     NewBlockTemplate = "new-block-template",
+    PalwClassReadinessChanged = "palw-class-readiness-changed",
+    PalwPanelAssignment = "palw-panel-assignment",
+    PalwPanelReceipt = "palw-panel-receipt",
+    PalwPanelEligibilityChanged = "palw-panel-eligibility-changed",
 }
 
 /**
@@ -40,7 +44,11 @@ export type RpcEventData = IBlockAdded
     | ISinkBlueScoreChanged 
     | IVirtualDaaScoreChanged 
     | IPruningPointUtxoSetOverride 
-    | INewBlockTemplate;
+    | INewBlockTemplate
+    | IPalwClassReadinessChanged
+    | IPalwPanelAssignment
+    | IPalwPanelReceipt
+    | IPalwPanelEligibilityChanged;
 
 /**
  * RPC notification event data map.
@@ -59,6 +67,10 @@ export type RpcEventMap = {
     "virtual-daa-score-changed" : IVirtualDaaScoreChanged,
     "pruning-point-utxo-set-override" : IPruningPointUtxoSetOverride,
     "new-block-template" : INewBlockTemplate,
+    "palw-class-readiness-changed" : IPalwClassReadinessChanged,
+    "palw-panel-assignment" : IPalwPanelAssignment,
+    "palw-panel-receipt" : IPalwPanelReceipt,
+    "palw-panel-eligibility-changed" : IPalwPanelEligibilityChanged,
 }
 
 /**
@@ -84,6 +96,10 @@ export type RpcEvent = {
  * {@link RpcClient.subscribeSinkBlueScoreChanged},
  * {@link RpcClient.subscribePruningPointUtxoSetOverride},
  * {@link RpcClient.subscribeNewBlockTemplate},
+ * {@link RpcClient.subscribePalwClassReadinessChanged},
+ * {@link RpcClient.subscribePalwPanelAssignment},
+ * {@link RpcClient.subscribePalwPanelReceipt},
+ * {@link RpcClient.subscribePalwPanelEligibilityChanged},
  * 
  * @category Node RPC
  */
@@ -237,6 +253,62 @@ declare! {
      * @category Node RPC
      */
     export interface INewBlockTemplate {
+        [key: string]: any;
+    }
+    "#,
+}
+
+declare! {
+    IPalwClassReadinessChanged,
+    r#"
+    /**
+     * PALW class readiness changed: ready seat count or registry state moved.
+     *
+     * @category Node RPC
+     */
+    export interface IPalwClassReadinessChanged {
+        [key: string]: any;
+    }
+    "#,
+}
+
+declare! {
+    IPalwPanelAssignment,
+    r#"
+    /**
+     * PALW panel assignment: a claim drew its seats.
+     *
+     * @category Node RPC
+     */
+    export interface IPalwPanelAssignment {
+        [key: string]: any;
+    }
+    "#,
+}
+
+declare! {
+    IPalwPanelReceipt,
+    r#"
+    /**
+     * PALW panel receipt: a selected seat's Valid was credited.
+     *
+     * @category Node RPC
+     */
+    export interface IPalwPanelReceipt {
+        [key: string]: any;
+    }
+    "#,
+}
+
+declare! {
+    IPalwPanelEligibilityChanged,
+    r#"
+    /**
+     * PALW panel eligibility changed: a bonded seat gained or lost eligibility, with a reason code.
+     *
+     * @category Node RPC
+     */
+    export interface IPalwPanelEligibilityChanged {
         [key: string]: any;
     }
     "#,

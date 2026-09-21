@@ -5,6 +5,8 @@
   against chain facts, and three pins that a Position moves only between a holder and the
   curve. Decisions 4 and 7 are stated, not built. Nothing moves on any preset: no rule verifies a
   descriptor, no fold reads one, no fence exists.
+* **ADR-0144 alignment (2026-09-21).** Unimplemented D4 / D6 / D7 steps 2–4 (anyone-serves
+  discovery and public serving) are withdrawn as PALW-reward work. See the end section.
 * Builds on: [0095](0095-a-position-is-a-membership-not-an-income.md) (a Position is a
   membership: the line declares, the chain computes the tier, a gateway reads it; §8's "a bond
   behind the promise" rejected; the reference check of §7 step 6),
@@ -184,3 +186,21 @@ Decisions 2, 3 and 5's pins — **done** (§9); the rest is Decision 7's list.
   * `consensus/core/tests/palw_adr0101_membership.rs` — Invariants 4 and 5.
   * `misaka-palw-sdk/tests/service_descriptor_signed.rs` — Invariant 3, with real keys.
   * `kaspa-evm/src/model_market.rs` — Invariant 6.
+
+## ADR-0144 alignment (2026-09-21)
+
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1: third-party
+inference serving is a non-goal. R-serve ("anyone may serve a line's holders") is a GPU marketplace
+in all but name.
+
+* **Kept.** Decisions 2, 3 and 5 as already implemented: which grant needs whom, the signed
+  descriptor a client can check against chain facts, and a Position that never moves and never
+  pays. Those pins do not require anyone to serve inference.
+* **Withdrawn as unimplemented PALW work.** Decision 4 (discovery is not chain state — well-known
+  path, mirrors, a directory). Decision 6 (serving stays unadjudicated — the marketplace's
+  enforcement model). Decision 7 steps 2–4 (the gateway serves a public descriptor, the site
+  renders checked descriptors, a directory of any transport). Step 1 (merge the 0095 membership
+  check) and step 5 (the holder mark at its own activation) are membership, not serving, and stay
+  with ADR-0095.
+* A later product that wants a marketplace is a new ADR that supersedes this alignment by name,
+  and it is not paid in PALW.

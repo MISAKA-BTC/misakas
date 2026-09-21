@@ -5684,6 +5684,1218 @@ impl Deserializer for GetPalwFreePromptPriceResponse {
     }
 }
 
+/// Why a seat or this node is not ready. `code` is the machine token; `message` is for operators.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwPanelHoldReason {
+    pub code: String,
+    pub message: String,
+}
+
+impl Serializer for RpcPalwPanelHoldReason {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.code, writer)?;
+        store!(String, &self.message, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwPanelHoldReason {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { code: load!(String, reader)?, message: load!(String, reader)? })
+    }
+}
+
+/// Chain facts for one class's panel: seat counts stay distinct.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwClassPanelStatus {
+    pub class_id: String,
+    pub model_name: String,
+    pub registry_state: String,
+    pub bonded_seats: u32,
+    pub ready_seats: u32,
+    pub required_ready_seats: u32,
+    pub selected_panel_seats: u32,
+    pub valid_receipt_seats: u32,
+    pub panel_size: u16,
+    pub receipt_quorum: u16,
+    pub full_seats_per_panel: u16,
+    pub partial_seats_per_panel: u16,
+    pub segment_count: u16,
+    pub inflight_claims: u32,
+    pub active_assignments: u32,
+    pub admission_permille: u64,
+    pub verification_mode: String,
+    pub s1_active: bool,
+    pub s1_scheduled_daa: u64,
+    pub s3_active: bool,
+    pub s3_scheduled_daa: u64,
+    pub s2_active: bool,
+    pub s2_scheduled_daa: u64,
+    /// Local RPC only: how many of this node's seats hold the class. 0 on a chain-only read.
+    pub holds_local: u32,
+    pub missing: Vec<RpcPalwPanelHoldReasonCount>,
+}
+
+impl Serializer for RpcPalwClassPanelStatus {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.model_name, writer)?;
+        store!(String, &self.registry_state, writer)?;
+        store!(u32, &self.bonded_seats, writer)?;
+        store!(u32, &self.ready_seats, writer)?;
+        store!(u32, &self.required_ready_seats, writer)?;
+        store!(u32, &self.selected_panel_seats, writer)?;
+        store!(u32, &self.valid_receipt_seats, writer)?;
+        store!(u16, &self.panel_size, writer)?;
+        store!(u16, &self.receipt_quorum, writer)?;
+        store!(u16, &self.full_seats_per_panel, writer)?;
+        store!(u16, &self.partial_seats_per_panel, writer)?;
+        store!(u16, &self.segment_count, writer)?;
+        store!(u32, &self.inflight_claims, writer)?;
+        store!(u32, &self.active_assignments, writer)?;
+        store!(u64, &self.admission_permille, writer)?;
+        store!(String, &self.verification_mode, writer)?;
+        store!(bool, &self.s1_active, writer)?;
+        store!(u64, &self.s1_scheduled_daa, writer)?;
+        store!(bool, &self.s3_active, writer)?;
+        store!(u64, &self.s3_scheduled_daa, writer)?;
+        store!(bool, &self.s2_active, writer)?;
+        store!(u64, &self.s2_scheduled_daa, writer)?;
+        store!(u32, &self.holds_local, writer)?;
+        serialize!(Vec<RpcPalwPanelHoldReasonCount>, &self.missing, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwClassPanelStatus {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            model_name: load!(String, reader)?,
+            registry_state: load!(String, reader)?,
+            bonded_seats: load!(u32, reader)?,
+            ready_seats: load!(u32, reader)?,
+            required_ready_seats: load!(u32, reader)?,
+            selected_panel_seats: load!(u32, reader)?,
+            valid_receipt_seats: load!(u32, reader)?,
+            panel_size: load!(u16, reader)?,
+            receipt_quorum: load!(u16, reader)?,
+            full_seats_per_panel: load!(u16, reader)?,
+            partial_seats_per_panel: load!(u16, reader)?,
+            segment_count: load!(u16, reader)?,
+            inflight_claims: load!(u32, reader)?,
+            active_assignments: load!(u32, reader)?,
+            admission_permille: load!(u64, reader)?,
+            verification_mode: load!(String, reader)?,
+            s1_active: load!(bool, reader)?,
+            s1_scheduled_daa: load!(u64, reader)?,
+            s3_active: load!(bool, reader)?,
+            s3_scheduled_daa: load!(u64, reader)?,
+            s2_active: load!(bool, reader)?,
+            s2_scheduled_daa: load!(u64, reader)?,
+            holds_local: load!(u32, reader)?,
+            missing: deserialize!(Vec<RpcPalwPanelHoldReasonCount>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwPanelHoldReasonCount {
+    pub code: String,
+    pub message: String,
+    pub seats: u32,
+}
+
+impl Serializer for RpcPalwPanelHoldReasonCount {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.code, writer)?;
+        store!(String, &self.message, writer)?;
+        store!(u32, &self.seats, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwPanelHoldReasonCount {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            code: load!(String, reader)?,
+            message: load!(String, reader)?,
+            seats: load!(u32, reader)?,
+        })
+    }
+}
+
+/// A bonded verifier seat as the chain recognises it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwPanelSeat {
+    pub seat_id: String,
+    pub bond_outpoint: String,
+    pub class_id: String,
+    pub ready: bool,
+    pub eligible: bool,
+    pub readiness_version: u8,
+    pub readiness_proved_daa: u64,
+    pub readiness_expires_daa: u64,
+    pub collateral_available: String,
+    pub collateral_locked: String,
+    pub assigned: u32,
+    pub hold: Option<RpcPalwPanelHoldReason>,
+}
+
+impl Serializer for RpcPalwPanelSeat {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.seat_id, writer)?;
+        store!(String, &self.bond_outpoint, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.ready, writer)?;
+        store!(bool, &self.eligible, writer)?;
+        store!(u8, &self.readiness_version, writer)?;
+        store!(u64, &self.readiness_proved_daa, writer)?;
+        store!(u64, &self.readiness_expires_daa, writer)?;
+        store!(String, &self.collateral_available, writer)?;
+        store!(String, &self.collateral_locked, writer)?;
+        store!(u32, &self.assigned, writer)?;
+        serialize!(Option<RpcPalwPanelHoldReason>, &self.hold, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwPanelSeat {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            seat_id: load!(String, reader)?,
+            bond_outpoint: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            ready: load!(bool, reader)?,
+            eligible: load!(bool, reader)?,
+            readiness_version: load!(u8, reader)?,
+            readiness_proved_daa: load!(u64, reader)?,
+            readiness_expires_daa: load!(u64, reader)?,
+            collateral_available: load!(String, reader)?,
+            collateral_locked: load!(String, reader)?,
+            assigned: load!(u32, reader)?,
+            hold: deserialize!(Option<RpcPalwPanelHoldReason>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwPanelAssignmentSeat {
+    pub seat_id: String,
+    pub seat_index: u16,
+    pub full_seat: bool,
+    pub segment_index: Option<u16>,
+    pub mask: u32,
+    pub receipt_status: String,
+    pub credited_daa: u64,
+}
+
+impl Serializer for RpcPalwPanelAssignmentSeat {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.seat_id, writer)?;
+        store!(u16, &self.seat_index, writer)?;
+        store!(bool, &self.full_seat, writer)?;
+        store!(Option<u16>, &self.segment_index, writer)?;
+        store!(u32, &self.mask, writer)?;
+        store!(String, &self.receipt_status, writer)?;
+        store!(u64, &self.credited_daa, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwPanelAssignmentSeat {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            seat_id: load!(String, reader)?,
+            seat_index: load!(u16, reader)?,
+            full_seat: load!(bool, reader)?,
+            segment_index: load!(Option<u16>, reader)?,
+            mask: load!(u32, reader)?,
+            receipt_status: load!(String, reader)?,
+            credited_daa: load!(u64, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwPanelAssignment {
+    pub claim_id: String,
+    pub class_id: String,
+    pub licensed_state: String,
+    pub deadline_daa: u64,
+    pub coverage_mask: u32,
+    pub full_seat: String,
+    pub valid_receipt_seats: u32,
+    pub selected_panel_seats: u32,
+    pub seats: Vec<RpcPalwPanelAssignmentSeat>,
+}
+
+impl Serializer for RpcPalwPanelAssignment {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.licensed_state, writer)?;
+        store!(u64, &self.deadline_daa, writer)?;
+        store!(u32, &self.coverage_mask, writer)?;
+        store!(String, &self.full_seat, writer)?;
+        store!(u32, &self.valid_receipt_seats, writer)?;
+        store!(u32, &self.selected_panel_seats, writer)?;
+        serialize!(Vec<RpcPalwPanelAssignmentSeat>, &self.seats, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwPanelAssignment {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            licensed_state: load!(String, reader)?,
+            deadline_daa: load!(u64, reader)?,
+            coverage_mask: load!(u32, reader)?,
+            full_seat: load!(String, reader)?,
+            valid_receipt_seats: load!(u32, reader)?,
+            selected_panel_seats: load!(u32, reader)?,
+            seats: deserialize!(Vec<RpcPalwPanelAssignmentSeat>, reader)?,
+        })
+    }
+}
+
+/// This node's local panel state for one class — artifact, working set, bond, proof. Not chain fact.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwLocalPanelClass {
+    pub class_id: String,
+    pub model_name: String,
+    pub seat_id: String,
+    pub artifact_loaded: bool,
+    pub artifact_root: String,
+    pub working_set_bytes: u64,
+    pub replay_capable: bool,
+    pub synced: bool,
+    pub bond_active: bool,
+    pub collateral_sompi: u64,
+    pub readiness_proof_accepted: bool,
+    pub readiness_proved_daa: u64,
+    pub chain_state: String,
+    pub assignments: u32,
+    pub hold: Option<RpcPalwPanelHoldReason>,
+}
+
+impl Serializer for RpcPalwLocalPanelClass {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.model_name, writer)?;
+        store!(String, &self.seat_id, writer)?;
+        store!(bool, &self.artifact_loaded, writer)?;
+        store!(String, &self.artifact_root, writer)?;
+        store!(u64, &self.working_set_bytes, writer)?;
+        store!(bool, &self.replay_capable, writer)?;
+        store!(bool, &self.synced, writer)?;
+        store!(bool, &self.bond_active, writer)?;
+        store!(u64, &self.collateral_sompi, writer)?;
+        store!(bool, &self.readiness_proof_accepted, writer)?;
+        store!(u64, &self.readiness_proved_daa, writer)?;
+        store!(String, &self.chain_state, writer)?;
+        store!(u32, &self.assignments, writer)?;
+        serialize!(Option<RpcPalwPanelHoldReason>, &self.hold, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwLocalPanelClass {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            model_name: load!(String, reader)?,
+            seat_id: load!(String, reader)?,
+            artifact_loaded: load!(bool, reader)?,
+            artifact_root: load!(String, reader)?,
+            working_set_bytes: load!(u64, reader)?,
+            replay_capable: load!(bool, reader)?,
+            synced: load!(bool, reader)?,
+            bond_active: load!(bool, reader)?,
+            collateral_sompi: load!(u64, reader)?,
+            readiness_proof_accepted: load!(bool, reader)?,
+            readiness_proved_daa: load!(u64, reader)?,
+            chain_state: load!(String, reader)?,
+            assignments: load!(u32, reader)?,
+            hold: deserialize!(Option<RpcPalwPanelHoldReason>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassPanelStatusRequest {
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwClassPanelStatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassPanelStatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwClassPanelStatusResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub found: bool,
+    pub status: RpcPalwClassPanelStatus,
+}
+
+impl Serializer for GetPalwClassPanelStatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.found, writer)?;
+        serialize!(RpcPalwClassPanelStatus, &self.status, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwClassPanelStatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            found: load!(bool, reader)?,
+            status: deserialize!(RpcPalwClassPanelStatus, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelSeatsRequest {
+    /// Empty: every bonded verifier seat. 128-hex or `QWEN36`: that class only.
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwPanelSeatsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelSeatsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelSeatsResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub seats: Vec<RpcPalwPanelSeat>,
+}
+
+impl Serializer for GetPalwPanelSeatsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        serialize!(Vec<RpcPalwPanelSeat>, &self.seats, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelSeatsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            seats: deserialize!(Vec<RpcPalwPanelSeat>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelStatusRequest {
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwPanelStatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelStatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelStatusResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub panel_running: bool,
+    pub panel_submitter: bool,
+    pub synced: bool,
+    pub classes: Vec<RpcPalwLocalPanelClass>,
+}
+
+impl Serializer for GetPalwPanelStatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.panel_running, writer)?;
+        store!(bool, &self.panel_submitter, writer)?;
+        store!(bool, &self.synced, writer)?;
+        serialize!(Vec<RpcPalwLocalPanelClass>, &self.classes, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelStatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            panel_running: load!(bool, reader)?,
+            panel_submitter: load!(bool, reader)?,
+            synced: load!(bool, reader)?,
+            classes: deserialize!(Vec<RpcPalwLocalPanelClass>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelAssignmentsRequest {
+    pub claim_id: String,
+    pub seat_id: String,
+}
+
+impl Serializer for GetPalwPanelAssignmentsRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.seat_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelAssignmentsRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { claim_id: load!(String, reader)?, seat_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwPanelAssignmentsResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub truncated: bool,
+    pub assignments: Vec<RpcPalwPanelAssignment>,
+}
+
+impl Serializer for GetPalwPanelAssignmentsResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.truncated, writer)?;
+        serialize!(Vec<RpcPalwPanelAssignment>, &self.assignments, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwPanelAssignmentsResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            truncated: load!(bool, reader)?,
+            assignments: deserialize!(Vec<RpcPalwPanelAssignment>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelPreflightCheck {
+    pub code: String,
+    pub ok: bool,
+    pub message: String,
+}
+
+impl Serializer for RpcPalwModelPreflightCheck {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.code, writer)?;
+        store!(bool, &self.ok, writer)?;
+        store!(String, &self.message, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelPreflightCheck {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { code: load!(String, reader)?, ok: load!(bool, reader)?, message: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelRegistration {
+    pub object_id: String,
+    pub class_id: String,
+    pub constructed: bool,
+    pub submitted: bool,
+    pub accepted: bool,
+    pub included: bool,
+    pub folded: bool,
+    pub submission_state: String,
+    pub processor_verdict: String,
+    pub reject_code: String,
+    pub mempool_accepted: bool,
+    pub included_block: String,
+    pub included_daa: u64,
+    pub registry_state: String,
+    pub transaction_id: String,
+}
+
+impl Serializer for RpcPalwModelRegistration {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.object_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.constructed, writer)?;
+        store!(bool, &self.submitted, writer)?;
+        store!(bool, &self.accepted, writer)?;
+        store!(bool, &self.included, writer)?;
+        store!(bool, &self.folded, writer)?;
+        store!(String, &self.submission_state, writer)?;
+        store!(String, &self.processor_verdict, writer)?;
+        store!(String, &self.reject_code, writer)?;
+        store!(bool, &self.mempool_accepted, writer)?;
+        store!(String, &self.included_block, writer)?;
+        store!(u64, &self.included_daa, writer)?;
+        store!(String, &self.registry_state, writer)?;
+        store!(String, &self.transaction_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelRegistration {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            object_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            constructed: load!(bool, reader)?,
+            submitted: load!(bool, reader)?,
+            accepted: load!(bool, reader)?,
+            included: load!(bool, reader)?,
+            folded: load!(bool, reader)?,
+            submission_state: load!(String, reader)?,
+            processor_verdict: load!(String, reader)?,
+            reject_code: load!(String, reader)?,
+            mempool_accepted: load!(bool, reader)?,
+            included_block: load!(String, reader)?,
+            included_daa: load!(u64, reader)?,
+            registry_state: load!(String, reader)?,
+            transaction_id: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelPreflightRequest {
+    pub object_hex: String,
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwModelPreflightRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.object_hex, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelPreflightRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { object_hex: load!(String, reader)?, class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelPreflightResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub class_id: String,
+    pub artifact_root: String,
+    pub n_ctx: u32,
+    pub layer_count: u32,
+    pub admissible: bool,
+    pub processor_verdict: String,
+    pub reject_code: String,
+    pub checks: Vec<RpcPalwModelPreflightCheck>,
+}
+
+impl Serializer for GetPalwModelPreflightResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.artifact_root, writer)?;
+        store!(u32, &self.n_ctx, writer)?;
+        store!(u32, &self.layer_count, writer)?;
+        store!(bool, &self.admissible, writer)?;
+        store!(String, &self.processor_verdict, writer)?;
+        store!(String, &self.reject_code, writer)?;
+        serialize!(Vec<RpcPalwModelPreflightCheck>, &self.checks, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelPreflightResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            class_id: load!(String, reader)?,
+            artifact_root: load!(String, reader)?,
+            n_ctx: load!(u32, reader)?,
+            layer_count: load!(u32, reader)?,
+            admissible: load!(bool, reader)?,
+            processor_verdict: load!(String, reader)?,
+            reject_code: load!(String, reader)?,
+            checks: deserialize!(Vec<RpcPalwModelPreflightCheck>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitPalwModelRegistrationRequest {
+    pub object_hex: String,
+    pub transaction_id: String,
+}
+
+impl Serializer for SubmitPalwModelRegistrationRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.object_hex, writer)?;
+        store!(String, &self.transaction_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitPalwModelRegistrationRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { object_hex: load!(String, reader)?, transaction_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitPalwModelRegistrationResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub registration: RpcPalwModelRegistration,
+    pub checks: Vec<RpcPalwModelPreflightCheck>,
+}
+
+impl Serializer for SubmitPalwModelRegistrationResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        serialize!(RpcPalwModelRegistration, &self.registration, writer)?;
+        serialize!(Vec<RpcPalwModelPreflightCheck>, &self.checks, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for SubmitPalwModelRegistrationResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            registration: deserialize!(RpcPalwModelRegistration, reader)?,
+            checks: deserialize!(Vec<RpcPalwModelPreflightCheck>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelRegistrationStatusRequest {
+    pub class_id: String,
+    pub object_id: String,
+    pub transaction_id: String,
+}
+
+impl Serializer for GetPalwModelRegistrationStatusRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.object_id, writer)?;
+        store!(String, &self.transaction_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelRegistrationStatusRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)?, object_id: load!(String, reader)?, transaction_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelRegistrationStatusResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub found: bool,
+    pub registration: RpcPalwModelRegistration,
+}
+
+impl Serializer for GetPalwModelRegistrationStatusResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.found, writer)?;
+        serialize!(RpcPalwModelRegistration, &self.registration, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelRegistrationStatusResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            found: load!(bool, reader)?,
+            registration: deserialize!(RpcPalwModelRegistration, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelRequest {
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwModelRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub found: bool,
+    pub class_id: String,
+    pub model_name: String,
+    pub n_ctx: u32,
+    pub artifact_root: String,
+    pub class_status: String,
+    pub registry_state: String,
+    pub ready_seats: u32,
+    pub required_ready_seats: u32,
+    pub inflight_claims: u32,
+    pub admission_permille: u32,
+    pub share_permille: u16,
+    pub certified_family: String,
+    pub fence_active: bool,
+    pub reason: String,
+}
+
+impl Serializer for GetPalwModelResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.model_name, writer)?;
+        store!(u32, &self.n_ctx, writer)?;
+        store!(String, &self.artifact_root, writer)?;
+        store!(String, &self.class_status, writer)?;
+        store!(String, &self.registry_state, writer)?;
+        store!(u32, &self.ready_seats, writer)?;
+        store!(u32, &self.required_ready_seats, writer)?;
+        store!(u32, &self.inflight_claims, writer)?;
+        store!(u32, &self.admission_permille, writer)?;
+        store!(u16, &self.share_permille, writer)?;
+        store!(String, &self.certified_family, writer)?;
+        store!(bool, &self.fence_active, writer)?;
+        store!(String, &self.reason, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            found: load!(bool, reader)?,
+            class_id: load!(String, reader)?,
+            model_name: load!(String, reader)?,
+            n_ctx: load!(u32, reader)?,
+            artifact_root: load!(String, reader)?,
+            class_status: load!(String, reader)?,
+            registry_state: load!(String, reader)?,
+            ready_seats: load!(u32, reader)?,
+            required_ready_seats: load!(u32, reader)?,
+            inflight_claims: load!(u32, reader)?,
+            admission_permille: load!(u32, reader)?,
+            share_permille: load!(u16, reader)?,
+            certified_family: load!(String, reader)?,
+            fence_active: load!(bool, reader)?,
+            reason: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelReadinessRequest {
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwModelReadinessRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelReadinessRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelSeatReadiness {
+    pub seat_id: String,
+    pub bond_txid: String,
+    pub bond_index: u32,
+    pub proved_daa: u64,
+    pub proved_span: u64,
+    pub expires_daa: u64,
+    pub fresh: bool,
+    pub ready: bool,
+    pub collateral_sompi: u64,
+    pub needed_collateral_sompi: u64,
+    pub not_ready_reason: String,
+}
+
+impl Serializer for RpcPalwModelSeatReadiness {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.seat_id, writer)?;
+        store!(String, &self.bond_txid, writer)?;
+        store!(u32, &self.bond_index, writer)?;
+        store!(u64, &self.proved_daa, writer)?;
+        store!(u64, &self.proved_span, writer)?;
+        store!(u64, &self.expires_daa, writer)?;
+        store!(bool, &self.fresh, writer)?;
+        store!(bool, &self.ready, writer)?;
+        store!(u64, &self.collateral_sompi, writer)?;
+        store!(u64, &self.needed_collateral_sompi, writer)?;
+        store!(String, &self.not_ready_reason, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelSeatReadiness {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            seat_id: load!(String, reader)?,
+            bond_txid: load!(String, reader)?,
+            bond_index: load!(u32, reader)?,
+            proved_daa: load!(u64, reader)?,
+            proved_span: load!(u64, reader)?,
+            expires_daa: load!(u64, reader)?,
+            fresh: load!(bool, reader)?,
+            ready: load!(bool, reader)?,
+            collateral_sompi: load!(u64, reader)?,
+            needed_collateral_sompi: load!(u64, reader)?,
+            not_ready_reason: load!(String, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelReadinessResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub found: bool,
+    pub class_id: String,
+    pub registry_state: String,
+    pub ready_seats: u32,
+    pub required_ready_seats: u32,
+    pub seats: Vec<RpcPalwModelSeatReadiness>,
+}
+
+impl Serializer for GetPalwModelReadinessResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.registry_state, writer)?;
+        store!(u32, &self.ready_seats, writer)?;
+        store!(u32, &self.required_ready_seats, writer)?;
+        serialize!(Vec<RpcPalwModelSeatReadiness>, &self.seats, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelReadinessResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            found: load!(bool, reader)?,
+            class_id: load!(String, reader)?,
+            registry_state: load!(String, reader)?,
+            ready_seats: load!(u32, reader)?,
+            required_ready_seats: load!(u32, reader)?,
+            seats: deserialize!(Vec<RpcPalwModelSeatReadiness>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelAdmissionRequest {
+    pub class_id: String,
+    pub object_hex: String,
+}
+
+impl Serializer for GetPalwModelAdmissionRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.object_hex, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelAdmissionRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)?, object_hex: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelAdmissionResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub class_id: String,
+    pub admissible: bool,
+    pub processor_verdict: String,
+    pub reject_code: String,
+    pub checks: Vec<RpcPalwModelPreflightCheck>,
+}
+
+impl Serializer for GetPalwModelAdmissionResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.admissible, writer)?;
+        store!(String, &self.processor_verdict, writer)?;
+        store!(String, &self.reject_code, writer)?;
+        serialize!(Vec<RpcPalwModelPreflightCheck>, &self.checks, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelAdmissionResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            class_id: load!(String, reader)?,
+            admissible: load!(bool, reader)?,
+            processor_verdict: load!(String, reader)?,
+            reject_code: load!(String, reader)?,
+            checks: deserialize!(Vec<RpcPalwModelPreflightCheck>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelCertificationRequest {
+    pub class_id: String,
+}
+
+impl Serializer for GetPalwModelCertificationRequest {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelCertificationRequest {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { class_id: load!(String, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RpcPalwModelCertifiedFamily {
+    pub lane: String,
+    pub digest: String,
+    pub covers: bool,
+}
+
+impl Serializer for RpcPalwModelCertifiedFamily {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.lane, writer)?;
+        store!(String, &self.digest, writer)?;
+        store!(bool, &self.covers, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for RpcPalwModelCertifiedFamily {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self { lane: load!(String, reader)?, digest: load!(String, reader)?, covers: load!(bool, reader)? })
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPalwModelCertificationResponse {
+    pub available: bool,
+    pub tip_daa: u64,
+    pub found: bool,
+    pub class_id: String,
+    pub end_to_end_certified: bool,
+    pub families: Vec<RpcPalwModelCertifiedFamily>,
+}
+
+impl Serializer for GetPalwModelCertificationResponse {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(bool, &self.available, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(bool, &self.found, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.end_to_end_certified, writer)?;
+        serialize!(Vec<RpcPalwModelCertifiedFamily>, &self.families, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for GetPalwModelCertificationResponse {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            available: load!(bool, reader)?,
+            tip_daa: load!(u64, reader)?,
+            found: load!(bool, reader)?,
+            class_id: load!(String, reader)?,
+            end_to_end_certified: load!(bool, reader)?,
+            families: deserialize!(Vec<RpcPalwModelCertifiedFamily>, reader)?,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwNodeStatusRequest {}
@@ -8484,6 +9696,239 @@ impl Deserializer for NewBlockTemplateNotification {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader)?;
         Ok(Self {})
+    }
+}
+
+macro_rules! palw_notify_command {
+    ($req:ident, $resp:ident, $doc:expr) => {
+        #[doc = $doc]
+        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        pub struct $req {
+            pub command: Command,
+        }
+        impl $req {
+            pub fn new(command: Command) -> Self {
+                Self { command }
+            }
+        }
+        impl Serializer for $req {
+            fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+                store!(u16, &1, writer)?;
+                store!(Command, &self.command, writer)?;
+                Ok(())
+            }
+        }
+        impl Deserializer for $req {
+            fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+                let _version = load!(u16, reader)?;
+                let command = load!(Command, reader)?;
+                Ok(Self { command })
+            }
+        }
+        #[derive(Clone, Debug, Serialize, Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        pub struct $resp {}
+        impl Serializer for $resp {
+            fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+                store!(u16, &1, writer)?;
+                Ok(())
+            }
+        }
+        impl Deserializer for $resp {
+            fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+                let _version = load!(u16, reader)?;
+                Ok(Self {})
+            }
+        }
+    };
+}
+
+palw_notify_command!(
+    NotifyPalwClassReadinessChangedRequest,
+    NotifyPalwClassReadinessChangedResponse,
+    "Subscribe to class ready-seat / registry-state changes."
+);
+palw_notify_command!(
+    NotifyPalwPanelAssignmentRequest,
+    NotifyPalwPanelAssignmentResponse,
+    "Subscribe to a claim drawing its S1 panel."
+);
+palw_notify_command!(
+    NotifyPalwPanelReceiptRequest,
+    NotifyPalwPanelReceiptResponse,
+    "Subscribe to a selected seat's Valid receipt being credited."
+);
+palw_notify_command!(
+    NotifyPalwPanelEligibilityChangedRequest,
+    NotifyPalwPanelEligibilityChangedResponse,
+    "Subscribe to a bonded seat becoming eligible or losing eligibility, with a reason code."
+);
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwClassReadinessChangedNotification {
+    pub class_id: String,
+    pub model_name: String,
+    pub registry_state: String,
+    pub previous_registry_state: String,
+    pub ready_seats: u32,
+    pub previous_ready_seats: u32,
+    pub required_ready_seats: u32,
+    pub bonded_seats: u32,
+}
+
+impl Serializer for PalwClassReadinessChangedNotification {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.model_name, writer)?;
+        store!(String, &self.registry_state, writer)?;
+        store!(String, &self.previous_registry_state, writer)?;
+        store!(u32, &self.ready_seats, writer)?;
+        store!(u32, &self.previous_ready_seats, writer)?;
+        store!(u32, &self.required_ready_seats, writer)?;
+        store!(u32, &self.bonded_seats, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for PalwClassReadinessChangedNotification {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            class_id: load!(String, reader)?,
+            model_name: load!(String, reader)?,
+            registry_state: load!(String, reader)?,
+            previous_registry_state: load!(String, reader)?,
+            ready_seats: load!(u32, reader)?,
+            previous_ready_seats: load!(u32, reader)?,
+            required_ready_seats: load!(u32, reader)?,
+            bonded_seats: load!(u32, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwPanelAssignmentNotification {
+    pub claim_id: String,
+    pub class_id: String,
+    pub licensed_state: String,
+    pub deadline_daa: u64,
+    pub coverage_mask: u32,
+    pub full_seat: String,
+    pub valid_receipt_seats: u32,
+    pub selected_panel_seats: u32,
+    pub seats: Vec<RpcPalwPanelAssignmentSeat>,
+}
+
+impl Serializer for PalwPanelAssignmentNotification {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(String, &self.licensed_state, writer)?;
+        store!(u64, &self.deadline_daa, writer)?;
+        store!(u32, &self.coverage_mask, writer)?;
+        store!(String, &self.full_seat, writer)?;
+        store!(u32, &self.valid_receipt_seats, writer)?;
+        store!(u32, &self.selected_panel_seats, writer)?;
+        serialize!(Vec<RpcPalwPanelAssignmentSeat>, &self.seats, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for PalwPanelAssignmentNotification {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            licensed_state: load!(String, reader)?,
+            deadline_daa: load!(u64, reader)?,
+            coverage_mask: load!(u32, reader)?,
+            full_seat: load!(String, reader)?,
+            valid_receipt_seats: load!(u32, reader)?,
+            selected_panel_seats: load!(u32, reader)?,
+            seats: deserialize!(Vec<RpcPalwPanelAssignmentSeat>, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwPanelReceiptNotification {
+    pub claim_id: String,
+    pub class_id: String,
+    pub coverage_mask: u32,
+    pub previous_coverage_mask: u32,
+    pub valid_receipt_seats: u32,
+    pub previous_valid_receipt_seats: u32,
+    pub selected_panel_seats: u32,
+}
+
+impl Serializer for PalwPanelReceiptNotification {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.claim_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(u32, &self.coverage_mask, writer)?;
+        store!(u32, &self.previous_coverage_mask, writer)?;
+        store!(u32, &self.valid_receipt_seats, writer)?;
+        store!(u32, &self.previous_valid_receipt_seats, writer)?;
+        store!(u32, &self.selected_panel_seats, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for PalwPanelReceiptNotification {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            claim_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            coverage_mask: load!(u32, reader)?,
+            previous_coverage_mask: load!(u32, reader)?,
+            valid_receipt_seats: load!(u32, reader)?,
+            previous_valid_receipt_seats: load!(u32, reader)?,
+            selected_panel_seats: load!(u32, reader)?,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwPanelEligibilityChangedNotification {
+    pub seat_id: String,
+    pub class_id: String,
+    pub eligible: bool,
+    pub ready: bool,
+    pub hold: Option<RpcPalwPanelHoldReason>,
+}
+
+impl Serializer for PalwPanelEligibilityChangedNotification {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        store!(u16, &1, writer)?;
+        store!(String, &self.seat_id, writer)?;
+        store!(String, &self.class_id, writer)?;
+        store!(bool, &self.eligible, writer)?;
+        store!(bool, &self.ready, writer)?;
+        serialize!(Option<RpcPalwPanelHoldReason>, &self.hold, writer)?;
+        Ok(())
+    }
+}
+
+impl Deserializer for PalwPanelEligibilityChangedNotification {
+    fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let _version = load!(u16, reader)?;
+        Ok(Self {
+            seat_id: load!(String, reader)?,
+            class_id: load!(String, reader)?,
+            eligible: load!(bool, reader)?,
+            ready: load!(bool, reader)?,
+            hold: deserialize!(Option<RpcPalwPanelHoldReason>, reader)?,
+        })
     }
 }
 

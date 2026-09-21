@@ -740,6 +740,9 @@ pub struct PalwSeatDutyV2 {
     /// This seat's position in the bound panel — the second input to the interval draw, so two
     /// seats of one panel open different intervals.
     pub seat_index: u8,
+    /// How many seats the bound panel has — `K = seats − 1` for Verification V2, and the assignment
+    /// is a function of this count together with the anchor.
+    pub panel_seat_count: u16,
     /// **What the chain PRICED this claim at** — the seat's only handle on "is the material I was
     /// served the work this claim was paid for".
     ///
@@ -896,6 +899,10 @@ pub struct PalwCourtDutyV2 {
     /// dispute, the root's `(m*, S*)`, the children awaiting the challenger's index — everything a
     /// party's next move is computed against, read off the chain rather than remembered.
     pub dissection: Option<crate::palw_attn_court_v1::PalwAttnDissectPhaseV1>,
+    /// ADR-0133 S1: seats on this claim's bound panel, so a close resumes the accused V2 segment
+    /// from its published checkpoint rather than from genesis. Zero when no panel is bound yet
+    /// (the bisection still runs; segment resume is then unavailable).
+    pub panel_seat_count: u16,
 }
 
 /// Every open session in which `mine` holds the executor's bond or the challenger's.
@@ -948,6 +955,7 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
             free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
             fused_class: crate::palw_state_v2::court_session_class_is_fused_v2(state, session),
             dissection: session.dissection.clone(),
+            panel_seat_count: state.panel(&session.claim).map(|panel| panel.seats.len() as u16).unwrap_or(0),
         });
     }
     out
@@ -1207,6 +1215,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
             out.push(PalwSeatDutyV2 {
                 panel_anchor: panel.anchor,
                 seat_index: seat_index as u8,
+                panel_seat_count: panel.seats.len() as u16,
                 accepted_block: claim.accepted_block,
                 claim_id: *claim_id,
                 class_id: claim.class_id,

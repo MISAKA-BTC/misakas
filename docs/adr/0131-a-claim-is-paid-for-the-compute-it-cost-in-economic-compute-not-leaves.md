@@ -3,6 +3,7 @@
 * Status: **PROPOSED 2026-09-17; Decisions 1 and 2 IMPLEMENTED the same day, in shadow** on
   `feat/palw-exec-lane-and-validator-retirement` (§7). No consensus rule, parameter or fingerprint
   moves: everything here is node-local measurement until Decision 3 gets a height.
+* **ADR-0144 alignment (2026-09-21).** Decisions 3–6 do not arm a scalar CCU until ADR-0146. See the end section.
 * Operator's direction, in the operator's words: "次に見るべきは claim数ではなく `MSK / canonical compute`";
   "PWU = fork choice / consensus work、CCU = model間の経済価格 を分離"; "M4で何秒だったかを直接consensus値に
   しない — 時間は校正用データに留めます"; "DAA補正を二重に掛けないこと"; "Producer CCUとPanel CCUを分離";
@@ -183,3 +184,18 @@ reward.
 ## 5. Number hygiene
 
 0131 was free when written; the next free number is 0132.
+
+## ADR-0144 alignment (2026-09-21)
+
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P4: reward may change
+only when verified work changes. Canonical work is a **vector**; a single scalar (MAC-eq, CCU, a
+heaviest-class unit) has not been shown to track real cost. [ADR-0146](0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md)
+is the experiment that would justify coefficients; it has not been run.
+
+* **Kept, in shadow.** Decisions 1 and 2: node-local measurement, PWU stays fork-choice work, time
+  is calibration data, producer compute and panel compute are named separately. Op 185 may keep
+  printing the census.
+* **Decisions 3–6 do not arm a scalar CCU.** The reward basis, the panel-pay measurement as a
+  consensus input, the rate, and a new model's shadow-then-price path wait on ADR-0146. Arming
+  them first would freeze the arithmetic 0144/0145 already disqualified. The 2026-09-17 "operator's,
+  after the shadow has run" schedule is withdrawn as a sufficient condition.

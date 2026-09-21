@@ -103,6 +103,21 @@ message KaspadRequest {
     GetPalwClassEconomicsRequestMessage getPalwClassEconomicsRequest = 1172;
     GetPalwModelRegistryRequestMessage getPalwModelRegistryRequest = 1174;
     GetPalwFreePromptPriceRequestMessage getPalwFreePromptPriceRequest = 1176;
+    GetPalwClassPanelStatusRequestMessage getPalwClassPanelStatusRequest = 1178;
+    GetPalwPanelSeatsRequestMessage getPalwPanelSeatsRequest = 1180;
+    GetPalwPanelStatusRequestMessage getPalwPanelStatusRequest = 1182;
+    GetPalwPanelAssignmentsRequestMessage getPalwPanelAssignmentsRequest = 1184;
+    NotifyPalwClassReadinessChangedRequestMessage notifyPalwClassReadinessChangedRequest = 1186;
+    NotifyPalwPanelAssignmentRequestMessage notifyPalwPanelAssignmentRequest = 1189;
+    NotifyPalwPanelReceiptRequestMessage notifyPalwPanelReceiptRequest = 1192;
+    NotifyPalwPanelEligibilityChangedRequestMessage notifyPalwPanelEligibilityChangedRequest = 1195;
+    GetPalwModelPreflightRequestMessage getPalwModelPreflightRequest = 1198;
+    SubmitPalwModelRegistrationRequestMessage submitPalwModelRegistrationRequest = 1200;
+    GetPalwModelRegistrationStatusRequestMessage getPalwModelRegistrationStatusRequest = 1202;
+    GetPalwModelRequestMessage getPalwModelRequest = 1204;
+    GetPalwModelReadinessRequestMessage getPalwModelReadinessRequest = 1206;
+    GetPalwModelAdmissionRequestMessage getPalwModelAdmissionRequest = 1208;
+    GetPalwModelCertificationRequestMessage getPalwModelCertificationRequest = 1210;
   }
 }
 
@@ -201,6 +216,25 @@ message KaspadResponse {
     GetPalwClassEconomicsResponseMessage getPalwClassEconomicsResponse = 1173;
     GetPalwModelRegistryResponseMessage getPalwModelRegistryResponse = 1175;
     GetPalwFreePromptPriceResponseMessage getPalwFreePromptPriceResponse = 1177;
+    GetPalwClassPanelStatusResponseMessage getPalwClassPanelStatusResponse = 1179;
+    GetPalwPanelSeatsResponseMessage getPalwPanelSeatsResponse = 1181;
+    GetPalwPanelStatusResponseMessage getPalwPanelStatusResponse = 1183;
+    GetPalwPanelAssignmentsResponseMessage getPalwPanelAssignmentsResponse = 1185;
+    NotifyPalwClassReadinessChangedResponseMessage notifyPalwClassReadinessChangedResponse = 1187;
+    PalwClassReadinessChangedNotificationMessage palwClassReadinessChangedNotification = 1188;
+    NotifyPalwPanelAssignmentResponseMessage notifyPalwPanelAssignmentResponse = 1190;
+    PalwPanelAssignmentNotificationMessage palwPanelAssignmentNotification = 1191;
+    NotifyPalwPanelReceiptResponseMessage notifyPalwPanelReceiptResponse = 1193;
+    PalwPanelReceiptNotificationMessage palwPanelReceiptNotification = 1194;
+    NotifyPalwPanelEligibilityChangedResponseMessage notifyPalwPanelEligibilityChangedResponse = 1196;
+    PalwPanelEligibilityChangedNotificationMessage palwPanelEligibilityChangedNotification = 1197;
+    GetPalwModelPreflightResponseMessage getPalwModelPreflightResponse = 1199;
+    SubmitPalwModelRegistrationResponseMessage submitPalwModelRegistrationResponse = 1201;
+    GetPalwModelRegistrationStatusResponseMessage getPalwModelRegistrationStatusResponse = 1203;
+    GetPalwModelResponseMessage getPalwModelResponse = 1205;
+    GetPalwModelReadinessResponseMessage getPalwModelReadinessResponse = 1207;
+    GetPalwModelAdmissionResponseMessage getPalwModelAdmissionResponse = 1209;
+    GetPalwModelCertificationResponseMessage getPalwModelCertificationResponse = 1211;
   }
 }
 

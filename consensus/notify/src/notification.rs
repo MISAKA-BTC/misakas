@@ -42,6 +42,18 @@ pub enum Notification {
 
     #[display(fmt = "NewBlockTemplate notification")]
     NewBlockTemplate(NewBlockTemplateNotification),
+
+    #[display(fmt = "PalwClassReadinessChanged notification: class {} ready {}/{}", "_0.class_id", "_0.ready_seats", "_0.required_ready_seats")]
+    PalwClassReadinessChanged(PalwClassReadinessChangedNotification),
+
+    #[display(fmt = "PalwPanelAssignment notification: claim {}", "_0.claim_id")]
+    PalwPanelAssignment(PalwPanelAssignmentNotification),
+
+    #[display(fmt = "PalwPanelReceipt notification: claim {} valid {}", "_0.claim_id", "_0.valid_receipt_seats")]
+    PalwPanelReceipt(PalwPanelReceiptNotification),
+
+    #[display(fmt = "PalwPanelEligibilityChanged notification: seat {} eligible {}", "_0.seat_id", "_0.eligible")]
+    PalwPanelEligibilityChanged(PalwPanelEligibilityChangedNotification),
 }
 }
 
@@ -182,3 +194,59 @@ pub struct PruningPointUtxoSetOverrideNotification {}
 
 #[derive(Debug, Clone)]
 pub struct NewBlockTemplateNotification {}
+
+#[derive(Debug, Clone)]
+pub struct PalwClassReadinessChangedNotification {
+    pub class_id: String,
+    pub model_name: String,
+    pub registry_state: String,
+    pub previous_registry_state: String,
+    pub ready_seats: u32,
+    pub previous_ready_seats: u32,
+    pub required_ready_seats: u32,
+    pub bonded_seats: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PalwPanelAssignmentSeatNotification {
+    pub seat_id: String,
+    pub seat_index: u16,
+    pub full_seat: bool,
+    pub segment_index: Option<u16>,
+    pub mask: u32,
+    pub receipt_status: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PalwPanelAssignmentNotification {
+    pub claim_id: String,
+    pub class_id: String,
+    pub licensed_state: String,
+    pub deadline_daa: u64,
+    pub coverage_mask: u32,
+    pub full_seat: String,
+    pub valid_receipt_seats: u32,
+    pub selected_panel_seats: u32,
+    pub seats: Vec<PalwPanelAssignmentSeatNotification>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PalwPanelReceiptNotification {
+    pub claim_id: String,
+    pub class_id: String,
+    pub coverage_mask: u32,
+    pub previous_coverage_mask: u32,
+    pub valid_receipt_seats: u32,
+    pub previous_valid_receipt_seats: u32,
+    pub selected_panel_seats: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct PalwPanelEligibilityChangedNotification {
+    pub seat_id: String,
+    pub class_id: String,
+    pub eligible: bool,
+    pub ready: bool,
+    pub hold_code: String,
+    pub hold_message: String,
+}

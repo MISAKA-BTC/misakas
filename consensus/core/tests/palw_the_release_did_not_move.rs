@@ -11,17 +11,18 @@
 //! with the new height and the new fingerprint written down together.
 
 use kaspa_consensus_core::config::params::{
-    MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA, palw_rc_shipped_params,
+    palw_rc_shipped_params, MAINNET_PARAMS, PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_EXECUTION_QUANTA_FENCE_DAA,
+    PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA,
 };
 
-/// **The shipped release's fingerprint, moved 2026-09-21 by ADR-0144 §9 at DAA 8,500.**
+/// **The shipped release's fingerprint, moved 2026-09-21 by ADR-0133 S3 at DAA 8,600 and S2 at DAA 8,700.**
 ///
-/// Previous (`20bf662f…` / `12e975ef…` / `554c9815…`) was the DAA clock at 7,900 plus ADR-0144 §9
-/// at 8,500. A scheduled future fence writes Some-only into the params id and the schedule id;
-/// the identity does not move (the fence normalises out until it fires).
-const T11_CONSENSUS_PARAMS_ID: &str = "8854b190978bbabd92381810a3183eb1c74864c97011b2adcda7ac714f625e23";
+/// Previous (`d0ea15c3…`) was execution quanta at 7,800 plus ADR-0144 §9 at 8,500. A scheduled
+/// future fence writes Some-only into the params id and the schedule id; the identity does not
+/// move (the fence normalises out until it fires).
+const T11_CONSENSUS_PARAMS_ID: &str = "8e1970ddbbc1a565f586329a224cf8e68b1a00bb77235698772937663e6c4288";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
-const T11_CONSENSUS_SCHEDULE_ID: &str = "7f0e6d9f2724c33c604a78286a825f83989d3ba9d5892f4e36d6dc97ce66e267";
+const T11_CONSENSUS_SCHEDULE_ID: &str = "c66bbb77d3ade3d5df4f8103c80b6f2728cda974c5105f4d6a84dac0b75b8f4b";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
 
 #[test]
@@ -83,6 +84,24 @@ fn arming_one_fence_of_the_bundle_on_the_release_is_refused() {
 
     three.palw_artifact_root_ownership = Some(ForkActivation::new(registry));
     three.validate_palw_v2().expect("with ADR-0143 at or below it, the bundle assembles");
+}
+
+/// **ADR-0144 P4 is satisfied, so 0147–0149 may arm — and the shipped release still does not.**
+/// The search in `palw_arbitrage_search_v1` reports 1.000000× weight-per-MAC across the four
+/// shipped classes. That is the gate 0146 asked for. This file still pins every bundle fence
+/// `None`: choosing a height is a different commit from knowing the height would be legal.
+#[test]
+fn p4_does_not_forbid_the_bundle_and_the_release_still_does_not_arm_it() {
+    use kaspa_consensus_core::palw_arbitrage_search_v1::{
+        palw_arbitrage_search_shipped_classes_v1, PALW_ARBITRAGE_BOUND_ARITHMETIC_V1,
+    };
+    let bound = palw_arbitrage_search_shipped_classes_v1();
+    assert_eq!(bound.weight_per_mac_spread, PALW_ARBITRAGE_BOUND_ARITHMETIC_V1);
+    assert!(bound.scalar_is_arithmetic_only, "collapsing traffic into the scalar would be a coefficient, which P4 forbids");
+    let rc = palw_rc_shipped_params();
+    assert_eq!(rc.palw_canonical_work, None);
+    assert_eq!(rc.palw_admission_independence, None);
+    assert_eq!(rc.palw_fp_derived_work, None);
 }
 
 /// **Where the new denominator reaches, and where it does not** — a self-red-team of the item 6
@@ -166,4 +185,45 @@ fn the_objective_offence_fence_is_past_the_clock() {
     assert!(!rc.palw_objective_offence_at(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA - 1));
     assert!(rc.palw_objective_offence_at(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA));
     assert_eq!(MAINNET_PARAMS.palw_objective_offence, None);
+}
+
+/// **Spend-once execution quanta ride DAA 7,800**, ~40 DAA past the live tip, so a rolling fleet
+/// can arm the mint before the first Final lands. Mainnet stays unset.
+#[test]
+fn the_execution_quanta_fence_is_past_the_clock() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    let rc = palw_rc_shipped_params();
+    assert_eq!(PALW_RC_EXECUTION_QUANTA_FENCE_DAA, 7_800);
+    assert!(PALW_RC_EXECUTION_QUANTA_FENCE_DAA > PALW_RC_ANCHOR_CLOCK_FENCE_DAA);
+    assert!(PALW_RC_EXECUTION_QUANTA_FENCE_DAA < PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA);
+    assert_eq!(rc.palw_execution_quanta, Some(ForkActivation::new(PALW_RC_EXECUTION_QUANTA_FENCE_DAA)));
+    assert!(!rc.palw_execution_quanta_at(PALW_RC_EXECUTION_QUANTA_FENCE_DAA - 1));
+    assert!(rc.palw_execution_quanta_at(PALW_RC_EXECUTION_QUANTA_FENCE_DAA));
+    assert_eq!(MAINNET_PARAMS.palw_execution_quanta, None);
+}
+
+/// **ADR-0133 S3 then S2 ride later unused heights**, so live licensing stays S1 coverage until
+/// the operator crosses them. Mainnet stays unset.
+#[test]
+fn the_verification_s3_and_s2_fences_are_past_s1_and_the_lock_ledger() {
+    use kaspa_consensus_core::config::params::{
+        ForkActivation, PALW_RC_VERIFICATION_S2_FENCE_DAA, PALW_RC_VERIFICATION_S3_FENCE_DAA, PALW_RC_VERIFICATION_V2_FENCE_DAA,
+    };
+    let rc = palw_rc_shipped_params();
+    assert_eq!(PALW_RC_VERIFICATION_V2_FENCE_DAA, 7_200);
+    assert_eq!(PALW_RC_VERIFICATION_S3_FENCE_DAA, 8_600);
+    assert_eq!(PALW_RC_VERIFICATION_S2_FENCE_DAA, 8_700);
+    assert!(PALW_RC_VERIFICATION_S3_FENCE_DAA > PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA);
+    assert!(PALW_RC_VERIFICATION_S2_FENCE_DAA > PALW_RC_VERIFICATION_S3_FENCE_DAA);
+    assert_eq!(rc.palw_verification_v2, Some(ForkActivation::new(PALW_RC_VERIFICATION_V2_FENCE_DAA)));
+    assert_eq!(rc.palw_verification_s3, Some(ForkActivation::new(PALW_RC_VERIFICATION_S3_FENCE_DAA)));
+    assert_eq!(rc.palw_verification_s2, Some(ForkActivation::new(PALW_RC_VERIFICATION_S2_FENCE_DAA)));
+    assert!(!rc.palw_verification_s3_at(PALW_RC_VERIFICATION_S3_FENCE_DAA - 1));
+    assert!(rc.palw_verification_s3_at(PALW_RC_VERIFICATION_S3_FENCE_DAA));
+    assert!(!rc.palw_verification_s2_at(PALW_RC_VERIFICATION_S2_FENCE_DAA - 1));
+    assert!(rc.palw_verification_s2_at(PALW_RC_VERIFICATION_S2_FENCE_DAA));
+    assert_eq!(MAINNET_PARAMS.palw_verification_s3, None);
+    assert_eq!(MAINNET_PARAMS.palw_verification_s2, None);
+    assert_eq!(rc.palw_kimi_k3, None, "Kimi stays fenced; fingerprint is Some-only");
+    assert_eq!(MAINNET_PARAMS.palw_kimi_k3, None);
 }

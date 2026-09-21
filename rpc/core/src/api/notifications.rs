@@ -48,6 +48,18 @@ pub enum Notification {
 
     #[display(fmt = "NewBlockTemplate notification")]
     NewBlockTemplate(NewBlockTemplateNotification),
+
+    #[display(fmt = "PalwClassReadinessChanged notification: class {} ready {}/{}", "_0.class_id", "_0.ready_seats", "_0.required_ready_seats")]
+    PalwClassReadinessChanged(PalwClassReadinessChangedNotification),
+
+    #[display(fmt = "PalwPanelAssignment notification: claim {}", "_0.claim_id")]
+    PalwPanelAssignment(PalwPanelAssignmentNotification),
+
+    #[display(fmt = "PalwPanelReceipt notification: claim {} valid {}", "_0.claim_id", "_0.valid_receipt_seats")]
+    PalwPanelReceipt(PalwPanelReceiptNotification),
+
+    #[display(fmt = "PalwPanelEligibilityChanged notification: seat {} eligible {}", "_0.seat_id", "_0.eligible")]
+    PalwPanelEligibilityChanged(PalwPanelEligibilityChangedNotification),
 }
 }
 
@@ -59,6 +71,10 @@ impl Notification {
             Notification::FinalityConflict(v) => to_value(&v),
             Notification::FinalityConflictResolved(v) => to_value(&v),
             Notification::NewBlockTemplate(v) => to_value(&v),
+            Notification::PalwClassReadinessChanged(v) => to_value(&v),
+            Notification::PalwPanelAssignment(v) => to_value(&v),
+            Notification::PalwPanelReceipt(v) => to_value(&v),
+            Notification::PalwPanelEligibilityChanged(v) => to_value(&v),
             Notification::PruningPointUtxoSetOverride(v) => to_value(&v),
             Notification::UtxosChanged(v) => to_value(&v),
             Notification::VirtualDaaScoreChanged(v) => to_value(&v),
@@ -158,6 +174,22 @@ impl Serializer for Notification {
                 store!(u16, &8, writer)?;
                 serialize!(NewBlockTemplateNotification, notification, writer)?;
             }
+            Notification::PalwClassReadinessChanged(notification) => {
+                store!(u16, &9, writer)?;
+                serialize!(PalwClassReadinessChangedNotification, notification, writer)?;
+            }
+            Notification::PalwPanelAssignment(notification) => {
+                store!(u16, &10, writer)?;
+                serialize!(PalwPanelAssignmentNotification, notification, writer)?;
+            }
+            Notification::PalwPanelReceipt(notification) => {
+                store!(u16, &11, writer)?;
+                serialize!(PalwPanelReceiptNotification, notification, writer)?;
+            }
+            Notification::PalwPanelEligibilityChanged(notification) => {
+                store!(u16, &12, writer)?;
+                serialize!(PalwPanelEligibilityChangedNotification, notification, writer)?;
+            }
         }
         Ok(())
     }
@@ -202,6 +234,22 @@ impl Deserializer for Notification {
             8 => {
                 let notification = deserialize!(NewBlockTemplateNotification, reader)?;
                 Ok(Notification::NewBlockTemplate(notification))
+            }
+            9 => {
+                let notification = deserialize!(PalwClassReadinessChangedNotification, reader)?;
+                Ok(Notification::PalwClassReadinessChanged(notification))
+            }
+            10 => {
+                let notification = deserialize!(PalwPanelAssignmentNotification, reader)?;
+                Ok(Notification::PalwPanelAssignment(notification))
+            }
+            11 => {
+                let notification = deserialize!(PalwPanelReceiptNotification, reader)?;
+                Ok(Notification::PalwPanelReceipt(notification))
+            }
+            12 => {
+                let notification = deserialize!(PalwPanelEligibilityChangedNotification, reader)?;
+                Ok(Notification::PalwPanelEligibilityChanged(notification))
             }
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid variant")),
         }

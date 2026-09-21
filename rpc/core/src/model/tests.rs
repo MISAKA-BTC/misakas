@@ -1554,6 +1554,115 @@ mod mockery {
 
     test!(NewBlockTemplateNotification);
 
+    impl Mock for NotifyPalwClassReadinessChangedRequest {
+        fn mock() -> Self {
+            NotifyPalwClassReadinessChangedRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwClassReadinessChangedRequest);
+    impl Mock for NotifyPalwClassReadinessChangedResponse {
+        fn mock() -> Self {
+            NotifyPalwClassReadinessChangedResponse {}
+        }
+    }
+    test!(NotifyPalwClassReadinessChangedResponse);
+    impl Mock for PalwClassReadinessChangedNotification {
+        fn mock() -> Self {
+            PalwClassReadinessChangedNotification {
+                class_id: mock_hex(),
+                model_name: "QWEN36".to_string(),
+                registry_state: "Probation".to_string(),
+                previous_registry_state: "Prefetching".to_string(),
+                ready_seats: 7,
+                previous_ready_seats: 6,
+                required_ready_seats: 7,
+                bonded_seats: 8,
+            }
+        }
+    }
+    test!(PalwClassReadinessChangedNotification);
+
+    impl Mock for NotifyPalwPanelAssignmentRequest {
+        fn mock() -> Self {
+            NotifyPalwPanelAssignmentRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwPanelAssignmentRequest);
+    impl Mock for NotifyPalwPanelAssignmentResponse {
+        fn mock() -> Self {
+            NotifyPalwPanelAssignmentResponse {}
+        }
+    }
+    test!(NotifyPalwPanelAssignmentResponse);
+    impl Mock for PalwPanelAssignmentNotification {
+        fn mock() -> Self {
+            PalwPanelAssignmentNotification {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                licensed_state: "panelBound".to_string(),
+                deadline_daa: mock(),
+                coverage_mask: mock(),
+                full_seat: format!("{}:0", mock_hex()),
+                valid_receipt_seats: mock(),
+                selected_panel_seats: mock(),
+                seats: mock(),
+            }
+        }
+    }
+    test!(PalwPanelAssignmentNotification);
+
+    impl Mock for NotifyPalwPanelReceiptRequest {
+        fn mock() -> Self {
+            NotifyPalwPanelReceiptRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwPanelReceiptRequest);
+    impl Mock for NotifyPalwPanelReceiptResponse {
+        fn mock() -> Self {
+            NotifyPalwPanelReceiptResponse {}
+        }
+    }
+    test!(NotifyPalwPanelReceiptResponse);
+    impl Mock for PalwPanelReceiptNotification {
+        fn mock() -> Self {
+            PalwPanelReceiptNotification {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                coverage_mask: mock(),
+                previous_coverage_mask: mock(),
+                valid_receipt_seats: mock(),
+                previous_valid_receipt_seats: mock(),
+                selected_panel_seats: mock(),
+            }
+        }
+    }
+    test!(PalwPanelReceiptNotification);
+
+    impl Mock for NotifyPalwPanelEligibilityChangedRequest {
+        fn mock() -> Self {
+            NotifyPalwPanelEligibilityChangedRequest { command: Command::Start }
+        }
+    }
+    test!(NotifyPalwPanelEligibilityChangedRequest);
+    impl Mock for NotifyPalwPanelEligibilityChangedResponse {
+        fn mock() -> Self {
+            NotifyPalwPanelEligibilityChangedResponse {}
+        }
+    }
+    test!(NotifyPalwPanelEligibilityChangedResponse);
+    impl Mock for PalwPanelEligibilityChangedNotification {
+        fn mock() -> Self {
+            PalwPanelEligibilityChangedNotification {
+                seat_id: format!("{}:0", mock_hex()),
+                class_id: mock_hex(),
+                eligible: mock(),
+                ready: mock(),
+                hold: mock(),
+            }
+        }
+    }
+    test!(PalwPanelEligibilityChangedNotification);
+
     impl Mock for SubscribeResponse {
         fn mock() -> Self {
             SubscribeResponse::new(mock())
@@ -1868,6 +1977,191 @@ mod mockery {
     }
 
     test!(GetPalwFreePromptPriceResponse);
+
+    impl Mock for RpcPalwPanelHoldReason {
+        fn mock() -> Self {
+            RpcPalwPanelHoldReason { code: "NO_ARTIFACT".to_string(), message: "this node does not hold a converted artifact".to_string() }
+        }
+    }
+    test!(RpcPalwPanelHoldReason);
+
+    impl Mock for RpcPalwPanelHoldReasonCount {
+        fn mock() -> Self {
+            RpcPalwPanelHoldReasonCount { code: "NO_ARTIFACT".to_string(), message: "this node does not hold a converted artifact".to_string(), seats: mock() }
+        }
+    }
+    test!(RpcPalwPanelHoldReasonCount);
+
+    impl Mock for RpcPalwClassPanelStatus {
+        fn mock() -> Self {
+            RpcPalwClassPanelStatus {
+                class_id: mock_hex(),
+                model_name: "QWEN36".to_string(),
+                registry_state: "Probation".to_string(),
+                bonded_seats: mock(),
+                ready_seats: mock(),
+                required_ready_seats: mock(),
+                selected_panel_seats: mock(),
+                valid_receipt_seats: mock(),
+                panel_size: mock(),
+                receipt_quorum: mock(),
+                full_seats_per_panel: mock(),
+                partial_seats_per_panel: mock(),
+                segment_count: mock(),
+                inflight_claims: mock(),
+                active_assignments: mock(),
+                admission_permille: mock(),
+                verification_mode: "s1".to_string(),
+                s1_active: mock(),
+                s1_scheduled_daa: mock(),
+                s3_active: mock(),
+                s3_scheduled_daa: mock(),
+                s2_active: mock(),
+                s2_scheduled_daa: mock(),
+                holds_local: mock(),
+                missing: mock(),
+            }
+        }
+    }
+    test!(RpcPalwClassPanelStatus);
+
+    impl Mock for RpcPalwPanelSeat {
+        fn mock() -> Self {
+            RpcPalwPanelSeat {
+                seat_id: format!("{}:0", mock_hex()),
+                bond_outpoint: format!("{}:0", mock_hex()),
+                class_id: mock_hex(),
+                ready: mock(),
+                eligible: mock(),
+                readiness_version: mock(),
+                readiness_proved_daa: mock(),
+                readiness_expires_daa: mock(),
+                collateral_available: "124000000000".to_string(),
+                collateral_locked: "0".to_string(),
+                assigned: mock(),
+                hold: mock(),
+            }
+        }
+    }
+    test!(RpcPalwPanelSeat);
+
+    impl Mock for RpcPalwPanelAssignmentSeat {
+        fn mock() -> Self {
+            RpcPalwPanelAssignmentSeat {
+                seat_id: format!("{}:0", mock_hex()),
+                seat_index: mock(),
+                full_seat: mock(),
+                segment_index: mock(),
+                mask: mock(),
+                receipt_status: "valid".to_string(),
+                credited_daa: mock(),
+            }
+        }
+    }
+    test!(RpcPalwPanelAssignmentSeat);
+
+    impl Mock for RpcPalwPanelAssignment {
+        fn mock() -> Self {
+            RpcPalwPanelAssignment {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                licensed_state: "panelBound".to_string(),
+                deadline_daa: mock(),
+                coverage_mask: mock(),
+                full_seat: format!("{}:0", mock_hex()),
+                valid_receipt_seats: mock(),
+                selected_panel_seats: mock(),
+                seats: mock(),
+            }
+        }
+    }
+    test!(RpcPalwPanelAssignment);
+
+    impl Mock for RpcPalwLocalPanelClass {
+        fn mock() -> Self {
+            RpcPalwLocalPanelClass {
+                class_id: mock_hex(),
+                model_name: "QWEN36".to_string(),
+                seat_id: format!("{}:2", mock_hex()),
+                artifact_loaded: mock(),
+                artifact_root: mock_hex(),
+                working_set_bytes: mock(),
+                replay_capable: mock(),
+                synced: mock(),
+                bond_active: mock(),
+                collateral_sompi: mock(),
+                readiness_proof_accepted: mock(),
+                readiness_proved_daa: mock(),
+                chain_state: "READY".to_string(),
+                assignments: mock(),
+                hold: mock(),
+            }
+        }
+    }
+    test!(RpcPalwLocalPanelClass);
+
+    impl Mock for GetPalwClassPanelStatusRequest {
+        fn mock() -> Self {
+            GetPalwClassPanelStatusRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwClassPanelStatusRequest);
+
+    impl Mock for GetPalwClassPanelStatusResponse {
+        fn mock() -> Self {
+            GetPalwClassPanelStatusResponse { available: mock(), tip_daa: mock(), found: mock(), status: mock() }
+        }
+    }
+    test!(GetPalwClassPanelStatusResponse);
+
+    impl Mock for GetPalwPanelSeatsRequest {
+        fn mock() -> Self {
+            GetPalwPanelSeatsRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwPanelSeatsRequest);
+
+    impl Mock for GetPalwPanelSeatsResponse {
+        fn mock() -> Self {
+            GetPalwPanelSeatsResponse { available: mock(), tip_daa: mock(), seats: mock() }
+        }
+    }
+    test!(GetPalwPanelSeatsResponse);
+
+    impl Mock for GetPalwPanelStatusRequest {
+        fn mock() -> Self {
+            GetPalwPanelStatusRequest { class_id: mock_hex() }
+        }
+    }
+    test!(GetPalwPanelStatusRequest);
+
+    impl Mock for GetPalwPanelStatusResponse {
+        fn mock() -> Self {
+            GetPalwPanelStatusResponse {
+                available: mock(),
+                tip_daa: mock(),
+                panel_running: mock(),
+                panel_submitter: mock(),
+                synced: mock(),
+                classes: mock(),
+            }
+        }
+    }
+    test!(GetPalwPanelStatusResponse);
+
+    impl Mock for GetPalwPanelAssignmentsRequest {
+        fn mock() -> Self {
+            GetPalwPanelAssignmentsRequest { claim_id: mock_hex(), seat_id: format!("{}:0", mock_hex()) }
+        }
+    }
+    test!(GetPalwPanelAssignmentsRequest);
+
+    impl Mock for GetPalwPanelAssignmentsResponse {
+        fn mock() -> Self {
+            GetPalwPanelAssignmentsResponse { available: mock(), tip_daa: mock(), truncated: mock(), assignments: mock() }
+        }
+    }
+    test!(GetPalwPanelAssignmentsResponse);
 
     impl Mock for RpcPalwModelLifecycle {
         fn mock() -> Self {

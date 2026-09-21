@@ -401,6 +401,11 @@ where
                 execution_root: commitment.execution_root,
                 trace_chunk_count: commitment.trace_chunk_count,
                 trace_retention_daa: commitment.trace_retention_daa,
+                // ADR-0145 §6: a V3 payload that names no prefix-STATE is genesis. The object
+                // is hashed into nothing; the rule that prices KvReused sits in the transition
+                // past `palw_fp_derived_work`. A later payload version that carries the object
+                // is how Studio names a local cache on the wire.
+                consumed_prefix_state: payload.consumed_prefix_state_v1(),
             },
         });
     }

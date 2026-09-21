@@ -11,9 +11,7 @@
 //! Registry floor stays the producer floor. Panel eligibility is a dynamic predicate on
 //! *available* slashable collateral, not a raised `min_collateral_sompi`.
 
-use crate::palw_offence_v1::{
-    palw_min_slashable_per_colluding_seat_v1, PALW_PANEL_COLLUDING_QUORUM_V1,
-};
+use crate::palw_offence_v1::{PALW_PANEL_COLLUDING_QUORUM_V1, palw_min_slashable_per_colluding_seat_v1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwClaimStateV2, PalwVoidReasonV2};
 use crate::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
@@ -114,8 +112,7 @@ pub fn palw_smallest_colluding_var_v1(available_of_drawn_seats: &[u128], quorum:
 
 /// Drawn panel is admissible only if the cheapest colluding subset out-values the claim.
 pub fn palw_drawn_panel_covers_v1(available_of_drawn_seats: &[u128], facts: &PalwClaimFraudFactsV1) -> bool {
-    palw_smallest_colluding_var_v1(available_of_drawn_seats, PALW_PANEL_COLLUDING_QUORUM_V1 as usize)
-        > palw_max_fraud_gain_v1(facts)
+    palw_smallest_colluding_var_v1(available_of_drawn_seats, PALW_PANEL_COLLUDING_QUORUM_V1 as usize) > palw_max_fraud_gain_v1(facts)
 }
 
 /// One live lock of slashable collateral against one claim, held until `expiry_daa`.
@@ -161,11 +158,7 @@ pub fn palw_liability_still_locks_v1(record: &PalwPanelLiabilityRecordV1, now_da
 }
 
 /// Producer-withholding / court-fraud bind after the claim row retires.
-pub fn palw_liability_matches_void_v1(
-    record: &PalwPanelLiabilityRecordV1,
-    reason: PalwVoidReasonV2,
-    voided_daa: u64,
-) -> bool {
+pub fn palw_liability_matches_void_v1(record: &PalwPanelLiabilityRecordV1, reason: PalwVoidReasonV2, voided_daa: u64) -> bool {
     record.voided_daa == Some(voided_daa) && record.void_reason == Some(reason)
 }
 
@@ -192,14 +185,7 @@ impl PalwSlashableExposureLedgerV1 {
     }
 
     /// Lock `required` against `claim` if the seat has the headroom. False = not eligible.
-    pub fn try_lock_valid(
-        &mut self,
-        bond: PalwBondKeyV2,
-        claim: Hash64,
-        required: u128,
-        expiry_daa: u64,
-        now_daa: u64,
-    ) -> bool {
+    pub fn try_lock_valid(&mut self, bond: PalwBondKeyV2, claim: Hash64, required: u128, expiry_daa: u64, now_daa: u64) -> bool {
         if self.locks.contains_key(&(bond, claim)) {
             return true;
         }
@@ -296,13 +282,7 @@ mod tests {
     }
 
     fn facts(reserved: u128, escrow: u64, pwu: u64, slash: u64) -> PalwClaimFraudFactsV1 {
-        PalwClaimFraudFactsV1 {
-            reserved,
-            escrowed_reward: escrow,
-            pwu,
-            slash_value_per_pwu: slash,
-            extra_economic_rights_sompi: 0,
-        }
+        PalwClaimFraudFactsV1 { reserved, escrowed_reward: escrow, pwu, slash_value_per_pwu: slash, extra_economic_rights_sompi: 0 }
     }
 
     #[test]
@@ -462,15 +442,9 @@ mod tests {
         for (kind, class) in rows {
             assert_eq!(palw_classify_valid_falsity_v1(kind), class, "{kind:?}");
         }
-        let holes: Vec<_> = rows
-            .iter()
-            .filter(|(_, c)| *c == ObjectiveProofExistsButNotPanelFalseValidPayload)
-            .map(|(k, _)| *k)
-            .collect();
-        assert!(
-            holes.is_empty(),
-            "every objective Invalid is structural-reject or a PanelFalseValid payload; leftover {holes:?}"
-        );
+        let holes: Vec<_> =
+            rows.iter().filter(|(_, c)| *c == ObjectiveProofExistsButNotPanelFalseValidPayload).map(|(k, _)| *k).collect();
+        assert!(holes.is_empty(), "every objective Invalid is structural-reject or a PanelFalseValid payload; leftover {holes:?}");
         use crate::palw_offence_v1::PalwPanelContradictionV1 as Contradiction;
         let disc = |c: Contradiction| borsh::to_vec(&c).expect("contradiction serializes")[0];
         assert_eq!(disc(Contradiction::ProducerWithholding { voided_daa: 1 }), 2, "DA-while-Valid");
@@ -488,10 +462,7 @@ mod tests {
         assert_eq!(palw_claim_extra_economic_rights_v1(&sample_claim()), 0);
         let derived = PalwClaimFraudFactsV1::from_claim(&sample_claim(), 5);
         assert_eq!(derived.extra_economic_rights_sompi, 0);
-        assert_eq!(
-            palw_max_fraud_gain_v1(&derived),
-            derived.escrowed_reward as u128 + palw_fork_weight_sompi_v1(derived.pwu, 5)
-        );
+        assert_eq!(palw_max_fraud_gain_v1(&derived), derived.escrowed_reward as u128 + palw_fork_weight_sompi_v1(derived.pwu, 5));
     }
 
     fn sample_claim() -> crate::palw_state_v2::PalwClaimStateV2 {

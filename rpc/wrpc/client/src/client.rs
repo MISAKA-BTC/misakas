@@ -76,6 +76,10 @@ impl Inner {
             RpcApiOps::VirtualDaaScoreChangedNotification,
             RpcApiOps::PruningPointUtxoSetOverrideNotification,
             RpcApiOps::NewBlockTemplateNotification,
+            RpcApiOps::PalwClassReadinessChangedNotification,
+            RpcApiOps::PalwPanelAssignmentNotification,
+            RpcApiOps::PalwPanelReceiptNotification,
+            RpcApiOps::PalwPanelEligibilityChangedNotification,
         ]
         .into_iter()
         .for_each(|notification_op| {
@@ -687,6 +691,17 @@ impl RpcApi for KaspaRpcClient {
             GetPalwClassEconomics,
             GetPalwModelRegistry,
             GetPalwFreePromptPrice,
+            GetPalwClassPanelStatus,
+            GetPalwPanelSeats,
+            GetPalwPanelStatus,
+            GetPalwPanelAssignments,
+            GetPalwModelPreflight,
+            SubmitPalwModelRegistration,
+            GetPalwModelRegistrationStatus,
+            GetPalwModel,
+            GetPalwModelReadiness,
+            GetPalwModelAdmission,
+            GetPalwModelCertification,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,

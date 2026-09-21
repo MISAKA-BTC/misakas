@@ -558,6 +558,22 @@ pub struct PalwNodeRuntimeV1 {
     pub last_draw_unix: u64,
     pub panel_running: bool,
     pub panel_submitter: bool,
+    /// Per-class facts this node's panel last published: artifact, working set, replay, hold.
+    pub panel_classes: Vec<PalwLocalPanelClassV1>,
+}
+
+/// One class this node's panel is (or is not) serving.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwLocalPanelClassV1 {
+    pub class_id: String,
+    pub model_name: String,
+    pub seat_id: String,
+    pub artifact_loaded: bool,
+    pub artifact_root: String,
+    pub working_set_bytes: u64,
+    pub replay_capable: bool,
+    pub hold_code: String,
+    pub hold_message: String,
 }
 
 impl PalwNodeRuntimeV1 {

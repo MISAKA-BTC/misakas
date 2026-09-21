@@ -13518,6 +13518,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
             execution_root: h64(43),
             trace_chunk_count: 4,
             trace_retention_daa: 999_999,
+            consumed_prefix_state: kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(base_class),
         };
         let (s2, _) = apply_palw_transition_v2(&s1, &inj_params, &cx(2, 2, 2), &[commit], None).unwrap();
         let seats = vec![PalwPanelSeatV2 { bond: harness_bond_key, operator_id: h64(90) }];
@@ -13938,6 +13939,7 @@ fn adr0125_config_funded_for(
                 schedule_span_daa: 1_000,
                 short_span: PalwExecSpanShortV1::NONE,
             });
+            p.palw_execution_quanta = Some(ForkActivation::always());
         })
         .build();
     config.params.validate_palw_v2().expect("the fixture bundle with the lane is a runnable ruleset");
@@ -14341,7 +14343,10 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
         false,
         false,
         &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
-            round_lane: Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: 1_000 }),
+            round_lane: Some(kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 {
+                schedule_span_daa: 1_000,
+                ..Default::default()
+            }),
             ..Default::default()
         },
     )
@@ -14545,6 +14550,107 @@ async fn adr0130_a_span_is_seeded_at_its_first_block_from_the_anchor_of_the_span
     ctx.validate_and_insert_block(merging.block.clone().to_immutable()).await.assert_valid_utxo_tip();
     let (_, merged) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
     assert!(merged.round_permit_used(span + 1, round, 0), "the merging block granted the permit the seeded schedule wrote");
+}
+
+/// **Execution quanta through the pipeline:** a planted Final with 500k CanonicalWork mints five
+/// spend-once tickets onto distinct future 1-second rounds. One of those rounds produces an algo-10
+/// block; the merging chain block consumes that quantum and leaves the siblings unspent.
+#[tokio::test]
+async fn execution_quanta_turn_one_final_into_n_algo10_round_permits() {
+    use kaspa_consensus_core::config::params::PalwExecutionLaneV1;
+    use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, palw_execution_permits_v1, palw_execution_span_v1};
+    use kaspa_consensus_core::palw_execution_quanta_v1::PALW_EXECUTION_QUANTUM_V1;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    const SPAN: u64 = 4;
+    let (mut config, bundle) = adr0125_config_funded_for(24);
+    {
+        let lane = config.params.palw_execution_lane.as_mut().expect("the fixture arms the lane");
+        *lane = PalwExecutionLaneV1 { schedule_span_daa: SPAN, ..*lane };
+    }
+    config.params.validate_palw_v2().expect("a lane with short spans is runnable");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let genesis_ts = config.params.genesis.timestamp;
+    let sink0 = ctx.consensus.get_sink();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert_eq!(tip, sink0);
+    let bond = state.bond(&adr0125_harness_bond()).expect("row 0").clone();
+    let payout = p2pkh_mldsa87_spk(bond.payout_payload.as_byte_slice());
+    let span = palw_execution_span_v1(vp.headers_store.get_daa_score(sink0).unwrap(), SPAN);
+    let snapshot = kaspa_consensus_core::palw_execution_lane_v1::palw_execution_schedule_snapshot_v1(
+        span + 1,
+        &[
+            PalwExecFinalV1 {
+                domain: bundle.base_class_id,
+                bond: adr0125_harness_bond(),
+                operator_id: bond.operator_id,
+                claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
+                execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+                credit: 500_000,
+            },
+            PalwExecFinalV1 {
+                domain: bundle.base_class_id,
+                bond: adr0125_harness_bond(),
+                operator_id: bond.operator_id,
+                claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A2),
+                execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
+                credit: 500_000,
+            },
+        ],
+    );
+    let planted = {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.round_pending.insert(span + 1, snapshot.clone());
+        carriage.into_state(&bundle.state, None).expect("a carriage with a pending snapshot rebuilds")
+    };
+    vp.palw_state_v2_store.write().set_tip_for_tests(sink0, &planted).unwrap();
+
+    let (opening, state_after) = loop {
+        ctx.simulated_time += config.params.target_time_per_block();
+        let block = ctx.build_block_template(60, ctx.simulated_time);
+        ctx.validate_and_insert_block(block.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+        let hash = block.block.header.hash;
+        let (_, next) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+        if palw_execution_span_v1(vp.headers_store.get_daa_score(hash).unwrap(), SPAN) > span {
+            break (hash, next);
+        }
+    };
+    let _ = opening;
+    let schedule = state_after.round_schedule(span + 1).expect("the span's first block schedules it").clone();
+    assert_eq!(
+        schedule.quanta.len(),
+        (500_000 / PALW_EXECUTION_QUANTUM_V1) as usize,
+        "copies of one execution_root do not multiply; 500k / 100k is five tickets, got {}",
+        schedule.quanta.len()
+    );
+    assert_eq!(
+        schedule.quanta.iter().map(|q| q.scheduled_round).collect::<std::collections::BTreeSet<_>>().len(),
+        5,
+        "each quantum owns a unique round"
+    );
+    let first = schedule.quanta[0];
+    let round = first.scheduled_round;
+    assert_eq!(
+        palw_execution_permits_v1(&schedule, round, 1).iter().map(|p| p.bond).collect::<Vec<_>>(),
+        vec![adr0125_harness_bond()]
+    );
+    ctx.simulated_time += config.params.target_time_per_block();
+    let after = ctx.build_block_template(61, ctx.simulated_time);
+    ctx.validate_and_insert_block(after.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let e1 = adr0125_round_block(&ctx, &config, round, 0, payout.clone(), 0);
+    let e1_hash = e1.header.hash;
+    ctx.consensus.validate_and_insert_block(e1.to_immutable()).virtual_state_task.await.expect("a signed round block is valid");
+    ctx.simulated_time = ctx.simulated_time.max(genesis_ts + round * 1_000) + config.params.target_time_per_block();
+    let merging = ctx.build_block_template(62, ctx.simulated_time);
+    assert!(merging.block.header.direct_parents().contains(&e1_hash), "virtual offers the quantum's round tip");
+    ctx.validate_and_insert_block(merging.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let (_, merged) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    assert!(merged.round_permit_used(span + 1, round, 0), "consuming the quantum is a tombstone");
+    let sibling = schedule.quanta[1].scheduled_round;
+    assert!(!merged.round_permit_used(span + 1, sibling, 0), "a sibling quantum is still live");
 }
 
 /// **ADR-0130 through the pipeline: an operator does not hold two consecutive rounds, and the round

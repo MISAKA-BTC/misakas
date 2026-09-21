@@ -75,18 +75,37 @@ impl PalwBackendRegistry {
         self.sdk.resolve(class_id, artifact_root, &self.holdings)
     }
 
-    /// **The bytes on disk of the holding that serves THIS class** (H-4 of the 2026-09-18 audit).
+    /// **The bytes a replay of THIS class will actually hold** (H-4 of the 2026-09-18 audit,
+    /// ADR-0112 for the mmap tier).
+    ///
     /// The resolver is the only thing that knows which holding answers a (class, root), so each
-    /// holding is offered on its own and the one that resolves is the one whose file the replay
-    /// will page in. `None` when no holding serves the class — the caller then has no per-class
+    /// holding is offered on its own and the one that resolves is the one whose pages the replay
+    /// will touch. `None` when no holding serves the class — the caller then has no per-class
     /// figure and falls back to its conservative one.
+    ///
+    /// A Qwen3.6 mmap holding under a residency budget pages the always-set plus routed experts,
+    /// not the 34 GiB file. Pricing the replay on `metadata.len()` made every 23 GiB testnet-11
+    /// seat defer QWEN36 forever (`class needs 34.49 GiB` against a ~13 GiB budget) even after the
+    /// process had already pinned ~6 GiB. Dense holdings still report the file: they decode it.
     pub fn holding_bytes_for_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<u64> {
         self.holdings
             .iter()
             .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
-            .and_then(|holding| holding.path.as_ref())
-            .and_then(|path| std::fs::metadata(path).ok())
-            .map(|meta| meta.len())
+            .and_then(holding_replay_bytes_v1)
+    }
+
+    /// **Bytes a replay of this class still has to take from MemAvailable.**
+    ///
+    /// A Qwen3.6 holding with ADR-0112 residency has already pinned its budget in this process.
+    /// Charging `budget_bytes` again against `MemAvailable` made every 23 GiB seat that had just
+    /// mapped QWEN36 defer it (`class needs 6.50 GiB` against a ~3 GiB leftover budget) — the
+    /// always-set was already in RSS. A page-cache or dense holding still reports the file, which
+    /// is what a replay will fault in.
+    pub fn incremental_replay_bytes_for_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<u64> {
+        self.holdings
+            .iter()
+            .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
+            .and_then(incremental_replay_bytes_v1)
     }
 
     /// **Resolve through the tables, then — armed — through the chain's own registration**
@@ -642,6 +661,29 @@ pub const PALW_REPLAY_BUDGET_PERMILLE_V1: u64 = 700;
 /// artifact this build no longer makes).
 pub const PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1: u64 = 512 << 20;
 
+/// **What a replay of this holding will hold on this host.**
+///
+/// A Qwen3.6 mapping with ADR-0112 residency reports the budget it already pinned. Every other
+/// holding — dense decode, or a mapping the page cache decides — reports the file, which is what
+/// the kernel will page in.
+pub fn holding_replay_bytes_v1(holding: &PalwLoadedArtifactV1) -> Option<u64> {
+    if let Some(stats) = misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding) {
+        return Some(stats.budget_bytes);
+    }
+    holding.path.as_ref().and_then(|path| std::fs::metadata(path).ok()).map(|meta| meta.len())
+}
+
+/// **What a replay of this holding still has to take from MemAvailable.** A resident Qwen3.6
+/// mapping has already pinned its budget; charging it again against leftover MemAvailable is the
+/// 6.50-vs-3 GiB deferral on a host that just mapped the class. Page-cache and dense holdings
+/// still report the file.
+pub fn incremental_replay_bytes_v1(holding: &PalwLoadedArtifactV1) -> Option<u64> {
+    if misaka_palw_sdk::lineages::qwen36::residency_stats_of(holding).is_some() {
+        return Some(0);
+    }
+    holding_replay_bytes_v1(holding)
+}
+
 /// Whether a replay that needs `need_bytes` (the class's artifact plus its scratch) fits this
 /// host's budget now: `need ≤ 70 % × (MemAvailable − reserve)`. `Ok` where the platform cannot say
 /// (the node then behaves as before this policy); `Err` names the numbers.
@@ -1064,6 +1106,51 @@ mod tests {
         let paged = load_class_holdings_v1("test-paged", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
         assert!(misaka_palw_sdk::lineages::qwen36::residency_stats_of(&paged[0]).is_none(), "the page cache decides: no stats");
         assert!(paged[0].summary.contains("page cache"), "{}", paged[0].summary);
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A budgeted Qwen3.6 holding prices a replay on the residency it pinned, not on the file.
+    /// A page-cache holding still reports the file — that mapping will fault the whole artifact.
+    #[test]
+    fn a_qwen36_replay_is_priced_on_residency_not_the_file() {
+        use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
+        let _guard = exclusive();
+        let path = temp_artifact("replay-bytes");
+        write_qwen36_fixture_with(&path, 2, 256);
+        let file = std::fs::metadata(&path).expect("the fixture is on disk").len();
+
+        let budgeted =
+            load_class_holdings_v1("test-replay-residency", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthOfTheWeights);
+        let stats = misaka_palw_sdk::lineages::qwen36::residency_stats_of(&budgeted[0]).expect("budgeted");
+        assert_eq!(holding_replay_bytes_v1(&budgeted[0]), Some(stats.budget_bytes));
+        assert!(stats.budget_bytes < file, "residency is the pages held, not the mapping's file");
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+
+        let paged = load_class_holdings_v1("test-replay-paged", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
+        assert_eq!(holding_replay_bytes_v1(&paged[0]), Some(file), "page cache: the file is what will fault in");
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// Once a Qwen3.6 holding is resident, a replay must not re-charge the budget against
+    /// MemAvailable — that leftover is ~3 GiB on a 23 GiB host that just pinned 6 GiB, and the
+    /// panel would defer forever. The incremental figure is zero; scratch is added by the caller.
+    #[test]
+    fn a_resident_qwen36_replay_does_not_recharge_the_budget() {
+        use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
+        let _guard = exclusive();
+        let path = temp_artifact("replay-incremental");
+        write_qwen36_fixture_with(&path, 2, 256);
+        let file = std::fs::metadata(&path).expect("the fixture is on disk").len();
+        let budgeted =
+            load_class_holdings_v1("test-replay-incremental", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthOfTheWeights);
+        assert_eq!(incremental_replay_bytes_v1(&budgeted[0]), Some(0), "already pinned: MemAvailable does not pay twice");
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+
+        let paged =
+            load_class_holdings_v1("test-replay-incremental-paged", &sdk(), std::slice::from_ref(&path), 0, Residency::PageCache);
+        assert_eq!(incremental_replay_bytes_v1(&paged[0]), Some(file), "page cache still faults the file");
         evict_held_artifacts_v1(std::slice::from_ref(&path));
         std::fs::remove_file(&path).ok();
     }

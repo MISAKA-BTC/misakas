@@ -2,7 +2,9 @@ use kaspa_notify::{scope::Scope, subscription::Command};
 
 use crate::protowire::{
     KaspadRequest, KaspadResponse, NotifyBlockAddedRequestMessage, NotifyFinalityConflictRequestMessage,
-    NotifyNewBlockTemplateRequestMessage, NotifyPruningPointUtxoSetOverrideRequestMessage, NotifySinkBlueScoreChangedRequestMessage,
+    NotifyNewBlockTemplateRequestMessage, NotifyPalwClassReadinessChangedRequestMessage, NotifyPalwPanelAssignmentRequestMessage,
+    NotifyPalwPanelEligibilityChangedRequestMessage, NotifyPalwPanelReceiptRequestMessage,
+    NotifyPruningPointUtxoSetOverrideRequestMessage, NotifySinkBlueScoreChangedRequestMessage,
     NotifyUtxosChangedRequestMessage, NotifyVirtualChainChangedRequestMessage, NotifyVirtualDaaScoreChangedRequestMessage,
     kaspad_request, kaspad_response,
 };
@@ -25,6 +27,26 @@ impl kaspad_request::Payload {
             }
             Scope::NewBlockTemplate(_) => {
                 kaspad_request::Payload::NotifyNewBlockTemplateRequest(NotifyNewBlockTemplateRequestMessage {
+                    command: command.into(),
+                })
+            }
+            Scope::PalwClassReadinessChanged(_) => {
+                kaspad_request::Payload::NotifyPalwClassReadinessChangedRequest(NotifyPalwClassReadinessChangedRequestMessage {
+                    command: command.into(),
+                })
+            }
+            Scope::PalwPanelAssignment(_) => {
+                kaspad_request::Payload::NotifyPalwPanelAssignmentRequest(NotifyPalwPanelAssignmentRequestMessage {
+                    command: command.into(),
+                })
+            }
+            Scope::PalwPanelReceipt(_) => {
+                kaspad_request::Payload::NotifyPalwPanelReceiptRequest(NotifyPalwPanelReceiptRequestMessage {
+                    command: command.into(),
+                })
+            }
+            Scope::PalwPanelEligibilityChanged(_) => {
+                kaspad_request::Payload::NotifyPalwPanelEligibilityChangedRequest(NotifyPalwPanelEligibilityChangedRequestMessage {
                     command: command.into(),
                 })
             }
@@ -79,6 +101,10 @@ impl kaspad_request::Payload {
                 | Payload::NotifyVirtualDaaScoreChangedRequest(_)
                 | Payload::NotifyPruningPointUtxoSetOverrideRequest(_)
                 | Payload::NotifyNewBlockTemplateRequest(_)
+                | Payload::NotifyPalwClassReadinessChangedRequest(_)
+                | Payload::NotifyPalwPanelAssignmentRequest(_)
+                | Payload::NotifyPalwPanelReceiptRequest(_)
+                | Payload::NotifyPalwPanelEligibilityChangedRequest(_)
                 | Payload::StopNotifyingUtxosChangedRequest(_)
                 | Payload::StopNotifyingPruningPointUtxoSetOverrideRequest(_)
         )
@@ -108,6 +134,10 @@ impl kaspad_response::Payload {
             Payload::VirtualDaaScoreChangedNotification(_) => true,
             Payload::PruningPointUtxoSetOverrideNotification(_) => true,
             Payload::NewBlockTemplateNotification(_) => true,
+            Payload::PalwClassReadinessChangedNotification(_) => true,
+            Payload::PalwPanelAssignmentNotification(_) => true,
+            Payload::PalwPanelReceiptNotification(_) => true,
+            Payload::PalwPanelEligibilityChangedNotification(_) => true,
             _ => false,
         }
     }

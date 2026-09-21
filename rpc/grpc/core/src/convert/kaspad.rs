@@ -89,6 +89,17 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(GetPalwClassEconomics);
     impl_into_kaspad_request!(GetPalwModelRegistry);
     impl_into_kaspad_request!(GetPalwFreePromptPrice);
+    impl_into_kaspad_request!(GetPalwClassPanelStatus);
+    impl_into_kaspad_request!(GetPalwPanelSeats);
+    impl_into_kaspad_request!(GetPalwPanelStatus);
+    impl_into_kaspad_request!(GetPalwPanelAssignments);
+    impl_into_kaspad_request!(GetPalwModelPreflight);
+    impl_into_kaspad_request!(SubmitPalwModelRegistration);
+    impl_into_kaspad_request!(GetPalwModelRegistrationStatus);
+    impl_into_kaspad_request!(GetPalwModel);
+    impl_into_kaspad_request!(GetPalwModelReadiness);
+    impl_into_kaspad_request!(GetPalwModelAdmission);
+    impl_into_kaspad_request!(GetPalwModelCertification);
     impl_into_kaspad_request!(GetTokenSupply);
     impl_into_kaspad_request!(GetTokenEmissionInfo);
     impl_into_kaspad_request!(GetValidatorStatus);
@@ -105,6 +116,10 @@ pub mod kaspad_request_convert {
     impl_into_kaspad_request!(NotifyVirtualDaaScoreChanged);
     impl_into_kaspad_request!(NotifyVirtualChainChanged);
     impl_into_kaspad_request!(NotifySinkBlueScoreChanged);
+    impl_into_kaspad_request!(NotifyPalwClassReadinessChanged);
+    impl_into_kaspad_request!(NotifyPalwPanelAssignment);
+    impl_into_kaspad_request!(NotifyPalwPanelReceipt);
+    impl_into_kaspad_request!(NotifyPalwPanelEligibilityChanged);
 
     macro_rules! impl_into_kaspad_request {
         ($name:tt) => {
@@ -259,6 +274,17 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_response!(GetPalwClassEconomics);
     impl_into_kaspad_response!(GetPalwModelRegistry);
     impl_into_kaspad_response!(GetPalwFreePromptPrice);
+    impl_into_kaspad_response!(GetPalwClassPanelStatus);
+    impl_into_kaspad_response!(GetPalwPanelSeats);
+    impl_into_kaspad_response!(GetPalwPanelStatus);
+    impl_into_kaspad_response!(GetPalwPanelAssignments);
+    impl_into_kaspad_response!(GetPalwModelPreflight);
+    impl_into_kaspad_response!(SubmitPalwModelRegistration);
+    impl_into_kaspad_response!(GetPalwModelRegistrationStatus);
+    impl_into_kaspad_response!(GetPalwModel);
+    impl_into_kaspad_response!(GetPalwModelReadiness);
+    impl_into_kaspad_response!(GetPalwModelAdmission);
+    impl_into_kaspad_response!(GetPalwModelCertification);
     impl_into_kaspad_response!(GetTokenSupply);
     impl_into_kaspad_response!(GetTokenEmissionInfo);
     impl_into_kaspad_response!(GetValidatorStatus);
@@ -275,6 +301,10 @@ pub mod kaspad_response_convert {
     impl_into_kaspad_notify_response!(NotifyVirtualDaaScoreChanged);
     impl_into_kaspad_notify_response!(NotifyVirtualChainChanged);
     impl_into_kaspad_notify_response!(NotifySinkBlueScoreChanged);
+    impl_into_kaspad_notify_response!(NotifyPalwClassReadinessChanged);
+    impl_into_kaspad_notify_response!(NotifyPalwPanelAssignment);
+    impl_into_kaspad_notify_response!(NotifyPalwPanelReceipt);
+    impl_into_kaspad_notify_response!(NotifyPalwPanelEligibilityChanged);
 
     impl_into_kaspad_notify_response!(NotifyUtxosChanged, StopNotifyingUtxosChanged);
     impl_into_kaspad_notify_response!(NotifyPruningPointUtxoSetOverride, StopNotifyingPruningPointUtxoSetOverride);

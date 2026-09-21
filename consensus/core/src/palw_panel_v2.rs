@@ -283,6 +283,8 @@ pub enum PalwPanelV2Error {
     NoQuorum { valid: u16, unavailable: u16, needed: u16 },
     #[error("verification V2: segment {segment} has {have} valid attestation(s), {need} needed")]
     CoverageShort { segment: u16, have: u16, need: u16 },
+    #[error("verification V2: seat {seat:?} attested mask {got:?}, assignment is {expected:?}")]
+    MaskNotAssigned { seat: PalwBondKeyV2, got: u32, expected: u32 },
     #[error("claim {0} does not license by parts: its panel is not a declared plan's stratified shape")]
     NotLicensedByParts(Hash64),
     #[error("claim {0} licenses by parts; a whole-object licence or default does not apply to it")]
@@ -1524,10 +1526,10 @@ pub fn palw_panel_outsider_bond_v1(
 /// sync walk credits exactly what this layer admitted.
 /// **ADR-0133 Verification V2: the licence by coverage.** Every check the V1 quorum makes (the seat,
 /// the duplicate, the signature — over the V3 message, the window, the `Unavailable` obligations)
-/// and then two conditions: the V1 quorum of `Valid` receipts, and every segment of the anchor's cut
-/// attested `Valid` at least `PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT` times. A set of full
-/// masks is exactly V1. The assignment is not checked here: it is a seat's duty (what it must replay
-/// to be paid), not a cap on what it may attest.
+/// and then two conditions: the V1 quorum of `Valid` receipts (three of five), and every segment of
+/// the anchor's cut attested `Valid` at least `PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT` times
+/// (the full seat plus the unique partial holder). A Valid receipt's mask must be that seat's
+/// assignment — a widened, narrowed, or foreign mask is refused.
 #[allow(clippy::too_many_arguments)]
 pub fn validate_receipt_coverage_v2<V>(
     state: &PalwChainStateV2,
@@ -1592,6 +1594,17 @@ where
             return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed after the block carrying it" });
         }
         answered.push(receipt.seat_bond);
+        if matches!(receipt.verdict, PalwReceiptVerdictV2::Valid) {
+            let seat_index = seats.iter().position(|seat| seat.bond == receipt.seat_bond).expect("NotASeat already returned") as u16;
+            let expected = assignment.mask_of(seat_index);
+            if signed.segments != expected {
+                return Err(PalwPanelV2Error::MaskNotAssigned {
+                    seat: receipt.seat_bond,
+                    got: signed.segments.0,
+                    expected: expected.0,
+                });
+            }
+        }
         match receipt.verdict {
             PalwReceiptVerdictV2::Valid => {
                 valid += 1;
@@ -3483,6 +3496,54 @@ mod tests {
         (bound, claim_id, sp, p, h64(999), seats, 106)
     }
 
+    /// The shipped panel: five seats, quorum three. `populated_state` has only three eligible
+    /// operators, so the five-seat coverage test registers its own spare operators.
+    fn five_seat_licensed_fixture() -> (PalwChainStateV2, Hash64, PalwStateParamsV2, PalwPanelParamsV2, Hash64, Vec<PalwPanelSeatV2>) {
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            register(1, 7, 0x21),
+            register(2, 8, 0x22),
+            register(3, 9, 0x23),
+            register(4, 10, 0x24),
+            register(7, 13, 0x25),
+            register(8, 14, 0x26),
+            register(9, 15, 0x27),
+        ];
+        let (s1, _) =
+            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (state, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        let p = PalwPanelParamsV2::new(
+            crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS,
+            crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM,
+            4,
+        )
+        .unwrap();
+        let sp = state_params();
+        let anchor_block = BlockHash::from_u64_word(0xA0C0);
+        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block, 0).expect("five eligible operators seat five");
+        assert_eq!(seats.len(), 5);
+        let (bound, _) = apply_palw_transition_v2(
+            &state,
+            &sp,
+            &ctx(3, 106, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: anchor_block, seats: seats.clone() }],
+            None,
+        )
+        .unwrap();
+        (bound, claim_id, sp, p, h64(999), seats)
+    }
+
     /// Receipts: the full path from a bound panel to both quorum outcomes, with every refusal
     /// shape on the way.
     #[test]
@@ -3613,7 +3674,7 @@ mod tests {
     #[test]
     fn adr0133_v2_a_licence_by_coverage_is_v1_for_full_masks_and_needs_two_attestations_a_segment() {
         use crate::palw_verification_v2::{PalwSegmentMaskV2, palw_segment_assignment_v2};
-        let (state, claim_id, sp, p, net, seats, _bound_daa) = licensed_fixture();
+        let (state, claim_id, sp, p, net, seats) = five_seat_licensed_fixture();
         const SIGNED_DAA: u64 = 108;
         let verify = |key: &[u8], _m: &[u8], sig: &[u8], _c: &[u8]| key == sig;
         let here = ctx(9, 130, 9);
@@ -3632,31 +3693,31 @@ mod tests {
             |r: Vec<PalwSeatReceiptV3>| validate_receipt_coverage_v2(&state, &p, &sp, &here, net, &claim_id, &r, verify, false, None);
         let quorum = p.quorum() as usize;
         assert!(quorum >= 2 && seats.len() > quorum, "the fixture's panel has room for a missing seat");
-
-        // Full masks: exactly V1 — the quorum licenses, one short of it does not.
-        let full: Vec<_> =
-            seats.iter().take(quorum).map(|s| sign(s, PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::full(k))).collect();
-        assert!(matches!(check(full.clone()), Ok(PalwReceiptQuorumV2::Licensed { .. })));
-        assert!(matches!(check(full[..quorum - 1].to_vec()), Err(PalwPanelV2Error::NoQuorum { .. })));
-
-        // The anchor's cut: the full seat plus every partial seat licenses; without the full seat the
-        // partial seats still cover every segment twice; the full seat and two partial seats leave a
-        // segment with one attestation, which is not a licence however many receipts there are.
         let panel = state.panel(&claim_id).unwrap();
         let a = palw_segment_assignment_v2(panel.anchor, claim_id, seats.len() as u16);
+
+        // A full mask on a partial seat is not that seat's assignment.
+        let stolen_full = sign(&seats[(a.full_seat as usize + 1) % seats.len()], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::full(k));
+        assert!(matches!(check(vec![stolen_full]), Err(PalwPanelV2Error::MaskNotAssigned { .. })));
+
+        // The assigned masks of every seat (full + four disjoint partials) license: quorum of 5 ≥ 3
+        // and every segment has two attestations (full seat + unique partial).
         let by_duty: Vec<_> =
             seats.iter().enumerate().map(|(i, s)| sign(s, PalwReceiptVerdictV2::Valid, a.mask_of(i as u16))).collect();
-        assert!(matches!(check(by_duty.clone()), Ok(PalwReceiptQuorumV2::Licensed { .. })), "{a:?}");
+        assert!(matches!(check(by_duty.clone()), Ok(PalwReceiptQuorumV2::Licensed { valid: 5 })), "{a:?}");
+        // Without the full seat each segment has one partial holder — coverage short, even with 4 Valids.
         let partial_only: Vec<_> =
             by_duty.iter().enumerate().filter(|(i, _)| *i as u16 != a.full_seat).map(|(_, r)| r.clone()).collect();
-        assert!(matches!(check(partial_only), Ok(PalwReceiptQuorumV2::Licensed { .. })), "{a:?}");
-        // A seat that finished only one of its segments attests only that one: with the full seat it
-        // still makes the quorum, and the segment it did not reach has one attestation — no licence.
-        let partial_index = (a.full_seat as usize + 1) % seats.len();
-        let narrow = sign(&seats[partial_index], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::single(0));
-        let few = vec![by_duty[a.full_seat as usize].clone(), narrow];
-        assert!(few.len() >= quorum);
-        assert!(matches!(check(few), Err(PalwPanelV2Error::CoverageShort { segment: 1, have: 1, need: 2 })), "{a:?}");
+        assert!(matches!(check(partial_only), Err(PalwPanelV2Error::CoverageShort { have: 1, need: 2, .. })), "{a:?}");
+        // Full seat plus two partials: quorum of 3, but two segments have only the full seat.
+        let mut few: Vec<_> = vec![by_duty[a.full_seat as usize].clone()];
+        few.extend(by_duty.iter().enumerate().filter(|(i, _)| *i as u16 != a.full_seat).map(|(_, r)| r.clone()).take(2));
+        assert_eq!(few.len(), quorum);
+        assert!(matches!(check(few), Err(PalwPanelV2Error::CoverageShort { have: 1, need: 2, .. })), "{a:?}");
+        // A partial that attests a neighbour's segment is refused.
+        let neighbour = (a.full_seat as usize + 1) % seats.len();
+        let wrong = sign(&seats[neighbour], PalwReceiptVerdictV2::Valid, PalwSegmentMaskV2::single((a.mask_of(neighbour as u16).0.trailing_zeros() as u16 + 1) % k));
+        assert!(matches!(check(vec![wrong]), Err(PalwPanelV2Error::MaskNotAssigned { .. })));
 
         // A widened mask is refused with the signature: the mask is signed.
         // The mask is signed: widening a receipt from one segment to all changes what the seat signed.
@@ -3680,7 +3741,7 @@ mod tests {
             segments: PalwSegmentMaskV2::full(k),
         };
         assert!(matches!(check(vec![outsider]), Err(PalwPanelV2Error::NotASeat(_))));
-        assert!(matches!(check(vec![full[0].clone(), full[0].clone()]), Err(PalwPanelV2Error::DuplicateSeat(_))));
+        assert!(matches!(check(vec![by_duty[0].clone(), by_duty[0].clone()]), Err(PalwPanelV2Error::DuplicateSeat(_))));
     }
 
     #[test]

@@ -339,6 +339,7 @@ mod tests {
             execution_root: h64(43),
             trace_chunk_count: 4,
             trace_retention_daa: 999_999,
+            consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(h64(1)),
         };
         let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[commit], None).unwrap();
         let seats = vec![PalwPanelSeatV2 { bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)), operator_id: h64(90) }];
@@ -435,6 +436,7 @@ mod tests {
             execution_root: h64(43),
             trace_chunk_count: 4,
             trace_retention_daa: 999_999,
+            consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(h64(1)),
         };
         let (pending, _) = apply_palw_transition_v2(&registered, &p, &ctx(2, 101, 2), &[commit], None).unwrap();
         assert_eq!(

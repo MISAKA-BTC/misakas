@@ -708,6 +708,26 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// ADR-0133 S1: assemble a coverage licence from V3 receipts, or `None` while the fence is
+    /// dormant or the set does not yet cover every segment twice.
+    fn palw_v2_receipt_coverage_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
+    /// ADR-0133 S2: assemble an optimistic licence from V3 receipts, or `None` while the fence is
+    /// dormant or the full-replay seat has not filed `Valid`.
+    fn palw_v2_optimistic_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<crate::palw_state_v2::PalwConsensusObjectV2> {
+        None
+    }
+
     /// **ADR-0124 Decision 2: assemble a seat's own supplementary receipt set** — the `Valid`
     /// receipts in `mine` for `claim` that the chain has licensed without crediting, as the
     /// `ReceiptLicensed` object the supplementary door accepts, or `None` while the door is shut
@@ -820,6 +840,12 @@ pub trait ConsensusApi: Send + Sync {
     /// ADR-0135: the model registry as the tip state holds it (lifecycle rows, ready seats, claims in
     /// flight, possession proofs). `None` off `ConsensusV2`.
     fn palw_model_registry_v1(&self) -> Option<crate::palw_model_registry_v1::PalwModelRegistryReadV1> {
+        None
+    }
+
+    /// Panel observability: class status, bonded seats, and per-claim assignments as the tip holds
+    /// them. `None` off `ConsensusV2`. Seat counts stay distinct — bonded / ready / selected / valid.
+    fn palw_panel_network_view_v1(&self) -> Option<crate::palw_panel_view_v1::PalwPanelNetworkViewV1> {
         None
     }
 

@@ -2194,3 +2194,382 @@ message GetPalwFreePromptPriceResponseMessage {
   string bondRoomSompi = 9;
   RPCError error = 1000;
 }
+
+message RpcPalwPanelHoldReason {
+  string code = 1;
+  string message = 2;
+}
+
+message RpcPalwPanelHoldReasonCount {
+  string code = 1;
+  string message = 2;
+  uint32 seats = 3;
+}
+
+message RpcPalwClassPanelStatus {
+  string classId = 1;
+  string modelName = 2;
+  string registryState = 3;
+  uint32 bondedSeats = 4;
+  uint32 readySeats = 5;
+  uint32 requiredReadySeats = 6;
+  uint32 selectedPanelSeats = 7;
+  uint32 validReceiptSeats = 8;
+  uint32 panelSize = 9;
+  uint32 receiptQuorum = 10;
+  uint32 fullSeatsPerPanel = 11;
+  uint32 partialSeatsPerPanel = 12;
+  uint32 segmentCount = 13;
+  uint32 inflightClaims = 14;
+  uint32 activeAssignments = 15;
+  uint64 admissionPermille = 16;
+  string verificationMode = 17;
+  bool s1Active = 18;
+  uint64 s1ScheduledDaa = 19;
+  bool s3Active = 20;
+  uint64 s3ScheduledDaa = 21;
+  bool s2Active = 22;
+  uint64 s2ScheduledDaa = 23;
+  uint32 holdsLocal = 24;
+  repeated RpcPalwPanelHoldReasonCount missing = 25;
+}
+
+message RpcPalwPanelSeat {
+  string seatId = 1;
+  string bondOutpoint = 2;
+  string classId = 3;
+  bool ready = 4;
+  bool eligible = 5;
+  uint32 readinessVersion = 6;
+  uint64 readinessProvedDaa = 7;
+  uint64 readinessExpiresDaa = 8;
+  string collateralAvailable = 9;
+  string collateralLocked = 10;
+  uint32 assigned = 11;
+  RpcPalwPanelHoldReason hold = 12;
+}
+
+message RpcPalwPanelAssignmentSeat {
+  string seatId = 1;
+  uint32 seatIndex = 2;
+  bool fullSeat = 3;
+  uint32 segmentIndex = 4;
+  bool hasSegmentIndex = 5;
+  uint32 mask = 6;
+  string receiptStatus = 7;
+  uint64 creditedDaa = 8;
+}
+
+message RpcPalwPanelAssignment {
+  string claimId = 1;
+  string classId = 2;
+  string licensedState = 3;
+  uint64 deadlineDaa = 4;
+  uint32 coverageMask = 5;
+  string fullSeat = 6;
+  uint32 validReceiptSeats = 7;
+  uint32 selectedPanelSeats = 8;
+  repeated RpcPalwPanelAssignmentSeat seats = 9;
+}
+
+message RpcPalwLocalPanelClass {
+  string classId = 1;
+  string modelName = 2;
+  string seatId = 3;
+  bool artifactLoaded = 4;
+  string artifactRoot = 5;
+  uint64 workingSetBytes = 6;
+  bool replayCapable = 7;
+  bool synced = 8;
+  bool bondActive = 9;
+  uint64 collateralSompi = 10;
+  bool readinessProofAccepted = 11;
+  uint64 readinessProvedDaa = 12;
+  string chainState = 13;
+  uint32 assignments = 14;
+  RpcPalwPanelHoldReason hold = 15;
+}
+
+message GetPalwClassPanelStatusRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwClassPanelStatusResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool found = 3;
+  RpcPalwClassPanelStatus status = 4;
+  RPCError error = 1000;
+}
+
+message GetPalwPanelSeatsRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwPanelSeatsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  repeated RpcPalwPanelSeat seats = 3;
+  RPCError error = 1000;
+}
+
+message GetPalwPanelStatusRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwPanelStatusResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool panelRunning = 3;
+  bool panelSubmitter = 4;
+  bool synced = 5;
+  repeated RpcPalwLocalPanelClass classes = 6;
+  RPCError error = 1000;
+}
+
+message GetPalwPanelAssignmentsRequestMessage {
+  string claimId = 1;
+  string seatId = 2;
+}
+
+message GetPalwPanelAssignmentsResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool truncated = 3;
+  repeated RpcPalwPanelAssignment assignments = 4;
+  RPCError error = 1000;
+}
+
+message NotifyPalwClassReadinessChangedRequestMessage {
+  RpcNotifyCommand command = 101;
+}
+
+message NotifyPalwClassReadinessChangedResponseMessage {
+  RPCError error = 1000;
+}
+
+message PalwClassReadinessChangedNotificationMessage {
+  string classId = 1;
+  string modelName = 2;
+  string registryState = 3;
+  string previousRegistryState = 4;
+  uint32 readySeats = 5;
+  uint32 previousReadySeats = 6;
+  uint32 requiredReadySeats = 7;
+  uint32 bondedSeats = 8;
+}
+
+message NotifyPalwPanelAssignmentRequestMessage {
+  RpcNotifyCommand command = 101;
+}
+
+message NotifyPalwPanelAssignmentResponseMessage {
+  RPCError error = 1000;
+}
+
+message PalwPanelAssignmentNotificationMessage {
+  string claimId = 1;
+  string classId = 2;
+  string licensedState = 3;
+  uint64 deadlineDaa = 4;
+  uint32 coverageMask = 5;
+  string fullSeat = 6;
+  uint32 validReceiptSeats = 7;
+  uint32 selectedPanelSeats = 8;
+  repeated RpcPalwPanelAssignmentSeat seats = 9;
+}
+
+message NotifyPalwPanelReceiptRequestMessage {
+  RpcNotifyCommand command = 101;
+}
+
+message NotifyPalwPanelReceiptResponseMessage {
+  RPCError error = 1000;
+}
+
+message PalwPanelReceiptNotificationMessage {
+  string claimId = 1;
+  string classId = 2;
+  uint32 coverageMask = 3;
+  uint32 previousCoverageMask = 4;
+  uint32 validReceiptSeats = 5;
+  uint32 previousValidReceiptSeats = 6;
+  uint32 selectedPanelSeats = 7;
+}
+
+message NotifyPalwPanelEligibilityChangedRequestMessage {
+  RpcNotifyCommand command = 101;
+}
+
+message NotifyPalwPanelEligibilityChangedResponseMessage {
+  RPCError error = 1000;
+}
+
+message PalwPanelEligibilityChangedNotificationMessage {
+  string seatId = 1;
+  string classId = 2;
+  bool eligible = 3;
+  bool ready = 4;
+  RpcPalwPanelHoldReason hold = 5;
+}
+
+message RpcPalwModelPreflightCheck {
+  string code = 1;
+  bool ok = 2;
+  string message = 3;
+}
+
+message RpcPalwModelRegistration {
+  string objectId = 1;
+  string classId = 2;
+  bool constructed = 3;
+  bool submitted = 4;
+  bool accepted = 5;
+  bool included = 6;
+  bool folded = 7;
+  string submissionState = 8;
+  string processorVerdict = 9;
+  string rejectCode = 10;
+  bool mempoolAccepted = 11;
+  string includedBlock = 12;
+  uint64 includedDaa = 13;
+  string registryState = 14;
+  string transactionId = 15;
+}
+
+message GetPalwModelPreflightRequestMessage {
+  string objectHex = 1;
+  string classId = 2;
+}
+
+message GetPalwModelPreflightResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  string classId = 3;
+  string artifactRoot = 4;
+  uint32 nCtx = 5;
+  uint32 layerCount = 6;
+  bool admissible = 7;
+  string processorVerdict = 8;
+  string rejectCode = 9;
+  repeated RpcPalwModelPreflightCheck checks = 10;
+  RPCError error = 1000;
+}
+
+message SubmitPalwModelRegistrationRequestMessage {
+  string objectHex = 1;
+  string transactionId = 2;
+}
+
+message SubmitPalwModelRegistrationResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  RpcPalwModelRegistration registration = 3;
+  repeated RpcPalwModelPreflightCheck checks = 4;
+  RPCError error = 1000;
+}
+
+message GetPalwModelRegistrationStatusRequestMessage {
+  string classId = 1;
+  string objectId = 2;
+  string transactionId = 3;
+}
+
+message GetPalwModelRegistrationStatusResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool found = 3;
+  RpcPalwModelRegistration registration = 4;
+  RPCError error = 1000;
+}
+
+message GetPalwModelRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwModelResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool found = 3;
+  string classId = 4;
+  string modelName = 5;
+  uint32 nCtx = 6;
+  string artifactRoot = 7;
+  string classStatus = 8;
+  string registryState = 9;
+  uint32 readySeats = 10;
+  uint32 requiredReadySeats = 11;
+  uint32 inflightClaims = 12;
+  uint32 admissionPermille = 13;
+  uint32 sharePermille = 14;
+  string certifiedFamily = 15;
+  bool fenceActive = 16;
+  string reason = 17;
+  RPCError error = 1000;
+}
+
+message GetPalwModelReadinessRequestMessage {
+  string classId = 1;
+}
+
+message RpcPalwModelSeatReadiness {
+  string seatId = 1;
+  string bondTxid = 2;
+  uint32 bondIndex = 3;
+  uint64 provedDaa = 4;
+  uint64 provedSpan = 5;
+  uint64 expiresDaa = 6;
+  bool fresh = 7;
+  bool ready = 8;
+  uint64 collateralSompi = 9;
+  uint64 neededCollateralSompi = 10;
+  string notReadyReason = 11;
+}
+
+message GetPalwModelReadinessResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool found = 3;
+  string classId = 4;
+  string registryState = 5;
+  uint32 readySeats = 6;
+  uint32 requiredReadySeats = 7;
+  repeated RpcPalwModelSeatReadiness seats = 8;
+  RPCError error = 1000;
+}
+
+message GetPalwModelAdmissionRequestMessage {
+  string classId = 1;
+  string objectHex = 2;
+}
+
+message GetPalwModelAdmissionResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  string classId = 3;
+  bool admissible = 4;
+  string processorVerdict = 5;
+  string rejectCode = 6;
+  repeated RpcPalwModelPreflightCheck checks = 7;
+  RPCError error = 1000;
+}
+
+message GetPalwModelCertificationRequestMessage {
+  string classId = 1;
+}
+
+message RpcPalwModelCertifiedFamily {
+  string lane = 1;
+  string digest = 2;
+  bool covers = 3;
+}
+
+message GetPalwModelCertificationResponseMessage {
+  bool available = 1;
+  uint64 tipDaa = 2;
+  bool found = 3;
+  string classId = 4;
+  bool endToEndCertified = 5;
+  repeated RpcPalwModelCertifiedFamily families = 6;
+  RPCError error = 1000;
+}

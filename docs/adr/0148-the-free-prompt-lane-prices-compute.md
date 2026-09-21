@@ -184,3 +184,12 @@ stands for, and the room is the bond's — but it moves who can mine with a give
 
 Bond sizing for operators, and any pool's arithmetic of claims per bond per day, must use the
 compute era's reservation (`GetPalwFreePromptPrice`), not the leaves figure.
+
+---
+
+## Implementation (2026-09-21)
+
+ADR-0146's search reports 1.000000× — P4 does not forbid this fence. It stays `None` on every
+shipped preset. Choosing a height is a different commit (0144 item 0). The free-prompt lane's
+prefix-STATE object family (0145 §6) is now how `KvReused` is derived; the V3 payload still
+names genesis.

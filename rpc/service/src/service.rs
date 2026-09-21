@@ -1981,6 +1981,533 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         })
     }
 
+    async fn get_palw_class_panel_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwClassPanelStatusRequest,
+    ) -> RpcResult<GetPalwClassPanelStatusResponse> {
+        let class_id = parse_class_id_or_alias(&request.class_id)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(view) = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await else {
+            return Ok(GetPalwClassPanelStatusResponse::default());
+        };
+        let Some(row) = view.classes.into_iter().find(|c| c.class_id == class_id) else {
+            return Ok(GetPalwClassPanelStatusResponse { available: true, tip_daa: view.tip_daa, found: false, status: Default::default() });
+        };
+        let holds_local = self
+            .flow_context
+            .palw_runtime()
+            .panel_classes
+            .iter()
+            .filter(|c| c.class_id.eq_ignore_ascii_case(&class_id.to_string()))
+            .count() as u32;
+        Ok(GetPalwClassPanelStatusResponse {
+            available: true,
+            tip_daa: view.tip_daa,
+            found: true,
+            status: rpc_palw_class_panel_status(&row, holds_local),
+        })
+    }
+
+    async fn get_palw_panel_seats_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelSeatsRequest,
+    ) -> RpcResult<GetPalwPanelSeatsResponse> {
+        let class_filter = if request.class_id.trim().is_empty() {
+            None
+        } else {
+            Some(parse_class_id_or_alias(&request.class_id)?)
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(view) = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await else {
+            return Ok(GetPalwPanelSeatsResponse::default());
+        };
+        let seats = view
+            .seats
+            .into_iter()
+            .filter(|s| class_filter.is_none_or(|id| s.class_id == id))
+            .map(rpc_palw_panel_seat)
+            .collect();
+        Ok(GetPalwPanelSeatsResponse { available: true, tip_daa: view.tip_daa, seats })
+    }
+
+    async fn get_palw_panel_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelStatusRequest,
+    ) -> RpcResult<GetPalwPanelStatusResponse> {
+        let class_filter = if request.class_id.trim().is_empty() {
+            None
+        } else {
+            Some(parse_class_id_or_alias(&request.class_id)?)
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let sink_daa_score_timestamp = session.async_get_sink_daa_score_timestamp().await;
+        let synced = self.is_node_synced(&session, sink_daa_score_timestamp).await;
+        let view = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await;
+        let rt = self.flow_context.palw_runtime();
+        let Some(view) = view else {
+            return Ok(GetPalwPanelStatusResponse {
+                panel_running: rt.panel_running,
+                panel_submitter: rt.panel_submitter,
+                synced,
+                ..Default::default()
+            });
+        };
+        let mut classes = Vec::new();
+        for local in rt.panel_classes.iter().filter(|c| {
+            class_filter.is_none_or(|id| c.class_id.eq_ignore_ascii_case(&id.to_string()))
+        }) {
+            let class_id = local.class_id.parse::<kaspa_hashes::Hash64>().ok();
+            let chain = class_id.and_then(|id| view.classes.iter().find(|c| c.class_id == id));
+            let seat = class_id.and_then(|id| {
+                view.seats.iter().find(|s| {
+                    s.class_id == id && kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id) == local.seat_id
+                })
+            });
+            classes.push(RpcPalwLocalPanelClass {
+                class_id: local.class_id.clone(),
+                model_name: if local.model_name.is_empty() {
+                    chain.map(|c| c.model_name.clone()).unwrap_or_default()
+                } else {
+                    local.model_name.clone()
+                },
+                seat_id: local.seat_id.clone(),
+                artifact_loaded: local.artifact_loaded,
+                artifact_root: local.artifact_root.clone(),
+                working_set_bytes: local.working_set_bytes,
+                replay_capable: local.replay_capable,
+                synced,
+                bond_active: seat.map(|s| s.eligible || s.ready).unwrap_or(false),
+                collateral_sompi: seat.map(|s| s.collateral_available.min(u128::from(u64::MAX)) as u64).unwrap_or(0),
+                readiness_proof_accepted: seat.map(|s| s.ready).unwrap_or(false),
+                readiness_proved_daa: seat.map(|s| s.readiness_proved_daa).unwrap_or(0),
+                chain_state: chain.map(|c| c.registry_state.clone()).unwrap_or_default(),
+                assignments: seat.map(|s| s.assigned).unwrap_or(0),
+                hold: local_hold_or_chain(local, seat),
+            });
+        }
+        if classes.is_empty() {
+            for row in view.classes.iter().filter(|c| class_filter.is_none_or(|id| c.class_id == id)) {
+                let seat = view.seats.iter().find(|s| s.class_id == row.class_id);
+                classes.push(RpcPalwLocalPanelClass {
+                    class_id: row.class_id.to_string(),
+                    model_name: row.model_name.clone(),
+                    seat_id: seat.map(|s| kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id)).unwrap_or_default(),
+                    artifact_loaded: false,
+                    artifact_root: String::new(),
+                    working_set_bytes: 0,
+                    replay_capable: false,
+                    synced,
+                    bond_active: seat.map(|s| s.eligible || s.ready).unwrap_or(false),
+                    collateral_sompi: seat.map(|s| s.collateral_available.min(u128::from(u64::MAX)) as u64).unwrap_or(0),
+                    readiness_proof_accepted: seat.map(|s| s.ready).unwrap_or(false),
+                    readiness_proved_daa: seat.map(|s| s.readiness_proved_daa).unwrap_or(0),
+                    chain_state: row.registry_state.clone(),
+                    assignments: seat.map(|s| s.assigned).unwrap_or(0),
+                    hold: if rt.panel_running {
+                        Some(rpc_hold(kaspa_consensus_core::palw_panel_view_v1::PalwPanelHoldReasonV1::NoArtifact))
+                    } else {
+                        seat.and_then(|s| s.hold).map(rpc_hold)
+                    },
+                });
+            }
+        }
+        Ok(GetPalwPanelStatusResponse {
+            available: true,
+            tip_daa: view.tip_daa,
+            panel_running: rt.panel_running,
+            panel_submitter: rt.panel_submitter,
+            synced,
+            classes,
+        })
+    }
+
+    async fn get_palw_panel_assignments_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelAssignmentsRequest,
+    ) -> RpcResult<GetPalwPanelAssignmentsResponse> {
+        let claim_filter = if request.claim_id.trim().is_empty() {
+            None
+        } else {
+            Some(parse_hash64(&request.claim_id, "claim id")?)
+        };
+        let seat_filter = if request.seat_id.trim().is_empty() { None } else { Some(request.seat_id.trim().to_string()) };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(view) = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await else {
+            return Ok(GetPalwPanelAssignmentsResponse::default());
+        };
+        let truncated = view.assignments.len() >= 512;
+        let assignments = view
+            .assignments
+            .into_iter()
+            .filter(|a| claim_filter.is_none_or(|id| a.claim_id == id))
+            .filter(|a| {
+                seat_filter.as_ref().is_none_or(|want| {
+                    a.seats.iter().any(|s| kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id) == *want)
+                        || kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(a.full_seat) == *want
+                })
+            })
+            .map(rpc_palw_panel_assignment)
+            .collect();
+        Ok(GetPalwPanelAssignmentsResponse { available: true, tip_daa: view.tip_daa, truncated, assignments })
+    }
+
+    async fn get_palw_model_preflight_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelPreflightRequest,
+    ) -> RpcResult<GetPalwModelPreflightResponse> {
+        let Some(bundle) = palw_v2_bundle(&self.config.params) else {
+            return Ok(GetPalwModelPreflightResponse::default());
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let object = decode_class_registered_hex(&request.object_hex)?;
+        let (report, _) = self.palw_model_preflight_report(&session, bundle, &object, tip_daa).await?;
+        Ok(rpc_preflight_response(true, tip_daa, &report))
+    }
+
+    async fn submit_palw_model_registration_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: SubmitPalwModelRegistrationRequest,
+    ) -> RpcResult<SubmitPalwModelRegistrationResponse> {
+        let Some(bundle) = palw_v2_bundle(&self.config.params) else {
+            return Ok(SubmitPalwModelRegistrationResponse::default());
+        };
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let object = if request.object_hex.trim().is_empty() {
+            None
+        } else {
+            Some(decode_class_registered_hex(&request.object_hex)?)
+        };
+        let mut checks = Vec::new();
+        let mut registration = RpcPalwModelRegistration { constructed: object.is_some(), ..Default::default() };
+        if let Some(object) = &object {
+            let bytes = borsh::to_vec(object).unwrap_or_default();
+            registration.object_id =
+                kaspa_consensus_core::palw_model_registration_v1::palw_registration_object_id_v1(&bytes).to_string();
+            let (report, class_row) = self.palw_model_preflight_report(&session, bundle, object, tip_daa).await?;
+            registration.class_id = report.class_id.to_string();
+            registration.processor_verdict = report.processor_verdict.clone();
+            registration.reject_code = report.reject_code.clone();
+            checks = report.checks.iter().map(rpc_preflight_check).collect();
+            if let Some(row) = class_row {
+                fill_registration_from_class(&mut registration, &row);
+            }
+        }
+        if !request.transaction_id.trim().is_empty() {
+            self.fill_registration_from_tx(&mut registration, &request.transaction_id).await?;
+        }
+        finalize_registration_state(&mut registration);
+        Ok(SubmitPalwModelRegistrationResponse { available: true, tip_daa, registration, checks })
+    }
+
+    async fn get_palw_model_registration_status_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwModelRegistrationStatusResponse> {
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwModelRegistrationStatusResponse::default());
+        }
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let mut registration = RpcPalwModelRegistration {
+            object_id: request.object_id.clone(),
+            class_id: request.class_id.clone(),
+            transaction_id: request.transaction_id.clone(),
+            constructed: !request.object_id.trim().is_empty(),
+            ..Default::default()
+        };
+        if !request.class_id.trim().is_empty() {
+            let class_id = parse_class_id_or_alias(&request.class_id)?;
+            registration.class_id = class_id.to_string();
+            let rows = session.spawn_blocking(|c| c.palw_v2_class_table()).await;
+            if let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) {
+                fill_registration_from_class(&mut registration, &row);
+            }
+            if let Some(read) = session.spawn_blocking(|c| c.palw_model_registry_v1()).await {
+                if let Some(class) = read.classes.iter().find(|c| c.class_id == class_id) {
+                    registration.registry_state = class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
+                    if class.row.is_some() {
+                        registration.folded = true;
+                        registration.included = true;
+                        registration.accepted = true;
+                        registration.submitted = true;
+                        registration.constructed = true;
+                    }
+                }
+            }
+        }
+        if !request.transaction_id.trim().is_empty() {
+            self.fill_registration_from_tx(&mut registration, &request.transaction_id).await?;
+        }
+        finalize_registration_state(&mut registration);
+        let found = registration.folded || registration.included || registration.accepted || registration.submitted || registration.constructed;
+        if !found {
+            registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
+                .code()
+                .to_string();
+            registration.processor_verdict = registration.reject_code.clone();
+        }
+        Ok(GetPalwModelRegistrationStatusResponse { available: true, tip_daa, found, registration })
+    }
+
+    async fn get_palw_model_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRequest,
+    ) -> RpcResult<GetPalwModelResponse> {
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwModelResponse::default());
+        }
+        let class_id = parse_class_id_or_alias(&request.class_id)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let rows = session.spawn_blocking(|c| c.palw_v2_class_table()).await;
+        let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) else {
+            return Ok(GetPalwModelResponse { available: true, tip_daa, found: false, class_id: class_id.to_string(), ..Default::default() });
+        };
+        let n_ctx = session
+            .spawn_blocking(|c| c.palw_registered_class_carriage_v1(class_id).map(|(profile, _)| profile.n_ctx))
+            .await
+            .unwrap_or(0);
+        let registry = session.spawn_blocking(|c| c.palw_model_registry_v1()).await;
+        let panel = session.spawn_blocking(|c| c.palw_panel_network_view_v1()).await;
+        let class_reg = registry.as_ref().and_then(|r| r.classes.iter().find(|c| c.class_id == class_id));
+        let panel_class = panel.as_ref().and_then(|v| v.classes.iter().find(|c| c.class_id == class_id));
+        let families = session.spawn_blocking(|c| c.palw_certified_families_v1()).await;
+        let certified_family = session
+            .spawn_blocking(move |c| {
+                let Some((profile, _)) = c.palw_registered_class_carriage_v1(class_id) else { return String::new() };
+                let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
+                families
+                    .into_iter()
+                    .find(|(lane, _, record)| {
+                        *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt
+                            && reachable.is_subset(&record.family.kernel_ids)
+                    })
+                    .map(|(_, digest, _)| digest.to_string())
+                    .unwrap_or_default()
+            })
+            .await;
+        Ok(GetPalwModelResponse {
+            available: true,
+            tip_daa,
+            found: true,
+            class_id: class_id.to_string(),
+            model_name: panel_class.map(|c| c.model_name.clone()).unwrap_or_default(),
+            n_ctx,
+            artifact_root: row.artifact_root.to_string(),
+            class_status: row.status,
+            registry_state: class_reg
+                .and_then(|c| c.row.as_ref().map(|r| format!("{:?}", r.state)))
+                .unwrap_or_else(|| "Legacy".into()),
+            ready_seats: class_reg.map(|c| c.ready_seats_now).or_else(|| panel_class.map(|c| c.ready_seats)).unwrap_or(0),
+            required_ready_seats: class_reg.and_then(|c| c.row.as_ref().map(|r| r.profile.required_ready_seats)).or_else(|| panel_class.map(|c| c.required_ready_seats)).unwrap_or(0),
+            inflight_claims: class_reg.map(|c| c.inflight_now).or_else(|| panel_class.map(|c| c.inflight_claims)).unwrap_or(0),
+            admission_permille: class_reg.and_then(|c| c.row.as_ref().map(|r| r.admission_milli as u32)).or_else(|| panel_class.map(|c| c.admission_permille)).unwrap_or(0),
+            share_permille: row.share_permille.unwrap_or(0),
+            certified_family,
+            fence_active: registry.as_ref().map(|r| r.active).unwrap_or(false),
+            reason: class_reg.map(|c| c.reason.clone()).unwrap_or_default(),
+        })
+    }
+
+    async fn get_palw_model_readiness_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelReadinessRequest,
+    ) -> RpcResult<GetPalwModelReadinessResponse> {
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwModelReadinessResponse::default());
+        }
+        let class_id = parse_class_id_or_alias(&request.class_id)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some(read) = session.spawn_blocking(|c| c.palw_model_registry_v1()).await else {
+            return Ok(GetPalwModelReadinessResponse { available: true, ..Default::default() });
+        };
+        let class = read.classes.iter().find(|c| c.class_id == class_id);
+        let max_age = read.globals.map(|g| g.readiness_probe_max_age_spans as u64).unwrap_or(0).saturating_mul(read.span_daa.max(1));
+        let seats = read
+            .readiness
+            .iter()
+            .filter(|r| r.class_id == class_id)
+            .map(|r| {
+                let bond = read.bonds.iter().find(|b| b.bond == r.bond);
+                let ready = r.fresh && r.not_ready_reason.is_empty();
+                RpcPalwModelSeatReadiness {
+                    seat_id: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(r.bond),
+                    bond_txid: r.bond.0.transaction_id.to_string(),
+                    bond_index: r.bond.0.index,
+                    proved_daa: r.row.proved_daa,
+                    proved_span: r.row.proved_span,
+                    expires_daa: r.row.proved_daa.saturating_add(max_age),
+                    fresh: r.fresh,
+                    ready,
+                    collateral_sompi: bond.map(|b| b.free_collateral_sompi.min(u128::from(u64::MAX)) as u64).unwrap_or(0),
+                    needed_collateral_sompi: bond.map(|b| b.needed_collateral_sompi.min(u128::from(u64::MAX)) as u64).unwrap_or(0),
+                    not_ready_reason: if ready {
+                        String::new()
+                    } else if r.not_ready_reason.is_empty() {
+                        kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::ReadySeatsInsufficient
+                            .code()
+                            .to_string()
+                    } else {
+                        r.not_ready_reason.clone()
+                    },
+                }
+            })
+            .collect();
+        Ok(GetPalwModelReadinessResponse {
+            available: true,
+            tip_daa: read.tip_daa,
+            found: class.is_some(),
+            class_id: class_id.to_string(),
+            registry_state: class.and_then(|c| c.row.as_ref().map(|r| format!("{:?}", r.state))).unwrap_or_else(|| "Legacy".into()),
+            ready_seats: class.map(|c| c.ready_seats_now).unwrap_or(0),
+            required_ready_seats: class.and_then(|c| c.row.as_ref().map(|r| r.profile.required_ready_seats)).unwrap_or(0),
+            seats,
+        })
+    }
+
+    async fn get_palw_model_admission_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelAdmissionRequest,
+    ) -> RpcResult<GetPalwModelAdmissionResponse> {
+        let pre = self
+            .get_palw_model_preflight_call(
+                connection,
+                GetPalwModelPreflightRequest { object_hex: request.object_hex, class_id: request.class_id.clone() },
+            )
+            .await?;
+        Ok(GetPalwModelAdmissionResponse {
+            available: pre.available,
+            tip_daa: pre.tip_daa,
+            class_id: if pre.class_id.is_empty() { request.class_id } else { pre.class_id },
+            admissible: pre.admissible,
+            processor_verdict: pre.processor_verdict,
+            reject_code: pre.reject_code,
+            checks: pre.checks,
+        })
+    }
+
+    async fn get_palw_model_certification_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwModelCertificationRequest,
+    ) -> RpcResult<GetPalwModelCertificationResponse> {
+        if palw_v2_bundle(&self.config.params).is_none() {
+            return Ok(GetPalwModelCertificationResponse::default());
+        }
+        let class_id = parse_class_id_or_alias(&request.class_id)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let tip_daa = session.get_virtual_daa_score();
+        let Some((profile, _)) = session.spawn_blocking(move |c| c.palw_registered_class_carriage_v1(class_id)).await else {
+            return Ok(GetPalwModelCertificationResponse {
+                available: true,
+                tip_daa,
+                found: false,
+                class_id: class_id.to_string(),
+                ..Default::default()
+            });
+        };
+        let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&profile);
+        let families = session.spawn_blocking(|c| c.palw_certified_families_v1()).await;
+        let families: Vec<RpcPalwModelCertifiedFamily> = families
+            .into_iter()
+            .map(|(lane, digest, record)| {
+                let covers = reachable.is_subset(&record.family.kernel_ids);
+                RpcPalwModelCertifiedFamily {
+                    lane: match lane {
+                        kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt => "attempt".into(),
+                        kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::FreePrompt => "free_prompt".into(),
+                    },
+                    digest: digest.to_string(),
+                    covers,
+                }
+            })
+            .collect();
+        let end_to_end_certified = families.iter().any(|f| f.lane == "attempt" && f.covers);
+        Ok(GetPalwModelCertificationResponse {
+            available: true,
+            tip_daa,
+            found: true,
+            class_id: class_id.to_string(),
+            end_to_end_certified,
+            families,
+        })
+    }
+
+    async fn palw_model_preflight_report(
+        &self,
+        session: &ConsensusSessionOwned,
+        bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        tip_daa: u64,
+    ) -> RpcResult<(
+        kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightReportV1,
+        Option<kaspa_consensus_core::palw_state_v2::PalwClassRowV2>,
+    )> {
+        let class_id = match object {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, .. } => *class_id,
+            _ => return Err(RpcError::General("the object is not a ClassRegistered".into())),
+        };
+        let rows = session.spawn_blocking(|c| c.palw_v2_class_table()).await;
+        let class_row = rows.into_iter().find(|r| r.class_id == class_id);
+        let already = class_row.is_some();
+        let registered_root = class_row.as_ref().map(|r| r.artifact_root);
+        let families = session.spawn_blocking(|c| c.palw_certified_families_v1()).await;
+        let chain_certified: Vec<_> = families
+            .into_iter()
+            .filter(|(lane, _, _)| *lane == kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt)
+            .map(|(_, _, record)| record.family)
+            .collect();
+        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        let report = kaspa_consensus_core::palw_model_registration_v1::palw_model_preflight_v1(
+            &self.config.params,
+            bundle,
+            object,
+            &certified,
+            &chain_certified,
+            tip_daa,
+            already,
+            registered_root,
+        )
+        .map_err(RpcError::General)?;
+        Ok((report, class_row))
+    }
+
+    async fn fill_registration_from_tx(&self, registration: &mut RpcPalwModelRegistration, txid: &str) -> RpcResult<()> {
+        let txid = parse_hash64(txid, "transaction id")?;
+        registration.transaction_id = txid.to_string();
+        registration.submitted = true;
+        let in_mempool = self
+            .mining_manager
+            .clone()
+            .get_transaction(txid, TransactionQuery::All)
+            .await
+            .is_some();
+        if in_mempool {
+            registration.accepted = true;
+            registration.mempool_accepted = true;
+        } else if !registration.included && !registration.folded {
+            registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
+                .code()
+                .to_string();
+            if registration.processor_verdict.is_empty() {
+                registration.processor_verdict = registration.reject_code.clone();
+            }
+        }
+        Ok(())
+    }
+
     async fn get_palw_producer_facts_call(
         &self,
         _connection: Option<&DynRpcConnection>,
@@ -3516,10 +4043,202 @@ impl AsyncService for RpcCoreService {
     }
 }
 
+fn palw_v2_bundle(params: &kaspa_consensus_core::config::params::Params) -> Option<&kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
+    match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle),
+        _ => None,
+    }
+}
+
+fn decode_class_registered_hex(hex: &str) -> RpcResult<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+    let hex = hex.trim();
+    if hex.is_empty() {
+        return Err(RpcError::General("objectHex is empty".into()));
+    }
+    if hex.len() % 2 != 0 {
+        return Err(RpcError::General("objectHex is not even-length hex".into()));
+    }
+    let mut bytes = vec![0u8; hex.len() / 2];
+    faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("objectHex: {e}")))?;
+    let object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 =
+        borsh::from_slice(&bytes).map_err(|e| RpcError::General(format!("objectHex is not a ClassRegistered: {e}")))?;
+    if !matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { .. }) {
+        return Err(RpcError::General("objectHex is not a ClassRegistered".into()));
+    }
+    Ok(object)
+}
+
+fn rpc_preflight_check(check: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightCheckV1) -> RpcPalwModelPreflightCheck {
+    RpcPalwModelPreflightCheck { code: check.code.clone(), ok: check.ok, message: check.message.clone() }
+}
+
+fn rpc_preflight_response(
+    available: bool,
+    tip_daa: u64,
+    report: &kaspa_consensus_core::palw_model_registration_v1::PalwModelPreflightReportV1,
+) -> GetPalwModelPreflightResponse {
+    GetPalwModelPreflightResponse {
+        available,
+        tip_daa,
+        class_id: report.class_id.to_string(),
+        artifact_root: report.artifact_root.to_string(),
+        n_ctx: report.n_ctx,
+        layer_count: u32::from(report.layer_count),
+        admissible: report.admissible,
+        processor_verdict: report.processor_verdict.clone(),
+        reject_code: report.reject_code.clone(),
+        checks: report.checks.iter().map(rpc_preflight_check).collect(),
+    }
+}
+
+fn fill_registration_from_class(registration: &mut RpcPalwModelRegistration, row: &kaspa_consensus_core::palw_state_v2::PalwClassRowV2) {
+    registration.class_id = row.class_id.to_string();
+    registration.constructed = true;
+    registration.submitted = true;
+    registration.accepted = true;
+    registration.included = true;
+    registration.folded = true;
+    registration.included_daa = row.registered_daa;
+    registration.mempool_accepted = false;
+    registration.reject_code.clear();
+    if registration.processor_verdict.is_empty() {
+        registration.processor_verdict = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::AdmissionOk
+            .code()
+            .to_string();
+    }
+}
+
+fn finalize_registration_state(registration: &mut RpcPalwModelRegistration) {
+    use kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationStageV1 as Stage;
+    let stage = if registration.folded {
+        Stage::Folded
+    } else if registration.included {
+        Stage::Included
+    } else if registration.accepted {
+        Stage::Accepted
+    } else if registration.submitted {
+        Stage::Submitted
+    } else if registration.constructed {
+        Stage::Constructed
+    } else {
+        Stage::Constructed
+    };
+    registration.submission_state = stage.name().to_string();
+    if registration.folded {
+        registration.included = true;
+        registration.accepted = true;
+        registration.submitted = true;
+        registration.constructed = true;
+    }
+}
+
 /// A 128-hex `Hash64` off the wire, or an error naming the field — a malformed id is a request
 /// error, never an absence (the integration test pins the difference).
 fn parse_hash64(text: &str, what: &str) -> RpcResult<kaspa_hashes::Hash64> {
     text.parse::<kaspa_hashes::Hash64>().map_err(|_| RpcError::General(format!("{what} '{text}' is not a 128-hex Hash64")))
+}
+
+fn parse_class_id_or_alias(raw: &str) -> RpcResult<kaspa_hashes::Hash64> {
+    kaspa_consensus_core::palw_panel_view_v1::palw_parse_class_alias_v1(raw).map_err(RpcError::General)
+}
+
+fn rpc_hold(reason: kaspa_consensus_core::palw_panel_view_v1::PalwPanelHoldReasonV1) -> RpcPalwPanelHoldReason {
+    RpcPalwPanelHoldReason { code: reason.code().to_string(), message: reason.message().to_string() }
+}
+
+fn rpc_palw_class_panel_status(
+    row: &kaspa_consensus_core::palw_panel_view_v1::PalwClassPanelViewV1,
+    holds_local: u32,
+) -> RpcPalwClassPanelStatus {
+    RpcPalwClassPanelStatus {
+        class_id: row.class_id.to_string(),
+        model_name: row.model_name.clone(),
+        registry_state: row.registry_state.clone(),
+        bonded_seats: row.bonded_seats,
+        ready_seats: row.ready_seats,
+        required_ready_seats: row.required_ready_seats,
+        selected_panel_seats: row.selected_panel_seats,
+        valid_receipt_seats: row.valid_receipt_seats,
+        panel_size: row.geometry.panel_size,
+        receipt_quorum: row.geometry.receipt_quorum,
+        full_seats_per_panel: row.geometry.full_seats_per_panel,
+        partial_seats_per_panel: row.geometry.partial_seats_per_panel,
+        segment_count: row.geometry.segment_count,
+        inflight_claims: row.inflight_claims,
+        active_assignments: row.active_assignments,
+        admission_permille: row.admission_permille,
+        verification_mode: row.verification.name.to_string(),
+        s1_active: row.verification.s1_active,
+        s1_scheduled_daa: row.verification.s1_scheduled_daa,
+        s3_active: row.verification.s3_active,
+        s3_scheduled_daa: row.verification.s3_scheduled_daa,
+        s2_active: row.verification.s2_active,
+        s2_scheduled_daa: row.verification.s2_scheduled_daa,
+        holds_local,
+        missing: row
+            .missing
+            .iter()
+            .map(|(reason, n)| RpcPalwPanelHoldReasonCount {
+                code: reason.code().to_string(),
+                message: reason.message().to_string(),
+                seats: *n,
+            })
+            .collect(),
+    }
+}
+
+fn rpc_palw_panel_seat(row: kaspa_consensus_core::palw_panel_view_v1::PalwPanelSeatViewV1) -> RpcPalwPanelSeat {
+    let id = kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(row.seat_id);
+    RpcPalwPanelSeat {
+        seat_id: id.clone(),
+        bond_outpoint: id,
+        class_id: row.class_id.to_string(),
+        ready: row.ready,
+        eligible: row.eligible,
+        readiness_version: row.readiness_version,
+        readiness_proved_daa: row.readiness_proved_daa,
+        readiness_expires_daa: row.readiness_expires_daa,
+        collateral_available: row.collateral_available.to_string(),
+        collateral_locked: row.collateral_locked.to_string(),
+        assigned: row.assigned,
+        hold: row.hold.map(rpc_hold),
+    }
+}
+
+fn rpc_palw_panel_assignment(row: kaspa_consensus_core::palw_panel_view_v1::PalwPanelAssignmentViewV1) -> RpcPalwPanelAssignment {
+    RpcPalwPanelAssignment {
+        claim_id: row.claim_id.to_string(),
+        class_id: row.class_id.to_string(),
+        licensed_state: row.licensed_state.to_string(),
+        deadline_daa: row.deadline_daa,
+        coverage_mask: row.coverage_mask,
+        full_seat: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(row.full_seat),
+        valid_receipt_seats: row.valid_receipt_seats,
+        selected_panel_seats: row.selected_panel_seats,
+        seats: row
+            .seats
+            .into_iter()
+            .map(|s| RpcPalwPanelAssignmentSeat {
+                seat_id: kaspa_consensus_core::palw_panel_view_v1::palw_bond_seat_id_v1(s.seat_id),
+                seat_index: s.seat_index,
+                full_seat: s.full_seat,
+                segment_index: s.segment_index,
+                mask: s.mask,
+                receipt_status: s.receipt_status.to_string(),
+                credited_daa: s.credited_daa,
+            })
+            .collect(),
+    }
+}
+
+fn local_hold_or_chain(
+    local: &kaspa_p2p_flows::flow_context::PalwLocalPanelClassV1,
+    seat: Option<&kaspa_consensus_core::palw_panel_view_v1::PalwPanelSeatViewV1>,
+) -> Option<RpcPalwPanelHoldReason> {
+    if !local.hold_code.is_empty() {
+        return Some(RpcPalwPanelHoldReason { code: local.hold_code.clone(), message: local.hold_message.clone() });
+    }
+    seat.and_then(|s| s.hold).map(rpc_hold)
 }
 
 /// ADR-0088 Decision 12: one line's row for the wire.

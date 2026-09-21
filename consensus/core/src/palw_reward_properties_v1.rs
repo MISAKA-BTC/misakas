@@ -1134,12 +1134,12 @@ fn a_reused_prefix_is_paid_for_as_if_it_were_new() {
 /// statement the old assertion was reaching for when it compared a padded prompt to a one-token
 /// job — which is not the same thing, because position 500 is not position 1.
 ///
-/// **The KV half is still open, and it is named rather than assumed away.** A producer that
-/// computed a prefix locally and never committed it is credited the whole prefill, because the
-/// chain has no row to discount against. Closing that needs the prefix-STATE commitment ADR-0145 §6
-/// describes, which moves the object's wire. What the chain can see — every prefix it has PAID for,
-/// on this class, whoever committed it and whether or not that claim has since retired — it now
-/// subtracts uniquely.
+/// **The KV half is closed in the derivation, and still omitted on the V3 wire.** A producer
+/// that computed a prefix locally names it as [`crate::palw_freeprompt_v3::PalwFpPrefixStateV1`];
+/// `fp_derive_work_from_state_v1` then prices `KvReused` and credits the tail only. A V3
+/// commitment that does not carry the object is genesis, so live claims still take the paid-prompt
+/// path only. The object family exists; putting it on the commitment is a new payload version,
+/// not an in-place field on V3.
 #[test]
 fn a_reused_prefix_is_not_paid_for_twice() {
     use crate::palw_freeprompt_v3::fp_derive_work_v1;

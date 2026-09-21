@@ -1,7 +1,13 @@
 # ADR-0146 — A coefficient is justified by the arbitrage it permits, not by being right
 
-**Status:** DESIGN, 2026-09-19. No code, no fence. ADR-0145 named the coefficient table its hardest
-open question and deferred it here.
+**Status:** SEARCH IMPLEMENTED 2026-09-21. No coefficient table, no fence, no `Params` field.
+`palw_arbitrage_search_v1` is the committed program Rule R7 asked for (`cargo test -p
+kaspa-consensus-core palw_arbitrage_search`). The bound it reports for the derivation is
+1.000000× across the four shipped classes and across the admissible declaration space of one
+class, so there is no table to write and no scalar to arm. §6 (resident vs paged) stays an open
+cost question, not a price lever.
+
+ADR-0145 named the coefficient table its hardest open question and deferred it here.
 
 ---
 
@@ -263,3 +269,16 @@ does not distinguish resident from paged. What changed is the shape of the quest
 is a difference between classes in COST, not a lever a registrant can pull in PRICE. An arbitrage
 would block the bundle. A cost asymmetry the protocol does not price is an open design question,
 and it is recorded here rather than closed.
+
+---
+
+## 10. Implementation (2026-09-21)
+
+The committed program Rule R7 asked for is `palw_arbitrage_search_v1`
+(`cargo test -p kaspa-consensus-core palw_arbitrage_search`). It reports a 1.000000× bound
+across the four shipped classes and across the admissible declaration space of one class, and
+the provisional scalar did not swallow traffic. There is therefore **no coefficient table to
+write and no scalar to arm**. ADR-0144 P4 is satisfied: 0147–0149 may arm without contradicting
+representation-neutral accounting. They stay `None` on every shipped preset — choosing a height
+is a different commit from knowing the height would be legal. §6 (resident vs paged) remains
+the open cost question this ADR already recorded.

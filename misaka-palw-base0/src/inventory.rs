@@ -41,10 +41,13 @@
 //!   were named by the graph as registered tensors, and a `const` in a binary is precisely a
 //!   parameter nothing can open.
 
+use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_artifact::{
     PalwArtifactInventoryDigestV1, PalwArtifactInventoryStreamV1, PalwArtifactInventorySummaryV1, PalwArtifactInventoryV1,
     PalwArtifactOperandV1, PalwArtifactRowDigestV1, PalwInventoryError, artifact_leaf_parts_v1,
 };
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 use kaspa_consensus_core::palw_base0_ops::ScaleParams;
 use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_tensor_names_v1};
 use kaspa_consensus_core::palw_shard_plan_v1::PalwInventoryRowMetaV1;
@@ -93,6 +96,82 @@ fn rope_row_bytes(table: &crate::rope::RopeTableV1, d_head: usize, position: usi
         out.extend_from_slice(&v.to_le_bytes());
     }
     out
+}
+
+/// Process-local A16 inventory digests. Pairing a held 2M class walks one rotary row per position
+/// per rope node; the panel then rebuilds the same object at submit. The root is a function of
+/// `(artifact digest, profile id)`, so the second walk is the first walk's answer kept.
+fn a16_inventory_digest_cache_v1()
+-> &'static Mutex<HashMap<(Hash64, Hash64), Arc<PalwArtifactInventoryDigestV1>>> {
+    static CACHE: OnceLock<Mutex<HashMap<(Hash64, Hash64), Arc<PalwArtifactInventoryDigestV1>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn a16_inventory_digest_key_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> (Hash64, Hash64) {
+    (artifact.artifact_digest(), profile.shape_profile_id())
+}
+
+/// The court-capable A16 inventory, retained after the first walk so registration preflight,
+/// submit rebuild, and a seat's possession proof do not re-hash 2M rotary rows.
+pub(crate) fn a16_inventory_digest_arc_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<Arc<PalwArtifactInventoryDigestV1>, InventoryBuildError> {
+    let key = a16_inventory_digest_key_v1(artifact, profile);
+    if let Ok(cache) = a16_inventory_digest_cache_v1().lock() {
+        if let Some(hit) = cache.get(&key) {
+            return Ok(Arc::clone(hit));
+        }
+    }
+    let built = Arc::new(a16_inventory_digest_uncached_v1(artifact, profile)?);
+    if let Ok(mut cache) = a16_inventory_digest_cache_v1().lock() {
+        cache.insert(key, Arc::clone(&built));
+    }
+    Ok(built)
+}
+
+/// Root only — the value `ClassRegistered` pins. Does not clone the leaf vector.
+pub fn a16_inventory_root_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<Hash64, InventoryBuildError> {
+    Ok(a16_inventory_digest_arc_v1(artifact, profile)?.root())
+}
+
+fn a16_rope_row_at_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    tensor_name: &str,
+    layer: Option<u16>,
+    row_start: u32,
+) -> Option<Vec<u8>> {
+    use kaspa_consensus_core::palw_step::kernel_semantics_id_v1 as kid;
+    use kaspa_consensus_core::palw_step_refute as kd;
+    let k_rope = kid(kd::KDESC_A16_ROPE);
+    let mut is_rope = false;
+    for slot in 0..profile.global_node_count() {
+        let Some((node, node_layer)) = profile.resolve_node_slot(slot) else { continue };
+        if node.kernel_semantics_id == k_rope && node.weight_name == tensor_name && node_layer == layer {
+            is_rope = true;
+            break;
+        }
+    }
+    if !is_rope {
+        return None;
+    }
+    let pairs = artifact.shape.d_head / 2;
+    let row_len = 8usize.checked_mul(pairs)?;
+    if row_len == 0 || (row_start as usize) % row_len != 0 {
+        return None;
+    }
+    let position = (row_start as usize) / row_len;
+    if position >= artifact.shape.max_position {
+        return None;
+    }
+    Some(rope_row_bytes(&artifact.rope, artifact.shape.d_head, position))
 }
 
 /// Tile one weight matrix into the rows a `MatMulQuant` opening addresses.
@@ -488,8 +567,7 @@ pub fn a16_inventory_v1(
     PalwArtifactInventoryV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
-/// **The A16 inventory as digests** — one row's bytes alive at a time.
-pub fn a16_inventory_digest_v1(
+fn a16_inventory_digest_uncached_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
 ) -> Result<PalwArtifactInventoryDigestV1, InventoryBuildError> {
@@ -508,8 +586,18 @@ pub fn a16_inventory_digest_v1(
     PalwArtifactInventoryDigestV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
+/// **The A16 inventory as digests** — one row's bytes alive at a time. The first call for a
+/// `(artifact, profile)` pair walks; later calls return the same leaves.
+pub fn a16_inventory_digest_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<PalwArtifactInventoryDigestV1, InventoryBuildError> {
+    Ok((*a16_inventory_digest_arc_v1(artifact, profile)?).clone())
+}
+
 /// **One row's bytes** of the A16 inventory, by its key — a second pass over the artifact that
-/// keeps nothing but the row asked for.
+/// keeps nothing but the row asked for. Rope leaves are O(1) in the position; every other
+/// operand still streams until the named row.
 pub fn a16_inventory_row_bytes_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
@@ -517,6 +605,9 @@ pub fn a16_inventory_row_bytes_v1(
     layer: Option<u16>,
     row_start: u32,
 ) -> Result<Option<Vec<u8>>, InventoryBuildError> {
+    if let Some(bytes) = a16_rope_row_at_v1(artifact, profile, tensor_name, layer, row_start) {
+        return Ok(Some(bytes));
+    }
     let mut wanted: Option<Vec<u8>> = None;
     a16_visit_inventory_rows_v1(artifact, profile, &mut |name, l, start, bytes| {
         if wanted.is_none() && name == tensor_name && l == layer && start == row_start {

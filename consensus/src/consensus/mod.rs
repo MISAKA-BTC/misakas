@@ -2253,6 +2253,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_model_registry_v1_impl()
     }
 
+    fn palw_panel_network_view_v1(&self) -> Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNetworkViewV1> {
+        self.virtual_processor.palw_panel_network_view_v1_impl()
+    }
+
     fn palw_certified_families_v1(
         &self,
     ) -> Vec<(
@@ -2303,6 +2307,22 @@ impl ConsensusApi for Consensus {
         candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.virtual_processor.palw_v2_receipt_quorum_assemble_impl(claim, &candidates)
+    }
+
+    fn palw_v2_receipt_coverage_assemble(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.virtual_processor.palw_v2_receipt_coverage_assemble_impl(claim, &candidates)
+    }
+
+    fn palw_v2_optimistic_assemble(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.virtual_processor.palw_v2_optimistic_assemble_impl(claim, &candidates)
     }
 
     fn palw_v2_supplementary_receipt_assemble(

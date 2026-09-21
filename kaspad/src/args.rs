@@ -340,6 +340,8 @@ pub struct Args {
     /// target at or below it.
     pub palw_single_lottery_devnet_daa: Option<u64>,
     pub palw_verification_v2_devnet_daa: Option<u64>,
+    pub palw_verification_s3_devnet_daa: Option<u64>,
+    pub palw_verification_s2_devnet_daa: Option<u64>,
     pub palw_readiness_v2_devnet_daa: Option<u64>,
     pub palw_anchor_clock_devnet_daa: Option<u64>,
     /// ADR-0143 on a private devnet: the DAA from which an artifact root has one owner.
@@ -486,6 +488,8 @@ impl Default for Args {
             palw_work_target_devnet_daa: None,
             palw_single_lottery_devnet_daa: None,
             palw_verification_v2_devnet_daa: None,
+            palw_verification_s3_devnet_daa: None,
+            palw_verification_s2_devnet_daa: None,
             palw_readiness_v2_devnet_daa: None,
             palw_anchor_clock_devnet_daa: None,
             palw_artifact_root_ownership_devnet_daa: None,
@@ -814,6 +818,46 @@ impl Args {
             config.params.palw_verification_v2 = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
             if let Err(e) = config.params.validate_palw_v2() {
                 panic!("--palw-verification-v2-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_verification_s3_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-verification-s3-devnet is devnet/simnet only (got {net:?}). Arming Verification S3 is a consensus \
+                     change and ships in a release, not a command line."
+                );
+            }
+            if config.params.palw_verification_v2.is_none() {
+                panic!(
+                    "--palw-verification-s3-devnet={daa} needs --palw-verification-v2-devnet at or below it: sampling attests a \
+                     V2 mask"
+                );
+            }
+            config.params.palw_verification_s3 = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-verification-s3-devnet={daa} produced a ruleset the node refuses: {e:?}");
+            }
+        }
+
+        if let Some(daa) = self.palw_verification_s2_devnet_daa {
+            let net = self.network().network_type();
+            if !matches!(net, NetworkType::Devnet | NetworkType::Simnet) {
+                panic!(
+                    "--palw-verification-s2-devnet is devnet/simnet only (got {net:?}). Arming Verification S2 is a consensus \
+                     change and ships in a release, not a command line."
+                );
+            }
+            if config.params.palw_verification_v2.is_none() {
+                panic!(
+                    "--palw-verification-s2-devnet={daa} needs --palw-verification-v2-devnet at or below it: the optimistic \
+                     licence is a door on S1's assignment"
+                );
+            }
+            config.params.palw_verification_s2 = Some(kaspa_consensus_core::config::params::ForkActivation::new(daa));
+            if let Err(e) = config.params.validate_palw_v2() {
+                panic!("--palw-verification-s2-devnet={daa} produced a ruleset the node refuses: {e:?}");
             }
         }
 
@@ -1587,6 +1631,31 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_VERIFICATION_V2_DEVNET"),
         )
         .arg(
+            Arg::new("palw-verification-s3-devnet")
+                .long("palw-verification-s3-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0133 S3 on a PRIVATE devnet: arm post-execution layer/position sampling at this DAA score. Needs \
+                     --palw-verification-v2-devnet at or below it. Unused until this height is crossed. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_VERIFICATION_S3_DEVNET"),
+        )
+        .arg(
+            Arg::new("palw-verification-s2-devnet")
+                .long("palw-verification-s2-devnet")
+                .value_name("daa-score")
+                .value_parser(clap::value_parser!(u64))
+                .require_equals(false)
+                .help(
+                    "ADR-0133 S2 on a PRIVATE devnet: arm optimistic licence from the full-replay seat at this DAA score. Needs \
+                     --palw-verification-v2-devnet at or below it, and S3 at or below it when S3 is armed. Unused until this \
+                     height is crossed. DEVNET/SIMNET ONLY.",
+                )
+                .env("KASPAD_PALW_VERIFICATION_S2_DEVNET"),
+        )
+        .arg(
             Arg::new("palw-readiness-v2-devnet")
                 .long("palw-readiness-v2-devnet")
                 .value_name("daa-score")
@@ -2088,6 +2157,14 @@ impl Args {
                 .get_one::<u64>("palw-verification-v2-devnet")
                 .copied()
                 .or(defaults.palw_verification_v2_devnet_daa),
+            palw_verification_s3_devnet_daa: m
+                .get_one::<u64>("palw-verification-s3-devnet")
+                .copied()
+                .or(defaults.palw_verification_s3_devnet_daa),
+            palw_verification_s2_devnet_daa: m
+                .get_one::<u64>("palw-verification-s2-devnet")
+                .copied()
+                .or(defaults.palw_verification_s2_devnet_daa),
             palw_readiness_v2_devnet_daa: m
                 .get_one::<u64>("palw-readiness-v2-devnet")
                 .copied()

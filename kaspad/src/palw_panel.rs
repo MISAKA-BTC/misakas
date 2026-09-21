@@ -44,7 +44,8 @@ use kaspa_consensus_core::palw_court_v2::{
 };
 use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
 use kaspa_consensus_core::palw_panel_v2::{
-    PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
+    PALW_RECEIPT_V2_MLDSA87_CONTEXT, PALW_RECEIPT_V3_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3,
+    palw_receipt_message_v2, palw_receipt_message_v3,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwConsensusObjectV2};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
@@ -734,6 +735,60 @@ impl PalwPanelService {
         }
     }
 
+    /// Node-local panel facts for `getPalwPanelStatus`: artifact, working-set, replay, hold reason.
+    fn publish_local_panel_status(
+        &self,
+        read: &kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1,
+        synced: bool,
+    ) {
+        use kaspa_consensus_core::palw_panel_view_v1::{palw_bond_seat_id_v1, palw_class_model_name_v1, PalwPanelHoldReasonV1};
+        let Some(bond) = self.bond else { return };
+        let seat_id = palw_bond_seat_id_v1(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond));
+        let backends = self.backends();
+        let ibd = self.flow_context.is_ibd_running() || !synced;
+        let mut rows = Vec::new();
+        for class in read.classes.iter().filter(|c| !c.is_base_class) {
+            let mut hold = None;
+            let mut artifact_loaded = false;
+            let mut artifact_root = String::new();
+            let mut working_set_bytes = 0u64;
+            match backends.resolve(class.class_id, class.artifact_root) {
+                Ok(_) => {
+                    artifact_loaded = true;
+                    artifact_root = class.artifact_root.to_string();
+                    working_set_bytes = backends.holding_bytes_for_v1(class.class_id, class.artifact_root).unwrap_or(0);
+                    if self.replay_memory_budget_v1(Some((class.class_id, class.artifact_root))).is_err() {
+                        hold = Some(PalwPanelHoldReasonV1::ReplayBudgetInsufficient);
+                    }
+                }
+                Err(e) => {
+                    let msg = e.to_lowercase();
+                    hold = Some(if msg.contains("root") {
+                        PalwPanelHoldReasonV1::ArtifactRootMismatch
+                    } else {
+                        PalwPanelHoldReasonV1::NoArtifact
+                    });
+                }
+            }
+            if ibd {
+                hold = Some(PalwPanelHoldReasonV1::NodeIbd);
+            }
+            let replay_capable = artifact_loaded && hold.is_none() && !ibd;
+            rows.push(kaspa_p2p_flows::flow_context::PalwLocalPanelClassV1 {
+                class_id: class.class_id.to_string(),
+                model_name: palw_class_model_name_v1(class.class_id),
+                seat_id: seat_id.clone(),
+                artifact_loaded,
+                artifact_root,
+                working_set_bytes,
+                replay_capable,
+                hold_code: hold.map(|h| h.code().to_string()).unwrap_or_default(),
+                hold_message: hold.map(|h| h.message().to_string()).unwrap_or_default(),
+            });
+        }
+        self.flow_context.update_palw_runtime(|r| r.panel_classes = rows);
+    }
+
     /// **ADR-0135 Decision 4, the seat's side: the possession proofs due now.** Every thirty
     /// seconds the registry is read; for each non-base class the registry governs or is about to
     /// (proofs are taken from the fence, through the grace), a proof is built when the chain holds
@@ -757,10 +812,16 @@ impl PalwPanelService {
         if self.keypair.is_none() {
             return Vec::new();
         }
-        // A seat that is not participating normally (IBD running, not near the tip) proves nothing:
-        // its proof would name a span it cannot see the end of, and a seat that cannot verify is not
-        // ready whatever it holds.
         if self.flow_context.is_ibd_running() || !synced {
+            if let Some(read) = session.palw_model_registry_v1() {
+                self.publish_local_panel_status(&read, false);
+            }
+            crate::palw_backends::note_throttled_v1("panel-proofs-unsynced", || {
+                format!(
+                    "[{PALW_PANEL}] no possession proofs this tick — the seat is not near the tip (ibd={}, synced={synced})",
+                    self.flow_context.is_ibd_running()
+                )
+            });
             return Vec::new();
         }
         {
@@ -771,6 +832,7 @@ impl PalwPanelService {
             *at = Some(std::time::Instant::now());
         }
         let Some(read) = session.palw_model_registry_v1() else { return Vec::new() };
+        self.publish_local_panel_status(&read, true);
         let (true, Some(globals)) = (read.active, read.globals) else { return Vec::new() };
         if read.span_daa == 0 {
             return Vec::new();
@@ -1007,8 +1069,8 @@ impl PalwPanelService {
         out
     }
 
-    /// The bytes a replay of a held class needs on this host: the largest held artifact file (its
-    /// pages, mapped and shared, still have to be resident to replay) plus one replay's scratch.
+    /// The bytes a replay of a held class needs on this host: the holding that serves that class
+    /// (ADR-0112 residency for a Qwen3.6 mmap, otherwise the file) plus one replay's scratch.
     /// **What a replay of THIS class needs on this host** (H-4 of the 2026-09-18 audit). It used to
     /// be the largest file among every holding, so a host that also held a 24 GiB artifact proved
     /// readiness for nothing and replayed nothing — for every class, however small, which on a
@@ -1017,14 +1079,10 @@ impl PalwPanelService {
     /// that resolves) it falls back to the old conservative maximum, because a need this node
     /// cannot place is not one it may under-state.
     fn replay_memory_need_bytes_v1(&self, class: Option<(Hash64, Hash64)>) -> u64 {
-        let per_class = class.and_then(|(class_id, artifact_root)| self.backends().holding_bytes_for_v1(class_id, artifact_root));
+        let per_class =
+            class.and_then(|(class_id, artifact_root)| self.backends().incremental_replay_bytes_for_v1(class_id, artifact_root));
         let artifact = per_class.unwrap_or_else(|| {
-            self.class_holdings
-                .iter()
-                .filter_map(|holding| holding.path.as_ref())
-                .filter_map(|path| std::fs::metadata(path).ok().map(|m| m.len()))
-                .max()
-                .unwrap_or(0)
+            self.class_holdings.iter().filter_map(crate::palw_backends::holding_replay_bytes_v1).max().unwrap_or(0)
         });
         artifact.saturating_add(crate::palw_backends::PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1)
     }
@@ -2772,6 +2830,7 @@ impl PalwPanelService {
             (u64, Option<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1>),
         > = HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
+        let mut receipts_v3: HashMap<Hash64, Vec<PalwSeatReceiptV3>> = HashMap::new();
         // **Keyed by the PANEL, not by the claim** (ADR-0060's redraw, found while landing
         // ADR-0065 D4). A claim whose panel concludes nothing is revived once and binds a SECOND
         // panel anchored on the sweep, which is the mechanism D4 leans on when a seat cannot be
@@ -2914,7 +2973,16 @@ impl PalwPanelService {
                         }
                     }
                     PalwGossipEvent::Receipt { bytes } => {
-                        if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV2>(&bytes) {
+                        if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV3>(&bytes) {
+                            let plausible = !receipt.receipt.signature.is_empty();
+                            let pool = receipts_v3.entry(receipt.receipt.claim).or_default();
+                            if plausible && !pool.contains(&receipt) {
+                                if pool.len() >= RECEIPTS_PER_CLAIM {
+                                    pool.remove(0);
+                                }
+                                pool.push(receipt);
+                            }
+                        } else if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV2>(&bytes) {
                             // **A receipt with no signature is not a receipt.** The pool is
                             // unauthenticated and capped, so sixteen well-formed junk receipts
                             // naming a live claim used to fill it before any real one arrived —
@@ -2987,8 +3055,16 @@ impl PalwPanelService {
                 // Did the class actually appear? `registered_class_ids` is the chain's own answer,
                 // and it is the ONE fact that distinguishes "the carrier was mined and the object
                 // stood" from "the carrier was mined and the object was dropped inside it".
-                let landed = match (session.palw_v2_registration_terms(), self.class_registration_id()) {
-                    (Some(terms), Some(id)) => terms.registered_class_ids.contains(&id),
+                //
+                // The id is the object we already built — never `class_registration_id()`, which
+                // re-pairs the holding and at 2M walks the A16 inventory again (~17 min) just to
+                // learn a Hash64 we signed. A court-capable A16 registration that paid that walk
+                // to submit would then pay it every tick until the carrier landed.
+                let landed = match (session.palw_v2_registration_terms(), &class_registration) {
+                    (Some(terms), Some(PalwConsensusObjectV2::ClassRegistered { class_id, .. })) => {
+                        terms.registered_class_ids.contains(class_id)
+                    }
+                    (Some(terms), _) => self.class_registration_id().is_some_and(|id| terms.registered_class_ids.contains(&id)),
                     // No terms (no V2 bundle) or no id this node can derive: the honest answer is
                     // "cannot tell", and the retry horizon below is what keeps that from latching.
                     _ => false,
@@ -3023,6 +3099,73 @@ impl PalwPanelService {
                     }
                     Err(e) => warn!("[{PALW_PANEL}] cannot register this node's class: {e}"),
                 }
+            }
+            // **Submit HERE, before the duty sweep.** The funded carrier used to be built at the
+            // bottom of the tick, after every seated claim had been judged. On a 2M A16 registrant
+            // that sweep never finished (one replay of a foreign duty sat for tens of minutes), so
+            // the object existed in memory and the chain never saw it. The fee UTXO is readable
+            // now; the live target was just sampled into the object.
+            if self.config.register_class.is_some()
+                && !class_registration_done
+                && class_registration_inflight.is_none()
+                && class_registration.is_some()
+            {
+                let registration_waits = kaspa_consensus_core::palw_model_registry_v1::palw_registration_waits_for_fences_v2(
+                    self.consensus_config.params.palw_model_registry,
+                    self.consensus_config.params.palw_admission_independence,
+                    current_daa,
+                );
+                if registration_waits {
+                    crate::palw_backends::note_throttled_v1("class-registration-waits-for-registry", || {
+                        format!(
+                            "[{PALW_PANEL}] holding the class registration at daa {current_daa}: the model registry's fence is \
+                             scheduled at daa {} and a class registered before it gets no lifecycle row",
+                            self.consensus_config.params.palw_model_registry.map(|f| f.daa_score()).unwrap_or(0)
+                        )
+                    });
+                } else if let Some((funding_outpoint, funding_entry)) = self.resolve_fee_funding(&session).await {
+                    if let Some(object) = class_registration.clone() {
+                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                    Ok(()) => {
+                                        info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
+                                        class_registration_inflight = Some((txid, current_daa));
+                                        let next = TransactionOutpoint::new(txid, 0);
+                                        self.persist_fee_outpoint(next);
+                                        chained_funding = Some((
+                                            next,
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        inflight = inflight.saturating_add(1);
+                                    }
+                                    Err(e) => warn!("[{PALW_PANEL}] the mempool refused the class registration: {e}"),
+                                }
+                            }
+                            Err(e) => warn!("[{PALW_PANEL}] cannot build the class registration carrier: {e}"),
+                        }
+                    }
+                } else {
+                    crate::palw_backends::note_throttled_v1("class-registration-waits-for-funding", || {
+                        format!(
+                            "[{PALW_PANEL}] class registration is built and waiting: no fee UTXO resolves this tick \
+                             (--palw-fee-outpoint {})",
+                            self.config.fee_outpoint.as_deref().unwrap_or("unset")
+                        )
+                    });
+                }
+            }
+            // Do not spend the rest of the tick on a foreign duty backlog while this node's class
+            // is still unregistered — that is the stall that left the 2M object unsent.
+            if self.config.register_class.is_some() && !class_registration_done {
+                continue;
             }
 
             // --- the challenger's half: dispute a licensed claim whose execution is not the
@@ -3976,7 +4119,36 @@ impl PalwPanelService {
                         // into the blocking task with a copy of the accused capture.
                         let carried_prompt: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
                         let roots_for_close = roots;
+                        let resume_accused = self.consensus_config.params.palw_verification_v2_at(current_daa);
+                        let accused_seats = duty.panel_seat_count;
                         let Ok((_backend, assembled)) = offload(backend, move |b| {
+                            // ADR-0133 S1 (4): a close of an accused leaf resumes the V2 segment
+                            // that contains it from the published checkpoint, then still files the
+                            // per-leaf refutation the chain's close check reads.
+                            if resume_accused
+                                && accused_seats > 0
+                                && let CloseSource::Capture(accused_bytes) = &source
+                                && let Some(shape) = b.capture_shape(accused_bytes)
+                            {
+                                let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(accused_seats);
+                                if let Some(segment) = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(
+                                    shape.step_leaf_count,
+                                    k,
+                                    index,
+                                ) {
+                                    let prompt: Vec<usize> = carried_prompt
+                                        .as_ref()
+                                        .map(|ids| ids.iter().map(|t| *t as usize).collect())
+                                        .unwrap_or_default();
+                                    let _ = b.replay_accused_segment_v1(
+                                        accused_bytes,
+                                        accused_seats,
+                                        segment,
+                                        &shape.job_context,
+                                        &prompt,
+                                    );
+                                }
+                            }
                             let refutation = match &source {
                                 CloseSource::Capture(accused_bytes) => match &carried_prompt {
                                     Some(ids) => b.refutation_for_free_prompt_index(accused_bytes, index, ids),
@@ -4252,6 +4424,7 @@ impl PalwPanelService {
                     continue;
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
+                let mut segments_attested: Option<kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2> = None;
                 // **Host memory, node-local and never consensus**: a replay that would push this host
                 // past its usable memory waits for a later tick instead of starting — swap is not
                 // capacity, and a host in swap finishes no replay at all. The deadline still runs;
@@ -4330,18 +4503,69 @@ impl PalwPanelService {
                     // them off the duty) but so the common garbage fails before the expensive
                     // step.
                     if duty.free_prompt {
-                        // **The interval seat comes FIRST** (ADR-0077 Decision 8, ADR-0082
-                        // Decision 9). It replays `k` drawn intervals against state this node
-                        // recomputed for itself and fetches neither the history nor the capture;
-                        // the whole-capture arms below are what a seat does when the class, the
-                        // executor or this build cannot do that, and they are unchanged.
+                        // **Past Verification V2 a partial seat resumes assigned segments first**
+                        // (ADR-0133 S1). The interval seat (ADR-0077 Decision 8, ADR-0082 Decision 9)
+                        // stays the fallback for the full-replay seat and for a seat that cannot
+                        // open a checkpoint; the whole-capture arms below remain what a seat does
+                        // when the class, the executor or this build cannot do either.
                         let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
                         if let Some(material) =
                             self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
                             && let Ok(resolved) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
-                            && let Some(prompt_ids) =
-                                Self::fp_prompt_for_job(resolved.as_ref(), &material, self.class_prompt_ids_form(material.job.class_id))
-                            && let Some(output_ids) = self.fp_committed_output_ids_v1(resolved.as_ref(), duty, &held)
+                            && let Some(prompt_ids) = Self::fp_prompt_for_job(
+                                resolved.as_ref(),
+                                &material,
+                                self.class_prompt_ids_form(material.job.class_id),
+                            )
+                        {
+                            let output_ids = self.fp_committed_output_ids_v1(resolved.as_ref(), duty, &held);
+                            if self.consensus_config.params.palw_verification_v2_at(current_daa) {
+                                let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+                                let ctx = output_ids
+                                    .as_ref()
+                                    .and_then(|ids| {
+                                        resolved.fp_job_context_for_executed_v1(&material.job, ids.len().min(u32::MAX as usize) as u32)
+                                    })
+                                    .or_else(|| resolved.fp_job_context_v1(&material.job));
+                                if let Some(ctx) = ctx {
+                                    match self
+                                        .palw_v2_try_partial_resume_v1(
+                                            duty,
+                                            resolved.as_ref(),
+                                            &ctx,
+                                            &prompt,
+                                            current_daa,
+                                            network_domain,
+                                            &held,
+                                            &interval_openings,
+                                            &mut requested_intervals,
+                                        )
+                                        .await
+                                    {
+                                        PalwV2SeatPathV1::Waiting => break 'verdict None,
+                                        PalwV2SeatPathV1::Faulted => break 'verdict None,
+                                        PalwV2SeatPathV1::Attested(mask) => {
+                                            segments_attested = Some(mask);
+                                            info!(
+                                                "[{PALW_PANEL}] claim {}: licensed by V2 segment resume — mask {:#x} (ADR-0133 S1)",
+                                                duty.claim_id, mask.0
+                                            );
+                                            break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                                        }
+                                        PalwV2SeatPathV1::FullReplay => {}
+                                    }
+                                }
+                            }
+                            if self.consensus_config.params.palw_verification_v2_at(current_daa) {
+                                let assignment = kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                                    duty.panel_anchor,
+                                    duty.claim_id,
+                                    duty.panel_seat_count.max(1),
+                                );
+                                if duty.seat_index as u16 != assignment.full_seat {
+                                    break 'verdict None;
+                                }
+                            }
                             // **The seat's ONE context per claim, built from what RAN** (ADR-0084
                             // Decision 4, ADR-0074 Decision 7). The executed count is the answer's
                             // length, and the line above has already made the chain's
@@ -4350,23 +4574,37 @@ impl PalwPanelService {
                             // early. Built at the CEILING it excluded every `EndOfGeneration`
                             // claim from this lane by making its surplus interval indices
                             // unopenable by construction.
-                            && let Some(ctx) = resolved
-                                .fp_job_context_for_executed_v1(&material.job, output_ids.len().min(u32::MAX as usize) as u32)
-                            && let Some(verdict) = self
-                                .interval_seat_outcome_v1(
-                                    &session,
-                                    duty,
-                                    network_domain,
-                                    current_daa,
-                                    &ctx,
-                                    kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&material.job),
-                                    &prompt_ids,
-                                    &output_ids,
-                                    &interval_openings,
-                                )
-                                .await
-                        {
-                            break 'verdict Some(verdict);
+                            if let Some(output_ids) = output_ids
+                                && let Some(ctx) = resolved
+                                    .fp_job_context_for_executed_v1(&material.job, output_ids.len().min(u32::MAX as usize) as u32)
+                                && let Some(verdict) = self
+                                    .interval_seat_outcome_v1(
+                                        &session,
+                                        duty,
+                                        network_domain,
+                                        current_daa,
+                                        &ctx,
+                                        kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&material.job),
+                                        &prompt_ids,
+                                        &output_ids,
+                                        &interval_openings,
+                                    )
+                                    .await
+                            {
+                                break 'verdict Some(verdict);
+                            }
+                        }
+                        if self.consensus_config.params.palw_verification_v2_at(current_daa) {
+                            let assignment = kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                                duty.panel_anchor,
+                                duty.claim_id,
+                                duty.panel_seat_count.max(1),
+                            );
+                            if duty.seat_index as u16 != assignment.full_seat {
+                                // Partial seats wait on SC01 resume. Genesis full replay is the
+                                // designated full-replay seat's duty only.
+                                break 'verdict None;
+                            }
                         }
                         // ADR-0098 Decision 2, the same round: the interval arm may just have found
                         // one. The capture arm below would otherwise certify a claim this seat has
@@ -4806,6 +5044,44 @@ impl PalwPanelService {
                         let resolved = if current_daa >= duty.bound_daa.saturating_add(PALW_ATTEMPT_REPLAY_GRACE_DAA)
                             && replayed.insert(duty.claim_id)
                         {
+                            if self.consensus_config.params.palw_verification_v2_at(current_daa) {
+                                match self
+                                    .palw_v2_try_partial_resume_v1(
+                                        duty,
+                                        resolved.as_ref(),
+                                        &ctx,
+                                        &prompt,
+                                        current_daa,
+                                        network_domain,
+                                        materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]),
+                                        &interval_openings,
+                                        &mut requested_intervals,
+                                    )
+                                    .await
+                                {
+                                    PalwV2SeatPathV1::Waiting => break 'verdict None,
+                                    PalwV2SeatPathV1::Faulted => break 'verdict None,
+                                    PalwV2SeatPathV1::Attested(mask) => {
+                                        segments_attested = Some(mask);
+                                        info!(
+                                            "[{PALW_PANEL}] claim {}: licensed by V2 segment resume — mask {:#x} (ADR-0133 S1)",
+                                            duty.claim_id, mask.0
+                                        );
+                                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                                    }
+                                    PalwV2SeatPathV1::FullReplay => {}
+                                }
+                            }
+                            let assignment = kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                                duty.panel_anchor,
+                                duty.claim_id,
+                                duty.panel_seat_count.max(1),
+                            );
+                            if self.consensus_config.params.palw_verification_v2_at(current_daa)
+                                && duty.seat_index as u16 != assignment.full_seat
+                            {
+                                break 'verdict None;
+                            }
                             let (ctx_for_blocking, prompt_for_blocking) = (ctx.clone(), prompt.clone());
                             let started = std::time::Instant::now();
                             info!(
@@ -4930,8 +5206,53 @@ impl PalwPanelService {
                 };
                 let Some(verdict) = verdict else { continue };
                 let signed_daa = current_daa.clamp(duty.bound_daa, duty.receipt_deadline);
-                let message = palw_receipt_message_v2(network_domain, duty.claim_id, verdict, signed_daa);
+                let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(duty.panel_seat_count.max(1));
+                let v2_at = self.consensus_config.params.palw_verification_v2_at(current_daa);
+                let mask = if v2_at {
+                    let assignment = kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                        duty.panel_anchor,
+                        duty.claim_id,
+                        duty.panel_seat_count.max(1),
+                    );
+                    segments_attested.unwrap_or_else(|| assignment.mask_of(duty.seat_index as u16))
+                } else {
+                    kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::full(k)
+                };
                 let kp = self.keypair.as_ref().expect("checked at start");
+                if v2_at {
+                    let message = palw_receipt_message_v3(network_domain, duty.claim_id, verdict, signed_daa, mask);
+                    let signature = match libcrux_ml_dsa::ml_dsa_87::sign(
+                        &kp.signing_key,
+                        message.as_byte_slice(),
+                        PALW_RECEIPT_V3_MLDSA87_CONTEXT,
+                        [0u8; 32],
+                    ) {
+                        Ok(sig) => sig.as_ref().to_vec(),
+                        Err(e) => {
+                            warn!("[{PALW_PANEL}] ML-DSA-87 V3 sign failed for claim {}: {e:?}", duty.claim_id);
+                            continue;
+                        }
+                    };
+                    let inner = PalwSeatReceiptV2 { claim: duty.claim_id, verdict, seat_bond: bond_key, signed_daa, signature };
+                    let receipt = PalwSeatReceiptV3 { receipt: inner.clone(), segments: mask };
+                    let bytes = borsh::to_vec(&receipt).expect("a V3 receipt serializes");
+                    info!(
+                        "[{PALW_PANEL}] filed a {:?} V3 receipt for claim {} (mask {:#x})",
+                        verdict_name(&verdict),
+                        duty.claim_id,
+                        mask.0
+                    );
+                    self.config.telemetry.panel_receipt(duty.class_id, verdict_name(&verdict));
+                    if matches!(verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
+                        own_receipts.insert(duty.claim_id, (inner.clone(), duty.receipt_deadline));
+                    }
+                    receipts.entry(duty.claim_id).or_default().push(inner);
+                    receipts_v3.entry(duty.claim_id).or_default().push(receipt);
+                    answered.insert((duty.claim_id, duty.bound_daa));
+                    self.flow_context.broadcast_palw_seat_receipt(bytes).await;
+                    continue;
+                }
+                let message = palw_receipt_message_v2(network_domain, duty.claim_id, verdict, signed_daa);
                 let signature = match libcrux_ml_dsa::ml_dsa_87::sign(
                     &kp.signing_key,
                     message.as_byte_slice(),
@@ -5135,22 +5456,44 @@ impl PalwPanelService {
                     // Built at the top of the tick (chain reads only); this block owns the SUBMIT
                     // because the fee UTXO lives here.
                     //
-                    // **Rebuilt HERE, at the moment of submission — not reused from the tick that
-                    // first built it.** The registration gate requires `initial_target` to EQUAL
-                    // the base class's live target, and that target moves at every epoch
-                    // retarget. The first registration this network saw was built at boot,
-                    // submitted twenty-eight minutes later after the receipt backlog, mined two
-                    // minutes after THAT — and dropped at acceptance, because daa 1,000's
-                    // retarget had moved the base target while the object sat in the cache. The
-                    // panel, which marks `submitted` on mempool acceptance, never knew: the
-                    // carrier was mined, the object died inside it, and the block stood. A value
-                    // checked for equality against a moving reference must be read where it is
-                    // used.
+                    // **Rebuilt HERE only when the live target has moved.** The registration gate
+                    // requires `initial_target` to EQUAL the base class's live target, and that
+                    // target moves at every epoch retarget. The first registration this network
+                    // saw was built at boot, submitted twenty-eight minutes later after the
+                    // receipt backlog, mined two minutes after THAT — and dropped at acceptance,
+                    // because daa 1,000's retarget had moved the base target while the object sat
+                    // in the cache. A value checked for equality against a moving reference must
+                    // be read where it is used.
+                    //
+                    // Rebuilding unconditionally re-pairs the holding. For court-capable A16 at
+                    // 2M that is a second ~17 min inventory walk on the same object. When the
+                    // cached object's target and slash still match the terms, send it.
                     if class_registration.is_some() && funding.is_some() {
-                        match self.build_class_registration(&session).await {
-                            Ok(object) => class_registration = Some(object),
-                            Err(e) => warn!("[{PALW_PANEL}] cannot refresh the class registration at submit: {e}"),
+                        let refresh = match (&class_registration, session.palw_v2_registration_terms()) {
+                            (
+                                Some(PalwConsensusObjectV2::ClassRegistered { initial_target, slash_value_per_pwu, .. }),
+                                Some(terms),
+                            ) => *initial_target != terms.initial_target || *slash_value_per_pwu != terms.slash_value_per_pwu,
+                            _ => true,
+                        };
+                        if refresh {
+                            match self.build_class_registration(&session).await {
+                                Ok(object) => class_registration = Some(object),
+                                Err(e) => warn!("[{PALW_PANEL}] cannot refresh the class registration at submit: {e}"),
+                            }
+                        } else {
+                            info!(
+                                "[{PALW_PANEL}] submitting the class registration built this process — the base class's live \
+                                 target still matches"
+                            );
                         }
+                    } else if class_registration.is_some() && funding.is_none() {
+                        crate::palw_backends::note_throttled_v1("class-registration-waits-for-funding", || {
+                            format!(
+                                "[{PALW_PANEL}] class registration is built and waiting: no fee UTXO resolves this tick \
+                                 (cap {MAX_INFLIGHT_CARRIERS} unconfirmed, or --palw-fee-outpoint unfunded)"
+                            )
+                        });
                     }
                     if let Some(object) = class_registration.clone()
                         && let Some((funding_outpoint, funding_entry)) = funding.clone()
@@ -5363,7 +5706,14 @@ impl PalwPanelService {
                         continue;
                     }
                     let pool = receipts.get(&claim).cloned().unwrap_or_default();
-                    let Some(object) = session.palw_v2_receipt_quorum_assemble(claim, pool) else { continue };
+                    let v3 = receipts_v3.get(&claim).cloned().unwrap_or_default();
+                    let Some(object) = session
+                        .palw_v2_receipt_coverage_assemble(claim, v3.clone())
+                        .or_else(|| session.palw_v2_optimistic_assemble(claim, v3))
+                        .or_else(|| session.palw_v2_receipt_quorum_assemble(claim, pool))
+                    else {
+                        continue;
+                    };
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
                             let txid = tx.id();
@@ -5707,6 +6057,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::SeatReadinessProved { .. } => "SeatReadinessProved",
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
+        PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
         PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",
@@ -5879,6 +6230,14 @@ where
 
 /// The job a challenger re-executes off the runtime: the user's for a free prompt (ADR-0073
 /// Decision 1d), the block's for an attempt.
+enum PalwV2SeatPathV1 {
+    FullReplay,
+    Waiting,
+    Attested(kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2),
+    /// S3 sampled a site that disagrees — the court tries it; this seat files no receipt.
+    Faulted,
+}
+
 enum ReplayWork {
     FreePrompt(kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<usize>),
     Attempt(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>),
@@ -6066,6 +6425,7 @@ impl PalwPanelService {
         let block_request = base0_fp_block_leaves_request_decode_v1(interval_index);
         // ADR-0103 Decision 2: so does a held class's resume request, under bit 30.
         let resume_request = base0_fp_resume_request_decode_v1(interval_index);
+        let segment_request = kaspa_consensus_core::palw_segment_resume_v1::palw_segment_opening_request_decode_v1(interval_index);
         // ADR-0085 §6 item 4: the step leaves the open court sessions on this claim have narrowed
         // to, which the served interval's annex carries when they fall inside it. Read off the
         // CHAIN, never off the request: an asker names nothing here, and a leaf no session names
@@ -6104,14 +6464,17 @@ impl PalwPanelService {
                      what: &str|
          -> Option<Vec<u8>> {
             let started = std::time::Instant::now();
-            let answer = match (block_request, resume_request) {
-                (Some((interval, block)), _) => backend
+            let answer = match (block_request, resume_request, segment_request) {
+                (Some((interval, block)), _, _) => backend
                     .open_fp_block_leaves(capture, interval, block, prompt_ids)
                     .map(|b| (b, format!("block {block} of interval {interval}"))),
-                (None, Some(interval)) => backend
+                (None, Some(interval), _) => backend
                     .open_fp_resume_v1(capture, interval, prompt_ids)
                     .map(|b| (b, format!("the state interval {interval} resumes from (ADR-0103 Decision 2)"))),
-                (None, None) => backend.open_fp_interval_with_close(capture, interval_index, prompt_ids, &disputed).map(|b| {
+                (None, None, Some((seat_count, segment))) => backend
+                    .open_segment_checkpoint_v1(capture, seat_count, segment)
+                    .map(|b| (b, format!("V2 segment {segment} checkpoint (ADR-0133 S1)"))),
+                (None, None, None) => backend.open_fp_interval_with_close(capture, interval_index, prompt_ids, &disputed).map(|b| {
                     let named = if disputed.is_empty() {
                         format!("interval {interval_index}")
                     } else {
@@ -7378,6 +7741,113 @@ impl PalwPanelService {
         true
     }
 
+    /// ADR-0133 S1/S3: a partial seat resumes assigned segments (or S3 sites) from published
+    /// checkpoints. Only the designated full-replay seat returns `FullReplay`. A partial seat
+    /// that cannot open waits; it does not walk the job from genesis.
+    async fn palw_v2_try_partial_resume_v1(
+        &self,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        prompt: &[usize],
+        current_daa: u64,
+        network_domain: Hash64,
+        held: &[Vec<u8>],
+        openings: &HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        requested_intervals: &mut HashMap<(Hash64, u32), u64>,
+    ) -> PalwV2SeatPathV1 {
+        use kaspa_consensus_core::palw_layer_sample_v3::{PALW_LAYER_SAMPLE_V3_SITES, palw_layer_sample_v3};
+        use kaspa_consensus_core::palw_segment_resume_v1::palw_segment_opening_request_index_v1;
+        use kaspa_consensus_core::palw_verification_v2::{palw_segment_assignment_v2, palw_segment_count_v2};
+        let seats = duty.panel_seat_count.max(1);
+        let assignment = palw_segment_assignment_v2(duty.panel_anchor, duty.claim_id, seats);
+        if duty.seat_index as u16 == assignment.full_seat {
+            return PalwV2SeatPathV1::FullReplay;
+        }
+        let mask = assignment.mask_of(duty.seat_index as u16);
+        let capture = held.iter().find(|bytes| {
+            backend.open_segment_checkpoint_v1(bytes, seats, 0).is_ok()
+                || kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(
+                    bytes,
+                    self.class_prompt_ids_form(duty.class_id),
+                )
+                .is_some()
+        });
+        if self.consensus_config.params.palw_verification_s3_at(current_daa)
+            && let Some(bytes) = capture
+        {
+            let shape = backend.capture_shape(bytes);
+            let layers = shape.as_ref().map(|s| s.layer_count).unwrap_or(0);
+            let positions = job.declared_prefill_tokens.saturating_add(job.exact_decode_tokens.saturating_sub(1));
+            if layers > 0 && positions > 0 {
+                let sites = palw_layer_sample_v3(
+                    duty.panel_anchor,
+                    duty.claim_id,
+                    duty.seat_index as u16,
+                    layers,
+                    positions,
+                    PALW_LAYER_SAMPLE_V3_SITES,
+                );
+                if !sites.is_empty() {
+                    let mut all_match = true;
+                    for site in &sites {
+                        match backend.replay_layer_site_v3(bytes, *site, seats) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                self.note_seat_fault_v1(duty.claim_id, 0, 0);
+                                return PalwV2SeatPathV1::Faulted;
+                            }
+                            Err(_) => {
+                                all_match = false;
+                                break;
+                            }
+                        }
+                    }
+                    if all_match {
+                        return PalwV2SeatPathV1::Attested(mask);
+                    }
+                }
+            }
+        }
+        let k = palw_segment_count_v2(seats);
+        let mut missing = Vec::new();
+        for index in 0..k {
+            if !mask.covers(index) {
+                continue;
+            }
+            let req = palw_segment_opening_request_index_v1(seats, index);
+            let opening = capture
+                .and_then(|bytes| backend.open_segment_checkpoint_v1(bytes, seats, index).ok())
+                .or_else(|| openings.get(&(duty.claim_id, req)).and_then(|v| v.first()).cloned());
+            let Some(opening) = opening else {
+                missing.push(req);
+                continue;
+            };
+            match backend.replay_segment_from_checkpoint_v1(job, prompt, &opening) {
+                Ok(replay) if replay.matches => {}
+                Ok(_) => {
+                    self.note_seat_fault_v1(duty.claim_id, 0, 0);
+                    return PalwV2SeatPathV1::Faulted;
+                }
+                Err(_) => return PalwV2SeatPathV1::Waiting,
+            }
+        }
+        if !missing.is_empty() {
+            let fresh: Vec<u32> = missing
+                .into_iter()
+                .filter(|i| requested_intervals.get(&(duty.claim_id, *i)).is_none_or(|at| current_daa >= at.saturating_add(25)))
+                .collect();
+            if !fresh.is_empty() {
+                for i in &fresh {
+                    requested_intervals.insert((duty.claim_id, *i), current_daa);
+                }
+                self.request_fp_interval_openings(network_domain, duty.claim_id, &fresh, current_daa).await;
+            }
+            return PalwV2SeatPathV1::Waiting;
+        }
+        PalwV2SeatPathV1::Attested(mask)
+    }
+
     /// **Ask the network for the openings this seat's draw names** (ADR-0077 Decision 8, the seat
     /// half of P-08).
     ///
@@ -8067,6 +8537,63 @@ mod court_responder_coverage_pin {
             "and grades the carriage it built"
         );
         assert!(source.contains("prompt_ids_opening: prompt_opening,"), "the accusation carries the tile the sampler opened");
+    }
+
+    /// **ADR-0133 S1 (4), pinned where it lives: a court close of an accused leaf resumes the V2
+    /// segment from its published checkpoint before assembling the per-leaf refutation.**
+    #[test]
+    fn a_court_close_resumes_the_accused_segment_from_its_checkpoint() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let close = source.find("the close does not assemble from this capture").expect("the close arm");
+        let resume = source[..close].rfind("palw_verification_v2_at(current_daa)").expect("resume is past Verification V2");
+        let arm = &source[resume..close];
+        assert!(arm.contains("replay_accused_segment_v1"), "S1 court resume precedes the close");
+        assert!(arm.contains("palw_segment_index_of_leaf_v2"), "the accused leaf names the V2 segment that is resumed");
+    }
+
+    /// **ADR-0133 S1 (3), pinned where it lives: a free-prompt partial seat resumes assigned
+    /// segments and attests the mask before the interval fallback.**
+    #[test]
+    fn a_free_prompt_partial_seat_resumes_assigned_segments_past_v2() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let start =
+            source.find("Past Verification V2 a partial seat resumes assigned segments first").expect("the free-prompt S1 arm");
+        let capture = start + source[start..].find("palw_fp_capture_decode_v1(").expect("the capture arm");
+        let arm = &source[start..capture];
+        let resume = arm.find("palw_v2_try_partial_resume_v1(").expect("S1 runtime resume is on the live lane");
+        let interval = arm.find(".interval_seat_outcome_v1(").expect("the interval fallback");
+        assert!(resume < interval, "segment resume precedes the interval seat");
+        assert!(arm.contains("palw_verification_v2_at(current_daa)"), "resume is past Verification V2");
+        assert!(arm.contains("segments_attested = Some(mask)"), "a partial seat attests its mask");
+        assert!(arm.contains("!= assignment.full_seat"), "a partial seat does not fall through to genesis replay");
+        assert!(arm.contains("break 'verdict None"), "a partial seat that cannot resume files nothing");
+        let resume_fn = source.find("async fn palw_v2_try_partial_resume_v1(").expect("the S1 resume helper");
+        let helper_end = source[resume_fn..].find("/// **Ask the network for the openings").expect("the helper ends");
+        let resume_body = &source[resume_fn..resume_fn + helper_end];
+        assert_eq!(
+            resume_body.matches("PalwV2SeatPathV1::FullReplay").count(),
+            1,
+            "only the designated full-replay seat may walk the whole job"
+        );
+        assert!(resume_body.contains("== assignment.full_seat"), "FullReplay is the full seat's path");
+        assert!(resume_body.contains("PalwV2SeatPathV1::Waiting"), "a partial that cannot open waits");
+    }
+
+    /// **ADR-0133 S1/S2, pinned where they live: the collector assembles coverage, then the
+    /// optimistic licence, then the V1 quorum.**
+    #[test]
+    fn the_collector_assembles_coverage_then_optimistic_then_v1() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        let coverage = source.find(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("S1 coverage");
+        let optimistic = source.find(".palw_v2_optimistic_assemble(claim, v3)").expect("S2 optimistic");
+        let v1 = source.find(".palw_v2_receipt_quorum_assemble(claim, pool)").expect("V1 quorum");
+        assert!(coverage < optimistic && optimistic < v1, "coverage, then optimistic, then V1");
     }
 
     /// **ADR-0111, pinned where it lives: a named leaf is pursued, a leaf request is served, and a

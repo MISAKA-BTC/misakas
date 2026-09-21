@@ -24,6 +24,8 @@ ADR-0069's certification scope (a family is certified for the lane it was drille
 
 > **Security amendment appended (2026-09-02)** — see the last section: preconditions on Phase ④ — the single-block beacon's withholding bias is bounded (`k ≥ 3` attempt blocks), 4b's supply metric counts executors not claims, and receipt weight ramps like attempts.
 
+> **ADR-0144 alignment (2026-09-21).** Decision 2's sentence that an executor self-prompt is "exactly as good as" a canonical job is withdrawn as a PALW-reward claim. Phase ④ is no longer an operator activation of the 2026-09-05 record: it waits for ADR-0144 §6 items 2–3. See the end section.
+
 ## 1. The finding
 
 MISAKA's purpose is a user running a local LLM on a prompt of their own. The chain has two lanes
@@ -289,3 +291,25 @@ retroactively only inside the ramp window and never after `Final` (ADR-0039 3e).
 Phases ①–③ are code; Phase ④ (Decision 4 — receipt blocks gain position and share) is an
 ACTIVATION gated by this ADR's security amendment (the beacon's `k ≥ 3` fold, the supply metric's
 `1/seat_count` floor). No code item is open; the activation is the operator's, on a measurement.
+
+## ADR-0144 alignment (2026-09-21)
+
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) is the constitution this
+ADR's purpose already named. The 2026-09-05 record above stands as history. What it may no longer
+schedule:
+
+* **Decision 2, the self-dealing paragraph.** "An executor who submits prompts to itself … is
+  exactly as good as" a canonical job is withdrawn as a PALW-reward claim. A self-prompt nobody
+  asked for is Attempt by another name. ADR-0144 P2/P3 and §6 item 5 require that synthetic work
+  shrink, not that it be treated as interchangeable with the user's own inference. Shape-crafting
+  remains the hole Decision 3 closed; that half is untouched.
+* **Phase ④ as an operator activation.** Decision 4 (receipt chain position, share walking toward
+  the receipt lane, payment unchanged) is a widening of the economy. ADR-0144 §6 item 0 forbids
+  that until items 2 and 3 land (representation-neutral accounting, earned admission). The 2026-09-02
+  security preconditions (SA-1…SA-3) still bind if and when Phase ④ is built; they are no longer
+  sufficient by themselves. ADR-0077 Decision 15's "one retarget span of measured receipt supply"
+  is the same schedule, equally withheld.
+* **What stays.** Phases ① and ③, and Decision 2's *question* (real-demand work should bear
+  weight), remain the load-bearing path. The destination is still that the inference the user ran
+  is the inference the chain rewards. Phase ④ is how that destination gets chain position — after
+  the accounting can serve it, not before.

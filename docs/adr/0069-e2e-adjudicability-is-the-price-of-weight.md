@@ -484,3 +484,12 @@ Invariants: **E1** a block of a share-0 or uncertified class contributes 0 to bo
 every ramp stage; **E2** the same block's subsidy and DAA advance are unchanged; **E3** a class that
 becomes certified mid-chain gains weight only for blocks after the certifying object's chain
 point — never retroactively (a retroactive gain would let a certification reorder history).
+
+## ADR-0144 alignment (2026-09-21)
+
+The remaining hole this ADR still names — a zero-share class's floor block still adds pwu to fork
+choice — is **not** closed by giving that block more synthetic weight, a new share, or a special
+PALW-work unit. [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) §6
+item 5: shrink Attempt; do not grow it. E1–E3 stand. The floor block's leftover pwu is closed by
+making synthetic work the less attractive fallback, then replacing its beacon role, not by a new
+weight-bearing exception.

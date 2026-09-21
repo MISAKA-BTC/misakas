@@ -20,6 +20,7 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::classes::ArtifactSourceV1;
 use crate::engine_a16::{A16Cache, A16Engine, A16PlanErrorV1};
+use crate::fp_interval::Base0FpIntervalKernelsV1;
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3};
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2};
@@ -1498,6 +1499,71 @@ impl Qwen25A16Backend {
     fn artifact_read_probe_v1(&self) -> Result<(), String> {
         Ok(())
     }
+
+    fn replay_segment_opening_v1(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        opening: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        let opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening).map_err(|e| e.to_string())?;
+        let first = kaspa_consensus_core::palw_step::canonical_step_coordinates(&self.profile, job, opened.leaf_start)
+            .ok_or_else(|| "the segment start is not a main step coordinate".to_string())?;
+        let last = kaspa_consensus_core::palw_step::canonical_step_coordinates(&self.profile, job, opened.leaf_end.saturating_sub(1))
+            .ok_or_else(|| "the segment end is not a main step coordinate".to_string())?;
+        let window = kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentResumeWindowV1 {
+            segment_index: opened.segment_index,
+            leaf_start: opened.leaf_start,
+            leaf_end: opened.leaf_end,
+            first_call: first.call_index,
+            last_call: last.call_index,
+        };
+        let start = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
+            crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: prompt }
+        } else {
+            crate::fp_interval::Base0FpIntervalStartV1::Checkpoint {
+                covered_decode_call: opened.covered_decode_call,
+                chunks: &opened.chunks,
+                seed_token: opened.seed_token,
+                prompt_tokens: prompt,
+            }
+        };
+        let first_call = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
+            0
+        } else {
+            opened.covered_decode_call.saturating_add(1)
+        };
+        let fp_window = crate::fp_interval::Base0FpWindowV1::from_calls_v1(
+            job.declared_prefill_tokens,
+            first_call,
+            last.call_index,
+        );
+        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, job, self.step_ladder_cap())
+            .map_err(|e| e.to_string())?;
+        let kernels = A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref(), fault: self.drill_fault_v1() };
+        let ctx_hash = job.context_hash();
+        let profile_hash = self.profile.shape_profile_id();
+        let mut hashes = Vec::new();
+        kernels.replay_interval_into(&self.profile, job, &start, fp_window, leaf_count, &mut |i, tile| {
+            hashes.push((i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)));
+            Ok(())
+        })?;
+        let attested: Vec<(u64, Hash64)> =
+            hashes.iter().copied().filter(|(i, _)| *i >= opened.leaf_start && *i < opened.leaf_end).collect();
+        let matches = attested == opened.committed_leaf_hashes;
+        Ok(kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1 {
+            window,
+            leaf_hashes: hashes,
+            calls_replayed: window.calls_from_covered(opened.covered_decode_call).unwrap_or(0),
+            matches,
+        })
+    }
+}
+
+fn opening_has_hash(opening: &[u8], leaf: u64, hash: Hash64) -> bool {
+    crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening)
+        .ok()
+        .is_some_and(|o| o.committed_leaf_hashes.iter().any(|(i, h)| *i == leaf && *h == hash))
 }
 
 impl PalwExecutionBackendV1 for Qwen25A16Backend {
@@ -1583,6 +1649,73 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             work_leaves: Some(run.binding.step_leaf_count),
         })
     }
+
+    fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
+        crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())
+    }
+
+    fn replay_segment_from_checkpoint_v1(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        opening: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        self.replay_segment_opening_v1(job, prompt, opening)
+    }
+
+    fn replay_accused_segment_v1(
+        &self,
+        capture: &[u8],
+        seat_count: u16,
+        segment_index: u16,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())?;
+        self.replay_segment_opening_v1(job, prompt, &opening)
+    }
+
+    fn replay_layer_site_v3(
+        &self,
+        capture: &[u8],
+        site: kaspa_consensus_core::palw_layer_sample_v3::PalwLayerSiteV3,
+        seat_count: u16,
+    ) -> Result<bool, String> {
+        let retention = crate::produce::base0_material_decode_any_v1(capture).map_err(|e| e.to_string())?;
+        let binding = retention.binding();
+        if site.layer >= binding.shape_profile.layer_count {
+            return Err("the sampled layer is not in this class".into());
+        }
+        let table = match binding.shape_profile.layer_kind(site.layer) {
+            kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention => kaspa_consensus_core::palw_step::PalwStepTableV1::Attn,
+            kaspa_consensus_core::palw_step::PalwLayerKindV1::GatedDeltaNet => kaspa_consensus_core::palw_step::PalwStepTableV1::Gdn,
+        };
+        let node_slot = binding
+            .shape_profile
+            .global_node_slot(table, site.layer, 0)
+            .ok_or_else(|| "this layer has no node to sample".to_string())?;
+        let prefill = binding.job_context.declared_prefill_tokens;
+        let (call_index, position) = if site.position < prefill {
+            (0u32, site.position)
+        } else {
+            (site.position - prefill + 1, 0u32)
+        };
+        let coord = kaspa_consensus_core::palw_step::PalwStepCoordinateV1 { call_index, node_slot, position, tile_index: 0 };
+        let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord)
+            .ok_or_else(|| "the sampled site is not a main step of this job".to_string())?;
+        let seats = seat_count.max(1);
+        let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
+        let index = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf)
+            .unwrap_or(0);
+        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seats, index).map_err(|e| e.to_string())?;
+        let prompt: Vec<usize> = match &retention {
+            crate::produce::Base0RetentionV1::Folded(m) => m.prompt_token_ids.iter().map(|t| *t as usize).collect(),
+            crate::produce::Base0RetentionV1::Dense(_) => Vec::new(),
+        };
+        let replay = self.replay_segment_opening_v1(&binding.job_context, &prompt, &opening)?;
+        Ok(replay.leaf_hashes.iter().any(|(i, h)| *i == leaf && opening_has_hash(&opening, leaf, *h)))
+    }
+
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
         // **The captured attempt, for the class that can carry one.** Its `execution_root` is the
         // step binding's own commitment — the value `check_execution_root_binding` compares a
@@ -1741,6 +1874,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
             job_context: binding.job_context.clone(),
             step_leaf_count: binding.step_leaf_count,
+            layer_count: binding.shape_profile.layer_count,
         })
     }
 
@@ -2516,8 +2650,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
 
     fn artifact_row_opening(&self, index: u32) -> Result<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1, String> {
         // The digest roots the path; a second pass copies the bytes of the named leaf alone — the
-        // inventory is never materialised to open one row of it (ADR-0135).
-        let digest = crate::inventory::a16_inventory_digest_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        // inventory is never materialised to open one row of it (ADR-0135). Reuse the process
+        // cache so a 2M rope walk is not paid again per leaf.
+        let digest = crate::inventory::a16_inventory_digest_arc_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
         let row = digest
             .rows()
             .get(index as usize)

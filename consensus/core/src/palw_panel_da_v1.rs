@@ -532,6 +532,7 @@ mod tests {
             execution_root: h64(43),
             trace_chunk_count: 4,
             trace_retention_daa: 999_999,
+            consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(h64(1)),
         };
         let (s2, _) = apply(&s1, &ctx(2, 101, 2), &[commit]);
         let seats = vec![PalwPanelSeatV2 { bond: PalwBondKeyV2(bond_op(1)), operator_id: h64(90) }];

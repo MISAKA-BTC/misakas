@@ -95,7 +95,77 @@ LLM クラスを検証する場合は、ネットワークの `model list` で�
 ./target/release/misaka --network testnet-11 verifier start --detach
 ```
 
-このモードでは、ノードは `--palw-panel` で起動し、`--palw-produce` は付与されません。つまり検証席は検証だけを行い、誤って採掘プロセスを二重起動しません。
+このモードでは、ノードは `--palw-panel` で起動し、`--palw-produce` は付与されません。つまり検証席は検証だけを行い、誤って採掘プロセスを二重起動しません。S1 / S2 / S3 も **この同じ起動** です。段階ごとの別プロセスや `--s1` のようなフラグはありません。
+
+## S1 / S2 / S3 の panel 起動
+
+S1・S2・S3 は別のサービスではありません。上の `verifier setup` → `verifier start` で panel を1つ起動し、チェーンの DAA が fence を超えた claim から席の検証の仕方が切り替わります。オペレータが決めた順は **V1（全再実行）→ S1（区間 replay）→ S3（層サンプル）→ S2（optimistic）** です。ゼロ知識証明は使いません。
+
+| 段階 | Testnet-11 DAA | 席の動き | 起動時に足すフラグ |
+|---|---:|---|---|
+| V1 | 7,200 未満 | 5席とも job 全体を再実行。3席の `Valid` で license | なし（従来の panel） |
+| **S1** | **7,200** | 1席が全区間（full-replay）。残り4席は重複しない1区間だけ。producer は決定論的 checkpoint `SC01` を出す。partial は checkpoint から自分の区間だけ replay し、割り当てどおりの mask と receipt を提出。genesis からの全再実行は full 席のみ | なし。**現行バイナリ**で同じ `verifier start` |
+| **S3** | **8,600** | S1 のうえに、partial が層・位置サンプルでも検証する | なし |
+| **S2** | **8,700** | full 席の `Valid` だけで optimistic licence 可。collector は coverage → optimistic → V1 の順 | なし |
+
+### 検証席の起動（S1 / S2 / S3 共通）
+
+```bash
+./target/release/misaka --network testnet-11 verifier setup
+./target/release/misaka --network testnet-11 verifier start --print-command
+./target/release/misaka --network testnet-11 verifier start --detach
+```
+
+`verifier start --print-command` に `--palw-panel` があり、`--palw-produce` が無いことを確認します。
+
+起動前に次を満たすビルドを使います。
+
+- `git switch main && git pull --ff-only` のあと `kaspad` と `misaka` を再ビルドする
+- 起動ログまたは `misaka doctor` の `Consensus fence schedule` に **7200, 8600, 8700** が含まれる
+- fingerprint は起動ログおよび `doctor` と一致する（文書に残っている古い例示値をコピーしない）
+
+tip の DAA が 7,200 を超えているのに、席が毎回 job 全体を genesis から再実行しているなら、古いバイナリです。再ビルドしてください。
+
+### Producer 側（S1 の前提）
+
+S1 の partial 席は producer が公開する `SC01` checkpoint から resume します。producer も **同じ世代のバイナリ** で起動します。checkpoint 用の別コマンドはありません。`mining start` が capture から `SC01` を決定論的に出します。
+
+```bash
+./target/release/misaka --network testnet-11 mining setup
+./target/release/misaka --network testnet-11 mining start --print-command
+./target/release/misaka --network testnet-11 mining start
+```
+
+producer ノードは receipt 期限まで capture を保持し、席からの checkpoint / opening 要求に応えます。partial 席は checkpoint が開けないとき **待って receipt を出しません**。genesis から全区間を歩き直しません。
+
+### 5席の割り当て（S1）
+
+panel は 5席、quorum は 3席です。割り当ては bind の `(anchor, claim, seat_count)` から決まり、席が自分で区間を選びません。
+
+- 1席: 全区間を検証（full-replay）
+- 残り4席: 互いに重複しない1区間
+- license: すべての区間が少なくとも2つの `Valid`（full 席 + その区間の partial）で覆われ、かつ `Valid` が3席以上
+- 欠落・重複・誤った checkpoint / root / class / mask の receipt は拒否される
+- Court も告発された区間を同じ checkpoint から resume する
+- CanonicalWork / payout / quanta は検証の分割では変わらない
+
+自分が full 席か partial 席かは抽選結果です。`verifier status` と node ログを見てください。
+
+### 動作確認
+
+```bash
+./target/release/misaka --network testnet-11 doctor
+./target/release/misaka --network testnet-11 verifier status
+./target/release/misaka --network testnet-11 logs --component node
+```
+
+S1 以降の正常ログの例:
+
+```text
+[palw-panel] claim …: licensed by V2 segment resume — mask 0x… (ADR-0133 S1)
+```
+
+DAA が fence 未満なら、その段階は動きません。S3 を 8,600 より前に、S2 を 8,700 より前に先走らせる設定はありません。
 
 ## 状態確認と検証結果の確認
 
@@ -147,7 +217,11 @@ LLM クラスを検証する場合は、ネットワークの `model list` で�
 | `judges nothing` | Bond がクラス capability を宣言していない | `verifier setup --model ...` を実行。登録済み Bond は再登録できないため、表示内容を確認 |
 | artifact missing / mismatch | クラスに対応しない、またはパスが誤り | `model list` でクラスを再確認し、絶対パスを指定 |
 | panel が動かない | ノードが同期中、または起動引数に `--palw-panel` がない | `verifier start --print-command` と `doctor` を確認 |
-| claim が長時間 pending | chain tip の進行、seat の稼働、または producer 側の処理遅延 | `verifier status`、`work show`、ノードログ、peer 数を確認 |
+| fence schedule に 7200 / 8600 / 8700 が無い | S1 / S3 / S2 を含まないビルド | `git pull --ff-only` 後に `kaspad` と `misaka` を再ビルドし、`doctor` で schedule を確認 |
+| 席が毎回 job 全体を genesis から再実行する | 古い panel、または full 席の duty | DAA ≥ 7200 なら現行バイナリか確認。full 席だけ全再実行するのは正常 |
+| `SC01` が来ない / partial が待ち続ける | producer が古い、または capture を保持していない | producer も現行バイナリで `mining start`。receipt 期限まで capture を残す |
+| receipt が mask / checkpoint / root / class で拒否される | 割り当て以外の区間を証明した、または不正な opening | 席は割り当て区間だけ replay する。producer の `SC01` と class artifact を合わせる |
+| claim が長時間 pending | chain tip の進行、seat の稼働、producer の遅延、または S1 の coverage 不足 | `verifier status`、`work show`、ノードログ、peer 数を確認。S1 は full 席と各区間の partial が揃う必要がある |
 
 ## 安全な停止
 

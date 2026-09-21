@@ -67,9 +67,13 @@ pub const PALW_EXEC_MAX_DOMAINS_V1: usize = 32;
 pub const PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1: usize = 64;
 
 /// **What the fold needs of the lane where it is open**: the span a schedule covers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct PalwExecLaneFoldV1 {
     pub schedule_span_daa: u64,
+    /// CanonicalWork units per execution quantum. Zero keeps the ADR-0125 credit lottery.
+    pub execution_quantum: u64,
+    /// Wall-clock round of this block, used as the first eligible round when quanta are assigned.
+    pub span_open_round: u64,
 }
 
 /// One round permit a chain block accepted: the span whose schedule granted it, its round and its
@@ -321,6 +325,11 @@ pub struct PalwExecScheduleV1 {
     pub seed: Hash64,
     /// Sorted by domain id.
     pub domains: Vec<PalwExecDomainV1>,
+    /// The Finals that earned this schedule, in claim-id order. The seed mints execution quanta
+    /// from these rather than from the aggregated domain credits.
+    pub finals: Vec<PalwExecFinalV1>,
+    /// Issued execution quanta. Empty means the ADR-0125 lottery still draws this span.
+    pub quanta: Vec<crate::palw_execution_quanta_v1::PalwExecQuantumV1>,
 }
 
 impl PalwExecScheduleV1 {
@@ -338,6 +347,10 @@ pub struct PalwExecSnapshotV1 {
     pub target_span: u64,
     /// Sorted by domain id, exactly as the schedule will list them.
     pub domains: Vec<PalwExecDomainV1>,
+    /// The Finals this snapshot was taken from, claim-id order, duplicates dropped. Trailing so a
+    /// carriage written before execution quanta still decodes: empty maps stay empty, and a live
+    /// snapshot of `(target_span, domains)` is the prefix of this layout.
+    pub finals: Vec<PalwExecFinalV1>,
 }
 
 /// **ADR-0130: what seeds the span two after the one that recorded it** — the latest chain block of
@@ -440,7 +453,7 @@ pub fn palw_execution_schedule_snapshot_v1(target_span: u64, finals: &[PalwExecF
         domain.bonds.truncate(PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1);
         domain.bonds.sort_by(|a, b| a.bond.cmp(&b.bond));
     }
-    PalwExecSnapshotV1 { target_span, domains }
+    PalwExecSnapshotV1 { target_span, domains, finals: ordered.into_iter().copied().collect() }
 }
 
 /// **ADR-0130: a span's seed** — `H(domain ‖ anchor's execution key ‖ span ‖ frontier blue score ‖
@@ -469,7 +482,24 @@ pub fn palw_execution_schedule_seeded_v1(
         span_index: snapshot.target_span,
         seed: palw_execution_span_seed_v1(anchor, snapshot.target_span, frontier_blue_score, frontier),
         domains: snapshot.domains.clone(),
+        finals: snapshot.finals.clone(),
+        quanta: Vec::new(),
     }
+}
+
+/// Assign execution quanta onto an already-seeded schedule. `quantum == 0` leaves the lottery in
+/// force (empty `quanta`). A non-zero unit mints spend-once tickets from the snapshot's Finals.
+pub fn palw_execution_schedule_assign_quanta_v1(schedule: &mut PalwExecScheduleV1, quantum: u64, open_round: u64) {
+    if quantum == 0 {
+        schedule.quanta.clear();
+        return;
+    }
+    schedule.quanta = crate::palw_execution_quanta_v1::palw_execution_mint_quanta_v1(
+        &schedule.finals,
+        schedule.seed,
+        u128::from(quantum),
+        open_round,
+    );
 }
 
 /// The most permits one domain may hold in a round of `width`: a third, rounded up.
@@ -504,6 +534,13 @@ pub struct PalwExecPermitV1 {
 /// schedules, and nothing relates one span's operator parities to the next's — an operator can hold
 /// the last round under one span and the next round under the other.
 pub fn palw_execution_permits_v1(schedule: &PalwExecScheduleV1, round: u64, width: u16) -> Vec<PalwExecPermitV1> {
+    if !schedule.quanta.is_empty() {
+        return crate::palw_execution_quanta_v1::palw_execution_quantum_for_round_v1(&schedule.quanta, round)
+            .into_iter()
+            .take(width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1) as usize)
+            .map(|q| PalwExecPermitV1 { index: 0, domain: q.domain, bond: q.bond, operator_id: q.operator_id })
+            .collect();
+    }
     let width = width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1);
     let parity = (round % 2) as u8;
     let cap = palw_execution_domain_cap_v1(width) as usize;
@@ -920,6 +957,7 @@ pub fn palw_execution_mergeset_rule_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_execution_quanta_v1::palw_execution_quantum_for_round_v1;
     use crate::tx::{TransactionId, TransactionOutpoint};
 
     fn h(v: u64) -> Hash64 {
@@ -1160,8 +1198,12 @@ mod tests {
             .enumerate()
             .map(|(i, f)| PalwExecFinalV1 { claim_id: h(9_000 + i as u64), execution_root: h(42), ..*f })
             .collect();
-        assert_eq!(palw_execution_schedule_snapshot_v1(9, &recast), snapshot, "claim ids and roots do not reach the participants");
-        assert_eq!(palw_execution_schedule_seeded_v1(&palw_execution_schedule_snapshot_v1(9, &recast), &a, 40, h(700)), schedule);
+        let recast_snapshot = palw_execution_schedule_snapshot_v1(9, &recast);
+        assert_eq!(recast_snapshot.domains, snapshot.domains, "claim ids and roots do not reach the participants");
+        assert_ne!(recast_snapshot.finals, snapshot.finals, "the mint still names the Finals that earned it");
+        let recast_schedule = palw_execution_schedule_seeded_v1(&recast_snapshot, &a, 40, h(700));
+        assert_eq!(recast_schedule.seed, schedule.seed);
+        assert_eq!(recast_schedule.domains, schedule.domains);
 
         // Domain 2 holds the odd rounds with two operators, so which bond takes a round is the seed's.
         let other = palw_execution_schedule_seeded_v1(&snapshot, &PalwExecSeedAnchorV1 { execution_key: h(601), ..a }, 40, h(700));
@@ -1551,6 +1593,49 @@ mod tests {
             Err(PalwExecMergesetError::TooManyBonds { count: 65, bound: PALW_EXEC_MAX_BONDS_PER_MERGESET_V1 })
         );
         assert_eq!(palw_execution_mergeset_rule_v1(None, &many[..64], 1, 1_000), Ok(()));
+    }
+
+    /// A verified Final mints N spend-once quanta; those, not the credit lottery, pick the rounds.
+    #[test]
+    fn a_seeded_schedule_mints_execution_quanta_and_each_round_holds_at_most_one_permit() {
+        let finals = vec![
+            PalwExecFinalV1 { execution_root: h(0xE0), ..final_credited(1, 10, 100, 1, 500_000) },
+            PalwExecFinalV1 { execution_root: h(0xE1), ..final_credited(1, 10, 100, 2, 200_000) },
+        ];
+        let mut schedule = schedule_of(3, &finals);
+        assert!(schedule.quanta.is_empty(), "seeded schedules start on the lottery until assigned");
+        palw_execution_schedule_assign_quanta_v1(&mut schedule, 100_000, 1_000);
+        assert_eq!(schedule.finals.len(), 2);
+        assert!(schedule.quanta.len() >= 6, "500k + 200k at 100k is at least six tickets, got {}", schedule.quanta.len());
+        let mut rounds = BTreeSet::new();
+        for q in &schedule.quanta {
+            assert!(rounds.insert(q.scheduled_round));
+            let permits = palw_execution_permits_v1(&schedule, q.scheduled_round, 1);
+            assert_eq!(permits.len(), 1, "one quantum is one permit");
+            assert_eq!(permits[0].bond, q.bond);
+            assert_eq!(permits[0].index, 0);
+            assert_eq!(palw_execution_permit_of_v1(&schedule, q.scheduled_round, 1, 0, &q.bond).map(|p| p.bond), Some(q.bond));
+        }
+        let lottery_round =
+            (0u64..4_000).find(|r| palw_execution_quantum_for_round_v1(&schedule.quanta, *r).is_none()).expect("a gap");
+        assert!(palw_execution_permits_v1(&schedule, lottery_round, 1).is_empty(), "a round with no quantum is missed, not redrawn");
+        palw_execution_schedule_assign_quanta_v1(&mut schedule, 0, 1_000);
+        assert!(schedule.quanta.is_empty(), "quantum 0 restores the lottery");
+    }
+
+    #[test]
+    fn heavier_canonical_work_holds_more_future_rounds_than_lighter_work() {
+        let light = {
+            let mut s = schedule_of(1, &[PalwExecFinalV1 { execution_root: h(0xA), ..final_credited(25, 10, 100, 25, 1_589_424) }]);
+            palw_execution_schedule_assign_quanta_v1(&mut s, 100_000, 0);
+            s.quanta.len()
+        };
+        let heavy = {
+            let mut s = schedule_of(1, &[PalwExecFinalV1 { execution_root: h(0xB), ..final_credited(36, 10, 100, 36, 2_685_360) }]);
+            palw_execution_schedule_assign_quanta_v1(&mut s, 100_000, 0);
+            s.quanta.len()
+        };
+        assert!(heavy > light, "QWEN36-scale work ({heavy}) must out-mint QWEN25-scale work ({light})");
     }
 
     /// **Integer only.** A consensus quota or draw that two platforms round differently is a fork,

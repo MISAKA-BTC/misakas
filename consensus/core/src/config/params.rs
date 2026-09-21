@@ -516,10 +516,7 @@ impl PalwExecutionLaneV1 {
     /// The width of the span `daa_score` falls in.
     pub fn width_at_daa(&self, daa_score: u64) -> u16 {
         let span_daa = self.schedule_span_daa_at(daa_score);
-        self.width_of_span_len(
-            crate::palw_execution_lane_v1::palw_execution_span_v1(daa_score, span_daa),
-            span_daa,
-        )
+        self.width_of_span_len(crate::palw_execution_lane_v1::palw_execution_span_v1(daa_score, span_daa), span_daa)
     }
 
     /// The widest round any stage of this lane configures.
@@ -1261,6 +1258,19 @@ pub struct Params {
     /// without `palw_model_registry` at or below it. Operator's order (2026-09-18): V1 → S1 → S3 if
     /// needed → S2 if speed wins; no zero-knowledge proof.
     pub palw_verification_v2: Option<ForkActivation>,
+    /// **ADR-0133 S3 — post-execution random layer/position sampling.** Past this fence a partial
+    /// seat may attest its V2 mask by recomputing the bind-drawn `(layer, position)` sites rather
+    /// than the whole assigned segments. Not a licence of its own. `Some` on testnet-11 at
+    /// [`PALW_RC_VERIFICATION_S3_FENCE_DAA`]; `None` elsewhere; hashed Some-only; refused without
+    /// `palw_verification_v2` at or below it.
+    pub palw_verification_s3: Option<ForkActivation>,
+    /// **ADR-0133 S2 — optimistic licence from the full-replay seat.** Past this fence a claim may
+    /// license on that seat's `Valid` alone (`OptimisticLicensed`); every other seat audits (S3 if
+    /// armed, S1 segments otherwise) and files the court if the sample disagrees. `Some` on
+    /// testnet-11 at [`PALW_RC_VERIFICATION_S2_FENCE_DAA`]; `None` elsewhere; hashed Some-only;
+    /// refused without `palw_verification_v2` at or below it, and without S3 at or below it when
+    /// both are armed.
+    pub palw_verification_s2: Option<ForkActivation>,
     /// **ADR-0133 §11.2 — readiness V2: a possession proof over the whole artifact.** Past this
     /// fence a seat proves possession with `SeatReadinessProvedV2` — the sixteen leaves the
     /// (class, bond, span) challenge draws from the whole inventory, in one multiproof, signed over
@@ -1328,6 +1338,12 @@ pub struct Params {
     /// liability, withdraw-before-expiry is refused, PanelFalseValid debits the lock, and
     /// eligibility is `available >= required(claim)` (`gain/3+1`). Hashed Some-only.
     pub palw_objective_offence: Option<ForkActivation>,
+    /// **Spend-once execution-round quanta** (1 CanonicalWork → N unique 1-second permits). Past
+    /// this fence a span's schedule mints tickets instead of drawing the ADR-0125 credit lottery.
+    /// `None` on mainnet. Testnet-11 schedules it at [`PALW_RC_EXECUTION_QUANTA_FENCE_DAA`]. Hashed
+    /// Some-only so a build that has not reached the height still peers with one that has it in
+    /// the future schedule.
+    pub palw_execution_quanta: Option<ForkActivation>,
     /// A public source URI on new model registrations. `None` on every preset; hashed Some-only.
     pub palw_public_model_source_required: Option<PalwPublicModelSourceRuleV1>,
     /// **ADR-0145 §1–§5: a claim's work is DERIVED, not declared** (the 2026-09-19 reward audit,
@@ -2108,6 +2124,12 @@ pub struct Params {
     /// are verified against the committed catalog, not through the admission gate, so that door
     /// needs the same refusal. `None` on every preset.
     pub palw_token_lift: Option<ForkActivation>,
+
+    /// **Kimi K3 family fence.** Past it a registration may reach the fenced Kimi kernels
+    /// (`verify_class_admission_v9`'s `kimi_family`). Weight still needs a certified family.
+    /// `None` on every shipped preset; hashed Some-only. Genesis that registers a Kimi class is
+    /// refused unless this fence is armed from genesis.
+    pub palw_kimi_k3: Option<ForkActivation>,
 
     /// **ADR-0093 Decision 6 — admission refuses a fused class the court cannot dissect.**
     ///
@@ -3016,6 +3038,31 @@ impl Params {
                 ));
             }
         }
+        if let Some(s3) = self.palw_verification_s3.filter(|f| *f != ForkActivation::never()) {
+            let v2_below = self.palw_verification_v2.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= s3.daa_score());
+            if !v2_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_verification_s3 is armed without palw_verification_v2 armed at or below its height: sampling attests \
+                     a V2 mask",
+                ));
+            }
+        }
+        if let Some(s2) = self.palw_verification_s2.filter(|f| *f != ForkActivation::never()) {
+            let v2_below = self.palw_verification_v2.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= s2.daa_score());
+            if !v2_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_verification_s2 is armed without palw_verification_v2 armed at or below its height: the optimistic \
+                     door names the S1 full-replay seat",
+                ));
+            }
+            if let Some(s3) = self.palw_verification_s3.filter(|f| *f != ForkActivation::never())
+                && s3.daa_score() > s2.daa_score()
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_verification_s2 is armed below palw_verification_s3: the operator's order is S1 then S3 then S2",
+                ));
+            }
+        }
         // ADR-0138: the anchor clock and the single lottery are one decision at one height. An
         // unpriced attempt lane that still advances the DAA score runs every window ten times fast;
         // an anchor clock without the single lottery would exempt nothing new. Both or neither, same day.
@@ -3718,6 +3765,14 @@ impl Params {
                  not armed from genesis: that kernel is adjudicated only where its fence is (ADR-0102)",
             ));
         }
+        if crate::palw_class_admission_v2::palw_genesis_reaches_kimi_kernel_v1(bundle)
+            && !self.palw_kimi_k3.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "this ruleset's genesis set registers a class reaching a Kimi K3 kernel and palw_kimi_k3 is not armed from \
+                 genesis",
+            ));
+        }
         // **ADR-0093 Decision 6 at the genesis door**, the same reason: a fence armed from genesis
         // judges the genesis rows too, or its first class would be the one it exists to refuse.
         if self.palw_fused_dissectable.is_some_and(|f| f != ForkActivation::never() && f.is_active(0))
@@ -3828,14 +3883,10 @@ impl Params {
                     return Err(PalwModeV2Error::Invalid("palw_execution_lane's short span is zero"));
                 }
                 if lane.short_span.schedule_span_daa >= lane.schedule_span_daa {
-                    return Err(PalwModeV2Error::Invalid(
-                        "palw_execution_lane's short span must be shorter than the opening span",
-                    ));
+                    return Err(PalwModeV2Error::Invalid("palw_execution_lane's short span must be shorter than the opening span"));
                 }
                 if lane.short_span.activation.daa_score() <= lane.activation.daa_score() {
-                    return Err(PalwModeV2Error::Invalid(
-                        "palw_execution_lane's short span must fire after the lane opens",
-                    ));
+                    return Err(PalwModeV2Error::Invalid("palw_execution_lane's short span must fire after the lane opens"));
                 }
                 if lane.widenings.iter().any(|stage| stage.is_used() && stage.activation == lane.short_span.activation) {
                     return Err(PalwModeV2Error::Invalid(
@@ -4374,6 +4425,12 @@ impl Params {
         if self.palw_verification_v2 == Some(ForkActivation::never()) {
             self.palw_verification_v2 = None;
         }
+        if self.palw_verification_s3 == Some(ForkActivation::never()) {
+            self.palw_verification_s3 = None;
+        }
+        if self.palw_verification_s2 == Some(ForkActivation::never()) {
+            self.palw_verification_s2 = None;
+        }
         if self.palw_readiness_v2 == Some(ForkActivation::never()) {
             self.palw_readiness_v2 = None;
         }
@@ -4396,6 +4453,9 @@ impl Params {
         }
         if self.palw_objective_offence == Some(ForkActivation::never()) {
             self.palw_objective_offence = None;
+        }
+        if self.palw_execution_quanta == Some(ForkActivation::never()) {
+            self.palw_execution_quanta = None;
         }
         if self.palw_public_model_source_required.is_some_and(|r| r.activation == ForkActivation::never()) {
             self.palw_public_model_source_required = None;
@@ -4508,6 +4568,9 @@ impl Params {
         // ADR-0102, likewise.
         if self.palw_token_lift == Some(ForkActivation::never()) {
             self.palw_token_lift = None;
+        }
+        if self.palw_kimi_k3 == Some(ForkActivation::never()) {
+            self.palw_kimi_k3 = None;
         }
         // ADR-0093 Decision 6, likewise.
         if self.palw_fused_dissectable == Some(ForkActivation::never()) {
@@ -4761,6 +4824,16 @@ impl Params {
         self.palw_objective_offence.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
     }
 
+    /// Whether a span's schedule mints spend-once execution quanta at `daa_score`.
+    pub fn palw_execution_quanta_at(&self, daa_score: u64) -> bool {
+        self.palw_execution_quanta.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The HEIGHT of the execution-quanta fence, if scheduled.
+    pub fn palw_execution_quanta_daa(&self) -> Option<u64> {
+        self.palw_execution_quanta.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score())
+    }
+
     /// ADR-0147 (the 2026-09-19 audit's F3, ADR-0145 I3/I4): whether the block-level rules of
     /// independent admission apply at `daa_score` — a registration opens `Candidate`, leaves it
     /// only on a jury the network drew, asks for no share, and stays out of the work-price unit.
@@ -4790,6 +4863,16 @@ impl Params {
     /// ADR-0133 Verification V2: whether segment-scoped licensing is in force at `daa_score`.
     pub fn palw_verification_v2_at(&self, daa_score: u64) -> bool {
         self.palw_verification_v2.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0133 S3: whether post-execution layer/position sampling is in force at `daa_score`.
+    pub fn palw_verification_s3_at(&self, daa_score: u64) -> bool {
+        self.palw_verification_s3.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// ADR-0133 S2: whether the full-replay seat's `Valid` alone may license at `daa_score`.
+    pub fn palw_verification_s2_at(&self, daa_score: u64) -> bool {
+        self.palw_verification_s2.is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0133 §11.2: whether readiness V2 (the whole-artifact possession proof) is in force.
@@ -5281,6 +5364,18 @@ impl Params {
         self.palw_token_lift_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// Kimi K3 family fence, resolved: `Some` only on a `ConsensusV2` network that armed it.
+    pub fn palw_kimi_k3_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_kimi_k3) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    pub fn palw_kimi_k3_at(&self, daa_score: u64) -> bool {
+        self.palw_kimi_k3_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// ADR-0093 Decision 6's fence, resolved: `Some` only on a `ConsensusV2` network that armed it.
     /// The ONE place "must a fused class be dissectable to be admitted" is decided.
     pub fn palw_fused_dissectable_fence(&self) -> Option<ForkActivation> {
@@ -5473,12 +5568,15 @@ impl Params {
             palw_single_lottery,
             palw_short_challenge_window,
             palw_verification_v2,
+            palw_verification_s3,
+            palw_verification_s2,
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
+            palw_execution_quanta,
             palw_public_model_source_required,
             palw_canonical_work,
             palw_admission_independence,
@@ -5514,6 +5612,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_kimi_k3,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -5557,12 +5656,15 @@ impl Params {
             ("palw_single_lottery", *palw_single_lottery),
             ("palw_short_challenge_window", *palw_short_challenge_window),
             ("palw_verification_v2", *palw_verification_v2),
+            ("palw_verification_s3", *palw_verification_s3),
+            ("palw_verification_s2", *palw_verification_s2),
             ("palw_readiness_v2", *palw_readiness_v2),
             ("palw_anchor_clock", *palw_anchor_clock),
             ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
+            ("palw_execution_quanta", *palw_execution_quanta),
             ("palw_public_model_source_required", palw_public_model_source_required.map(|r| r.activation)),
             ("palw_canonical_work", *palw_canonical_work),
             ("palw_admission_independence", *palw_admission_independence),
@@ -5638,6 +5740,7 @@ impl Params {
             ("palw_shard_court", *palw_shard_court),
             ("palw_shard_licensing", *palw_shard_licensing),
             ("palw_token_lift", *palw_token_lift),
+            ("palw_kimi_k3", *palw_kimi_k3),
             ("palw_fused_dissectable", *palw_fused_dissectable),
             ("palw_attn_anchored_root", *palw_attn_anchored_root),
             ("palw_held_context", *palw_held_context),
@@ -5854,6 +5957,10 @@ impl Params {
             h.write(b"palw_token_lift");
             h.write(lift.daa_score().to_le_bytes());
         }
+        if let Some(kimi) = self.palw_kimi_k3 {
+            h.write(b"palw_kimi_k3");
+            h.write(kimi.daa_score().to_le_bytes());
+        }
         // ADR-0093 Decision 6's fence, NAMED likewise: it changes which classes may register.
         if let Some(dissectable) = self.palw_fused_dissectable {
             h.write(b"palw_fused_dissectable");
@@ -6068,12 +6175,15 @@ impl Params {
             palw_single_lottery,
             palw_short_challenge_window,
             palw_verification_v2,
+            palw_verification_s3,
+            palw_verification_s2,
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
+            palw_execution_quanta,
             palw_public_model_source_required,
             palw_canonical_work,
             palw_admission_independence,
@@ -6099,6 +6209,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_kimi_k3,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -6318,6 +6429,20 @@ impl Params {
                 visit(&mut absent);
             }
         }
+        match palw_verification_s3.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_verification_s2.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
         // ADR-0133 §11.2 readiness V2, a bare fence: the same treatment again.
         match palw_readiness_v2.as_mut() {
             Some(activation) => fork(activation, visit),
@@ -6359,6 +6484,13 @@ impl Params {
             }
         }
         match palw_objective_offence.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_execution_quanta.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -6557,6 +6689,9 @@ impl Params {
         }
         // ADR-0102. Some-only, likewise.
         if let Some(activation) = palw_token_lift.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_kimi_k3.as_mut() {
             fork(activation, visit);
         }
         // ADR-0093 Decision 6. Some-only, likewise.
@@ -6883,12 +7018,15 @@ impl Params {
             palw_single_lottery,
             palw_short_challenge_window,
             palw_verification_v2,
+            palw_verification_s3,
+            palw_verification_s2,
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
+            palw_execution_quanta,
             palw_public_model_source_required,
             palw_canonical_work,
             palw_admission_independence,
@@ -6914,6 +7052,7 @@ impl Params {
             palw_shard_court,
             palw_shard_licensing,
             palw_token_lift,
+            palw_kimi_k3,
             palw_fused_dissectable,
             palw_attn_anchored_root,
             palw_held_context,
@@ -7126,6 +7265,14 @@ impl Params {
             h.write(b"palw_verification_v2");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_verification_s3 {
+            h.write(b"palw_verification_s3");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_verification_s2 {
+            h.write(b"palw_verification_s2");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0133 §11.2 readiness V2: the height only, Some-only.
         if let Some(activation) = palw_readiness_v2 {
             h.write(b"palw_readiness_v2");
@@ -7153,6 +7300,10 @@ impl Params {
         }
         if let Some(activation) = palw_objective_offence {
             h.write(b"palw_objective_offence");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_execution_quanta {
+            h.write(b"palw_execution_quanta");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(rule) = palw_public_model_source_required {
@@ -7370,6 +7521,10 @@ impl Params {
         // the kernel or the field.
         if let Some(activation) = palw_token_lift {
             h.write(b"palw_token_lift");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_kimi_k3 {
+            h.write(b"palw_kimi_k3");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0093 Decision 6, Some-only for the same reason: a dormant network fingerprints
@@ -7850,12 +8005,15 @@ impl Params {
             palw_single_lottery: self.palw_single_lottery,
             palw_short_challenge_window: self.palw_short_challenge_window,
             palw_verification_v2: self.palw_verification_v2,
+            palw_verification_s3: self.palw_verification_s3,
+            palw_verification_s2: self.palw_verification_s2,
             palw_readiness_v2: self.palw_readiness_v2,
             palw_anchor_clock: self.palw_anchor_clock,
             palw_clock_cursor: None,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
+            palw_execution_quanta: self.palw_execution_quanta,
             palw_public_model_source_required: None,
             palw_canonical_work: None,
             palw_admission_independence: None,
@@ -7881,6 +8039,7 @@ impl Params {
             palw_shard_court: self.palw_shard_court,
             palw_shard_licensing: self.palw_shard_licensing,
             palw_token_lift: self.palw_token_lift,
+            palw_kimi_k3: self.palw_kimi_k3,
             palw_fused_dissectable: self.palw_fused_dissectable,
             palw_attn_anchored_root: self.palw_attn_anchored_root,
             palw_held_context: self.palw_held_context,
@@ -8801,12 +8960,15 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_verification_s3: None,
+    palw_verification_s2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
@@ -8835,6 +8997,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
@@ -9005,12 +9168,15 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_verification_s3: None,
+    palw_verification_s2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
@@ -9039,6 +9205,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
@@ -9191,12 +9358,15 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_verification_s3: None,
+    palw_verification_s2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
@@ -9225,6 +9395,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
@@ -12917,6 +13088,15 @@ pub const PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA: u64 = 7_301;
 /// zero-knowledge proof is used or planned.
 pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 
+/// **ADR-0133 S3 on testnet-11.** Layer/position sampling, after S1 is live, before S2. 8,600 is
+/// past the lock ledger (8,500) and unnamed on any released schedule, so already-committed
+/// licences stay coverage-shaped until the operator crosses it. Mainnet stays `None`.
+pub const PALW_RC_VERIFICATION_S3_FENCE_DAA: u64 = 8_600;
+
+/// **ADR-0133 S2 on testnet-11.** Optimistic licence from the full-replay seat, after S3. 8,700
+/// is past S3 and unnamed on any released schedule. Mainnet stays `None`.
+pub const PALW_RC_VERIFICATION_S2_FENCE_DAA: u64 = 8_700;
+
 /// **ADR-0138 + ADR-0142 — the DAA clock and its cursor, on testnet-11 at DAA 7,780.**
 ///
 /// The 6,001 / 7,101 flag day left both dormant: past the anchor clock only a heartbeat can
@@ -12937,6 +13117,13 @@ pub const PALW_RC_VERIFICATION_V2_FENCE_DAA: u64 = 7_200;
 /// clock (one setter); the cursor arms at the same height. A fleet still advertising 7,900
 /// must roll before 7,780.
 pub const PALW_RC_ANCHOR_CLOCK_FENCE_DAA: u64 = 7_780;
+
+/// **Spend-once execution-round quanta on the BPS1 lane.** Past this height a verified Attempt
+/// Final mints `ceil(CanonicalWork / 100_000)` unique 1-second permits instead of drawing the
+/// ADR-0125 credit lottery. 7,800 is ~40 DAA past the live tip (~7,740) and 20 DAA past the
+/// clock, so already-committed schedules stay lottery-shaped and the fork-id gate can see the
+/// fence. Mainnet stays `None`.
+pub const PALW_RC_EXECUTION_QUANTA_FENCE_DAA: u64 = 7_800;
 
 /// **ADR-0144 §9: the live lock ledger, as one future bundle.** Past this height a Valid
 /// receipt locks `required = palw_max_fraud_gain_v1(claim)/3+1`, Final keeps a liability,
@@ -12961,12 +13148,16 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     // ADR-0135 Upgrade A, ADR-0132 Upgrade C and ADR-0137 ride the same flag day.
     params.palw_model_registry = None;
     params.palw_verification_v2 = None;
+    params.palw_verification_s3 = None;
+    params.palw_verification_s2 = None;
     params.palw_readiness_v2 = None;
     params.palw_economic_payout = None;
     params.palw_work_target = None;
     params.set_palw_single_lottery(None);
     params.set_palw_short_challenge_window(None);
     params.palw_verification_v2 = None;
+    params.palw_verification_s3 = None;
+    params.palw_verification_s2 = None;
     params.palw_readiness_v2 = None;
     params.palw_anchor_clock = None;
     params.palw_clock_cursor = None;
@@ -12974,6 +13165,7 @@ pub(crate) fn palw_rc_clear_flag_day_6001_for_tests(params: &mut Params) {
     params.palw_artifact_root_ownership = None;
     params.palw_canonical_work = None;
     params.palw_objective_offence = None;
+    params.palw_execution_quanta = None;
 }
 
 /// **The fleet's release as deployed (`13520042`, fingerprint `ae1d6162…`)**: no flag-day set, no
@@ -13504,11 +13696,15 @@ pub fn palw_rc_base_params() -> Params {
     // ADR-0144 §9: the lock ledger, Final liability, and PanelFalseValid debit — one future
     // height, after the clock, so already-committed Valid receipts are not retroactively locked.
     params.palw_objective_offence = Some(ForkActivation::new(PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA));
+    params.palw_execution_quanta = Some(ForkActivation::new(PALW_RC_EXECUTION_QUANTA_FENCE_DAA));
     // ADR-0132 §7.6: the short challenge window, on the 6,001 / 7,101 flag day — explicit, in the
     // schedule and the fork id, mirrored into the bundle by the setter.
     params.set_palw_short_challenge_window(Some(flag_day_6001));
     // ADR-0133 Verification V2: its own day, a hundred DAA past the flag day.
     params.palw_verification_v2 = Some(ForkActivation::new(PALW_RC_VERIFICATION_V2_FENCE_DAA));
+    // ADR-0133 S3 then S2, after the lock ledger, unnamed on any released schedule.
+    params.palw_verification_s3 = Some(ForkActivation::new(PALW_RC_VERIFICATION_S3_FENCE_DAA));
+    params.palw_verification_s2 = Some(ForkActivation::new(PALW_RC_VERIFICATION_S2_FENCE_DAA));
     // ADR-0133 §11.2: readiness V2 takes the same day — the possession proof the 6,001 bundle left
     // as V1 (H-6 of the 2026-09-18 audit) becomes a whole-artifact multiproof here.
     params.palw_readiness_v2 = Some(ForkActivation::new(PALW_RC_VERIFICATION_V2_FENCE_DAA));
@@ -13897,12 +14093,15 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_single_lottery: None,
     palw_short_challenge_window: None,
     palw_verification_v2: None,
+    palw_verification_s3: None,
+    palw_verification_s2: None,
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
+    palw_execution_quanta: None,
     palw_public_model_source_required: None,
     palw_canonical_work: None,
     palw_admission_independence: None,
@@ -13968,6 +14167,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_shard_court: None,
     palw_shard_licensing: None,
     palw_token_lift: None,
+    palw_kimi_k3: None,
     palw_fused_dissectable: None,
     palw_attn_anchored_root: None,
     palw_held_context: None,
@@ -19015,6 +19215,8 @@ mod consensus_params_id_tests {
                 "palw_single_lottery",
                 "palw_short_challenge_window",
                 "palw_verification_v2",
+                "palw_verification_s3",
+                "palw_verification_s2",
                 "palw_readiness_v2",
                 "palw_anchor_clock",
                 "palw_clock_cursor",
@@ -19994,6 +20196,8 @@ mod consensus_params_id_tests {
             // The registry and the payout ride the economy's height; a moved economy moves them off.
             scheduled.palw_model_registry = None;
             scheduled.palw_verification_v2 = None;
+            scheduled.palw_verification_s3 = None;
+            scheduled.palw_verification_s2 = None;
             scheduled.palw_readiness_v2 = None;
             scheduled.palw_economic_payout = None;
             scheduled.palw_work_target = None;
@@ -20121,6 +20325,8 @@ mod consensus_params_id_tests {
         dormant.palw_panel_economy = None;
         dormant.palw_model_registry = None;
         dormant.palw_verification_v2 = None;
+        dormant.palw_verification_s3 = None;
+        dormant.palw_verification_s2 = None;
         dormant.palw_readiness_v2 = None;
         dormant.palw_economic_payout = None;
         dormant.palw_work_target = None;
@@ -20977,10 +21183,11 @@ mod palw_execution_lane_stage_tests {
         assert_eq!(base.consensus_identity_id(), armed(opening).consensus_identity_id(), "a scheduled shortening leaves the identity");
         assert_eq!(base.consensus_identity_id(), armed(later).consensus_identity_id());
         assert!(base.fence_schedule_v1().contains(&1_000));
-        assert!(base
-            .palw_fences_v1()
-            .iter()
-            .any(|(name, fence)| *name == "palw_execution_lane_span_short" && *fence == Some(ForkActivation::new(1_000))));
+        assert!(
+            base.palw_fences_v1()
+                .iter()
+                .any(|(name, fence)| *name == "palw_execution_lane_span_short" && *fence == Some(ForkActivation::new(1_000)))
+        );
         armed(shortened).validate_palw_v2().expect("a shorter span after the opening is runnable");
         let mut too_wide = shortened;
         too_wide.short_span.schedule_span_daa = 100;
@@ -21299,8 +21506,7 @@ mod palw_overlay_carve_tests {
         assert!(rc.palw_compute_overlay_retired_at(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA));
         assert_ne!(PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA, PALW_RC_PALW_UPGRADE_FENCE_DAA, "its own height, so the gate sees it");
         assert_ne!(
-            PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA,
-            PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
+            PALW_RC_EXECUTION_SPAN_SHORT_FENCE_DAA, PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA,
             "the span-short fence is one before retirement, so each failure names its cause"
         );
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_compute_overlay_retired" && fence.is_some()));
@@ -21341,6 +21547,8 @@ mod palw_model_registry_fence_tests {
         let mut rc = shipped.clone();
         rc.palw_model_registry = None;
         rc.palw_verification_v2 = None;
+        rc.palw_verification_s3 = None;
+        rc.palw_verification_s2 = None;
         rc.palw_readiness_v2 = None;
         rc.palw_economic_payout = None;
         rc.palw_work_target = None;
@@ -21396,6 +21604,8 @@ mod palw_model_registry_fence_tests {
         rc.set_palw_single_lottery(None);
         // Verification V2 (6,100) follows the registry; this test moves the registry past it.
         rc.palw_verification_v2 = None;
+        rc.palw_verification_s3 = None;
+        rc.palw_verification_s2 = None;
         rc.palw_readiness_v2 = None;
         assert!(rc.palw_fences_v1().iter().any(|(name, fence)| *name == "palw_single_lottery" && fence.is_none()));
         let mut never = rc.clone();
@@ -21485,7 +21695,10 @@ mod palw_model_registry_fence_tests {
             ("palw_single_lottery", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_anchor_clock", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_clock_cursor", PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_execution_quanta", PALW_RC_EXECUTION_QUANTA_FENCE_DAA),
             ("palw_objective_offence", PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA),
+            ("palw_verification_s3", PALW_RC_VERIFICATION_S3_FENCE_DAA),
+            ("palw_verification_s2", PALW_RC_VERIFICATION_S2_FENCE_DAA),
         ];
         for name in UPGRADE_6001 {
             assert_eq!(by_name.get(name).copied().flatten(), Some(PALW_RC_PALW_UPGRADE_FENCE_DAA), "{name}: on the flag day");
@@ -21556,7 +21769,10 @@ mod palw_model_registry_fence_tests {
         for daa in [day, day + 1] {
             assert!(rc.palw_model_registry_at(daa) && rc.palw_economic_payout_at(daa).is_some(), "registry/payout on at {daa}");
             assert!(rc.palw_work_target_at(daa), "work target on at {daa}");
-            assert!(!rc.palw_single_lottery_at(daa), "the single lottery waits for DAA {PALW_RC_ANCHOR_CLOCK_FENCE_DAA}, at {daa} too");
+            assert!(
+                !rc.palw_single_lottery_at(daa),
+                "the single lottery waits for DAA {PALW_RC_ANCHOR_CLOCK_FENCE_DAA}, at {daa} too"
+            );
             assert!(rc.palw_short_challenge_window_at(daa), "short window on at {daa}");
         }
         for daa in [PALW_RC_ANCHOR_CLOCK_FENCE_DAA, PALW_RC_ANCHOR_CLOCK_FENCE_DAA + 1] {
@@ -21573,6 +21789,7 @@ mod palw_model_registry_fence_tests {
             schedule.contains(&PALW_RC_VERIFICATION_V2_FENCE_DAA)
                 && schedule.contains(&PALW_RC_COMPUTE_OVERLAY_RETIRED_FENCE_DAA)
                 && schedule.contains(&PALW_RC_ANCHOR_CLOCK_FENCE_DAA)
+                && schedule.contains(&PALW_RC_EXECUTION_QUANTA_FENCE_DAA)
                 && schedule.contains(&PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA)
                 && !schedule.contains(&7_000),
             "{schedule:?}: 7,000 is nobody's height any more"
@@ -21625,6 +21842,8 @@ mod palw_model_registry_fence_tests {
         // refusals this test is about could not fire.
         rc.palw_model_registry = None;
         rc.palw_verification_v2 = None;
+        rc.palw_verification_s3 = None;
+        rc.palw_verification_s2 = None;
         rc.palw_readiness_v2 = None;
         rc.palw_economic_payout = None;
         let mut never = rc.clone();
@@ -21688,6 +21907,8 @@ mod palw_model_registry_fence_tests {
         let mut rc = shipped.clone();
         rc.palw_model_registry = None;
         rc.palw_verification_v2 = None;
+        rc.palw_verification_s3 = None;
+        rc.palw_verification_s2 = None;
         rc.palw_readiness_v2 = None;
         rc.palw_economic_payout = None;
         rc.palw_work_target = None;
@@ -21748,13 +21969,10 @@ mod adr0142_release_probe {
             ("palw_single_lottery", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_anchor_clock", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
             ("palw_clock_cursor", super::PALW_RC_ANCHOR_CLOCK_FENCE_DAA),
+            ("palw_execution_quanta", super::PALW_RC_EXECUTION_QUANTA_FENCE_DAA),
             ("palw_objective_offence", super::PALW_RC_OBJECTIVE_OFFENCE_FENCE_DAA),
         ] {
-            assert_eq!(
-                rows.iter().find(|(n, _)| *n == held).map(|(_, h)| *h),
-                Some(height),
-                "{held} is scheduled at {height}"
-            );
+            assert_eq!(rows.iter().find(|(n, _)| *n == held).map(|(_, h)| *h), Some(height), "{held} is scheduled at {height}");
         }
         assert!(rows.iter().any(|(n, _)| *n == "palw_work_target"), "the work target keeps the day");
         assert!(rows.iter().any(|(n, _)| *n == "palw_model_registry"), "and so does the registry");

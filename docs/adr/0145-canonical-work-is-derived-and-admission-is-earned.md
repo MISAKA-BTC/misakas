@@ -1,7 +1,10 @@
 # ADR-0145 — Canonical work is derived, not declared; admission is earned, not registered
 
-**Status:** DESIGN, 2026-09-19. No code, no fence. This is the accounting and admission half of
-ADR-0144's constitution, and it exists to be attacked before anything is built from it.
+**Status:** DESIGN 2026-09-19; **§1–§5 implemented dormant** (ADR-0147/0148/0149, the economic
+bundle, `None` on every preset). **§6 prefix-STATE: object family implemented 2026-09-21**
+(`PalwFpPrefixStateV1`, `fp_derive_work_from_state_v1` derives `KvReused`). The V3 commitment
+wire is unchanged — a field addition would be a new object family, and live claims persist. A
+V3 commitment that names no state is genesis. No new fence.
 
 ADR-0144 fixed what PALW is for. This fixes the two mechanisms the 2026-09-19 reward audit proved
 cannot carry it: a unit of work the registrant writes, and an admission the registrant can pass
@@ -269,3 +272,15 @@ last emergency was scheduled.
 
 At which point new models are something the network can safely have more of, rather than something
 it has to be protected from.
+
+---
+
+## 11. Implementation (2026-09-21)
+
+§1–§5 remain behind the economic bundle (`palw_canonical_work` / `palw_admission_independence` /
+`palw_fp_derived_work`), `None` on every preset. **§6 prefix-STATE is now an object family**:
+`PalwFpPrefixStateV1` (own domain, own id). A V3 commitment that names no state is genesis —
+Uncached or PrefixReused from paid prompt ids. A named non-genesis state of this class derives
+`KvReused` and credits the tail only (`fp_derive_work_from_state_v1`). Declaring more cache cannot
+raise the pay. The V3 commitment wire is unchanged (golden-vector rule); extraction reads genesis
+until a later payload version carries the object. No new fence. No testnet-11 height.

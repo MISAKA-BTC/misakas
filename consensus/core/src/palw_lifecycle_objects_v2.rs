@@ -100,6 +100,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
     match object {
         PalwConsensusObjectV2::ReceiptLicensed { .. }
         | PalwConsensusObjectV2::ReceiptLicensedV2 { .. }
+        | PalwConsensusObjectV2::OptimisticLicensed { .. }
         | PalwConsensusObjectV2::ProducerDefaulted { .. }
         | PalwConsensusObjectV2::CourtOpened { .. }
         | PalwConsensusObjectV2::CourtClosed { .. }
@@ -1062,6 +1063,7 @@ mod tests {
             execution_root: h64(43),
             trace_chunk_count: 4,
             trace_retention_daa: 99,
+            consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(h64(1)),
         };
         // The panel binding: excluded for a different reason than the other three — not because
         // it moves value, but because the chain already derives it and one question gets one
@@ -1574,6 +1576,7 @@ mod tests {
                     evidence: vec![1],
                 },
             ),
+            (52, PalwConsensusObjectV2::OptimisticLicensed { claim: h64(18), receipts: Vec::new() }),
         ]);
         for (discriminant, object) in pinned {
             assert_eq!(borsh::to_vec(&object).unwrap()[0], discriminant, "{object:?}");

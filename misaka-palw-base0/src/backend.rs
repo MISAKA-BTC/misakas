@@ -479,6 +479,46 @@ impl PalwExecutionBackendV1 for Base0Backend {
         })
     }
 
+    fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
+        crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())
+    }
+
+    fn replay_segment_from_checkpoint_v1(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        opening: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        crate::produce::base0_replay_segment_from_checkpoint_v1(
+            &self.artifact,
+            &self.profile,
+            job,
+            prompt,
+            opening,
+            self.network_ladder,
+        )
+            .map_err(|e| e.to_string())
+    }
+
+    fn replay_accused_segment_v1(
+        &self,
+        capture: &[u8],
+        seat_count: u16,
+        segment_index: u16,
+        _job: &PalwJobContextV2,
+        prompt: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        crate::produce::base0_replay_accused_segment_v1(
+            &self.artifact,
+            capture,
+            seat_count,
+            segment_index,
+            prompt,
+            self.network_ladder,
+        )
+            .map_err(|e| e.to_string())
+    }
+
     /// The non-streaming verb IS the streaming one with a callback that does nothing — never the
     /// reverse (ADR-0077 Decision 2). One inference, one capture, one commitment.
     fn execute_free_prompt(
@@ -573,6 +613,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
             job_context: binding.job_context.clone(),
             step_leaf_count: binding.step_leaf_count,
+            layer_count: binding.shape_profile.layer_count,
         })
     }
 
@@ -2387,6 +2428,7 @@ mod end_to_end_tests {
             execution_root: commitment.execution_root,
             trace_chunk_count: commitment.trace_chunk_count,
             trace_retention_daa: commitment.trace_retention_daa,
+            consumed_prefix_state: kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(entry.class_id()),
         };
         let (s2, _) = apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), &[committed], None).unwrap();
         let seats = vec![PalwPanelSeatV2 { bond: PalwBondKeyV2(bond_outpoint), operator_id: h(90) }];

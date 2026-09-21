@@ -26,6 +26,8 @@ ADR-0073 Phase ① 1e (a seat hashes the whole capture), on the free-prompt lane
 
 > **Security amendment appended (2026-09-02)** — see the last section (SA-1…SA-7): a public gateway spends the operator's exposure and the spend is bounded; interval openings are served to bonded requesters only; F1 covers the prompt side of the stream; the turn deadline is derived, not chosen; `PanelDa`'s enforcement is a licence until ADR-0062 lands; the persistent runtime re-verifies what it mapped.
 
+> **ADR-0144 alignment (2026-09-21).** R0 and Phase A stay: one local inference is the answer and the claim. A public commercial gateway is out of PALW reward (P1). Decision 15 waits on ADR-0073's 0144 amendment. See the end section.
+
 ## 1. What was measured
 
 The three classes testnet-11 registers, read off `canonical_classes_v1` /
@@ -566,3 +568,22 @@ interval's opening carries the prompt's embeddings). The gateway files mode-2 un
 verbatim at boot; the commitment builder carries no ids on chain and the submitter stages the
 worker's beside the material. Armed on a carded mainnet from genesis; dormant on testnet-11 and
 devnet. Design record: `docs/palw-private-prompts-design-2026-09-05.md`.
+
+## ADR-0144 alignment (2026-09-21)
+
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1: rewardable inference
+is local; a localhost OpenAI-compatible endpoint is in scope; an internet-facing gateway that sells
+somebody else's GPU is not.
+
+* **Kept, and still the product path.** R0 (the practical local LLM and the mining runtime are the
+  same inference). Phase A (executor-side, consensus-inert): stream the answer, commit after start,
+  the family workers are the gateway's workers. Decision 3: the gateway reads the chain it commits
+  to — that remaining half is ADR-0075's gateway gap, on the local `/v1`, not a marketplace.
+* **Withdrawn as a PALW-reward goal.** "A node can be a public LLM entrance" (this ADR's pairing
+  with ADR-0079's Done-when, SA-1's public-job budget as a product, Decision 9's public mining
+  pages as a commercial serving surface). A loopback bind is the default product. A non-loopback
+  bind remains ADR-0079 Decision 10's acknowledged operator act; it does not earn PALW for serving
+  a stranger's prompt on the operator's GPU. SA-1 still prices exposure if that bind is used; it
+  no longer describes what PALW is for.
+* **Decision 15** (ADR-0073 Phase ④ activation after one retarget span of measured receipt supply)
+  is withheld with Phase ④ itself — see ADR-0073's 2026-09-21 alignment.

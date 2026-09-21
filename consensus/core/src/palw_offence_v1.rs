@@ -149,11 +149,7 @@ pub fn palw_offence_evidence_digest_v1(evidence: &[u8]) -> Hash64 {
 /// and two serializations of one equivocation are still one offence.
 ///
 /// Empty evidence (fold unit tests that bypass the processor) falls back to the named id.
-pub fn palw_ledger_evidence_id_v1(
-    kind: PalwOffenceKindV1,
-    evidence: &[u8],
-    named: &Hash64,
-) -> Result<Hash64, PalwOffenceVerifyError> {
+pub fn palw_ledger_evidence_id_v1(kind: PalwOffenceKindV1, evidence: &[u8], named: &Hash64) -> Result<Hash64, PalwOffenceVerifyError> {
     if evidence.is_empty() {
         if *named == Hash64::default() {
             return Err(PalwOffenceVerifyError::EvidenceEmpty);
@@ -255,8 +251,8 @@ fn palw_panel_contradiction_digest_v1(contradiction: &PalwPanelContradictionV1) 
             Ok(palw_tagged_contradiction_digest_v1(b"legs", &body))
         }
         PalwPanelContradictionV1::ForgedOutput { binding, pin, position } => {
-            let body = borsh::to_vec(&(binding, pin, position))
-                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            let body =
+                borsh::to_vec(&(binding, pin, position)).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
             Ok(palw_tagged_contradiction_digest_v1(b"forged-output", &body))
         }
     }
@@ -398,8 +394,7 @@ where
     }
     match payload.valid_receipt.verdict {
         crate::palw_panel_v2::PalwReceiptVerdictV2::Valid => {}
-        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { .. }
-        | crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable => {
+        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { .. } | crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNotValidVerdict);
         }
     }
@@ -578,11 +573,11 @@ where
     crate::palw_carriage::adjudicate_equivocation_carriage_v1(&carriage, &record, 0, network_id, |key, digest, sig, ctx| {
         verify_signature(key, &digest.as_bytes(), sig, ctx)
     })
-        .map(|_| ())
-        .map_err(|e| match e {
-            crate::palw_carriage::PalwCarriageError::EquivocationBondNotTheSigner => PalwOffenceVerifyError::BondNotTheSigner,
-            other => PalwOffenceVerifyError::Carriage(other.to_string()),
-        })
+    .map(|_| ())
+    .map_err(|e| match e {
+        crate::palw_carriage::PalwCarriageError::EquivocationBondNotTheSigner => PalwOffenceVerifyError::BondNotTheSigner,
+        other => PalwOffenceVerifyError::Carriage(other.to_string()),
+    })
 }
 
 #[cfg(test)]
@@ -682,7 +677,14 @@ mod tests {
         let domain = Hash64::from_u64_word(0xD1);
         let mut ids = Vec::new();
         for seat in 1u64..=3 {
-            let payload = mock_panel_false_valid(op(seat), claim, &executor_pk, network, domain, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid);
+            let payload = mock_panel_false_valid(
+                op(seat),
+                claim,
+                &executor_pk,
+                network,
+                domain,
+                crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+            );
             let evidence = borsh::to_vec(&payload).expect("serializes");
             let named = palw_offence_evidence_digest_v1(&evidence);
             palw_verify_objective_offence_v1(
@@ -704,7 +706,8 @@ mod tests {
         assert_ne!(ids[1], ids[2]);
         assert_ne!(ids[0], ids[2]);
 
-        let again = mock_panel_false_valid(op(1), claim, &executor_pk, network, domain, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid);
+        let again =
+            mock_panel_false_valid(op(1), claim, &executor_pk, network, domain, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid);
         let mut renamed = again.clone();
         renamed.valid_receipt.signed_daa = 99;
         let a = borsh::to_vec(&again).unwrap();
@@ -798,13 +801,13 @@ mod tests {
         network_id: &[u8],
         job_id: Hash64,
     ) -> crate::palw_carriage::PalwEquivocationCarriageV1 {
-        use crate::palw_slash::{PalwClassContradictionCertificateV1, PalwExecutionAttestationV1, PALW_S_OBJECT_VERSION_V3};
+        use crate::palw_slash::{PALW_S_OBJECT_VERSION_V3, PalwClassContradictionCertificateV1, PalwExecutionAttestationV1};
         use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
         let signer = crate::mldsa87_primitives::mldsa87_key_id(pubkey);
         let ctx = PalwJobContextV2 {
             version: PALW_TRACE_COMMITMENT_VERSION_V2,
             network_id: network_id.to_vec(),
-            job_id: job_id,
+            job_id,
             job_nullifier: Hash64::from_u64_word(0x12),
             assignment_id: Hash64::from_u64_word(0x13),
             execution_seed: [0x22; 32],
@@ -873,7 +876,8 @@ mod tests {
         let accused = op(1);
         let pubkey = [7u8; 4];
         let network = b"testnet-11";
-        let evidence = borsh::to_vec(&mock_equivocation_carriage(accused, &pubkey, network, Hash64::from_u64_word(0x11))).expect("carriage serializes");
+        let evidence = borsh::to_vec(&mock_equivocation_carriage(accused, &pubkey, network, Hash64::from_u64_word(0x11)))
+            .expect("carriage serializes");
         let id = palw_offence_evidence_digest_v1(&evidence);
         palw_verify_objective_offence_v1(
             PalwOffenceKindV1::ExecutorEquivocation,
@@ -899,10 +903,12 @@ mod tests {
         let b = borsh::to_vec(&carriage).expect("swapped serializes");
         assert_ne!(a, b, "the submitter can choose attestation order");
         assert_ne!(palw_offence_evidence_digest_v1(&a), palw_offence_evidence_digest_v1(&b));
-        let id_a = palw_ledger_offence_id_v1(PalwOffenceKindV1::ExecutorEquivocation, &accused, &a, &palw_offence_evidence_digest_v1(&a))
-            .expect("canonical a");
-        let id_b = palw_ledger_offence_id_v1(PalwOffenceKindV1::ExecutorEquivocation, &accused, &b, &palw_offence_evidence_digest_v1(&b))
-            .expect("canonical b");
+        let id_a =
+            palw_ledger_offence_id_v1(PalwOffenceKindV1::ExecutorEquivocation, &accused, &a, &palw_offence_evidence_digest_v1(&a))
+                .expect("canonical a");
+        let id_b =
+            palw_ledger_offence_id_v1(PalwOffenceKindV1::ExecutorEquivocation, &accused, &b, &palw_offence_evidence_digest_v1(&b))
+                .expect("canonical b");
         assert_eq!(id_a, id_b, "one pair of signed roots is one offence, whatever the byte order");
     }
 
@@ -911,7 +917,8 @@ mod tests {
         let accused = op(1);
         let pubkey = [7u8; 4];
         let network = b"testnet-11";
-        let evidence = borsh::to_vec(&mock_equivocation_carriage(accused, &pubkey, network, Hash64::from_u64_word(0x11))).expect("serializes");
+        let evidence =
+            borsh::to_vec(&mock_equivocation_carriage(accused, &pubkey, network, Hash64::from_u64_word(0x11))).expect("serializes");
         assert_eq!(
             palw_verify_objective_offence_v1(
                 PalwOffenceKindV1::ExecutorEquivocation,
@@ -948,11 +955,8 @@ mod tests {
         assert_eq!(PalwOffenceKindV1::ExecutorEquivocation as u8, 0);
         assert_eq!(PalwOffenceKindV1::PanelFalseValid as u8, 1);
         assert_eq!(PalwOffenceKindV1::CourtExecutorGuilty as u8, 2);
-        let kinds = [
-            PalwOffenceKindV1::ExecutorEquivocation,
-            PalwOffenceKindV1::PanelFalseValid,
-            PalwOffenceKindV1::CourtExecutorGuilty,
-        ];
+        let kinds =
+            [PalwOffenceKindV1::ExecutorEquivocation, PalwOffenceKindV1::PanelFalseValid, PalwOffenceKindV1::CourtExecutorGuilty];
         assert_eq!(kinds.len(), 3, "ADR-0144 §9: no quality, cache, speedup, delay or unavailability kind");
     }
 }

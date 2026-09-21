@@ -126,6 +126,9 @@ pub const PALW_FP_V3_DOMAIN_BEACON_FOLD: &[u8] = b"misaka-palw/fp-v3/beacon-fold
 /// ADR-0145 §6: the running commitment to a prompt's first `k` token ids (see
 /// [`fp_prompt_prefix_roots_at_v1`]).
 pub const PALW_FP_V3_DOMAIN_PROMPT_PREFIX: &[u8] = b"misaka-palw/fp-v3/prompt-prefix/v1";
+/// ADR-0145 §6: the prefix-STATE a run consumed — the checkpoint root a seat replays from,
+/// never a miner's word for "that was a cache hit" (see [`PalwFpPrefixStateV1`]).
+pub const PALW_FP_V3_DOMAIN_PREFIX_STATE: &[u8] = b"misaka-palw/fp-v3/prefix-state/v1";
 /// ADR-0148: the key the lane's ONE receipt target, and its census, are kept under (see
 /// [`fp_pooled_receipt_key_v1`]).
 pub const PALW_FP_V3_DOMAIN_POOLED_RECEIPT_KEY: &[u8] = b"misaka-palw/fp-v3/pooled-receipt-key/v1";
@@ -148,6 +151,7 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_BEACON_FOLD,
     PALW_FP_V3_DOMAIN_POOLED_RECEIPT_KEY,
     PALW_FP_V3_DOMAIN_PROMPT_PREFIX,
+    PALW_FP_V3_DOMAIN_PREFIX_STATE,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -549,15 +553,54 @@ pub enum PalwFpExecutionModeV1 {
     /// The prompt extends a prompt this bond has already been paid for on this class, so the
     /// shared prefix's leaves are not credited again. `prefix_tokens` says how many.
     PrefixReused = 1,
-    /// **Not reachable yet, and named rather than implied.** A run that consumed a KV state the
-    /// receipt commits to, which is neither the prompt-prefix case above nor an uncached run: the
-    /// producer holds the state but the chain never paid for the tokens that built it. Deriving it
-    /// needs the receipt to carry a prefix-STATE commitment a seat can replay to, which is a
-    /// change to the commitment's wire (a new object family, per this module's own golden-vector
-    /// rule) and is the half of ADR-0145 §6 this pass does not close. The variant exists so the
-    /// accounting has somewhere to put the answer the moment the evidence arrives; nothing
-    /// constructs it today and `fp_derive_work_v1` never returns it.
+    /// A run that consumed a KV state the prefix-STATE commitment names, which is neither a
+    /// prompt the chain has already paid for nor an uncached run: the producer holds the state
+    /// and the chain never paid for the tokens that built it. Derived from [`PalwFpPrefixStateV1`],
+    /// never from a field the miner fills in to raise its own pay — declaring more cache only
+    /// ever lowers the credit, so the lie worth telling is omitting the state, and omitting it
+    /// is genesis, which a seat replays from empty.
     KvReused = 2,
+}
+
+/// **The prefix-STATE a free-prompt run consumed** (ADR-0145 §6).
+///
+/// Own object family, own domain — not an in-place field on `PalwFreePromptCommitmentV3`, whose
+/// golden-vector rule forbids adding bytes to a layout the live lane already persisted. A V3
+/// commitment that does not name a state is [`Self::genesis`]: cold cache, Uncached or
+/// PrefixReused from paid prompt ids. A producer that wants KvReused (the Studio path: a long
+/// chat whose prefix was computed locally and never paid) carries this object beside the
+/// commitment; a seat replays FROM `state_root` at `prefix_tokens`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpPrefixStateV1 {
+    /// Checkpoint merkle root of the KV (and recurrence) state at `prefix_tokens`.
+    pub state_root: Hash64,
+    /// How many prompt positions this state already holds. Zero is genesis, whatever the root.
+    pub prefix_tokens: u32,
+    /// The class the state belongs to. A state of another class is a different object.
+    pub class_id: Hash64,
+}
+
+impl PalwFpPrefixStateV1 {
+    /// Cold cache: no positions held, empty root. The V3 default, and the only value a miner
+    /// who omits the object can be read as having committed.
+    pub fn genesis(class_id: Hash64) -> Self {
+        Self { state_root: Hash64::default(), prefix_tokens: 0, class_id }
+    }
+
+    /// True iff the run started from an empty cache. A non-zero `prefix_tokens` with the empty
+    /// root is still genesis: nothing a seat can replay from.
+    pub fn is_genesis(self) -> bool {
+        self.prefix_tokens == 0 || self.state_root == Hash64::default()
+    }
+
+    /// `H(domain ‖ class ‖ prefix_tokens ‖ state_root)` — the id a later claim can name.
+    pub fn id(self) -> Hash64 {
+        let mut state = keyed(PALW_FP_V3_DOMAIN_PREFIX_STATE);
+        state.update(self.class_id.as_byte_slice());
+        state.update(&self.prefix_tokens.to_le_bytes());
+        state.update(self.state_root.as_byte_slice());
+        finish(state)
+    }
 }
 
 /// **The work of one free-prompt run, derived** (ADR-0145 I1): what the enumeration says the run
@@ -687,6 +730,10 @@ pub fn fp_accounted_prefix_tokens_v2(ids: &[u32], already_paid: &[&[u32]]) -> u3
 /// `accounted_prefix_tokens` is the chain's reading, not the executor's (see
 /// [`PalwFpExecutionModeV1`]).
 ///
+/// A V3 commitment that does not name a prefix-STATE is genesis: this function prices the paid
+/// prompt prefix only. [`fp_derive_work_from_state_v1`] is the same derivation with the state
+/// named, which is how `KvReused` is reached.
+///
 /// `cap` is the class's step ladder, the same one the extraction walk bounds `work_leaves` by: a
 /// derivation that ran past the ladder would be pricing work the court cannot walk to, and
 /// `step_leaf_count_of_tokens_capped_v1` refuses it there rather than here.
@@ -702,32 +749,53 @@ pub fn fp_derive_work_v1(
     accounted_prefix_tokens: u32,
     cap: u64,
 ) -> Result<PalwFpDerivedWorkV1, crate::palw_step::PalwStepError> {
+    fp_derive_work_from_state_v1(
+        profile,
+        prompt_tokens,
+        decode_tokens_executed,
+        accounted_prefix_tokens,
+        PalwFpPrefixStateV1::genesis(Hash64::default()),
+        cap,
+    )
+}
+
+/// **ADR-0145 §6: the same derivation, with the prefix-STATE the run consumed.**
+///
+/// `accounted_prefix_tokens` is what the chain has already paid this class to evaluate.
+/// `prefix_state` is the checkpoint a seat replays from. The credited prefill is the NEW
+/// positions only: `max(paid, consumed)` of the prompt. Mode:
+///
+/// * genesis state and nothing paid → `Uncached`
+/// * paid ≥ consumed → `PrefixReused` (the chain already bought those tokens)
+/// * consumed > paid → `KvReused` (local cache the chain never paid for)
+///
+/// Declaring more cache only ever lowers the credit, so a miner cannot raise its pay by
+/// inventing a state. Omitting the object is genesis, which is the V3 path.
+pub fn fp_derive_work_from_state_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    accounted_prefix_tokens: u32,
+    prefix_state: PalwFpPrefixStateV1,
+    cap: u64,
+) -> Result<PalwFpDerivedWorkV1, crate::palw_step::PalwStepError> {
     let total_leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(profile, prompt_tokens, decode_tokens_executed, cap)?;
-    let prefix = accounted_prefix_tokens.min(prompt_tokens);
+    let paid = accounted_prefix_tokens.min(prompt_tokens);
+    let consumed = if prefix_state.is_genesis() { 0 } else { prefix_state.prefix_tokens.min(prompt_tokens) };
+    let prefix = paid.max(consumed);
+    let mode = if consumed > paid {
+        PalwFpExecutionModeV1::KvReused
+    } else if prefix > 0 {
+        PalwFpExecutionModeV1::PrefixReused
+    } else {
+        PalwFpExecutionModeV1::Uncached
+    };
     if prefix == 0 {
-        return Ok(PalwFpDerivedWorkV1 {
-            total_leaves,
-            credited_leaves: total_leaves,
-            accounted_prefix_tokens: 0,
-            mode: PalwFpExecutionModeV1::Uncached,
-        });
+        return Ok(PalwFpDerivedWorkV1 { total_leaves, credited_leaves: total_leaves, accounted_prefix_tokens: 0, mode });
     }
-    // The prefix's own prefill, evaluated at the same ladder and by the same enumeration. It is a
-    // DIFFERENCE of two exact evaluations rather than a proportion, for the reason
-    // `job_leaf_split_capped_v1` gives about the aux series: a `⌈positions / c⌉` term is not
-    // additive, and a proportional split of a non-additive term is a price nobody can reproduce.
     let prefix_prefill = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(profile, prefix, cap)?;
-    // Saturating: `prefix_prefill` is bounded by the whole job's prefill, which is bounded by
-    // `total_leaves` — but both are `u64` saturations of `u128` sums, so at an unbounded ladder the
-    // two could in principle meet. Crediting zero is the fail-closed direction for a job that large
-    // and no ladder this chain admits reaches it.
     let credited_leaves = total_leaves.saturating_sub(prefix_prefill);
-    Ok(PalwFpDerivedWorkV1 {
-        total_leaves,
-        credited_leaves,
-        accounted_prefix_tokens: prefix,
-        mode: PalwFpExecutionModeV1::PrefixReused,
-    })
+    Ok(PalwFpDerivedWorkV1 { total_leaves, credited_leaves, accounted_prefix_tokens: prefix, mode })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -823,16 +891,43 @@ pub fn fp_derive_credited_compute_v1(
     decode_tokens_executed: u32,
     accounted_prefix_tokens: u32,
 ) -> Result<u128, crate::palw_canonical_work_v1::PalwCanonicalWorkError> {
+    fp_derive_credited_compute_from_state_v1(
+        profile,
+        prompt_tokens,
+        decode_tokens_executed,
+        accounted_prefix_tokens,
+        PalwFpPrefixStateV1::genesis(Hash64::default()),
+    )
+}
+
+/// ADR-0145 §6: the compute derivation with the prefix-STATE named. Mode follows
+/// [`fp_derive_work_from_state_v1`]: a consumed state the chain never paid for is `KvReused`.
+pub fn fp_derive_credited_compute_from_state_v1(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    accounted_prefix_tokens: u32,
+    prefix_state: PalwFpPrefixStateV1,
+) -> Result<u128, crate::palw_canonical_work_v1::PalwCanonicalWorkError> {
     use crate::palw_canonical_work_v1::{
         PalwCanonicalClassDescriptorV1, PalwCanonicalExecutionFactsV1, PalwExecutionModeV1, palw_canonical_work_v1,
     };
     let descriptor = PalwCanonicalClassDescriptorV1::of(profile, Hash64::default())?;
-    let reused = accounted_prefix_tokens.min(prompt_tokens);
+    let paid = accounted_prefix_tokens.min(prompt_tokens);
+    let consumed = if prefix_state.is_genesis() { 0 } else { prefix_state.prefix_tokens.min(prompt_tokens) };
+    let reused = paid.max(consumed);
+    let mode = if consumed > paid {
+        PalwExecutionModeV1::KvReused
+    } else if reused > 0 {
+        PalwExecutionModeV1::PrefixReused
+    } else {
+        PalwExecutionModeV1::Uncached
+    };
     let facts = PalwCanonicalExecutionFactsV1 {
         prefill_tokens: prompt_tokens,
         generated_tokens: decode_tokens_executed,
         reused_prefix_tokens: reused,
-        mode: if reused == 0 { PalwExecutionModeV1::Uncached } else { PalwExecutionModeV1::PrefixReused },
+        mode,
     };
     Ok(palw_canonical_work_v1(&descriptor, &facts)?.provisional_scalar_v1())
 }
@@ -2080,6 +2175,13 @@ impl PalwFpCommitmentTxPayloadV3 {
     /// The claim id this payload creates on acceptance.
     pub fn claim_id(&self) -> Hash64 {
         self.signed_message()
+    }
+
+    /// **ADR-0145 §6: the prefix-STATE this payload names.** V3 names none, so this is genesis.
+    /// A later payload version that carries [`PalwFpPrefixStateV1`] overrides it; omitting the
+    /// object is still genesis, which is how a miner cannot raise its pay by staying silent.
+    pub fn consumed_prefix_state_v1(&self) -> PalwFpPrefixStateV1 {
+        PalwFpPrefixStateV1::genesis(self.commitment.job.class_id)
     }
 }
 
@@ -3606,16 +3708,71 @@ mod fp_answer_tests {
         assert_eq!(fp_accounted_prefix_tokens_v1(&ids, &[(0, fp_prompt_prefix_roots_at_v1(&ids, &[0])[0])]), 0);
     }
 
-    /// **The `KvReused` mode exists and nothing derives it**, which is the honest state of
-    /// ADR-0145 §6 after this pass: the chain can see a prompt that extends one it has paid for,
-    /// and it cannot see a KV state the receipt never committed to. Pinned so the gap cannot close
-    /// by accident, and so whoever makes it derivable has to come here and say what changed.
+    /// **V3, which does not name a prefix-STATE, never derives `KvReused`.** Omitting the object
+    /// is genesis, and genesis is Uncached or PrefixReused from paid prompt ids — that is the
+    /// miner's-word-is-never-an-input half of ADR-0145 §6. Pinned so a later V4 wire that forgets
+    /// to default omitted state to genesis cannot quietly start believing a miner.
     #[test]
-    fn nothing_derives_the_kv_reused_mode_yet() {
+    fn a_v3_commitment_that_names_no_prefix_state_never_derives_kv_reused() {
         let profile = floor_profile();
         for prefix in [0u32, 1, 100] {
             let work = fp_derive_work_v1(&profile, 100, 4, prefix, DERIVED_LADDER).unwrap();
             assert_ne!(work.mode, PalwFpExecutionModeV1::KvReused);
         }
+    }
+
+    /// **A named prefix-STATE is how `KvReused` is derived.** A producer that computed 80 tokens
+    /// locally and never committed them, then submits a 100-token prompt from that cache, is
+    /// credited the tail only. The same prompt with genesis state is credited the whole prefill.
+    /// Declaring more cache cannot raise the pay: a 80-token state credits less than genesis.
+    #[test]
+    fn a_prefix_state_commitment_derives_kv_reused_and_prices_only_new_work() {
+        let profile = floor_profile();
+        let class = Hash64::from_u64_word(0xC1);
+        let cold = fp_derive_work_v1(&profile, 100, 4, 0, DERIVED_LADDER).unwrap();
+        let warm = fp_derive_work_from_state_v1(
+            &profile,
+            100,
+            4,
+            0,
+            PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 80, class_id: class },
+            DERIVED_LADDER,
+        )
+        .unwrap();
+        assert_eq!(cold.mode, PalwFpExecutionModeV1::Uncached);
+        assert_eq!(warm.mode, PalwFpExecutionModeV1::KvReused);
+        assert_eq!(cold.total_leaves, warm.total_leaves, "the same run, priced two ways");
+        assert!(warm.credited_leaves < cold.credited_leaves, "a held prefix must not be paid as new work");
+        assert_eq!(warm.accounted_prefix_tokens, 80);
+        // A paid prefix that already covers the consumed state is PrefixReused, not KvReused —
+        // the chain bought those tokens, there is nothing local to name.
+        let paid = fp_derive_work_from_state_v1(
+            &profile,
+            100,
+            4,
+            80,
+            PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 80, class_id: class },
+            DERIVED_LADDER,
+        )
+        .unwrap();
+        assert_eq!(paid.mode, PalwFpExecutionModeV1::PrefixReused);
+        assert_eq!(paid.credited_leaves, warm.credited_leaves);
+        // Genesis-shaped objects (zero tokens, or an empty root) never become KvReused.
+        for genesis in [
+            PalwFpPrefixStateV1::genesis(class),
+            PalwFpPrefixStateV1 { state_root: Hash64::default(), prefix_tokens: 80, class_id: class },
+            PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 0, class_id: class },
+        ] {
+            assert!(genesis.is_genesis());
+            assert_ne!(
+                fp_derive_work_from_state_v1(&profile, 100, 4, 0, genesis, DERIVED_LADDER).unwrap().mode,
+                PalwFpExecutionModeV1::KvReused
+            );
+        }
+        // Two states of the same length on different classes are different objects.
+        let a = PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 80, class_id: class };
+        let b =
+            PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 80, class_id: Hash64::from_u64_word(0xC2) };
+        assert_ne!(a.id(), b.id());
     }
 }

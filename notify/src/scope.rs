@@ -45,6 +45,10 @@ pub enum Scope {
     VirtualDaaScoreChanged,
     PruningPointUtxoSetOverride,
     NewBlockTemplate,
+    PalwClassReadinessChanged,
+    PalwPanelAssignment,
+    PalwPanelReceipt,
+    PalwPanelEligibilityChanged,
 }
 }
 
@@ -266,3 +270,29 @@ impl Deserializer for NewBlockTemplateScope {
         Ok(Self {})
     }
 }
+
+macro_rules! empty_scope {
+    ($name:ident) => {
+        #[derive(Clone, Display, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+        pub struct $name {}
+
+        impl Serializer for $name {
+            fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+                store!(u16, &1, writer)?;
+                Ok(())
+            }
+        }
+
+        impl Deserializer for $name {
+            fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+                let _version = load!(u16, reader)?;
+                Ok(Self {})
+            }
+        }
+    };
+}
+
+empty_scope!(PalwClassReadinessChangedScope);
+empty_scope!(PalwPanelAssignmentScope);
+empty_scope!(PalwPanelReceiptScope);
+empty_scope!(PalwPanelEligibilityChangedScope);

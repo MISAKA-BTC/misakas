@@ -313,6 +313,17 @@ impl RpcApi for GrpcClient {
     route!(get_palw_class_economics_call, GetPalwClassEconomics);
     route!(get_palw_model_registry_call, GetPalwModelRegistry);
     route!(get_palw_free_prompt_price_call, GetPalwFreePromptPrice);
+    route!(get_palw_class_panel_status_call, GetPalwClassPanelStatus);
+    route!(get_palw_panel_seats_call, GetPalwPanelSeats);
+    route!(get_palw_panel_status_call, GetPalwPanelStatus);
+    route!(get_palw_panel_assignments_call, GetPalwPanelAssignments);
+    route!(get_palw_model_preflight_call, GetPalwModelPreflight);
+    route!(submit_palw_model_registration_call, SubmitPalwModelRegistration);
+    route!(get_palw_model_registration_status_call, GetPalwModelRegistrationStatus);
+    route!(get_palw_model_call, GetPalwModel);
+    route!(get_palw_model_readiness_call, GetPalwModelReadiness);
+    route!(get_palw_model_admission_call, GetPalwModelAdmission);
+    route!(get_palw_model_certification_call, GetPalwModelCertification);
     route!(get_token_supply_call, GetTokenSupply);
     route!(get_token_emission_info_call, GetTokenEmissionInfo);
     route!(submit_evm_transaction_call, SubmitEvmTransaction);

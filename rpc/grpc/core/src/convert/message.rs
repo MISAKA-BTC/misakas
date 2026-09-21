@@ -194,6 +194,23 @@ from!(item: &kaspa_rpc_core::NotifyNewBlockTemplateRequest, protowire::NotifyNew
 });
 from!(RpcResult<&kaspa_rpc_core::NotifyNewBlockTemplateResponse>, protowire::NotifyNewBlockTemplateResponseMessage);
 
+from!(item: &kaspa_rpc_core::NotifyPalwClassReadinessChangedRequest, protowire::NotifyPalwClassReadinessChangedRequestMessage, {
+    Self { command: item.command.into() }
+});
+from!(RpcResult<&kaspa_rpc_core::NotifyPalwClassReadinessChangedResponse>, protowire::NotifyPalwClassReadinessChangedResponseMessage);
+from!(item: &kaspa_rpc_core::NotifyPalwPanelAssignmentRequest, protowire::NotifyPalwPanelAssignmentRequestMessage, {
+    Self { command: item.command.into() }
+});
+from!(RpcResult<&kaspa_rpc_core::NotifyPalwPanelAssignmentResponse>, protowire::NotifyPalwPanelAssignmentResponseMessage);
+from!(item: &kaspa_rpc_core::NotifyPalwPanelReceiptRequest, protowire::NotifyPalwPanelReceiptRequestMessage, {
+    Self { command: item.command.into() }
+});
+from!(RpcResult<&kaspa_rpc_core::NotifyPalwPanelReceiptResponse>, protowire::NotifyPalwPanelReceiptResponseMessage);
+from!(item: &kaspa_rpc_core::NotifyPalwPanelEligibilityChangedRequest, protowire::NotifyPalwPanelEligibilityChangedRequestMessage, {
+    Self { command: item.command.into() }
+});
+from!(RpcResult<&kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>, protowire::NotifyPalwPanelEligibilityChangedResponseMessage);
+
 // ~~~
 
 from!(&kaspa_rpc_core::GetCurrentNetworkRequest, protowire::GetCurrentNetworkRequestMessage);
@@ -1022,6 +1039,302 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwFreePromptPriceResponse>, protowir
         error: None,
     }
 });
+from!(item: &kaspa_rpc_core::RpcPalwPanelHoldReason, protowire::RpcPalwPanelHoldReason, {
+    Self { code: item.code.clone(), message: item.message.clone() }
+});
+from!(item: &kaspa_rpc_core::RpcPalwPanelHoldReasonCount, protowire::RpcPalwPanelHoldReasonCount, {
+    Self { code: item.code.clone(), message: item.message.clone(), seats: item.seats }
+});
+from!(item: &kaspa_rpc_core::RpcPalwClassPanelStatus, protowire::RpcPalwClassPanelStatus, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        registry_state: item.registry_state.clone(),
+        bonded_seats: item.bonded_seats,
+        ready_seats: item.ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        selected_panel_seats: item.selected_panel_seats,
+        valid_receipt_seats: item.valid_receipt_seats,
+        panel_size: item.panel_size as u32,
+        receipt_quorum: item.receipt_quorum as u32,
+        full_seats_per_panel: item.full_seats_per_panel as u32,
+        partial_seats_per_panel: item.partial_seats_per_panel as u32,
+        segment_count: item.segment_count as u32,
+        inflight_claims: item.inflight_claims,
+        active_assignments: item.active_assignments,
+        admission_permille: item.admission_permille,
+        verification_mode: item.verification_mode.clone(),
+        s1_active: item.s1_active,
+        s1_scheduled_daa: item.s1_scheduled_daa,
+        s3_active: item.s3_active,
+        s3_scheduled_daa: item.s3_scheduled_daa,
+        s2_active: item.s2_active,
+        s2_scheduled_daa: item.s2_scheduled_daa,
+        holds_local: item.holds_local,
+        missing: item.missing.iter().map(protowire::RpcPalwPanelHoldReasonCount::from).collect(),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwPanelSeat, protowire::RpcPalwPanelSeat, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        bond_outpoint: item.bond_outpoint.clone(),
+        class_id: item.class_id.clone(),
+        ready: item.ready,
+        eligible: item.eligible,
+        readiness_version: item.readiness_version as u32,
+        readiness_proved_daa: item.readiness_proved_daa,
+        readiness_expires_daa: item.readiness_expires_daa,
+        collateral_available: item.collateral_available.clone(),
+        collateral_locked: item.collateral_locked.clone(),
+        assigned: item.assigned,
+        hold: item.hold.as_ref().map(protowire::RpcPalwPanelHoldReason::from),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwPanelAssignmentSeat, protowire::RpcPalwPanelAssignmentSeat, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        seat_index: item.seat_index as u32,
+        full_seat: item.full_seat,
+        segment_index: item.segment_index.unwrap_or(0) as u32,
+        has_segment_index: item.segment_index.is_some(),
+        mask: item.mask,
+        receipt_status: item.receipt_status.clone(),
+        credited_daa: item.credited_daa,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwPanelAssignment, protowire::RpcPalwPanelAssignment, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        licensed_state: item.licensed_state.clone(),
+        deadline_daa: item.deadline_daa,
+        coverage_mask: item.coverage_mask,
+        full_seat: item.full_seat.clone(),
+        valid_receipt_seats: item.valid_receipt_seats,
+        selected_panel_seats: item.selected_panel_seats,
+        seats: item.seats.iter().map(protowire::RpcPalwPanelAssignmentSeat::from).collect(),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwLocalPanelClass, protowire::RpcPalwLocalPanelClass, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        seat_id: item.seat_id.clone(),
+        artifact_loaded: item.artifact_loaded,
+        artifact_root: item.artifact_root.clone(),
+        working_set_bytes: item.working_set_bytes,
+        replay_capable: item.replay_capable,
+        synced: item.synced,
+        bond_active: item.bond_active,
+        collateral_sompi: item.collateral_sompi,
+        readiness_proof_accepted: item.readiness_proof_accepted,
+        readiness_proved_daa: item.readiness_proved_daa,
+        chain_state: item.chain_state.clone(),
+        assignments: item.assignments,
+        hold: item.hold.as_ref().map(protowire::RpcPalwPanelHoldReason::from),
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwClassPanelStatusRequest, protowire::GetPalwClassPanelStatusRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwClassPanelStatusResponse>, protowire::GetPalwClassPanelStatusResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        status: Some((&item.status).into()),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwPanelSeatsRequest, protowire::GetPalwPanelSeatsRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwPanelSeatsResponse>, protowire::GetPalwPanelSeatsResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        seats: item.seats.iter().map(protowire::RpcPalwPanelSeat::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwPanelStatusRequest, protowire::GetPalwPanelStatusRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwPanelStatusResponse>, protowire::GetPalwPanelStatusResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        panel_running: item.panel_running,
+        panel_submitter: item.panel_submitter,
+        synced: item.synced,
+        classes: item.classes.iter().map(protowire::RpcPalwLocalPanelClass::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwPanelAssignmentsRequest, protowire::GetPalwPanelAssignmentsRequestMessage, {
+    Self { claim_id: item.claim_id.clone(), seat_id: item.seat_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwPanelAssignmentsResponse>, protowire::GetPalwPanelAssignmentsResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        truncated: item.truncated,
+        assignments: item.assignments.iter().map(protowire::RpcPalwPanelAssignment::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwModelPreflightCheck, protowire::RpcPalwModelPreflightCheck, {
+    Self { code: item.code.clone(), ok: item.ok, message: item.message.clone() }
+});
+from!(item: &kaspa_rpc_core::RpcPalwModelRegistration, protowire::RpcPalwModelRegistration, {
+    Self {
+        object_id: item.object_id.clone(),
+        class_id: item.class_id.clone(),
+        constructed: item.constructed,
+        submitted: item.submitted,
+        accepted: item.accepted,
+        included: item.included,
+        folded: item.folded,
+        submission_state: item.submission_state.clone(),
+        processor_verdict: item.processor_verdict.clone(),
+        reject_code: item.reject_code.clone(),
+        mempool_accepted: item.mempool_accepted,
+        included_block: item.included_block.clone(),
+        included_daa: item.included_daa,
+        registry_state: item.registry_state.clone(),
+        transaction_id: item.transaction_id.clone(),
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelPreflightRequest, protowire::GetPalwModelPreflightRequestMessage, {
+    Self { object_hex: item.object_hex.clone(), class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelPreflightResponse>, protowire::GetPalwModelPreflightResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        artifact_root: item.artifact_root.clone(),
+        n_ctx: item.n_ctx,
+        layer_count: item.layer_count,
+        admissible: item.admissible,
+        processor_verdict: item.processor_verdict.clone(),
+        reject_code: item.reject_code.clone(),
+        checks: item.checks.iter().map(protowire::RpcPalwModelPreflightCheck::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::SubmitPalwModelRegistrationRequest, protowire::SubmitPalwModelRegistrationRequestMessage, {
+    Self { object_hex: item.object_hex.clone(), transaction_id: item.transaction_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::SubmitPalwModelRegistrationResponse>, protowire::SubmitPalwModelRegistrationResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        registration: Some((&item.registration).into()),
+        checks: item.checks.iter().map(protowire::RpcPalwModelPreflightCheck::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelRegistrationStatusRequest, protowire::GetPalwModelRegistrationStatusRequestMessage, {
+    Self { class_id: item.class_id.clone(), object_id: item.object_id.clone(), transaction_id: item.transaction_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelRegistrationStatusResponse>, protowire::GetPalwModelRegistrationStatusResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        registration: Some((&item.registration).into()),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelRequest, protowire::GetPalwModelRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelResponse>, protowire::GetPalwModelResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        n_ctx: item.n_ctx,
+        artifact_root: item.artifact_root.clone(),
+        class_status: item.class_status.clone(),
+        registry_state: item.registry_state.clone(),
+        ready_seats: item.ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        inflight_claims: item.inflight_claims,
+        admission_permille: item.admission_permille,
+        share_permille: item.share_permille as u32,
+        certified_family: item.certified_family.clone(),
+        fence_active: item.fence_active,
+        reason: item.reason.clone(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwModelSeatReadiness, protowire::RpcPalwModelSeatReadiness, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        bond_txid: item.bond_txid.clone(),
+        bond_index: item.bond_index,
+        proved_daa: item.proved_daa,
+        proved_span: item.proved_span,
+        expires_daa: item.expires_daa,
+        fresh: item.fresh,
+        ready: item.ready,
+        collateral_sompi: item.collateral_sompi,
+        needed_collateral_sompi: item.needed_collateral_sompi,
+        not_ready_reason: item.not_ready_reason.clone(),
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelReadinessRequest, protowire::GetPalwModelReadinessRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelReadinessResponse>, protowire::GetPalwModelReadinessResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        class_id: item.class_id.clone(),
+        registry_state: item.registry_state.clone(),
+        ready_seats: item.ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        seats: item.seats.iter().map(protowire::RpcPalwModelSeatReadiness::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelAdmissionRequest, protowire::GetPalwModelAdmissionRequestMessage, {
+    Self { class_id: item.class_id.clone(), object_hex: item.object_hex.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelAdmissionResponse>, protowire::GetPalwModelAdmissionResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        admissible: item.admissible,
+        processor_verdict: item.processor_verdict.clone(),
+        reject_code: item.reject_code.clone(),
+        checks: item.checks.iter().map(protowire::RpcPalwModelPreflightCheck::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwModelCertifiedFamily, protowire::RpcPalwModelCertifiedFamily, {
+    Self { lane: item.lane.clone(), digest: item.digest.clone(), covers: item.covers }
+});
+from!(item: &kaspa_rpc_core::GetPalwModelCertificationRequest, protowire::GetPalwModelCertificationRequestMessage, {
+    Self { class_id: item.class_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelCertificationResponse>, protowire::GetPalwModelCertificationResponseMessage, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        class_id: item.class_id.clone(),
+        end_to_end_certified: item.end_to_end_certified,
+        families: item.families.iter().map(protowire::RpcPalwModelCertifiedFamily::from).collect(),
+        error: None,
+    }
+});
 from!(item: &kaspa_rpc_core::RpcPalwModelLifecycle, protowire::RpcPalwModelLifecycle, {
     Self {
         class_id: item.class_id.clone(),
@@ -1580,6 +1893,23 @@ try_from!(item: &protowire::NotifyNewBlockTemplateRequestMessage, kaspa_rpc_core
     Self { command: item.command.into() }
 });
 try_from!(&protowire::NotifyNewBlockTemplateResponseMessage, RpcResult<kaspa_rpc_core::NotifyNewBlockTemplateResponse>);
+
+try_from!(item: &protowire::NotifyPalwClassReadinessChangedRequestMessage, kaspa_rpc_core::NotifyPalwClassReadinessChangedRequest, {
+    Self { command: item.command.into() }
+});
+try_from!(&protowire::NotifyPalwClassReadinessChangedResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwClassReadinessChangedResponse>);
+try_from!(item: &protowire::NotifyPalwPanelAssignmentRequestMessage, kaspa_rpc_core::NotifyPalwPanelAssignmentRequest, {
+    Self { command: item.command.into() }
+});
+try_from!(&protowire::NotifyPalwPanelAssignmentResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwPanelAssignmentResponse>);
+try_from!(item: &protowire::NotifyPalwPanelReceiptRequestMessage, kaspa_rpc_core::NotifyPalwPanelReceiptRequest, {
+    Self { command: item.command.into() }
+});
+try_from!(&protowire::NotifyPalwPanelReceiptResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwPanelReceiptResponse>);
+try_from!(item: &protowire::NotifyPalwPanelEligibilityChangedRequestMessage, kaspa_rpc_core::NotifyPalwPanelEligibilityChangedRequest, {
+    Self { command: item.command.into() }
+});
+try_from!(&protowire::NotifyPalwPanelEligibilityChangedResponseMessage, RpcResult<kaspa_rpc_core::NotifyPalwPanelEligibilityChangedResponse>);
 
 // ~~~
 
@@ -2458,6 +2788,297 @@ try_from!(item: &protowire::GetPalwFreePromptPriceResponseMessage, RpcResult<kas
         pwu: item.pwu,
         reserved_sompi: item.reserved_sompi.clone(),
         bond_room_sompi: item.bond_room_sompi.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwPanelHoldReason, kaspa_rpc_core::RpcPalwPanelHoldReason, {
+    Self { code: item.code.clone(), message: item.message.clone() }
+});
+try_from!(item: &protowire::RpcPalwPanelHoldReasonCount, kaspa_rpc_core::RpcPalwPanelHoldReasonCount, {
+    Self { code: item.code.clone(), message: item.message.clone(), seats: item.seats }
+});
+try_from!(item: &protowire::RpcPalwClassPanelStatus, kaspa_rpc_core::RpcPalwClassPanelStatus, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        registry_state: item.registry_state.clone(),
+        bonded_seats: item.bonded_seats,
+        ready_seats: item.ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        selected_panel_seats: item.selected_panel_seats,
+        valid_receipt_seats: item.valid_receipt_seats,
+        panel_size: u16::try_from(item.panel_size).map_err(|_| RpcError::General("panelSize is not a u16".to_string()))?,
+        receipt_quorum: u16::try_from(item.receipt_quorum).map_err(|_| RpcError::General("receiptQuorum is not a u16".to_string()))?,
+        full_seats_per_panel: u16::try_from(item.full_seats_per_panel)
+            .map_err(|_| RpcError::General("fullSeatsPerPanel is not a u16".to_string()))?,
+        partial_seats_per_panel: u16::try_from(item.partial_seats_per_panel)
+            .map_err(|_| RpcError::General("partialSeatsPerPanel is not a u16".to_string()))?,
+        segment_count: u16::try_from(item.segment_count).map_err(|_| RpcError::General("segmentCount is not a u16".to_string()))?,
+        inflight_claims: item.inflight_claims,
+        active_assignments: item.active_assignments,
+        admission_permille: item.admission_permille,
+        verification_mode: item.verification_mode.clone(),
+        s1_active: item.s1_active,
+        s1_scheduled_daa: item.s1_scheduled_daa,
+        s3_active: item.s3_active,
+        s3_scheduled_daa: item.s3_scheduled_daa,
+        s2_active: item.s2_active,
+        s2_scheduled_daa: item.s2_scheduled_daa,
+        holds_local: item.holds_local,
+        missing: item.missing.iter().map(kaspa_rpc_core::RpcPalwPanelHoldReasonCount::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::RpcPalwPanelSeat, kaspa_rpc_core::RpcPalwPanelSeat, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        bond_outpoint: item.bond_outpoint.clone(),
+        class_id: item.class_id.clone(),
+        ready: item.ready,
+        eligible: item.eligible,
+        readiness_version: u8::try_from(item.readiness_version)
+            .map_err(|_| RpcError::General("readinessVersion is not a u8".to_string()))?,
+        readiness_proved_daa: item.readiness_proved_daa,
+        readiness_expires_daa: item.readiness_expires_daa,
+        collateral_available: item.collateral_available.clone(),
+        collateral_locked: item.collateral_locked.clone(),
+        assigned: item.assigned,
+        hold: item.hold.as_ref().map(kaspa_rpc_core::RpcPalwPanelHoldReason::try_from).transpose()?,
+    }
+});
+try_from!(item: &protowire::RpcPalwPanelAssignmentSeat, kaspa_rpc_core::RpcPalwPanelAssignmentSeat, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        seat_index: u16::try_from(item.seat_index).map_err(|_| RpcError::General("seatIndex is not a u16".to_string()))?,
+        full_seat: item.full_seat,
+        segment_index: if item.has_segment_index {
+            Some(u16::try_from(item.segment_index).map_err(|_| RpcError::General("segmentIndex is not a u16".to_string()))?)
+        } else {
+            None
+        },
+        mask: item.mask,
+        receipt_status: item.receipt_status.clone(),
+        credited_daa: item.credited_daa,
+    }
+});
+try_from!(item: &protowire::RpcPalwPanelAssignment, kaspa_rpc_core::RpcPalwPanelAssignment, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        licensed_state: item.licensed_state.clone(),
+        deadline_daa: item.deadline_daa,
+        coverage_mask: item.coverage_mask,
+        full_seat: item.full_seat.clone(),
+        valid_receipt_seats: item.valid_receipt_seats,
+        selected_panel_seats: item.selected_panel_seats,
+        seats: item.seats.iter().map(kaspa_rpc_core::RpcPalwPanelAssignmentSeat::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::RpcPalwLocalPanelClass, kaspa_rpc_core::RpcPalwLocalPanelClass, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        seat_id: item.seat_id.clone(),
+        artifact_loaded: item.artifact_loaded,
+        artifact_root: item.artifact_root.clone(),
+        working_set_bytes: item.working_set_bytes,
+        replay_capable: item.replay_capable,
+        synced: item.synced,
+        bond_active: item.bond_active,
+        collateral_sompi: item.collateral_sompi,
+        readiness_proof_accepted: item.readiness_proof_accepted,
+        readiness_proved_daa: item.readiness_proved_daa,
+        chain_state: item.chain_state.clone(),
+        assignments: item.assignments,
+        hold: item.hold.as_ref().map(kaspa_rpc_core::RpcPalwPanelHoldReason::try_from).transpose()?,
+    }
+});
+try_from!(item: &protowire::GetPalwClassPanelStatusRequestMessage, kaspa_rpc_core::GetPalwClassPanelStatusRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwClassPanelStatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwClassPanelStatusResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        status: item.status.as_ref().map(kaspa_rpc_core::RpcPalwClassPanelStatus::try_from).transpose()?.unwrap_or_default(),
+    }
+});
+try_from!(item: &protowire::GetPalwPanelSeatsRequestMessage, kaspa_rpc_core::GetPalwPanelSeatsRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwPanelSeatsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPanelSeatsResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        seats: item.seats.iter().map(kaspa_rpc_core::RpcPalwPanelSeat::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::GetPalwPanelStatusRequestMessage, kaspa_rpc_core::GetPalwPanelStatusRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwPanelStatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPanelStatusResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        panel_running: item.panel_running,
+        panel_submitter: item.panel_submitter,
+        synced: item.synced,
+        classes: item.classes.iter().map(kaspa_rpc_core::RpcPalwLocalPanelClass::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::GetPalwPanelAssignmentsRequestMessage, kaspa_rpc_core::GetPalwPanelAssignmentsRequest, {
+    Self { claim_id: item.claim_id.clone(), seat_id: item.seat_id.clone() }
+});
+try_from!(item: &protowire::GetPalwPanelAssignmentsResponseMessage, RpcResult<kaspa_rpc_core::GetPalwPanelAssignmentsResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        truncated: item.truncated,
+        assignments: item.assignments.iter().map(kaspa_rpc_core::RpcPalwPanelAssignment::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::RpcPalwModelPreflightCheck, kaspa_rpc_core::RpcPalwModelPreflightCheck, {
+    Self { code: item.code.clone(), ok: item.ok, message: item.message.clone() }
+});
+try_from!(item: &protowire::RpcPalwModelRegistration, kaspa_rpc_core::RpcPalwModelRegistration, {
+    Self {
+        object_id: item.object_id.clone(),
+        class_id: item.class_id.clone(),
+        constructed: item.constructed,
+        submitted: item.submitted,
+        accepted: item.accepted,
+        included: item.included,
+        folded: item.folded,
+        submission_state: item.submission_state.clone(),
+        processor_verdict: item.processor_verdict.clone(),
+        reject_code: item.reject_code.clone(),
+        mempool_accepted: item.mempool_accepted,
+        included_block: item.included_block.clone(),
+        included_daa: item.included_daa,
+        registry_state: item.registry_state.clone(),
+        transaction_id: item.transaction_id.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwModelPreflightRequestMessage, kaspa_rpc_core::GetPalwModelPreflightRequest, {
+    Self { object_hex: item.object_hex.clone(), class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelPreflightResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelPreflightResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        artifact_root: item.artifact_root.clone(),
+        n_ctx: item.n_ctx,
+        layer_count: item.layer_count,
+        admissible: item.admissible,
+        processor_verdict: item.processor_verdict.clone(),
+        reject_code: item.reject_code.clone(),
+        checks: item.checks.iter().map(kaspa_rpc_core::RpcPalwModelPreflightCheck::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::SubmitPalwModelRegistrationRequestMessage, kaspa_rpc_core::SubmitPalwModelRegistrationRequest, {
+    Self { object_hex: item.object_hex.clone(), transaction_id: item.transaction_id.clone() }
+});
+try_from!(item: &protowire::SubmitPalwModelRegistrationResponseMessage, RpcResult<kaspa_rpc_core::SubmitPalwModelRegistrationResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        registration: item.registration.as_ref().map(kaspa_rpc_core::RpcPalwModelRegistration::try_from).transpose()?.unwrap_or_default(),
+        checks: item.checks.iter().map(kaspa_rpc_core::RpcPalwModelPreflightCheck::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::GetPalwModelRegistrationStatusRequestMessage, kaspa_rpc_core::GetPalwModelRegistrationStatusRequest, {
+    Self { class_id: item.class_id.clone(), object_id: item.object_id.clone(), transaction_id: item.transaction_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelRegistrationStatusResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelRegistrationStatusResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        registration: item.registration.as_ref().map(kaspa_rpc_core::RpcPalwModelRegistration::try_from).transpose()?.unwrap_or_default(),
+    }
+});
+try_from!(item: &protowire::GetPalwModelRequestMessage, kaspa_rpc_core::GetPalwModelRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        n_ctx: item.n_ctx,
+        artifact_root: item.artifact_root.clone(),
+        class_status: item.class_status.clone(),
+        registry_state: item.registry_state.clone(),
+        ready_seats: item.ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        inflight_claims: item.inflight_claims,
+        admission_permille: item.admission_permille,
+        share_permille: item.share_permille.min(u32::from(u16::MAX)) as u16,
+        certified_family: item.certified_family.clone(),
+        fence_active: item.fence_active,
+        reason: item.reason.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwModelSeatReadiness, kaspa_rpc_core::RpcPalwModelSeatReadiness, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        bond_txid: item.bond_txid.clone(),
+        bond_index: item.bond_index,
+        proved_daa: item.proved_daa,
+        proved_span: item.proved_span,
+        expires_daa: item.expires_daa,
+        fresh: item.fresh,
+        ready: item.ready,
+        collateral_sompi: item.collateral_sompi,
+        needed_collateral_sompi: item.needed_collateral_sompi,
+        not_ready_reason: item.not_ready_reason.clone(),
+    }
+});
+try_from!(item: &protowire::GetPalwModelReadinessRequestMessage, kaspa_rpc_core::GetPalwModelReadinessRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelReadinessResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelReadinessResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        class_id: item.class_id.clone(),
+        registry_state: item.registry_state.clone(),
+        ready_seats: item.ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        seats: item.seats.iter().map(kaspa_rpc_core::RpcPalwModelSeatReadiness::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::GetPalwModelAdmissionRequestMessage, kaspa_rpc_core::GetPalwModelAdmissionRequest, {
+    Self { class_id: item.class_id.clone(), object_hex: item.object_hex.clone() }
+});
+try_from!(item: &protowire::GetPalwModelAdmissionResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelAdmissionResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        class_id: item.class_id.clone(),
+        admissible: item.admissible,
+        processor_verdict: item.processor_verdict.clone(),
+        reject_code: item.reject_code.clone(),
+        checks: item.checks.iter().map(kaspa_rpc_core::RpcPalwModelPreflightCheck::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::RpcPalwModelCertifiedFamily, kaspa_rpc_core::RpcPalwModelCertifiedFamily, {
+    Self { lane: item.lane.clone(), digest: item.digest.clone(), covers: item.covers }
+});
+try_from!(item: &protowire::GetPalwModelCertificationRequestMessage, kaspa_rpc_core::GetPalwModelCertificationRequest, {
+    Self { class_id: item.class_id.clone() }
+});
+try_from!(item: &protowire::GetPalwModelCertificationResponseMessage, RpcResult<kaspa_rpc_core::GetPalwModelCertificationResponse>, {
+    Self {
+        available: item.available,
+        tip_daa: item.tip_daa,
+        found: item.found,
+        class_id: item.class_id.clone(),
+        end_to_end_certified: item.end_to_end_certified,
+        families: item.families.iter().map(kaspa_rpc_core::RpcPalwModelCertifiedFamily::try_from).collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelLifecycle, {

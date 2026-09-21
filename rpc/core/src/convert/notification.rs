@@ -2,8 +2,10 @@
 
 use crate::{
     BlockAddedNotification, FinalityConflictNotification, FinalityConflictResolvedNotification, NewBlockTemplateNotification,
-    Notification, PruningPointUtxoSetOverrideNotification, RpcAcceptedTransactionIds, SinkBlueScoreChangedNotification,
-    UtxosChangedNotification, VirtualChainChangedNotification, VirtualDaaScoreChangedNotification, convert::utxo::utxo_set_into_rpc,
+    Notification, PalwClassReadinessChangedNotification, PalwPanelAssignmentNotification, PalwPanelEligibilityChangedNotification,
+    PalwPanelReceiptNotification, PruningPointUtxoSetOverrideNotification, RpcAcceptedTransactionIds, RpcPalwPanelAssignmentSeat,
+    RpcPalwPanelHoldReason, SinkBlueScoreChangedNotification, UtxosChangedNotification, VirtualChainChangedNotification,
+    VirtualDaaScoreChangedNotification, convert::utxo::utxo_set_into_rpc,
 };
 use kaspa_consensus_notify::notification as consensus_notify;
 use kaspa_index_core::notification as index_notify;
@@ -31,6 +33,10 @@ impl From<&consensus_notify::Notification> for Notification {
             consensus_notify::Notification::VirtualDaaScoreChanged(msg) => Notification::VirtualDaaScoreChanged(msg.into()),
             consensus_notify::Notification::PruningPointUtxoSetOverride(msg) => Notification::PruningPointUtxoSetOverride(msg.into()),
             consensus_notify::Notification::NewBlockTemplate(msg) => Notification::NewBlockTemplate(msg.into()),
+            consensus_notify::Notification::PalwClassReadinessChanged(msg) => Notification::PalwClassReadinessChanged(msg.into()),
+            consensus_notify::Notification::PalwPanelAssignment(msg) => Notification::PalwPanelAssignment(msg.into()),
+            consensus_notify::Notification::PalwPanelReceipt(msg) => Notification::PalwPanelReceipt(msg.into()),
+            consensus_notify::Notification::PalwPanelEligibilityChanged(msg) => Notification::PalwPanelEligibilityChanged(msg.into()),
         }
     }
 }
@@ -109,6 +115,79 @@ impl From<&consensus_notify::PruningPointUtxoSetOverrideNotification> for Prunin
 impl From<&consensus_notify::NewBlockTemplateNotification> for NewBlockTemplateNotification {
     fn from(_: &consensus_notify::NewBlockTemplateNotification) -> Self {
         Self {}
+    }
+}
+
+impl From<&consensus_notify::PalwClassReadinessChangedNotification> for PalwClassReadinessChangedNotification {
+    fn from(item: &consensus_notify::PalwClassReadinessChangedNotification) -> Self {
+        Self {
+            class_id: item.class_id.clone(),
+            model_name: item.model_name.clone(),
+            registry_state: item.registry_state.clone(),
+            previous_registry_state: item.previous_registry_state.clone(),
+            ready_seats: item.ready_seats,
+            previous_ready_seats: item.previous_ready_seats,
+            required_ready_seats: item.required_ready_seats,
+            bonded_seats: item.bonded_seats,
+        }
+    }
+}
+
+impl From<&consensus_notify::PalwPanelAssignmentNotification> for PalwPanelAssignmentNotification {
+    fn from(item: &consensus_notify::PalwPanelAssignmentNotification) -> Self {
+        Self {
+            claim_id: item.claim_id.clone(),
+            class_id: item.class_id.clone(),
+            licensed_state: item.licensed_state.clone(),
+            deadline_daa: item.deadline_daa,
+            coverage_mask: item.coverage_mask,
+            full_seat: item.full_seat.clone(),
+            valid_receipt_seats: item.valid_receipt_seats,
+            selected_panel_seats: item.selected_panel_seats,
+            seats: item
+                .seats
+                .iter()
+                .map(|s| RpcPalwPanelAssignmentSeat {
+                    seat_id: s.seat_id.clone(),
+                    seat_index: s.seat_index,
+                    full_seat: s.full_seat,
+                    segment_index: s.segment_index,
+                    mask: s.mask,
+                    receipt_status: s.receipt_status.clone(),
+                    credited_daa: 0,
+                })
+                .collect(),
+        }
+    }
+}
+
+impl From<&consensus_notify::PalwPanelReceiptNotification> for PalwPanelReceiptNotification {
+    fn from(item: &consensus_notify::PalwPanelReceiptNotification) -> Self {
+        Self {
+            claim_id: item.claim_id.clone(),
+            class_id: item.class_id.clone(),
+            coverage_mask: item.coverage_mask,
+            previous_coverage_mask: item.previous_coverage_mask,
+            valid_receipt_seats: item.valid_receipt_seats,
+            previous_valid_receipt_seats: item.previous_valid_receipt_seats,
+            selected_panel_seats: item.selected_panel_seats,
+        }
+    }
+}
+
+impl From<&consensus_notify::PalwPanelEligibilityChangedNotification> for PalwPanelEligibilityChangedNotification {
+    fn from(item: &consensus_notify::PalwPanelEligibilityChangedNotification) -> Self {
+        Self {
+            seat_id: item.seat_id.clone(),
+            class_id: item.class_id.clone(),
+            eligible: item.eligible,
+            ready: item.ready,
+            hold: if item.hold_code.is_empty() {
+                None
+            } else {
+                Some(RpcPalwPanelHoldReason { code: item.hold_code.clone(), message: item.hold_message.clone() })
+            },
+        }
     }
 }
 

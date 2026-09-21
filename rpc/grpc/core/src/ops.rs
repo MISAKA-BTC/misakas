@@ -128,6 +128,17 @@ pub enum KaspadPayloadOps {
     GetPalwClassEconomics,
     GetPalwModelRegistry,
     GetPalwFreePromptPrice,
+    GetPalwClassPanelStatus,
+    GetPalwPanelSeats,
+    GetPalwPanelStatus,
+    GetPalwPanelAssignments,
+    GetPalwModelPreflight,
+    SubmitPalwModelRegistration,
+    GetPalwModelRegistrationStatus,
+    GetPalwModel,
+    GetPalwModelReadiness,
+    GetPalwModelAdmission,
+    GetPalwModelCertification,
     GetTokenSupply,
     GetTokenEmissionInfo,
 
@@ -140,6 +151,10 @@ pub enum KaspadPayloadOps {
     NotifyPruningPointUtxoSetOverride,
     NotifyVirtualDaaScoreChanged,
     NotifyVirtualChainChanged,
+    NotifyPalwClassReadinessChanged,
+    NotifyPalwPanelAssignment,
+    NotifyPalwPanelReceipt,
+    NotifyPalwPanelEligibilityChanged,
 
     // Legacy stop subscription commands
     StopNotifyingUtxosChanged,

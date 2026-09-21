@@ -45,6 +45,7 @@ mod palw_fp;
 /// ADR-0088 Decision 12: `palw line-… / version-… / proposal-… / evaluate` — the model registry.
 mod palw_line;
 mod palw_model;
+mod palw_panel;
 mod palw_registry;
 mod palw_service;
 mod palw_settlement;
@@ -904,6 +905,66 @@ enum ExtensionCmd {
 }
 
 #[derive(Subcommand, Debug)]
+enum PalwPanelCmd {
+    /// Declare this bond for a class. The artifact path is what `verifier start` must load.
+    Join {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Bond outpoint `<txid>:<index>`. Optional when this key holds exactly one.
+        #[arg(long)]
+        bond: Option<String>,
+        /// Class id (128-hex) or `QWEN36`.
+        #[arg(long)]
+        class: String,
+        /// Converted artifact this node will serve. Join does not load it; `verifier start` does.
+        #[arg(long)]
+        artifact: std::path::PathBuf,
+        /// Submit the capability declaration.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Withdraw this bond from a class (replaces the declared set without it).
+    Leave {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: Option<String>,
+        #[arg(long)]
+        class: String,
+        #[arg(long)]
+        yes: bool,
+    },
+    /// This node's local panel state: artifact, working set, replay, bond, proof, hold reason.
+    Status {
+        #[arg(long)]
+        class: Option<String>,
+    },
+    /// Chain facts only: bonded seats, ready seats, selected, receipts. No artifact-loaded.
+    List {
+        #[arg(long)]
+        class: Option<String>,
+    },
+    /// Per-claim panel assignment: full seat, partial segments, receipts, coverage, deadline.
+    Assignments {
+        #[arg(long)]
+        claim: Option<String>,
+    },
+    /// Show whether a possession proof is due / accepted. The running panel submits it.
+    #[command(subcommand)]
+    Readiness(PalwPanelReadinessCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum PalwPanelReadinessCmd {
+    Prove {
+        #[arg(long)]
+        class: String,
+        #[arg(long)]
+        bond: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum PalwCmd {
     /// ADR-0108: verify, preflight, submit and receipt an extension manifest.
     #[command(subcommand)]
@@ -927,6 +988,10 @@ enum PalwCmd {
     /// derived from its graph, the seats ready for it and every seat's possession proof. Read from
     /// the node's state (`getPalwModelRegistry`); dormant until the registry fence is scheduled.
     Registry {},
+    /// Panel participation and observability: join/leave, local status, chain seats, assignments.
+    /// Seat counts stay distinct — bonded / ready / selected / valid receipts.
+    #[command(subcommand)]
+    Panel(PalwPanelCmd),
     Settlement {
         /// The DAA score of the block that accepted the transaction (an output's block DAA score, as
         /// `misaka wallet utxo list` prints it).
@@ -2391,6 +2456,18 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::Settlement { daa, min_depth }) => palw_settlement::run(&ctx, daa, min_depth).await,
         Command::Palw(PalwCmd::Economics {}) => palw_economics::run(&ctx).await,
         Command::Palw(PalwCmd::Registry {}) => palw_registry::run(&ctx).await,
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Status { class })) => palw_panel::status(&ctx, class.as_deref()).await,
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::List { class })) => palw_panel::list(&ctx, class.as_deref()).await,
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Assignments { claim })) => palw_panel::assignments(&ctx, claim.as_deref()).await,
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Join { key, bond, class, artifact, yes })) => {
+            palw_panel::join(&ctx, &key.source(), bond.as_deref(), &class, &artifact.display().to_string(), yes).await
+        }
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Leave { key, bond, class, yes })) => {
+            palw_panel::leave(&ctx, &key.source(), bond.as_deref(), &class, yes).await
+        }
+        Command::Palw(PalwCmd::Panel(PalwPanelCmd::Readiness(PalwPanelReadinessCmd::Prove { class, bond }))) => {
+            palw_panel::readiness_prove(&ctx, &class, &bond).await
+        },
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }

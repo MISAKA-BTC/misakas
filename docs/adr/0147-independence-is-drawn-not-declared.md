@@ -192,3 +192,10 @@ once the fence is in force, on the 0‰ terms the gate will apply. A carrier tha
 caught by the panel's retry, as before. The CLI paths (`model add`, `extension submit`) read the
 same terms; they have no landing-margin wait, which leaves a ten-DAA window in which a hand-filed
 registration can be refused and its fee lost — named, not closed.
+
+---
+
+## Implementation (2026-09-21)
+
+ADR-0146's search reports 1.000000× — P4 does not forbid this fence. It stays `None` on every
+shipped preset. Choosing a height is a different commit (0144 item 0).

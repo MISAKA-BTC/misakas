@@ -18,7 +18,10 @@ state carries a blockquote banner dated 2026-09-02 under its header, pointing ba
 unimplemented decision that was weak against an adversary carries a dated **Security amendment**
 section at its end (the "Security amendments" section below is the list). ADR bodies are otherwise
 never rewritten: a reversed decision stays in the file, labelled, so the reasoning that reached it
-can be found again.
+can be found again. **0144-alignment pass: 2026-09-21** — unimplemented ADRs before
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) that contradicted its
+constitution were amended the same way (dated banner + end section, bodies not rewritten). The
+implementation order is in "What to build next" below.
 
 > [!IMPORTANT]
 > **Current testnet-11 activation map (reconciled 2026-09-20).** `Params` is the executable
@@ -44,11 +47,14 @@ ADR-0067 (classes are chain data, kernels are the build) → ADR-0068 (the LLM-p
 ADR-0069 / ADR-0070 (weight is the price of end-to-end adjudicability; the model tiers are
 adjudicable) → ADR-0072 (+ Decision 8) / ADR-0074 (the ticket is the execution; the attempt is a
 claim drawn by the chain's beacon) → ADR-0073 (real-demand work bears the weight — Phases ① and ③
-landed, ② in force, ④ open) → ADR-0075 (certification is a consensus object) → ADR-0076 (per-class
-attempt-lane seed) → *on branches, PROPOSED:* ADR-0077 (a prompt a person would type is a claim the
-court can try — one runtime, checkpoint-priced court, the 512-token rows), ADR-0078 (what was made
-from it is committed; the thing itself never rides — derived artifacts), ADR-0079 (a pure function
-needs no permissions; the sandbox is for the host — no security field ever enters the priced bytes).
+landed, ② in force, ④ withheld until ADR-0144 §6 items 2–3) → ADR-0075 (certification is a consensus
+object) → ADR-0076 (per-class attempt-lane seed) → ADR-0144 (the constitution: PALW pays for the
+inference you were going to run anyway) → ADR-0145 / 0146 (derived work, coefficients) →
+*on branches, PROPOSED, and 0144-aligned 2026-09-21:* ADR-0077 (a prompt a person would type is a
+claim the court can try — one local runtime; public commercial serving is out of PALW reward),
+ADR-0078 (what was made from it is committed; the thing itself never rides — derivation stays
+weightless unless it **is** the user's inference), ADR-0079 (a pure function needs no permissions;
+the sandbox is for the local host, not a public LLM entrance).
 
 What that chain means today, in the sentences people most often get wrong:
 
@@ -144,7 +150,7 @@ What that chain means today, in the sentences people most often get wrong:
 | 0066 D3 — attempt blue work leaves `calc_work(bits)`; F3a — sibling heartbeat width | closed: a 2²⁰ constant behind `Params::palw_attempt_work`; at most four heartbeats per mergeset or one chain | [0068](0068-the-llm-primary-economy-and-the-floors-minimum.md) F2, F3a/F5 |
 | 0068 Phase 0 — "walk the table via 0054 on the running chain" | corrected in-text: the live reserve was 500‰, so the walk could never pass the half-table; Phase 2's re-mint was the only route | [0068](0068-the-llm-primary-economy-and-the-floors-minimum.md) Status |
 | 0069 D2 / D5 / D6 — the certified set is the build's (`court_e2e_root`, pinned) | the set the weight gate reads is genesis ∪ chain; a weightless entrant is seated by an object, not by a re-genesis; a certificate is scoped to the lane it was drilled on | [0075](0075-certification-is-a-consensus-object.md), [0073](0073-real-demand-work-bears-the-weight.md) |
-| 0069 §1 — "no uncertified family carries fork-choice weight" | amended on review to **cadence**: a weightless class's one floor block per epoch still adds pwu; pricing it at zero is an undone fork-choice change | [0069](0069-e2e-adjudicability-is-the-price-of-weight.md) review notes |
+| 0069 §1 — "no uncertified family carries fork-choice weight" | amended on review to **cadence**: a weightless class's one floor block per epoch still adds pwu; pricing it at zero is an undone fork-choice change. **0144-aligned 2026-09-21:** close by shrinking Attempt, not by more synthetic weight | [0069](0069-e2e-adjudicability-is-the-price-of-weight.md) review notes; [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) §6 item 5 |
 | 0071 D1 — the attempt lane's price frozen off `header.bits` | **withdrawn after Relaunch 5 measured it**: freezing the target removed the only control on block interval (41–54 blocks/min against 0.5). `bits` keeps block interval; the per-class retarget only redistributes share | [0071](0071-the-attempt-lanes-price-and-the-tickets-bound.md) §3 |
 | 0071 D1a (first draft) — an absolute expectation `share × DAA span` | rejected at implementation; the standing rule is a ceiling: an idle class converges toward the producing classes' price, never past it (`converge_idle_target_v1`) | [0071](0071-the-attempt-lanes-price-and-the-tickets-bound.md) D1a |
 | 0071 D2 — `pwu = 2^k × per_inference` (the bucket's work) | withdrawn: `pwu = max(1, expected_draws) × per_inference`; the bucket `k = 22` stands only as the anchor's position field | [0072](0072-the-ticket-is-the-execution.md) D5 |
@@ -152,6 +158,13 @@ What that chain means today, in the sentences people most often get wrong:
 | 0072 header — "a version bump and a coordinated upgrade, not a re-mint" | D7 decided the same day: the rule went live inside Relaunch 5's re-genesis, no fence; the activation shape is recorded for mainnet | [0072](0072-the-ticket-is-the-execution.md) §3 |
 | 0072 §3 — "the attempt lane is still the canonical-job lane" | the canonical job is a claim too, drawn by the beacon; real demand is the primary lane by design (weight activation gated) | [0074](0074-the-attempt-is-a-claim-drawn-by-the-chain.md), [0073](0073-real-demand-work-bears-the-weight.md) |
 | 0073 D3 — one unit, quantum = leaf count | as landed: quantum = `max(1, canonical_leaves / 8)`; the lottery discipline is the beacon draw | [0074](0074-the-attempt-is-a-claim-drawn-by-the-chain.md) D5, D2 |
+| 0073 D2 — self-prompt "exactly as good as" a canonical job | **withdrawn as a PALW-reward claim (2026-09-21)**: a self-prompt nobody asked for is Attempt by another name; shape-crafting remains the hole D3 closed | [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P2/P3, §6 item 5 |
+| 0073 Phase ④ — receipt position / share as an operator activation | **withheld (2026-09-21)** until 0144 §6 items 2–3; the 2026-09-02 security preconditions still bind if it is built | [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) §6 item 0 |
+| 0077 public LLM entrance / 0079 Done-when | **withdrawn as a PALW-reward goal (2026-09-21)**: localhost `/v1` in scope; commercial serving is not | [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1 |
+| 0078 D7 — a derivation transformer earns PALW leaf weight | **withdrawn (2026-09-21)** unless the transformer **is** the user's local inference | [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P3 |
+| 0101 D4 / D6 / D7 steps 2–4 — anyone-serves discovery and public serving | **withdrawn as unimplemented PALW work (2026-09-21)**; membership pins (D2/D3/D5) stay | [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1 |
+| 0130 §5 / D7–D8 — widen BPS, derived panel share, DA reward | stay deferred, now under 0144 item 0 rather than "after BPS 1 is hardened" | [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) §6 item 0 |
+| 0131 D3–D6 — arm a scalar CCU after shadow | shadow may measure; do not arm until 0146 | [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P4, [0146](0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md) |
 | 0073 D6 / 0074 D6 — the free-prompt-certified set is the build's | the set has a chain half; a weightless entrant is seated by `ClassLaneCertified` | [0075](0075-certification-is-a-consensus-object.md) |
 | 0075 §7 — the mainnet card names model-root constants | the assembly can pin tiers, but the decided route is floor-only at genesis with every model arriving by registration → drill → binding | [0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md) §4, [0075](0075-certification-is-a-consensus-object.md) D8 |
 | 0056 D6 — "an attempt whose `artifact_root` differs is admission-rejected" | amended (PROPOSED 2026-09-05, revised the same day; implemented the same day on `palw-adr0088-0089-impl`): differs from *every root in force* for the class — the founding root stays written once; a line's current version, its previews and a superseded version inside its grace are in force beside it; `DuplicateClass` stands | [0088](0088-the-class-keeps-its-graph-and-the-owner-keeps-publishing.md) D3 |
@@ -233,15 +246,20 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
   landed and the class is FP-certified, and ③ has landed", and both hold on `main`
   (`palw_freeprompt_v3.rs:349`, `palw_state_v2.rs:6178-6183` price a quantum in leaves;
   `palw_state_v2.rs:6172-6177` refuses an uncertified class's claim). A grep for a Phase-② fence
-  returns nothing, so arming it would be an empty diff. What is open is Phase ④ and the receipt block's chain position / share migration (`algo_id_carries_no_chain_position(7)`
-  still true; 0055 D1 stands until then).
+  returns nothing, so arming it would be an empty diff. What is open is Phase ④ and the receipt
+  block's chain position / share migration (`algo_id_carries_no_chain_position(7)` still true;
+  0055 D1 stands until then). **0144-aligned 2026-09-21:** that activation is withheld until
+  ADR-0144 §6 items 2–3; the 2026-09-05 "operator activation on a measurement" record is no longer
+  a sufficient schedule, and Decision 2's "self-dealing is exactly as good as a canonical job" is
+  withdrawn as a PALW-reward claim.
 * **ADR-0075** — **corrected 2026-09-02 against the tree: the SDK half is CLOSED.**
   `PalwClassSdk` takes the chain's set as an argument (`terms.chain_certified_families`,
   `misaka-palw-sdk/src/sdk.rs:496,569,583`), so it reads genesis ∪ chain. What remains is the
   GATEWAY: `misaka-palw-gateway/src/` contains no reference to a certified set at all, so it cannot
   tell a chain-certified class from an uncertified one — which is also ADR-0077 Decision 3's
-  requirement that the gateway read the chain it commits to. The mainnet card is still empty until
-  real operator keys exist.
+  requirement that the gateway read the chain it commits to. **0144-aligned 2026-09-21:** that
+  remaining work is the localhost `/v1` surface, not a GPU marketplace. The mainnet card is still
+  empty until real operator keys exist.
 * **ADR-0076 §8** — restated 2026-09-02: the processor already pins a post-genesis entrant's
   `initial_target` to the base class's live target (M2-12), so the field is not free; what stays
   open is that the pinned price is the floor's until `ClassLaneCertified` re-seeds it (Decision 4),
@@ -254,6 +272,8 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
 * **ADR-0071 §5** — a false capability declaration costs nothing, and pricing it collides with the
   silence doctrine.
 * **ADR-0069** — a zero-share class's floor block still adds pwu to fork choice.
+  **0144-aligned 2026-09-21:** close by shrinking Attempt, not by giving the floor block more
+  synthetic weight.
 * **ADR-0067** — **not unimplemented: unarmed.** `--palw-chain-classes` is shipped
   (`kaspad/src/args.rs:238,979`, `daemon.rs:1328,1522`, and `palw_backends.rs:43`, whose comment
   names the flag as the fence's only caller), and testnet-11's launchers do not pass it. Arming is
@@ -277,6 +297,71 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
   breaks one. The re-mint that carried it is already in the fingerprint trail at `params.rs:8125`.)
 * **ADR-0045 D2 / 0056** — the mid-epoch budget gap (an entrant has no attempt-lane budget until
   the next boundary), kept for state-root compatibility.
+
+## What to build next (0144-alignment, 2026-09-21)
+
+Follow [ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) §6. Item 0 binds
+today: **do not widen the economy** until accounting and admission land. A `None` fence is not
+"unimplemented"; the list below is code that is missing or a decision that is still only a document.
+
+A fence that is `None` (0147–0149, 0143, 0062, 0087–0091, …) is **code that exists and is unarmed**.
+It is not this list.
+
+### 1. Constitution path — no new reward surface
+
+1. **[0146](0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md)** — SEARCH IMPLEMENTED
+   2026-09-21. Bound is 1.000000×; no coefficient table; no scalar armed.
+2. **[0145](0145-canonical-work-is-derived-and-admission-is-earned.md) §6 prefix-STATE** —
+   object family implemented (`PalwFpPrefixStateV1`, fold derives `KvReused`). V3 wire still
+   genesis. A later payload version is how Studio names a local cache on the wire.
+3. **[0147](0147-independence-is-drawn-not-declared.md) / [0148](0148-the-free-prompt-lane-prices-compute.md) /
+   [0149](0149-an-attempts-pwu-is-the-derivation.md)** — implemented, dormant. P4 does not
+   forbid arming (0146 bound is 1). **Do not set a testnet-11 height** until accounting is
+   drilled; 0144 item 0 still binds.
+
+### 2. Local product — 0144 items 3–4, P1–P3
+
+4. **[0075](0075-certification-is-a-consensus-object.md) remaining** — the gateway reads genesis ∪
+   chain, on the localhost `/v1`.
+5. **[0077](0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md) Phase A** — same
+   inference streams the answer; commit after start. Consensus-inert. Public commercial serving is
+   out of PALW reward.
+6. **[0079](0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md) remainder** —
+   host sandbox for the loopback worker. Multi-tenant / public serving stay in §8.
+7. **[0136](0136-an-artifact-is-mapped-not-read-and-a-host-holds-one-copy-of-it.md) remainder** — one
+   runtime per host over IPC, host-global pin/LRU (local residency, P1).
+
+### 3. Then make useful work the economy — 0144 item 5
+
+8. **[0069](0069-e2e-adjudicability-is-the-price-of-weight.md) leftover pwu** — shrink Attempt; do
+   not add synthetic weight.
+9. **[0073](0073-real-demand-work-bears-the-weight.md) Phase ④** — receipt chain position / share,
+   only after §6 items 2–3. The 2026-09-05 operator-activation record is not a schedule.
+10. **[0142](0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md)** if still unarmed
+    (already built). **[0140](0140-the-heartbeat-is-the-emergency-generator.md)** group assertion.
+    **[0141](0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md)** stays measurement
+    (waste counters); do not remove the lottery yet.
+
+### Do not implement (withdrawn or out of PALW-reward scope under 0144)
+
+* **[0101](0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md)
+  D4 / D6 / D7 steps 2–4** — anyone-serves marketplace. Membership pins (D2/D3/D5) stay.
+* **[0078](0078-what-was-made-from-it-is-committed-the-thing-never-rides.md) D7** PALW weight for a
+  derivation transformer, unless that transformer **is** the user's local inference. The weightless
+  object layer may land later as a product.
+* **[0130](0130-bps1-is-hardened-before-it-is-widened.md) D7–D8 / §5** — BPS widen, derived panel
+  share, DA reward. Width stays 1.
+* **[0131](0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md) D3–D6** —
+  scalar CCU until 0146. Shadow (D1–D2) may keep measuring.
+* **0023** EVM three lanes as PALW work. **0010–0018** validator rebuild (0126 already retired the
+  PALW coupling). **0063 D4** `miner` subcommand (deleted lineage); D1 BIP39 is ops, not constitution.
+* **0104** was never written. **0141** lottery removal.
+
+### Orthogonal / later ops (not 0144 work)
+
+0015 HSM / PKCS#11 / HA; 0064 named pipeline fixtures; 0066 D4 committed liveness table; 0071 §5
+false-capability cost; 0072 §3 mainnet algo + DAA fence handshake; 0093 D8 live drill; 0099 D4
+beyond 8 shards; 0102 D5 catalog row; 0106 W8–W10.
 
 ## Security amendments (2026-09-02) — what the unimplemented decisions gained before they are built
 
@@ -397,3 +482,9 @@ relation, and why the heartbeat lane needed its own `algo_id = 8` (ADR-0066) rat
 | [0141](0141-can-an-inference-be-the-ticket-without-a-hash-lottery.md) | PROPOSED 2026-09-18, **decides nothing and changes no rule**: with ADR-0140 keeping the heartbeat's hash deliberately, this is the only hashing left that shapes who produces blocks. A producer pays for one full inference before the target comparison and most draws lose, so the lottery meters rather than secures. Records why removing it means answering "who produces slot N?" — offline producers, DAG concurrency, identity grinding, Sybil bonds, a retired beacon, newcomer entry, censorship, empty slots — and is therefore ADR-0071/0072/0076 and the class economy rewritten together. Builds only the waste counters, because the first half of any future argument is a guess without them. |
 | [0142](0142-the-consensus-clock-is-a-cursor-a-heartbeat-consumes-a-slot.md) | PROPOSED 2026-09-18, **built and drilled, armed nowhere**: the heartbeat's admissibility was measured against its selected parent, which every new chain block replaces, so past the anchor clock a block that advanced no clock moved the next opportunity to advance it — measured on the drill at a 21-second cadence as a DAA frozen at its own flag day with zero beats minted. The invariant is now "a block that does not advance the consensus clock MUST NOT postpone the next opportunity to advance it": a heartbeat consumes a slot, the slot moves in whole intervals so a timestamp selects a slot and nothing finer, a late beat loses the slots it missed rather than banking them, and nothing else writes it. The slot rule retires behind the fence, since width stays bounded by the hash price and four beats a mergeset while the clock is bounded by the cursor. The reference is DERIVED, not stored — the block at the selected parent's score with the lowest blue score, read from the DAA window — which is what lets a pruned node and one that joined by pruning proof answer as an archival one; a stored cursor did not, and that was ADR-0066 finding 4 again. `validate_palw_v2` refuses `palw_anchor_clock` without it, and refuses the fence on a network whose difficulty window is sampled. |
 | [0143](0143-an-artifact-root-has-one-owner-on-the-chain.md) | IMPLEMENTED 2026-09-18, **behind its own fence `palw_artifact_root_ownership`, dormant on every preset**: "which line owns this artifact root" was answered by the FIRST match in `BTreeMap` id order, so a hash's byte order was a consensus-visible outcome — and live on testnet-11 the Qwen2.5 class's own registered founding root is carried by a copy line that resolves first. Two defects, each with its own fix: the chain admitted duplicates at all, and it resolved them positionally. A rooted index `artifact_root -> (class_id, line_id, version)` is now the one answer; a class reserves its founding root in the transition that writes the class, so the window between announcing this fence and reaching it cannot be squatted; and `ClassRegistered`, `ModelLineFounded` and `ModelVersionPublished` all refuse an owned root through one helper. Three readers, not the two the defect showed — a voided claim's subtraction carried a third copy of the walk, and one that never filtered by force while the counting side always did. At the fence a migration canonicalizes what is already there: the founding line takes its own root however late it published, else the earliest accepted version, else `(line, version)` order. Legacy duplicate rows stay as record and stop being the answer; nothing settled before the fence is recomputed. **ADR-0088's competing weights are untouched** — only the exact root collides, and the chain never looks inside an artifact to judge similarity. |
+| [0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) | CONSTITUTION 2026-09-19; **no code, no fence.** PALW pays for the inference you were going to run anyway. P1 local first (localhost OpenAI in scope; GPU markets are not); P2 free prompt; P3 same inference, one purpose; P4 representation-neutral accounting; P5 efficiency vs tricks; P6 eligibility scarce; P7 permissionless admission, weight earned. §6 item 0: do not widen the economy until accounting and admission land. **Alignment pass 2026-09-21** amends unimplemented pre-0144 ADRs that contradicted this (bodies not rewritten). |
+| [0145](0145-canonical-work-is-derived-and-admission-is-earned.md) | DESIGN 2026-09-19; **§1–§5 implemented dormant** (0147–0149). **§6 prefix-STATE object family 2026-09-21** (`PalwFpPrefixStateV1`; V3 wire still genesis). Accounting and admission half of 0144: work is a derived vector, admission is earned. |
+| [0146](0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md) | SEARCH IMPLEMENTED 2026-09-21. Bound 1.000000×; no coefficient table, no fence, no scalar. Do not arm a scalar CCU (0131 D3–D6). 0147–0149 may arm without contradicting P4; they stay `None` on shipped presets. |
+| [0147](0147-independence-is-drawn-not-declared.md) | IMPLEMENTED, **dormant** behind `palw_admission_independence` (one of three 0145-bundle fences, armed together or not at all). Independent admission is drawn, not declared. |
+| [0148](0148-the-free-prompt-lane-prices-compute.md) | IMPLEMENTED, **dormant** behind `palw_canonical_work` + `palw_fp_derived_work`. Free-prompt prices compute the same for every class. |
+| [0149](0149-an-attempts-pwu-is-the-derivation.md) | IMPLEMENTED, **dormant** behind `palw_canonical_work`. An attempt's pwu is the derivation; the weight reads it directly. |

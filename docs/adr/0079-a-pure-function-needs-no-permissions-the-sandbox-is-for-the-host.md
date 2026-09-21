@@ -26,6 +26,8 @@ chain-side model distribution network (ADR-0067 Decision 6).
 
 > **Security amendment appended (2026-09-02)** — see the last section (SA-1…SA-8), corrections found reading the ADR against the tree: the memory ceiling must not be `RLIMIT_AS` (the hybrid maps 33 GiB); the signer trusts the supervisor's channel, not the gateway's bytes; the DA opening server authenticates; `PATH` leaves the allowlist; Decision 7 and ADR-0077 Decision 6 are one rule; nothing logs a prompt.
 
+> **ADR-0144 alignment (2026-09-21).** The sandbox remains for the local host and the loopback worker. "Done when a node can be a public LLM entrance" is withdrawn as a PALW-reward goal (P1). Multi-tenant / public commercial serving stay in §8. See the end section.
+
 ## 1. The finding: the provenance half is built, the host half is not
 
 The proposal's chain — model → runtime → input → execution → receipt → output root → artifact — is
@@ -450,3 +452,20 @@ default; `security-report` prints paths and posture, never key material or promp
 **SA-8 — Decision 10's per-source rate is not the bound.** Sources share addresses behind proxies;
 the binding limits are one job slot, a bounded in-flight queue, and a daily public-job budget tied
 to exposure (ADR-0077 SA-1).
+
+## ADR-0144 alignment (2026-09-21)
+
+[ADR-0144](0144-palw-pays-for-the-inference-you-were-going-to-run-anyway.md) P1: remote GPU markets
+and third-party inference serving are non-goals. The sandbox this ADR specifies is for the host that
+runs the user's own model.
+
+* **Kept, and still to implement.** Decisions 1–9, 11–13: confinement, no keys in the parser, the
+  signer sidecar, the local security-report, the chain never takes the host's word. That is the
+  loopback worker's posture, and it is in scope.
+* **Withdrawn as a PALW-reward Done-when.** "A node can be a public LLM entrance on a host that also
+  holds a bond" describes a commercial serving product. Decision 10's bind guard stays: a
+  non-loopback bind is an acknowledged operator act, refused without
+  `MISAKA_PALW_ALLOW_PUBLIC_GATEWAY`, and never the seat. It is not a PALW product requirement.
+* **§8 unchanged, now read against P1.** Multi-tenant gateway isolation (one gateway, many paying
+  users) remains deliberately not decided, and under 0144 it is out of the reward path even if an
+  operator later builds it.

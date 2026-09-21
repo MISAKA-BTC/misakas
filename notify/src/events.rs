@@ -51,10 +51,14 @@ event_type_enum! {
         VirtualDaaScoreChanged,
         PruningPointUtxoSetOverride,
         NewBlockTemplate,
+        PalwClassReadinessChanged,
+        PalwPanelAssignment,
+        PalwPanelReceipt,
+        PalwPanelEligibilityChanged,
     }
 }
 
-pub const EVENT_COUNT: usize = 9;
+pub const EVENT_COUNT: usize = 13;
 
 impl FromStr for EventType {
     type Err = Error;
@@ -70,6 +74,10 @@ impl FromStr for EventType {
             "virtual-daa-score-changed" => Ok(EventType::VirtualDaaScoreChanged),
             "pruning-point-utxo-set-override" => Ok(EventType::PruningPointUtxoSetOverride),
             "new-block-template" => Ok(EventType::NewBlockTemplate),
+            "palw-class-readiness-changed" => Ok(EventType::PalwClassReadinessChanged),
+            "palw-panel-assignment" => Ok(EventType::PalwPanelAssignment),
+            "palw-panel-receipt" => Ok(EventType::PalwPanelReceipt),
+            "palw-panel-eligibility-changed" => Ok(EventType::PalwPanelEligibilityChanged),
             _ => Err(Error::InvalidEventType(s.to_string())),
         }
     }

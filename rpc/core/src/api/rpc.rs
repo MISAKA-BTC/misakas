@@ -814,6 +814,162 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwFreePromptPriceResponse::default())
     }
 
+    async fn get_palw_class_panel_status(
+        &self,
+        request: GetPalwClassPanelStatusRequest,
+    ) -> RpcResult<GetPalwClassPanelStatusResponse> {
+        self.get_palw_class_panel_status_call(None, request).await
+    }
+    async fn get_palw_class_panel_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwClassPanelStatusRequest,
+    ) -> RpcResult<GetPalwClassPanelStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwClassPanelStatusResponse::default())
+    }
+
+    async fn get_palw_panel_seats(&self, request: GetPalwPanelSeatsRequest) -> RpcResult<GetPalwPanelSeatsResponse> {
+        self.get_palw_panel_seats_call(None, request).await
+    }
+    async fn get_palw_panel_seats_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelSeatsRequest,
+    ) -> RpcResult<GetPalwPanelSeatsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelSeatsResponse::default())
+    }
+
+    async fn get_palw_panel_status(&self, request: GetPalwPanelStatusRequest) -> RpcResult<GetPalwPanelStatusResponse> {
+        self.get_palw_panel_status_call(None, request).await
+    }
+    async fn get_palw_panel_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelStatusRequest,
+    ) -> RpcResult<GetPalwPanelStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelStatusResponse::default())
+    }
+
+    async fn get_palw_panel_assignments(
+        &self,
+        request: GetPalwPanelAssignmentsRequest,
+    ) -> RpcResult<GetPalwPanelAssignmentsResponse> {
+        self.get_palw_panel_assignments_call(None, request).await
+    }
+    async fn get_palw_panel_assignments_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwPanelAssignmentsRequest,
+    ) -> RpcResult<GetPalwPanelAssignmentsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwPanelAssignmentsResponse::default())
+    }
+
+    async fn get_palw_model_preflight(
+        &self,
+        request: GetPalwModelPreflightRequest,
+    ) -> RpcResult<GetPalwModelPreflightResponse> {
+        self.get_palw_model_preflight_call(None, request).await
+    }
+    async fn get_palw_model_preflight_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelPreflightRequest,
+    ) -> RpcResult<GetPalwModelPreflightResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelPreflightResponse::default())
+    }
+
+    async fn submit_palw_model_registration(
+        &self,
+        request: SubmitPalwModelRegistrationRequest,
+    ) -> RpcResult<SubmitPalwModelRegistrationResponse> {
+        self.submit_palw_model_registration_call(None, request).await
+    }
+    async fn submit_palw_model_registration_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: SubmitPalwModelRegistrationRequest,
+    ) -> RpcResult<SubmitPalwModelRegistrationResponse> {
+        let _ = (connection, request);
+        Ok(SubmitPalwModelRegistrationResponse::default())
+    }
+
+    async fn get_palw_model_registration_status(
+        &self,
+        request: GetPalwModelRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwModelRegistrationStatusResponse> {
+        self.get_palw_model_registration_status_call(None, request).await
+    }
+    async fn get_palw_model_registration_status_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRegistrationStatusRequest,
+    ) -> RpcResult<GetPalwModelRegistrationStatusResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelRegistrationStatusResponse::default())
+    }
+
+    async fn get_palw_model(&self, request: GetPalwModelRequest) -> RpcResult<GetPalwModelResponse> {
+        self.get_palw_model_call(None, request).await
+    }
+    async fn get_palw_model_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelRequest,
+    ) -> RpcResult<GetPalwModelResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelResponse::default())
+    }
+
+    async fn get_palw_model_readiness(
+        &self,
+        request: GetPalwModelReadinessRequest,
+    ) -> RpcResult<GetPalwModelReadinessResponse> {
+        self.get_palw_model_readiness_call(None, request).await
+    }
+    async fn get_palw_model_readiness_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelReadinessRequest,
+    ) -> RpcResult<GetPalwModelReadinessResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelReadinessResponse::default())
+    }
+
+    async fn get_palw_model_admission(
+        &self,
+        request: GetPalwModelAdmissionRequest,
+    ) -> RpcResult<GetPalwModelAdmissionResponse> {
+        self.get_palw_model_admission_call(None, request).await
+    }
+    async fn get_palw_model_admission_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelAdmissionRequest,
+    ) -> RpcResult<GetPalwModelAdmissionResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelAdmissionResponse::default())
+    }
+
+    async fn get_palw_model_certification(
+        &self,
+        request: GetPalwModelCertificationRequest,
+    ) -> RpcResult<GetPalwModelCertificationResponse> {
+        self.get_palw_model_certification_call(None, request).await
+    }
+    async fn get_palw_model_certification_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwModelCertificationRequest,
+    ) -> RpcResult<GetPalwModelCertificationResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwModelCertificationResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

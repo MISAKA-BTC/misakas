@@ -150,6 +150,9 @@ pub mod palw_admission_v2;
 /// to repeat it as `#![cfg(test)]`, which is the same statement twice.
 #[cfg(test)]
 pub mod palw_adversarial;
+/// ADR-0146: the committed search that reports the worst reward-per-MAC the derivation
+/// permits. No coefficient table, no fence — `cargo test palw_arbitrage_search` is the program.
+pub mod palw_arbitrage_search_v1;
 pub mod palw_artifact;
 pub mod palw_attempt_v2;
 /// ADR-0082 Decision 2 / U-03: the dissection as a court phase, and its window gate.
@@ -173,16 +176,16 @@ pub mod palw_bisect;
 /// coverage gate. All consensus-inert — nothing in validation, fork choice or the header
 /// pipeline consumes any of it until the ADR-0038 change set wires and activates together.
 pub mod palw_block_commitment;
-/// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
-/// bodies, their caps, and the stateless validators that become the Stage-1 admission
-/// validators verbatim. Land-stage, consensus-inert — the Stage-0 consumer is an external
-/// watcher; no transaction validation or store reads any of it.
 /// **ADR-0145 §1–§5: a claim's work is DERIVED from the graph and the execution, never declared.**
 /// The 2026-09-19 reward audit measured 7.8× the fork-choice weight for identical arithmetic
 /// because `pwu_per_inference` counts a canonical job the registrant writes while an attempt past
 /// `Params::palw_prefill_draw` runs a different one. Behind `Params::palw_canonical_work`, `None`
 /// on every preset.
 pub mod palw_canonical_work_v1;
+/// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
+/// bodies, their caps, and the stateless validators that become the Stage-1 admission
+/// validators verbatim. Land-stage, consensus-inert — the Stage-0 consumer is an external
+/// watcher; no transaction validation or store reads any of it.
 pub mod palw_carriage;
 pub mod palw_catalog_coverage;
 pub mod palw_chain_weight;
@@ -226,6 +229,8 @@ pub mod palw_economics_ledger_v1;
 /// ADR-0125 — the execution lane's round rules (a second, a seed, capped quotas, alternating
 /// permits) as pure functions; consensus-inert until the lane that reads them is built.
 pub mod palw_execution_lane_v1;
+/// Spend-once execution-round quanta: 1 verified CanonicalWork → N unique permit tickets.
+pub mod palw_execution_quanta_v1;
 pub mod palw_exposure;
 pub mod palw_facts;
 pub mod palw_fork_authority_v2;
@@ -255,6 +260,15 @@ pub mod palw_job_panel;
 /// no one, credits nothing, freezes the class). Consensus-inert — nothing constructs it on
 /// any shipped network; the Track-C change set is its first consumer.
 pub mod palw_job_state;
+/// Kimi K3 native geometry, integer ops, tokenizer and artifact identity. Not a genesis class.
+/// Its kernels sit in the fenced catalog so `court_catalog_root` does not move.
+pub mod palw_kimi_k3_artifact_v1;
+pub mod palw_kimi_k3_foundation_v1;
+pub mod palw_kimi_k3_ops;
+pub mod palw_kimi_k3_profile;
+pub mod palw_kimi_k3_tokenizer_v1;
+/// ADR-0133 S3: post-execution random layer/position sampling, behind `Params::palw_verification_s3`.
+pub mod palw_layer_sample_v3;
 /// ADR-0111 — a seat may demand the committed leaf it needs to judge: the seat's assigned
 /// intervals and the interval that owns a leaf, as pure functions of the binding — the bound a
 /// held DA demand for a leaf's evidence is admitted under.
@@ -275,6 +289,13 @@ pub mod palw_model_fit_v1;
 pub mod palw_model_lines_v1;
 pub mod palw_model_market_v1;
 pub mod palw_model_registry_v1;
+/// Model-add tracking: machine-readable refusal codes and the constructed→folded pipeline.
+pub mod palw_model_registration_v1;
+/// ADR-0144 §9: objective-offence identity, PanelFalseValid payloads, and the processor's
+/// cryptographic gate. Consensus-inert until `Params::palw_objective_offence` is Some.
+pub mod palw_offence_v1;
+/// ADR-0133 S2: optimistic licence from the full-replay seat, behind `Params::palw_verification_s2`.
+pub mod palw_optimistic_licence_v2;
 /// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
 /// ADR-0077 SA-5, which says what arming it does NOT buy.
 pub mod palw_panel_da_v1;
@@ -282,13 +303,13 @@ pub mod palw_panel_da_v1;
 /// judges, and a claim is paid for the compute it certifies: the three pure rules, and nothing
 /// that reads a fence.
 pub mod palw_panel_economy_v1;
-/// ADR-0144 §9: objective-offence identity, PanelFalseValid payloads, and the processor's
-/// cryptographic gate. Consensus-inert until `Params::palw_objective_offence` is Some.
-pub mod palw_offence_v1;
+pub mod palw_panel_v2;
+/// Operator/RPC view of panel seats, class readiness, and per-claim assignments.
+/// Seat counts stay distinct (`bonded` / `ready` / `selected` / `validReceipt`); a hold has a reason code.
+pub mod palw_panel_view_v1;
 /// ADR-0144 §9: slashable panel VAR that cannot be counted twice. Pure functions of consensus
 /// facts; the fold in `palw_state_v2` is the writer, behind the same fence.
 pub mod palw_panel_var_v1;
-pub mod palw_panel_v2;
 pub mod palw_producer_v2;
 /// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
 /// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
@@ -323,6 +344,8 @@ pub mod palw_schedule;
 /// ADR-0098 — the panel's coverage of one claim, measured with the draw the seats run
 /// (ADR-0077 Decision 8): the number ADR-0081 Decision 8 asked for and never took. A report.
 pub mod palw_seat_coverage_v1;
+/// ADR-0133 S1 runtime: map a V2 segment onto the decode-call window a checkpoint resume covers.
+pub mod palw_segment_resume_v1;
 /// ADR-0101 — a membership is proven by the chain and served by anyone: the signed service
 /// descriptor and the check a client runs against chain facts. Consensus-inert.
 pub mod palw_service_descriptor_v1;

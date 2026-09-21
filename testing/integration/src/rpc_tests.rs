@@ -12,7 +12,9 @@ use kaspa_grpc_core::ops::KaspadPayloadOps;
 use kaspa_notify::{
     connection::{ChannelConnection, ChannelType},
     scope::{
-        BlockAddedScope, FinalityConflictScope, NewBlockTemplateScope, PruningPointUtxoSetOverrideScope, Scope,
+        BlockAddedScope, FinalityConflictScope, NewBlockTemplateScope, PalwClassReadinessChangedScope, PalwPanelAssignmentScope,
+        PalwPanelEligibilityChangedScope, PalwPanelReceiptScope, PruningPointUtxoSetOverrideScope, Scope, SinkBlueScoreChangedScope,
+        UtxosChangedScope, VirtualChainChangedScope, VirtualDaaScoreChangedScope,
         SinkBlueScoreChangedScope, UtxosChangedScope, VirtualChainChangedScope, VirtualDaaScoreChangedScope,
     },
 };
@@ -793,6 +795,34 @@ async fn sanity_test() {
                         .unwrap();
                 })
             }
+            KaspadPayloadOps::NotifyPalwClassReadinessChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwClassReadinessChangedScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPalwPanelAssignment => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwPanelAssignmentScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPalwPanelReceipt => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwPanelReceiptScope {}.into()).await.unwrap();
+                })
+            }
+            KaspadPayloadOps::NotifyPalwPanelEligibilityChanged => {
+                let rpc_client = client.clone();
+                let id = listener_id;
+                tst!(op, {
+                    rpc_client.start_notify(id, PalwPanelEligibilityChangedScope {}.into()).await.unwrap();
+                })
+            }
             KaspadPayloadOps::StopNotifyingUtxosChanged => {
                 let rpc_client = client.clone();
                 let id = listener_id;
@@ -957,6 +987,48 @@ async fn sanity_test() {
                     assert!(!response.priced);
                     let malformed = GetPalwFreePromptPriceRequest { class_id: "not-hex".to_string(), ..request };
                     assert!(rpc_client.get_palw_free_prompt_price_call(None, malformed).await.is_err(), "a malformed id is an error");
+                })
+            }
+            KaspadPayloadOps::GetPalwClassPanelStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let malformed = GetPalwClassPanelStatusRequest { class_id: "not-hex".to_string() };
+                    assert!(rpc_client.get_palw_class_panel_status_call(None, malformed).await.is_err());
+                    let response = rpc_client
+                        .get_palw_class_panel_status_call(None, GetPalwClassPanelStatusRequest { class_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.available, "a chain without ConsensusV2 has no class panel");
+                })
+            }
+            KaspadPayloadOps::GetPalwPanelSeats => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response =
+                        rpc_client.get_palw_panel_seats_call(None, GetPalwPanelSeatsRequest { class_id: String::new() }).await.unwrap();
+                    assert!(!response.available);
+                    assert!(response.seats.is_empty());
+                })
+            }
+            KaspadPayloadOps::GetPalwPanelStatus => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response =
+                        rpc_client.get_palw_panel_status_call(None, GetPalwPanelStatusRequest { class_id: String::new() }).await.unwrap();
+                    assert!(!response.available);
+                })
+            }
+            KaspadPayloadOps::GetPalwPanelAssignments => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_panel_assignments_call(
+                            None,
+                            GetPalwPanelAssignmentsRequest { claim_id: String::new(), seat_id: String::new() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available);
                 })
             }
             KaspadPayloadOps::GetPalwFreePromptClaim => {

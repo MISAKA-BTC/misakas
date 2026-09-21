@@ -432,6 +432,9 @@ pub struct PalwAdmissionShapeV1 {
     /// ADR-0103: `Params::palw_held_context` and `Params::palw_panel_da_at` at the height — may a
     /// class register a held map, and may its widest job commit with no ids.
     pub held: PalwHeldAdmissionV1,
+    /// May a class reach the fenced Kimi K3 kernels. `Params::palw_kimi_k3` at the height —
+    /// dormant (`false`) on every shipped preset.
+    pub kimi_family: bool,
 }
 
 /// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
@@ -478,6 +481,7 @@ pub fn palw_admission_shape_at_v1(
         token_lift: params.palw_token_lift_active_at(daa_score),
         fused_dissectable: params.palw_fused_dissectable_active_at(daa_score),
         held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
+        kimi_family: params.palw_kimi_k3_at(daa_score),
     })
 }
 
@@ -498,6 +502,16 @@ pub fn palw_genesis_registers_held_class_v1(bundle: &PalwConsensusParamsV2) -> b
 /// genesis — the `palw_attn_widest_registered_site_v2` precedent for fused rows.
 pub fn palw_genesis_reaches_fenced_kernel_v1(bundle: &PalwConsensusParamsV2) -> bool {
     let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+    bundle.genesis_objects.iter().any(|object| {
+        matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if !reachable_kernels_v1(&carriage.profile).is_disjoint(&fenced))
+    })
+}
+
+/// A genesis row that reaches a Kimi K3 kernel. Refused until a dedicated fence exists: shipping
+/// those kernels in the fenced catalog must not let a genesis set register the class.
+pub fn palw_genesis_reaches_kimi_kernel_v1(bundle: &PalwConsensusParamsV2) -> bool {
+    let fenced = crate::palw_step_refute::kimi_fenced_kernel_ids_v1();
     bundle.genesis_objects.iter().any(|object| {
         matches!(object, PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
             if !reachable_kernels_v1(&carriage.profile).is_disjoint(&fenced))
@@ -680,7 +694,9 @@ fn derive_court_cost_walk_v1(
             let strided_combine =
                 node.kernel_semantics_id == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_MOE_COMBINE);
             let head_sliced_gdn = node.op_kind == Op::GatedDeltaNet
-                && node.kernel_semantics_id == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_GDN_STEP);
+                && (node.kernel_semantics_id == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_GDN_STEP)
+                    || node.kernel_semantics_id
+                        == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_KIMI_KDA_STEP));
             let sliced_conv = node.op_kind == Op::SsmConv
                 && node.kernel_semantics_id == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_SSM_CONV);
             let opening = if node.weight_name.is_empty() {
@@ -1205,6 +1221,12 @@ pub enum PalwClassAdmissionError {
     /// graph is adjudicable by this build, and what is missing is the fence.
     #[error("the class reaches the per-token lift kernel and this network has not armed palw_token_lift")]
     TokenLiftNeedsItsFence,
+    /// Kimi K3's kernels are in the fenced catalog so shipping them does not move
+    /// `court_catalog_root`. A class that reaches them is refused by name until
+    /// [`verify_class_admission_v9`]'s `kimi_family` argument is true — not reported as a coverage
+    /// gap. No shipped `Params` field arms it yet.
+    #[error("the class reaches a Kimi K3 kernel and this network has not armed the Kimi family fence")]
+    KimiFamilyNeedsItsFence,
     /// **ADR-0093 Decision 6: a fused output tile that is not inside one head cannot be dissected.**
     ///
     /// A dissection is one head's softmax; `palw_attn_dispute_site_v2` refuses a tile spanning two
@@ -1237,6 +1259,36 @@ pub enum PalwClassAdmissionError {
     /// `LinearInTheContext` so the refusal names the right problem).
     #[error("under the held regime the class's {wall} could not be priced across the context sweep")]
     ChainWallOrderUnknown { wall: &'static str },
+}
+
+impl PalwClassAdmissionError {
+    /// Stable machine token for CLI/RPC. The Display sentence stays for humans.
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::NotARegistration => "NOT_A_REGISTRATION",
+            Self::ClassIdIsNotTheProfileId { .. } => "CLASS_ID_IS_NOT_THE_PROFILE_ID",
+            Self::Profile(_) => "PROFILE_NOT_CANONICAL",
+            Self::CoverageGap => "COURT_KERNEL_UNCOVERED",
+            Self::DeeperThanTheLadder { .. } => "DEEPER_THAN_THE_LADDER",
+            Self::CourtCostExceedsCeiling { .. } => "COURT_COST_EXCEEDS_CEILING",
+            Self::ClassIsNotDerived => "CLASS_IS_NOT_DERIVED",
+            Self::PwuPerInferenceMismatch { .. } => "PWU_PER_INFERENCE_MISMATCH",
+            Self::CanonicalDeeperThanWorstCase { .. } => "CANONICAL_DEEPER_THAN_WORST_CASE",
+            Self::NotEndToEndCertified { .. } => "NOT_END_TO_END_CERTIFIED",
+            Self::CanonicalFootprintUnderTheRow { .. } => "CANONICAL_FOOTPRINT_UNDER_THE_ROW",
+            Self::FusedAttentionNeedsTheKaryCourt => "FUSED_ATTENTION_NEEDS_THE_KARY_COURT",
+            Self::FusedQuerySliceStraddlesTiles { .. } => "FUSED_QUERY_SLICE_STRADDLES_TILES",
+            Self::FusedQueryRowUnservable(_) => "FUSED_QUERY_ROW_UNSERVABLE",
+            Self::PricedForADifferentCourt { .. } => "PRICED_FOR_A_DIFFERENT_COURT",
+            Self::CourtWindowTooShort { .. } => "COURT_WINDOW_TOO_SHORT",
+            Self::TokenLiftNeedsItsFence => "FAMILY_FENCE_CLOSED",
+            Self::KimiFamilyNeedsItsFence => "FAMILY_FENCE_CLOSED",
+            Self::FusedTileStraddlesHeads { .. } => "FUSED_TILE_STRADDLES_HEADS",
+            Self::HeldMapNeedsItsFence => "FAMILY_FENCE_CLOSED",
+            Self::LinearInTheContext { .. } => "LINEAR_IN_THE_CONTEXT",
+            Self::ChainWallOrderUnknown { .. } => "CHAIN_WALL_ORDER_UNKNOWN",
+        }
+    }
 }
 
 /// **The Phase B rules a `palw_context_ladder`-armed network judges a registration under**
@@ -1753,6 +1805,47 @@ pub fn verify_class_admission_v8(
     deepest_job_bound: bool,
     held: PalwHeldAdmissionV1,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v9(
+        bundle,
+        profile,
+        canonical,
+        registration,
+        certified,
+        chain_certified,
+        ladder,
+        court,
+        decode_rules,
+        token_lift,
+        fused_dissectable,
+        deepest_job_bound,
+        held,
+        false,
+    )
+}
+
+/// [`verify_class_admission_v8`] with the Kimi family fence as an argument.
+///
+/// `kimi_family` is `Params::palw_kimi_k3` at the block. `false` on every shipped preset —
+/// [`verify_class_admission_v8`] byte for byte. `true` admits a class that reaches the fenced
+/// Kimi kernels into the coverage the gate checks; those ids leave the identity catalog the same
+/// way the per-token lift does. Weight still needs a certified family that covers them.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v9(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+    court: Option<PalwKaryCourtV1>,
+    decode_rules: bool,
+    token_lift: bool,
+    fused_dissectable: bool,
+    deepest_job_bound: bool,
+    held: PalwHeldAdmissionV1,
+    kimi_family: bool,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -1862,7 +1955,14 @@ pub fn verify_class_admission_v8(
     if !token_lift && !kernel_ids.is_disjoint(&fenced) {
         return Err(PalwClassAdmissionError::TokenLiftNeedsItsFence);
     }
-    let identity_ids: BTreeSet<Hash64> = kernel_ids.difference(&fenced).copied().collect();
+    let kimi_fenced = crate::palw_step_refute::kimi_fenced_kernel_ids_v1();
+    if !kimi_family && !kernel_ids.is_disjoint(&kimi_fenced) {
+        return Err(PalwClassAdmissionError::KimiFamilyNeedsItsFence);
+    }
+    let mut identity_ids: BTreeSet<Hash64> = kernel_ids.difference(&fenced).copied().collect();
+    if kimi_family {
+        identity_ids = identity_ids.difference(&kimi_fenced).copied().collect();
+    }
     verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: derived_id, kernel_ids: identity_ids.clone() })
         .map_err(|_| PalwClassAdmissionError::CoverageGap)?;
     // The catalogued set is read from the adjudication table itself, which is what

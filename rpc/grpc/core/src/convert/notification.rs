@@ -1,5 +1,7 @@
 use crate::protowire::{
-    BlockAddedNotificationMessage, KaspadResponse, NewBlockTemplateNotificationMessage, RpcNotifyCommand, kaspad_response::Payload,
+    BlockAddedNotificationMessage, KaspadResponse, NewBlockTemplateNotificationMessage, PalwClassReadinessChangedNotificationMessage,
+    PalwPanelAssignmentNotificationMessage, PalwPanelEligibilityChangedNotificationMessage, PalwPanelReceiptNotificationMessage,
+    RpcNotifyCommand, kaspad_response::Payload,
 };
 use crate::protowire::{
     FinalityConflictNotificationMessage, FinalityConflictResolvedNotificationMessage, NotifyPruningPointUtxoSetOverrideRequestMessage,
@@ -11,7 +13,7 @@ use crate::protowire::{
 };
 use crate::{from, try_from};
 use kaspa_notify::subscription::Command;
-use kaspa_rpc_core::{Notification, RpcError, RpcHash};
+use kaspa_rpc_core::{Notification, RpcError, RpcHash, RpcResult};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -25,6 +27,12 @@ from!(item: &kaspa_rpc_core::Notification, Payload, {
     match item {
         Notification::BlockAdded(notification) => Payload::BlockAddedNotification(notification.into()),
         Notification::NewBlockTemplate(notification) => Payload::NewBlockTemplateNotification(notification.into()),
+        Notification::PalwClassReadinessChanged(notification) => Payload::PalwClassReadinessChangedNotification(notification.into()),
+        Notification::PalwPanelAssignment(notification) => Payload::PalwPanelAssignmentNotification(notification.into()),
+        Notification::PalwPanelReceipt(notification) => Payload::PalwPanelReceiptNotification(notification.into()),
+        Notification::PalwPanelEligibilityChanged(notification) => {
+            Payload::PalwPanelEligibilityChangedNotification(notification.into())
+        },
         Notification::VirtualChainChanged(notification) => Payload::VirtualChainChangedNotification(notification.into()),
         Notification::FinalityConflict(notification) => Payload::FinalityConflictNotification(notification.into()),
         Notification::FinalityConflictResolved(notification) => Payload::FinalityConflictResolvedNotification(notification.into()),
@@ -40,6 +48,52 @@ from!(item: &kaspa_rpc_core::Notification, Payload, {
 from!(item: &kaspa_rpc_core::BlockAddedNotification, BlockAddedNotificationMessage, { Self { block: Some((&*item.block).into()) } });
 
 from!(&kaspa_rpc_core::NewBlockTemplateNotification, NewBlockTemplateNotificationMessage);
+
+from!(item: &kaspa_rpc_core::PalwClassReadinessChangedNotification, PalwClassReadinessChangedNotificationMessage, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        registry_state: item.registry_state.clone(),
+        previous_registry_state: item.previous_registry_state.clone(),
+        ready_seats: item.ready_seats,
+        previous_ready_seats: item.previous_ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        bonded_seats: item.bonded_seats,
+    }
+});
+from!(item: &kaspa_rpc_core::PalwPanelAssignmentNotification, PalwPanelAssignmentNotificationMessage, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        licensed_state: item.licensed_state.clone(),
+        deadline_daa: item.deadline_daa,
+        coverage_mask: item.coverage_mask,
+        full_seat: item.full_seat.clone(),
+        valid_receipt_seats: item.valid_receipt_seats,
+        selected_panel_seats: item.selected_panel_seats,
+        seats: item.seats.iter().map(crate::protowire::RpcPalwPanelAssignmentSeat::from).collect(),
+    }
+});
+from!(item: &kaspa_rpc_core::PalwPanelReceiptNotification, PalwPanelReceiptNotificationMessage, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        coverage_mask: item.coverage_mask,
+        previous_coverage_mask: item.previous_coverage_mask,
+        valid_receipt_seats: item.valid_receipt_seats,
+        previous_valid_receipt_seats: item.previous_valid_receipt_seats,
+        selected_panel_seats: item.selected_panel_seats,
+    }
+});
+from!(item: &kaspa_rpc_core::PalwPanelEligibilityChangedNotification, PalwPanelEligibilityChangedNotificationMessage, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        class_id: item.class_id.clone(),
+        eligible: item.eligible,
+        ready: item.ready,
+        hold: item.hold.as_ref().map(crate::protowire::RpcPalwPanelHoldReason::from),
+    }
+});
 
 from!(item: &kaspa_rpc_core::VirtualChainChangedNotification, VirtualChainChangedNotificationMessage, {
     Self {
@@ -104,6 +158,14 @@ try_from!(item: &Payload, kaspa_rpc_core::Notification, {
     match item {
         Payload::BlockAddedNotification(notification) => Notification::BlockAdded(notification.try_into()?),
         Payload::NewBlockTemplateNotification(notification) => Notification::NewBlockTemplate(notification.try_into()?),
+        Payload::PalwClassReadinessChangedNotification(notification) => {
+            Notification::PalwClassReadinessChanged(notification.try_into()?)
+        }
+        Payload::PalwPanelAssignmentNotification(notification) => Notification::PalwPanelAssignment(notification.try_into()?),
+        Payload::PalwPanelReceiptNotification(notification) => Notification::PalwPanelReceipt(notification.try_into()?),
+        Payload::PalwPanelEligibilityChangedNotification(notification) => {
+            Notification::PalwPanelEligibilityChanged(notification.try_into()?)
+        }
         Payload::VirtualChainChangedNotification(notification) => Notification::VirtualChainChanged(notification.try_into()?),
         Payload::FinalityConflictNotification(notification) => Notification::FinalityConflict(notification.try_into()?),
         Payload::FinalityConflictResolvedNotification(notification) => {
@@ -133,6 +195,52 @@ try_from!(item: &BlockAddedNotificationMessage, kaspa_rpc_core::BlockAddedNotifi
 });
 
 try_from!(&NewBlockTemplateNotificationMessage, kaspa_rpc_core::NewBlockTemplateNotification);
+
+try_from!(item: &PalwClassReadinessChangedNotificationMessage, kaspa_rpc_core::PalwClassReadinessChangedNotification, {
+    Self {
+        class_id: item.class_id.clone(),
+        model_name: item.model_name.clone(),
+        registry_state: item.registry_state.clone(),
+        previous_registry_state: item.previous_registry_state.clone(),
+        ready_seats: item.ready_seats,
+        previous_ready_seats: item.previous_ready_seats,
+        required_ready_seats: item.required_ready_seats,
+        bonded_seats: item.bonded_seats,
+    }
+});
+try_from!(item: &PalwPanelAssignmentNotificationMessage, kaspa_rpc_core::PalwPanelAssignmentNotification, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        licensed_state: item.licensed_state.clone(),
+        deadline_daa: item.deadline_daa,
+        coverage_mask: item.coverage_mask,
+        full_seat: item.full_seat.clone(),
+        valid_receipt_seats: item.valid_receipt_seats,
+        selected_panel_seats: item.selected_panel_seats,
+        seats: item.seats.iter().map(kaspa_rpc_core::RpcPalwPanelAssignmentSeat::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &PalwPanelReceiptNotificationMessage, kaspa_rpc_core::PalwPanelReceiptNotification, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        coverage_mask: item.coverage_mask,
+        previous_coverage_mask: item.previous_coverage_mask,
+        valid_receipt_seats: item.valid_receipt_seats,
+        previous_valid_receipt_seats: item.previous_valid_receipt_seats,
+        selected_panel_seats: item.selected_panel_seats,
+    }
+});
+try_from!(item: &PalwPanelEligibilityChangedNotificationMessage, kaspa_rpc_core::PalwPanelEligibilityChangedNotification, {
+    Self {
+        seat_id: item.seat_id.clone(),
+        class_id: item.class_id.clone(),
+        eligible: item.eligible,
+        ready: item.ready,
+        hold: item.hold.as_ref().map(kaspa_rpc_core::RpcPalwPanelHoldReason::try_from).transpose()?,
+    }
+});
 
 try_from!(item: &VirtualChainChangedNotificationMessage, kaspa_rpc_core::VirtualChainChangedNotification, {
     Self {

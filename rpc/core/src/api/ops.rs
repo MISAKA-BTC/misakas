@@ -40,6 +40,10 @@ pub enum RpcApiOps {
     NotifyVirtualDaaScoreChanged = 16,
     NotifyVirtualChainChanged = 17,
     NotifySinkBlueScoreChanged = 18,
+    NotifyPalwClassReadinessChanged = 19,
+    NotifyPalwPanelAssignment = 20,
+    NotifyPalwPanelReceipt = 21,
+    NotifyPalwPanelEligibilityChanged = 22,
 
     // Notification ops required by wRPC
 
@@ -54,6 +58,10 @@ pub enum RpcApiOps {
     VirtualDaaScoreChangedNotification = 66,
     PruningPointUtxoSetOverrideNotification = 67,
     NewBlockTemplateNotification = 68,
+    PalwClassReadinessChangedNotification = 69,
+    PalwPanelAssignmentNotification = 70,
+    PalwPanelReceiptNotification = 71,
+    PalwPanelEligibilityChangedNotification = 72,
 
     // RPC methods
     /// Ping the node to check if connection is alive
@@ -232,6 +240,29 @@ pub enum RpcApiOps {
     /// virtual's DAA, and the executor bond's room for it — asked by a gateway after its inference
     /// and before it writes the commitment, so the entrance and the ledger price one expression.
     GetPalwFreePromptPrice = 187,
+    /// One class's panel as the chain holds it: bonded / ready / selected / valid receipt seats stay
+    /// distinct, with S1 geometry and the missing-reason census.
+    GetPalwClassPanelStatus = 188,
+    /// Bonded verifier seats the chain recognises, optionally filtered by class.
+    GetPalwPanelSeats = 189,
+    /// This node's local panel state: artifact, working-set, replay, sync, bond, proof, hold reason.
+    GetPalwPanelStatus = 190,
+    /// Per-claim panel assignment: full seat, partial segment, receipt status, coverage, deadline.
+    GetPalwPanelAssignments = 191,
+    /// Would the processor admit this ClassRegistered at the tip (same reason codes).
+    GetPalwModelPreflight = 192,
+    /// Track a constructed/submitted ClassRegistered: objectId, classId, pipeline, reject code.
+    SubmitPalwModelRegistration = 193,
+    /// constructed / submitted / accepted / included / folded for one registration.
+    GetPalwModelRegistrationStatus = 194,
+    /// One class: registry lifecycle, seats, share, certified family, fence.
+    GetPalwModel = 195,
+    /// Possession proofs for one class: expiry, collateral, ready/non-ready reason.
+    GetPalwModelReadiness = 196,
+    /// Processor admission checks for a class or a constructed object.
+    GetPalwModelAdmission = 197,
+    /// Which chain-certified families cover this class (not activation).
+    GetPalwModelCertification = 198,
 }
 
 impl RpcApiOps {
@@ -247,6 +278,10 @@ impl RpcApiOps {
                 | RpcApiOps::NotifyFinalityConflictResolved
                 | RpcApiOps::NotifySinkBlueScoreChanged
                 | RpcApiOps::NotifyVirtualDaaScoreChanged
+                | RpcApiOps::NotifyPalwClassReadinessChanged
+                | RpcApiOps::NotifyPalwPanelAssignment
+                | RpcApiOps::NotifyPalwPanelReceipt
+                | RpcApiOps::NotifyPalwPanelEligibilityChanged
                 | RpcApiOps::Subscribe
                 | RpcApiOps::Unsubscribe
         )
@@ -273,6 +308,10 @@ impl From<EventType> for RpcApiOps {
             EventType::VirtualDaaScoreChanged => RpcApiOps::VirtualDaaScoreChangedNotification,
             EventType::PruningPointUtxoSetOverride => RpcApiOps::PruningPointUtxoSetOverrideNotification,
             EventType::NewBlockTemplate => RpcApiOps::NewBlockTemplateNotification,
+            EventType::PalwClassReadinessChanged => RpcApiOps::PalwClassReadinessChangedNotification,
+            EventType::PalwPanelAssignment => RpcApiOps::PalwPanelAssignmentNotification,
+            EventType::PalwPanelReceipt => RpcApiOps::PalwPanelReceiptNotification,
+            EventType::PalwPanelEligibilityChanged => RpcApiOps::PalwPanelEligibilityChangedNotification,
         }
     }
 }

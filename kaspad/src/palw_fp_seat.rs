@@ -590,6 +590,7 @@ mod tests {
             receipt_deadline: 1_300,
             panel_anchor: h(anchor),
             seat_index,
+            panel_seat_count: 5,
             pwu: 1_000,
             quanta: 1,
             free_prompt: true,

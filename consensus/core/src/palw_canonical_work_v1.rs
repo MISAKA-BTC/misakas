@@ -52,8 +52,9 @@
 //! because the accounting sites behind the fence need one number today; it is the sum of the
 //! ARITHMETIC dimensions only, it equals `palw_job_economic_compute_v1` of the executed job
 //! exactly (pinned by a test), and it is provisional in the strict sense of ADR-0146 §4: the
-//! measured arbitrage bound that would justify collapsing the vector has not been measured, so
-//! nothing collapses the byte dimensions into it.
+//! search in [`crate::palw_arbitrage_search_v1`] measured the collapse of arithmetic and found a
+//! bound of 1.000000×, so there is no coefficient table to write. Byte dimensions stay out of
+//! the scalar; collapsing them would be a coefficient of 1 byte = 1 MAC, which Rule R4 forbids.
 //!
 //! ## The fence
 //!

@@ -104,6 +104,8 @@ misaka --network testnet-11 mining start --print-command
 misaka --network testnet-11 mining start
 ```
 
+S1（DAA 7,200）以降、この起動が capture から決定論的 checkpoint `SC01` を公開します。checkpoint 用の別フラグはありません。panel の partial 席が区間 resume するため、producer も検証席と同じ世代のバイナリを使い、receipt 期限まで capture を保持してください。手順の本体は [検証参加ガイド](testnet11-verification-participation-ja.md) です。
+
 Equivalent manual shape:
 
 ```bash

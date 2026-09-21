@@ -189,6 +189,8 @@ pub enum PalwFpIntervalVerdictV1 {
 pub struct PalwCaptureShapeV1 {
     pub job_context: PalwJobContextV2,
     pub step_leaf_count: u64,
+    /// Layers of the registered graph — S3 samples over this.
+    pub layer_count: u16,
 }
 
 pub trait PalwExecutionBackendV1: Send + Sync {
@@ -215,6 +217,58 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     fn execute_for_verdict(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwReplayRootsV1, String> {
         let outcome = self.execute(job, prompt)?;
         Ok(PalwReplayRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, work_leaves: None })
+    }
+
+    /// **ADR-0133 S1 (1): the producer publishes the checkpoint at a V2 segment's start.**
+    ///
+    /// Opaque family bytes: the checkpoint leaf the trace already commits, its state chunks, the
+    /// seed token the next call consumes, and the committed leaf hashes of `[leaf_start, leaf_end)`.
+    /// A seat that holds the capture extracts this without a forward pass. Defaulted to a refusal:
+    /// a family with no checkpoint leg cannot make a partial seat cheaper than a full replay.
+    fn open_segment_checkpoint_v1(&self, _capture: &[u8], _seat_count: u16, _segment_index: u16) -> Result<Vec<u8>, String> {
+        Err("this execution family publishes no per-segment checkpoint".to_string())
+    }
+
+    /// **ADR-0133 S1 (2)(3): replay one assigned segment from its published checkpoint.**
+    ///
+    /// Restores the KV cache (dense first; a hybrid falls back to the same restore when the
+    /// capture retained chunks) and runs only the decode calls in the window. `matches` is
+    /// whether the recomputed hashes agree with the hashes the opening carried.
+    fn replay_segment_from_checkpoint_v1(
+        &self,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+        _opening: &[u8],
+    ) -> Result<crate::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        Err("this execution family cannot resume a segment from a checkpoint".to_string())
+    }
+
+    /// **ADR-0133 S3: recompute one sampled `(layer, position)` from committed activations.**
+    ///
+    /// `Ok(true)` is agreement with the capture; `Ok(false)` is a lie the court can try; `Err`
+    /// is "I could not check" (no opening, no layer weights). Defaulted to a refusal.
+    fn replay_layer_site_v3(
+        &self,
+        _capture: &[u8],
+        _site: crate::palw_layer_sample_v3::PalwLayerSiteV3,
+        _seat_count: u16,
+    ) -> Result<bool, String> {
+        Err("this execution family cannot sample a layer site".to_string())
+    }
+
+    /// **ADR-0133 S1 (4): resume from the checkpoint covering an accused segment's first leaf.**
+    ///
+    /// The court already has per-leaf anchored replay; this names the segment-scoped entry so a
+    /// close that names a segment does not walk from genesis. Defaulted to a refusal.
+    fn replay_accused_segment_v1(
+        &self,
+        _capture: &[u8],
+        _seat_count: u16,
+        _segment_index: u16,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+    ) -> Result<crate::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        Err("this execution family cannot resume an accused segment from a checkpoint".to_string())
     }
 
     /// **The free-prompt lane's run — the one verb whose tokens the caller chooses.**

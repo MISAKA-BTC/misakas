@@ -544,7 +544,7 @@ impl PalwClassSdk {
     ///
     /// **`shape` is the court and ladder the ACCEPTANCE path judges this registration under**
     /// (`palw_admission_shape_at_v1` from the network's `Params` at the point of submission), and
-    /// the probe asks `verify_class_admission_v8` with exactly those. It asked the court-less
+    /// the probe asks `verify_class_admission_v9` with exactly those. It asked the court-less
     /// `verify_class_admission_v3` until the ADR-0082 devnet drill: the graph-v5 row was refused
     /// by name (`FusedAttentionNeedsTheKaryCourt`) on a ruleset whose fence is armed, and the
     /// panel reported "would be refused by the admission gate" for a row the gate admits. A
@@ -606,7 +606,7 @@ impl PalwClassSdk {
                 entry.model_id
             )
         })?;
-        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v8(
+        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(
             bundle,
             &entry.profile,
             &canonical,
@@ -621,6 +621,7 @@ impl PalwClassSdk {
             // F4's deepest-legal-job bound rides the economic bundle, dormant on every preset.
             false,
             shape.held,
+            shape.kimi_family,
         )
         .map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
@@ -1270,6 +1271,7 @@ mod chain_only_lattice_tests {
             execution_root: commitment.execution_root,
             trace_chunk_count: commitment.trace_chunk_count,
             trace_retention_daa: commitment.trace_retention_daa,
+            consumed_prefix_state: kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(class_id),
         };
         let (s3, _) = apply_palw_transition_v2(&s2, &params, &at(3, 102, 3), &[committed], None).unwrap();
         let seats = vec![PalwPanelSeatV2 { bond: PalwBondKeyV2(bond_outpoint), operator_id: h(90) }];

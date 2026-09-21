@@ -1860,6 +1860,7 @@ mod certification_object_tests {
             execution_root: run.outcome.execution_root,
             trace_chunk_count: run.outcome.trace_chunk_count,
             trace_retention_daa: 999_999,
+            consumed_prefix_state: kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(a16_class),
         };
         assert_eq!(
             apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), std::slice::from_ref(&commit), None).unwrap_err(),

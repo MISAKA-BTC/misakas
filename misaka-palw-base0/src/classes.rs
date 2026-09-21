@@ -94,7 +94,7 @@ impl CanonicalClassV1 {
             // be opened against, which is the A16 genesis root form defect exactly.
             ArtifactSourceV1::ConvertedA16 => {
                 if crate::qwen25_a16_backend::a16_court_capable_v1(&self.profile) {
-                    Ok(crate::inventory::a16_inventory_digest_v1(artifact, &self.profile)?.root())
+                    Ok(crate::inventory::a16_inventory_root_v1(artifact, &self.profile)?)
                 } else {
                     Ok(artifact.artifact_digest())
                 }

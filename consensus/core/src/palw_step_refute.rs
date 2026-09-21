@@ -199,6 +199,13 @@ pub const KDESC_Q36_GDN_STEP: &str = "q36/gated-delta-net/head-sliced-genesis-re
 pub const KDESC_Q36_SILU: &str = "q36/silu/lane-sliced/intexp-sigmoid/v1";
 pub const KDESC_Q36_DECAY: &str = "q36/decay/softplus-intln-exp-refined/v1";
 
+/// Kimi K3's own four. Fenced: appending them to [`KERNEL_CATALOG`] would move
+/// `court_catalog_root` and every V2 preset fingerprint. [`KERNEL_CATALOG_FENCED_KIMI_V1`].
+pub const KDESC_KIMI_KDA_STEP: &str = "kimi/kda/head-sliced-genesis-replay/decay-rankone-read/v1";
+pub const KDESC_KIMI_MLA_FUSED: &str = "kimi/mla-fused/scores-softmax-values/v1";
+pub const KDESC_KIMI_ROUTER_TOPK: &str = "kimi/router-topk/softmax-shifted-k-passes-low-index/v1";
+pub const KDESC_KIMI_MOE_COMBINE: &str = "kimi/moe-combine/routed16-shared2/i64-weighted-sum/v1";
+
 /// The A16 tier's nine, for a caller assembling a reachable set for any class in it.
 /// **The A16 rotation and the A16 elementwise product** — two ops the tier's engine has always
 /// performed and the catalog never named, because until a dense A16 class was registered nothing
@@ -315,9 +322,24 @@ pub fn catalogued_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
 const KERNEL_CATALOG_FENCED_V1: &[(&str, KernelProgram)] =
     &[(KDESC_A16_REQUANTIZE_BY_TOKEN, KernelProgram::Qwen36(Qwen36Op::RequantizeByToken))];
 
+const KERNEL_CATALOG_FENCED_KIMI_V1: &[(&str, KernelProgram)] = &[
+    (KDESC_KIMI_KDA_STEP, KernelProgram::Kimi(KimiOp::KdaStep)),
+    (KDESC_KIMI_MLA_FUSED, KernelProgram::Kimi(KimiOp::MlaFused)),
+    (KDESC_KIMI_ROUTER_TOPK, KernelProgram::Kimi(KimiOp::RouterTopk)),
+    (KDESC_KIMI_MOE_COMBINE, KernelProgram::Kimi(KimiOp::MoeCombine)),
+];
+
 /// The fenced kernels' ids — disjoint from [`catalogued_kernel_ids_v1`] by construction.
 pub fn fenced_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
     KERNEL_CATALOG_FENCED_V1.iter().map(|(d, _)| kernel_semantics_id_v1(d)).collect()
+}
+
+/// Kimi K3 kernels this build adjudicates. Out of [`catalogued_kernel_ids_v1`] so shipping
+/// them does not move `court_catalog_root`. Admission refuses a class that reaches them
+/// ([`crate::palw_class_admission_v2::PalwClassAdmissionError::KimiFamilyNeedsItsFence`]) until
+/// a dedicated fence is armed.
+pub fn kimi_fenced_kernel_ids_v1() -> std::collections::BTreeSet<Hash64> {
+    KERNEL_CATALOG_FENCED_KIMI_V1.iter().map(|(d, _)| kernel_semantics_id_v1(d)).collect()
 }
 
 /// The ten BASE-0 kernels, for a caller assembling that class's reachable set (ADR-0040 D + H).
@@ -350,6 +372,8 @@ enum KernelProgram {
     Base0(Base0Op),
     /// The A16 tier and Qwen3.6's own ops (ADR-0052), same discipline.
     Qwen36(Qwen36Op),
+    /// Kimi K3's own ops. Fenced; not in `court_catalog_root`.
+    Kimi(KimiOp),
 }
 
 /// The BASE-0 op a catalogued kernel id resolves to (ADR-0040 Decision D).
@@ -403,6 +427,16 @@ enum Qwen36Op {
     HeadRmsNorm,
     A16Rope,
     A16MulElem,
+}
+
+/// Kimi K3's four integer programs. Same discipline as [`Qwen36Op`]: the court calls the
+/// functions in [`crate::palw_kimi_k3_ops`], never a second transcription.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KimiOp {
+    KdaStep,
+    MlaFused,
+    RouterTopk,
+    MoeCombine,
 }
 
 /// The class's `ggml_vec_dot_f32` lane structure (simd-mappings.h, read verbatim).
@@ -520,7 +554,7 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
     // agree, so a profile declaring `AttnFused` over some other catalogued kernel — or the fused
     // kernel under another op kind — would be admitted by one gate and tried by another.
     let declares_fused = node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused;
-    let serves_fused = matches!(program, KernelProgram::Qwen36(Qwen36Op::AttnFused));
+    let serves_fused = matches!(program, KernelProgram::Qwen36(Qwen36Op::AttnFused) | KernelProgram::Kimi(KimiOp::MlaFused));
     if declares_fused != serves_fused {
         return Err("a node's op kind and its kernel must be the same op: the court reads one and the catalog the other");
     }
@@ -586,7 +620,7 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
         }
         // The fused site reads the query row and BOTH cached series, and names the tensor its
         // three narrowings and the softmax's widening byte are registered in (ADR-0082 D1).
-        KernelProgram::Qwen36(Qwen36Op::AttnFused) => {
+        KernelProgram::Qwen36(Qwen36Op::AttnFused) | KernelProgram::Kimi(KimiOp::MlaFused) => {
             if inputs < 3 {
                 return Err("a fused attention site must name its query row and both cached series");
             }
@@ -620,7 +654,7 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
         }
         // The recurrence reads five rows per position — keys, the conv row, queries and the two
         // gates — and replays from the genesis; the narrowings are registration artifacts.
-        KernelProgram::Qwen36(Qwen36Op::GdnStep) => {
+        KernelProgram::Qwen36(Qwen36Op::GdnStep) | KernelProgram::Kimi(KimiOp::KdaStep) => {
             if inputs < 5 {
                 return Err("the recurrence must name its five per-position rows");
             }
@@ -732,6 +766,18 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             }
             Ok(())
         }
+        KernelProgram::Kimi(KimiOp::RouterTopk) => {
+            if inputs < 1 {
+                return Err("the Kimi router must name its logit row");
+            }
+            Ok(())
+        }
+        KernelProgram::Kimi(KimiOp::MoeCombine) => {
+            if inputs < 3 {
+                return Err("the Kimi combine names routed outputs, shared outputs, and the routing row");
+            }
+            Ok(())
+        }
     }
 }
 
@@ -740,7 +786,12 @@ fn resolve_kernel(id: &Hash64) -> Option<KernelProgram> {
     // (a class reaching a fenced kernel is refused wherever its fence is dormant), and a court
     // that could not recompute a kernel an admitted class reaches would end its disputes
     // `Unadjudicable` — the hole A4 exists to close.
-    KERNEL_CATALOG.iter().chain(KERNEL_CATALOG_FENCED_V1).find(|(d, _)| kernel_semantics_id_v1(d) == *id).map(|(_, p)| *p)
+    KERNEL_CATALOG
+        .iter()
+        .chain(KERNEL_CATALOG_FENCED_V1)
+        .chain(KERNEL_CATALOG_FENCED_KIMI_V1)
+        .find(|(d, _)| kernel_semantics_id_v1(d) == *id)
+        .map(|(_, p)| *p)
 }
 
 /// Recompute one BASE-0 node's output row (ADR-0040 Decision D).
@@ -904,6 +955,85 @@ fn attn_params_count_v1(profile: &PalwShapeProfileV3, scores: bool, series_len: 
 }
 
 #[allow(clippy::too_many_arguments)]
+fn kimi_row(
+    op: KimiOp,
+    node: &crate::palw_step::PalwStepNodeV1,
+    profile: &PalwShapeProfileV3,
+    inputs: &[Vec<u32>],
+    kv_len: u64,
+) -> Result<Vec<u32>, PalwStepRefuteError> {
+    use crate::palw_base0_a16::A16QuantParams;
+    use crate::palw_kimi_k3_ops as kimi;
+    let as_i32 = |row: &Vec<u32>| -> Vec<i32> { row.iter().map(|v| *v as i32).collect() };
+    let out = |row: Vec<i32>| -> Vec<u32> { row.into_iter().map(|v| v as u32).collect() };
+    let shape = |_e| PalwStepRefuteError::InputSetNotCanonical("a kimi op refused its operand shape");
+    match op {
+        KimiOp::RouterTopk => {
+            if inputs.is_empty() {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the Kimi router names its logit row"));
+            }
+            let width = match node.out_len {
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as usize,
+                crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("the router is not kv-scaled"));
+                }
+            };
+            if width == 0 || !width.is_multiple_of(2) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the router's width is not two lanes per chosen expert"));
+            }
+            let k = width / 2;
+            let routed = kimi::kimi_k3_router_topk(&as_i32(&inputs[0]), k, 0).map_err(shape)?;
+            let mut out_row: Vec<u32> = Vec::with_capacity(width);
+            out_row.extend(routed.iter().map(|r| r.expert as u32));
+            out_row.extend(routed.iter().map(|r| r.weight_q as u32));
+            Ok(out_row)
+        }
+        KimiOp::MoeCombine => {
+            if inputs.len() < 3 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the Kimi combine needs routed, shared, routing"));
+            }
+            let hidden = match node.out_len {
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as usize,
+                crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => return Err(PalwStepRefuteError::Unadjudicable),
+            };
+            let routing = as_i32(&inputs[2]);
+            if routing.len() < 2 || routing.len() % 2 != 0 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the routing row is not two lanes per expert"));
+            }
+            let k = routing.len() / 2;
+            let mut weights = Vec::with_capacity(k);
+            for i in 0..k {
+                weights.push(kimi::KimiK3RoutedExpert { expert: routing[i] as u16, weight_q: routing[k + i] });
+            }
+            Ok(out(kimi::kimi_k3_moe_combine(&as_i32(&inputs[0]), &as_i32(&inputs[1]), &weights, hidden).map_err(shape)?))
+        }
+        KimiOp::KdaStep => {
+            if inputs.len() < 5 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("KDA names k, v, q, decay, beta"));
+            }
+            let k = as_i32(&inputs[0]);
+            let v = as_i32(&inputs[1]);
+            let q = as_i32(&inputs[2]);
+            let decay = *inputs[3].first().ok_or(PalwStepRefuteError::Unadjudicable)? as i32 as i64;
+            let beta = *inputs[4].first().ok_or(PalwStepRefuteError::Unadjudicable)? as i32 as i64;
+            let mut state = kimi::KimiK3KdaStateV1::zeros(v.len(), k.len());
+            let scale = A16QuantParams { multiplier: 1, shift: 0, zero: 0 };
+            Ok(out(kimi::kimi_k3_kda_step(&mut state, &k, &v, &q, decay, beta, scale).map_err(shape)?))
+        }
+        KimiOp::MlaFused => {
+            if inputs.len() < 3 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("MLA fused names q, K, V"));
+            }
+            let heads = profile.attn_heads as usize;
+            let d_qk = profile.attn_head_dim as usize;
+            let d_v = profile.attn_head_dim as usize;
+            let kv = kv_len as usize;
+            Ok(out(kimi::kimi_k3_mla_fused(&as_i32(&inputs[0]), &as_i32(&inputs[1]), &as_i32(&inputs[2]), heads, d_qk, d_v, kv, 0)
+                .map_err(shape)?))
+        }
+    }
+}
+
 fn qwen36_row(
     op: Qwen36Op,
     node: &crate::palw_step::PalwStepNodeV1,
@@ -3544,7 +3674,7 @@ fn required_positions(program: KernelProgram, out: &PalwStepCoordinateV1) -> Vec
         // **The integer recurrence replays from the genesis, exactly as the float one does.** A
         // registered state chunk map later turns this checkpoint-anchored; until then the state is
         // never an opened operand and the replay is the adjudication.
-        KernelProgram::GdnCore { .. } | KernelProgram::Qwen36(Qwen36Op::GdnStep) => {
+        KernelProgram::GdnCore { .. } | KernelProgram::Qwen36(Qwen36Op::GdnStep) | KernelProgram::Kimi(KimiOp::KdaStep) => {
             let mut v = Vec::new();
             // Prefill positions 0..=(p or all), then decode calls 1..=c.
             if out.call_index == 0 {
@@ -4621,6 +4751,7 @@ fn run_program(
     let row = match program {
         KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len, gather),
         KernelProgram::Qwen36(op) => qwen36_row(op, node, layer, profile, inputs, weights, kv_len, gather),
+        KernelProgram::Kimi(op) => kimi_row(op, node, profile, inputs, kv_len),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
             Ok(l2_norm_row(x, profile.l2_eps_bits))
@@ -7384,6 +7515,16 @@ mod catalog_through_line_tests {
         }
         assert!(fenced.is_disjoint(&super::catalogued_kernel_ids_v1()), "a fenced kernel inside the identity is a flag day");
         assert!(!KDESC_ALL.contains(&super::KDESC_A16_REQUANTIZE_BY_TOKEN));
+        let kimi = super::kimi_fenced_kernel_ids_v1();
+        assert_eq!(kimi.len(), 4);
+        for id in &kimi {
+            assert!(resolve_kernel(id).is_some(), "Kimi kernel fenced but not adjudicable: {id}");
+        }
+        assert!(
+            kimi.is_disjoint(&super::catalogued_kernel_ids_v1()),
+            "Kimi kernels inside the identity would move court_catalog_root"
+        );
+        assert!(kimi.is_disjoint(&fenced), "Kimi kernels must not ride the token-lift fence");
     }
 
     /// ADR-0040 Decision H's tenth op included: the closed BASE-0 catalog is closed on this side

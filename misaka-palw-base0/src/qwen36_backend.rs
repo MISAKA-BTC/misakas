@@ -1017,14 +1017,113 @@ impl Qwen36Backend {
     }
 }
 
+/// Restore this family's cache from a checkpoint's composed chunks (ADR-0133 S1 hybrid).
+fn qwen36_cache_from_checkpoint_chunks_v1(
+    shape: &Qwen36ShapeV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    covered: u32,
+    chunks: &[Vec<u8>],
+) -> Result<Qwen36Cache, String> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(profile, ctx, covered);
+    let declared = profile.state_chunk_map_id;
+    let mut cache = Qwen36Cache::new(shape);
+    let apply_attn = |cache: &mut Qwen36Cache, geometry: &map::PalwStateChunkGeometryV1, attn_chunks: &[Vec<u8>]| -> Result<(), String> {
+        if attn_chunks.len() as u64 != geometry.chunk_count() {
+            return Err(format!(
+                "the attention half names {} chunks and the opening carried {}",
+                geometry.chunk_count(),
+                attn_chunks.len()
+            ));
+        }
+        let count = geometry.positions as usize;
+        for (li, kind) in shape.layer_types.iter().enumerate() {
+            if *kind == crate::qwen36::Qwen36LayerKind::FullAttention {
+                cache.keys[li].resize(count, Vec::new());
+                cache.values[li].resize(count, Vec::new());
+            }
+        }
+        for (index, bytes) in attn_chunks.iter().enumerate() {
+            let entry = map::integer_kv_state_chunk_entry_v1(geometry, index as u64)
+                .ok_or_else(|| format!("the attention map has no entry for chunk {index}"))?;
+            let width = entry.row_bytes as usize;
+            for p in entry.position_start..entry.position_start + entry.position_count {
+                let row = map::integer_kv_state_row_v1(&entry, bytes, p)
+                    .ok_or_else(|| format!("attention chunk {index} is not its own length at position {p}"))?;
+                let values: Vec<i32> = if row.len() == width {
+                    if width % 4 == 0 {
+                        row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+                    } else {
+                        row.iter().map(|b| *b as i8 as i32).collect()
+                    }
+                } else {
+                    return Err("the map describes a row this cache does not hold".into());
+                };
+                let side = match entry.kind {
+                    map::PalwStateChunkKindV1::Key => &mut cache.keys,
+                    map::PalwStateChunkKindV1::Value => &mut cache.values,
+                };
+                let layer = side
+                    .get_mut(entry.attn_layer as usize)
+                    .ok_or_else(|| format!("attention chunk {index} names layer {} this cache does not hold", entry.attn_layer))?;
+                let slot = layer
+                    .get_mut(p as usize)
+                    .ok_or_else(|| format!("attention chunk {index} names position {p} past the restored history"))?;
+                *slot = values;
+            }
+        }
+        Ok(())
+    };
+    let apply_gdn = |cache: &mut Qwen36Cache, gdn_chunks: &[Vec<u8>]| -> Result<(), String> {
+        let (layers, _) = crate::fp_recompute::qwen36_recurrence_state_v1(shape, cache);
+        let heads = shape.linear_v_heads as u32;
+        let dim = shape.linear_head_dim as u32;
+        let kernel = shape.conv_kernel as u32;
+        let geometry = crate::fp_capture::base0_gdn_state_geometry_v2(&layers, heads, dim, dim, kernel).map_err(|e| e.to_string())?;
+        let states = crate::fp_capture::base0_gdn_state_from_chunks_v2(&geometry, gdn_chunks).map_err(|e| e.to_string())?;
+        for (i, layer) in layers.iter().enumerate() {
+            let li = *layer as usize;
+            cache.gdn[li] = states[i].heads.clone();
+            cache.conv[li] = states[i].conv.clone();
+        }
+        Ok(())
+    };
+    if declared == map::gdn_state_chunk_map_id_v2() || declared == map::gdn_state_chunk_map_id_v1() {
+        apply_gdn(&mut cache, chunks)?;
+        return Ok(cache);
+    }
+    if declared == map::hybrid_state_chunk_map_id_v3() || declared == map::hybrid_state_chunk_map_id_v4() {
+        let hybrid = map::hybrid_state_geometry_for_covered_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+        if chunks.len() as u64 != hybrid.chunk_count() {
+            return Err(format!(
+                "the hybrid composition names {} chunks and the opening carried {}",
+                hybrid.chunk_count(),
+                chunks.len()
+            ));
+        }
+        let attn_n = hybrid.attn.chunk_count() as usize;
+        apply_attn(&mut cache, &hybrid.attn, &chunks[..attn_n])?;
+        if hybrid.gdn_chunk_count() > 0 {
+            apply_gdn(&mut cache, &chunks[attn_n..])?;
+        }
+        return Ok(cache);
+    }
+    let geometry = crate::legs::base0_checkpoint_geometry_at_v1(profile, ctx, covered).map_err(|e| format!("{e:?}"))?;
+    apply_attn(&mut cache, &geometry, chunks)?;
+    Ok(cache)
+}
+
+fn qwen36_opening_has_hash(opening: &[u8], leaf: u64, hash: Hash64) -> bool {
+    crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening)
+        .ok()
+        .is_some_and(|o| o.committed_leaf_hashes.iter().any(|(i, h)| *i == leaf && *h == hash))
+}
+
 /// **The hybrid tier's kernels, as a seat's interval replay needs them** (ADR-0077 Decision 8).
 ///
-/// Genesis-anchored only, and that is a statement about the CLASS rather than a shortcut here: the
-/// registered graph declares no state chunk map (`state_chunk_map_id` is the sentinel), so it
-/// commits no checkpoint any replay could resume from, and interval 0 is the whole job. ADR-0077
-/// Decision 10 is what changes that — a registered recurrence state map (the GatedDeltaNet state
-/// plus the conv window, [`crate::fp_capture`]) moves the class id, and the `Checkpoint` arm below
-/// becomes a restore instead of a refusal.
+/// Genesis from the prompt; a `Checkpoint` restores the composed cache the class registered
+/// (ADR-0133 S1: dense first, then hybrid execute-from-checkpoint).
 struct Qwen36IntervalKernels<'a> {
     artifact: &'a Qwen36ArtifactV1,
     plan: &'a crate::qwen36_plan::Qwen36ProfilePlanV1,
@@ -1040,14 +1139,13 @@ impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> 
         step_leaf_count: u64,
         sink: &mut dyn FnMut(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1) -> Result<(), String>,
     ) -> Result<(), String> {
-        let crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } = start else {
-            return Err(
-                "this class registers no state chunk map, so no committed checkpoint exists to resume from (ADR-0077 Decision 10)"
-                    .to_string(),
-            );
-        };
         let engine = Qwen36Engine::new(self.artifact);
-        let mut cache = Qwen36Cache::new(&self.artifact.shape);
+        let mut cache = match start {
+            crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => Qwen36Cache::new(&self.artifact.shape),
+            crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
+                qwen36_cache_from_checkpoint_chunks_v1(&self.artifact.shape, profile, ctx, *covered_decode_call, chunks)?
+            }
+        };
         let vocab = self.artifact.shape.vocab;
         let max_position = self.artifact.shape.max_position;
         crate::fp_interval::base0_fp_replay_interval_into_v1(
@@ -1104,6 +1202,74 @@ impl Qwen36Backend {
                 .map_err(|e| format!("this host can no longer read the mapped artifact: tensor {name}: {e}"))?;
         }
         Ok(())
+    }
+
+    fn replay_segment_opening_v1(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        opening: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        let profile = self.profile.as_ref().ok_or_else(|| "this backend serves no registered graph".to_string())?;
+        let plan = self.plan.as_ref().ok_or_else(|| "this backend serves no registered plan".to_string())?;
+        let opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening).map_err(|e| e.to_string())?;
+        let first = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, job, opened.leaf_start)
+            .ok_or_else(|| "the segment start is not a main step coordinate".to_string())?;
+        let last = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, job, opened.leaf_end.saturating_sub(1))
+            .ok_or_else(|| "the segment end is not a main step coordinate".to_string())?;
+        let window = kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentResumeWindowV1 {
+            segment_index: opened.segment_index,
+            leaf_start: opened.leaf_start,
+            leaf_end: opened.leaf_end,
+            first_call: first.call_index,
+            last_call: last.call_index,
+        };
+        let start = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
+            crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: prompt }
+        } else {
+            crate::fp_interval::Base0FpIntervalStartV1::Checkpoint {
+                covered_decode_call: opened.covered_decode_call,
+                chunks: &opened.chunks,
+                seed_token: opened.seed_token,
+                prompt_tokens: prompt,
+            }
+        };
+        let first_step = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
+            1
+        } else {
+            let positions = kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                profile,
+                job,
+                opened.covered_decode_call,
+            );
+            u64::from(positions) + 1
+        };
+        let last_step = crate::fp_interval::Base0FpWindowV1::step_of_coordinate_v1(
+            job.declared_prefill_tokens,
+            last.call_index,
+            last.position,
+        );
+        let fp_window = crate::fp_interval::Base0FpWindowV1 { first_step, last_step };
+        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, job, self.step_ladder_cap())
+            .map_err(|e| e.to_string())?;
+        let kernels = Qwen36IntervalKernels { artifact: &self.artifact, plan };
+        let ctx_hash = job.context_hash();
+        let profile_hash = profile.shape_profile_id();
+        let mut hashes = Vec::new();
+        use crate::fp_interval::Base0FpIntervalKernelsV1;
+        kernels.replay_interval_into(profile, job, &start, fp_window, leaf_count, &mut |i, tile| {
+            hashes.push((i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)));
+            Ok(())
+        })?;
+        let attested: Vec<(u64, Hash64)> =
+            hashes.iter().copied().filter(|(i, _)| *i >= opened.leaf_start && *i < opened.leaf_end).collect();
+        let matches = attested == opened.committed_leaf_hashes;
+        Ok(kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1 {
+            window,
+            leaf_hashes: hashes,
+            calls_replayed: window.calls_from_covered(opened.covered_decode_call).unwrap_or(0),
+            matches,
+        })
     }
 }
 
@@ -1180,6 +1346,73 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             work_leaves: Some(run.binding.step_leaf_count),
         })
     }
+
+    fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
+        crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())
+    }
+
+    fn replay_segment_from_checkpoint_v1(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        opening: &[u8],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        self.replay_segment_opening_v1(job, prompt, opening)
+    }
+
+    fn replay_accused_segment_v1(
+        &self,
+        capture: &[u8],
+        seat_count: u16,
+        segment_index: u16,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
+        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())?;
+        self.replay_segment_opening_v1(job, prompt, &opening)
+    }
+
+    fn replay_layer_site_v3(
+        &self,
+        capture: &[u8],
+        site: kaspa_consensus_core::palw_layer_sample_v3::PalwLayerSiteV3,
+        seat_count: u16,
+    ) -> Result<bool, String> {
+        let retention = crate::produce::base0_material_decode_any_v1(capture).map_err(|e| e.to_string())?;
+        let binding = retention.binding();
+        if site.layer >= binding.shape_profile.layer_count {
+            return Err("the sampled layer is not in this class".into());
+        }
+        let table = match binding.shape_profile.layer_kind(site.layer) {
+            kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention => kaspa_consensus_core::palw_step::PalwStepTableV1::Attn,
+            kaspa_consensus_core::palw_step::PalwLayerKindV1::GatedDeltaNet => kaspa_consensus_core::palw_step::PalwStepTableV1::Gdn,
+        };
+        let node_slot = binding
+            .shape_profile
+            .global_node_slot(table, site.layer, 0)
+            .ok_or_else(|| "this layer has no node to sample".to_string())?;
+        let prefill = binding.job_context.declared_prefill_tokens;
+        let (call_index, position) = if site.position < prefill {
+            (0u32, site.position)
+        } else {
+            (site.position - prefill + 1, 0u32)
+        };
+        let coord = kaspa_consensus_core::palw_step::PalwStepCoordinateV1 { call_index, node_slot, position, tile_index: 0 };
+        let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord)
+            .ok_or_else(|| "the sampled site is not a main step of this job".to_string())?;
+        let seats = seat_count.max(1);
+        let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
+        let index = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf)
+            .unwrap_or(0);
+        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seats, index).map_err(|e| e.to_string())?;
+        let prompt: Vec<usize> = match &retention {
+            crate::produce::Base0RetentionV1::Folded(m) => m.prompt_token_ids.iter().map(|t| *t as usize).collect(),
+            crate::produce::Base0RetentionV1::Dense(_) => Vec::new(),
+        };
+        let replay = self.replay_segment_opening_v1(&binding.job_context, &prompt, &opening)?;
+        Ok(replay.leaf_hashes.iter().any(|(i, h)| *i == leaf && qwen36_opening_has_hash(&opening, leaf, *h)))
+    }
+
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
         // **The captured attempt, where the declaration is the program.** A plan proves this
         // build serves the registered graph node for node, and the planned traced walk is what a
@@ -1404,6 +1637,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
             job_context: binding.job_context.clone(),
             step_leaf_count: binding.step_leaf_count,
+            layer_count: binding.shape_profile.layer_count,
         })
     }
 
@@ -2877,6 +3111,96 @@ mod tests {
                 leaf.checkpoint_index
             );
         }
+    }
+
+    /// **ADR-0133 S1 hybrid: resume from composed checkpoint chunks, not from leaf 0.**
+    #[test]
+    fn a_hybrid_segment_resumes_from_composed_checkpoint_chunks() {
+        use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1;
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        use kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2;
+
+        let (artifact, profile) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
+        assert_eq!(profile.state_chunk_map_id, map::hybrid_state_chunk_map_id_v3());
+        let artifact = std::sync::Arc::new(artifact);
+        let plan = Qwen36Engine::new(&artifact).plan_from_profile(&profile).expect("the fixture graph compiles");
+        let backend = Qwen36Backend::with_class_profile(
+            artifact.clone(),
+            "Qwen3.6-fixture",
+            (3, 4),
+            profile.clone(),
+            b"misaka-palw-test".to_vec(),
+        );
+        let (ctx, prompt) = crate::produce::base0_rc_job_v1(
+            &profile,
+            Hash64::from_u64_word(0x0000_13D3),
+            artifact.shape.vocab,
+            3,
+            4,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        );
+        let run = qwen36_execute_for_attempt_v1(&artifact, &profile, &plan, &ctx, &prompt).expect("the hybrid job runs");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let ctx_hash = ctx.context_hash();
+        let profile_hash = profile.shape_profile_id();
+        let committed: Vec<(u64, Hash64)> = run
+            .tiles
+            .tiles
+            .iter()
+            .map(|(i, tile)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, tile)))
+            .collect();
+        let leaf_start = (0..run.binding.step_leaf_count)
+            .find(|&i| {
+                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, i)
+                    .is_some_and(|c| c.call_index > 0)
+            })
+            .expect("a job with decode tokens has a leaf past the prefill");
+        let leaf = run
+            .checkpoints
+            .leaves
+            .iter()
+            .find(|l| l.covered_decode_call == ctx.declared_prefill_tokens)
+            .expect("the per-position cadence checkpoints after the prefill");
+        let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&artifact, &plan);
+        let state = crate::fp_recompute::base0_fp_recompute_state_at_covered_v1(
+            &profile,
+            &ctx,
+            &ids,
+            &run.generated_token_ids,
+            leaf.covered_decode_call,
+            &mut kernels,
+            kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        )
+        .expect("the seat can recompute the composed checkpoint");
+        let leaf_end = (leaf_start + 8).min(run.binding.step_leaf_count);
+        let positions = palw_checkpoint_positions_at_v1(&profile, &ctx, leaf.covered_decode_call);
+        let first_step = u64::from(positions) + 1;
+        let prefill = ctx.declared_prefill_tokens;
+        let seed = if first_step > u64::from(prefill) {
+            run.generated_token_ids.get((first_step - u64::from(prefill) - 1) as usize).copied().unwrap_or(0)
+        } else {
+            0
+        };
+        let opening = crate::produce::Base0SegmentCheckpointOpeningV1 {
+            version: crate::produce::PALW_SEGMENT_CHECKPOINT_VERSION_V1,
+            segments: palw_segment_count_v2(3),
+            segment_index: 1,
+            leaf_start,
+            leaf_end,
+            covered_decode_call: leaf.covered_decode_call,
+            checkpoint_leaf: leaf.clone(),
+            chunks: state.chunks,
+            seed_token: seed,
+            committed_leaf_hashes: committed.iter().copied().filter(|(i, _)| *i >= leaf_start && *i < leaf_end).collect(),
+        }
+        .encode_v1()
+        .expect("the constructed opening encodes");
+        let replay = backend
+            .replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening)
+            .expect("hybrid execute-from-checkpoint must resume");
+        assert!(replay.matches, "the resumed leaves are not the committed ones");
+        assert!(replay.calls_replayed < ctx.exact_decode_tokens, "a partial hybrid seat must not pay the whole job");
+        assert!(!replay.window.genesis(), "a decode leaf does not resume from the prompt");
     }
 
     /// The drill's forgery at `leaf` — one lane of its tile moved, the commitment re-derived exactly

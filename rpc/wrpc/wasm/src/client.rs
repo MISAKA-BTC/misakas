@@ -908,6 +908,10 @@ build_wrpc_wasm_bindgen_subscriptions!([
     /// New block template notification event is produced when a new block
     /// template is generated for mining in the Kaspa BlockDAG.
     NewBlockTemplate,
+    PalwClassReadinessChanged,
+    PalwPanelAssignment,
+    PalwPanelReceipt,
+    PalwPanelEligibilityChanged,
 ]);
 
 // Build RPC method invocation functions. This macro

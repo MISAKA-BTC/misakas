@@ -1729,8 +1729,20 @@ pub fn palw_claim_safe_contribution_v3(
 /// A bond identity — its registration outpoint — with the total order `TransactionOutpoint`
 /// itself does not carry. The order is `(transaction_id, index)`, both fixed-width, so map
 /// iteration (and therefore every root) is identical on every ISA.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwBondKeyV2(pub TransactionOutpoint);
+
+impl PartialOrd for PalwBondKeyV2 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PalwBondKeyV2 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.transaction_id.cmp(&other.0.transaction_id).then(self.0.index.cmp(&other.0.index))
+    }
+}
 
 /// The smallest [`PalwBondKeyV2`] under the ordering below — a range start for "every row of this
 /// class, whichever bond committed it". Not a bond any chain holds: an all-zero transaction id has
@@ -3382,6 +3394,13 @@ pub enum PalwConsensusObjectV2 {
         execution_root: Hash64,
         trace_chunk_count: u32,
         trace_retention_daa: u64,
+        /// **ADR-0145 §6: the prefix-STATE this run consumed.** Genesis (empty root or zero
+        /// tokens) is the V3 default — a payload that does not name a state is read as cold
+        /// cache. A non-genesis value is the checkpoint a seat replays from; the transition
+        /// derives `KvReused` from it and credits only the new positions. Same carriage as
+        /// `prompt_token_ids`: the object is built inside a node, never hashed into a root,
+        /// never sent to a peer. The rule is behind `palw_fp_derived_work`.
+        consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1,
     },
     /// **ADR-0075 Decision 1: a drilled family enters the chain's certified set through its own
     /// evidence.** The transition grades `evidence` with the shipped court's grader
@@ -3900,6 +3919,13 @@ pub enum PalwConsensusObjectV2 {
         evidence_id: Hash64,
         evidence: Vec<u8>,
     },
+    /// **ADR-0133 S2: the full-replay seat's `Valid` licenses.** Accepted only past
+    /// `Params::palw_verification_s2`, by `palw_optimistic_receipts_license_v2`; folded as a
+    /// licence. Other receipts ride along so the fold can credit them. Tag 52; appended last.
+    OptimisticLicensed {
+        claim: Hash64,
+        receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -4081,6 +4107,11 @@ pub struct PalwFpClaimPromptV1 {
     /// are written only past `Params::palw_fp_derived_work`, which is dormant on every preset, so
     /// no row with the older layout exists anywhere to be read.
     pub expires_daa: u64,
+    /// **The prefix-STATE this run consumed** (ADR-0145 §6). Genesis (zero tokens, empty root)
+    /// is the V3 default. A non-genesis value is the checkpoint a later claim of the same class
+    /// can replay from; it is how `KvReused` is derived, never a miner-written price field.
+    pub consumed_state_root: Hash64,
+    pub consumed_prefix_tokens: u32,
 }
 
 /// **How many whole epochs a paid prompt row outlives its acceptance epoch** (ADR-0145 §6,
@@ -4851,13 +4882,9 @@ pub enum PalwStateV2Error {
     DuplicateBond(PalwBondKeyV2),
     #[error("bond {0:?} is already retiring")]
     BondAlreadyRetiring(PalwBondKeyV2),
-    #[error(
-        "bond {bond:?} still holds {locked} sompi of slashable panel locks; withdraw is refused until liability expiry"
-    )]
+    #[error("bond {bond:?} still holds {locked} sompi of slashable panel locks; withdraw is refused until liability expiry")]
     BondRetireWhileSlashableLocked { bond: PalwBondKeyV2, locked: u128 },
-    #[error(
-        "seat {seat:?} cannot lock {required} sompi of slashable collateral on claim {claim} (available {available})"
-    )]
+    #[error("seat {seat:?} cannot lock {required} sompi of slashable collateral on claim {claim} (available {available})")]
     SeatValidLockRefused { seat: PalwBondKeyV2, claim: Hash64, required: u128, available: u128 },
     #[error("objective offence is not armed at this chain point (ADR-0144 §9)")]
     ObjectiveOffenceDormant,
@@ -5059,6 +5086,12 @@ pub enum PalwStateV2Error {
         "free-prompt claim {claim} carries {carried} prompt token ids, which is not its committed prompt length — past Params::palw_fp_derived_work the chain reads the prompt itself to see which prefix of it has already been paid for (ADR-0145 §6), and a commitment that carries no ids cannot be read"
     )]
     FreePromptPromptNotAccountable { claim: Hash64, carried: usize },
+    /// **ADR-0145 §6: a prefix-STATE of another class is a different object.** Using it here
+    /// would price this run against a cache a seat of THIS class cannot replay from.
+    #[error(
+        "free-prompt claim {claim} names a prefix-STATE of class {named}, not of class {class} — a seat of this class cannot replay from another class's KV (ADR-0145 §6)"
+    )]
+    FreePromptPrefixStateClassMismatch { claim: Hash64, named: Hash64, class: Hash64 },
     /// **ADR-0145 §5: the enumeration refused this job.** Past the ladder, or a graph
     /// `validate_shape` rejects — the same refusals `step_leaf_count_capped_v1` makes about any
     /// job, surfaced here rather than swallowed, because a job the court cannot walk to is a job
@@ -9170,11 +9203,7 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::ConsumedOffence { key, old, new });
     }
 
-    fn write_slashable_lock(
-        &mut self,
-        key: (PalwBondKeyV2, Hash64),
-        new: Option<crate::palw_panel_var_v1::PalwSlashableLockV1>,
-    ) {
+    fn write_slashable_lock(&mut self, key: (PalwBondKeyV2, Hash64), new: Option<crate::palw_panel_var_v1::PalwSlashableLockV1>) {
         let old = self.state.slashable_locks.get(&key).copied();
         if old == new {
             return;
@@ -9291,12 +9320,7 @@ impl<'a> TransitionBuilder<'a> {
         for seat in seats {
             let available = self.slashable_available(&seat.bond, now_daa);
             if available < required {
-                return Err(PalwStateV2Error::SeatValidLockRefused {
-                    seat: seat.bond,
-                    claim: claim_id,
-                    required,
-                    available,
-                });
+                return Err(PalwStateV2Error::SeatValidLockRefused { seat: seat.bond, claim: claim_id, required, available });
             }
         }
         Ok(())
@@ -9315,12 +9339,11 @@ impl<'a> TransitionBuilder<'a> {
         let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
         let mut valid_signers: Vec<(crate::tx::TransactionOutpoint, Hash64)> = Vec::new();
         let mut locked_sompi = 0u128;
-        let keys: Vec<(PalwBondKeyV2, Hash64)> =
-            self.state.slashable_locks.keys().filter(|(_, c)| *c == claim_id).copied().collect();
+        let keys: Vec<(PalwBondKeyV2, Hash64)> = self.state.slashable_locks.keys().filter(|(_, c)| *c == claim_id).copied().collect();
         for key in keys {
             if let Some(lock) = self.state.slashable_locks.get(&key).copied() {
                 locked_sompi = locked_sompi.saturating_add(lock.amount);
-                valid_signers.push((key.0 .0, key.1));
+                valid_signers.push((key.0.0, key.1));
                 if lock.expiry_daa < expiry_daa {
                     self.write_slashable_lock(key, Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa, ..lock }));
                 }
@@ -9365,8 +9388,8 @@ impl<'a> TransitionBuilder<'a> {
         evidence: &[u8],
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_offence_v1::{
-            palw_offence_id_v1, palw_panel_contradiction_convicts_execution_v1, PalwConsumedOffenceV1, PalwOffenceKindV1,
-            PalwPanelFalseValidEvidenceV1,
+            PalwConsumedOffenceV1, PalwOffenceKindV1, PalwPanelFalseValidEvidenceV1, palw_offence_id_v1,
+            palw_panel_contradiction_convicts_execution_v1,
         };
         if !self.extras.objective_offence_at(ctx.daa_score) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
@@ -9388,15 +9411,16 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         let amount = match kind {
-            PalwOffenceKindV1::ExecutorEquivocation => {
-                self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0)
-            }
+            PalwOffenceKindV1::ExecutorEquivocation => self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0),
             PalwOffenceKindV1::PanelFalseValid => {
                 let payload: PalwPanelFalseValidEvidenceV1 = borsh::from_slice(evidence).map_err(|_| {
                     PalwStateV2Error::ObjectiveOffenceRefused(offence_id, "PanelFalseValid evidence does not decode".into())
                 })?;
                 if payload.accused_seat != accused.0 {
-                    return Err(PalwStateV2Error::ObjectiveOffenceRefused(offence_id, "the Valid receipt does not name this accused seat".into()));
+                    return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                        offence_id,
+                        "the Valid receipt does not name this accused seat".into(),
+                    ));
                 }
                 self.bind_panel_false_valid(ctx, &payload)?;
                 let class_id = self
@@ -9487,9 +9511,11 @@ impl<'a> TransitionBuilder<'a> {
                 }
             }
             PalwPanelContradictionV1::CourtExecutorGuilty { offence_id } => {
-                let consumed = self.state.consumed_offences.get(offence_id).ok_or_else(|| {
-                    refused("CourtExecutorGuilty names an offence this chain has not consumed".into())
-                })?;
+                let consumed = self
+                    .state
+                    .consumed_offences
+                    .get(offence_id)
+                    .ok_or_else(|| refused("CourtExecutorGuilty names an offence this chain has not consumed".into()))?;
                 let executor = self
                     .state
                     .claims
@@ -10629,7 +10655,8 @@ impl<'a> TransitionBuilder<'a> {
     /// no longer be accepted, so nothing it could collide with needs keeping.
     fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) {
         use crate::palw_execution_lane_v1::{
-            PalwExecFinalV1, palw_execution_schedule_seeded_v1, palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
+            PalwExecFinalV1, palw_execution_schedule_assign_quanta_v1, palw_execution_schedule_seeded_v1,
+            palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
         };
         let span_now = palw_execution_span_v1(ctx.daa_score, span_daa);
         let opens_span = self.state.last_point.is_none_or(|last| palw_execution_span_v1(last.daa_score, span_daa) < span_now);
@@ -10648,10 +10675,11 @@ impl<'a> TransitionBuilder<'a> {
                     && anchor.span + 1 == span_now
                 {
                     let (frontier_blue_score, frontier) = self.state.safe_frontier();
-                    self.write_round_schedule(
-                        span_now,
-                        Some(palw_execution_schedule_seeded_v1(&snapshot, &anchor, frontier_blue_score, frontier)),
-                    );
+                    let mut schedule = palw_execution_schedule_seeded_v1(&snapshot, &anchor, frontier_blue_score, frontier);
+                    if let Some(lane) = self.extras.round_lane {
+                        palw_execution_schedule_assign_quanta_v1(&mut schedule, lane.execution_quantum, lane.span_open_round);
+                    }
+                    self.write_round_schedule(span_now, Some(schedule));
                 }
             }
             if !self.state.round_finals.is_empty() {
@@ -10739,11 +10767,17 @@ impl<'a> TransitionBuilder<'a> {
         // A claim names a registered class, and a class row leaves the state only when a delta that
         // registered it is reverted; an attempt whose class is gone, or that certified no compute,
         // earns nothing rather than a guessed credit.
-        let Some(class) = self.state.classes.get(&claim.class_id) else { return Ok(()) };
-        let credit = crate::palw_execution_lane_v1::palw_execution_credit_v1(
-            palw_exposure_pwu_v2(class, claim.pwu, canonical),
-            self.work_price_unit_at(claim.accepted_daa),
-        );
+        let exposure = {
+            let Some(class) = self.state.classes.get(&claim.class_id) else { return Ok(()) };
+            palw_exposure_pwu_v2(class, claim.pwu, canonical)
+        };
+        // Lottery quotas stay clamped at the work-price unit. Execution quanta mint from the
+        // unclamped CanonicalWork scalar so a heavier verified job earns more spend-once tickets.
+        let credit = if self.extras.round_lane.is_some_and(|lane| lane.execution_quantum > 0) {
+            exposure
+        } else {
+            crate::palw_execution_lane_v1::palw_execution_credit_v1(exposure, self.work_price_unit_at(claim.accepted_daa))
+        };
         if credit == 0 {
             return Ok(());
         }
@@ -16365,6 +16399,32 @@ fn apply_object(
             builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score)?;
             builder.license_claim(*claim_id, claim, ctx.daa_score)?;
         }
+        PalwConsensusObjectV2::OptimisticLicensed { claim: claim_id, receipts } => {
+            if !builder.extras.verification_s2_active {
+                return Err(PalwStateV2Error::VerificationV2Dormant);
+            }
+            let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
+            let PalwClaimPhaseV2::PanelBound { .. } = claim.phase else {
+                return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "OptimisticLicensed" });
+            };
+            if builder.claim_licenses_by_parts(claim_id) {
+                return Err(PalwStateV2Error::LicensedByParts(*claim_id));
+            }
+            let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
+            let verdicts = palw_seat_verdicts_of_v2(&inner);
+            palw_licence_names_its_outsider_v1(
+                &builder.state,
+                claim_id,
+                &claim,
+                &verdicts,
+                builder.extras.admission_independence_daa,
+            )?;
+            builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
+            builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
+            builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
+            builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score)?;
+            builder.license_claim(*claim_id, claim, ctx.daa_score)?;
+        }
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
             let mut group = builder
                 .state
@@ -16744,6 +16804,7 @@ fn apply_object(
             execution_root,
             trace_chunk_count,
             trace_retention_daa,
+            consumed_prefix_state,
         } => {
             if builder.state.claims.contains_key(claim_id) {
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
@@ -16829,7 +16890,7 @@ fn apply_object(
             // state, which a node also answers a gateway with (`palw_fp_commitment_price_v1`), so the
             // exposure a gateway checks before an inference and the reservation written here are
             // the same number by construction rather than by two readings agreeing.
-            let price = palw_fp_commitment_price_v1(
+            let price = palw_fp_commitment_price_from_state_v1(
                 &builder.state,
                 builder.params,
                 PalwFpPriceInputsV1 {
@@ -16843,6 +16904,7 @@ fn apply_object(
                 *prompt_tokens,
                 *decode_tokens_executed,
                 *work_leaves,
+                *consumed_prefix_state,
             )?;
             let (quanta, pwu, reserved, in_compute) = (price.quanta, price.pwu, price.reserved, price.priced_in_compute);
             let derived = price.derived_work;
@@ -16962,6 +17024,8 @@ fn apply_object(
                         prefix_root: crate::palw_freeprompt_v3::fp_prompt_prefix_root_v1(prompt_token_ids),
                         prompt_token_ids: prompt_token_ids.clone(),
                         expires_daa: palw_fp_prompt_row_expiry_v1(ctx.daa_score, builder.params.epoch_length),
+                        consumed_state_root: consumed_prefix_state.state_root,
+                        consumed_prefix_tokens: consumed_prefix_state.prefix_tokens,
                     }),
                 );
             }
@@ -17064,6 +17128,37 @@ pub fn palw_fp_commitment_price_v1(
     decode_tokens_executed: u32,
     work_leaves: u64,
 ) -> Result<PalwFpCommitmentPriceV1, PalwStateV2Error> {
+    palw_fp_commitment_price_from_state_v1(
+        state,
+        params,
+        inputs,
+        claim_id,
+        class_id,
+        prompt_token_ids,
+        prompt_tokens,
+        decode_tokens_executed,
+        work_leaves,
+        crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(*class_id),
+    )
+}
+
+/// **ADR-0145 §6: the same price, with the prefix-STATE the run consumed.** A V3 commitment
+/// that names none is genesis, which [`palw_fp_commitment_price_v1`] already is. Naming a
+/// non-genesis state of this class derives `KvReused` and credits the tail only. Declaring
+/// more cache cannot raise the pay.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_fp_commitment_price_from_state_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    inputs: PalwFpPriceInputsV1,
+    claim_id: &Hash64,
+    class_id: &Hash64,
+    prompt_token_ids: &[u32],
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    work_leaves: u64,
+    prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1,
+) -> Result<PalwFpCommitmentPriceV1, PalwStateV2Error> {
     let class = state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
     let (per_job, cap) = (params.fp_quanta_per_canonical_job, params.fp_max_quanta_per_receipt);
     if per_job == 0 || cap == 0 {
@@ -17071,6 +17166,13 @@ pub fn palw_fp_commitment_price_v1(
     }
     let decode_rules = params.fp_decode_rules_at(inputs.daa_score);
     let derived = if inputs.fp_derived_work_daa.is_some_and(|height| inputs.daa_score >= height) {
+        if !prefix_state.is_genesis() && prefix_state.class_id != *class_id {
+            return Err(PalwStateV2Error::FreePromptPrefixStateClassMismatch {
+                claim: *claim_id,
+                named: prefix_state.class_id,
+                class: *class_id,
+            });
+        }
         let profile = state
             .fp_work_profiles
             .get(class_id)
@@ -17082,8 +17184,9 @@ pub fn palw_fp_commitment_price_v1(
         // accounted prefix is unknowable and the only honest answer is to refuse rather
         // than to assume zero — assuming zero is precisely the "declare it uncached" lie
         // this rule exists to make unavailable. Both modes are dormant or unused on every
-        // shipped preset, and a network that arms one owes this rule a prefix-STATE
-        // commitment it can check instead (ADR-0145 §6).
+        // shipped preset. A named prefix-STATE is how a producer that computed locally
+        // (and never paid) still prices the tail: the object is the checkpoint a seat
+        // replays from, not a miner's word for "cache hit" (ADR-0145 §6).
         if prompt_token_ids.len() != prompt_tokens as usize {
             return Err(PalwStateV2Error::FreePromptPromptNotAccountable { claim: *claim_id, carried: prompt_token_ids.len() });
         }
@@ -17100,8 +17203,19 @@ pub fn palw_fp_commitment_price_v1(
         let ladder = state.class_step_ladder_v1(class_id, crate::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
         let already_paid = state.fp_claimed_prompt_ids_of(class_id, inputs.daa_score);
         let accounted = crate::palw_freeprompt_v3::fp_accounted_prefix_tokens_v2(prompt_token_ids, &already_paid);
-        let work = crate::palw_freeprompt_v3::fp_derive_work_v1(&profile, prompt_tokens, decode_tokens_executed, accounted, ladder)
-            .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable { claim: *claim_id, class: *class_id, why: e.to_string() })?;
+        let work = crate::palw_freeprompt_v3::fp_derive_work_from_state_v1(
+            &profile,
+            prompt_tokens,
+            decode_tokens_executed,
+            accounted,
+            prefix_state,
+            ladder,
+        )
+        .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
+            claim: *claim_id,
+            class: *class_id,
+            why: e.to_string(),
+        })?;
         if work.total_leaves != work_leaves {
             return Err(PalwStateV2Error::FreePromptWorkLeavesMismatch {
                 claim: *claim_id,
@@ -17144,11 +17258,12 @@ pub fn palw_fp_commitment_price_v1(
         let Some((work, profile)) = &derived else {
             return Err(PalwStateV2Error::FreePromptComputeWithoutDerivation { claim: *claim_id, class: *class_id });
         };
-        let credited = crate::palw_freeprompt_v3::fp_derive_credited_compute_v1(
+        let credited = crate::palw_freeprompt_v3::fp_derive_credited_compute_from_state_v1(
             profile,
             prompt_tokens,
             decode_tokens_executed,
             work.accounted_prefix_tokens,
+            prefix_state,
         )
         .map_err(|e| PalwStateV2Error::FreePromptWorkUnderivable {
             claim: *claim_id,
@@ -17392,6 +17507,11 @@ pub struct PalwTransitionExtrasV1 {
     /// a segment-scoped receipt set is refused; past it, it licenses by coverage and the V1 object
     /// still licenses by quorum.
     pub verification_v2_active: bool,
+    /// ADR-0133 S3: `Params::palw_verification_s3` resolved at the block's DAA.
+    pub verification_s3_active: bool,
+    /// ADR-0133 S2: `Params::palw_verification_s2` resolved at the block's DAA. Past it
+    /// `OptimisticLicensed` may license from the full-replay seat's `Valid` alone.
+    pub verification_s2_active: bool,
     /// ADR-0133 §11.2: `Params::palw_readiness_v2` resolved at the block's DAA. Past it a possession
     /// proof is a multiproof over the whole artifact, the V1 object is refused, and only a V2 row
     /// counts a seat ready.
@@ -21027,7 +21147,7 @@ pub(crate) mod tests {
 
         fn extras(fold: Option<PalwModelRegistryFoldV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
-                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN }),
+                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN, ..Default::default() }),
                 model_registry: fold,
                 ..Default::default()
             }
@@ -21268,6 +21388,68 @@ pub(crate) mod tests {
                 &on,
             );
             assert!(matches!(again, Err(PalwStateV2Error::WrongPhase { .. })), "{again:?}");
+        }
+
+        #[test]
+        fn adr0133_s2_an_optimistic_licence_folds_past_the_fence_and_is_refused_below_it() {
+            use crate::palw_panel_v2::PalwSeatReceiptV3;
+            use crate::palw_verification_v2::PalwSegmentMaskV2;
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let env = kimi_attempt(1, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s2, _) = step(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), None).unwrap();
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: op_id(22) }];
+            let (s3, _) = step(
+                &s2,
+                &p,
+                &ctx(3, 102, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+                None,
+            )
+            .unwrap();
+            let object = PalwConsensusObjectV2::OptimisticLicensed {
+                claim: claim_id,
+                receipts: seat_says(true)
+                    .into_iter()
+                    .map(|receipt| PalwSeatReceiptV3 { receipt, segments: PalwSegmentMaskV2::full(1) })
+                    .collect(),
+            };
+            assert_eq!(borsh::to_vec(&object).unwrap()[0], 52, "OptimisticLicensed is tag 52");
+            let off = extras(None);
+            let dormant = apply_palw_transition_v2_with_extras(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                &[object.clone()],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &off,
+            );
+            assert!(matches!(dormant, Err(PalwStateV2Error::VerificationV2Dormant)), "{dormant:?}");
+            let on = PalwTransitionExtrasV1 { verification_s2_active: true, ..extras(None) };
+            let (s4, d4) = apply_palw_transition_v2_with_extras(
+                &s3,
+                &p,
+                &ctx(4, 103, 4),
+                &[object.clone()],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &on,
+            )
+            .expect("past the fence the full seat's Valid licenses");
+            assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+            let back = revert_delta_v2(&s4, &d4, &p).expect("reverts");
+            assert_eq!(back.state_root(), s3.state_root());
         }
 
         #[test]
@@ -22210,7 +22392,7 @@ pub(crate) mod tests {
         /// The registry governing from genesis, the panel economy on, and the payout as given.
         fn priced_extras(payout: Option<crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
-                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN }),
+                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN, ..Default::default() }),
                 model_registry: Some(fold(kimi_work())),
                 panel_economy_active: true,
                 economic_payout: payout,
@@ -22596,7 +22778,7 @@ pub(crate) mod tests {
             let s5 = kimi_with_a_final(&p, root);
             let shadowed = PalwTransitionExtrasV1 {
                 work_target: shadowed_extras(10_000).work_target,
-                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN }),
+                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN, ..Default::default() }),
                 ..Default::default()
             };
             let (s8, _) = step_with(&s5, &p, &funded(8, 1005, 8), &[], None, &shadowed);
@@ -23016,7 +23198,7 @@ pub(crate) mod tests {
             let (_, root) = inventory();
             let fenced = PalwTransitionExtrasV1 {
                 work_target_active: true,
-                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN }),
+                round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: SPAN, ..Default::default() }),
                 ..Default::default()
             };
             let (s1, _) = step_with(&PalwChainStateV2::genesis(), &p, &funded(1, 100, 1), &network(root), None, &fenced);
@@ -26131,9 +26313,26 @@ pub(crate) mod tests {
 
     // ---- ADR-0125: the execution lane's scheduler and permit ledger ----
 
+    fn round_extras_quanta(
+        span_daa: u64,
+        quantum: u64,
+        open_round: u64,
+        uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>,
+    ) -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 {
+            round_lane: Some(crate::palw_execution_lane_v1::PalwExecLaneFoldV1 {
+                schedule_span_daa: span_daa,
+                execution_quantum: quantum,
+                span_open_round: open_round,
+            }),
+            round_permit_uses: uses,
+            ..economy_extras()
+        }
+    }
+
     fn round_extras(span_daa: u64, uses: Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
-            round_lane: Some(crate::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: span_daa }),
+            round_lane: Some(crate::palw_execution_lane_v1::PalwExecLaneFoldV1 { schedule_span_daa: span_daa, ..Default::default() }),
             round_permit_uses: uses,
             ..economy_extras()
         }
@@ -26363,6 +26562,145 @@ pub(crate) mod tests {
         assert_ne!(snapshot.domains[0].parity, snapshot.domains[1].parity);
         assert_eq!(snapshot.domains[0].bonds.iter().map(|b| b.bond).collect::<Vec<_>>(), vec![bond_key(1)]);
         assert!(snapshot.domains[1].bonds.is_empty(), "the other domain keeps its row and holds no permits");
+    }
+
+    /// With execution quanta armed, a Final stores the unclamped CanonicalWork scalar, not the
+    /// ADR-0125 lottery clamp — so a 40-pwu floor job still mints from 40 when a 30-pwu class
+    /// would have been the unit.
+    #[test]
+    fn execution_quanta_credit_the_unclamped_canonical_work_not_the_lottery_clamp() {
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![7, 2],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A02),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(30),
+            initial_target: u128::MAX / 2,
+            share_permille: 300,
+            activation_daa: 0,
+            admission: None,
+        });
+        let (s1, _) = apply_economy(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+
+        let on_floor = attempt(40, 1);
+        let on_model = attempt_for_class(20, 2, h64(2), bond_key(1), vec![7; 4], op_id(21), h64(12));
+        let floor_id = attempt_id_v2(&on_floor.attempt);
+        let model_id = attempt_id_v2(&on_model.attempt);
+        let (s2, _) = apply_economy(&s1, &p, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(2, 101, 2) }, &[], Some(&on_floor));
+        let (s3, _) = apply_economy(&s2, &p, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(3, 102, 3) }, &[], Some(&on_model));
+
+        let mut s = s3;
+        for (n, claim_id) in [(4u64, floor_id), (5, model_id)] {
+            let (bound, _) = apply_economy(
+                &s,
+                &p,
+                &ctx(n * 10, 100 + n, n * 10),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(70 + n), seats: vec![seat_n(2)] }],
+                None,
+            );
+            let receipts = vec![receipt_at(claim_id, bond_key(2), true, 101 + n)];
+            let (licensed, _) = apply_economy(
+                &bound,
+                &p,
+                &ctx(n * 10 + 1, 101 + n, n * 10 + 1),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }],
+                None,
+            );
+            s = licensed;
+        }
+        let lane = round_extras_quanta(100, 10, 1_000, Vec::new());
+        let fin = apply_round(&s, &p, &ctx(90, 140, 90), &[], &lane).expect("both finalize in span 1");
+        let (_, finals) = fin.round_finals();
+        assert_eq!(finals.get(&model_id).expect("the model's attempt is a credit").credit, 20);
+        assert_eq!(
+            finals.get(&floor_id).expect("the floor's attempt is a credit").credit,
+            40,
+            "quanta mint from unclamped work; the lottery would have clamped this to 30"
+        );
+    }
+
+    /// 1 Final → N unique spend-once quanta assigned to future 1-second rounds. Consuming a round
+    /// is a tombstone; the class epoch budget is not the thing that pays for those tickets.
+    #[test]
+    fn execution_quanta_turn_one_final_into_n_unique_round_permits_consumed_once() {
+        use crate::palw_execution_lane_v1::{PalwExecPermitUseV1, palw_execution_permits_v1};
+        use crate::palw_execution_quanta_v1::{PalwExecQuantumPhaseV1, palw_execution_quantum_phase_v1};
+        let p = params().with_worker_carve_permille(620).unwrap();
+        let (s3, claim_id) = economy_bound(&p);
+        let lane = round_extras_quanta(100, 10, 1_000, Vec::new());
+        let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
+        let s4 = apply_round(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], &lane)
+            .expect("licensed");
+        let s5 = apply_round(&s4, &p, &ctx(5, 124, 5), &[], &lane).expect("finalized");
+        let (_, finals) = s5.round_finals();
+        assert_eq!(finals.get(&claim_id).expect("credited").credit, 40, "the floor's 40-pwu attempt");
+
+        let s6 = apply_round(&s5, &p, &ctx(6, 200, 6), &[], &lane).expect("span 2 opens");
+        let (s7, _) =
+            fold_round(&s6, &p, &ctx(7, 201, 7), &[], Some((&attempt(40, 2), h64(0xE7))), &lane).expect("an attempt in span 2");
+        let budgets_before = s7.epoch_budgets().cloned();
+        let s8 = apply_round(&s7, &p, &ctx(8, 300, 8), &[], &lane).expect("span 3 opens");
+        assert_eq!(s8.epoch_budgets().cloned(), budgets_before, "minting execution quanta does not spend the class epoch budget");
+        let schedule = s8.round_schedule(3).expect("span 3 is scheduled").clone();
+        assert_eq!(schedule.quanta.len(), 4, "40 pwu / 10-pwu quantum is four tickets");
+        let mut rounds = std::collections::BTreeSet::new();
+        for q in &schedule.quanta {
+            assert!(q.scheduled_round >= 1_000);
+            assert!(rounds.insert(q.scheduled_round), "two quanta share round {}", q.scheduled_round);
+            let permits = palw_execution_permits_v1(&schedule, q.scheduled_round, 1);
+            assert_eq!(permits.len(), 1);
+            assert_eq!(permits[0].bond, bond_key(1));
+            assert_eq!(
+                palw_execution_quantum_phase_v1(&schedule.quanta, &std::collections::BTreeSet::new(), q.quantum_id),
+                PalwExecQuantumPhaseV1::Scheduled
+            );
+        }
+        assert!(
+            palw_execution_permits_v1(&schedule, 10, 1).is_empty(),
+            "the lottery's even-round is not a permit unless a quantum landed there"
+        );
+
+        let first = schedule.quanta[0];
+        let used = PalwExecPermitUseV1 { span: 3, round: first.scheduled_round, permit_index: 0 };
+        let s9 = apply_round(&s8, &p, &ctx(9, 301, 9), &[], &round_extras_quanta(100, 10, 1_000, vec![used])).expect("consumed");
+        assert!(s9.round_permit_used(3, first.scheduled_round, 0));
+        let consumed = std::collections::BTreeSet::from([first.scheduled_round]);
+        assert_eq!(palw_execution_quantum_phase_v1(&schedule.quanta, &consumed, first.quantum_id), PalwExecQuantumPhaseV1::Consumed);
+        let second = schedule.quanta[1];
+        assert_eq!(
+            palw_execution_quantum_phase_v1(&schedule.quanta, &consumed, second.quantum_id),
+            PalwExecQuantumPhaseV1::Scheduled,
+            "a sibling quantum is still live"
+        );
+        let twice = apply_palw_transition_v2_with_extras(
+            &s9,
+            &p,
+            &ctx(10, 302, 10),
+            &[],
+            None,
+            false,
+            false,
+            false,
+            false,
+            &round_extras_quanta(100, 10, 1_000, vec![used]),
+        );
+        assert!(matches!(twice, Err(PalwStateV2Error::RoundPermitRefused(_))), "a consumed quantum does not revive: {twice:?}");
+        let other = PalwExecPermitUseV1 { span: 3, round: second.scheduled_round, permit_index: 0 };
+        let s10 = apply_round(&s9, &p, &ctx(11, 303, 11), &[], &round_extras_quanta(100, 10, 1_000, vec![other]))
+            .expect("a second quantum spends separately");
+        assert!(s10.round_permit_used(3, second.scheduled_round, 0));
+        assert_eq!(s10.round_permits_accepted(3), 2);
     }
 
     /// **ADR-0125 §7.1's reorg across a span boundary, at the state layer, through ADR-0130's two
@@ -29892,6 +30230,7 @@ pub(crate) mod tests {
             execution_root: h64(43),
             trace_chunk_count: 4,
             trace_retention_daa: 999_999,
+            consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(h64(1)),
         }
     }
 
@@ -30721,6 +31060,7 @@ pub(crate) mod tests {
             execution_root: h64(43),
             trace_chunk_count: 4,
             trace_retention_daa: 999_999,
+            consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(derived_profile().shape_profile_id()),
         }
     }
 
@@ -30952,8 +31292,9 @@ pub(crate) mod tests {
             }
             let mut fresh = published.clone();
             for (i, (_, object)) in blocks.iter().enumerate() {
-                let (next, _) = apply_derived(&fresh, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), std::slice::from_ref(object), &armed)
-                    .expect("the fresh walk applies");
+                let (next, _) =
+                    apply_derived(&fresh, &p, &ctx(4 + i as u64, 103 + i as u64, 4 + i as u64), std::slice::from_ref(object), &armed)
+                        .expect("the fresh walk applies");
                 fresh = next;
             }
             assert_eq!(fresh.state_root(), tip.state_root(), "a node that never reorged and one that did agree on the tip");
@@ -30977,7 +31318,8 @@ pub(crate) mod tests {
             // something: the same prompt priced on the reverted chain costs what it cost the first time.
             let repeat = derived_commit_from(1, 0xFA, &ids[..16], 8, leaves(16));
             let (on_fresh, _) = apply_derived(&published, &p, &ctx(9, 120, 9), std::slice::from_ref(&repeat), &armed).expect("fresh");
-            let (on_reverted, _) = apply_derived(&walked_back, &p, &ctx(9, 120, 9), std::slice::from_ref(&repeat), &armed).expect("reverted");
+            let (on_reverted, _) =
+                apply_derived(&walked_back, &p, &ctx(9, 120, 9), std::slice::from_ref(&repeat), &armed).expect("reverted");
             assert_eq!(
                 on_fresh.claim(&h64(0xFA)).unwrap().pwu,
                 on_reverted.claim(&h64(0xFA)).unwrap().pwu,
@@ -31120,6 +31462,7 @@ pub(crate) mod tests {
                 execution_root: h64(43),
                 trace_chunk_count: 4,
                 trace_retention_daa: 999_999,
+                consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(class),
             }
         }
 
@@ -31695,6 +32038,7 @@ pub(crate) mod tests {
                 execution_root,
                 trace_chunk_count,
                 trace_retention_daa,
+                consumed_prefix_state,
                 ..
             } => PalwConsensusObjectV2::FreePromptCommitted {
                 claim,
@@ -31711,6 +32055,7 @@ pub(crate) mod tests {
                 execution_root,
                 trace_chunk_count,
                 trace_retention_daa,
+                consumed_prefix_state,
             },
             other => other,
         };
@@ -31776,6 +32121,54 @@ pub(crate) mod tests {
         assert!(second.fp_claimed_prompts_of(&class, &bond_key(2)).is_empty(), "provenance stays per bond");
         assert!(second.fp_claimed_prompts_of(&h64(1), &bond_key(1)).is_empty());
         assert_eq!(second.fp_claimed_prompt_ids_of(&class, 0).len(), 2, "…and the credit reads the whole class");
+    }
+
+    /// **ADR-0145 §6: a named prefix-STATE is how unpaid local KV is not paid as new work.**
+    ///
+    /// The paid-prompt path above catches a prefix the chain already bought. A producer that
+    /// computed 8 tokens locally and never committed them still holds the KV; without the
+    /// object the same 32-token prompt is priced as uncached. Naming the checkpoint derives
+    /// `KvReused` and credits the tail only — the same credit as if the chain had paid for
+    /// those 8 tokens — and declaring more cache cannot raise the pay. The V3 wire still
+    /// omits the object (genesis); this is the fold's reading once a payload carries it.
+    #[test]
+    fn past_the_fence_a_named_prefix_state_is_credited_for_its_extension_only() {
+        use crate::palw_freeprompt_v3::{PalwFpExecutionModeV1, PalwFpPrefixStateV1, fp_derive_work_from_state_v1};
+        let (p, base, class, _) = derived_work_chain();
+        let armed = derived_work_armed();
+        let (published, _) = apply_derived(&base, &p, &ctx(3, 102, 3), &[lane_certification(class)], &armed).expect("published");
+        let profile = derived_profile();
+
+        let long: Vec<u32> = (0..32).collect();
+        let long_leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, 32, 2, 1 << 26).unwrap();
+        let (alone, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[derived_commit(0xF2, &long, 2, long_leaves)], &armed)
+            .expect("an uncached long prompt applies");
+        let uncached_pwu = alone.claim(&h64(0xF2)).unwrap().pwu;
+
+        let local = PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 8, class_id: class };
+        let derived = fp_derive_work_from_state_v1(&profile, 32, 2, 0, local, 1 << 26).unwrap();
+        assert_eq!(derived.mode, PalwFpExecutionModeV1::KvReused);
+        let mut named = derived_commit(0xF3, &long, 2, long_leaves);
+        if let PalwConsensusObjectV2::FreePromptCommitted { consumed_prefix_state, .. } = &mut named {
+            *consumed_prefix_state = local;
+        }
+        let (warm, _) = apply_derived(&published, &p, &ctx(4, 103, 4), &[named], &armed).expect("a named local cache applies");
+        let cached = warm.claim(&h64(0xF3)).unwrap();
+        assert_eq!(cached.work_leaves, long_leaves, "the RUN is the same run");
+        assert!(cached.pwu < uncached_pwu, "the held prefix is not paid as new: {} vs {uncached_pwu}", cached.pwu);
+        let prefix_prefill = crate::palw_step::prefill_leaf_count_of_tokens_capped_v1(&profile, 8, 1 << 26).unwrap();
+        let expected_quanta = ((long_leaves - prefix_prefill) / 1_000) as u32;
+        assert_eq!(cached.pwu, expected_quanta as u64 * 1_000);
+        assert_eq!(cached.reserved, cached.pwu as u128 * 5);
+
+        let mut stranger = derived_commit(0xF4, &long, 2, long_leaves);
+        if let PalwConsensusObjectV2::FreePromptCommitted { consumed_prefix_state, .. } = &mut stranger {
+            *consumed_prefix_state =
+                PalwFpPrefixStateV1 { state_root: Hash64::from_u64_word(0x51), prefix_tokens: 8, class_id: h64(1) };
+        }
+        let refused = apply_derived(&published, &p, &ctx(4, 103, 4), &[stranger], &armed)
+            .expect_err("a prefix-STATE of another class is not this class's cache");
+        assert!(matches!(refused, PalwStateV2Error::FreePromptPrefixStateClassMismatch { .. }), "refused BY NAME: {refused:?}");
     }
 
     /// **RE-AUDIT 2026-09-19 — one conversation has one price, whatever order it was committed
@@ -40844,6 +41237,8 @@ pub(crate) mod tests {
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
+                verification_s3_active: false,
+                verification_s2_active: false,
                 readiness_v2_active: false,
                 model_lines_active: true,
                 // ADR-0094's instalments ride ADR-0095's fence, and the EVM lane keeps the carrier
@@ -41081,6 +41476,8 @@ pub(crate) mod tests {
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
+                verification_s3_active: false,
+                verification_s2_active: false,
                 readiness_v2_active: false,
                 model_lines_active: true,
                 model_benefits_active: false,
@@ -41147,9 +41544,8 @@ pub(crate) mod tests {
         att: Option<&PalwAttemptEnvelopeV2>,
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
         let extras = armed_offence_extras();
-        let (state, delta) =
-            apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras)
-                .expect("armed transition applies");
+        let (state, delta) = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, &extras)
+            .expect("armed transition applies");
         state.assert_internal_consistency(p).expect("internal consistency after armed apply");
         (state, delta)
     }
@@ -41180,9 +41576,7 @@ pub(crate) mod tests {
     }
 
     fn sybil_seats() -> Vec<PalwPanelSeatV2> {
-        (2..=6)
-            .map(|n| PalwPanelSeatV2 { bond: bond_key(n), operator_id: op_id(20 + n) })
-            .collect()
+        (2..=6).map(|n| PalwPanelSeatV2 { bond: bond_key(n), operator_id: op_id(20 + n) }).collect()
     }
 
     fn register_sybil_panel(collateral: u64) -> Vec<PalwConsensusObjectV2> {
@@ -41253,10 +41647,7 @@ pub(crate) mod tests {
             &extras,
         )
         .expect_err("a seat already locked cannot bind a second claim");
-        assert!(
-            matches!(err, PalwStateV2Error::SeatValidLockRefused { required: got, .. } if got == required),
-            "{err:?}"
-        );
+        assert!(matches!(err, PalwStateV2Error::SeatValidLockRefused { required: got, .. } if got == required), "{err:?}");
     }
 
     #[test]
@@ -41272,8 +41663,7 @@ pub(crate) mod tests {
         let required = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
         let posted = required.max(p.min_collateral_sompi() as u128) as u64;
         for n in [1u64, 10, 100] {
-            let (mut state, _) =
-                apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
+            let (mut state, _) = apply_armed(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_sybil_panel(posted), None);
             let (licensed, first, delta) = license_sybil_claim(&state, &p, 40, 1, 101, posted);
             assert_eq!(licensed.slashable_lock(bond_key(2), first).map(|l| l.amount), Some(required));
             let reverted = revert_delta_v2(&licensed, &delta, &p).expect("Valid lock reverts");
@@ -41431,13 +41821,8 @@ pub(crate) mod tests {
                 signature: Vec::new(),
             },
         ];
-        let (s4, _) = apply_armed(
-            &s3,
-            &p,
-            &ctx(5, 104, 104),
-            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts }],
-            None,
-        );
+        let (s4, _) =
+            apply_armed(&s3, &p, &ctx(5, 104, 104), &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts }], None);
         assert!(matches!(
             s4.claim(&claim_id).unwrap().phase,
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
@@ -41495,12 +41880,15 @@ pub(crate) mod tests {
         let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
         let loaded = decoded.into_state(&p, Some(s6.state_root())).expect("IBD after DA slash");
         assert_eq!(loaded.bond(&bond_key(2)).unwrap().collateral, after);
-        assert!(loaded.consumed_offence(&crate::palw_offence_v1::palw_offence_id_v1(
-            crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
-            &bond_key(2).0,
-            &evidence_id,
-        ))
-        .is_some());
+        assert!(
+            loaded
+                .consumed_offence(&crate::palw_offence_v1::palw_offence_id_v1(
+                    crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid,
+                    &bond_key(2).0,
+                    &evidence_id,
+                ))
+                .is_some()
+        );
         let _ = s7;
     }
 
@@ -41512,13 +41900,8 @@ pub(crate) mod tests {
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
-        let (s3, _) = apply(
-            &s2,
-            &p,
-            &ctx(3, 102, 3),
-            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
-            None,
-        );
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
         let (s4, _) = apply(
             &s3,
             &p,
@@ -41530,7 +41913,6 @@ pub(crate) mod tests {
         let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).unwrap();
         assert!(!bytes.contains(&PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1));
     }
-
 }
 
 /// ADR-0123's release rule, tested as the pure function admission and the producer both call.

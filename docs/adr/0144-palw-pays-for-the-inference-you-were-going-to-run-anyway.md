@@ -254,3 +254,24 @@ Not a green test suite. This:
 
 The first half is a product measurement. The second half is P4, and it is the one an adversary will
 test for us.
+
+## 9. Alignment pass (2026-09-21)
+
+Earlier unimplemented ADRs that contradicted this constitution were amended in place (bodies not
+rewritten; dated banners and end sections only):
+
+| ADR | what contradicted this file | what the amendment does |
+|---|---|---|
+| [0073](0073-real-demand-work-bears-the-weight.md) D2 / Phase ④ | self-prompt "exactly as good as" a canonical job; receipt share/position as an operator activation | withdraw the self-dealing reading; Phase ④ waits on §6 items 2–3 |
+| [0077](0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md) | public commercial gateway as PALW goal | keep R0 / Phase A / local Decision 3; public serving out of reward |
+| [0078](0078-what-was-made-from-it-is-committed-the-thing-never-rides.md) D7 | a derivation transformer earns PALW leaf weight | door closed unless the transformer **is** the user's local inference |
+| [0079](0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md) | Done-when = public LLM entrance | sandbox stays for the loopback host; public entrance is not a PALW product |
+| [0101](0101-a-membership-is-proven-by-the-chain-and-served-by-anyone-and-a-position-never-moves.md) D4/D6/D7 | anyone-serves inference marketplace | keep membership pins; withdraw unimplemented serving/discovery |
+| [0130](0130-bps1-is-hardened-before-it-is-widened.md) D7–D8 / §5 | widen BPS, derived panel share, DA reward | stay deferred under §6 item 0 |
+| [0131](0131-a-claim-is-paid-for-the-compute-it-cost-in-economic-compute-not-leaves.md) D3–D6 | arm a scalar CCU after shadow | shadow may measure; do not arm until [0146](0146-a-coefficient-is-justified-by-the-arbitrage-it-permits.md) |
+| [0069](0069-e2e-adjudicability-is-the-price-of-weight.md) leftover pwu | close a hole by adding synthetic weight | close by shrinking Attempt (§6 item 5) |
+| [0075](0075-certification-is-a-consensus-object.md) gateway remainder | (aligned, restated) | remaining work is local `/v1` reading genesis ∪ chain |
+
+Orthogonal and not amended: 0023 (EVM lanes), 0010–0018 (validator ops; 0126 already retired the
+PALW coupling), 0063 D1/D4 (BIP39 / `miner`), 0140 (heartbeat as emergency generator), 0141
+(decides nothing), 0104 (never written). Implementation order: [`README.md`](README.md).

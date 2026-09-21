@@ -35,6 +35,14 @@ use crate::palw_v2::PalwJobContextV2;
 
 /// Wire version of every step-v1 object in this module.
 pub const PALW_STEP_OBJECT_VERSION_V1: u16 = 1;
+/// **Kimi K3's layer phase.** V1 attention is `(i+1) % interval == 0` (23 of 93 at interval 4).
+/// V2 is `i % interval == 0` (24 of 93). A new version, not a field: adding a field to
+/// [`PalwShapeProfileV3`] would move every existing `shape_profile_id`.
+pub const PALW_STEP_OBJECT_VERSION_V2: u16 = 2;
+
+fn palw_step_version_supported(version: u16) -> bool {
+    version == PALW_STEP_OBJECT_VERSION_V1 || version == PALW_STEP_OBJECT_VERSION_V2
+}
 
 /// The shape-profile v3 identity domain. v2's shape-string domain stays frozen; deployed
 /// contexts keep meaning what they meant. Which id a class's jobs carry is a registration
@@ -505,7 +513,7 @@ impl PalwShapeProfileV3 {
     /// is its first half rather than a shorter alternative to it.
     pub fn validate_geometry(&self) -> Result<(), PalwStepError> {
         use PalwStepError::ProfileNotCanonical as bad;
-        if self.version != PALW_STEP_OBJECT_VERSION_V1 {
+        if !palw_step_version_supported(self.version) {
             return Err(PalwStepError::UnsupportedVersion { got: self.version, expected: PALW_STEP_OBJECT_VERSION_V1 });
         }
         if self.layer_count == 0 {
@@ -576,7 +584,7 @@ impl PalwShapeProfileV3 {
     pub fn validate_shape(&self) -> Result<(), PalwStepError> {
         use PalwStepError::ProfileNotCanonical as bad;
         self.validate_geometry()?;
-        if self.version != PALW_STEP_OBJECT_VERSION_V1 {
+        if !palw_step_version_supported(self.version) {
             return Err(PalwStepError::UnsupportedVersion { got: self.version, expected: PALW_STEP_OBJECT_VERSION_V1 });
         }
         if self.layer_count == 0 {
@@ -738,12 +746,18 @@ impl PalwShapeProfileV3 {
     }
 
     /// Layer kind under the pinned rule (Fact 1). `layer` must be `< layer_count`.
+    ///
+    /// V1: `(layer + 1) % interval == 0`. V2: `layer % interval == 0` — the phase Kimi K3's
+    /// 24-of-93 MLA stack actually uses. Existing V1 profiles keep the +1 phase byte for byte.
     pub fn layer_kind(&self, layer: u16) -> PalwLayerKindV1 {
-        if self.full_attention_interval != 0 && (layer as u32 + 1).is_multiple_of(self.full_attention_interval as u32) {
-            PalwLayerKindV1::Attention
-        } else {
-            PalwLayerKindV1::GatedDeltaNet
-        }
+        let interval = self.full_attention_interval as u32;
+        let hit = interval != 0
+            && if self.version == PALW_STEP_OBJECT_VERSION_V2 {
+                (layer as u32).is_multiple_of(interval)
+            } else {
+                (layer as u32 + 1).is_multiple_of(interval)
+            };
+        if hit { PalwLayerKindV1::Attention } else { PalwLayerKindV1::GatedDeltaNet }
     }
 
     pub(crate) fn layer_table(&self, layer: u16) -> &[PalwStepNodeV1] {
@@ -2679,6 +2693,18 @@ mod tests {
         q.full_attention_interval = 4;
         let attn: Vec<u16> = (0..24).filter(|&l| q.layer_kind(l) == PalwLayerKindV1::Attention).collect();
         assert_eq!(attn, vec![3, 7, 11, 15, 19, 23]);
+    }
+
+    #[test]
+    fn version_two_uses_the_zero_based_attention_phase() {
+        let mut q = tiny_profile();
+        q.version = PALW_STEP_OBJECT_VERSION_V2;
+        q.layer_count = 93;
+        q.full_attention_interval = 4;
+        let attn: Vec<u16> = (0..93).filter(|&l| q.layer_kind(l) == PalwLayerKindV1::Attention).collect();
+        assert_eq!(attn.len(), 24);
+        assert_eq!(attn[0], 0);
+        assert_eq!(*attn.last().unwrap(), 92);
     }
 
     #[test]
