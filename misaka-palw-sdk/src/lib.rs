@@ -392,8 +392,22 @@ mod tests {
             .into_iter()
             .find(|entry| entry.model_id == misaka_palw_base0::classes::A16_GRAPH_V7_2M_MODEL_ID)
             .expect("the SDK exposes the fixed 2M held row");
-        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, 7_000).expect("the armed t11 shape derives");
-        assert!(shape.held.armed, "the 2M row is only admitted after the held fence");
+        // **The height comes from the fence, not from a literal.** This read 7,000 and testnet-11's
+        // `palw_held_context` is at 7,100, so the test asserted "held is armed" one height BELOW the
+        // fence that arms it and had been failing ever since the height last moved. A fence height
+        // written into a test goes stale every time an operator moves it, and the failure it produces
+        // looks like a defect in the thing under test rather than in the pin.
+        let armed_at = params
+            .palw_held_context
+            .expect("testnet-11 schedules the held regime")
+            .daa_score()
+            .max(1);
+        let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, armed_at).expect("the armed t11 shape derives");
+        assert!(shape.held.armed, "the 2M row is only admitted from the held fence at DAA {armed_at}");
+        // And the other side of the fence, so "armed" is a statement about the height and not a
+        // constant that would pass wherever it was evaluated.
+        let before = palw_admission_shape_at_v1(&params, bundle, &row.profile, armed_at - 1).expect("the shape derives below it too");
+        assert!(!before.held.armed, "the held regime is not armed at DAA {}", armed_at - 1);
         sdk.preflight_admission(bundle, &row, Hash64::from_u64_word(0x2A16_2A16), &shape)
             .expect("the 2M row is admissible through the exact held t11 registration gate");
     }
