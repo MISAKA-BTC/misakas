@@ -348,3 +348,43 @@ fn the_genesis_registered_row_is_admissible_under_the_armed_rc_court() {
         other => panic!("an unfenced court must refuse the genesis row by name, got {other:?}"),
     }
 }
+
+/// **Which root does the 2M artifact derive under testnet-12's own registered profile?**
+///
+/// The t12 pin was taken from the fleet's `class-registration.json` rather than measured against
+/// the profile t12 registers — and an inventory root is a function of the PROFILE, not of the file
+/// alone. When the first t12 fleet's producers finally cleared the exposure ceiling they hit this:
+/// `holds no artifact whose registered root form is b5baca63…`, every thirty seconds, on all four
+/// hosts, over a byte-identical artifact. Ignored: needs the 2.87 GB file named by
+/// `PALW_A16_2M_PATH` and an inventory walk over it.
+#[test]
+#[ignore]
+fn print_a16_2m_root_forms() {
+    let path = std::env::var("PALW_A16_2M_PATH").expect("PALW_A16_2M_PATH=/root/palw-class/qwen25-1.5b-a16-2m.palwart");
+    let bytes = std::fs::read(&path).expect("read the artifact");
+    let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("decode .palwart");
+    let n_ctx = kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX;
+    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
+        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            n_ctx,
+            ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+        },
+    )
+    .expect("the graph-v7 2M profile projects");
+    let pin = kaspa_consensus_core::config::params::PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT;
+    println!("file            {path}");
+    println!("n_ctx           {n_ctx}");
+    println!("class_id(v7)    {}", profile.shape_profile_id());
+    println!("artifact_digest {}", artifact.artifact_digest());
+    println!("pinned_const    {pin}");
+    // Shape first, because the resolver checks it first and a shape miss never pays for the walk.
+    println!("--- inventory walk (minutes at 2M) ---");
+    match misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile) {
+        Ok(inv) => {
+            let root = inv.root();
+            println!("inventory_root  {root}");
+            println!("inventory==pin  {}", root == pin);
+        }
+        Err(e) => println!("inventory FAILED: {e:?}"),
+    }
+}
