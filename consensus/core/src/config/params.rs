@@ -9965,6 +9965,120 @@ pub fn palw_v2_params_with_class_rows_v1(
 
     let mut params =
         palw_v2_params_from_artifacts_on_base_with_utxos(base, base0_artifact_root, genesis_bonds, genesis_utxos.clone())?;
+    // **A held row set mints the held REGIME first, and the order is forced.**
+    //
+    // `palw_held_context_mint_v1` is the one spelling of "this lattice runs ADR-0103" — the V4
+    // signing-context set, trace format 4 with the tiled prompt ids, the regime's prompt cap, the
+    // `2^40` step ladder and the arity its own court derives. Two things below read the bundle it
+    // rewrites, so it cannot run afterwards:
+    //
+    // * a held row's `max_step_leaf_count` and `canonical_step_leaf_count` are counted against
+    //   `bundle.court.max_step_leaf_count()`. Registered under the RC's `2^26` and then minted to
+    //   `2^40`, every one of those counts would be a cap rather than a count — the class would be
+    //   priced at a ceiling it does not reach;
+    // * `prompt_ids_form` below is read off the trace format the mint sets.
+    //
+    // It also arms, from genesis, the fences the regime cannot run without (`palw_prompt_ids_merkle`,
+    // `palw_signature_contexts_v2`, `palw_kary_court`, `palw_shard_court`, `palw_panel_da`,
+    // `palw_held_context`, `palw_da_court`, `palw_fp_da_pins`) — every one of which
+    // `palw_t12_arm_every_rule_from_genesis` has already armed, so this is the same decision
+    // arriving through the function that owns it rather than a second one.
+    if let PalwGenesisClassRowsV1::HeldLadder { dense_n_ctx, hybrid_n_ctx } = rows {
+        // **The close budget is DERIVED from the rows this genesis registers** (ADR-0082
+        // Decision 6), before the mint, because the mint carries the court's ceilings forward and
+        // the rows are what those ceilings have to pay for.
+        //
+        // `DEFAULT_MAX_CLOSE_CHUNKS` is 27, sized for the RC's graph-v5 row at 512. A held row at
+        // 2,097,152 opens a wider terminal, and a ruleset that registered it against the RC's
+        // ceiling would fail its own boot gate with "a registered class's terminal opening exceeds
+        // the ceiling this ruleset pays for" — which is the honest failure and not the intended
+        // one. `palw_widest_close_over_the_ladder_v1` is the derivation that answers it, over THIS
+        // set's families and THIS set's widths, and it returns the binding node rather than a bare
+        // maximum so the number has a reason attached.
+        //
+        // Priced under the court the mint is about to install: the Merkle prompt-id form (trace
+        // format 4) and the ladder the regime freezes. Getting that pre-image wrong cannot go
+        // unnoticed — `verify_against_catalog` re-derives every registered row's cost against the
+        // court that actually shipped, and refuses the genesis if the two disagree.
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+            unreachable!("palw_v2_params_from_artifacts_on_base_with_utxos installs a ConsensusV2 bundle or returns Err");
+        };
+        let ladder = crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
+        let court_preimage = crate::palw_class_admission_v2::PalwKaryCourtV1 {
+            dissection_arity: bundle.court.dissection_arity(),
+            prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            window_court_daa: bundle.state.window_court(),
+        };
+        // **Each family at ITS OWN width, not the cross product.** `palw_widest_close_over_the_ladder_v1`
+        // prices `families × rows`, which is the right shape for "how wide could this ladder ever go";
+        // it is the wrong one for "what does THIS genesis register". Asked for both families at both
+        // widths it answers with the hybrid at 2,097,152 — a row nobody registers — and sizes the
+        // close budget, the court window and the pruning horizon for it.
+        let widest = [
+            (&crate::palw_context_ladder::PALW_LADDER_FAMILIES_V7[0..1], dense_n_ctx),
+            (&crate::palw_context_ladder::PALW_LADDER_FAMILIES_V7[1..2], hybrid_n_ctx),
+        ]
+        .into_iter()
+        .filter_map(|(family, row)| {
+            crate::palw_context_ladder::palw_widest_close_over_the_ladder_v1(family, &[row], Some(court_preimage), ladder)
+        })
+        .map(|(_, _, binding)| binding.close_bytes)
+        .max()
+        .ok_or(invalid("no held row of this genesis set prices at all: the set registers nothing prosecutable"))?;
+        let close_bytes = widest.max(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES);
+        let court = bundle.court;
+        bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+            court.max_step_leaf_count(),
+            court.turn_deadline_daa(),
+            court.terminal_rounds(),
+            close_bytes,
+            court.max_terminal_macs(),
+            court.max_operand_count(),
+        )
+        .map_err(|_| invalid("the held set's derived close budget is not a legal court ceiling"))?
+        .with_dissection_arity(court.dissection_arity())
+        .map_err(|_| invalid("the held set's court refuses its own arity"))?;
+        params = palw_held_context_mint_v1(params, ladder)?;
+        // **And the arity the FINAL class set derives, frozen before those rows are priced.**
+        //
+        // A held court's arity is a function of the widest registered attention site
+        // (`palw_court_arity_held_v1` over `palw_attn_widest_registered_site_v2`), and the mint has
+        // only the floor to look at: it answers 2. Register the 2M row afterwards and the same
+        // derivation answers 4 — so the rows would be admitted priced for a binary court and
+        // prosecuted in a 4-ary one, which is precisely what `validate_palw_v2` refuses ("the gate
+        // that admits a class would price it for one court and the court that plays its dispute
+        // would deal another"). Under-priced by `k/2` in disclosure bytes, on the very close ceiling
+        // they were admitted under.
+        //
+        // So the site is taken over the profiles this genesis is ABOUT to register as well as the
+        // ones it already has, the arity is derived once, and the rows below are priced at it. The
+        // fixed point converges in one step because a profile does not depend on the arity.
+        let dense_profile = crate::palw_context_ladder::palw_a16_context_row_profile_v7(dense_n_ctx)
+            .map_err(|_| invalid("the held dense row does not derive at the width this genesis registers"))?;
+        let hybrid_profile = crate::palw_context_ladder::palw_qwen36_context_row_profile_v7(hybrid_n_ctx)
+            .map_err(|_| invalid("the held hybrid row does not derive at the width this genesis registers"))?;
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+            unreachable!("the mint returns a ConsensusV2 ruleset or an Err");
+        };
+        let (registered_history, registered_lanes) = crate::palw_court_v2::palw_attn_widest_registered_site_v2(bundle);
+        let (rows_history, rows_lanes) =
+            crate::palw_court_v2::palw_attn_widest_site_of_profiles_v2([&dense_profile, &hybrid_profile]);
+        let arity = crate::palw_mode_v2::palw_court_arity_held_v1(
+            bundle.state.window_court(),
+            bundle.court.turn_deadline_daa(),
+            registered_history.max(rows_history),
+            crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4,
+            bundle.court.terminal_rounds(),
+            registered_lanes.max(rows_lanes),
+            bundle.court.max_close_chunks(),
+        )
+        .ok_or(invalid(
+            "no dissection arity fits this genesis set's court window: the widest row it registers cannot be tried inside it",
+        ))?;
+        bundle.court = bundle.court.with_dissection_arity(arity).map_err(|_| invalid("the derived held arity is not a legal one"))?;
+        let bundle = bundle.clone();
+        params = params.with_palw_v2_depths(&bundle);
+    }
     // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
     //
     // ADR-0082 Decision 5's fence (`palw_prompt_ids_merkle`) is `None` on every shipped preset, so
@@ -10006,7 +10120,38 @@ pub fn palw_v2_params_with_class_rows_v1(
     // what happens next in both directions — a tier that fills its budget grows, one that goes
     // quiet decays back into the floor.
     let floor_reserve = bundle.state.base_class_reserve_permille();
-    let dense_share = qwen25_a16_artifact_root.map(|_| PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE).unwrap_or(0);
+    // **A network whose work target is armed from genesis declares NO per-model share** (the
+    // operator's decision of 2026-09-22, ADR-0137's own conclusion carried into the mint).
+    //
+    // ADR-0137 made a share a RESULT: past `Params::palw_work_target` a model class's draw is
+    // `MAX · min(1, CCU_m / W₀)` (`palw_effective_class_target_v1` — "the class target is not read
+    // at all"), `apply_class_share_growth` returns before it grows or decays anything, the registry
+    // "moves no share, refreshes no budget and seats no price", and the panel's capacity is one
+    // network-wide replay budget rather than a per-class allocation (D5, `panel_room_v1`). On such a
+    // network the 489‰ the RC card hands each tier is a number nothing reads — and a number nothing
+    // reads is worse than no number, because it looks like a policy. It also breaks ADR-0144's
+    // "registering a model must not change an unrelated model's economics": a declared share funds
+    // an entrant by SCALING every incumbent, so the eleventh model would move the other ten.
+    //
+    // So both tiers register at the bundle's own `min_grantable_share_permille` — the floor a
+    // post-genesis entrant takes (ADR-0049 Decision H) — and the liveness floor holds the whole
+    // residual, which is exactly what ADR-0137 says it is: "the floor is the residual and is never
+    // priced here". Block rights come from verified work and nothing else:
+    //
+    //     Ready panel → claim verified → Final → CanonicalWork → execution quanta → global permit
+    //
+    // with the anti-Sybil conditions armed beside it on this preset — `palw_canonical_work`
+    // (ADR-0145 F1: a claim's work is DERIVED, so padding, copies and idle context buy nothing),
+    // `palw_admission_independence` (F3: a class is not judged by its own registrant, so registering
+    // a swarm of light models and seating them yourself is not a route to block rights), and the
+    // execution lane's ONE permit a round, which is the scarcity every model shares.
+    let no_declared_share = matches!(rows, PalwGenesisClassRowsV1::HeldLadder { .. });
+    let min_share = bundle.state.min_grantable_share_permille();
+    let dense_share = if no_declared_share {
+        qwen25_a16_artifact_root.map(|_| min_share).unwrap_or(0)
+    } else {
+        qwen25_a16_artifact_root.map(|_| PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE).unwrap_or(0)
+    };
     // **The hybrid asks for more than it keeps, because the dense tier dilutes it.**
     //
     // `granted_share_table_v2` funds an entrant by scaling every incumbent to `1000 - share`, and
@@ -10015,9 +10160,15 @@ pub fn palw_v2_params_with_class_rows_v1(
     // BELOW it, silently, and the two tiers would not be the equals this card means them to be.
     // Inverting the dilution here is what makes the constants above describe the table the chain
     // actually starts with, which a test asserts by folding the real transition over these objects.
-    let hybrid_share =
+    // The dilution inversion exists to make a DECLARED figure land on an INTENDED realized one.
+    // With no intended allocation there is nothing to invert: the minimum is the minimum however
+    // the tiers dilute each other, and the floor absorbs the difference.
+    let hybrid_share = if no_declared_share {
+        min_share
+    } else {
         u16::try_from((u32::from(PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE) * 1000).div_ceil(1000 - u32::from(dense_share)))
-            .map_err(|_| invalid("the hybrid's genesis share does not fit a permille"))?;
+            .map_err(|_| invalid("the hybrid's genesis share does not fit a permille"))?
+    };
     // The floor after both donations, in the same arithmetic the transition applies. A genesis that
     // starts the floor below the reserve ADR-0054 would never let a growing class cross is a
     // genesis in a state its own rules could not have produced.
@@ -10442,6 +10593,13 @@ pub const PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT: crate::Hash64 = crate::H
 ]);
 
 /// **The dense row testnet-12 registers: the held graph-v7 row at ADR-0103's widest context.**
+/// **The one scheduled height on testnet-12: ADR-0065 D1's bond-maturity window.**
+///
+/// 1,000 DAA — the value this tree's own fence sweep uses — and the fence is armed AT it rather than
+/// at genesis, because a window cannot have elapsed at block zero. See
+/// `palw_t12_arm_every_rule_from_genesis`.
+pub const PALW_T12_BOND_MATURITY_WINDOW_DAA: u64 = 1_000;
+
 pub const PALW_T12_DENSE_N_CTX: u32 = crate::palw_base0_a16::A16_MAX_ATTN_HISTORY_HELD_V1 as u32;
 
 /// **The hybrid row testnet-12 registers: the held graph-v7 row at 512.**
@@ -14168,13 +14326,42 @@ pub fn palw_t12_base_params() -> Params {
 pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     let at = ForkActivation::always();
 
+    // ---- pass 0: the ADR-0068 Phase 2 lanes ----------------------------------------------------
+    // The same two `palw_rc_arm_phase1` installs, with the same constants (the binary's own, so the
+    // `validate_palw_v2` locks hold by construction). They are NOT inherited from
+    // `palw_rc_base_params`, which leaves both `None` — the RC preset gets them from `arm_phase1`,
+    // and this preset deliberately does not route through that function (see this module's
+    // `palw_t12_shipped_params`). Stated here because `palw_heartbeat_transparent` below is refused
+    // on a network whose heartbeat lane is dormant: a chain cannot hold a rule about how heartbeats
+    // count in an anticone when it has no heartbeats.
+    params.palw_heartbeat = Some(PalwHeartbeatV1 {
+        activation: at,
+        work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+        max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+    });
+    params.palw_attempt_work = Some(PalwAttemptWorkV1 {
+        activation: at,
+        work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+        ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
+    });
+
     // ---- pass 1: the fences testnet-11 leaves dormant ------------------------------------------
     // ADR-0064: a bond is usable in the block that accepts its registration.
     params.palw_bootstrap_activation = Some(at);
-    // ADR-0065 D1: a bond must have been registered a window before it may judge. The genesis bonds
-    // are registered at DAA 0 and `anchor - window` saturates, so they may judge from block one; the
-    // window binds only the strangers who register later, which is the rule's whole point.
-    params.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: at, window_daa: 1_000 });
+    // **ADR-0065 D1 — the ONE rule this preset cannot arm at DAA 0, and the reason is the rule
+    // itself.** A bond may judge only if it was registered `window_daa` before the anchor, and at
+    // genesis every bond was registered at DAA 0: `validate_palw_v2` refuses the pair in those words
+    // ("armed before its own window has elapsed since genesis — every genesis bond would be immature
+    // at once and no panel could be drawn"). A maturity window is not a statement a chain can make
+    // about its own first block.
+    //
+    // So it is armed at the earliest height where it MEANS anything — its own window — rather than
+    // dropped. From DAA 1,000 the eight genesis bonds are mature by a margin and every bond
+    // registered afterwards waits its window, which is the whole content of the decision. This is
+    // the only scheduled height on this network, and it is scheduled by arithmetic rather than by
+    // an operator's calendar.
+    params.palw_bond_maturity =
+        Some(PalwBondMaturityV1 { activation: ForkActivation::new(PALW_T12_BOND_MATURITY_WINDOW_DAA), window_daa: PALW_T12_BOND_MATURITY_WINDOW_DAA });
     // ADR-0071 SA-1..SA-4: a capability declaration is bounded, priced and proven. Safe from genesis
     // because the genesis registrations name `palw_genesis_registrant_bond_v1()` and therefore keep
     // SA-3's exemption — the reason that sentinel exists rather than a real registry row.
@@ -14195,20 +14382,32 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     params.palw_signature_contexts_v2 = Some(at);
     // ADR-0082 D2 (C-2/H-5): the fused terminal's clock does not convict for a move nobody can make.
     params.palw_court_responder_coverage = Some(at);
-    // ADR-0082 D10/D11: the free-prompt lane's numerator is its decode leaves, and the committed
-    // token is the seeded argmax.
-    params.palw_fp_decode_rules = Some(at);
-    // ADR-0096 D6–D8: a free-prompt job may carry a decode constraint.
-    params.palw_fp_decode_constraint = Some(at);
+    // **ADR-0082 D10/D11 stays dormant because THIS BUILD cannot carry it**, and `validate_palw_v2`
+    // says so in those words: the state transition has no decode-leaf enumeration (every
+    // free-prompt claim would be refused `FreePromptDecodeLeavesUnavailable`) and no engine
+    // implements `decode_token_select_v2` (every temperature job would be refused
+    // `SamplingNotArmed`). That is a missing implementation, not a decision a regenesis can make —
+    // arming it here would ship a network whose free-prompt lane refuses every claim.
+    // params.palw_fp_decode_rules = Some(at);
+    // **ADR-0096 D6-D8 stays dormant because THIS BUILD cannot carry it**, in `validate_palw_v2`'s
+    // own words: consensus-core has no constraint automaton and no version-6 free-prompt job, the
+    // court has no v3 refutation arm, and no engine masks a decode. A missing implementation, not a
+    // decision a regenesis gets to make.
+    // params.palw_fp_decode_constraint = Some(at);
     // ADR-0044 D9 (L-2): the two advertised free-prompt caps are enforced, not merely advertised.
     params.palw_fp_ruleset_caps = Some(at);
     // ADR-0093 D6/D8: admission refuses a fused class the court cannot dissect, and a root claim
     // carries the anchor the dissection's bottom needs.
     params.palw_fused_dissectable = Some(at);
     params.palw_attn_anchored_root = Some(at);
-    // ADR-0100 D4: a sharded class is licensed per shard. No genesis class declares a shard plan, so
-    // this is a capability the chain is born with rather than one it uses on day one.
-    params.palw_shard_licensing = Some(at);
+    // **ADR-0100 D4's per-shard licensing stays DORMANT, and `validate_palw_v2` is why**: it refuses
+    // it beside `palw_admission_independence` — "a stratified panel seats no outsider, so a bought
+    // class licensed by parts would be judged by its own population alone" (ADR-0147). The two
+    // cannot both be armed, and of the pair the independence rule is the one this chain needs: it is
+    // the 2026-09-19 reward audit's F3, CRITICAL and live, while no class in this genesis declares a
+    // shard plan and none can be registered without one. Arming the capability and losing the
+    // correctness rule would be trading a fix for a feature nobody uses.
+    // params.palw_shard_licensing = Some(at);
     // ADR-0102: the court adjudicates the embedding lift per token (graph-v6's fenced kernel).
     params.palw_token_lift = Some(at);
     // The Kimi K3 family's fenced kernels. **Genesis-only in effect**: a genesis that registers a
@@ -14259,11 +14458,16 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
         params.pq_activation_daa_score,
         params.evm_activation_daa_score,
     );
+    let bond_maturity = params.palw_bond_maturity;
     params.for_each_fence(&mut |score| {
         if *score != u64::MAX {
             *score = 0;
         }
     });
+    // The walk zeroes every height, and this is the one height that may not be zero (see the
+    // ADR-0065 D1 note above). Restored rather than special-cased inside the visitor, because the
+    // visitor's value is that it knows nothing about individual fences.
+    params.palw_bond_maturity = bond_maturity;
     params.crescendo_activation = layer0.0;
     // **A `ConsensusV2` network activates no V1 PALW proof-of-work.** These are `never()` on the RC
     // base and the walk preserves `never()`, so restoring them is a belt-and-braces restatement of
@@ -14288,6 +14492,23 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     //
     // Each changes execution results, which is why each is fenced at all; a chain with no execution
     // below DAA 0 is the one place they are free.
+    // **The execution lane opens at its SHORT span, because there is nothing to shorten.**
+    //
+    // The RC lane opens at a 5-DAA schedule span and narrows to 1 at a later height; the walk above
+    // zeroed both, and `validate_palw_v2` refuses that — "the short span must fire after the lane
+    // opens" — correctly, since two rules at one height are one rule wearing two names. A chain
+    // born today simply opens at the span the later fence was heading for: one permit a round, one
+    // span a DAA, no widening scheduled. `PalwExecSpanShortV1::NONE` is the "no second height"
+    // spelling, not a disabled feature.
+    //
+    // This is the global scarcity every model shares, and it is the reason removing the per-model
+    // share does not raise the block rate: block rights are `verified work / execution quantum`,
+    // and the lane's one permit a round is what bounds how many of them become blocks. Registering
+    // ten models cannot widen it.
+    if let Some(lane) = params.palw_execution_lane.as_mut() {
+        lane.schedule_span_daa = lane.short_span.schedule_span_daa.max(1);
+        lane.short_span = PalwExecSpanShortV1::NONE;
+    }
     params.evm_gas_pool_v2_activation_daa_score = 0;
     params.evm_f002_withdraw_cap_activation_daa_score = 0;
     params.evm_f003_mldsa_verify_activation_daa_score = 0;
@@ -14310,6 +14531,9 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     debug_assert!(params.palw_inactivity_leak.is_none(), "validate_palw_v2 refuses a network that sets the retired leak");
     debug_assert!(params.palw_frontier_provenance.is_none(), "ADR-0065 D2 is unimplementable inside the state fold");
     debug_assert!(params.palw_beacon_fold.is_none(), "PALW block production has no beacon to fold");
+    debug_assert!(params.palw_shard_licensing.is_none(), "validate_palw_v2 refuses it beside palw_admission_independence");
+    debug_assert!(params.palw_fp_decode_rules.is_none(), "this build carries neither half of ADR-0082 D10/D11");
+    debug_assert!(params.palw_fp_decode_constraint.is_none(), "this build carries no constraint automaton (ADR-0096 D6-D8)");
 }
 
 pub fn palw_rc_params(
@@ -14430,7 +14654,26 @@ pub fn palw_v2_params_on_base(
     // bundle builder already wrote — which is what leaves testnet-11's and devnet's ruleset ids
     // exactly where they are.
     if base.palw_signature_contexts_v2.is_some_and(|a| a != ForkActivation::never()) {
-        bundle.signature_contexts_root = crate::palw_mode_v2::palw_v2_signature_contexts_root_v2();
+        // **Which complete set — decided by what this network's OWN fences will need.**
+        //
+        // The root is frozen at genesis and lives inside `palw_ruleset_id_v2`, so it has to cover
+        // every context the acceptance layer will ever verify under on this chain, not just the ones
+        // it verifies under today. `validate_palw_v2` states both requirements by name: the one-move
+        // court's accusation context needs at least COMPLETE_V3, and the held regime needs
+        // COMPLETE_V4. Writing V2 unconditionally made "arm the shard court" and "arm the signature
+        // set" two fences that refuse each other, which is the shape of a rule with nothing able to
+        // obey it.
+        //
+        // Read from the fence rather than from the height: a fence scheduled for DAA 8,000 still
+        // means this chain will verify that context, and the root cannot be re-minted at 8,000.
+        let ever = |f: Option<ForkActivation>| f.is_some_and(|a| a != ForkActivation::never());
+        bundle.signature_contexts_root = if ever(base.palw_held_context) {
+            crate::palw_mode_v2::palw_v2_signature_contexts_root_v4()
+        } else if ever(base.palw_shard_court) {
+            crate::palw_mode_v2::palw_v2_signature_contexts_root_v3()
+        } else {
+            crate::palw_mode_v2::palw_v2_signature_contexts_root_v2()
+        };
     }
     // The bond's withdrawal delay is NOT rewritten here where the DA court is armed: it is resolved
     // at each block by `palw_v2_bond_withdrawal_delay_at_v1`, so the ruleset id (and therefore every
@@ -14521,6 +14764,30 @@ pub fn palw_v2_params_on_base(
     // hand anywhere else, they drift — which is how a params set assembled outside this function
     // ended up failing the very lattice bound this derivation exists to satisfy.
     params = params.with_palw_v2_depths(&bundle);
+    // **A network that mints the HELD regime from genesis freezes the arity that regime derives**
+    // (ADR-0082 Decision 3 / ADR-0103 Decision 5).
+    //
+    // `validate_palw_v2` refuses an armed `palw_kary_court` whose frozen `dissection_arity` is not
+    // the one the ruleset derives — "the gate that admits a class would price it for one court and
+    // the court that plays its dispute would deal another". Under the held regime no session plays
+    // the leaf ladder, so the derivation runs with the ladder's rounds at zero and generally
+    // answers something other than the binary arity every preset literal carries. Without this the
+    // base assembly refuses the very ruleset `palw_held_context_mint_v1` is about to complete, and
+    // the refusal names a re-mint that is already in progress.
+    //
+    // **Inert on every network that does not mint the regime at genesis**, which is every network
+    // that exists: testnet-11 arms `palw_held_context` at a height, so `is_active(0)` is false and
+    // this branch never runs; devnet, simnet and mainnet leave the fence dormant. No fingerprint
+    // moves.
+    let mut bundle = bundle;
+    if params.palw_held_context.is_some_and(|f| f != ForkActivation::never() && f.is_active(0)) {
+        let derived = crate::palw_court_v2::palw_court_params_held_at_v2(&bundle, true, true).map_err(|_| {
+            crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "the held regime is minted from genesis and no dissection arity fits this ruleset's court window with the                  ladder at zero (ADR-0103 Decision 5)",
+            )
+        })?;
+        bundle.court = bundle.court.with_dissection_arity(derived.dissection_arity())?;
+    }
     params.palw_consensus_mode = crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     // ADR-0132 §7.6: a base whose fences were armed before it had a bundle (the shipped preset
     // arms on `LegacyTn11` and assembles here) mirrors the short window's height into the bundle

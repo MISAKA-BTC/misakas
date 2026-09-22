@@ -1084,12 +1084,27 @@ pub fn palw_attn_move_is_admissible_v2(
 /// derivation then returns whatever the leaf ladder alone needs.
 pub fn palw_attn_widest_registered_site_v2(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> (u64, usize) {
     use crate::palw_state_v2::PalwConsensusObjectV2;
+    palw_attn_widest_site_of_profiles_v2(bundle.genesis_objects.iter().filter_map(|object| match object {
+        PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } => Some(&carriage.profile),
+        _ => None,
+    }))
+}
+
+/// **The same widest site, over profiles a genesis is ABOUT to register** — the arity a held court
+/// derives is a function of the class set, so a mint that registers its rows after deriving the
+/// arity derives the wrong one (measured: the floor alone answers 2, the floor plus a 2M held row
+/// answers 4, and the rows would have been priced at 2 and prosecuted at 4).
+///
+/// Split out rather than copied so the two callers cannot come to disagree about what "the widest
+/// registered site" means — which is the same reason
+/// [`palw_attn_widest_registered_site_v2`] exists at all.
+pub fn palw_attn_widest_site_of_profiles_v2<'a>(
+    profiles: impl IntoIterator<Item = &'a crate::palw_step::PalwShapeProfileV3>,
+) -> (u64, usize) {
     use crate::palw_step::PalwStepOpKindV1;
     let mut history = 0u64;
     let mut lanes = 0usize;
-    for object in &bundle.genesis_objects {
-        let PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. } = object else { continue };
-        let profile = &carriage.profile;
+    for profile in profiles {
         let mut fused = false;
         for slot in 0..profile.global_node_count() {
             let Some((node, _)) = profile.resolve_node_slot(slot) else { continue };

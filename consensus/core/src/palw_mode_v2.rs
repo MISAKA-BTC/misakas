@@ -1542,11 +1542,33 @@ impl PalwConsensusParamsV2 {
         // the genesis loader checks each registration object against this same catalog, and a
         // class cannot hold a share without having been registered. No params-side table is
         // left to sweep here.
+        // **The FENCED kernels leave the set the identity catalog judges** (ADR-0102), exactly as
+        // they do in the admission gate (`verify_class_admission_*`: "a fenced kernel is admitted by
+        // its fence, and only by it").
+        //
+        // A catalog entry's `reachable_kernels` is deliberately WHOLE — it records every kernel the
+        // class reaches, and weight asks a certified family to cover all of them — while
+        // `catalogued_kernel_ids_v1` is deliberately NOT: a fenced kernel is adjudicable (the
+        // resolver reads the fenced table) and is kept out of `court_catalog_root` so shipping it
+        // moves no network's identity. Comparing the whole set against the catalogued table
+        // therefore reported every fenced-kernel class as a coverage gap, including one whose fence
+        // its network arms from genesis — which is how a genesis registering the hybrid's graph-v7
+        // row was refused with "this build cannot adjudicate" for a kernel this build adjudicates.
+        //
+        // Whether the fence is ARMED is not this function's question and is not skipped: the bundle
+        // has no `Params`, and `Params::validate_palw_v2` refuses a genesis set reaching either
+        // fenced table unless the matching fence (`palw_token_lift`, `palw_kimi_k3`) is armed from
+        // genesis. One question each, asked where its answer lives.
+        let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
+        let kimi_fenced = crate::palw_step_refute::kimi_fenced_kernel_ids_v1();
         for entry in catalog.entries() {
-            let reachable = crate::palw_catalog_coverage::PalwReachableKernelSetV1 {
-                execution_class_id: entry.class_id,
-                kernel_ids: entry.reachable_kernels.clone(),
-            };
+            let kernel_ids: std::collections::BTreeSet<Hash64> =
+                entry.reachable_kernels.difference(&fenced).copied().collect::<std::collections::BTreeSet<_>>()
+                    .difference(&kimi_fenced)
+                    .copied()
+                    .collect();
+            let reachable =
+                crate::palw_catalog_coverage::PalwReachableKernelSetV1 { execution_class_id: entry.class_id, kernel_ids };
             crate::palw_catalog_coverage::verify_catalog_coverage_v1(&reachable)
                 .map_err(|_| PalwModeV2Error::Invalid("a registered class reaches kernels this build cannot adjudicate"))?;
         }

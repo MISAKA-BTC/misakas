@@ -72,6 +72,37 @@ pub const MISAKA_PREMINE_CAP_SOMPI: u64 = 10_000_000_000 * SOMPI_PER_KASPA;
 /// `palw_locked_bond_outpoints_v2`.
 pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 
+/// **testnet-12's genesis-bond collateral: 38,889,673.33839680 MSK a seat.**
+///
+/// Not a policy choice and not a bigger version of the number above — it is what
+/// `palw_v2_collateral_for_claim_lifetime_v1` DERIVES for the dearest class this genesis registers,
+/// and the C-08 gate ("a bond declares only what its outpoint holds") is what makes the premine
+/// obey the derivation instead of the other way round.
+///
+/// The dearest class is the held Qwen2.5 row at `n_ctx` 2,097,152, whose canonical job counts
+/// ~2.16×10¹¹ step leaves against the 512 row's ~5.3×10⁷ — four thousand times the claim, four
+/// thousand times the exposure a bond reserves while it is open. Carving t11's 10,000 MSK here
+/// would mint a registry whose every claim fails `the bond's exposure ceiling leaves no room`, i.e.
+/// a network that registers a 2M class and can never produce one block of it.
+///
+/// Eight seats take 311,117,386.7 MSK of the 10B cap, beside the 758M community table — the main
+/// wallet keeps ~8.93B, and `every_network_genesis_mints_exactly_the_10b_cap` still holds, because
+/// this is carved OUT of the main wallet like every other genesis output.
+///
+/// **Pinned rather than recomputed here**, because the derivation needs the class profile, its
+/// canonical job and the ruleset's ladder — three things a premine table has no business holding.
+/// `t12_bond_collateral_matches_the_card` re-derives it from the shipped card and fails the build
+/// on any drift, which is the same discipline the genesis hash pins live under.
+pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 3_888_967_333_839_680;
+
+/// The genesis-bond collateral `net` carves, per seat.
+fn genesis_bond_collateral_for(net: NetworkId) -> u64 {
+    if net.network_type == NetworkType::Testnet && net.suffix == Some(12) {
+        return PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
+    }
+    GENESIS_BOND_COLLATERAL_SOMPI
+}
+
 /// The main wallet's outpoint index on [`MISAKA_PREMINE_TXID`].
 ///
 /// Historical: the 2026-06-17 layout put 40 vault UTXOs at indices 0–39 and the main wallet at
@@ -501,10 +532,11 @@ pub(crate) fn bonded_genesis_utxos(
     // identity — `PalwBondKeyV2(premine_outpoint(card.premine_index))` — so the collateral goes
     // where the bond points, not where the card happens to sit in the list), owned by the main
     // wallet's key: "the main wallet bonds", there is no custody block.
+    let collateral = genesis_bond_collateral_for(net);
     for (premine_index, _) in cards {
         assert!(*premine_index < MAIN_PREMINE_INDEX, "a genesis bond may not stake the main wallet itself or a float index");
-        utxos.push((premine_outpoint(*premine_index), premine_entry(GENESIS_BOND_COLLATERAL_SOMPI, main_spk.clone())));
-        carved = carved.checked_add(GENESIS_BOND_COLLATERAL_SOMPI).expect("collateral cannot overflow");
+        utxos.push((premine_outpoint(*premine_index), premine_entry(collateral, main_spk.clone())));
+        carved = carved.checked_add(collateral).expect("collateral cannot overflow");
     }
 
     // Per-bond fee floats, after the main wallet's index, at each bond's own payout key.

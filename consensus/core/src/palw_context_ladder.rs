@@ -1311,6 +1311,31 @@ pub fn palw_qwen36_context_row_profile_v5(n_ctx: u32) -> Result<PalwShapeProfile
 /// other set Decision 6's derivation has to be evaluated over.
 pub const PALW_LADDER_FAMILIES_V5: [PalwLadderFamilyV1; 2] = [palw_a16_context_row_profile_v5, palw_qwen36_context_row_profile_v5];
 
+/// **The dense tier at a ladder row, graph v7** — [`palw_a16_context_row_profile_v5`]'s twin under
+/// ADR-0103's held map, as a plain `fn(u32)` so it can be a [`PalwLadderFamilyV1`].
+///
+/// The held map is what lifts `validate_geometry`'s `n_ctx × layer_count` product ceiling to a
+/// per-position budget (ADR-0103 Decision 6), so this family is the only one that derives at all
+/// past `n_ctx` 524,288 — and therefore the only one a 2M row can be priced over.
+pub fn palw_a16_context_row_profile_v7(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+        n_ctx,
+        ..crate::palw_qwen25_profile::QWEN25_1_5B
+    })
+}
+
+/// **The hybrid tier at a ladder row, graph v7** — the held composition (attention at the v4 tiled
+/// map, recurrence at v2's head-sliced layout), as a [`PalwLadderFamilyV1`].
+pub fn palw_qwen36_context_row_profile_v7(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
+    crate::palw_qwen36_profile::qwen36_profile_v7(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+        crate::palw_qwen36_profile::PalwQwen36GeometryV1 { n_ctx, ..crate::palw_qwen36_profile::QWEN36_35B_A3B },
+    ))
+}
+
+/// **The HELD genesis set** — the two families under ADR-0103's regime, which is the set
+/// Decision 6's close derivation has to be evaluated over for a network that mints held rows.
+pub const PALW_LADDER_FAMILIES_V7: [PalwLadderFamilyV1; 2] = [palw_a16_context_row_profile_v7, palw_qwen36_context_row_profile_v7];
+
 #[cfg(test)]
 mod tests {
     use super::*;
