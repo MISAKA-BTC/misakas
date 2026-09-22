@@ -18,7 +18,7 @@ use std::sync::{Mutex, OnceLock};
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
-use kaspa_core::{info, warn};
+use kaspa_core::{error, info, warn};
 use kaspa_hashes::Hash64;
 use misaka_palw_sdk::{PalwClassSdk, PalwLoadedArtifactV1};
 
@@ -422,6 +422,57 @@ fn held_artifacts() -> &'static Mutex<HashMap<HeldArtifactKey, PalwLoadedArtifac
 /// process, so that line still counts artifacts), a line naming the file for one another duty
 /// already holds, and a warning for each path not held and why. A file about to be mapped is
 /// announced first, because a cold root pass over 33 GiB is minutes of otherwise silent startup.
+/// **Re-derive every root in every sidecar, and refuse to start if one disagrees**
+/// (`--palw-verify-class-manifest`).
+///
+/// A manifest is a cache for a value that must not be typed by a human, and a cache nobody ever
+/// checks is how a wrong value survives a rebuild. Twice now, a flat artifact digest was pinned where
+/// the operand-inventory root belonged and a network's dense tier produced zero blocks — the second
+/// time over a byte-identical artifact, with every seat reporting the mismatch every thirty seconds
+/// and nobody able to see WHICH value the node derived.
+///
+/// So this returns the sentence rather than logging it, and its caller refuses to start: a node that
+/// serves a sidecar it did not write should find out at startup, while an operator is watching, and
+/// not at the moment a claim's openings fail to verify.
+///
+/// Costs one streamed walk per class per artifact — 135 s at a 2,097,152 context, measured — which is
+/// why it is a flag and not the default. Absent sidecars are not failures: a node with none derives
+/// every root it is asked for, which is correct and slower.
+/// **Whether `--palw-verify-class-manifest` was given**, set once by the daemon.
+///
+/// A process-global rather than a parameter threaded through two service constructors: holdings are
+/// materialized in exactly one place ([`load_class_holdings_v1`], which caches process-wide), so the
+/// check belongs there, and both services must be held to the same answer. A flag that only one of
+/// them read would be a node that verifies its panel's artifacts and not its producer's.
+static VERIFY_CLASS_MANIFESTS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Called once from the daemon, before any service is constructed.
+pub fn arm_class_manifest_verification_v1(on: bool) {
+    let _ = VERIFY_CLASS_MANIFESTS.set(on);
+}
+
+fn class_manifest_verification_armed_v1() -> bool {
+    *VERIFY_CLASS_MANIFESTS.get().unwrap_or(&false)
+}
+
+pub fn verify_class_manifests_v1(sdk: &PalwClassSdk, holdings: &[PalwLoadedArtifactV1]) -> Result<usize, String> {
+    let mut checked = 0usize;
+    for holding in holdings {
+        let name = holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string());
+        match misaka_palw_sdk::class_manifest::manifest_beside(holding) {
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Absent => {}
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Disagrees(why) => {
+                return Err(format!("{name}: {why}"));
+            }
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Agrees(m) => {
+                m.verify_against_the_artifact(sdk, holding).map_err(|e| format!("{name}: {e}"))?;
+                checked += m.rows.len();
+            }
+        }
+    }
+    Ok(checked)
+}
+
 pub fn load_class_holdings_v1(
     role: &str,
     sdk: &PalwClassSdk,
@@ -451,6 +502,53 @@ pub fn load_class_holdings_v1(
     });
     for (path, why) in &skipped {
         warn!("[{role}] class artifact {} is not held: {why}", path.display());
+    }
+    // **Fail closed before anything is served.** The sentence goes to stdout as well as the log
+    // because a node that refuses to start must say why where the operator is looking, and a startup
+    // refusal that only appears in a log file is how an operator concludes the binary is broken.
+    if class_manifest_verification_armed_v1() {
+        match verify_class_manifests_v1(sdk, &holdings) {
+            Ok(rows) => info!(
+                "[{role}] --palw-verify-class-manifest: {rows} registered root(s) re-derived from the artifacts beside their \
+                 manifests, all agreeing"
+            ),
+            Err(why) => {
+                let sentence = format!(
+                    "--palw-verify-class-manifest: {why}\n\nThis node will not start. A class manifest is how a registered \
+                     inventory root stops being a value a human types, and one that disagrees with the artifact beside it would \
+                     have this node answer \"yes, I can serve that class\" about weights that produce a different root — whose \
+                     claims are slashable. Regenerate it with `palw-class manifest <artifact>`, or drop the sidecar to derive \
+                     every root instead."
+                );
+                println!("{sentence}");
+                error!("[{role}] {sentence}");
+                std::process::exit(1);
+            }
+        }
+    }
+    // **The sidecar, said out loud at load** — once per artifact, where the operator is already
+    // reading, rather than on a resolve that retries every thirty seconds.
+    //
+    // A `.palwmanifest` is what keeps an inventory root out of human hands, so whether one is present
+    // and whether it agrees are facts about this node's ability to serve a registered class. Absent
+    // is not an error: the node derives, streamed. Disagreeing is not an error either — it still
+    // derives — but it is a line the operator must see, because a sidecar that describes a different
+    // file will mislead whoever reads it next, and nothing on the resolve path fixes a stale file.
+    for holding in &holdings {
+        let name = holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string());
+        match misaka_palw_sdk::class_manifest::manifest_beside(holding) {
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Agrees(m) => info!(
+                "[{role}] class manifest for {name}: {} class(es) with their inventory roots, digest {} — a registered root is                  read rather than walked (`palw-class manifest --check` re-derives them)",
+                m.rows.len(),
+                m.artifact_digest
+            ),
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Absent => info!(
+                "[{role}] no class manifest beside {name}: this node will DERIVE each registered root it is asked about                  (streamed, but 135 s at a 2M context). Write one with `palw-class manifest {name}`"
+            ),
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Disagrees(why) => warn!(
+                "[{role}] the class manifest beside {name} is NOT USED: {why}. This node derives every root instead, so it is                  correct and slow; the file on disk stays wrong until it is regenerated"
+            ),
+        }
     }
     // ADR-0112 Decision 8: the budget's arithmetic, printed where the operator reads the log —
     // and a warning when the host cannot hold what the budget pins, because a budget the kernel

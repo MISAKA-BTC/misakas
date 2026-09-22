@@ -106,15 +106,52 @@ pub(crate) fn dense_artifact_by_registered_root(
     if !misaka_palw_base0::qwen25_a16_backend::a16_court_capable_v1(profile) {
         return None;
     }
-    // **Streamed, because this runs once per CANDIDATE holding.** `a16_inventory_v1` materializes
-    // one row digest per leaf; at a 2M context that is `max_position` rotary rows for each holding
-    // this asks about, and the question is only ever "does its root equal these 64 bytes".
-    // `a16_inventory_root_v1` answers it from the frontier (`a16_streamed_root.rs` pins the two
-    // roots equal), so a resolve costs one peak per tree level instead of the whole inventory.
-    holdings
-        .iter()
-        .filter_map(artifact_of)
-        .find(|a| misaka_palw_base0::inventory::a16_inventory_root_v1(a, profile).is_ok_and(|r| r == root))
+    // **The sidecar first, then the frontier** — this runs once per CANDIDATE holding, and the
+    // question is only ever "does this holding's root for this class equal these 64 bytes".
+    //
+    // `<artifact>.palwmanifest` answers it in a few hundred bytes when the operator has written one
+    // (`palw-class manifest`), and the sidecar is bound to the file's digest so it cannot describe a
+    // different artifact. Failing that, `a16_inventory_root_v1` streams the walk — 135 s and no
+    // per-leaf state at a 2M context, against the materialized build's 11.5 GiB and a kernel kill.
+    //
+    // A sidecar that disagrees with its own file is not trusted and not ignored: the derivation runs
+    // and `SIDECAR_DISAGREED` records it for the node to report, because a stale sidecar left
+    // unmentioned is how the next reader inherits it.
+    let class_id = kaspa_consensus_core::palw_class_identity_v1::PalwClassIdV1::of_this_graph(profile.shape_profile_id());
+    holdings.iter().find(|holding| {
+        let Some(a) = artifact_of(holding) else { return false };
+        match crate::class_manifest::inventory_root_from_sidecar(holding, class_id) {
+            Ok(Some(claimed)) => claimed.into_hash64() == root,
+            Ok(None) => misaka_palw_base0::inventory::a16_inventory_root_v1(&a, profile).is_ok_and(|r| r == root),
+            Err(why) => {
+                note_sidecar_disagreement(&why.to_string());
+                misaka_palw_base0::inventory::a16_inventory_root_v1(&a, profile).is_ok_and(|r| r == root)
+            }
+        }
+    }).and_then(artifact_of)
+}
+
+/// **Sidecars that disagreed with their own file, for the node to report once.**
+///
+/// The SDK has no logger and a resolve runs on a hot path, so the sentence is parked here and the
+/// node drains it (`palw_backends`). A `Mutex<BTreeSet>` rather than a counter: the operator needs
+/// the sentence, and needs it once rather than once per retry — testnet-12's producers retried every
+/// thirty seconds for hours.
+fn sidecar_disagreements() -> &'static std::sync::Mutex<std::collections::BTreeSet<String>> {
+    static SEEN: std::sync::OnceLock<std::sync::Mutex<std::collections::BTreeSet<String>>> = std::sync::OnceLock::new();
+    SEEN.get_or_init(|| std::sync::Mutex::new(std::collections::BTreeSet::new()))
+}
+
+fn note_sidecar_disagreement(why: &str) {
+    if let Ok(mut seen) = sidecar_disagreements().lock() {
+        seen.insert(why.to_string());
+    }
+}
+
+/// Every distinct sidecar disagreement seen so far. The node prints these; nothing clears them,
+/// because a disagreement does not stop being true.
+pub fn sidecar_disagreements_v1() -> Vec<String> {
+    sidecar_disagreements().lock().map(|s| s.iter().cloned().collect()).unwrap_or_default()
 }
 
 fn dense_artifacts(holdings: &[PalwLoadedArtifactV1]) -> Vec<Base0ArtifactV1> {

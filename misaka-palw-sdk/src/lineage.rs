@@ -166,6 +166,35 @@ pub trait PalwModelLineageV1: Send + Sync {
     /// `Err` carries the field-naming refusal — derive, never declare (ADR-0046).
     fn pair(&self, court: &PalwCourtParamsV2, entry: &PalwClassEntryV1, artifact: &PalwLoadedArtifactV1) -> Result<Hash64, String>;
 
+    /// **The root for a registered class on the READ side, from the sidecar when there is one.**
+    ///
+    /// [`Self::pair`] is the derivation and stays the derivation — it is what WRITES a manifest, and
+    /// a manifest derived from a manifest would record nothing. This is the other direction: a
+    /// resolve asks "does the artifact I hold produce the root the chain registered", and at a 2M
+    /// context deriving that answer costs 135 s and several GiB (measured) while reading it costs a
+    /// few hundred bytes.
+    ///
+    /// A default method, so there is one implementation of "sidecar first, derivation second" for
+    /// every lineage rather than one per lineage to keep in step.
+    ///
+    /// The second return value is a sidecar that disagrees with its own file. It does NOT silence
+    /// the question — the root is still derived — and it is handed back rather than swallowed,
+    /// because trusting such a sidecar ships a wrong root while ignoring it quietly leaves a stale
+    /// one on disk forever. Both are how this class of defect survives a rebuild.
+    fn root_for_resolve(
+        &self,
+        court: &PalwCourtParamsV2,
+        entry: &PalwClassEntryV1,
+        artifact: &PalwLoadedArtifactV1,
+    ) -> (Result<Hash64, String>, Option<String>) {
+        let class_id = kaspa_consensus_core::palw_class_identity_v1::PalwClassIdV1::of_this_graph(entry.class_id());
+        match crate::class_manifest::inventory_root_from_sidecar(artifact, class_id) {
+            Ok(Some(root)) => (Ok(root.into_hash64()), None),
+            Ok(None) => (self.pair(court, entry, artifact), None),
+            Err(why) => (self.pair(court, entry, artifact), Some(why.to_string())),
+        }
+    }
+
     /// **Resolve the class the chain named into something that can run it** — or say it is not
     /// this lineage's class.
     ///

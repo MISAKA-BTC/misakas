@@ -444,6 +444,10 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         exit(1);
     }
 
+    // Before any service constructs its holdings, because the check has to be the same for all of
+    // them (see `arm_class_manifest_verification_v1`).
+    crate::palw_backends::arm_class_manifest_verification_v1(args.palw_verify_class_manifest);
+
     let params = {
         let params: Params = network.into();
         match &args.override_params_file {

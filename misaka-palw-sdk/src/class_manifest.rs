@@ -350,3 +350,52 @@ mod tests {
         }
     }
 }
+
+/// **What a holding's sidecar turned out to be.** Three answers, because "no manifest" and "a
+/// manifest about another file" must not collapse into one: the first is an operator who never ran
+/// `palw-class manifest`, and the second is a file that will mislead the next reader.
+#[derive(Debug)]
+pub enum PalwManifestLookupV1 {
+    /// No sidecar beside the artifact, or the holding came from no file. Derive.
+    Absent,
+    /// A sidecar that describes this exact file.
+    Agrees(PalwClassManifestFileV1),
+    /// A sidecar that does not. **The caller derives anyway and SAYS SO** — silently ignoring it is
+    /// how a stale root survives, and silently trusting it is how a wrong one ships.
+    Disagrees(PalwClassManifestErrorV1),
+}
+
+/// The sidecar beside a holding's file, checked against that file.
+///
+/// Reading it is a few hundred bytes; the walk it replaces is 135 s and several GiB at a 2M context
+/// (measured), so this is re-read per lookup rather than cached in the holding — the cost is not
+/// where the problem was.
+pub fn manifest_beside(holding: &crate::PalwLoadedArtifactV1) -> PalwManifestLookupV1 {
+    let Some(path) = holding.path.as_ref() else { return PalwManifestLookupV1::Absent };
+    let sidecar = PalwClassManifestFileV1::path_beside(path);
+    let Ok(text) = std::fs::read_to_string(&sidecar) else { return PalwManifestLookupV1::Absent };
+    match PalwClassManifestFileV1::from_json(&text) {
+        Err(e) => PalwManifestLookupV1::Disagrees(e),
+        Ok(m) => match m.agrees_with_artifact(holding) {
+            Ok(()) => PalwManifestLookupV1::Agrees(m),
+            Err(e) => PalwManifestLookupV1::Disagrees(e),
+        },
+    }
+}
+
+/// **The root for a class, from the sidecar when it can be trusted.**
+///
+/// `Ok(Some(root))` — the sidecar named it. `Ok(None)` — no usable sidecar, or it does not carry
+/// this class; derive. `Err(why)` — a sidecar that disagrees with its own file, which the caller
+/// must surface before falling back, because it is a fact about the operator's disk that no amount
+/// of deriving fixes.
+pub fn inventory_root_from_sidecar(
+    holding: &crate::PalwLoadedArtifactV1,
+    class_id: PalwClassIdV1,
+) -> Result<Option<PalwInventoryRootV1>, PalwClassManifestErrorV1> {
+    match manifest_beside(holding) {
+        PalwManifestLookupV1::Absent => Ok(None),
+        PalwManifestLookupV1::Disagrees(e) => Err(e),
+        PalwManifestLookupV1::Agrees(m) => Ok(m.rows.iter().find(|r| r.class_id == class_id).map(|r| r.inventory_root)),
+    }
+}

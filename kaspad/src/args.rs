@@ -260,6 +260,10 @@ pub struct Args {
     pub palw_dump_classes: bool,
     /// ADR-0067: arm the chain-registered-class arm (the fence's node half).
     pub palw_chain_classes: bool,
+    /// ADR-0151 follow-up: recompute every class manifest at startup and REFUSE TO START on any
+    /// disagreement. Off by default because the recomputation is 135 s an artifact at a 2M context;
+    /// on for any node whose sidecars it did not write itself.
+    pub palw_verify_class_manifest: bool,
     /// ADR-0067 Decision 6: `class-id:file` pairs whose declarations this node should adopt.
     pub palw_class_carriage: Vec<String>,
     pub palw_bond_collateral: Option<u64>,
@@ -459,6 +463,7 @@ impl Default for Args {
             palw_register_bond: false,
             palw_dump_classes: false,
             palw_chain_classes: false,
+            palw_verify_class_manifest: false,
             palw_class_carriage: Vec::new(),
             palw_bond_collateral: None,
             palw_producer_class: None,
@@ -1447,6 +1452,21 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-verify-class-manifest")
+                .long("palw-verify-class-manifest")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: re-derive every root in every `<artifact>.palwmanifest` at startup and REFUSE TO \
+                     START if one disagrees with the file beside it. A manifest is how a registered inventory root \
+                     stops being a value a human types — twice now, a flat artifact digest was pinned where the \
+                     operand-inventory root belonged and a network's dense tier produced zero blocks — and a cache \
+                     nobody checks is how a wrong value survives. Off by default because the recomputation is about \
+                     135 s an artifact at a 2,097,152 context; on is the right setting for any node serving a sidecar \
+                     it did not write itself. Without it the node still reports, at load, whether each manifest is \
+                     present and whether it agrees, and derives every root it cannot read.",
+                ),
+        )
+        .arg(
             Arg::new("palw-dump-classes")
                 .long("palw-dump-classes")
                 .action(ArgAction::SetTrue)
@@ -2092,6 +2112,11 @@ impl Args {
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),
             palw_chain_classes: arg_match_unwrap_or::<bool>(&m, "palw-chain-classes", defaults.palw_chain_classes),
+            palw_verify_class_manifest: arg_match_unwrap_or::<bool>(
+                &m,
+                "palw-verify-class-manifest",
+                defaults.palw_verify_class_manifest,
+            ),
             palw_class_carriage: m
                 .get_many::<String>("palw-class-carriage")
                 .map(|v| v.cloned().collect())
