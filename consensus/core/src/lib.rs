@@ -223,6 +223,7 @@ pub mod palw_e2e_adjudicability;
 /// claim or per block and do not. A doc comment with a test suite attached; no rule, no state,
 /// no caller. Read it before proposing that one answer become several claims.
 pub mod palw_economic_compute_v1;
+pub mod palw_economic_safety_v1;
 pub mod palw_economic_locus_v1;
 pub mod palw_economic_payout_v1;
 pub mod palw_economics_ledger_v1;
