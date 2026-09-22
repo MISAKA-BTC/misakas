@@ -1,6 +1,9 @@
 # ADR-0151 — Liveness is structural; collateral covers fraud
 
-* Status: **D2 and D3 ARMED on testnet-12 from genesis. D1 partially landed. D4, D5, D6 open.**
+* Status: **D2, D3, D4 and D5 in force on testnet-12 from genesis; D1's genesis half landed, its
+  runtime half open; D6 partially.** D4 and D5 were drafted as OPEN from a description of the defect
+  and turned out to be already built — that correction is recorded in their sections rather than
+  edited away.
   testnet-12 is the last testnet before mainnet, so the operator's decision (2026-09-22) was to start
   it on the separated design rather than ship the capital buffer and remove it later.
 * Date: 2026-09-22
@@ -81,35 +84,70 @@ bind window is ~20 hours of wall clock and the 7,200-DAA exposure span is ~10 da
 collateral-dependent — but a claim's exposure is held far longer in wall-clock terms than the figures
 suggest, and D4 is what stops that from blocking new work.
 
-### D1 — collateral is reachable fraud liability — **PARTIALLY LANDED**
+### D1 — collateral is reachable fraud liability — **GENESIS HALF LANDED**
 
-`palw_v2_collateral_for_class_set_v1` sums per class instead of maxing over the dearest: the floor at
-`MAX_CLAIM_EXPOSURE_DAA + 1` (genuinely reachable) plus each model row at
-`PALW_MODEL_CLAIM_CONCURRENCY_V1 = 4` (its enforced cap ×4). 21,630.05 MSK.
+`palw_v2_collateral_for_class_set_v1` makes two corrections, which pull in opposite directions:
 
-**Not yet done:** the per-claim primitive is still `pwu × slash_value`, a proxy that tracks compute.
-The correct one is `max_fraud_gain / minimum_colluding_quorum` — ADR-0144 §9 already derives the first
-(`palw_max_fraud_gain_v1`) and the lock ledger already spends against it. Compute is not what a liar
-gains, so 21,630.05 MSK is an improved ceiling and not yet the economic requirement. This wants its own
-commit, because it changes the runtime exposure ledger and not only a genesis figure.
+* **concurrency, per class instead of the dearest** — the floor at `MAX_CLAIM_EXPOSURE_DAA + 1`
+  (genuinely reachable), each model row at `PALW_MODEL_CLAIM_CONCURRENCY_V1 = 4` (its enforced cap ×4);
+* **liability, per claim, is `palw_max_fraud_gain_v1` = `escrowed_reward + fork_weight(pwu, slash)`** —
+  the fraud a Valid Final AUTHORIZES, not the compute it counts.
 
-### D4 — admission capacity and slash liability are separate ledgers — **OPEN**
+**The second correction RAISES the figure, and that was the finding.** The expectation was a refinement
+downward; measured, the dense row's gain is 2,702.96 MSK against 1,350.15 MSK of `pwu × slash`, because
+a claim's `pwu` is the expected attempt count times one inference — so the fork weight a Final buys is
+twice what the bond reserves against it. And the ESCROW half of a gain does not shrink with a cheap
+claim, so the floor's term (7,201 concurrent × 2.66814 MSK) becomes the largest of the three.
 
-A claim under verification consumes `max_inflight`. On `Final` or `Voided` the **processing capacity
-must return immediately**; only the slashable exposure stays, in a liability ledger, until its
-challenge horizon passes. Today one ledger does both, which is why a resolved claim's collateral still
-blocks new work — and, given the wall-clock spans above, blocks it for days.
+| class | concurrent | gain/claim | collateral |
+|---|---|---|---|
+| BASE-0 floor | 7,201 | 2.66814 MSK | 38,426.56 MSK |
+| held Qwen3.6 @512 | 4 | 4.73917 MSK | 37.91 MSK |
+| held Qwen2.5 @2M | 4 | 2,702.96409 MSK | 21,623.71 MSK |
+| | | | **60,088.18 MSK** |
 
-### D5 — one derived profile per class, and duration is not weight — **OPEN**
+Eight seats: 480,705.47 MSK, 0.0048 % of the 10B cap.
 
-A class's receipt deadline, liability horizon and windows all come from
-`verification_window_spans × span_daa`. A long horizon must not by itself raise reward, quanta or a
-collateral multiple: `lifecycle duration ≠ economic weight`.
+**The runtime half is NOT done, and this is the one place testnet-12 knowingly ships a gap.** A
+producer's live reservation is still `palw_exposure_pwu_v1 × slash_value`, i.e. half the gain on the
+dense row. Closing it means splitting a value the design keeps unified on purpose: that same
+`DerivedV1` arm feeds ADR-0124's work price and ADR-0125's execution credit, and "paid on the same
+number it can be slashed on" is what `work_priced_escrow` rests on. Its own commit, on the running
+network.
 
-### D6 — the gate asks for progress, not for capital — **OPEN**
+### D4 — admission capacity and slash liability are separate ledgers — **ALREADY BUILT, armed here**
 
-`verify_palw_genesis_v2` currently asks a yes/no question about the clock (D2). The end state is the
-§4 search run against the card: from every reachable state, can this network advance?
+Drafted as OPEN on the premise that "one ledger does both jobs". **That premise is false**, and the
+check is recorded rather than the draft quietly fixed:
+
+* `reserved_exposure` is the CAPACITY ledger. `release_for_claim` runs **on `Final` and on `Voided`
+  alike** — "the exposure and the immature contribution both belong only to non-terminal claims" — so
+  processing capacity returns the moment a claim resolves.
+* `slashable_locks: BTreeMap<(bond, claim), PalwSlashableLockV1>` is the LIABILITY ledger:
+  `{ claim, amount, expiry_daa }`, `is_live(now_daa)`, no claim bytes retained. Its own doc is this
+  decision's sentence: *"Final does not erase liability … withdraw is refused while any lock on the
+  bond is live."*
+
+What testnet-12 adds is that the second is armed from DAA 0 (`palw_objective_offence`, which
+testnet-11 schedules at 8,500). Pinned by `t12_adr0151_d4_d5::d4_the_liability_ledger_is_armed_from_genesis`.
+
+### D5 — one derived profile per class, and duration is not weight — **ALREADY BUILT, armed here**
+
+Also drafted as OPEN, also already true:
+
+* **duration is not weight.** `palw_economic_payout_v1` contains no `window`, no `_daa`, no
+  `deadline` and no `expiry` — the reward is `min(escrow, C_P × rate)` and the panel's share is
+  `clamp(α·C_V / (C_P + α·C_V), S_min, S_max)`. A source-level test pins the absence, because the
+  property is "no such term exists" and only the text can state that.
+* **the deadline is the class's own.** ADR-0133 §11.3's `max(window_receipt,
+  verification_window_spans × span_daa)`, armed from genesis here (`palw_class_receipt_window`), which
+  is what lets the 2M row leave `Probation` without weakening the network's deadline for anybody.
+
+### D6 — the gate asks for progress, not for capital — **HALF DONE**
+
+The question has changed: `verify_palw_genesis_v2_with_clock_v1` asks a FACT about the network's clock
+rather than sizing capital. What it does not yet do is run §4's reachable-state search against the
+card. That search is owed as a drill before deployment (§4) and belongs in the gate before mainnet.
 
 ## 3. What this does NOT change
 
@@ -142,8 +180,11 @@ predicate is not a wedge search, and this ADR does not claim it is.
 
 ## 5. Order of the remaining work
 
-1. **testnet-12 genesis** — D2, D3, D1-partial. Done 2026-09-22; §4's drill before deployment.
-2. **After t12 is running** — D4, then D1's fraud-gain primitive, then D5. t12 is the network that
-   rehearses them.
-3. **Before mainnet** — D6, and the removal of the `window_bind × dearest` code path entirely rather
-   than its conditioning. A mainnet card must not be populated while that path can still be reached.
+1. **testnet-12 genesis** — D2, D3, D4, D5 and D1's genesis half. Done 2026-09-22. **§4's wedge search
+   before the network carries value.**
+2. **On the running t12** — D1's runtime half: the producer's live reservation raised to the gain its
+   claim authorizes, which means separating the reservation from the work price and the execution
+   credit. t12 is the network that rehearses it.
+3. **Before mainnet** — D6 in full (the gate runs §4's search), and the removal of the
+   `window_bind × dearest` code path entirely rather than its conditioning. A mainnet card must not be
+   populated while that path can still be reached.
