@@ -72,28 +72,54 @@ pub const MISAKA_PREMINE_CAP_SOMPI: u64 = 10_000_000_000 * SOMPI_PER_KASPA;
 /// `palw_locked_bond_outpoints_v2`.
 pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 
-/// **testnet-12's genesis-bond collateral: 38,889,673.33839680 MSK a seat.**
+/// **testnet-12's genesis-bond collateral: 1,620,178.03104000 MSK a seat.**
 ///
-/// Not a policy choice and not a bigger version of the number above — it is what
-/// `palw_v2_collateral_for_claim_lifetime_v1` DERIVES for the dearest class this genesis registers,
-/// and the C-08 gate ("a bond declares only what its outpoint holds") is what makes the premine
-/// obey the derivation instead of the other way round.
+/// Derived, not chosen — [`crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1`] over the
+/// classes this genesis registers — and pinned here because the premine has to carve what the card
+/// declares (audit C-08: a bond may declare only what its outpoint holds).
 ///
-/// The dearest class is the held Qwen2.5 row at `n_ctx` 2,097,152, whose canonical job counts
-/// ~2.16×10¹¹ step leaves against the 512 row's ~5.3×10⁷ — four thousand times the claim, four
-/// thousand times the exposure a bond reserves while it is open. Carving t11's 10,000 MSK here
-/// would mint a registry whose every claim fails `the bond's exposure ceiling leaves no room`, i.e.
-/// a network that registers a 2M class and can never produce one block of it.
+/// **Two bounds, and the larger one wins.**
 ///
-/// Eight seats take 311,117,386.7 MSK of the 10B cap, beside the 758M community table — the main
-/// wallet keeps ~8.93B, and `every_network_genesis_mints_exactly_the_10b_cap` still holds, because
-/// this is carved OUT of the main wallet like every other genesis output.
+/// *The admission sum*, which is what a bond's ceiling must cover for its claims to be accepted:
 ///
-/// **Pinned rather than recomputed here**, because the derivation needs the class profile, its
-/// canonical job and the ruleset's ladder — three things a premine table has no business holding.
-/// `t12_bond_collateral_matches_the_card` re-derives it from the shipped card and fails the build
-/// on any drift, which is the same discipline the genesis hash pins live under.
-pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 3_888_967_333_839_680;
+/// | class | concurrent claims | collateral |
+/// |---|---|---|
+/// | BASE-0 floor (pwu 7,708) | 7,201 — `MAX_CLAIM_EXPOSURE_DAA + 1`, genuinely reachable | 11.10 MSK |
+/// | held Qwen3.6 @512 (pwu 2.07×10⁷) | 4 — its in-flight cap ×4 | 16.57 MSK |
+/// | held Qwen2.5 @2,097,152 (pwu 2.70×10¹⁰) | 4 — same | 21,602.37 MSK |
+/// | | | **21,630.05 MSK** |
+///
+/// *The genesis liveness bound*, `verify_palw_genesis_v2`'s `BondCannotSustainBindWindow`: the
+/// dearest class's per-claim reservation × `window_bind` (600). A claim is not released until
+/// `BindTimeout`, and DAA advances only when blocks are produced, so a bond that cannot hold the
+/// window deep stops the chain with no timeout and no operator action. **1,620,178.03 MSK**, and it
+/// is the bound that binds.
+///
+/// **This was 38,889,673.34 MSK before the operator questioned it (2026-09-22), and the objection
+/// was right.** `palw_v2_collateral_for_claim_lifetime_v1` prices the dearest class at
+/// `max(per-claim) × (MAX_CLAIM_EXPOSURE_DAA + 1)` = ×7,201 — the FLOOR's concurrency applied to a
+/// class the class-local gate caps at one in flight. One 2M claim's exposure is 5,400.59 MSK; the
+/// collapse asked for seven thousand of them at once, and a seat cost more than twice the entire
+/// 758M community allocation. The liveness bound needs 601 of them, not 7,201, which is 24× less.
+///
+/// **It locks the operator's own money and is not an entry price.** The bound is GENESIS-ONLY: a bond
+/// registered later meets the runtime ceiling alone — one 2M claim reserves ~1,350 MSK, so ~2,700 MSK
+/// declared carries it — so nothing here is a barrier to a newcomer running a 2M seat. Eight seats
+/// take 12,961,424.25 MSK, **0.13 % of the 10B cap**, beside the 758M community table, and
+/// `every_network_genesis_mints_exactly_the_10b_cap` still holds because this is carved OUT of the
+/// main wallet like every other genesis output.
+///
+/// **The remaining conservatism is the gate's, not this constant's.** Whether the dearest class can
+/// really be held 600 deep is a question the gate cannot ask at genesis — the in-flight cap it would
+/// need comes from a registry that does not exist yet — so it takes the safe answer. Teaching it the
+/// cap would bring this to the 21,630 MSK sum above; that is a change to a consensus gate and wants
+/// its own drill, so it is named here rather than done in passing.
+///
+/// **Pinned rather than recomputed here**, because the derivation needs the class profiles, their
+/// canonical jobs and the ruleset's ladder — three things a premine table has no business holding.
+/// `t12_bond_collateral_matches_the_card` re-derives it from the shipped card and fails the build on
+/// any drift, which is the discipline the genesis hash pins already live under.
+pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 162_017_803_104_000;
 
 /// The genesis-bond collateral `net` carves, per seat.
 fn genesis_bond_collateral_for(net: NetworkId) -> u64 {

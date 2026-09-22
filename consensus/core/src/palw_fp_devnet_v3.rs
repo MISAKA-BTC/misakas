@@ -580,6 +580,92 @@ pub struct PalwGenesisBondSpecV1 {
     pub payout_payload: Hash64,
 }
 
+/// **How many claims of ONE model class a genesis bond is funded for** — four, against the one the
+/// chain enforces.
+///
+/// The class-local gate at acceptance refuses a rowed class past its in-flight cap, and the held 2M
+/// row's cap is one (ADR-0133's derived profile); the execution lane admits one permit a round on
+/// top of that. Four is therefore a 4× margin over the enforced concurrency, in the safe direction,
+/// and small enough that the margin is not the entry price.
+pub const PALW_MODEL_CLAIM_CONCURRENCY_V1: u64 = 4;
+
+/// **Collateral for a genesis registry, sized per CLASS instead of on the dearest one alone.**
+///
+/// [`palw_v2_collateral_for_claim_lifetime_v1`] multiplies the DEAREST class's per-claim exposure by
+/// `MAX_CLAIM_EXPOSURE_DAA + 1` — 7,201 on the shipped windows — because a bond really can
+/// accumulate that many claims before the first one finalizes. That is true of the LIVENESS FLOOR,
+/// whose claims arrive one a block and which no cap limits. It is false of a model class: the
+/// class-local gate refuses one past its in-flight cap, which the held 2M row derives as one.
+///
+/// Collapsing the two into `max(per-claim) × 7201` prices the dearest class as if it were also the
+/// most concurrent. Measured on the testnet-12 card: the held Qwen2.5 row at `n_ctx` 2,097,152 costs
+/// **5,400.59 MSK for one claim** and **38,889,673.34 MSK** under the collapse — a 7,201× figure
+/// that would make a seat on a public testnet cost more than the whole community allocation. The
+/// floor, at genuine full concurrency, costs 11.10 MSK.
+///
+/// So this sums the terms instead of maxing them:
+///
+/// ```text
+/// (  floor_pwu  × slash × (MAX_CLAIM_EXPOSURE_DAA + 1)            // the floor, really concurrent
+///  + Σ model_pwu × slash × PALW_MODEL_CLAIM_CONCURRENCY_V1  )     // each model row, at its cap ×4
+/// × 1000 / MAX_EXPOSURE_RATIO_PERMILLE
+/// ```
+///
+/// Every constant is the one [`palw_v2_collateral_for_claim_lifetime_v1`] uses, read from the same
+/// place, so the two derivations cannot drift on the arithmetic they share — only on the
+/// concurrency assumption, which is the whole point of having two.
+///
+/// **It is still an over-estimate, deliberately.** `pwu` here is `palw_pwu_v1`'s — one inference
+/// times the expected attempt count at the genesis target — while a claim reserves one inference's
+/// worth (`palw_exposure_pwu_v1`). The margin is named rather than tightened, for the reason the
+/// sibling function gives: funding a bond above its requirement costs an operator nothing the chain
+/// enforces, and funding one below it is a permanent wedge.
+pub fn palw_v2_collateral_for_class_set_v1(floor_pwu_per_inference: u64, model_pwus_per_inference: &[u64], window_bind: u64) -> u64 {
+    let exposure = |pwu_per_inference: u64, concurrency: u64| -> u128 {
+        let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
+        (pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU as u128).max(1).saturating_mul(concurrency as u128)
+    };
+    let mut ceiling = exposure(floor_pwu_per_inference, MAX_CLAIM_EXPOSURE_DAA + 1);
+    for pwu in model_pwus_per_inference {
+        ceiling = ceiling.saturating_add(exposure(*pwu, PALW_MODEL_CLAIM_CONCURRENCY_V1));
+    }
+    // **And the genesis LIVENESS bound, which is the one that actually binds** (`verify_palw_genesis_v2`'s
+    // `BondCannotSustainBindWindow`).
+    //
+    // The per-class sum above is what a bond's exposure ceiling has to cover for its claims to be
+    // ADMITTED. It is not what the genesis gate asks. The gate asks something stronger and for a
+    // different reason: a claim is not released until `BindTimeout` at `window_bind` DAA, and on a
+    // `ConsensusV2` network DAA advances only when blocks are produced — so a bond whose ceiling
+    // admits fewer concurrent claims than the window is long fills the ceiling, needs DAA it can
+    // only get by producing, and the chain stops with no timeout and no operator action. The gate
+    // measures that against the DEAREST registered class, because that is the one that fills a
+    // ceiling first (measured: a registry sized on the base class alone passed, and a producer for
+    // the funded tier wedged after fifteen blocks).
+    //
+    // Whether the dearest class can really be held `window_bind` deep is a question the gate cannot
+    // ask at genesis — the in-flight cap it would need is derived from a registry that does not exist
+    // yet — so the gate takes the conservative answer and this derivation matches it rather than
+    // arguing with it. The cost is a locked figure, not a barrier: the bound is GENESIS-ONLY, so a
+    // bond registered later meets only the runtime ceiling (one 2M claim's reservation, ~2,700 MSK),
+    // and a newcomer is unaffected by this number.
+    let liveness = model_pwus_per_inference
+        .iter()
+        .chain(std::iter::once(&floor_pwu_per_inference))
+        .map(|pwu| {
+            let per_claim = (crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(
+                &crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: *pwu },
+            ) as u128)
+                .saturating_mul(SLASH_VALUE_PER_PWU as u128)
+                .max(1);
+            per_claim.saturating_mul(window_bind as u128)
+        })
+        .max()
+        .unwrap_or(0);
+    let ceiling = ceiling.max(liveness);
+    let collateral = ceiling.saturating_mul(1000).div_ceil(MAX_EXPOSURE_RATIO_PERMILLE as u128);
+    collateral.max(MIN_COLLATERAL_SOMPI as u128).min(u64::MAX as u128) as u64
+}
+
 /// **The collateral a bond must declare to survive its own bind window.**
 ///
 /// Every ConsensusV2 block is an attempt, so every block creates a claim reserving

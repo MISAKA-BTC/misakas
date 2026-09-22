@@ -10277,8 +10277,45 @@ pub fn palw_v2_params_with_class_rows_v1(
     // ceiling is `declared × max_exposure_ratio`, so the surplus sitting in the outpoint bought
     // exactly one extra concurrent claim, and the ADR's "≈3× margin" existed on paper only. The
     // held amount is the honest figure and C-08 (`held ≥ declared`) still passes by construction.
-    let carried_collateral = crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
-        .max(crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI);
+    // **Sized per CLASS on a held card, on the dearest class alone on the RC's.**
+    //
+    // `palw_v2_collateral_for_claim_lifetime_v1` prices `max(per-claim) × (MAX_CLAIM_EXPOSURE_DAA + 1)`
+    // = ×7,201, because a bond really can accumulate that many claims before the first finalizes.
+    // That concurrency is the FLOOR's; a model class is refused past its in-flight cap, which the
+    // held 2M row derives as one. Measured on this card: the collapse asks 38,889,673.34 MSK a seat
+    // and the honest sum asks about 21,700 — the floor at genuine full concurrency is 11.10 MSK and
+    // one 2M claim is 5,400.59. A seat that costs more than the whole community allocation is not a
+    // safety margin, it is a closed network.
+    //
+    // The RC path keeps the collapse untouched: testnet-11's registry is a live chain fact, and at
+    // `n_ctx` 512 the two derivations differ by little enough that re-sizing it would move a shipped
+    // genesis to save collateral nobody is short of.
+    let carried_collateral = if no_declared_share {
+        let floor_pwu = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, .. }
+                    if *class_id == bundle.base_class_id =>
+                {
+                    match pwu_rule {
+                        crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => Some(*pwu_per_inference),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .max()
+            .ok_or(invalid("the base assembly carries no floor registration to size collateral against"))?;
+        let model_pwus: Vec<u64> = std::iter::once(genesis_pwu_of(&object))
+            .chain(dense.as_ref().map(|(_, _, dense_object)| genesis_pwu_of(dense_object)))
+            .collect();
+        crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1(floor_pwu, &model_pwus, bundle.state.window_bind())
+            .max(crate::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI)
+    } else {
+        crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
+            .max(crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI)
+    };
     // **And the registry has to be able to JUDGE the tiers this card funds** (ADR-0071
     // Decision 3).
     //
