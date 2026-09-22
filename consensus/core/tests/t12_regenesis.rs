@@ -206,3 +206,38 @@ fn t12_keeps_t11_peer_port() {
     assert_eq!(t12().default_p2p_port(), 26311);
     assert_eq!(NetworkId::with_suffix(NetworkType::Testnet, 11).default_p2p_port(), 26311);
 }
+
+/// **The fleet's own command lines keep working across the regenesis.**
+///
+/// Every live node names three premine outpoints on its command line — its bond's collateral index,
+/// its fee float index, and (through `--palw-producer-class`) the class it produces for. If any of
+/// them moved, the switch would look like a working deployment and every submission would fail: a
+/// `--palw-fee-outpoint` that names nothing funds no lifecycle transaction, and a producer whose
+/// escrow never releases is the closed loop the fee floats exist to open.
+///
+/// Measured off the hosts on 2026-09-22: bond-1 pairs with fee outpoint 42 … bond-6 with 47.
+#[test]
+fn the_fleets_premine_outpoints_are_unchanged() {
+    let utxos = genesis_premine_utxos_for(t12());
+    // The floats sit after the main wallet, one per card, in card order.
+    for (position, card) in PALW_RC_GENESIS_BONDS.iter().enumerate() {
+        let float_index = MAIN_PREMINE_INDEX + 1 + position as u32;
+        let float = utxos.get(&premine_outpoint(float_index)).map(|e| e.amount);
+        assert_eq!(float, Some(PALW_RC_BOND_FEE_FLOAT_SOMPI), "bond {} float at outpoint {float_index}", card.premine_index);
+        // And the collateral sits at the card's own declared index, which is its bond identity.
+        let collateral = utxos.get(&premine_outpoint(card.premine_index)).map(|e| e.amount);
+        assert_eq!(collateral, Some(PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI), "bond {} collateral", card.premine_index);
+    }
+    // The six the fleet actually runs, spelled out so the pairing is readable rather than derived.
+    for (bond_index, fee_index) in [(1u32, 42u32), (2, 43), (3, 44), (4, 45), (5, 46), (6, 47)] {
+        let position = PALW_RC_GENESIS_BONDS
+            .iter()
+            .position(|c| c.premine_index == bond_index)
+            .expect("the fleet's bond is a genesis card");
+        assert_eq!(
+            MAIN_PREMINE_INDEX + 1 + position as u32,
+            fee_index,
+            "bond {bond_index} must still pair with fee outpoint {fee_index} — the host command lines name it"
+        );
+    }
+}
