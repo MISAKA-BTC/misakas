@@ -106,10 +106,10 @@ fn t12_collateral_is_the_liability_not_the_liveness_bound() {
             _ => None,
         })
         .expect("eight genesis bonds");
-    assert_eq!(declared, 2_163_004_918_320, "21,630.04918320 MSK — the reachable fraud liability");
+    assert_eq!(declared, 6_008_818_407_600, "60,088.18407600 MSK — the fraud a bond's reachable claims authorize");
     // The bind-window figure this replaced, stated so the test names the size of the change rather
-    // than asserting a number nobody can place: 1,620,178.03104000 MSK, about 75x.
-    assert_eq!(162_017_803_104_000u64 / declared, 74);
+    // than asserting a number nobody can place: 1,620,178.03104000 MSK, about 27x.
+    assert_eq!(162_017_803_104_000u64 / declared, 26, "the liveness bound was ~27x the liability it stood in for");
 }
 
 /// **A network that does NOT have the structural guarantee keeps the bind-window rule.** The default

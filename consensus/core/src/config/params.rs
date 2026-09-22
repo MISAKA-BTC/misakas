@@ -10086,6 +10086,8 @@ pub fn palw_v2_params_with_class_rows_v1(
     }
     // ADR-0151 D3, read before the bundle is borrowed: does this chain's clock need a claim?
     let clock_advances_without_a_claim = palw_clock_advances_without_a_claim_v1(&params);
+    // ADR-0151 D1, same reason: the escrow a claim carries is the cash half of its fraud gain.
+    let base_subsidy_and_carve = (params.pre_deflationary_phase_base_subsidy, params.palw_overlay_carve.map(|c| c.worker_carve_permille));
     // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
     //
     // ADR-0082 Decision 5's fence (`palw_prompt_ids_merkle`) is `None` on every shipped preset, so
@@ -10318,7 +10320,11 @@ pub fn palw_v2_params_with_class_rows_v1(
             .chain(dense.as_ref().map(|(_, _, dense_object)| genesis_pwu_of(dense_object)))
             .collect();
         let bind_window_liveness = (!clock_advances_without_a_claim).then(|| bundle.state.window_bind());
-        crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1(floor_pwu, &model_pwus, bind_window_liveness)
+        // **The escrow a genesis-era claim carries**, which is the cash half of its fraud gain: the
+        // pre-deflationary subsidy through the overlay's worker carve. Read from the preset rather
+        // than assumed, because a card with a different carve authorizes a different lie.
+        let escrowed_reward = escrow_for_a_genesis_claim_v1(&base_subsidy_and_carve);
+        crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1(floor_pwu, &model_pwus, escrowed_reward, bind_window_liveness)
             .max(crate::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI)
     } else {
         crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
@@ -14371,6 +14377,16 @@ pub fn palw_clock_advances_without_a_claim_v1(params: &Params) -> bool {
     // the clock belongs to a lane a bond has to pay to enter.
     let never = |a: ForkActivation| a == ForkActivation::never();
     never(params.pow_blake2b_sha3_activation) && never(params.pow_palw_activation) && never(params.pow_palw_ollama_activation)
+}
+
+
+/// **The escrow one genesis-era claim carries** — the cash half of `palw_max_fraud_gain_v1`
+/// (ADR-0151 D1). The pre-deflationary base subsidy through the overlay's worker carve, which is
+/// what `worker_carve_v2` computes for a block; stated as its own function so the collateral
+/// derivation and a reader are looking at one spelling.
+fn escrow_for_a_genesis_claim_v1((subsidy, carve_permille): &(u64, Option<u16>)) -> u64 {
+    let permille = carve_permille.unwrap_or(0) as u64;
+    subsidy / 1_000 * permille
 }
 
 pub fn palw_t12_base_params() -> Params {

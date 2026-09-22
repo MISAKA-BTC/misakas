@@ -589,71 +589,72 @@ pub struct PalwGenesisBondSpecV1 {
 /// and small enough that the margin is not the entry price.
 pub const PALW_MODEL_CLAIM_CONCURRENCY_V1: u64 = 4;
 
-/// **Collateral for a genesis registry, sized per CLASS instead of on the dearest one alone.**
+/// **Collateral for a genesis registry: the fraud a bond's reachable claims would authorize**
+/// (ADR-0151 D1).
 ///
-/// [`palw_v2_collateral_for_claim_lifetime_v1`] multiplies the DEAREST class's per-claim exposure by
-/// `MAX_CLAIM_EXPOSURE_DAA + 1` — 7,201 on the shipped windows — because a bond really can
-/// accumulate that many claims before the first one finalizes. That is true of the LIVENESS FLOOR,
-/// whose claims arrive one a block and which no cap limits. It is false of a model class: the
-/// class-local gate refuses one past its in-flight cap, which the held 2M row derives as one.
+/// Two corrections to [`palw_v2_collateral_for_claim_lifetime_v1`], and they pull in opposite
+/// directions, which is why both are needed.
 ///
-/// Collapsing the two into `max(per-claim) × 7201` prices the dearest class as if it were also the
-/// most concurrent. Measured on the testnet-12 card: the held Qwen2.5 row at `n_ctx` 2,097,152 costs
-/// **5,400.59 MSK for one claim** and **38,889,673.34 MSK** under the collapse — a 7,201× figure
-/// that would make a seat on a public testnet cost more than the whole community allocation. The
-/// floor, at genuine full concurrency, costs 11.10 MSK.
+/// **Concurrency, per class instead of the dearest.** That function prices
+/// `max(per-claim) × (MAX_CLAIM_EXPOSURE_DAA + 1)` — ×7,201 on the shipped windows — because a bond
+/// really can accumulate that many claims before the first finalizes. That is the LIVENESS FLOOR's
+/// concurrency: its claims arrive one a block and nothing caps them. It is false of a model class,
+/// which the class-local gate refuses past its in-flight cap. Collapsing them priced the dearest
+/// class as if it were also the most concurrent: 38,889,673.34 MSK a seat on the testnet-12 card
+/// against 5,400.59 MSK for one 2M claim.
 ///
-/// So this sums the terms instead of maxing them:
+/// **Liability, per claim, is the fraud a Valid Final AUTHORIZES — not the compute it counts.**
+/// `pwu × slash_value` is a proxy that tracks compute, and compute is not what a liar gains.
+/// [`crate::palw_panel_var_v1::palw_max_fraud_gain_v1`] is the primitive ADR-0144 §9 already derives
+/// and the lock ledger already spends against: `escrowed_reward + fork_weight(pwu, slash) + extra`.
+/// Measured on this card the two differ by a factor of two on the dense row — the claim's `pwu` is
+/// the expected attempt count times one inference, so the fork weight a Final buys is twice what
+/// `palw_exposure_pwu_v1` reserves against it (2,702.96 MSK of gain against 1,350.15 MSK reserved).
+/// The escrow term does not shrink with a cheap claim, which is why the floor's contribution RISES
+/// under this rule even as the dense row's concurrency correction lowers the total.
 ///
 /// ```text
-/// (  floor_pwu  × slash × (MAX_CLAIM_EXPOSURE_DAA + 1)            // the floor, really concurrent
-///  + Σ model_pwu × slash × PALW_MODEL_CLAIM_CONCURRENCY_V1  )     // each model row, at its cap ×4
+/// (  max_fraud_gain(floor claim)  × (MAX_CLAIM_EXPOSURE_DAA + 1)     // the floor, really concurrent
+///  + Σ max_fraud_gain(model claim) × PALW_MODEL_CLAIM_CONCURRENCY_V1 // each model row, at its cap ×4
+///  , and never less than the genesis liveness bound where that still applies )
 /// × 1000 / MAX_EXPOSURE_RATIO_PERMILLE
 /// ```
 ///
-/// Every constant is the one [`palw_v2_collateral_for_claim_lifetime_v1`] uses, read from the same
-/// place, so the two derivations cannot drift on the arithmetic they share — only on the
-/// concurrency assumption, which is the whole point of having two.
-///
-/// **It is still an over-estimate, deliberately.** `pwu` here is `palw_pwu_v1`'s — one inference
-/// times the expected attempt count at the genesis target — while a claim reserves one inference's
-/// worth (`palw_exposure_pwu_v1`). The margin is named rather than tightened, for the reason the
-/// sibling function gives: funding a bond above its requirement costs an operator nothing the chain
-/// enforces, and funding one below it is a permanent wedge.
+/// **What this does NOT fix, and it is named rather than left to be discovered:** the RUNTIME
+/// reservation is still `palw_exposure_pwu_v1 × slash_value`, so a producer's live exposure is half
+/// the gain its claim authorizes on the dense row. Closing that means splitting a value the design
+/// deliberately keeps unified — `palw_exposure_pwu_v1`'s `DerivedV1` arm is read by the collateral, by
+/// ADR-0124's work price and by ADR-0125's execution credit at once, and "paid on the same number it
+/// can be slashed on" is what `work_priced_escrow` is built on. That is ADR-0151 D1's second half and
+/// it wants its own commit. This function makes the GENESIS carve honest; it does not make the
+/// runtime ledger honest.
 pub fn palw_v2_collateral_for_class_set_v1(
     floor_pwu_per_inference: u64,
     model_pwus_per_inference: &[u64],
+    escrowed_reward: u64,
     bind_window_liveness: Option<u64>,
 ) -> u64 {
-    let exposure = |pwu_per_inference: u64, concurrency: u64| -> u128 {
-        let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
-        (pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU as u128).max(1).saturating_mul(concurrency as u128)
+    let gain = |pwu_per_inference: u64| -> u128 {
+        crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
+            reserved: 0,
+            escrowed_reward,
+            // The claim's pwu, as the fold derives it: the expected attempt count at the genesis
+            // target times one inference. This is the number the fork weight is computed from, so it
+            // is the number the gain is computed from.
+            pwu: crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference),
+            slash_value_per_pwu: SLASH_VALUE_PER_PWU,
+            extra_economic_rights_sompi: 0,
+        })
+        .max(1)
     };
-    let mut ceiling = exposure(floor_pwu_per_inference, MAX_CLAIM_EXPOSURE_DAA + 1);
+    let mut ceiling = gain(floor_pwu_per_inference).saturating_mul(MAX_CLAIM_EXPOSURE_DAA as u128 + 1);
     for pwu in model_pwus_per_inference {
-        ceiling = ceiling.saturating_add(exposure(*pwu, PALW_MODEL_CLAIM_CONCURRENCY_V1));
+        ceiling = ceiling.saturating_add(gain(*pwu).saturating_mul(PALW_MODEL_CLAIM_CONCURRENCY_V1 as u128));
     }
     // **And the genesis LIVENESS bound, for a network that still needs it** — `None` where ADR-0151 D3's
     // structural guarantee holds (`palw_clock_advances_without_a_claim_v1`), which is the case this
     // derivation exists for; `Some(window_bind)` reproduces `verify_palw_genesis_v2`'s
     // `BondCannotSustainBindWindow` figure for a chain whose clock really is its claims.
-    //
-    // The per-class sum above is what a bond's exposure ceiling has to cover for its claims to be
-    // ADMITTED. It is not what the genesis gate asks. The gate asks something stronger and for a
-    // different reason: a claim is not released until `BindTimeout` at `window_bind` DAA, and on a
-    // `ConsensusV2` network DAA advances only when blocks are produced — so a bond whose ceiling
-    // admits fewer concurrent claims than the window is long fills the ceiling, needs DAA it can
-    // only get by producing, and the chain stops with no timeout and no operator action. The gate
-    // measures that against the DEAREST registered class, because that is the one that fills a
-    // ceiling first (measured: a registry sized on the base class alone passed, and a producer for
-    // the funded tier wedged after fifteen blocks).
-    //
-    // Whether the dearest class can really be held `window_bind` deep is a question the gate cannot
-    // ask at genesis — the in-flight cap it would need is derived from a registry that does not exist
-    // yet — so the gate takes the conservative answer and this derivation matches it rather than
-    // arguing with it. The cost is a locked figure, not a barrier: the bound is GENESIS-ONLY, so a
-    // bond registered later meets only the runtime ceiling (one 2M claim's reservation, ~2,700 MSK),
-    // and a newcomer is unaffected by this number.
     let liveness = bind_window_liveness
         .map(|window_bind| {
             model_pwus_per_inference
@@ -675,6 +676,7 @@ pub fn palw_v2_collateral_for_class_set_v1(
     let collateral = ceiling.saturating_mul(1000).div_ceil(MAX_EXPOSURE_RATIO_PERMILLE as u128);
     collateral.max(MIN_COLLATERAL_SOMPI as u128).min(u64::MAX as u128) as u64
 }
+
 
 /// **The collateral a bond must declare to survive its own bind window.**
 ///

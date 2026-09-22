@@ -65,6 +65,7 @@ fn t12_bond_collateral_matches_the_card() {
     assert_eq!(declared.len(), 8, "eight genesis bonds");
     for c in &declared {
         assert_eq!(*c, PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI, "the card declares exactly what the premine carves (audit C-08)");
+        assert_eq!(*c, 6_008_818_407_600, "60,088.18407600 MSK: the fraud a bond reachable claims authorize (ADR-0151 D1)");
     }
     // And the premine really holds it.
     let utxos = genesis_premine_utxos_for(t12());
