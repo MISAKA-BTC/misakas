@@ -42245,6 +42245,56 @@ pub(crate) mod tests {
     }
 }
 
+/// **ADR-0151: the forfeiture set is DERIVED, so it reverts with the conviction.**
+///
+/// The operator's condition was "二重slash/二重forfeitがない … reorg / restart / IBD まで通す". The
+/// structural half of that is here: there is no second ledger of "what this conviction forfeited", so
+/// reverting a conviction's delta un-forfeits its root by construction and nothing has to remember to
+/// clean up. The live half — a real reorg, a real restart, a real IBD — is the drill.
+#[cfg(test)]
+mod adr0151_forfeiture_is_derived {
+    use super::*;
+
+    #[test]
+    fn the_forfeiture_set_follows_the_convictions_and_nothing_else() {
+        use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
+        let mut state = PalwChainStateV2::genesis();
+        assert!(state.palw_forfeited_execution_roots_v1().is_empty(), "a fresh chain forfeits nothing");
+        let root = Hash64::from_u64_word(0x55);
+        let key = Hash64::from_u64_word(0x777);
+        let convicted = PalwConsumedOffenceV1 {
+            kind: PalwOffenceKindV1::PanelFalseValid,
+            accused: crate::tx::TransactionOutpoint { transaction_id: Hash64::from_u64_word(3), index: 0 },
+            amount: 10,
+            accepted_daa: 42,
+            execution_root: root,
+        };
+        state.consumed_offences.insert(key, convicted);
+        assert_eq!(state.palw_forfeited_execution_roots_v1(), [root].into_iter().collect::<std::collections::BTreeSet<_>>());
+        // A second conviction on the SAME root adds nothing: no double-forfeit.
+        state.consumed_offences.insert(Hash64::from_u64_word(0x778), convicted);
+        assert_eq!(state.palw_forfeited_execution_roots_v1().len(), 1, "one root, one forfeiture");
+        // Reverting the conviction un-forfeits it, with nothing else to undo — which is what makes
+        // this safe across a reorg rather than merely untested across one.
+        state.consumed_offences.remove(&key);
+        state.consumed_offences.remove(&Hash64::from_u64_word(0x778));
+        assert!(state.palw_forfeited_execution_roots_v1().is_empty());
+        // And a conviction that named no execution forfeits nothing: an equivocating key is a fact
+        // about the key, not about one root's rights.
+        state.consumed_offences.insert(
+            Hash64::from_u64_word(0x888),
+            PalwConsumedOffenceV1 {
+                kind: PalwOffenceKindV1::ExecutorEquivocation,
+                accused: crate::tx::TransactionOutpoint { transaction_id: Hash64::from_u64_word(4), index: 0 },
+                amount: 1,
+                accepted_daa: 43,
+                execution_root: Hash64::default(),
+            },
+        );
+        assert!(state.palw_forfeited_execution_roots_v1().is_empty());
+    }
+}
+
 /// ADR-0123's release rule, tested as the pure function admission and the producer both call.
 #[cfg(test)]
 mod adr_0123_budget_release_tests {

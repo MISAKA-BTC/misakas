@@ -981,7 +981,7 @@ impl VirtualStateProcessor {
             palw_fp_derived_work: params.palw_fp_derived_work,
             palw_objective_offence: params.palw_objective_offence,
             palw_seat_gate_possession: params.palw_seat_gate_possession,
-            palw_target_time_per_block_ms: params.pre_crescendo_target_time_per_block,
+            palw_target_time_per_block_ms: params.target_time_per_block(),
             palw_economic_safety: params.palw_economic_safety,
             palw_execution_quanta: params.palw_execution_quanta,
             palw_single_lottery: params.palw_single_lottery,
