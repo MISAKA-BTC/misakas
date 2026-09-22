@@ -345,6 +345,13 @@ pub fn palw_verify_objective_offence_v1<F>(
     palw_pubkey: &[u8],
     palw_bond_active: bool,
     network_id: &[u8],
+    // **The RULESET's step ladder, ADR-0084 U-08** — `bundle.court.max_step_leaf_count()`, never the
+    // executor's `PALW_STEP_MAX_LEAVES`. A `PanelFalseValid` whose contradiction is a step refutation
+    // is adjudicated here, and an adjudicator walking a shallower ladder than the class was admitted
+    // at refuses honest evidence: on a network with the held 2M row (step space ≈2^37.6) against the
+    // default 2^22, EVERY structural refutation of that class is `PanelFalseValidNeedsContradiction`,
+    // so a seat that voted Valid on a lie it could see cannot be convicted through this route at all.
+    max_step_leaf_count: u64,
     verify_signature: F,
 ) -> Result<(), PalwOffenceVerifyError>
 where
@@ -361,7 +368,7 @@ where
             verify_palw_executor_equivocation_v1(accused, evidence, palw_pubkey, palw_bond_active, network_id, verify_signature)
         }
         PalwOffenceKindV1::PanelFalseValid => {
-            verify_palw_panel_false_valid_v1(accused, evidence, palw_pubkey, palw_bond_active, network_id, verify_signature)
+            verify_palw_panel_false_valid_v1(accused, evidence, palw_pubkey, palw_bond_active, network_id, max_step_leaf_count, verify_signature)
         }
         PalwOffenceKindV1::CourtExecutorGuilty => Err(PalwOffenceVerifyError::CourtGuiltyIsNotStandalone),
     }
@@ -373,6 +380,7 @@ fn verify_palw_panel_false_valid_v1<F>(
     seat_pubkey: &[u8],
     palw_bond_active: bool,
     network_id: &[u8],
+    max_step_leaf_count: u64,
     verify_signature: F,
 ) -> Result<(), PalwOffenceVerifyError>
 where
@@ -457,7 +465,8 @@ where
             }
         }
         PalwPanelContradictionV1::StepStructural(refutation) => {
-            crate::palw_step_leg::check_step_refutation_v1(refutation)
+            // ADR-0084 U-08: the RULESET's ladder, so a class admitted deep can be prosecuted deep.
+            crate::palw_step_leg::check_step_refutation_capped_v1(refutation, max_step_leaf_count)
                 .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
             if refutation.binding.job_context.job_id != payload.claim_id {
                 return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
@@ -608,6 +617,7 @@ mod tests {
             &[7; 4],
             true,
             b"testnet-11",
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
             |_, _, _, _| true,
         )
         .unwrap_err();
@@ -626,6 +636,7 @@ mod tests {
             &[7; 4],
             true,
             b"testnet-11",
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
             |_, _, _, _| true,
         )
         .unwrap_err();
@@ -642,6 +653,7 @@ mod tests {
             &[7; 4],
             true,
             b"testnet-11",
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
             |_, _, _, _| true,
         )
         .unwrap_err();
@@ -662,7 +674,8 @@ mod tests {
                 &[7; 4],
                 true,
                 b"testnet-11",
-                |_, _, _, _| true,
+                    crate::palw_step::PALW_STEP_MAX_LEAVES,
+                    |_, _, _, _| true,
             )
             .unwrap_err();
             assert_eq!(err, PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
@@ -695,6 +708,7 @@ mod tests {
                 &[7; 4],
                 true,
                 network,
+                crate::palw_step::PALW_STEP_MAX_LEAVES,
                 |_, _, _, _| true,
             )
             .expect("Valid receipt + executor equivocation on the same claim");
@@ -737,7 +751,8 @@ mod tests {
                 &[7; 4],
                 true,
                 b"testnet-11",
-                |_, _, _, _| true,
+                    crate::palw_step::PALW_STEP_MAX_LEAVES,
+                    |_, _, _, _| true,
             )
             .unwrap_err();
             assert_eq!(err, PalwOffenceVerifyError::PanelFalseValidNotValidVerdict);
@@ -765,6 +780,7 @@ mod tests {
             &[7; 4],
             true,
             b"testnet-11",
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
             |_, _, _, _| true,
         )
         .unwrap_err();
@@ -780,6 +796,7 @@ mod tests {
             &[7; 4],
             true,
             b"testnet-11",
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
             |_, _, _, _| true,
         )
         .expect("a named CourtFraud void is well-formed; the processor binds it to the claim phase");
@@ -887,6 +904,7 @@ mod tests {
             &pubkey,
             true,
             network,
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
             |_, _, _, _| true,
         )
         .expect("one signer, two roots, matching accused PALW key");
@@ -928,6 +946,7 @@ mod tests {
                 &pubkey,
                 true,
                 network,
+                crate::palw_step::PALW_STEP_MAX_LEAVES,
                 |_, _, _, _| true,
             )
             .unwrap_err(),
@@ -943,6 +962,7 @@ mod tests {
                 &pubkey,
                 true,
                 network,
+                crate::palw_step::PALW_STEP_MAX_LEAVES,
                 |_, _, _, _| true,
             )
             .unwrap_err(),

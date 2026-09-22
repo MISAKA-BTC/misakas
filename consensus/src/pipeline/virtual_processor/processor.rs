@@ -6056,6 +6056,18 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed { claim, receipts: kept })
     }
 
+    /// **The ladder this network froze, ADR-0084 U-08's one accessor.** `max_step_leaf_count` is a
+    /// bundle field — inside `palw_ruleset_id_v2`, so it cannot move on a running chain — and it is
+    /// DAA-free (`palw_court_params_at_v2` only ever changes the dissection arity). A node with no
+    /// bundle has no ladder to apply and falls back to the executor's structural top, which is
+    /// exactly as permissive as this path already was.
+    fn palw_max_step_leaf_count_v1(&self) -> u64 {
+        self.palw_v2_bundle
+            .as_ref()
+            .map(|bundle| bundle.court.max_step_leaf_count())
+            .unwrap_or(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES)
+    }
+
     pub(crate) fn palw_v2_validate_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -7249,6 +7261,14 @@ impl VirtualStateProcessor {
                                 | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
                         ),
                         domain.as_byte_slice(),
+                        // **ADR-0084 U-08: the RULESET's step ladder, not the executor's.** A
+                        // `PanelFalseValid` whose contradiction is a step refutation is adjudicated
+                        // inside that call, and walking a shallower ladder than the class was
+                        // admitted at refuses honest evidence — on a network carrying the held 2M row
+                        // (step space ~2^37.6) against the default 2^22 that is EVERY structural
+                        // refutation of that class, so a seat that voted Valid on a visible lie could
+                        // not be convicted through this route at all.
+                        self.palw_max_step_leaf_count_v1(),
                         |pk, msg, sig, ctx| Self::verify_mldsa87_with_context_bool(pk, msg, sig, ctx),
                     )
                     .map_err(|e| e.to_string())?;
