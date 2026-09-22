@@ -517,10 +517,13 @@ mod tests {
         // name gets a coherent answer; it pins the Relaunch-2-era premine it was minted over).
         // The fingerprint pin test in params.rs learned the same lesson first: pin the
         // MATERIALIZED value, or the pin guards a number no node ever reports.
-        let cases: [(&str, NetworkId, &GenesisBlock); 5] = [
+        let cases: [(&str, NetworkId, &GenesisBlock); 6] = [
             ("mainnet", NetworkId::new(NetworkType::Mainnet), &GENESIS),
             ("testnet-10", NetworkId::with_suffix(NetworkType::Testnet, 10), &TESTNET_GENESIS),
             ("testnet-11", NetworkId::with_suffix(NetworkType::Testnet, 11), &PALW_RC_GENESIS),
+            // testnet-12's premine is its own: the 758M community table on the t12 sentinel txid and
+            // the collateral its card derives (1,620,178.03 MSK a seat, not t11's flat 10,000).
+            ("testnet-12", NetworkId::with_suffix(NetworkType::Testnet, 12), &PALW_T12_GENESIS),
             ("devnet", NetworkId::new(NetworkType::Devnet), &DEVNET_GENESIS),
             ("simnet", NetworkId::new(NetworkType::Simnet), &SIMNET_GENESIS),
         ];
@@ -554,7 +557,9 @@ mod tests {
         // TESTNET11_GENESIS is the retired fossil). Its `hash` covers its `utxo_commitment`, so a
         // premine re-pin that moves the commitment and not the hash is caught HERE — every other
         // guard (the premine test, the ceremony printer) reads the commitment alone.
-        [GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS, PALW_RC_GENESIS].into_iter().for_each(
+        [GENESIS, TESTNET_GENESIS, TESTNET11_GENESIS, SIMNET_GENESIS, DEVNET_GENESIS, PALW_RC_GENESIS, PALW_T12_GENESIS]
+            .into_iter()
+            .for_each(
             |genesis| {
                 let block: Block = (&genesis).into();
                 assert_hashes_eq(calc_hash_merkle_root(block.transactions.iter()), block.header.hash_merkle_root);

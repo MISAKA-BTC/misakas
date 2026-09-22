@@ -615,6 +615,7 @@ mod tests {
             NetworkId::new(NetworkType::Mainnet),
             NetworkId::with_suffix(NetworkType::Testnet, 10),
             NetworkId::with_suffix(NetworkType::Testnet, 11),
+            NetworkId::with_suffix(NetworkType::Testnet, 12),
             NetworkId::new(NetworkType::Devnet),
             NetworkId::new(NetworkType::Simnet),
         ];
