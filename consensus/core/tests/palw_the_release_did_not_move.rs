@@ -24,7 +24,17 @@ use kaspa_consensus_core::config::params::{
 /// only two of the three constants below change with this pair.
 const T11_CONSENSUS_PARAMS_ID: &str = "79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640";
 const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
-const T11_CONSENSUS_SCHEDULE_ID: &str = "b212d3b1efa892609d6779f9b047a51938ec1189d6a98cc813d8730a677c1e1a";
+/// **Re-pinned 2026-09-23 for ADR-0151's `palw_economic_safety`, and only this one of the three.**
+///
+/// `consensus_schedule_id` writes every score `for_each_fence` visits, and a `None` Some-only fence
+/// is visited through a `u64::MAX` sentinel — so ADDING a fence moves this id on every preset,
+/// dormant or not. The other two did not move and that is the point: `consensus_params_id` (the
+/// ruleset a node announces) and `consensus_identity_id` (what two nodes must share to peer) are
+/// Some-only in the sense that matters, so testnet-11 peers and folds exactly as it did.
+///
+/// This id is explicitly NOT a gate — it exists so a mismatch can be reported precisely — which is
+/// why a new dormant fence may move it and why re-pinning is the whole remedy.
+const T11_CONSENSUS_SCHEDULE_ID: &str = "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64";
 const MAINNET_CONSENSUS_PARAMS_ID: &str = "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1";
 
 #[test]
