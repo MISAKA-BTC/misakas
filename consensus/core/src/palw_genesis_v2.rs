@@ -146,11 +146,44 @@ pub enum PalwGenesisV2Error {
 /// Returns `Ok` only if the node may start. Every failure names the disagreement rather than a
 /// position, because the operator fixing it is holding two artifacts and needs to know which one
 /// is wrong.
+
+
 pub fn verify_palw_genesis_v2(
     bundle: &PalwConsensusParamsV2,
     catalog: &PalwClassCatalogV2,
     registrations: &[PalwConsensusObjectV2],
     genesis_output_value: impl Fn(&crate::tx::TransactionOutpoint) -> Option<u64>,
+) -> Result<(), PalwGenesisV2Error> {
+    // **`false` is the conservative answer and it is the default on purpose** (ADR-0151 D3): a caller
+    // that has not PROVED its network advances the clock without a claim gets the bind-window
+    // collateral rule, which is the behaviour every network had before that ADR. Only
+    // `verify_palw_genesis_v2_with_clock_v1` can say otherwise, and only from `Params`.
+    verify_palw_genesis_v2_with_clock_v1(bundle, catalog, registrations, genesis_output_value, false)
+}
+
+/// **[`verify_palw_genesis_v2`] told whether this chain's clock needs a claim** (ADR-0151 D3).
+///
+/// `clock_advances_without_a_claim` comes from
+/// [`crate::config::params::palw_clock_advances_without_a_claim_v1`], and it is a statement about the
+/// network's own fences: the heartbeat lane armed from genesis, and no lane `bits` prices that a bond
+/// must pay to enter. When it holds, the DAA score advances every heartbeat interval however full every
+/// bond's exposure ceiling is — so `BindTimeout` always fires, exposure is always released, and the
+/// cycle the bind-window collateral rule defends against cannot close:
+///
+/// ```text
+/// collateral exhausted -> no claim admitted -> no block produced -> DAA frozen
+///   -> no BindTimeout -> collateral never released
+/// ```
+///
+/// **The rule is then skipped, not weakened.** Every other check here still runs: a bond may not
+/// declare more collateral than its outpoint holds (audit C-08), the registry must seat a panel, every
+/// registration must agree with the committed catalog, and the base class must register first.
+pub fn verify_palw_genesis_v2_with_clock_v1(
+    bundle: &PalwConsensusParamsV2,
+    catalog: &PalwClassCatalogV2,
+    registrations: &[PalwConsensusObjectV2],
+    genesis_output_value: impl Fn(&crate::tx::TransactionOutpoint) -> Option<u64>,
+    clock_advances_without_a_claim: bool,
 ) -> Result<(), PalwGenesisV2Error> {
     // Root, coverage, and the court's depth against the catalog's — the bundle's own gate, run
     // first so a catalog that is not even the committed one fails before anything is read out of
@@ -307,6 +340,13 @@ pub fn verify_palw_genesis_v2(
     }
     let _ = dearest;
     let per_claim = per_claim.max(1);
+    // **ADR-0151 D3: a chain whose clock does not need a claim does not need this bound.** See
+    // `verify_palw_genesis_v2_with_clock_v1`. This is the last check in the gate that asks for
+    // CAPITAL instead of checking a fact, and it exists only to keep the DAA moving; a network whose
+    // heartbeat moves it regardless has already paid for that with structure.
+    if clock_advances_without_a_claim {
+        return Ok(());
+    }
     let window_bind = bundle.state.window_bind();
     let ratio = bundle.admission.max_exposure_ratio_permille() as u128;
     for (bond, collateral, _) in &bonds {
@@ -337,6 +377,7 @@ pub fn verify_palw_genesis_v2(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::palw_mode_v2::PalwClassCatalogEntryV2;
     use crate::palw_state_v2::PalwBondKeyV2;

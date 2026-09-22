@@ -9726,9 +9726,14 @@ pub fn palw_v2_params_from_artifacts_on_base_with_utxos(
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
         unreachable!("palw_v2_params_on_base installs a ConsensusV2 bundle or returns Err");
     };
-    crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
-        genesis_utxos.get(outpoint).map(|entry| entry.amount)
-    })?;
+    crate::palw_genesis_v2::verify_palw_genesis_v2_with_clock_v1(
+        bundle,
+        &catalog,
+        &bundle.genesis_objects,
+        |outpoint| genesis_utxos.get(outpoint).map(|entry| entry.amount),
+        // ADR-0151 D3 — read from THIS network's fences, never assumed.
+        palw_clock_advances_without_a_claim_v1(&params),
+    )?;
     // **The last transform a booting node applies, applied here too.**
     //
     // `From<NetworkId> for Params` wraps its whole match in `with_registered_models`, so a node's
@@ -10079,6 +10084,8 @@ pub fn palw_v2_params_with_class_rows_v1(
         let bundle = bundle.clone();
         params = params.with_palw_v2_depths(&bundle);
     }
+    // ADR-0151 D3, read before the bundle is borrowed: does this chain's clock need a claim?
+    let clock_advances_without_a_claim = palw_clock_advances_without_a_claim_v1(&params);
     // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
     //
     // ADR-0082 Decision 5's fence (`palw_prompt_ids_merkle`) is `None` on every shipped preset, so
@@ -10310,7 +10317,8 @@ pub fn palw_v2_params_with_class_rows_v1(
         let model_pwus: Vec<u64> = std::iter::once(genesis_pwu_of(&object))
             .chain(dense.as_ref().map(|(_, _, dense_object)| genesis_pwu_of(dense_object)))
             .collect();
-        crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1(floor_pwu, &model_pwus, bundle.state.window_bind())
+        let bind_window_liveness = (!clock_advances_without_a_claim).then(|| bundle.state.window_bind());
+        crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1(floor_pwu, &model_pwus, bind_window_liveness)
             .max(crate::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI)
     } else {
         crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
@@ -10420,9 +10428,14 @@ pub fn palw_v2_params_with_class_rows_v1(
     // The SUPPLIED set, so both gate runs — the base assembly's and this one's — resolve a bond's
     // collateral against one premine. Reading `genesis_premine_utxos_for` a second time here would
     // make the two halves of one card answer to two different UTXO sets.
-    crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
-        genesis_utxos.get(outpoint).map(|entry| entry.amount)
-    })?;
+    crate::palw_genesis_v2::verify_palw_genesis_v2_with_clock_v1(
+        bundle,
+        &catalog,
+        &bundle.genesis_objects,
+        |outpoint| genesis_utxos.get(outpoint).map(|entry| entry.amount),
+        // ADR-0151 D3 — read from THIS network's fences, never assumed.
+        clock_advances_without_a_claim,
+    )?;
     Ok(params)
 }
 
@@ -14310,6 +14323,56 @@ pub fn palw_rc_base_params() -> Params {
 /// What IS inherited, deliberately: the eight genesis bond cards (the operators hold those keys
 /// already), the frozen 120 s cadence, the P2P port (26311 — see `NetworkId::default_p2p_port`),
 /// the DNS seeder names, and the EVM lane.
+
+/// **ADR-0151 D3: can this network advance its consensus clock without admitting a claim?**
+///
+/// The question the genesis collateral rule was really asking, asked directly. `verify_palw_genesis_v2`
+/// used to demand that every genesis bond be able to hold `window_bind` of the dearest claim at once,
+/// because of a cycle:
+///
+/// ```text
+/// collateral exhausted -> no claim admitted -> no block produced -> DAA frozen
+///   -> no BindTimeout -> collateral never released
+/// ```
+///
+/// It bought the way out of that cycle with capital: 1,620,178 MSK a seat on the testnet-12 card,
+/// against a reachable liability of 21,630. **Capital is the wrong instrument** — it makes the initial
+/// operators the only parties who can afford a seat, and a genesis seat and a later seat obey
+/// different economics for the same duty. The cycle should be cut where it closes, which is the
+/// clock.
+///
+/// It is cut when two things hold, and this function is those two things:
+///
+/// * **the heartbeat lane is armed from genesis.** A heartbeat carries no claim and reserves no
+///   exposure — it is minted against a constant target, `PALW_HEARTBEAT_MAX_PER_MERGESET` a mergeset —
+///   so a bond whose ceiling is completely full can still mint one;
+/// * **no lane this network can produce is priced by `bits`.** On a `ConsensusV2` network every V1
+///   proof-of-work activation is `never()` (algos 1–5 are unreachable), and past the single lottery
+///   `algo_id_is_priced_by_bits_v3` takes the attempt, receipt, execution and round lanes out of the
+///   pricing. So `priced == 0` on every mergeset — and ADR-0138 §3b's stand-in rule
+///   (`SampledDifficultyManager::calc_daa_score_and_mergeset_non_daa_blocks`: `stand_in = priced == 0
+///   && heartbeats > 0`) makes exactly one heartbeat tick the clock in the missing anchor's place,
+///   at most once per wall-clock interval under ADR-0142's cursor.
+///
+/// Together: **the DAA score advances every heartbeat interval regardless of what any bond can
+/// afford.** Deadlines fire, `BindTimeout` releases exposure, and the chain cannot wedge on
+/// collateral. Both clauses are height-independent — the second is about activations that are
+/// `never()`, the first about a fence armed at 0 — so the answer cannot become false later.
+///
+/// Read by the genesis gate ([`crate::palw_genesis_v2::verify_palw_genesis_v2_with_clock_v1`]) and by
+/// the collateral derivation, which drops its liveness term when this is true.
+pub fn palw_clock_advances_without_a_claim_v1(params: &Params) -> bool {
+    // A heartbeat must be mintable from block one.
+    let heartbeat_from_genesis = params.palw_heartbeat.is_some_and(|h| h.activation != ForkActivation::never() && h.activation.is_active(0));
+    if !heartbeat_from_genesis {
+        return false;
+    }
+    // And no lane whose digest `bits` prices may be producible, or the beat is not the stand-in and
+    // the clock belongs to a lane a bond has to pay to enter.
+    let never = |a: ForkActivation| a == ForkActivation::never();
+    never(params.pow_blake2b_sha3_activation) && never(params.pow_palw_activation) && never(params.pow_palw_ollama_activation)
+}
+
 pub fn palw_t12_base_params() -> Params {
     let mut params = palw_rc_base_params();
     params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);

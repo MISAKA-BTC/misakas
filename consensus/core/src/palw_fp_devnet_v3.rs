@@ -620,7 +620,11 @@ pub const PALW_MODEL_CLAIM_CONCURRENCY_V1: u64 = 4;
 /// worth (`palw_exposure_pwu_v1`). The margin is named rather than tightened, for the reason the
 /// sibling function gives: funding a bond above its requirement costs an operator nothing the chain
 /// enforces, and funding one below it is a permanent wedge.
-pub fn palw_v2_collateral_for_class_set_v1(floor_pwu_per_inference: u64, model_pwus_per_inference: &[u64], window_bind: u64) -> u64 {
+pub fn palw_v2_collateral_for_class_set_v1(
+    floor_pwu_per_inference: u64,
+    model_pwus_per_inference: &[u64],
+    bind_window_liveness: Option<u64>,
+) -> u64 {
     let exposure = |pwu_per_inference: u64, concurrency: u64| -> u128 {
         let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
         (pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU as u128).max(1).saturating_mul(concurrency as u128)
@@ -629,8 +633,10 @@ pub fn palw_v2_collateral_for_class_set_v1(floor_pwu_per_inference: u64, model_p
     for pwu in model_pwus_per_inference {
         ceiling = ceiling.saturating_add(exposure(*pwu, PALW_MODEL_CLAIM_CONCURRENCY_V1));
     }
-    // **And the genesis LIVENESS bound, which is the one that actually binds** (`verify_palw_genesis_v2`'s
-    // `BondCannotSustainBindWindow`).
+    // **And the genesis LIVENESS bound, for a network that still needs it** — `None` where ADR-0151 D3's
+    // structural guarantee holds (`palw_clock_advances_without_a_claim_v1`), which is the case this
+    // derivation exists for; `Some(window_bind)` reproduces `verify_palw_genesis_v2`'s
+    // `BondCannotSustainBindWindow` figure for a chain whose clock really is its claims.
     //
     // The per-class sum above is what a bond's exposure ceiling has to cover for its claims to be
     // ADMITTED. It is not what the genesis gate asks. The gate asks something stronger and for a
@@ -648,18 +654,22 @@ pub fn palw_v2_collateral_for_class_set_v1(floor_pwu_per_inference: u64, model_p
     // arguing with it. The cost is a locked figure, not a barrier: the bound is GENESIS-ONLY, so a
     // bond registered later meets only the runtime ceiling (one 2M claim's reservation, ~2,700 MSK),
     // and a newcomer is unaffected by this number.
-    let liveness = model_pwus_per_inference
-        .iter()
-        .chain(std::iter::once(&floor_pwu_per_inference))
-        .map(|pwu| {
-            let per_claim = (crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(
-                &crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: *pwu },
-            ) as u128)
-                .saturating_mul(SLASH_VALUE_PER_PWU as u128)
-                .max(1);
-            per_claim.saturating_mul(window_bind as u128)
+    let liveness = bind_window_liveness
+        .map(|window_bind| {
+            model_pwus_per_inference
+                .iter()
+                .chain(std::iter::once(&floor_pwu_per_inference))
+                .map(|pwu| {
+                    let per_claim = (crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(
+                        &crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: *pwu },
+                    ) as u128)
+                        .saturating_mul(SLASH_VALUE_PER_PWU as u128)
+                        .max(1);
+                    per_claim.saturating_mul(window_bind as u128)
+                })
+                .max()
+                .unwrap_or(0)
         })
-        .max()
         .unwrap_or(0);
     let ceiling = ceiling.max(liveness);
     let collateral = ceiling.saturating_mul(1000).div_ceil(MAX_EXPOSURE_RATIO_PERMILLE as u128);

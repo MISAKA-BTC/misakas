@@ -119,7 +119,7 @@ pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 /// canonical jobs and the ruleset's ladder — three things a premine table has no business holding.
 /// `t12_bond_collateral_matches_the_card` re-derives it from the shipped card and fails the build on
 /// any drift, which is the discipline the genesis hash pins already live under.
-pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 162_017_803_104_000;
+pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 2_163_004_918_320;
 
 /// The genesis-bond collateral `net` carves, per seat.
 fn genesis_bond_collateral_for(net: NetworkId) -> u64 {
