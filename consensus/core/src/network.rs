@@ -276,7 +276,14 @@ impl NetworkId {
             NetworkType::Mainnet => 26111,
             NetworkType::Testnet => match self.suffix {
                 Some(10) => 26211,
-                Some(11) => 26311,
+                // **12 SHARES 11's port, by the operator's decision at the 2026-09-22 regenesis**
+                // ("今のpeerのポートはそのまま使用すること"). testnet-12 replaces testnet-11 on the
+                // same four hosts, so every firewall rule, `--addpeer`, seeder config and user
+                // `--connect` keeps working across the switch, which is the whole point of holding
+                // the port still. The cost is the one this map exists to avoid — a leftover t11 node
+                // now dials a t12 node and is refused by network id instead of by a closed port —
+                // and it is paid deliberately: t11 is being retired, not run beside this net.
+                Some(11) | Some(12) => 26311,
                 None | Some(_) => 26411,
             },
             NetworkType::Simnet => 26511,

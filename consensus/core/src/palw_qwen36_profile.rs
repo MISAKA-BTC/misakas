@@ -1657,6 +1657,85 @@ pub fn qwen36_registration_v3(
     Ok((profile, entry, object))
 }
 
+/// **The canonical job of a HELD hybrid row at width `n_ctx`** — the dense family's
+/// `qwen25_a16_held_canonical_v1` arithmetic over this family's own decode, so the two ladders meet
+/// ADR-0103 Decision 14's floor by one formula instead of two.
+pub fn qwen36_held_canonical_v1(n_ctx: u32) -> (u32, u32) {
+    let decode = QWEN36_RC_CANONICAL.1.max(1);
+    let floor = crate::palw_context_ladder::palw_canonical_footprint_floor_v1(n_ctx) as u32;
+    (floor.saturating_add(1).saturating_sub(decode), decode)
+}
+
+/// **Everything a chain needs to register the hybrid family's HELD row at `n_ctx`** (ADR-0103
+/// Decision 3's graph-v7): the profile, its catalog entry and the genesis-form registration.
+///
+/// [`qwen36_registration_v3`]'s twin at a ladder width, and the differences are the ones ADR-0103
+/// makes: the profile is `qwen36_profile_v7` (the held composition — the attention half at the v4
+/// tiled map, the recurrence half at v2's head-sliced layout), the court cost is priced by the
+/// ladder's own shape rather than by the genesis-anchored long form, and the carriage is carried so
+/// the fused graph can be read back (a held row's `fused_attention` is readable from nowhere else).
+///
+/// **It needs TWO fences, and both from genesis:** `palw_token_lift` (graph-v7 reaches the fenced
+/// per-token lift kernel graph-v6 introduced) and `palw_held_context`. That pair is exactly why
+/// testnet-11 could register the hybrid only at `n_ctx` 8 — it arms neither — and why testnet-12,
+/// which arms both at DAA 0, can register this row at 512 and above.
+#[allow(clippy::too_many_arguments)]
+pub fn qwen36_held_registration_v1(
+    artifact_root: Hash64,
+    n_ctx: u32,
+    share_permille: u16,
+    slash_value_per_pwu: u64,
+    initial_target: u128,
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    registrant_bond: crate::palw_state_v2::PalwBondKeyV2,
+) -> Result<
+    (PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2),
+    PalwStepError,
+> {
+    let profile = qwen36_profile_v7(qwen36_geometry_artifact_eps(PalwQwen36GeometryV1 { n_ctx, ..QWEN36_35B_A3B }))?;
+    let class_id = profile.shape_profile_id();
+    let (prefill, decode) = qwen36_held_canonical_v1(n_ctx);
+    let canonical = crate::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+    if !crate::palw_context_ladder::palw_footprint_meets_the_row_v1(&profile, &canonical) {
+        return Err(PalwStepError::ProfileNotCanonical("the held hybrid row's canonical job is under the row's own footprint floor"));
+    }
+    let ladder = bundle.court.max_step_leaf_count();
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
+    let court = crate::palw_class_admission_v2::PalwKaryCourtV1 {
+        dissection_arity: bundle.court.dissection_arity(),
+        prompt_ids_form,
+        window_court_daa: bundle.state.window_court(),
+    };
+    let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court), ladder)
+        .ok_or(PalwStepError::ProfileNotCanonical("the held hybrid row declares no map the ladder rule prices"))?;
+    let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        class_id,
+        artifact_root,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?,
+        canonical_step_leaf_count: counted,
+        reachable_kernels: crate::palw_class_admission_v2::reachable_kernels_v1(&profile),
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(&profile, rules.cost_shape)
+            .map_err(|_| PalwStepError::ProfileNotCanonical("the held hybrid class's court cost does not derive"))?,
+    };
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+        initial_target,
+        share_permille,
+        activation_daa: 0,
+        admission: Some(Box::new(crate::palw_state_v2::PalwClassAdmissionCarriageV2 {
+            profile: profile.clone(),
+            canonical,
+            registrant_bond,
+            signature: Vec::new(),
+        })),
+    };
+    Ok((profile, entry, object))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

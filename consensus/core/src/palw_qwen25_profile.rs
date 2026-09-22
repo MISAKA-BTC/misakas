@@ -1059,6 +1059,92 @@ pub fn qwen25_a16_graph_v5_registration_v1(
     Ok((profile, entry, object))
 }
 
+/// **The canonical job of a HELD dense row at width `n_ctx`** — [`qwen25_a16_graph_v5_canonical_v1`]
+/// generalised off the frozen 512, because ADR-0103's regime is a LADDER and the floor it has to
+/// meet moves with the rung.
+///
+/// Same arithmetic, one substitution: `palw_canonical_footprint_floor_v1(n_ctx)` instead of the
+/// floor at `QWEN25_A16_GRAPH_V5_N_CTX`. At `n_ctx` 2,097,152 that is `(262_143, 2)` — the prefill
+/// ADR-0103 Decision 14 names for the 2M row, arrived at by the formula rather than typed.
+pub fn qwen25_a16_held_canonical_v1(n_ctx: u32) -> (u32, u32) {
+    let decode = QWEN25_A16_CANONICAL.1.max(1);
+    let floor = crate::palw_context_ladder::palw_canonical_footprint_floor_v1(n_ctx) as u32;
+    (floor.saturating_add(1).saturating_sub(decode), decode)
+}
+
+/// **Everything a chain needs to register the dense family's HELD row at `n_ctx`** (ADR-0103
+/// Decision 3's graph-v7): the profile, its catalog entry and the genesis-form registration.
+///
+/// [`qwen25_a16_graph_v5_registration_v1`]'s twin, built the same way and differing in exactly two
+/// places — the profile is `qwen25_a16_artifact_row_profile_v7` (the held map, which is what lifts
+/// `validate_geometry`'s `n_ctx × layers` product ceiling to a per-position budget and is therefore
+/// the ONLY way a row past `n_ctx` 524,288 derives at all), and the width is a parameter.
+///
+/// A held row is admissible only while `Params::palw_held_context` is armed, which is a fact about
+/// the network and not about this function: the admission gate refuses the class otherwise, so a
+/// preset that registers one and leaves the fence dormant fails its own genesis gate rather than
+/// shipping a class nobody can produce for.
+#[allow(clippy::too_many_arguments)]
+pub fn qwen25_a16_held_registration_v1(
+    artifact_root: Hash64,
+    n_ctx: u32,
+    share_permille: u16,
+    slash_value_per_pwu: u64,
+    initial_target: u128,
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    registrant_bond: crate::palw_state_v2::PalwBondKeyV2,
+) -> Result<
+    (PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2),
+    PalwStepError,
+> {
+    let profile = qwen25_a16_artifact_row_profile_v7(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B })?;
+    let class_id = profile.shape_profile_id();
+    let (prefill, decode) = qwen25_a16_held_canonical_v1(n_ctx);
+    let canonical = crate::palw_base0_profile::rc_job_context(&profile, prefill, decode);
+    // Decision 14's floor, checked here so a row that cannot meet it fails to BUILD rather than be
+    // refused by the admission gate on a chain that already registered it.
+    if !crate::palw_context_ladder::palw_footprint_meets_the_row_v1(&profile, &canonical) {
+        return Err(PalwStepError::ProfileNotCanonical("the held dense row's canonical job is under the row's own footprint floor"));
+    }
+    // **The ruleset's ladder, from the bundle this row joins** — never the executor's constant.
+    let ladder = bundle.court.max_step_leaf_count();
+    let counted = crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, ladder)?;
+    let court = crate::palw_class_admission_v2::PalwKaryCourtV1 {
+        dissection_arity: bundle.court.dissection_arity(),
+        prompt_ids_form,
+        window_court_daa: bundle.state.window_court(),
+    };
+    let rules = crate::palw_context_ladder::palw_class_ladder_rules_for_court_v1(&profile, Some(court), ladder)
+        .ok_or(PalwStepError::ProfileNotCanonical("the held dense row declares no map the ladder rule prices"))?;
+    let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        class_id,
+        artifact_root,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_capped_v1(&profile, ladder)?,
+        canonical_step_leaf_count: counted,
+        reachable_kernels: crate::palw_class_admission_v2::reachable_kernels_v1(&profile),
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_shaped_v1(&profile, rules.cost_shape)
+            .map_err(|_| PalwStepError::ProfileNotCanonical("the held dense class's court cost does not derive"))?,
+    };
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+        initial_target,
+        share_permille,
+        activation_daa: 0,
+        admission: Some(Box::new(crate::palw_state_v2::PalwClassAdmissionCarriageV2 {
+            profile: profile.clone(),
+            canonical,
+            registrant_bond,
+            // Empty by rule, not by omission — see `qwen25_a16_graph_v5_registration_v1`.
+            signature: Vec::new(),
+        })),
+    };
+    Ok((profile, entry, object))
+}
+
 #[cfg(test)]
 mod tests {
     /// **The A16 dense class passes the whole admission gate.** Not a cost check: the same

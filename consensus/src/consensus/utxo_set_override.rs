@@ -119,6 +119,57 @@ mod repin {
         println!("REPIN hash: Hash64::from_bytes({}),", rust(header.hash.as_byte_slice()));
     }
 
+    /// **Print the genesis constants testnet-12's premine and coinbase imply.** Run whenever the t12
+    /// community table, the bond cards or the coinbase marker change:
+    /// `cargo test -p kaspa-consensus --lib repin::print_repinned_t12_genesis -- --ignored --nocapture`.
+    ///
+    /// THREE values, computed in this order because each feeds the next: the merkle root is a
+    /// function of the coinbase payload alone; the `utxo_commitment` is the MuHash over
+    /// `genesis_premine_utxos_for(testnet-12)`; the block hash covers both. Printing the hash before
+    /// installing the other two would print the hash of a header nobody ships — which is how a
+    /// re-pin goes wrong, since the M-07 guard then reports a premine mismatch for a merkle-root
+    /// mistake.
+    #[test]
+    #[ignore]
+    fn print_repinned_t12_genesis() {
+        use kaspa_consensus_core::merkle::calc_hash_merkle_root;
+        let mut genesis = kaspa_consensus_core::config::genesis::PALW_T12_GENESIS;
+        let net = NetworkId::with_suffix(NetworkType::Testnet, 12);
+
+        // 1. the merkle root over this genesis's own coinbase transaction
+        let txs = genesis.build_genesis_transactions();
+        genesis.hash_merkle_root = calc_hash_merkle_root(txs.iter());
+
+        // 2. the premine commitment
+        let mut ms = MuHash::new();
+        for (outpoint, entry) in kaspa_consensus_core::config::premine::genesis_premine_utxos_for(net) {
+            ms.add_utxo(&outpoint, &entry);
+        }
+        genesis.utxo_commitment = ms.finalize();
+
+        // 3. the block hash over the completed header
+        let header: kaspa_consensus_core::header::Header = (&genesis).into();
+
+        let rust = |b: &[u8]| {
+            let mut out = String::from("[\n");
+            for chunk in b.chunks(21) {
+                out.push_str("        ");
+                for x in chunk {
+                    out.push_str(&format!("0x{x:02x}, "));
+                }
+                out.push('\n');
+            }
+            out.push_str("    ]");
+            out
+        };
+        let total: u64 = kaspa_consensus_core::config::premine::genesis_premine_utxos_for(net).values().map(|e| e.amount).sum();
+        println!("T12 premine outputs: {}", kaspa_consensus_core::config::premine::genesis_premine_utxos_for(net).len());
+        println!("T12 premine total sompi: {total}");
+        println!("T12 hash_merkle_root: Hash64::from_bytes({}),", rust(genesis.hash_merkle_root.as_byte_slice()));
+        println!("T12 utxo_commitment: Hash64::from_bytes({}),", rust(genesis.utxo_commitment.as_byte_slice()));
+        println!("T12 hash: Hash64::from_bytes({}),", rust(header.hash.as_byte_slice()));
+    }
+
     /// **Print the genesis constants a filled mainnet card implies** (mainnet audit 2026-09-06,
     /// M-7). Run in the same commit that fills `PALW_MAINNET_GENESIS_BONDS` and the artifact roots:
     /// `cargo test -p kaspa-consensus --lib -- repin::print_repinned_mainnet -- --ignored

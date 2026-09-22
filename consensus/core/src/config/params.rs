@@ -8276,7 +8276,11 @@ impl From<NetworkId> for Params {
                 // suffix `palw_rc_params` itself stamps aborted the process.
                 // 12 is retired into 11. Left as an explicit refusal rather than a silent
                 // alias: a node still configured for 12 should be told, not quietly moved.
-                Some(12) => panic!("testnet-12 was consolidated into testnet-11; use --netsuffix=11"),
+                // **testnet-12 — the 2026-09-22 regenesis.** It was retired into 11 (and this arm
+                // was an explicit refusal) because 12 and 13 had been minted for internal relaunches
+                // nobody could join; it is a network again because this time it replaces 11 on the
+                // public fleet. See `palw_t12_shipped_params`.
+                Some(12) => palw_t12_shipped_params(),
                 Some(x) => panic!("Testnet suffix {} is not supported (this build knows 10, 11 and 12)", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -9904,6 +9908,58 @@ pub fn palw_v2_params_with_classes_on_base_with_utxos(
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
     genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    palw_v2_params_with_class_rows_v1(
+        base,
+        base0_artifact_root,
+        qwen36_artifact_root,
+        qwen25_a16_artifact_root,
+        genesis_bonds,
+        genesis_utxos,
+        PalwGenesisClassRowsV1::Rc,
+    )
+}
+
+/// **Which ROWS of the two model families a genesis registers** — one artifact, several widths.
+///
+/// A class is its graph AND its context (`n_ctx` is inside `shape_profile_id`), so "register Qwen2.5"
+/// is not a complete instruction: the width and the map have to be named. Two sets ship.
+///
+/// The variants are not interchangeable and the difference is measured, not stylistic: a row under
+/// the graph-v5 / graph-v3 maps is bounded by `n_ctx × layer_count ≤ PALW_STEP_MAX_ENUMERATION`, so
+/// the dense family stops deriving above `n_ctx` 524,288 and the hybrid above 131,072. A row under
+/// the HELD map (ADR-0103 Decision 6) is bounded per POSITION instead, which is the only reason a
+/// 2M row exists at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwGenesisClassRowsV1 {
+    /// **testnet-11's set**: the hybrid's graph-v3 row at its frozen `n_ctx` 8 and the dense
+    /// graph-v5 row at 512. Live chain facts — a registered class id can never be re-pointed — so
+    /// this variant is frozen with them.
+    Rc,
+    /// **testnet-12's set**: both families' graph-v7 rows (the held map) at the widths named here.
+    ///
+    /// Shipped as `dense_n_ctx: 2_097_152` — ADR-0103's widest context, and the class the fleet's
+    /// `qwen25-1.5b-a16-2m.palwart` actually serves — and `hybrid_n_ctx: 512`, the widest row an
+    /// existing hybrid artifact's rotary table covers. A held row needs `palw_held_context` armed,
+    /// and the hybrid's also needs `palw_token_lift`; both are armed from genesis on that preset, so
+    /// the genesis gate is what proves the pairing rather than a comment.
+    HeldLadder { dense_n_ctx: u32, hybrid_n_ctx: u32 },
+}
+
+/// [`palw_v2_params_with_classes_on_base_with_utxos`] with the row set named. Everything except the
+/// two registration calls is shared: the share arithmetic and its dilution inversion, the collateral
+/// and capability re-derivation off the dearest registered class, the catalog's two orders, the
+/// per-class attempt-target seeding and both runs of the genesis gate. A second copy of any of that
+/// would be a second place for it to drift, which is the defect this file's own history records.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_params_with_class_rows_v1(
+    base: Params,
+    base0_artifact_root: crate::Hash64,
+    qwen36_artifact_root: crate::Hash64,
+    qwen25_a16_artifact_root: Option<crate::Hash64>,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+    genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
+    rows: PalwGenesisClassRowsV1,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     use crate::palw_mode_v2::PalwModeV2Error as E;
     let invalid = |what: &'static str| E::Invalid(what);
 
@@ -9977,8 +10033,23 @@ pub fn palw_v2_params_with_classes_on_base_with_utxos(
         // class id that no node dispatches, which is the shape this line has to get right because
         // nothing downstream can tell it apart: the admission gate's weight rule is scoped to the
         // FAMILY, and the family is certified either way.
-        crate::palw_qwen36_profile::qwen36_registration_v3(qwen36_artifact_root, hybrid_share, slash, target)
-            .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
+        match rows {
+            PalwGenesisClassRowsV1::Rc => crate::palw_qwen36_profile::qwen36_registration_v3(qwen36_artifact_root, hybrid_share, slash, target)
+                .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?,
+            // The held row carries a CARRIAGE, so it is built against the bundle it joins (the
+            // ladder, the arity, the court window) exactly as the dense row below is.
+            PalwGenesisClassRowsV1::HeldLadder { hybrid_n_ctx, .. } => crate::palw_qwen36_profile::qwen36_held_registration_v1(
+                qwen36_artifact_root,
+                hybrid_n_ctx,
+                hybrid_share,
+                slash,
+                target,
+                bundle,
+                prompt_ids_form,
+                crate::palw_state_v2::palw_genesis_registrant_bond_v1(),
+            )
+            .map_err(|_| invalid("the held Qwen3.6 row does not derive"))?,
+        };
     // The A16 dense class, when its artifact root is pinned. It registers last, so what it declares
     // is what it keeps — no dilution follows it.
     //
@@ -9995,6 +10066,22 @@ pub fn palw_v2_params_with_classes_on_base_with_utxos(
     // another takes it, so the cadence table the chain starts with is the one the card's arithmetic
     // was written against, and the hybrid's dilution inversion above is unmoved.
     let dense = match qwen25_a16_artifact_root {
+        Some(root) if matches!(rows, PalwGenesisClassRowsV1::HeldLadder { .. }) => {
+            let PalwGenesisClassRowsV1::HeldLadder { dense_n_ctx, .. } = rows else { unreachable!("matched above") };
+            Some(
+                crate::palw_qwen25_profile::qwen25_a16_held_registration_v1(
+                    root,
+                    dense_n_ctx,
+                    dense_share,
+                    slash,
+                    target,
+                    bundle,
+                    prompt_ids_form,
+                    crate::palw_state_v2::palw_genesis_registrant_bond_v1(),
+                )
+                .map_err(|_| invalid("the held Qwen2.5 A16 row does not derive"))?,
+            )
+        }
         Some(root) => Some(
             crate::palw_qwen25_profile::qwen25_a16_graph_v5_registration_v1(
                 root,
@@ -10333,6 +10420,38 @@ pub const PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT: crate::Hash64 = crate::Hash6
 /// family has already paid for once. If a future conversion ever moves the operand set, the probe
 /// above is what says so — and then this becomes its own constant, with its own measurement.
 pub const PALW_RC_GENESIS_QWEN25_A16_GRAPH_V5_ARTIFACT_ROOT: crate::Hash64 = PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT;
+
+/// **The 2M Qwen2.5 artifact's root — the weights testnet-12's dense row is registered over.**
+///
+/// NOT [`PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT`], and the difference is the point. ADR-0103's
+/// graph-v7 is "the same artifact under the held map", which is true of the GRAPH and false of this
+/// artifact: a 2M row needs a rotary table that covers 2M positions, so the fleet re-converted the
+/// model (`qwen25-convert --a16 --n-ctx 2097152`, 2.87 GB against the 512-span artifact's 1.80 GB)
+/// and a re-conversion is a different inventory and therefore a different root.
+///
+/// Measured off the artifact the fleet is serving today — `/root/palw-class/qwen25-1.5b-a16-2m.palwart`
+/// on all four hosts, whose `class-registration.json` names class `74c67e63…`, "Qwen2.5-1.5B A16
+/// graph-v7@2097152". Registering THIS root at genesis is what makes the class the fleet already
+/// mines a genesis class on testnet-12 instead of a post-genesis registration waiting on a span
+/// boundary and a readiness age.
+pub const PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([
+    0xb5, 0xba, 0xca, 0x63, 0x64, 0x13, 0x5a, 0x62, 0xbd, 0x45, 0x12, 0xa5, 0x8c, 0x2c, 0xa7, 0x47, 0x37, 0x30, 0x19, 0xa4, 0x95,
+    0x50, 0x59, 0x68, 0xd8, 0x84, 0xb2, 0xc0, 0xe5, 0x2e, 0x4c, 0xe9, 0x32, 0x2a, 0x8a, 0xf0, 0xdb, 0x90, 0xd3, 0xec, 0x10, 0x01,
+    0xc1, 0x5b, 0x5a, 0x89, 0xfe, 0x0e, 0x80, 0x08, 0x51, 0x9e, 0x55, 0xa5, 0xf3, 0xf8, 0x65, 0xe1, 0x55, 0x62, 0xfb, 0x89, 0x67,
+    0xae,
+]);
+
+/// **The dense row testnet-12 registers: the held graph-v7 row at ADR-0103's widest context.**
+pub const PALW_T12_DENSE_N_CTX: u32 = crate::palw_base0_a16::A16_MAX_ATTN_HISTORY_HELD_V1 as u32;
+
+/// **The hybrid row testnet-12 registers: the held graph-v7 row at 512.**
+///
+/// 512 and not wider because 512 is what an EXISTING hybrid artifact's rotary table covers
+/// (`PALW_CONTEXT_LADDER_ROWS`'s first rung and the reason it is first). Wider takes the same route
+/// the dense row took — a re-conversion, a new root, and a registration — which past this genesis is
+/// a transaction rather than a third regenesis, because `palw_model_registry`, `palw_context_ladder`
+/// and `palw_held_context` are all armed from DAA 0 here.
+pub const PALW_T12_HYBRID_N_CTX: u32 = 512;
 
 pub fn palw_rc_qwen25_a16_is_registered() -> bool {
     PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
@@ -13536,6 +13655,69 @@ pub fn palw_rc_shipped_params() -> Params {
     )
 }
 
+/// **testnet-12 as it ships: the fences at DAA 0 and the two HELD rows the fleet can serve.**
+///
+/// [`palw_rc_shipped_params`]'s shape over [`palw_t12_base_params`], with one substitution and one
+/// consequence.
+///
+/// The substitution is the row set ([`PalwGenesisClassRowsV1::HeldLadder`]): the dense slot holds
+/// the graph-v7 row at [`PALW_T12_DENSE_N_CTX`] over
+/// [`PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT`] — class `74c67e63…`, the class the fleet is
+/// mining on testnet-11 today — and the hybrid slot the graph-v7 row at [`PALW_T12_HYBRID_N_CTX`].
+/// The shares are testnet-11's, 489‰ each, so the cadence table this chain starts with is the one
+/// the RC card's arithmetic was written against and the floor keeps its 22‰.
+///
+/// The consequence is that this preset MUST arm `palw_held_context` and `palw_token_lift` from
+/// genesis, and it does — not as a special case but because
+/// [`palw_t12_arm_every_rule_from_genesis`] arms every rule this binary knows. The admission gate
+/// refuses a held row while the held fence is dormant and refuses the hybrid's per-token lift while
+/// `palw_token_lift` is, so a preset that got either wrong fails its own genesis gate at startup
+/// rather than booting a network whose classes nobody can produce for. That is the whole reason the
+/// widths in this function are legal here and were not on testnet-11.
+///
+/// **Every other width in 512…2M is registrable from block one**, by transaction, with no fence to
+/// wait for: `palw_context_ladder` (the court prices the checkpoint, not the context),
+/// `palw_model_registry` (ADR-0135's permissionless registry), `palw_seat_gate_possession` and
+/// `palw_class_receipt_window` are all in force at DAA 0. Only the two rows an artifact exists for
+/// are in the genesis BLOCK.
+pub fn palw_t12_shipped_params() -> Params {
+    if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+        return palw_t12_base_params();
+    }
+    let bonds: Vec<_> = PALW_RC_GENESIS_BONDS
+        .iter()
+        .map(|c| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(c.premine_index)),
+            pubkey: c.bond_pubkey.to_vec(),
+            operator_pubkey: c.operator_pubkey.to_vec(),
+            payout_payload: crate::Hash64::from_bytes(c.payout_payload),
+        })
+        .collect();
+    let base = palw_t12_base_params();
+    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(base.net);
+    let params = palw_v2_params_with_class_rows_v1(
+        base,
+        PALW_RC_GENESIS_ARTIFACT_ROOT,
+        PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+        Some(PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT),
+        bonds,
+        genesis_utxos,
+        PalwGenesisClassRowsV1::HeldLadder { dense_n_ctx: PALW_T12_DENSE_N_CTX, hybrid_n_ctx: PALW_T12_HYBRID_N_CTX },
+    )
+    // A card that is set and does not assemble is a binary that would boot a network its own genesis
+    // gate refuses; failing at startup with the gate's own message is the only honest outcome.
+    .unwrap_or_else(|e| panic!("the testnet-12 genesis card does not assemble: {e}"));
+    // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
+    // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
+    // already armed everything — so routing through it could only either change nothing or
+    // overwrite a decision this preset made. The two locks it exists to assert are asserted below
+    // over the assembled ruleset, which is the network actually being shipped.
+    if let Err(e) = params.validate_palw_v2() {
+        panic!("the testnet-12 ruleset does not validate: {e}");
+    }
+    params
+}
+
 /// **Devnet as it ships on this branch: the ADR-0068 Phase 1 drill network — `ConsensusV2`
 /// with a ZERO-row genesis bond registry.**
 ///
@@ -13907,6 +14089,227 @@ pub fn palw_rc_base_params() -> Params {
     // The whole cadence in one spelling; a no-op on this base, which is the point of asserting it
     // here rather than trusting `TESTNET_PARAMS` to keep carrying it.
     params.with_two_minute_cadence()
+}
+
+// =================================================================================================
+// testnet-12 — the 2026-09-22 regenesis of testnet-11, with every rule in force from DAA 0
+// =================================================================================================
+
+/// **testnet-12's base identity: testnet-11's, at a new genesis, with every fence at DAA 0.**
+///
+/// The operator's instruction for this regenesis was one sentence — "過去に fence をつけて DAA から
+/// 有効にしていたもの、将来なるものを genesis から有効にすること" — and a regenesis is the one
+/// moment it can be obeyed literally. On a LIVE chain a rule arrives at a height because the blocks
+/// below that height were judged under the old rule and cannot be re-judged (ADR-0083 path (a)); a
+/// chain with no blocks below has nothing to protect, so the honest form of every one of those rules
+/// is `always()`. That is what [`palw_t12_arm_every_rule_from_genesis`] does, and doing it through
+/// `for_each_fence` rather than by hand is what keeps it true of fences added after today.
+///
+/// What is NOT inherited from t11:
+/// * the genesis block ([`crate::config::genesis::PALW_T12_GENESIS`]) and with it the premine —
+///   the 758M t12 community table on its own sentinel txid;
+/// * every scheduled height. t11's flag days (1,150 / 1,900 / 2,150 / 2,400 / 3,500 / 4,000 / 6,900
+///   / 7,100 / 7,101 / 7,200 / 7,300 / 7,301 / 7,780 / 7,800 / 8,100 / 8,160 / 8,500 / 8,600 /
+///   8,700) are gone, not moved: there is no height at which this chain changes its mind.
+///
+/// What IS inherited, deliberately: the eight genesis bond cards (the operators hold those keys
+/// already), the frozen 120 s cadence, the P2P port (26311 — see `NetworkId::default_p2p_port`),
+/// the DNS seeder names, and the EVM lane.
+pub fn palw_t12_base_params() -> Params {
+    let mut params = palw_rc_base_params();
+    params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
+    params.genesis = crate::config::genesis::PALW_T12_GENESIS;
+    palw_t12_arm_every_rule_from_genesis(&mut params);
+    params
+}
+
+/// **Arm every rule this binary knows at DAA 0, and say which ones cannot be armed and why.**
+///
+/// Two passes, in this order and for this reason:
+///
+/// 1. **Install the dormant fences.** A `None` fence is absent, and `for_each_fence` visits absence
+///    through a sentinel it cannot write back — so a walk alone can move a height and can never
+///    turn a rule on. The struct-bearing ones also need a CONFIGURATION beside the height, and a
+///    configuration is a decision: each one below is the value this tree's own fence sweep
+///    (`fork_id_v1`'s table) uses, not a number invented here.
+/// 2. **Walk every fence to 0.** `for_each_fence` is exhaustive over `Params` by destructuring, so
+///    a fence added to the struct tomorrow is armed by this function without anybody remembering to
+///    come back — which is the only way a list of 80 heights stays true. `never()` is preserved
+///    (score `u64::MAX` round-trips to `never()`), which is what keeps the three V1 proof-of-work
+///    activations off: a `ConsensusV2` network may activate none of them and `validate_palw_v2`
+///    refuses a build that does.
+///
+/// **The Layer-0 activations are saved and restored around the walk** rather than left to the
+/// `never()` round-trip alone, because `crescendo_activation`, `pq_activation_daa_score` and
+/// `evm_activation_daa_score` are already 0 and the four EVM feature fences are set BELOW by name.
+/// Restoring them explicitly means this function's effect on the EVM lane is a list one can read,
+/// not a side effect of a generic walk.
+///
+/// **Three PALW fences stay dormant, and none of them is an oversight:**
+///
+/// * `palw_inactivity_leak` — **`validate_palw_v2` refuses `Some`.** ADR-0066 Decision 4's leak was
+///   replaced by `dns_bft_gate`'s (ADR-0128, armed below from 0); the field survives only so its
+///   Some-only hashing keeps the fingerprints it is already in. Arming it would fail the build.
+/// * `palw_frontier_provenance` — ADR-0065 D2 is **restated as unimplementable** inside the state
+///   fold: `safe_frontier` is written by a pure single-chain transition whose result is hashed into
+///   `state_root`, so a value that depended on the fork point would depend on which branch a node
+///   happened to walk. There is no rule here to arm.
+/// * `palw_beacon_fold` — ADR-0073 SA-1 folds `k` attempt blocks into the **free-prompt beacon**,
+///   and this tree's own finding is that PALW block production has no beacon (the attempt IS the
+///   execution anchor). Arming a fold over a randomness source nothing reads would put a `k` inside
+///   the fingerprint to no effect.
+///
+/// Anything else `None` on testnet-11 is armed here, including the three the operator decided on
+/// 2026-09-22: `palw_context_ladder` (the 512 rows — see [`palw_t12_shipped_params`]),
+/// `palw_artifact_root_ownership` (ADR-0143, with the 2026-09-19 audit's `(class_id, root)` keying,
+/// which is what lets one artifact carry `@512` and `@2048`), and `palw_panel_exposure_floor`
+/// (ADR-0130's λ = 2, affordable here because the collateral is re-derived from the dearest
+/// registered class rather than left at the 10,000 MSK carve).
+pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
+    let at = ForkActivation::always();
+
+    // ---- pass 1: the fences testnet-11 leaves dormant ------------------------------------------
+    // ADR-0064: a bond is usable in the block that accepts its registration.
+    params.palw_bootstrap_activation = Some(at);
+    // ADR-0065 D1: a bond must have been registered a window before it may judge. The genesis bonds
+    // are registered at DAA 0 and `anchor - window` saturates, so they may judge from block one; the
+    // window binds only the strangers who register later, which is the rule's whole point.
+    params.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: at, window_daa: 1_000 });
+    // ADR-0071 SA-1..SA-4: a capability declaration is bounded, priced and proven. Safe from genesis
+    // because the genesis registrations name `palw_genesis_registrant_bond_v1()` and therefore keep
+    // SA-3's exemption — the reason that sentinel exists rather than a real registry row.
+    params.palw_capability_bound = Some(at);
+    // ADR-0075 SA-1/SA-2: the permissionless certification lane pays rent.
+    params.palw_certification_rent = Some(at);
+    // ADR-0075 D14: only a chunk that can complete a group spends the block's certification cap.
+    params.palw_chunk_cap_charge = Some(at);
+    // ADR-0077 Phase B Decisions 10–14 / SA-4: the court prices the checkpoint, not the context.
+    // **This is the fence the 512 rows need** (`PALW_CONTEXT_LADDER_ROWS`), so it is the one the
+    // operator's "qwen25 / qwen36 を ctx512 から" asks for.
+    params.palw_context_ladder = Some(at);
+    // ADR-0081 D3: a job's prompt ids are a tiled Merkle root, so the court that reads ONE id can
+    // open it. Genesis-only by rule (`validate_palw_v2` refuses it above genesis) — a regenesis is
+    // the only occasion this rule has.
+    params.palw_prompt_ids_merkle = Some(at);
+    // ADR-0042 D11: the COMPLETE nineteen-context signature set, not the frozen nine.
+    params.palw_signature_contexts_v2 = Some(at);
+    // ADR-0082 D2 (C-2/H-5): the fused terminal's clock does not convict for a move nobody can make.
+    params.palw_court_responder_coverage = Some(at);
+    // ADR-0082 D10/D11: the free-prompt lane's numerator is its decode leaves, and the committed
+    // token is the seeded argmax.
+    params.palw_fp_decode_rules = Some(at);
+    // ADR-0096 D6–D8: a free-prompt job may carry a decode constraint.
+    params.palw_fp_decode_constraint = Some(at);
+    // ADR-0044 D9 (L-2): the two advertised free-prompt caps are enforced, not merely advertised.
+    params.palw_fp_ruleset_caps = Some(at);
+    // ADR-0093 D6/D8: admission refuses a fused class the court cannot dissect, and a root claim
+    // carries the anchor the dissection's bottom needs.
+    params.palw_fused_dissectable = Some(at);
+    params.palw_attn_anchored_root = Some(at);
+    // ADR-0100 D4: a sharded class is licensed per shard. No genesis class declares a shard plan, so
+    // this is a capability the chain is born with rather than one it uses on day one.
+    params.palw_shard_licensing = Some(at);
+    // ADR-0102: the court adjudicates the embedding lift per token (graph-v6's fenced kernel).
+    params.palw_token_lift = Some(at);
+    // The Kimi K3 family's fenced kernels. **Genesis-only in effect**: a genesis that registers a
+    // Kimi class is refused unless this is armed from genesis, and arming it later cannot rescue
+    // one. This genesis registers none, so what it buys is that a future K3 registration is a
+    // transaction rather than a third regenesis.
+    params.palw_kimi_k3 = Some(at);
+    // ADR-0083 D1's other half (mainnet audit 2026-09-05): a receipt row is not a priced row.
+    params.palw_receipt_rows_unpriced = Some(at);
+    // ADR-0072 D8 (C-1): every field inside the priced bytes is pinned at the HEADER stage.
+    params.palw_attempt_header_pins = Some(at);
+    // ADR-0105: a heartbeat never turns a bonded block red — the measured `ghostdag_k = 1` trap.
+    params.palw_heartbeat_transparent = Some(at);
+    // ADR-0107: a class's cadence share grows only on work that reached `Final`.
+    params.palw_share_growth_final = Some(at);
+    // ADR-0018 §E (H-2/H-3/M-1): the validator payout paths obey their own stated bounds.
+    params.palw_validator_payout_bounds = Some(at);
+    // ADR-0045 D2 (M-2): the crossing block derives its own epoch's budget from the parent state.
+    params.palw_epoch_boundary_budget = Some(at);
+    // ADR-0123: a spent class budget borrows the epoch slots nobody else is filling — the rule that
+    // stops the measured 14× stall (t11, 2026-09-12: one seat's 367/367 budget and no floor exit).
+    params.palw_epoch_budget_release = Some(at);
+    // ADR-0130: the seat exposure floor, λ = 2 — a seat reserves twice the most it can be paid.
+    params.palw_panel_exposure_floor = Some(PalwPanelExposureFloorV1 { activation: at, reward_multiple_permille: 2_000 });
+    // ADR-0143 with the 2026-09-19 audit's remedy applied: an artifact root has one owner per CLASS,
+    // and the index is bounded. Keyed `(class_id, root)` — global keying would refuse the second of
+    // `@512` and `@2048` over one artifact, which is exactly the ladder this net registers.
+    params.palw_artifact_root_ownership = Some(at);
+    // The 2026-09-19 adversarial audit: one operator identity, one bond.
+    params.palw_operator_id_unique = Some(at);
+    // A public source URI on new model registrations.
+    params.palw_public_model_source_required = Some(PalwPublicModelSourceRuleV1 { activation: at });
+    // ADR-0145 §1–§5 (reward audit F1, CRITICAL): a claim's work is DERIVED, not declared.
+    params.palw_canonical_work = Some(at);
+    // ADR-0145 / F3 (I3, I4): a class is not judged by its own registrant.
+    params.palw_admission_independence = Some(at);
+    // ADR-0145 §5/§6 (F2, CRITICAL): the free-prompt lane's work is derived, and a cached prefix is
+    // not paid twice.
+    params.palw_fp_derived_work = Some(at);
+
+    // ---- pass 2: every fence's height to 0, `never()` preserved ---------------------------------
+    // The Layer-0 / EVM activations are this walk's only exceptions, restored by name below.
+    let layer0 = (
+        params.crescendo_activation,
+        params.pow_blake2b_sha3_activation,
+        params.pow_palw_activation,
+        params.pow_palw_ollama_activation,
+        params.pq_activation_daa_score,
+        params.evm_activation_daa_score,
+    );
+    params.for_each_fence(&mut |score| {
+        if *score != u64::MAX {
+            *score = 0;
+        }
+    });
+    params.crescendo_activation = layer0.0;
+    // **A `ConsensusV2` network activates no V1 PALW proof-of-work.** These are `never()` on the RC
+    // base and the walk preserves `never()`, so restoring them is a belt-and-braces restatement of
+    // a refusal `validate_palw_v2` also enforces — the one place where saying it twice is cheap.
+    params.pow_blake2b_sha3_activation = layer0.1;
+    params.pow_palw_activation = layer0.2;
+    params.pow_palw_ollama_activation = layer0.3;
+    params.pq_activation_daa_score = layer0.4;
+    params.evm_activation_daa_score = layer0.5;
+
+    // **The four EVM feature fences, armed by NAME rather than by the walk.** Three of them are
+    // `u64::MAX` on testnet-11 (inert, never scheduled anywhere) and the walk preserves that, so
+    // "every future rule from genesis" has to say them out loud:
+    //
+    // * gas pool v2 — the EVM-lane liveness fix (t11 schedules it at 2,125,000): declared gas gates
+    //   admission, the pool is debited by ACTUAL gas, and a non-fitting tx is skipped without
+    //   blocking the smaller ones behind it;
+    // * F002 (audit M-03) — a tx whose withdrawals would push a block over
+    //   `MAX_WITHDRAWALS_PER_EVM_BLOCK` is a class-2 skip;
+    // * F003 (PREA v1.1 §9) — the `MLDSA87_VERIFY` precompile is registered;
+    // * typed receipt root (§12 Phase-7) — the lane commits the EIP-2718 typed receipt root.
+    //
+    // Each changes execution results, which is why each is fenced at all; a chain with no execution
+    // below DAA 0 is the one place they are free.
+    params.evm_gas_pool_v2_activation_daa_score = 0;
+    params.evm_f002_withdraw_cap_activation_daa_score = 0;
+    params.evm_f003_mldsa_verify_activation_daa_score = 0;
+    params.evm_typed_receipt_root_activation_daa_score = 0;
+
+    // ---- the mirrored setters, re-applied so the bundle cannot carry a stale height -------------
+    // `set_palw_*` write a field AND the V2 bundle's copy of it; the walk wrote only the field. On
+    // this bundle-less base the mirror is a no-op today, and stating it is what keeps that true if
+    // this function is ever called on an assembled ruleset.
+    let single_lottery = params.palw_single_lottery;
+    params.set_palw_single_lottery(single_lottery);
+    let short_challenge = params.palw_short_challenge_window;
+    params.set_palw_short_challenge_window(short_challenge);
+    let receipt_window = params.palw_class_receipt_window;
+    params.set_palw_class_receipt_window(receipt_window);
+
+    // Three fences stay dormant by the reasoning in this function's doc block; asserted rather than
+    // left implicit, because "we meant to leave that one" and "we forgot that one" look identical in
+    // a diff.
+    debug_assert!(params.palw_inactivity_leak.is_none(), "validate_palw_v2 refuses a network that sets the retired leak");
+    debug_assert!(params.palw_frontier_provenance.is_none(), "ADR-0065 D2 is unimplementable inside the state fold");
+    debug_assert!(params.palw_beacon_fold.is_none(), "PALW block production has no beacon to fold");
 }
 
 pub fn palw_rc_params(

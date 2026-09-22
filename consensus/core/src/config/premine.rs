@@ -266,9 +266,105 @@ const TESTNET11_COMMUNITY_TXID: [u8; 64] = [
 /// The t11 community UTXO set: one single-key ML-DSA-87 P2PKH UTXO per entry, spendable from
 /// block 0, indices `0..TESTNET11_COMMUNITY_ALLOCATIONS.len()` on the community sentinel txid.
 pub fn testnet11_community_utxos() -> UtxoCollection {
-    let txid = Hash64::from_bytes(TESTNET11_COMMUNITY_TXID);
-    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(TESTNET11_COMMUNITY_ALLOCATIONS.len());
-    for (i, (addr, whole_msk)) in TESTNET11_COMMUNITY_ALLOCATIONS.iter().enumerate() {
+    community_utxos_v1(TESTNET11_COMMUNITY_TXID, TESTNET11_COMMUNITY_ALLOCATIONS)
+}
+
+/// **The testnet-12 COMMUNITY allocation — testnet-11's table, carried across the regenesis with
+/// the changes the operator collected after it** (Discord, 2026-09-06 … 2026-09-17).
+///
+/// testnet-12 is a re-genesis of testnet-11, not a new programme: everybody who held a t11
+/// allocation holds the same one here. So this table IS [`TESTNET11_COMMUNITY_ALLOCATIONS`], in the
+/// same order, with exactly the operator's four decisions of 2026-09-22 applied:
+///
+/// * **tetsu31's address is replaced IN PLACE** (their fourth): the 2026-08-28
+///   `qfvt2l0a…` entry becomes their 2026-09-06 `qtd0nxwg…` one at the same 5M. Replacing rather
+///   than appending is what keeps one person's four addresses one payment — the supersession list
+///   is keyed by ADDRESS, so a change can never quietly become a second entry.
+/// * **maruko is APPENDED at 100M**, at their 2026-09-12 address. They also changed once
+///   (2026-09-06 `q2lcruqk…`), and only the later address is here — they were never in the t11
+///   table, so the change is recorded below rather than in a supersession note.
+/// * **nyanmi-1828 is APPENDED at 5M** (2026-09-11), a new member.
+/// * **tetsu31's LLM address is APPENDED at 5M** (2026-09-17). This is the ONE case where one
+///   person legitimately holds two entries: they asked for a second address for the LLM lane
+///   ("LLMあり用にテストネットアドレス追加しました"), which is an addition and not a change, so it
+///   is a second payment by the operator's decision rather than by an accounting slip.
+///
+/// Everything else is unmoved, including uki at 5M (the operator's 2026-09-22 confirmation: the
+/// chat log's "1M" beside their address is the amount they posted, the table's 5M is the cut).
+///
+/// **The whole allocation is carved out of the main wallet** (see [`bonded_genesis_utxos`]), so
+/// growing this table moves the main wallet's amount and never the 10B cap.
+///
+/// Amounts are whole MSK (× [`SOMPI_PER_KASPA`] at build). The fixed order feeds the genesis
+/// `utxo_commitment` via the outpoint index, so it must never be reordered — **new members are
+/// APPENDED, never inserted.**
+#[rustfmt::skip]
+pub const TESTNET12_COMMUNITY_ALLOCATIONS: &[(&str, u64)] = &[
+    // operator (2026-08-11)
+    ("misakatest:qt0meznnlhgxx9h99yn78erahuyql0fnaeh9fxwjhw5j2qftsvsdjy38hm89ul7dfvddy0v2uqkgr4tqgr9nxp23xtn4tylf370f2k9f8hpry2wz", 100_000_000),
+    // tetsu31 — LLM なし lane (2026-09-06; their FOURTH address, replacing the 2026-08-28
+    // `qfvt2l0a…` t11 carried. Still 5M and still one entry for this lane.)
+    ("misakatest:qtd0nxwg6qee0azyll9tggyxw5zz7qcrw3294w9g0y3lx8uvc6pvhll0fduu575ughzc7eudx473v6advc2jne8tw2a5pqzhfy30dk9fputec8r9", 5_000_000),
+    // Kurenai (re-registered address, 2026-08-23)
+    ("misakatest:q2hftf0vsn23n5lpqzq9lealff4frahnr420lz4zwfjadtdfnq8jm375wddxrqa60f5ma706jq2j2htlrvgx7qf2xx04canvrtjq64n9r9e7tf4w", 30_000_000),
+    // タケヤマ #1 (changed address, 2026-08-23)
+    ("misakatest:qtdksp2u6vkc8pxem5kecpt4cc9g4kdc9qkmaw2ehv530suad40rfvs2xwtx0s3j2hwvff6cg0ruqhu4fqsq6fft050h0gfwf464ume679e56p50", 100_000_000),
+    // タケヤマ #2 (2026-08-12)
+    ("misakatest:qgm8ft3wk722xp8ju7mv0weuhq9anqcp3q3v37fq2dz4xfhhc96ujw2hf39k6ncjav27mp2hkajyyyu4m4s8rgggaxtj8g2qtmuqgsk5y34fsncq", 100_000_000),
+    // コタヌキM (2026-08-12)
+    ("misakatest:qtpu9le2jr93fv094jasvl92x2ewqvh9xsnutzh3tegwy9x8amac5xjl40cwjx2yrl0w4dqnf8fsamagr024nmrdfsd7v2d7m97dqa7qcelse3lx", 1_000_000),
+    // uki (changed address, 2026-08-19; 5M confirmed by the operator 2026-09-22)
+    ("misakatest:qt4uw0l8pemv6l0pqeuc247g2h3sp40kve88acz5xfzer3hwjaafw83jv77s8hemyyxnktc2v5zdu3v22s7d4067gtzupttchy23ycqym5vn82w6", 5_000_000),
+    // あかぼね (2026-08-17)
+    ("misakatest:qfcqlqw7kfgtg9g09rsz3m0e808th2e0p4stz0r4hn8prtnmvp6xy9adngl3xhfkyplpppwehfh7vkqlvqenhh2rj5sp388mezrc8tnk5uyxt65r", 5_000_000),
+    // kamil (2026-08-17)
+    ("misakatest:qga0xgy5xctju8da7scuwfxj93e205er5fs59qcr5w57nejl9h93rgt9thjnd87mmv5z98wxv26ewzqha4496nnxnza66s9l3jgyk5pq0wmepk43", 1_000_000),
+    // Daifuku (2026-08-22)
+    ("misakatest:q2wr70tgc8rtnz54026l5xntydq5hp7nuvp0fyxv30e2sk9jx2kc4gyt7tet0htttl5p4d36lyt25dshm45kqefdjpu8kcjurrakwx74rlpceqyt", 100_000_000),
+    // ほうじ茶 (2026-08-26)
+    ("misakatest:qgz4mlmfhw39yfh2dg3xul2ex9es9pxyrn46wu7th4gl2ldchugw85j30a84kv3wwv5r6ls9wg8ffzd5huzecejh7fhf3gf7rjgtcvlwdeqfcy34", 100_000_000),
+    // Nusi (2026-09-01)
+    ("misakatest:qgqh5unkydrp2qyhgxgg723sul5xv40ffymwnlhqale3973qlyfqc8snme7thmmpcqvn9f9gzeyavwdqthfqelq7y8tyajsdnnhsmx980g8ujkzl", 100_000_000),
+    // The Witch King (2026-09-02)
+    ("misakatest:qfq3yl2d090e3nphrwh5jyrr97g2f85z2zpkasca0s3d7tk98fuv9sknzlhjxnwd8pdly2kgz25krdfxs5066zkupf5g4r442g72xfswyu0h5yhp", 1_000_000),
+    // ---- APPENDED for testnet-12 (the operator's collection after the t11 cut) ----
+    // maruko (2026-09-12; changed from their 2026-09-06 `q2lcruqk…`, which is NOT allocated)
+    ("misakatest:qgx6v27ku0dnn3saqmq7txtkhul8807fdw3mleyxk6yhdmmkrfgkqsqtmu37h0z49ht9v7znkh2vhh8phvk3yh600707v470chwyt24ua9ka3r7c", 100_000_000),
+    // nyanmi-1828 (2026-09-11)
+    ("misakatest:qf4dwhp0m8u49ndylula4juh3wsnstufgkv0wfsn47hva4fhxcafadm9893rvurq73yee2x6nfvphxhdtc4y60g9j0g2v5v9tz69z6xasnfy4qmd", 5_000_000),
+    // tetsu31 — LLM あり lane (2026-09-17). Their SECOND entry, and the only double in this table:
+    // an ADDED address for the LLM lane, not a changed one.
+    ("misakatest:q2lw0t6a4ht75fmmayzama5t5axrnakeqe77yvn2ezuk83e2zul9pyeevr9zmg2lul65s8tu7jgpcrzkh9g5f5mtkeu4um649zkwfupeudn5e7m6", 5_000_000),
+];
+
+/// Total testnet-12 community allocation: **758M MSK** — t11's 648M plus maruko's 100M,
+/// nyanmi-1828's 5M and tetsu31's LLM-lane 5M. Pinned by `t12_community_total_is_758m`.
+pub const TESTNET12_COMMUNITY_SOMPI: u64 = 758_000_000 * SOMPI_PER_KASPA;
+
+/// Deterministic sentinel txid for the t12 community UTXOs: ASCII "misaka-t12-community"
+/// (20 bytes) zero-padded to 64. Its own txid, distinct from t11's, so the two tables can never
+/// collide on an outpoint — and so a t11 community outpoint is not a name on this chain at all.
+#[rustfmt::skip]
+const TESTNET12_COMMUNITY_TXID: [u8; 64] = [
+    0x6d, 0x69, 0x73, 0x61, 0x6b, 0x61, 0x2d, 0x74, 0x31, 0x32, 0x2d, // "misaka-t12-"
+    0x63, 0x6f, 0x6d, 0x6d, 0x75, 0x6e, 0x69, 0x74, 0x79,             // "community"
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+];
+
+/// The t12 community UTXO set: one single-key ML-DSA-87 P2PKH UTXO per entry, spendable from
+/// block 0, indices `0..TESTNET12_COMMUNITY_ALLOCATIONS.len()` on the t12 community sentinel txid.
+pub fn testnet12_community_utxos() -> UtxoCollection {
+    community_utxos_v1(TESTNET12_COMMUNITY_TXID, TESTNET12_COMMUNITY_ALLOCATIONS)
+}
+
+/// The one construction path both community tables take: `(address, whole MSK)` rows become one
+/// ML-DSA-87 P2PKH UTXO each at their own index on `txid`. Shared rather than copied because the
+/// predecessor of this file totalled a genesis wrong by having two construction paths for one set.
+fn community_utxos_v1(txid: [u8; 64], rows: &[(&str, u64)]) -> UtxoCollection {
+    let txid = Hash64::from_bytes(txid);
+    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(rows.len());
+    for (i, (addr, whole_msk)) in rows.iter().enumerate() {
         let script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(addr));
         let outpoint = TransactionOutpoint { transaction_id: txid, index: i as u32 };
         let amount = whole_msk.checked_mul(SOMPI_PER_KASPA).expect("a community allocation cannot overflow sompi");
@@ -356,6 +452,16 @@ pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
     }
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
         return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_RC_GENESIS_BONDS), testnet11_community_utxos());
+    }
+    // **testnet-12 — the 2026-09-22 regenesis of testnet-11.** The SAME eight genesis bond cards
+    // (`PALW_RC_GENESIS_BONDS`), because a card is a set of operator-held ML-DSA-87 keys and the
+    // fleet already holds those files; re-carding would be a key ceremony this regenesis does not
+    // need and does not include. What changes is the community table (t12's, on its own sentinel
+    // txid) — so the collateral outpoints a bond's identity is built from are byte-identical to
+    // t11's while the balances in the set are not, which is exactly the split this net wants: the
+    // operators keep their keys, the members keep their allocations, the chain is a different chain.
+    if net.network_type == NetworkType::Testnet && net.suffix == Some(12) {
+        return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_RC_GENESIS_BONDS), testnet12_community_utxos());
     }
     // **Mainnet takes the same shape the moment it has cards, and not before.** The list is empty
     // until a genesis registry exists (real keys, held by the operators who will run those seats),
