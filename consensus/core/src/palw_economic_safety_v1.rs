@@ -16,13 +16,22 @@
 //! | `max_fraud_gain` as computed | 2,702.96409 MSK |
 //! | three colluding locks cover | 2,702.96409 MSK (**+2 sompi**) |
 //! | execution quanta one Final mints | 2,963 |
-//! | each convertible to one algo-10 permit worth a block | 3.70468 MSK |
-//! | block rights the gain does NOT count | **10,976.98 MSK** |
+//! | block rights the gain does NOT count | **2,963 round blocks' FEES** |
+//!
+//! **A round block earns fees and no subsidy, and the first reading of this got that wrong.**
+//! `coinbase.rs`: "a round block's fees are its payout's, aggregated — never the merger's lump,
+//! never a carve (**the lane mints nothing, so there is no subsidy to carve**)". Pricing a permit at
+//! the block subsidy put the uncounted rights at 10,976.98 MSK; the honest figure is the FEE flow
+//! those 2,963 rounds divert, which is a property of the network's traffic and not of the claim.
+//! That is why [`palw_permit_value_sompi_v1`] is a declared per-network ceiling and not a
+//! derivation: consensus bounds a block's mass, never its fee per unit of mass, so no function here
+//! can compute it. What a testnet is FOR is measuring it.
 //!
 //! `palw_claim_extra_economic_rights_v1` returned `0` while its own doc named "Permits, extra
 //! eligibility, or any other sompi-denominated right the claim mints" — and on this network a Final
 //! mints exactly that (`palw_execution_quanta_v1`: "an execution quantum is an execution *right*: it
-//! converts into at most one algo-10 round permit"). So the lie's biggest prize was free.
+//! converts into at most one algo-10 round permit"). Whatever those rounds are worth, the lie got
+//! them for nothing.
 //!
 //! # Two ways to close it, and why this module takes both
 //!
@@ -75,21 +84,32 @@ pub const fn palw_rounds_per_daa_v1(target_time_per_block_ms: u64) -> u64 {
 /// `0` is the pre-bundle behaviour: a quantum is spendable as soon as its span opens, which is what
 /// made a fraudulent Final's 2,963 permits realizable ~82 hours before its liability lock expired.
 ///
-/// Set to the liability horizon (`PalwCourtParamsV2::window_court`) by
-/// [`palw_exec_quantum_maturity_daa_v1`], so the two edges coincide and revocation is total. A
-/// SHORTER value is legal and safe — [`palw_realizable_before_maturity_v1`] prices the window it
-/// opens — and is how an operator trades collateral for latency.
-pub const PALW_EXEC_QUANTUM_MATURITY_IS_THE_LIABILITY_HORIZON: bool = true;
+/// **testnet-12 sets it to the CHALLENGE window, not the liability horizon, on purpose** (the
+/// operator, 2026-09-23). Matching the horizon (`window_court`, 3,000 DAA) makes the safety argument
+/// trivial — nothing is ever both spendable and convictable, so the residual is identically zero —
+/// and buys that triviality with about a hundred hours of frozen execution rights on a clock that
+/// ticks every 120 s. Two costs follow: the last testnet before mainnet could not exercise its own
+/// execution lane, and `palw_realizable_before_maturity_v1` — the function the whole design rests on —
+/// would never be reached by a real claim.
+///
+/// At `window_challenge` (1,200 DAA, ~40 h) a 1,800-DAA window stays in which a right is both
+/// spendable and still convictable, and that window is PRICED into `max_fraud_gain`. The tradeoff
+/// becomes the continuous thing it should be — longer maturity, more recoverable, less collateral;
+/// shorter maturity, faster permits, more collateral — and mainnet picks its point from what t12
+/// measures instead of inheriting a hundred-hour freeze.
+pub const PALW_EXEC_QUANTUM_MATURITY_IS_THE_CHALLENGE_WINDOW: bool = true;
 
-/// The maturity this network applies: the liability horizon when
-/// [`PALW_EXEC_QUANTUM_MATURITY_IS_THE_LIABILITY_HORIZON`], else nothing.
-pub const fn palw_exec_quantum_maturity_daa_v1(window_court_daa: u64) -> u64 {
-    if PALW_EXEC_QUANTUM_MATURITY_IS_THE_LIABILITY_HORIZON { window_court_daa } else { 0 }
+/// The maturity this network applies, in DAA: the challenge window on testnet-12.
+///
+/// Takes both windows because the choice is between them, and returning the shorter one is the whole
+/// decision — a caller that passed only one could not express it.
+pub const fn palw_exec_quantum_maturity_daa_v1(window_challenge_daa: u64, window_court_daa: u64) -> u64 {
+    if PALW_EXEC_QUANTUM_MATURITY_IS_THE_CHALLENGE_WINDOW { window_challenge_daa } else { window_court_daa }
 }
 
 /// **The earliest DAA at which a Final's execution quanta may be spent.**
-pub const fn palw_exec_quantum_matures_at_v1(final_daa: u64, window_court_daa: u64) -> u64 {
-    final_daa.saturating_add(palw_exec_quantum_maturity_daa_v1(window_court_daa))
+pub const fn palw_exec_quantum_matures_at_v1(final_daa: u64, window_challenge_daa: u64, window_court_daa: u64) -> u64 {
+    final_daa.saturating_add(palw_exec_quantum_maturity_daa_v1(window_challenge_daa, window_court_daa))
 }
 
 /// **The rights a fraudulent Final can realize before a conviction could still take them** — the
@@ -106,11 +126,12 @@ pub const fn palw_exec_quantum_matures_at_v1(final_daa: u64, window_court_daa: u
 /// a network that somehow priced a permit at `u64::MAX` should refuse to seat a panel, not wrap.
 pub fn palw_realizable_before_maturity_v1(
     quanta_minted: u32,
+    window_challenge_daa: u64,
     window_court_daa: u64,
     target_time_per_block_ms: u64,
     permit_value_sompi: u64,
 ) -> u128 {
-    let maturity = palw_exec_quantum_maturity_daa_v1(window_court_daa);
+    let maturity = palw_exec_quantum_maturity_daa_v1(window_challenge_daa, window_court_daa);
     let gap_daa = window_court_daa.saturating_sub(maturity);
     if gap_daa == 0 || quanta_minted == 0 || permit_value_sompi == 0 {
         return 0;
@@ -120,16 +141,35 @@ pub fn palw_realizable_before_maturity_v1(
     realizable.saturating_mul(u128::from(permit_value_sompi))
 }
 
-/// **What one algo-10 permit is worth, in sompi** — the block it buys.
+/// **What one algo-10 permit is worth, in sompi — a DECLARED ceiling, because consensus cannot
+/// derive it.**
 ///
-/// The subsidy is the floor and the honest one to price against: a permit's holder produces a round
-/// block and collects its subsidy. Fees are not added, and the omission is named: a fee is paid by a
-/// transaction the attacker would also have to supply, so counting it would let a liar inflate its own
-/// slash requirement by spamming itself. The subsidy is what the CHAIN hands over for holding the
-/// permit, and that is what a lie steals.
-pub const fn palw_permit_value_sompi_v1(subsidy_sompi: u64) -> u64 {
-    subsidy_sompi
+/// A round block mints nothing: `coinbase.rs` pays "a round block's fees … to its own payout …
+/// never a carve (the lane mints nothing, so there is no subsidy to carve)". So a permit is worth
+/// the FEES of the transactions its holder includes, and consensus bounds a block's mass but never
+/// its fee per unit of mass. There is no function that can compute this value, and a derivation that
+/// pretended otherwise — the subsidy, say — would price a right the lane does not pay.
+///
+/// So it is a per-network ceiling an operator declares and a testnet MEASURES. It is the one input
+/// to [`palw_realizable_before_maturity_v1`] that is not a chain fact, and it is named here rather
+/// than buried so that "what did we assume a stolen round was worth" is a question with an address.
+///
+/// **The gain it belongs to is a DIVERSION, not a mint**: had the liar not held the permit, an honest
+/// participant would have collected those fees. That makes the figure bounded by real traffic rather
+/// than by the claim, which is exactly why testnet-12 runs a short maturity — to measure it on a lane
+/// that is actually being used before mainnet fixes a number.
+pub const fn palw_permit_value_sompi_v1(permit_fee_ceiling_sompi: u64) -> u64 {
+    permit_fee_ceiling_sompi
 }
+
+/// **testnet-12's declared ceiling for one stolen round: 1 MSK.**
+///
+/// A placeholder with a job, not a measurement: the lane's fee flow on this network is what t12
+/// exists to measure, and until it has, a round is priced at one whole MSK — far above any fee a
+/// near-empty testnet round actually carries, so the residual it feeds into `max_fraud_gain` errs
+/// high. **Mainnet must replace this with the measured figure**, which is ADR-0151's stated reason
+/// for running the short maturity here at all.
+pub const PALW_T12_PERMIT_FEE_CEILING_SOMPI: u64 = 100_000_000;
 
 /// **Whether a Final's rights are forfeit** — the revocation half of the bundle.
 ///
@@ -166,18 +206,18 @@ pub fn palw_seat_lock_required_v2(max_fraud_gain: u128, colluding_quorum: u64) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1;
-    use crate::palw_offence_v1::palw_colluding_quorum_covers_v1;
+    use crate::palw_offence_v1::{PALW_PANEL_COLLUDING_QUORUM_V1, palw_colluding_quorum_covers_v1};
     use crate::palw_panel_var_v1::{PalwClaimFraudFactsV1, palw_max_fraud_gain_v1};
 
     /// The testnet-12 held 2M row, as the card registers it.
     const ESCROW: u64 = 266_736_960;
     const PWU_PER_INFERENCE: u64 = 27_002_967_184;
     const SLASH: u64 = 5;
+    const WINDOW_CHALLENGE: u64 = 1_200;
     const WINDOW_COURT: u64 = 3_000;
     const CADENCE_MS: u64 = 120_000;
-    const SUBSIDY: u64 = 370_468_345;
     const QUANTA: u32 = 2_963;
+    const PERMIT: u64 = PALW_T12_PERMIT_FEE_CEILING_SOMPI;
 
     fn facts(extra: u128) -> PalwClaimFraudFactsV1 {
         PalwClaimFraudFactsV1 {
@@ -189,61 +229,78 @@ mod tests {
         }
     }
 
+    fn residual() -> u128 {
+        palw_realizable_before_maturity_v1(QUANTA, WINDOW_CHALLENGE, WINDOW_COURT, CADENCE_MS, palw_permit_value_sompi_v1(PERMIT))
+    }
+
     /// **The defect, reproduced.** With the rights priced at zero the colluding quorum out-values the
-    /// gain by two sompi, while the Final mints 2,963 permits worth ten thousand MSK.
+    /// gain by TWO SOMPI, on a claim that mints 2,963 permits.
     #[test]
-    fn the_shipped_inequality_held_by_two_sompi_and_missed_ten_thousand_msk() {
+    fn the_shipped_inequality_held_by_two_sompi() {
         let gain = palw_max_fraud_gain_v1(&facts(0));
         let seat = crate::palw_offence_v1::palw_min_slashable_per_colluding_seat_v1(gain, PALW_PANEL_COLLUDING_QUORUM_V1);
         assert_eq!(seat.saturating_mul(u128::from(PALW_PANEL_COLLUDING_QUORUM_V1)) - gain, 2, "the whole margin");
-        let missed = u128::from(QUANTA) * u128::from(palw_permit_value_sompi_v1(SUBSIDY));
-        assert!(missed > gain * 4, "the uncounted block rights are four times the gain that was counted");
     }
 
-    /// **Maturity at the liability horizon leaves nothing to price.** The two edges coincide, so at
-    /// every instant a conviction can be filed every quantum is still unused.
+    /// **testnet-12 runs the SHORT maturity, so the residual is real and priced.**
+    ///
+    /// 1,200 DAA of maturity against a 3,000-DAA liability horizon leaves 1,800 DAA in which a right
+    /// is both spendable and still convictable. At 120 rounds a DAA that is 216,000 rounds — far more
+    /// than the mint's 2,963 — so every quantum is realizable and the cap that bites is the mint's.
     #[test]
-    fn at_the_shipped_maturity_no_right_is_realizable_before_conviction() {
-        assert_eq!(palw_exec_quantum_maturity_daa_v1(WINDOW_COURT), WINDOW_COURT);
-        assert_eq!(palw_exec_quantum_matures_at_v1(10_000, WINDOW_COURT), 13_000);
-        assert_eq!(
-            palw_realizable_before_maturity_v1(QUANTA, WINDOW_COURT, CADENCE_MS, palw_permit_value_sompi_v1(SUBSIDY)),
-            0,
-            "nothing is both spendable and still convictable"
-        );
-    }
-
-    /// **And a shorter maturity is priced, not a hole.** The residual is the permits realizable in the
-    /// gap, capped by the quanta that exist.
-    #[test]
-    fn a_shorter_maturity_is_priced() {
-        // One round a second against a 120 s tick: 120 rounds a DAA.
+    fn the_short_maturity_prices_every_quantum() {
+        assert_eq!(palw_exec_quantum_maturity_daa_v1(WINDOW_CHALLENGE, WINDOW_COURT), WINDOW_CHALLENGE);
+        assert_eq!(palw_exec_quantum_matures_at_v1(10_000, WINDOW_CHALLENGE, WINDOW_COURT), 11_200);
         assert_eq!(palw_rounds_per_daa_v1(CADENCE_MS), 120);
-        // A gap of one DAA admits 120 permits; the mint has 2,963, so the cap does not bite.
-        let one_daa_gap = palw_realizable_before_maturity_v1(QUANTA, WINDOW_COURT, CADENCE_MS, palw_permit_value_sompi_v1(SUBSIDY));
-        assert_eq!(one_daa_gap, 0, "the shipped setting has no gap at all");
-        // Priced directly, with the maturity stripped out, so the arithmetic is visible.
-        let gap_rounds = 1u128 * 120;
-        let priced = gap_rounds.min(u128::from(QUANTA)) * u128::from(SUBSIDY);
-        assert_eq!(priced, 120 * u128::from(SUBSIDY));
+        assert_eq!(residual(), u128::from(QUANTA) * u128::from(PERMIT), "the mint's own count is the binding cap");
+        assert!(residual() > 0, "the point of the short maturity is that this path is REACHED");
     }
 
-    /// **The margin is a tenth, not two sompi** — and the inequality survives a whole permit moving.
+    /// **The tradeoff is continuous, which is the property mainnet needs.** Longer maturity, less
+    /// realizable; at the liability horizon, nothing.
     #[test]
-    fn the_widened_margin_survives_one_permit_of_drift() {
-        let gain = palw_max_fraud_gain_v1(&facts(0));
+    fn maturity_and_recoverable_rights_move_together() {
+        let at = |maturity: u64| {
+            let gap = WINDOW_COURT.saturating_sub(maturity);
+            let rounds = gap.saturating_mul(palw_rounds_per_daa_v1(CADENCE_MS));
+            u128::from(QUANTA).min(u128::from(rounds)).saturating_mul(u128::from(PERMIT))
+        };
+        assert_eq!(at(WINDOW_COURT), 0, "maturity at the horizon leaves nothing to price");
+        assert!(at(2_990) < at(WINDOW_CHALLENGE), "a longer maturity prices less");
+        assert!(at(0) >= at(WINDOW_CHALLENGE), "and no maturity prices the most");
+        // The knob is monotone, so an operator can trade latency for collateral without a cliff.
+        let mut previous = u128::MAX;
+        for maturity in [0u64, 600, 1_200, 1_800, 2_400, 3_000] {
+            let now = at(maturity);
+            assert!(now <= previous, "the residual must not grow with maturity at {maturity}");
+            previous = now;
+        }
+    }
+
+    /// **With the residual priced, three colluding seats out-value the lie again** — and by a tenth
+    /// rather than by two sompi, so one unpriced permit cannot flip it.
+    #[test]
+    fn the_priced_gain_is_covered_with_a_real_margin() {
+        let gain = palw_max_fraud_gain_v1(&facts(residual()));
+        assert!(gain > palw_max_fraud_gain_v1(&facts(0)), "the rights are in the gain now");
         let seat = palw_seat_lock_required_v2(gain, PALW_PANEL_COLLUDING_QUORUM_V1);
         let quorum = u128::from(PALW_PANEL_COLLUDING_QUORUM_V1);
-        assert!(palw_colluding_quorum_covers_v1(seat, PALW_PANEL_COLLUDING_QUORUM_V1, gain));
-        // A gain that grew by one permit is still covered, which the one-sompi margin was not.
-        let drifted = gain + u128::from(SUBSIDY);
+        assert!(palw_colluding_quorum_covers_v1(seat, PALW_PANEL_COLLUDING_QUORUM_V1, gain), "the inequality holds");
         assert!(
-            seat.saturating_mul(quorum) > drifted,
-            "a tenth of the lock must absorb one unpriced permit: {} vs {}",
-            seat.saturating_mul(quorum),
-            drifted
+            seat.saturating_mul(quorum) > gain.saturating_add(u128::from(PERMIT)),
+            "and survives a whole unpriced permit of drift"
         );
+        // The shipped one-sompi margin would not have.
         let thin = crate::palw_offence_v1::palw_min_slashable_per_colluding_seat_v1(gain, PALW_PANEL_COLLUDING_QUORUM_V1);
-        assert!(thin.saturating_mul(quorum) <= drifted, "the shipped margin does not");
+        assert!(thin.saturating_mul(quorum) <= gain.saturating_add(u128::from(PERMIT)));
+    }
+
+    /// A round block mints nothing, so a permit is priced at a declared FEE ceiling and never at a
+    /// subsidy. Pinned because the first reading of this priced it at the block subsidy and reported
+    /// an uncounted gain four times too large.
+    #[test]
+    fn a_permit_is_priced_at_fees_not_at_a_subsidy() {
+        assert_eq!(palw_permit_value_sompi_v1(PERMIT), PERMIT);
+        assert_eq!(PALW_T12_PERMIT_FEE_CEILING_SOMPI, 100_000_000, "one MSK a stolen round, until t12 measures it");
     }
 }
