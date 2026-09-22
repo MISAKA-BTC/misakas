@@ -589,6 +589,41 @@ pub struct PalwGenesisBondSpecV1 {
 /// and small enough that the margin is not the entry price.
 pub const PALW_MODEL_CLAIM_CONCURRENCY_V1: u64 = 4;
 
+/// **One class row, in both of the units a collateral derivation has to reconcile.**
+///
+/// A registration declares `pwu_per_inference` (its canonical job's leaf count) and the chain
+/// derives `palw_canonical_draw_work_v1` (that job's MAC-equivalents). They are not proportional
+/// across classes — a held 2M row's leaves are compressed by its tiling while its MAC-eq draw is
+/// not — so a derivation that reads one where the runtime reads the other is wrong by their ratio.
+/// On testnet-12's card that ratio is 44.25×, and it is why every seat of the first t12 fleet logged
+/// `holding: the bond's exposure ceiling leaves no room for another claim` with `produced=0`.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwCollateralRowV1 {
+    /// `palw_max_exposure_pwu_of_rule_v1` of the row's rule — what the registration declares.
+    pub declared_leaves: u64,
+    /// `palw_canonical_draw_work_v1(...).provisional_scalar_v1()` — one draw's derived work.
+    pub derived_per_draw: u128,
+}
+
+/// **A row's reservation in the unit `palw_exposure_pwu_v3` reserves in**: its derived work for one
+/// draw, renormalised by the floor class's leaves-per-MAC-eq.
+///
+/// **Why not the raw weight.** Above the canonical-work fence an attempt's pwu is
+/// `palw_pwu_v1(target, derived_per_draw)` on the RAW draw, and the fork weight its Final buys is
+/// that times `slash_value`. Measured on testnet-12's 2M row that is 335,728,175.72 MSK for ONE
+/// claim — 3.36 % of the whole 10B cap, 5,620× the renormalised reservation. No bond can post it, so
+/// "collateral covers the fraud gain" (ADR-0151 D1) is a statement about the EXPOSURE unit, and this
+/// function is where that unit is named once for every reader of it.
+pub fn palw_exposure_unit_pwu_v1(derived_per_draw: u128, floor_declared_leaves: u64, floor_derived_per_draw: u128) -> u64 {
+    if floor_derived_per_draw == 0 || floor_declared_leaves == 0 {
+        // The basis is what makes the conversion meaningful; without it the runtime keeps the
+        // declared value (`palw_exposure_pwu_v3`'s `_` arm), so this does too.
+        return derived_per_draw.min(u64::MAX as u128) as u64;
+    }
+    let scaled = derived_per_draw.saturating_mul(floor_declared_leaves as u128) / floor_derived_per_draw;
+    scaled.min(u64::MAX as u128) as u64
+}
+
 /// **Collateral for a genesis registry: the fraud a bond's reachable claims would authorize**
 /// (ADR-0151 D1).
 ///
@@ -629,27 +664,27 @@ pub const PALW_MODEL_CLAIM_CONCURRENCY_V1: u64 = 4;
 /// it wants its own commit. This function makes the GENESIS carve honest; it does not make the
 /// runtime ledger honest.
 pub fn palw_v2_collateral_for_class_set_v1(
-    floor_pwu_per_inference: u64,
-    model_pwus_per_inference: &[u64],
+    floor: PalwCollateralRowV1,
+    model_rows: &[PalwCollateralRowV1],
     escrowed_reward: u64,
     bind_window_liveness: Option<u64>,
 ) -> u64 {
-    let gain = |pwu_per_inference: u64| -> u128 {
-        crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
-            reserved: 0,
-            escrowed_reward,
-            // The claim's pwu, as the fold derives it: the expected attempt count at the genesis
-            // target times one inference. This is the number the fork weight is computed from, so it
-            // is the number the gain is computed from.
-            pwu: crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference),
-            slash_value_per_pwu: SLASH_VALUE_PER_PWU,
-            extra_economic_rights_sompi: 0,
-        })
-        .max(1)
+    // **The reservation the RUNTIME really writes, which is the unit the collateral must be posted
+    // in** — `palw_exposure_pwu_v3`: this row's derived work for one draw, renormalised by the FLOOR
+    // class's leaves-per-MAC-eq so a dear class does not reserve in a unit of its own. See
+    // [`palw_exposure_unit_pwu_v1`] for why the raw weight unit cannot be used here.
+    let reservation = |row: PalwCollateralRowV1| -> u128 {
+        (palw_exposure_unit_pwu_v1(row.derived_per_draw, floor.declared_leaves, floor.derived_per_draw) as u128)
+            .saturating_mul(SLASH_VALUE_PER_PWU as u128)
     };
-    let mut ceiling = gain(floor_pwu_per_inference).saturating_mul(MAX_CLAIM_EXPOSURE_DAA as u128 + 1);
-    for pwu in model_pwus_per_inference {
-        ceiling = ceiling.saturating_add(gain(*pwu).saturating_mul(PALW_MODEL_CLAIM_CONCURRENCY_V1 as u128));
+    // The cash half is the escrow the claim carries; the weight half is the reservation above, in
+    // the exposure unit. `extra_economic_rights` stays 0 here — ADR-0151's permit term is priced at
+    // the seat lock, not at the bond's exposure ceiling, and double-counting it would move every
+    // shipped genesis.
+    let gain = |row: PalwCollateralRowV1| -> u128 { (escrowed_reward as u128).saturating_add(reservation(row)).max(1) };
+    let mut ceiling = gain(floor).saturating_mul(MAX_CLAIM_EXPOSURE_DAA as u128 + 1);
+    for row in model_rows {
+        ceiling = ceiling.saturating_add(gain(*row).saturating_mul(PALW_MODEL_CLAIM_CONCURRENCY_V1 as u128));
     }
     // **And the genesis LIVENESS bound, for a network that still needs it** — `None` where ADR-0151 D3's
     // structural guarantee holds (`palw_clock_advances_without_a_claim_v1`), which is the case this
@@ -657,12 +692,13 @@ pub fn palw_v2_collateral_for_class_set_v1(
     // `BondCannotSustainBindWindow` figure for a chain whose clock really is its claims.
     let liveness = bind_window_liveness
         .map(|window_bind| {
-            model_pwus_per_inference
+            model_rows
                 .iter()
-                .chain(std::iter::once(&floor_pwu_per_inference))
+                .map(|row| row.declared_leaves)
+                .chain(std::iter::once(floor.declared_leaves))
                 .map(|pwu| {
                     let per_claim = (crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(
-                        &crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: *pwu },
+                        &crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: pwu },
                     ) as u128)
                         .saturating_mul(SLASH_VALUE_PER_PWU as u128)
                         .max(1);

@@ -50,6 +50,11 @@ fn t12_genesis_mints_exactly_the_cap() {
 /// **The collateral the premine carves is the one the card derives.** The pin exists because the
 /// premine cannot run the derivation (it needs the class profiles); this is what keeps the two
 /// honest, and it is the test that would have caught the 38,889,673 MSK figure as a 24× overshoot.
+///
+/// It would NOT have caught the figure that actually shipped and wedged the fleet: 60,088.18 MSK was
+/// self-consistent between card and premine and wrong in its UNIT. `t12_producer_exposure_measured`
+/// is the test for that, and it compares against the live fleet's own log line rather than against
+/// another copy of the same derivation.
 #[test]
 fn t12_bond_collateral_matches_the_card() {
     let p = Params::from(t12());
@@ -65,7 +70,12 @@ fn t12_bond_collateral_matches_the_card() {
     assert_eq!(declared.len(), 8, "eight genesis bonds");
     for c in &declared {
         assert_eq!(*c, PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI, "the card declares exactly what the premine carves (audit C-08)");
-        assert_eq!(*c, 6_008_818_407_600, "60,088.18407600 MSK: the fraud a bond reachable claims authorize (ADR-0151 D1)");
+        assert_eq!(
+            *c, 51_642_979_663_480,
+            "516,429.79663480 MSK: the fraud a bond's reachable claims authorize, in the unit the RUNTIME reserves in \
+             (ADR-0151 D1). The 60,088.18407600 MSK this replaced was the same sum on each class's OWN declared leaves, \
+             44.25x short on the 2M row, and it wedged every producer of the first t12 fleet shut at produced=0."
+        );
     }
     // And the premine really holds it.
     let utxos = genesis_premine_utxos_for(t12());

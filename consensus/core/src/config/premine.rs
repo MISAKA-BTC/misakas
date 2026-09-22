@@ -72,54 +72,72 @@ pub const MISAKA_PREMINE_CAP_SOMPI: u64 = 10_000_000_000 * SOMPI_PER_KASPA;
 /// `palw_locked_bond_outpoints_v2`.
 pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 
-/// **testnet-12's genesis-bond collateral: 60,088.18407600 MSK a seat.**
+/// **testnet-12's genesis-bond collateral: 516,429.79663480 MSK a seat.**
 ///
 /// Derived, not chosen — [`crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1`] over the
 /// classes this genesis registers — and pinned here because the premine has to carve what the card
 /// declares (audit C-08: a bond may declare only what its outpoint holds).
 ///
-/// **The fraud a bond's reachable claims authorize**, class by class, at the concurrency the chain
-/// actually enforces (ADR-0151 D1). `max_fraud_gain = escrowed_reward + fork_weight(pwu, slash)`:
+/// **The fraud a bond's reachable claims authorize, IN THE UNIT THE RUNTIME RESERVES IN**, class by
+/// class, at the concurrency the chain actually enforces (ADR-0151 D1):
 ///
-/// | class | concurrent claims | gain per claim | collateral |
-/// |---|---|---|---|
-/// | BASE-0 floor (pwu 7,708) | 7,201 — `MAX_CLAIM_EXPOSURE_DAA + 1`, genuinely reachable | 2.66814 MSK | 38,426.56 MSK |
-/// | held Qwen3.6 @512 (pwu 2.07×10⁷) | 4 — its in-flight cap ×4 | 4.73917 MSK | 37.91 MSK |
-/// | held Qwen2.5 @2,097,152 (pwu 2.70×10¹⁰) | 4 — same | 2,702.96409 MSK | 21,623.71 MSK |
-/// | | | | **60,088.18 MSK** |
+/// | class | exposure pwu | reservation / claim | gain / claim | concurrent | collateral |
+/// |---|---|---|---|---|---|
+/// | BASE-0 floor | 7,708 | 0.00039 MSK | 2.66776 MSK | 7,201 — `MAX_CLAIM_EXPOSURE_DAA + 1` | 38,421.01 MSK |
+/// | held Qwen3.6 @512 | 56,436,664 | 2.82183 MSK | 5.48920 MSK | 4 — its in-flight cap ×4 | 43.91 MSK |
+/// | held Qwen2.5 @2,097,152 | 1,194,858,841,364 | 59,742.94207 MSK | 59,745.60944 MSK | 4 — same | 477,964.88 MSK |
+/// | | | | | | **516,429.79663480 MSK** |
 ///
-/// The floor is the largest term and that is not a mistake: the ESCROW half of a fraud gain does not
-/// shrink with a cheap claim. Every Final, however trivial its compute, names the block's escrow, and
-/// the floor is the one class that really can hold 7,201 of them at once. (The escrow is the
-/// pre-deflationary base subsidy 3.70468345 MSK through the 720-permille worker carve = 2.66736960 MSK.)
+/// Eight seats take 4,131,438.37 MSK, **0.0413 % of the 10B cap**, beside the 758M community table,
+/// and `every_network_genesis_mints_exactly_the_10b_cap` still holds because this is carved OUT of
+/// the main wallet like every other genesis output.
 ///
-/// **Three figures preceded this one, and the path matters more than the number:**
+/// **The unit is the whole story, and getting it wrong shipped a network that could not mine.** Three
+/// quantities describe one class and they are not proportional across classes:
+///
+/// 1. its **declared leaves** — `pwu_per_inference`, what the registration writes (2.70×10¹⁰ here);
+/// 2. its **derived MAC-eq per draw** — `palw_canonical_draw_work_v1` (3.36×10¹⁵ here);
+/// 3. that, **renormalised by the floor's leaves-per-MAC-eq** — `palw_exposure_pwu_v3` (1.19×10¹² here).
+///
+/// The runtime reserves (3) and checks it against `collateral × max_exposure_ratio`. The first t12
+/// card carved against (1), which is 44.25× smaller on the 2M row, so every seat of the first fleet
+/// logged `holding: the bond's exposure ceiling leaves no room for another claim` with `produced=0`
+/// from genesis — the chain lived on its heartbeat clock and no model block was ever possible.
+/// `t12_producer_exposure_measured` reproduces the fleet's own `per_claim=5974294206820` to the sompi.
+///
+/// **And (2) is why "collateral covers the fraud gain" is a claim about the EXPOSURE unit.** Above
+/// the canonical-work fence an attempt's pwu is `palw_pwu_v1(target, derived_per_draw)` on the raw
+/// draw, so the fork weight one 2M Final buys is 335,728,175.72 MSK — 3.36 % of the entire 10B cap,
+/// 5,620× the renormalised reservation. No bond can post that, and no honest network can price a
+/// seat at a thirtieth of its own supply. ADR-0151 D1 is therefore satisfied against (3), which is
+/// the number the chain can actually slash; `the_raw_fork_weight_of_a_2m_claim_is_not_collateralizable`
+/// pins the comparison so this paragraph cannot quietly become false.
+///
+/// **Four figures preceded this one, and the path matters more than the number:**
 ///
 /// * **38,889,673.34 MSK** — `palw_v2_collateral_for_claim_lifetime_v1`, which prices the DEAREST
 ///   class at the FLOOR's concurrency (`max(per-claim) × 7,201`). The operator caught it.
 /// * **1,620,178.03 MSK** — `verify_palw_genesis_v2`'s bind-window bound, `dearest × 600`. Not a
 ///   pricing error: it bought DAA liveness with capital. ADR-0151 D3 replaced it with structure (the
 ///   heartbeat advances the clock with no claim and no collateral), so it no longer applies here.
-/// * **21,630.05 MSK** — the same per-class sum priced at `pwu × slash`, i.e. at the COMPUTE a claim
-///   counts. Compute is not what a liar gains.
+/// * **21,630.05 MSK** — the same per-class sum priced at `pwu × slash` on the DECLARED leaves, i.e.
+///   at the compute a claim counts. Compute is not what a liar gains, and the declared unit is not
+///   what the runtime reserves in.
+/// * **60,088.18407600 MSK** — the same sum with the escrow half added but still on the declared
+///   leaves. This is the one that shipped and wedged; it was short by 8.59×.
 ///
-/// Eight seats take 480,705.47 MSK, **0.0048 % of the 10B cap**, beside the 758M community table, and
-/// `every_network_genesis_mints_exactly_the_10b_cap` still holds because this is carved OUT of the
-/// main wallet like every other genesis output.
-///
-/// **The runtime ledger is NOT yet honest, and this constant cannot make it so.** A producer's live
-/// reservation is `palw_exposure_pwu_v1 × slash_value` = 1,350.15 MSK on the dense row against
-/// 2,702.96 MSK of gain — the claim's `pwu` is the expected attempt count times one inference, so the
-/// fork weight a Final buys is twice what the bond reserves against it. Closing that means splitting
-/// a value the design keeps unified on purpose (the same arm feeds ADR-0124's work price and
-/// ADR-0125's execution credit, and "paid on the same number it can be slashed on" is what
-/// `work_priced_escrow` rests on). ADR-0151 D1's second half; its own commit.
+/// **What is still NOT closed:** the runtime reserves (3) while the fork weight it authorizes is (2),
+/// so the chain's own weight ledger is 5,620× the number the bond can be slashed for. The collateral
+/// is now honest about what it covers; the WEIGHT unit is the remaining half of ADR-0151 D1 and it
+/// wants its own commit. Splitting it means separating a value the design keeps unified on purpose
+/// (the same arm feeds ADR-0124's work price and ADR-0125's execution credit, and "paid on the same
+/// number it can be slashed on" is what `work_priced_escrow` rests on).
 ///
 /// **Pinned rather than recomputed here**, because the derivation needs the class profiles, their
 /// canonical jobs and the ruleset's ladder — three things a premine table has no business holding.
 /// `t12_bond_collateral_matches_the_card` re-derives it from the shipped card and fails the build on
 /// any drift, which is the discipline the genesis hash pins already live under.
-pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 6_008_818_407_600;
+pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 51_642_979_663_480;
 
 /// The genesis-bond collateral `net` carves, per seat.
 fn genesis_bond_collateral_for(net: NetworkId) -> u64 {

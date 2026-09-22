@@ -42271,8 +42271,19 @@ mod adr0151_forfeiture_is_derived {
         };
         state.consumed_offences.insert(key, convicted);
         assert_eq!(state.palw_forfeited_execution_roots_v1(), [root].into_iter().collect::<std::collections::BTreeSet<_>>());
-        // A second conviction on the SAME root adds nothing: no double-forfeit.
-        state.consumed_offences.insert(Hash64::from_u64_word(0x778), convicted);
+        // A second, DISTINCT conviction naming the same root adds nothing: no double-forfeit. Built
+        // fresh rather than cloned so it is a different offence against a different accused, which is
+        // the case the rule has to survive — two courts landing on one execution.
+        state.consumed_offences.insert(
+            Hash64::from_u64_word(0x778),
+            PalwConsumedOffenceV1 {
+                kind: PalwOffenceKindV1::PanelFalseValid,
+                accused: crate::tx::TransactionOutpoint { transaction_id: Hash64::from_u64_word(9), index: 1 },
+                amount: 7,
+                accepted_daa: 43,
+                execution_root: root,
+            },
+        );
         assert_eq!(state.palw_forfeited_execution_roots_v1().len(), 1, "one root, one forfeiture");
         // Reverting the conviction un-forfeits it, with nothing else to undo — which is what makes
         // this safe across a reorg rather than merely untested across one.

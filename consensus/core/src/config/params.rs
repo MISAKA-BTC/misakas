@@ -10217,7 +10217,7 @@ pub fn palw_v2_params_with_class_rows_v1(
     if floor_after < u32::from(floor_reserve) {
         return Err(invalid("the genesis class shares would start the liveness floor below its own reserve"));
     }
-    let (_profile, entry, object) =
+    let (hybrid_profile, entry, object) =
         // **`_v3`, and the version number is not the obvious one.** The hybrid's corrected row is
         // `graph-v3` — the v2 projection over the eps-corrected geometry — because `graph-v2`'s
         // spelling reached t11 first and a registered name cannot be re-pointed at a different id.
@@ -10348,15 +10348,54 @@ pub fn palw_v2_params_with_class_rows_v1(
             })
             .max()
             .ok_or(invalid("the base assembly carries no floor registration to size collateral against"))?;
-        let model_pwus: Vec<u64> = std::iter::once(genesis_pwu_of(&object))
-            .chain(dense.as_ref().map(|(_, _, dense_object)| genesis_pwu_of(dense_object)))
-            .collect();
+        // **Each row in BOTH units** (ADR-0151 D1, corrected 2026-09-23). The reservation the
+        // runtime writes is the row's derived work for one draw renormalised by the floor's
+        // leaves-per-MAC-eq, not its own declared leaves — the two differ by 44.25× on the held 2M
+        // row, which is exactly the factor that wedged the first t12 fleet's producers shut.
+        // A free function, not a closure: it names no error type, so the caller keeps using its own
+        // `invalid` and this stays readable next to the two call shapes around it.
+        fn derived_per_draw(profile: &crate::palw_step::PalwShapeProfileV3, canonical: (u32, u32)) -> Option<u128> {
+            let descriptor = crate::palw_canonical_work_v1::PalwCanonicalClassDescriptorV1::of(profile, crate::Hash64::default()).ok()?;
+            let job = crate::palw_base0_profile::rc_job_context(profile, canonical.0, canonical.1);
+            Some(crate::palw_canonical_work_v1::palw_canonical_draw_work_v1(&descriptor, &job, true).ok()?.provisional_scalar_v1())
+        }
+        // The floor's profile is rebuilt here rather than threaded in: it is a pure function of
+        // `PALW_RC_BASE0_GEOMETRY`, and the base assembly that first built it is a different call.
+        let floor_profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .map_err(|_| invalid("the floor profile does not derive for the collateral basis"))?;
+        let floor_row = crate::palw_fp_devnet_v3::PalwCollateralRowV1 {
+            declared_leaves: floor_pwu,
+            derived_per_draw: derived_per_draw(&floor_profile, crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL)
+                .ok_or(invalid("the floor's canonical draw does not derive"))?,
+        };
+        let hybrid_canonical = match rows {
+            PalwGenesisClassRowsV1::HeldLadder { hybrid_n_ctx, .. } => crate::palw_qwen36_profile::qwen36_held_canonical_v1(hybrid_n_ctx),
+            PalwGenesisClassRowsV1::Rc => crate::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+        };
+        let mut model_rows = vec![crate::palw_fp_devnet_v3::PalwCollateralRowV1 {
+            declared_leaves: genesis_pwu_of(&object),
+            derived_per_draw: derived_per_draw(&hybrid_profile, hybrid_canonical)
+                .ok_or(invalid("the hybrid row's canonical draw does not derive"))?,
+        }];
+        if let Some((dense_profile, _, dense_object)) = dense.as_ref() {
+            let dense_canonical = match rows {
+                PalwGenesisClassRowsV1::HeldLadder { dense_n_ctx, .. } => {
+                    crate::palw_qwen25_profile::qwen25_a16_held_canonical_v1(dense_n_ctx)
+                }
+                PalwGenesisClassRowsV1::Rc => crate::palw_qwen25_profile::QWEN25_A16_CANONICAL,
+            };
+            model_rows.push(crate::palw_fp_devnet_v3::PalwCollateralRowV1 {
+                declared_leaves: genesis_pwu_of(dense_object),
+                derived_per_draw: derived_per_draw(dense_profile, dense_canonical)
+                    .ok_or(invalid("the dense row's canonical draw does not derive"))?,
+            });
+        }
         let bind_window_liveness = (!clock_advances_without_a_claim).then(|| bundle.state.window_bind());
         // **The escrow a genesis-era claim carries**, which is the cash half of its fraud gain: the
         // pre-deflationary subsidy through the overlay's worker carve. Read from the preset rather
         // than assumed, because a card with a different carve authorizes a different lie.
         let escrowed_reward = escrow_for_a_genesis_claim_v1(&base_subsidy_and_carve);
-        crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1(floor_pwu, &model_pwus, escrowed_reward, bind_window_liveness)
+        crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1(floor_row, &model_rows, escrowed_reward, bind_window_liveness)
             .max(crate::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI)
     } else {
         crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
