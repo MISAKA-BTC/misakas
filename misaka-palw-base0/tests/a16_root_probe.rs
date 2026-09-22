@@ -361,8 +361,25 @@ fn the_genesis_registered_row_is_admissible_under_the_armed_rc_court() {
 #[ignore]
 fn print_a16_2m_root_forms() {
     let path = std::env::var("PALW_A16_2M_PATH").expect("PALW_A16_2M_PATH=/root/palw-class/qwen25-1.5b-a16-2m.palwart");
+    // **Phase by phase, because RSS alone does not name the culprit.** The streamed walk's own state
+    // is `O(groups + log leaves)`; whatever else is resident is the DECODED ARTIFACT, and at a 2M
+    // context its rotary table is `max_position` positions of cos/sin — a term that belongs to
+    // holding the model, not to rooting it.
+    let rss = |label: &str| {
+        if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
+            let get = |k: &str| s.lines().find(|l| l.starts_with(k)).unwrap_or("").split_whitespace().nth(1).unwrap_or("0").to_string();
+            let kb: f64 = get("VmRSS:").parse().unwrap_or(0.0);
+            let hwm: f64 = get("VmHWM:").parse().unwrap_or(0.0);
+            println!("  [rss] {label:28} rss {:6.2} GiB   peak {:6.2} GiB", kb / 1048576.0, hwm / 1048576.0);
+        }
+    };
+    rss("start");
     let bytes = std::fs::read(&path).expect("read the artifact");
+    rss("file bytes read");
     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("decode .palwart");
+    rss("artifact decoded");
+    drop(bytes);
+    rss("file bytes dropped");
     let n_ctx = kaspa_consensus_core::config::params::PALW_T12_DENSE_N_CTX;
     let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
         kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
@@ -389,9 +406,5 @@ fn print_a16_2m_root_forms() {
         }
         Err(e) => println!("inventory FAILED: {e:?}"),
     }
-    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
-        for line in status.lines().filter(|l| l.starts_with("VmHWM") || l.starts_with("VmRSS")) {
-            println!("{line}");
-        }
-    }
+    rss("after the streamed walk");
 }
