@@ -9577,14 +9577,19 @@ pub const SIMNET_PARAMS: Params = Params {
 /// launch window mints at roughly the target cadence instead of bursting — the gate-3
 /// finding this preset applies).
 ///
-/// This is a STAGING net for the gate-4 fleet soak: no DNS seeders (join by `--addpeer`
-/// only), and its fingerprint/genesis differ from both live t10 and devnet, so it
-/// handshake-rejects strangers by construction. Whether the PUBLIC launch runs this
-/// suffix or a t10 re-genesis is the gate-5 ADR's decision, not this preset's claim.
+/// This is the public PALW staging net. Its fingerprint/genesis differ from both live t10
+/// and devnet, so it handshake-rejects strangers by construction. Peer discovery is kept
+/// outside consensus and uses the project's DNS seeders; operators must not bake a resolved
+/// seeder IP into a permanent configuration because the answer set is operational and rotates.
 pub const TESTNET11_PARAMS: Params = Params {
     net: NetworkId::with_suffix(NetworkType::Testnet, 11),
     genesis: TESTNET11_GENESIS,
-    dns_seeders: &[],
+    dns_seeders: &[
+        "seeder1.misakascan.com",
+        "seeder2.misakascan.com",
+        "seeder3.misakascan.com",
+        "seeder4.misakascan.com",
+    ],
     // PALW-only lane, devnet's shape: every post-genesis header declares algo 4 and is
     // validated by replaying one pinned inference. The Ollama flavor stays off — the
     // fleet's calibrated class is the WORKER (x86 CPU) class, measured 4/4 in gate 2.
