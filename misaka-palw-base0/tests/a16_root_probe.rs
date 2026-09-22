@@ -357,6 +357,32 @@ fn the_genesis_registered_row_is_admissible_under_the_armed_rc_court() {
 /// `holds no artifact whose registered root form is b5baca63…`, every thirty seconds, on all four
 /// hosts, over a byte-identical artifact. Ignored: needs the 2.87 GB file named by
 /// `PALW_A16_2M_PATH` and an inventory walk over it.
+///
+/// **Measured 2026-09-23 on the deployed file, streamed** (169.58.39.220, 23 GB host):
+///
+/// ```text
+/// artifact_digest  b5baca63…   == the pinned constant   <- the defect: a digest was pinned
+/// inventory_root   f63af2c4…   != the pinned constant   <- what a registration must pin
+/// groups           957                                   walk 135.6 s
+///
+/// phase                      rss        peak
+/// start                      0.00 GiB   0.00 GiB
+/// file bytes read            2.68 GiB   2.68 GiB
+/// artifact decoded           5.35 GiB   6.35 GiB
+/// file bytes dropped         2.68 GiB   6.35 GiB
+/// after the streamed walk    2.68 GiB   6.35 GiB
+/// ```
+///
+/// **The streamed walk adds nothing**: RSS is 2.68 GiB before it and 2.68 GiB after, against the
+/// 11.5 GiB the materialized walk reached before the kernel killed it. The 6.35 GiB peak that
+/// remains is entirely DECODE — the whole file in a `Vec` while a second full copy is built from it
+/// — so it belongs to holding the artifact, not to rooting it, and it is what a committed manifest
+/// removes: a root check that reads a manifest does not decode 2.87 GB to learn a value it is about
+/// to compare with 64 bytes.
+///
+/// The root above is NOT re-pinned into the genesis card here, deliberately. Pinning a measured hash
+/// by hand is the practice that produced this defect twice; the constant goes away in favour of the
+/// manifest, and until then t12 does not re-launch.
 #[test]
 #[ignore]
 fn print_a16_2m_root_forms() {
