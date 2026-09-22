@@ -33,6 +33,7 @@ USAGE:
     palw-class measure   --network <id> [--name <model name>] [--replay-ms <ms> --measured-on <host>]
                          [--key-file <ml-dsa-87 seed>] [--out <measured.json>] <artifact-path>
     palw-class verify    --network <id> [--artifact <artifact-path>] <measured.json>
+    palw-class manifest  --network <id> [--out <path>] [--check] <artifact-path>
 
 `measure` (ADR-0100) reads the geometry off the artifact, measures its bytes from the inventory,
 evaluates every wall of ADR-0097 at 512 / 32,768 / 131,072 / 1,048,576 positions and the shard
@@ -40,6 +41,13 @@ plans a seat budget allows, and writes the Measured Model Artifact — signed un
 when --key-file is given. `verify` recomputes a document: with --artifact every field, without it
 everything but the artifact's own (which it names as needing the artifact); exits 1 on a mismatch
 or a signature that does not verify.
+
+`manifest` writes `<artifact-path>.palwmanifest`: the inventory root of every class this artifact
+pairs with, derived through the SAME call a producer's class resolve uses, plus the artifact digest
+that binds the file to the sidecar. It exists so nobody types an inventory root into a genesis card
+again — that substitution (the flat artifact digest where the operand-inventory root belonged) shut
+the dense tier of testnet-11 and then of testnet-12. `--check` recomputes an existing sidecar and
+exits 1 on any disagreement instead of writing.
 
 NETWORKS: a network id with a PALW V2 bundle, e.g. testnet-11 or devnet.
 
@@ -138,6 +146,14 @@ fn run(args: &[String]) -> Result<(), String> {
             let artifact = take_flag(&mut args, "--artifact");
             let path = args.first().ok_or(USAGE)?;
             verify(&view, std::path::Path::new(path), artifact.as_deref().map(std::path::Path::new))
+        }
+        "manifest" => {
+            let view = network_view(network.as_deref().ok_or(USAGE)?)?;
+            let out = take_flag(&mut args, "--out");
+            let check = args.iter().any(|a| a == "--check");
+            args.retain(|a| a != "--check");
+            let path = PathBuf::from(args.first().ok_or(USAGE)?);
+            manifest(&view, &path, out.as_deref().map(PathBuf::from), check)
         }
         "bind-tokenizer" => {
             let tokenizer = take_flag(&mut args, "--tokenizer").ok_or(USAGE)?;
@@ -259,6 +275,51 @@ fn ledger(view: &NetworkView) {
             entry.canonical_job.0, entry.canonical_job.1
         );
     }
+}
+
+/// **Write — or re-check — the sidecar that keeps an inventory root out of human hands.**
+///
+/// Every row comes from `PalwClassManifestFileV1::derive_from_artifact`, which is `sdk.pairings` ->
+/// `CanonicalClassV1::artifact_root`: the expression a producer evaluates when it asks whether it can
+/// serve a registered class. A manifest built any other way would be the second mapping this is
+/// replacing rather than a record of the first.
+fn manifest(view: &NetworkView, path: &std::path::Path, out: Option<PathBuf>, check: bool) -> Result<(), String> {
+    let sdk = sdk_for(view);
+    let artifact = sdk.load_artifact(path)?;
+    let bytes = std::fs::metadata(path).map(|m| m.len()).map_err(|e| format!("{}: {e}", path.display()))?;
+    let derived = misaka_palw_sdk::PalwClassManifestFileV1::derive_from_artifact(&sdk, &artifact, bytes);
+    let target = out.unwrap_or_else(|| misaka_palw_sdk::PalwClassManifestFileV1::path_beside(path));
+
+    if check {
+        let text = std::fs::read_to_string(&target).map_err(|e| format!("{}: {e}", target.display()))?;
+        let on_disk = misaka_palw_sdk::PalwClassManifestFileV1::from_json(&text).map_err(|e| e.to_string())?;
+        on_disk.verify_against_the_artifact(&sdk, &artifact).map_err(|e| e.to_string())?;
+        println!("{}: agrees with {} — {} class(es) re-derived", target.display(), path.display(), on_disk.rows.len());
+        return Ok(());
+    }
+
+    println!("{}", artifact.summary);
+    println!("artifact digest  {}", derived.artifact_digest);
+    if derived.rows.is_empty() {
+        return Err(format!(
+            "this artifact pairs with no class this build knows, so there is no root to record — \
+             run `palw-class inspect --network {} {}` for the reasons",
+            view.network_id,
+            path.display()
+        ));
+    }
+    for r in &derived.rows {
+        let registered = view.genesis_classes.iter().find(|(id, _)| *id == r.class_id.into_hash64());
+        let note = match registered {
+            Some((_, on_chain)) if *on_chain == r.inventory_root.into_hash64() => "  (matches this network's registration)",
+            Some(_) => "  (THIS NETWORK REGISTERED A DIFFERENT ROOT FOR THIS CLASS)",
+            None => "",
+        };
+        println!("  {}  class {}  root {}{note}", r.model_id, r.class_id, r.inventory_root);
+    }
+    std::fs::write(&target, derived.to_json()).map_err(|e| format!("{}: {e}", target.display()))?;
+    println!("wrote {}", target.display());
+    Ok(())
 }
 
 fn inspect(view: &NetworkView, path: &std::path::Path) -> Result<(), String> {

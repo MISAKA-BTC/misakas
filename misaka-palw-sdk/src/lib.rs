@@ -32,6 +32,7 @@
 //! owns its container), funding and signing (key custody is the node's), and fleet distribution.
 //! The SDK is where a model becomes a class; it is not a wallet and not a deployment tool.
 
+pub mod class_manifest;
 pub mod conformance;
 pub mod lineage;
 pub mod lineages {
@@ -40,6 +41,7 @@ pub mod lineages {
 }
 pub mod sdk;
 
+pub use class_manifest::{PalwClassManifestErrorV1, PalwClassManifestFileV1, PalwClassManifestRowV1};
 pub use lineage::{PalwClassEntryV1, PalwLoadedArtifactV1, PalwModelLineageV1, PalwWeightResidencyV1};
 pub use sdk::{PalwCandidateError, PalwClassSdk, PalwRegistrationCandidateV1, builtin_lineages_v1};
 
