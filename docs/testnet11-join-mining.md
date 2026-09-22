@@ -16,9 +16,12 @@ The binary from `misaka-cli` is `target/release/misaka`.
 
 ```bash
 kaspad --testnet --netsuffix=11 --utxoindex \
-  --rpclisten-borsh=default \
-  --addpeer=169.58.39.220:26311
+  --rpclisten-borsh=default
 ```
+
+DNS seeders provide the current testnet-11 bootstrap peers. If an environment requires an
+explicit bootstrap, resolve a seeder for that invocation and pass the resulting IP to `--peer`;
+the flag currently accepts IP addresses, not hostnames.
 
 Default ports:
 
@@ -65,8 +68,7 @@ For an existing Floor Bond:
 misaka --network testnet-11 mining setup \
   --model floor \
   --key-file ~/.misaka/miner.seed \
-  --bond <registered-bond-txid>:<index> \
-  --peer 169.58.39.220:26311
+  --bond <registered-bond-txid>:<index>
 ```
 
 ## 4. Inspect an existing Bond
@@ -90,7 +92,6 @@ The wizard performs registration after showing the spend and asking for confirma
 ```bash
 kaspad --testnet --netsuffix=11 --utxoindex \
   --rpclisten-borsh=default \
-  --addpeer=169.58.39.220:26311 \
   --palw-register-bond \
   --palw-producer-key=~/.misaka/miner.seed
 ```
@@ -125,7 +126,6 @@ Equivalent manual shape:
 ```bash
 kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
   --listen=0.0.0.0:26311 --rpclisten-borsh=default --utxoindex \
-  --addpeer=169.58.39.220:26311 \
   --palw-produce --palw-panel \
   --palw-producer-key=~/.misaka/miner.seed \
   --palw-producer-bond=<registered-bond-txid>:<index> \

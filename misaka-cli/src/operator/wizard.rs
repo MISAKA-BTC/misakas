@@ -107,11 +107,16 @@ pub(crate) struct SetupArgs {
     pub(crate) no_wait: bool,
 }
 
-/// Where a node of `network` finds its first peer when nothing names one: testnet-11 carries no
-/// DNS seeders, and every command in its join doc names this entry point.
+/// Explicit bootstrap peers when a network has no DNS discovery.
+///
+/// Testnet-11 has live DNS seeders in its consensus-independent network parameters. Keeping a
+/// literal fleet IP here made the wizard keep dialing a retired or temporarily stopped host even
+/// though kaspad could use the current seeder set. Return no forced peer and let kaspad perform
+/// its normal DNS bootstrap; operators can still pass a freshly resolved IP with `--peer` for an
+/// isolated environment.
 pub(crate) fn default_peers(network: &str) -> Vec<String> {
     match network {
-        "testnet-11" => vec!["169.58.39.220:26311".to_string()],
+        "testnet-11" => Vec::new(),
         _ => Vec::new(),
     }
 }
@@ -276,7 +281,9 @@ pub(crate) fn artifacts_here(network: &str, appdir: Option<&Path>) -> Vec<PathBu
     let home = dirs::home_dir().unwrap_or_default();
     let mut dirs = vec![home.join(".misaka").join("models"), home.join(".misaka").join(network).join("models")];
     dirs.extend(appdir.map(|a| a.join("models")));
-    dirs.extend(std::env::var_os("MISAKA_PALW_ARTIFACT_DIRS").into_iter().flat_map(|raw| std::env::split_paths(&raw)));
+    if let Some(raw) = std::env::var_os("MISAKA_PALW_ARTIFACT_DIRS") {
+        dirs.extend(std::env::split_paths(&raw));
+    }
     let mut out = Vec::new();
 
     // An exact environment path has priority over directory discovery, but it is still checked
@@ -2478,7 +2485,7 @@ mod tests {
         file.advanced.appdir = Some("~/.misaka/testnet-11/node".into());
         file.advanced.bond = Some("aa:0".into());
         file.advanced.fee_outpoint = Some("aa:1".into());
-        file.advanced.peers = vec!["169.58.39.220:26311".into()];
+        file.advanced.peers = vec!["127.0.0.1:26311".into()];
         file.advanced.artifact = Some(ArtifactList::One("~/m/a \"b\".palwart".into()));
         file.advanced.extra_kaspad_args = vec!["--palw-devnet-floor-only".into()];
         file.advanced.stop_grace_secs = Some(60);
@@ -2519,7 +2526,7 @@ mod tests {
         assert_eq!(default_appdir("testnet-11", &home), home.join(".rusty-kaspa"), "a synced chain is not synced again");
         assert_eq!(default_appdir("devnet", &home), home.join(".misaka/devnet/node"), "per network");
         let _ = std::fs::remove_dir_all(&home);
-        assert_eq!(default_peers("testnet-11"), vec!["169.58.39.220:26311".to_string()]);
+        assert!(default_peers("testnet-11").is_empty(), "testnet-11 uses DNS seeders instead of a stale literal IP");
         assert!(default_peers("devnet").is_empty());
     }
 }

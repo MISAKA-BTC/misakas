@@ -40,7 +40,7 @@ DNS seed が使える環境では、次だけで起動できます。
 DNS が使えない場合は、公開エントリポイントを追加します。
 
 ```bash
-  --addpeer=169.58.39.220:26311
+  # testnet-11 は DNS seeder から現在の peer を自動検出
 ```
 
 起動ログで次を確認してください。
@@ -64,9 +64,12 @@ Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 
 ./target/release/misaka --network testnet-11 verifier setup \
   --model floor \
   --key-file "$HOME/.misaka/miner.seed" \
-  --bond <bond-txid>:<index> \
-  --peer 169.58.39.220:26311
+  --bond <bond-txid>:<index>
 ```
+
+DNS が使えない場合だけ、`dig +short A seeder1.misakascan.com` で得た IP を
+`--peer <IP>:26311` として一時的に追加してください。`--peer` は hostname を受け付けず、
+解決結果は恒久設定に保存しないでください。
 
 LLM クラスを検証する場合は、ネットワークの `model list` で現在のクラスを確認して、同じクラスに対応する artifact を渡します。
 
@@ -212,7 +215,7 @@ DAA が fence 未満なら、その段階は動きません。S3 を 8,600 よ�
 |---|---|---|
 | fingerprint mismatch | 古いバイナリまたは別 relaunch | `main` から再ビルドし、現在の datadir を継続して起動 |
 | fence schedule mismatch | 現行 fence を含まないビルド | `git pull --ff-only` 後に `kaspad` と `misaka` を再ビルド |
-| `0 peers` | DNS、firewall、または peer の ruleset 不一致 | `--addpeer=169.58.39.220:26311`、P2P 26311/tcp、ログの fork-id を確認 |
+| `0 peers` | DNS、firewall、または peer の ruleset 不一致 | DNS を確認し、必要なら `dig +short A seeder1.misakascan.com` の結果を `--addpeer=<IP>:26311` に一時指定。P2P 26311/tcp と fork-id も確認 |
 | `bond unknown` | outpoint の誤り、または別ネットワーク | `bond status --bond <txid>:<index>` で正確な outpoint を確認 |
 | `judges nothing` | Bond がクラス capability を宣言していない | `verifier setup --model ...` を実行。登録済み Bond は再登録できないため、表示内容を確認 |
 | artifact missing / mismatch | クラスに対応しない、またはパスが誤り | `model list` でクラスを再確認し、絶対パスを指定 |

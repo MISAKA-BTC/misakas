@@ -247,8 +247,11 @@ most likely synced from a stale node that was still answering on the network nam
 forever. Recovery: stop the node, delete the app dir (`~/.kaspa-pq/misaka-testnet-11` or your
 `--appdir`), rebuild from current `main`, and resync — the real chain re-downloads in minutes.
 
-If DNS is blocked where you run, add the public entry nodes by hand:
-`--addpeer=169.58.232.113:26311 --addpeer=169.58.39.220:26311`.
+If DNS seeding is blocked where you run, resolve a seeder once and pass the result for that
+invocation (the peer flag currently accepts IP addresses, not hostnames):
+`SEEDER_IP=$(dig +short A seeder1.misakascan.com | tail -n1); kaspad ... --addpeer="$SEEDER_IP:26311"`.
+Do not copy that resolved IP into permanent configuration; the address behind a seeder is
+operational state and can change or be withdrawn.
 
 | I want to… | read |
 |---|---|
@@ -484,8 +487,10 @@ explorer backend) needs to connect locally.
   refuses the handshake if one ever answered. A seeder that has nothing healthy to advertise
   returns an empty answer rather than a wrong peer.
 
-  If discovery is slow, bootstrap explicitly: `--addpeer=169.58.39.220:26311` (or `--connect=` to
-  use only that peer). Block explorer: **[misakascan.com](https://misakascan.com)**.
+  If discovery is slow, resolve a seeder for that invocation and pass the resulting IP to
+  `--addpeer` (or `--connect` to use only that peer). The flags currently accept IP addresses,
+  not hostnames; do not hard-code a DNS answer's IP in a permanent config. Block explorer:
+  **[misakascan.com](https://misakascan.com)**.
 - `--utxoindex` is required for wallet/validator funding lookups.
 - **gRPC is always on by default** (loopback, `127.0.0.1:26210` on testnet) even with no RPC flag,
   so the **miner needs no extra flag** — it connects over gRPC. **wRPC (Borsh / JSON) is off by

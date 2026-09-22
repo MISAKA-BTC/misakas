@@ -107,13 +107,16 @@ room for ONE default-length claim, the gateway had checked the room against a ca
 ```bash
 kaspad --testnet --netsuffix=11 --appdir=$HOME/.t11 --utxoindex \
   --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26210 --rpclisten-borsh=default \
-  --addpeer=169.58.39.220:26311 \
   --palw-produce --palw-panel \
   --palw-producer-key=$HOME/.misaka/miner.seed \
   --palw-producer-bond=<bond txid>:0 \
   --palw-fee-outpoint=<bond txid>:1 \
   --palw-class-artifact=/abs/qwen25-1.5b-a16.bound.palwart
 ```
+
+DNS seeding supplies the current testnet-11 peers. If it is unavailable, resolve a seeder for
+that invocation and add the resulting `<IP>:26311`; do not persist a potentially stale resolved
+IP address.
 
 (No `--palw-producer-class`: the ordinary attempt lane is Floor and uses the Floor-sized Bond.
 Its class budget can pause attempts until an epoch boundary; the receipt lane is handled by the

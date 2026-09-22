@@ -28,11 +28,15 @@ cargo build --release -p kaspad -p misaka-cli
 ./target/release/kaspad \
   --testnet --netsuffix=11 \
   --utxoindex \
-  --rpclisten-borsh=default \
-  --addpeer=169.58.39.220:26311
+  --rpclisten-borsh=default
 ```
 
-DNS seeding is supported; the explicit peer is a reliable fallback.
+DNS seeding is the default bootstrap path for testnet-11. If DNS is blocked or a private
+environment needs an explicit bootstrap, resolve a seeder for that invocation and pass its IP,
+for example `SEEDER_IP=$(dig +short A seeder1.misakascan.com | tail -n1)` followed by
+`--addpeer="$SEEDER_IP:26311"`. The peer flag currently accepts IP addresses, not hostnames; do
+not persist a resolved IP as the network's peer because seeder answers are operational and may
+change.
 
 ## Ports
 
