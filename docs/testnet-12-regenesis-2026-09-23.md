@@ -71,8 +71,9 @@ Same binary as shipped. `consensus/tests/palw_t12_liveness.rs` and
   liveness property the collateral reduction rests on, observed under partition.
 * **join as a user would** — a fresh node with no `--addpeer` and no `--connect` queried the four DNS
   seeders, got addresses from seeder1 and seeder3 (seeder2/seeder4 are not delegated in public DNS),
-  connected to `169.58.232.113:26311`, and reached the tip (`challenger_work=21 defender_work=21`),
-  0 network mismatches.
+  connected to **both** public nodes (`169.58.232.113:26311` and, once peer exchange gave it the port,
+  `169.58.39.220:26321`), accepted blocks via relay and tracked the tip (work 21 → 23), with 0 network
+  mismatches. **That is the goal's endpoint: a user needs nothing but this build and `--netsuffix=12`.**
 
 **Still owed** (ADR-0151 §4): a forced reorg, and the class-at-cap states on a fleet that is actually
 producing model blocks. The arithmetic for every registered class is covered by the drill test; the
@@ -89,3 +90,12 @@ reachable-state search over a live reorg is not.
   the topology t11 had, not a regression, but it means one entry point.
 * `/root/misakas-stale-consensus-diagnosis` is still running a t11 fixture node on 5.104.81.23 on its
   own ports and datadir. It belongs to another session's work and was left alone.
+
+## Fleet state at the end of the switch
+
+| host | node | seeder | blocks | peers | fatal |
+|---|---|---|---|---|---|
+| 169.58.232.113 | active | active | 26 | 3 | 0 |
+| 169.58.39.220 (ibm) | active | active | 40 | 10 | 0 |
+| 5.104.81.23 | 4 seats active | active | — | — | 0 |
+| 95.111.236.186 | (seeder only) | active | — | — | — |
