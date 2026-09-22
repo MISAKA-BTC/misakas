@@ -98,6 +98,8 @@ pub(crate) struct SetupArgs {
     pub(crate) artifacts: Vec<String>,
     /// `auto`, or `<txid>:<index>`.
     pub(crate) fee_outpoint: Option<String>,
+    /// Kept as a compatibility flag. Setup now always verifies a non-base artifact before it
+    /// writes the profile; accepting an unchecked path is what caused late startup failures.
     pub(crate) verify_artifact: bool,
     /// The validator's stake, in sompi (default: the network's minimum bond).
     pub(crate) amount: Option<u64>,
@@ -259,13 +261,32 @@ pub(crate) async fn class_choices(node: &NodeRead, rows: &[kaspa_rpc_core::RpcPa
     classes
 }
 
-/// The `.palwart` files this host keeps where setup looks: `~/.misaka/models`,
-/// `~/.misaka/<network>/models` and `<appdir>/models`.
+/// The `.palwart` files this host keeps where setup looks.
+///
+/// An operator may keep a large artifact outside the node directory (for example on a mounted
+/// volume) without putting that path in a profile first:
+///
+/// * `MISAKA_PALW_ARTIFACT` names one exact file;
+/// * `MISAKA_PALW_ARTIFACT_DIRS` is a platform-separated list of directories to scan.
+///
+/// The normal per-user and per-node locations remain fallbacks. Discovery never makes an
+/// artifact trustworthy: `step_artifact` computes and matches the PALW root before writing a
+/// mining profile.
 pub(crate) fn artifacts_here(network: &str, appdir: Option<&Path>) -> Vec<PathBuf> {
     let home = dirs::home_dir().unwrap_or_default();
     let mut dirs = vec![home.join(".misaka").join("models"), home.join(".misaka").join(network).join("models")];
     dirs.extend(appdir.map(|a| a.join("models")));
+    dirs.extend(std::env::var_os("MISAKA_PALW_ARTIFACT_DIRS").into_iter().flat_map(|raw| std::env::split_paths(&raw)));
     let mut out = Vec::new();
+
+    // An exact environment path has priority over directory discovery, but it is still checked
+    // against the class root below. This is useful for a read-only mounted artifact volume.
+    if let Some(path) = std::env::var_os("MISAKA_PALW_ARTIFACT") {
+        let p = PathBuf::from(path);
+        if p.is_file() {
+            out.push(p);
+        }
+    }
     for dir in dirs {
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for e in entries.flatten() {
@@ -1897,35 +1918,36 @@ impl<'a> Wizard<'a> {
         if candidates.is_empty() {
             candidates = artifacts_here(&self.network, Some(&self.appdir));
         }
-        let chosen = if self.args.verify_artifact {
-            let mut matched = None;
-            for p in &candidates {
-                let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
-                self.ui.mark(
-                    Severity::Info,
-                    "artifact",
-                    &format!("reading {} ({}) for its root…", host::tilde(p), host::human_bytes(size)),
-                );
-                match artifact_roots(&self.network, p) {
-                    Ok(roots) if roots.iter().any(|(_, r)| r.eq_ignore_ascii_case(&class.artifact_root)) => {
-                        matched = Some(p.clone());
-                        break;
-                    }
-                    Ok(_) => self.ui.sub(&paint::yellow(&format!("! its root is not {}'s", class.label()))),
-                    Err(e) => self.ui.sub(&paint::yellow(&format!("! {e}"))),
+        // A non-base artifact is executable consensus input. Do not write a profile that merely
+        // points at an existing file: if its root is wrong, kaspad will reject the seat later,
+        // after the operator has already paid the setup costs. The old optional check was the
+        // source of that late and opaque startup wall. Keep --verify-artifact for compatibility,
+        // but make this gate unconditional.
+        let mut chosen = None;
+        for p in &candidates {
+            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            let purpose = if self.args.verify_artifact {
+                "reading for its root (explicit verification)…"
+            } else {
+                "reading for its required class root…"
+            };
+            self.ui.mark(Severity::Info, "artifact", &format!("{} {} ({})", purpose, host::tilde(p), host::human_bytes(size)));
+            match artifact_roots(&self.network, p) {
+                Ok(roots) if roots.iter().any(|(_, r)| r.eq_ignore_ascii_case(&class.artifact_root)) => {
+                    chosen = Some(p.clone());
+                    break;
                 }
+                Ok(_) => self.ui.sub(&paint::yellow(&format!("! its root is not {}'s", class.label()))),
+                Err(e) => self.ui.sub(&paint::yellow(&format!("! {e}"))),
             }
-            matched
-        } else {
-            candidates.first().cloned()
-        };
+        }
         let Some(path) = chosen else {
             let f = if candidates.is_empty() {
                 Finding::error("E-MODEL-ARTIFACT-MISSING", exit::MODEL, format!("{} needs its artifact, and none is here", class.label()))
                     .reason("a node mines and judges a model class by running it, from the class's .palwart file")
-                    .current("no --artifact, no [advanced] artifact, nothing in ~/.misaka/models")
+                    .current("no --artifact, no [advanced] artifact, no MISAKA_PALW_ARTIFACT, and no artifact in the configured search directories")
                     .fix("get the class's artifact (docs/testnet11-free-prompt-mining.md#2-the-artifact-bound-and-the-same-file-everywhere)")
-                    .fix("then: misaka mining setup --artifact <file> [--verify-artifact]")
+                    .fix("then: set MISAKA_PALW_ARTIFACT=/path/to/file or pass --artifact <file>")
             } else {
                 Finding::error("E-MODEL-ARTIFACT-ROOT", exit::MODEL, format!("No artifact here is {}'s", class.label()))
                     .reason("the chain pins the class's artifact root; a file with another root cannot run its claims")
@@ -1936,11 +1958,7 @@ impl<'a> Wizard<'a> {
             return Err(Halt::Blocked(f));
         };
         let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        let checked = if self.args.verify_artifact {
-            "its root is the class's ✓"
-        } else {
-            "root not checked (--verify-artifact reads the whole file)"
-        };
+        let checked = "its root is the class's ✓";
         self.row(Severity::Ok, "artifact", format!("{} · {} · {checked}", host::tilde(&path), host::human_bytes(size)));
         let needed = (8u64 << 30) + size / 5;
         if let Some(avail) = host::mem_available()

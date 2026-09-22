@@ -367,7 +367,8 @@ struct SetupCliArgs {
     /// The panel's fee output: `auto` (default), or <txid>:<index>.
     #[arg(long, value_name = "auto|OUTPOINT")]
     fee_outpoint: Option<String>,
-    /// Read the artifact through and check its root against the class's (minutes for a large model).
+    /// Explicitly request artifact verification (non-base artifacts are always verified before
+    /// setup writes a profile; this flag remains for compatibility and clearer operator intent).
     #[arg(long)]
     verify_artifact: bool,
     /// The validator's stake in MSK (validator setup; default: the network's minimum bond).

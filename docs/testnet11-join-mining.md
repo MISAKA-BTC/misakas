@@ -45,6 +45,20 @@ misaka --network testnet-11 mining setup
 
 The ADR-0122 wizard checks the node, network identity, model, key, funds, Bond registry, artifact, panel capability and fee output, then writes `~/.misaka/mining.toml`. Re-running the command resumes from chain and local state.
 
+Large class artifacts do not need to be copied into the node directory. Point setup at the exact
+file, or at a mounted directory containing it:
+
+```bash
+export MISAKA_PALW_ARTIFACT=/srv/misaka/palw/qwen25-1.5b-a16-2m.palwart
+# alternatively: export MISAKA_PALW_ARTIFACT_DIRS=/srv/misaka/palw:/mnt/models
+misaka --network testnet-11 mining setup --model <class-id-or-name> --verify-artifact
+```
+
+For every non-Floor class, setup reads the artifact and matches its computed PALW state root to
+the class registered on chain before it writes `mining.toml`. `--verify-artifact` is retained as a
+compatibility/documentation flag; the root check is now mandatory, so an old or mismatched file
+cannot become a later panel-start failure.
+
 For an existing Floor Bond:
 
 ```bash
