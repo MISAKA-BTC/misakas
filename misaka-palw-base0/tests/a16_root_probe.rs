@@ -378,13 +378,20 @@ fn print_a16_2m_root_forms() {
     println!("artifact_digest {}", artifact.artifact_digest());
     println!("pinned_const    {pin}");
     // Shape first, because the resolver checks it first and a shape miss never pays for the walk.
-    println!("--- inventory walk (minutes at 2M) ---");
-    match misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile) {
-        Ok(inv) => {
-            let root = inv.root();
+    println!("groups          {}", misaka_palw_base0::inventory::a16_inventory_group_count_v1(&artifact, &profile).expect("groups"));
+    println!("--- STREAMED inventory root (one peak per level; the materialized walk OOMs here) ---");
+    let t0 = std::time::Instant::now();
+    match misaka_palw_base0::inventory::a16_inventory_root_streamed_v1(&artifact, &profile) {
+        Ok(root) => {
             println!("inventory_root  {root}");
             println!("inventory==pin  {}", root == pin);
+            println!("walk took       {:.1?}", t0.elapsed());
         }
         Err(e) => println!("inventory FAILED: {e:?}"),
+    }
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        for line in status.lines().filter(|l| l.starts_with("VmHWM") || l.starts_with("VmRSS")) {
+            println!("{line}");
+        }
     }
 }
