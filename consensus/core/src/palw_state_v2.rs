@@ -7025,6 +7025,23 @@ impl PalwChainStateV2 {
         self.slashable_locks.get(&(seat, claim))
     }
 
+    /// **ADR-0151: the executions whose downstream rights are forfeit.**
+    ///
+    /// Derived from `consumed_offences` rather than kept beside it: a conviction is written once, and
+    /// a second ledger of "what that conviction forfeited" is a second thing to keep in step. Every
+    /// `PanelFalseValid` that named an execution contributes its root; a conviction that named none
+    /// (a key signing two roots is about the key) contributes nothing.
+    ///
+    /// Scanned per span boundary, which is O(convictions) on a map that only grows by a conviction —
+    /// a whole objective offence, its evidence and its slash behind each row.
+    pub fn palw_forfeited_execution_roots_v1(&self) -> std::collections::BTreeSet<Hash64> {
+        self.consumed_offences
+            .values()
+            .filter(|row| row.execution_root != Hash64::default())
+            .map(|row| row.execution_root)
+            .collect()
+    }
+
     pub fn panel_liability(&self, claim: &Hash64) -> Option<&crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1> {
         self.panel_liabilities.get(claim)
     }
@@ -9531,6 +9548,8 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.consumed_offences.contains_key(&offence_id) {
             return Ok(());
         }
+        // ADR-0151: the execution a conviction forfeits the rights of. Set by the arm that knows one.
+        let mut convicted_execution_root = Hash64::default();
         let amount = match kind {
             PalwOffenceKindV1::ExecutorEquivocation => self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0),
             PalwOffenceKindV1::PanelFalseValid => {
@@ -9552,6 +9571,7 @@ impl<'a> TransitionBuilder<'a> {
                     .or_else(|| self.state.panel_liabilities.get(&payload.claim_id).map(|r| r.class_id));
                 let ladder = class_id.and_then(|id| self.state.class_step_ladders.get(&id).copied()).unwrap_or(64);
                 let (execution_root, artifact_root) = self.false_valid_execution_roots(&payload)?;
+                convicted_execution_root = execution_root;
                 palw_panel_contradiction_convicts_execution_v1(&payload.contradiction, execution_root, artifact_root, ladder)
                     .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
                 if let Some(lock) = self.state.slashable_locks.get(&(accused, payload.claim_id)).copied() {
@@ -9573,7 +9593,15 @@ impl<'a> TransitionBuilder<'a> {
         self.slash_bond(accused, amount as u128)?;
         self.write_consumed_offence(
             offence_id,
-            Some(PalwConsumedOffenceV1 { kind, accused: accused.0, amount, accepted_daa: ctx.daa_score }),
+            Some(PalwConsumedOffenceV1 {
+                kind,
+                accused: accused.0,
+                amount,
+                accepted_daa: ctx.daa_score,
+                // ADR-0151: recorded only where the bundle is armed, so a dormant network's
+                // `consumed_offences` rows — and therefore its state root — are what they were.
+                execution_root: if self.extras.economic_safety.is_some() { convicted_execution_root } else { Hash64::default() },
+            }),
         );
         Ok(())
     }
@@ -10795,8 +10823,29 @@ impl<'a> TransitionBuilder<'a> {
     /// no longer be accepted, so nothing it could collide with needs keeping.
     fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) {
         use crate::palw_execution_lane_v1::{
-            PalwExecFinalV1, palw_execution_schedule_assign_quanta_v1, palw_execution_schedule_seeded_v1,
+            PalwExecFinalV1, palw_execution_schedule_assign_quanta_matured_v1, palw_execution_schedule_seeded_v1,
             palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
+        };
+        // **ADR-0151: what a conviction has taken back, and how long a fresh right waits.**
+        //
+        // The forfeiture set is derived from the convictions themselves, so a Final whose execution was
+        // convicted mints nothing at any of the three stages a right can sit in. The maturity is the
+        // challenge window converted to rounds — a ticket occupies a round, not a DAA — and it is what
+        // keeps every right of a Final unused for as long as a conviction can still take it.
+        //
+        // Both are inert where `Params::palw_economic_safety` is dormant, which is every preset but
+        // testnet-12: an empty set and a zero maturity make the mint below the one every other network
+        // runs, ticket for ticket.
+        let (maturity_rounds, forfeited) = match self.extras.economic_safety {
+            Some(safety) => (
+                crate::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1(
+                    self.params.window_challenge(),
+                    self.params.window_court,
+                )
+                .saturating_mul(crate::palw_economic_safety_v1::palw_rounds_per_daa_v1(safety.target_time_per_block_ms)),
+                self.state.palw_forfeited_execution_roots_v1(),
+            ),
+            None => (0, std::collections::BTreeSet::new()),
         };
         let span_now = palw_execution_span_v1(ctx.daa_score, span_daa);
         let opens_span = self.state.last_point.is_none_or(|last| palw_execution_span_v1(last.daa_score, span_daa) < span_now);
@@ -10817,14 +10866,28 @@ impl<'a> TransitionBuilder<'a> {
                     let (frontier_blue_score, frontier) = self.state.safe_frontier();
                     let mut schedule = palw_execution_schedule_seeded_v1(&snapshot, &anchor, frontier_blue_score, frontier);
                     if let Some(lane) = self.extras.round_lane {
-                        palw_execution_schedule_assign_quanta_v1(&mut schedule, lane.execution_quantum, lane.span_open_round);
+                        palw_execution_schedule_assign_quanta_matured_v1(
+                            &mut schedule,
+                            lane.execution_quantum,
+                            lane.span_open_round,
+                            maturity_rounds,
+                            &forfeited,
+                        );
                     }
                     self.write_round_schedule(span_now, Some(schedule));
                 }
             }
             if !self.state.round_finals.is_empty() {
                 if self.state.round_span + 1 == span_now {
-                    let finals: Vec<PalwExecFinalV1> = self.state.round_finals.values().copied().collect();
+                    // ADR-0151: a convicted execution does not enter the next span's snapshot either —
+                    // the earliest of the three stages a forfeited right can be dropped at.
+                    let finals: Vec<PalwExecFinalV1> = self
+                        .state
+                        .round_finals
+                        .values()
+                        .copied()
+                        .filter(|f| !crate::palw_economic_safety_v1::palw_exec_rights_are_forfeit_v1(&forfeited, &f.execution_root))
+                        .collect();
                     let snapshot = palw_execution_schedule_snapshot_v1(span_now + 1, &finals);
                     if !snapshot.domains.is_empty() {
                         self.write_round_pending(span_now + 1, Some(snapshot));

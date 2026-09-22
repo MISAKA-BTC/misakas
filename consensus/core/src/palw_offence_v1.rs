@@ -58,6 +58,18 @@ pub struct PalwConsumedOffenceV1 {
     pub accused: TransactionOutpoint,
     pub amount: u64,
     pub accepted_daa: u64,
+    /// **ADR-0151: the execution whose rights this conviction forfeits.**
+    ///
+    /// The `CanonicalWork` the convicted Final named, so the economic-safety bundle can find every
+    /// downstream right and revoke it — the unused quanta of that root, in `round_finals`, in a span
+    /// snapshot, and in a seeded schedule. Zero for a conviction that names no execution
+    /// (`ExecutorEquivocation` is about a key signing two roots, not about one root's rights).
+    ///
+    /// Recorded HERE rather than in a new state map because `consumed_offences` is already rooted,
+    /// already has a delta entry and is already the one place a conviction is written once — and the
+    /// forfeiture set is a function of it (`palw_forfeited_execution_roots_v1`), not a second ledger
+    /// that could disagree with it.
+    pub execution_root: crate::Hash64,
 }
 
 /// **A panel seat signed Valid, and the same claim has an objective Invalid.**

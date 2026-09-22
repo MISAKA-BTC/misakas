@@ -490,15 +490,30 @@ pub fn palw_execution_schedule_seeded_v1(
 /// Assign execution quanta onto an already-seeded schedule. `quantum == 0` leaves the lottery in
 /// force (empty `quanta`). A non-zero unit mints spend-once tickets from the snapshot's Finals.
 pub fn palw_execution_schedule_assign_quanta_v1(schedule: &mut PalwExecScheduleV1, quantum: u64, open_round: u64) {
+    palw_execution_schedule_assign_quanta_matured_v1(schedule, quantum, open_round, 0, &std::collections::BTreeSet::new())
+}
+
+/// **[`palw_execution_schedule_assign_quanta_v1`] under ADR-0151's bundle.** The tickets mature before
+/// they may be spent and a convicted Final mints none; with a zero maturity and an empty forfeiture
+/// set it is the function above, ticket for ticket.
+pub fn palw_execution_schedule_assign_quanta_matured_v1(
+    schedule: &mut PalwExecScheduleV1,
+    quantum: u64,
+    open_round: u64,
+    maturity_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<crate::Hash64>,
+) {
     if quantum == 0 {
         schedule.quanta.clear();
         return;
     }
-    schedule.quanta = crate::palw_execution_quanta_v1::palw_execution_mint_quanta_v1(
+    schedule.quanta = crate::palw_execution_quanta_v1::palw_execution_mint_quanta_matured_v1(
         &schedule.finals,
         schedule.seed,
         u128::from(quantum),
         open_round,
+        maturity_rounds,
+        forfeited_roots,
     );
 }
 
@@ -514,6 +529,18 @@ pub struct PalwExecPermitV1 {
     pub domain: Hash64,
     pub bond: PalwBondKeyV2,
     pub operator_id: Hash64,
+    /// **ADR-0151's lineage: the execution quantum this permit came from, and through it the Final
+    /// and the `execution_root`.**
+    ///
+    /// `quantum_id = H(canonical_work_id(execution_root) ‖ final_id ‖ index)`, so a permit is
+    /// traceable to the work that earned it without a second index. Zero for a permit the DOMAIN
+    /// lottery handed out — that path is not earned by a Final and has no Final to forfeit against,
+    /// which is a fact worth being able to read off the permit rather than infer from the schedule.
+    ///
+    /// Recorded because a right you cannot trace is a right you cannot revoke: the forfeiture in
+    /// `palw_execution_mint_quanta_matured_v1` drops a convicted Final's UNUSED tickets, and this is
+    /// what lets a reader say which permits a conviction should have reached.
+    pub quantum_id: Hash64,
 }
 
 /// **A round's permits, from the schedule alone.**
@@ -538,7 +565,7 @@ pub fn palw_execution_permits_v1(schedule: &PalwExecScheduleV1, round: u64, widt
         return crate::palw_execution_quanta_v1::palw_execution_quantum_for_round_v1(&schedule.quanta, round)
             .into_iter()
             .take(width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1) as usize)
-            .map(|q| PalwExecPermitV1 { index: 0, domain: q.domain, bond: q.bond, operator_id: q.operator_id })
+            .map(|q| PalwExecPermitV1 { index: 0, domain: q.domain, bond: q.bond, operator_id: q.operator_id, quantum_id: q.quantum_id })
             .collect();
     }
     let width = width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1);
@@ -587,7 +614,14 @@ pub fn palw_execution_permits_v1(schedule: &PalwExecScheduleV1, round: u64, widt
             .expect("an available domain has a bond whose operator is free");
         used_operators.insert(bond.operator_id);
         held[chosen] += 1;
-        permits.push(PalwExecPermitV1 { index, domain: domain.domain, bond: bond.bond, operator_id: bond.operator_id });
+        // The lottery path earns no Final, so there is no quantum to name.
+        permits.push(PalwExecPermitV1 {
+            index,
+            domain: domain.domain,
+            bond: bond.bond,
+            operator_id: bond.operator_id,
+            quantum_id: Hash64::default(),
+        });
     }
     permits
 }

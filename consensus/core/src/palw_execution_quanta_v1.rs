@@ -138,7 +138,39 @@ pub fn palw_execution_mint_quanta_v1(
     quantum: u128,
     open_round: u64,
 ) -> Vec<PalwExecQuantumV1> {
-    let mut by_work: Vec<&PalwExecFinalV1> = finals.iter().filter(|f| f.credit > 0).collect();
+    palw_execution_mint_quanta_matured_v1(finals, seed, quantum, open_round, 0, &std::collections::BTreeSet::new())
+}
+
+/// **[`palw_execution_mint_quanta_v1`] under ADR-0151's economic-safety bundle**: the mint that
+/// matures its tickets and skips the Finals whose rights are forfeit.
+///
+/// Two additions, and they are the two halves of "a fraudulent Final's rights are recoverable":
+///
+/// * **`maturity_rounds`** — no ticket is scheduled before `open_round + maturity_rounds`, so a
+///   right minted by a Final cannot be spent until its conviction window has had that long to run.
+///   Expressed in ROUNDS rather than DAA because a round is what a ticket occupies; the caller
+///   converts, and the conversion errs by at most one span (the Final's own offset inside it), which
+///   is 120 rounds against a maturity of 144,000.
+/// * **`forfeited_roots`** — a Final whose `execution_root` was convicted mints nothing. Keyed by
+///   the ROOT and not the claim, for the same reason the dedup below is: the right belongs to the
+///   work, so a second claim over the same execution is the same right and forfeits with it.
+///
+/// With `maturity_rounds == 0` and an empty forfeiture set this is the pre-bundle mint, ticket for
+/// ticket — which is what [`palw_execution_mint_quanta_v1`] is, and why no existing network moves.
+pub fn palw_execution_mint_quanta_matured_v1(
+    finals: &[PalwExecFinalV1],
+    seed: Hash64,
+    quantum: u128,
+    open_round: u64,
+    maturity_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<Hash64>,
+) -> Vec<PalwExecQuantumV1> {
+    let open_round = open_round.saturating_add(maturity_rounds);
+    let mut by_work: Vec<&PalwExecFinalV1> = finals
+        .iter()
+        .filter(|f| f.credit > 0)
+        .filter(|f| !crate::palw_economic_safety_v1::palw_exec_rights_are_forfeit_v1(forfeited_roots, &f.execution_root))
+        .collect();
     by_work.sort_by(|a, b| a.execution_root.cmp(&b.execution_root).then(a.claim_id.cmp(&b.claim_id)));
     by_work.dedup_by(|a, b| a.execution_root == b.execution_root);
 
