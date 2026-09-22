@@ -1,6 +1,6 @@
 # Running a Testnet-11 node
 
-Verified against current `main` on 2026-09-20.
+Verified against current `main` on 2026-09-22.
 
 ## Roles
 
@@ -52,22 +52,21 @@ wRPC is disabled until its listener flag is supplied. Keep RPC on loopback unles
 
 ## Identity
 
-The current Testnet-11 fingerprint is (the build that shortens the execution span at 7,300; previous `137b9c50…`):
+The current-main Testnet-11 fingerprint verified on 2026-09-22 is:
 
 ```text
-400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8
+79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640
 ```
 
-**This number moved on 2026-09-20 and the one it replaced is not wrong, it is older.** The execution
-lane's schedule span shortens 5 DAA → 1 DAA at 7,300; ADR-0130's f+2 future-seed delay is kept.
-What did **not** move is the identity two nodes compare at the handshake, so a node on `137b9c50…`
-still peers with this one. It will be refused from DAA 7,300, where the span length changes — which
-is why every node must carry this build before that height.
+The corresponding fence schedule is `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101,
+7200, 7300, 7301, 7780, 7800, 8100, 8160, 8500, 8600, 8700, 2125000`. A different fingerprint or
+schedule is a ruleset mismatch; rebuild from current `main` rather than copying a value from an
+older runbook.
 
 The fence schedule this build prints on start:
 
 ```text
-1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7300, 7301, 8000, 2125000
+1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7300, 7301, 7780, 7800, 8100, 8160, 8500, 8600, 8700, 2125000
 ```
 
 **7,100** activates the held regime and deep-audit fixes. **7,101** is the one PALW upgrade day

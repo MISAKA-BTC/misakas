@@ -1,6 +1,6 @@
 # Joining Testnet-11 as a PALW producer
 
-Verified against current `main` on 2026-09-13. Testnet-11 Relaunch 5f produces blocks with PALW ConsensusV2 at a frozen 120-second cadence. `kaspa-pq-miner` and `misaminer` cannot create the required attempt envelope; production runs inside `kaspad --palw-produce`.
+Verified against current `main` on 2026-09-22. Testnet-11 Relaunch 5f produces blocks with PALW ConsensusV2 at a frozen 120-second cadence. `kaspa-pq-miner` and `misaminer` cannot create the required attempt envelope; production runs inside `kaspad --palw-produce`.
 
 ## 1. Build
 
@@ -37,7 +37,7 @@ Default ports:
 The startup log must report:
 
 ```text
-Consensus params fingerprint: 400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8 (network testnet-11)
+Consensus params fingerprint: 79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640 (network testnet-11)
 ```
 
 ## 3. Recommended setup

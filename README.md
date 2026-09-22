@@ -5,12 +5,13 @@
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
 > [!IMPORTANT]
-> **Current status (2026-09-20).** The live public network is **`testnet-11`**, Relaunch 5f.
+> **Current status (2026-09-22).** The live public network is **`testnet-11`**, Relaunch 5f.
 > Build current `main`, select it explicitly with `--testnet --netsuffix=11` or
 > `misaka --network testnet-11`, and verify fingerprint
-> **`400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8`** (the build that shortens
-> the execution lane's schedule span 5 DAA → 1 DAA at 7,300, keeping ADR-0130's f+2 seed delay;
-> previous `137b9c50…`). The held regime and the audit's deep fixes are at DAA 7,100; the DAA 7,101
+> **`79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640`** (the current main build
+> verified on 2026-09-22). Its fence schedule is `1150, 1900, 2150, 2400, 3500, 4000, 6900,
+> 7100, 7101, 7200, 7300, 7301, 7780, 7800, 8100, 8160, 8500, 8600, 8700, 2125000`. The held
+> regime and the audit's deep fixes are at DAA 7,100; the DAA 7,101
 > flag day carries ADR-0130's operator lottery and 5-DAA spans, the model registry, the economic
 > payout, the work target and the short challenge window; ADR-0133's Verification V2 (S1) is at
 > 7,200; ADR-0130's span-short is at 7,300; ADR-0134's compute-overlay retirement is at 7,301; the
@@ -217,8 +218,8 @@ The log must show this fingerprint and, on the next line, this fence schedule, o
 wrong ruleset:
 
 ```
-Consensus params fingerprint: 400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8 (network testnet-11)
-Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7300, 7301, 8000, 2125000 (schedule id …)
+Consensus params fingerprint: 79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640 (network testnet-11)
+Consensus fence schedule: 1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7300, 7301, 7780, 7800, 8100, 8160, 8500, 8600, 8700, 2125000 (schedule id …)
 ```
 
 > **The fingerprint moved on 2026-09-20 (execution span-short at 7,300).** The identity did not:

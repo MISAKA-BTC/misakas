@@ -430,7 +430,7 @@ appdir        = "~/.misaka/testnet-11/node"
 bond          = "<txid>:<index>"   # discovered: the locked outpoint at the key's address
 fee_outpoint  = "<txid>:<index>"   # chosen: a mature, unbonded, non-coinbase UTXO ≥ 0.1 MSK at the key
 artifact      = "~/.misaka/models/qwen25-1.5b-a16.bound.palwart"
-peers         = ["169.58.39.220:26311", "169.58.232.113:26311"]
+# omitted: testnet-11 uses DNS seeders; explicit IPs are operator overrides
 listen        = "0.0.0.0:26311"
 rpc_borsh     = "127.0.0.1:27210"
 resident_bytes = "auto"
@@ -614,7 +614,7 @@ MISAKA mining · testnet-11                                          misaka 0.x 
 ```
 ◐ HOLDING — no peer is connected                                            [E-NET-NO-PEERS]
   Reason    the producer never mines alone: a block with no peer to relay it is a fork of one
-  Current   0 peers · outbound to 169.58.39.220:26311 refused 40 s ago
+  Current   0 peers · outbound to the resolved testnet-11 bootstrap peer refused 40 s ago
   Required  at least 1 connected peer
   Fix       misaka doctor node      (checks the P2P port, --addpeer and the fork fingerprint)
   Docs      docs/testnet11-join-mining.md#peers
@@ -858,15 +858,17 @@ What the implementation settled that the decisions above left open, and where it
   2. the configured one;
   3. the largest ordinary output of at least 0.1 MSK;
   4. otherwise a self-send is offered.
-* **Artifacts.** `--verify-artifact` computes the root through the SDK's pairings. Without it, setup
-  finds the file and says the root was not checked: reading a 33 GiB file takes minutes.
+* **Artifacts.** Setup always computes the root through the SDK's pairings before writing a non-base
+  profile. `--verify-artifact` remains as a compatibility/documentation flag; an unchecked artifact
+  is never accepted because a late panel-start failure is harder to diagnose and can strand setup.
 * **`[mining] wallet` is not asked.**
   * A bond's payee is fixed at registration.
   * The funding output must be signable by the key.
   * So the payee is the key's own address. Changing it is a hand edit, for an operator who knows the
     consequence.
-* **testnet-11's default peer is `169.58.39.220:26311`.** The network carries no DNS seeders, and
-  that is the entry point the join doc names.
+* **testnet-11 uses DNS seeders for discovery.** Setup does not persist a fleet IP as a default;
+  if an operator needs an explicit bootstrap, a seeder is resolved for that invocation and its IP
+  is passed to `--peer`/`--addpeer` without being treated as a stable network identity.
 * **A question is answered only by a person.**
   * Input that closes before a line (a pipe running dry) is *no answer*, never the default. With
     stdin at EOF, the first build made a key; the same rule would have let a pipe say yes to a

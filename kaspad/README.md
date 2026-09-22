@@ -9,14 +9,16 @@ cargo build --release -p kaspad
 ./target/release/kaspad \
   --testnet --netsuffix=11 \
   --utxoindex \
-  --rpclisten-borsh=default \
-  --addpeer=169.58.39.220:26311
+  --rpclisten-borsh=default
 ```
+
+Testnet-11 uses DNS seeders by default. If an explicit bootstrap is required, resolve a seeder
+for that invocation and pass its IP to `--addpeer`; do not persist a resolved seeder IP.
 
 Verify consensus fingerprint:
 
 ```text
-400403b8431082c9464d7326c3c11f77425ef3dbc41110f85a0dd28cb6f5f2d8
+79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640
 ```
 
 A normal full node needs no model artifact or Bond. PALW production is configured with `misaka --network testnet-11 mining setup`; an external hash miner cannot produce Testnet-11 PALW blocks.
