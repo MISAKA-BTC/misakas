@@ -9307,10 +9307,59 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::PanelLiability { key, old, new });
     }
 
+    /// **What one Valid signature on this claim must lock** (ADR-0144 §9, ADR-0151 D1/D4).
+    ///
+    /// Three colluding seats must out-value the most the lie can earn
+    /// (`palw_colluding_quorum_covers_v1`), and past `Params::palw_economic_safety` that gain
+    /// includes the execution rights the Final mints — which
+    /// `palw_claim_extra_economic_rights_v1` valued at zero, on a claim whose Final mints 270,029
+    /// permit candidates. The margin also stops being one sompi.
     fn panel_valid_lock_required(&self, claim: &PalwClaimStateV2) -> u128 {
         let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
-        let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash);
-        crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts)
+        let mut facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash);
+        let Some(safety) = self.extras.economic_safety else {
+            // Dormant: byte-identical to the rule every existing lock was written under.
+            return crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        };
+        facts.extra_economic_rights_sompi = self.claim_realizable_rights_v1(claim, &safety);
+        crate::palw_economic_safety_v1::palw_seat_lock_required_v2(
+            crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts),
+            crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1,
+        )
+    }
+
+    /// **The execution rights this claim's Final could realize before a conviction could take them.**
+    ///
+    /// The quanta it mints are `credit / execution_quantum`, and the credit is the UNCLAMPED
+    /// CanonicalWork scalar — the same value `record_round_final` credits, read here the same way so
+    /// the lock and the mint cannot disagree about how many rights are at stake. Zero where the lane
+    /// mints no quanta at all, which is every network that leaves `palw_execution_quanta` dormant.
+    fn claim_realizable_rights_v1(
+        &self,
+        claim: &PalwClaimStateV2,
+        safety: &PalwEconomicSafetyFoldV1,
+    ) -> u128 {
+        let Some(lane) = self.extras.round_lane.filter(|lane| lane.execution_quantum > 0) else { return 0 };
+        let Some(class) = self.state.classes.get(&claim.class_id) else { return 0 };
+        // The same accessor `record_round_final` uses, so the lock and the mint cannot disagree.
+        let canonical = self.canonical_per_draw(&claim.class_id, claim.accepted_daa);
+        let exposure = palw_exposure_pwu_v2(class, claim.pwu, canonical);
+        let quanta = crate::palw_execution_quanta_v1::palw_execution_quantum_count_v1(
+            u128::from(exposure),
+            u128::from(lane.execution_quantum),
+            // The count is what the mint will produce; its fractional tie-break is seeded by a span
+            // the lock cannot see, so the ceiling (`whole + 1`) is the honest bound to price.
+            crate::Hash64::default(),
+            crate::Hash64::default(),
+        )
+        .saturating_add(1);
+        crate::palw_economic_safety_v1::palw_realizable_before_maturity_v1(
+            quanta,
+            self.params.window_challenge(),
+            self.params.window_court,
+            safety.target_time_per_block_ms,
+            crate::palw_economic_safety_v1::palw_permit_value_sompi_v1(safety.permit_value_sompi),
+        )
     }
 
     fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {

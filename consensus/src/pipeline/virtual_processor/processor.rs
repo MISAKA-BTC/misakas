@@ -447,6 +447,14 @@ pub struct VirtualStateProcessor {
     pub(super) palw_seat_gate_possession: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Spend-once execution-round quanta: `Params::palw_execution_quanta`. Past it a Final mints
     /// N unique 1-second permits from CanonicalWork instead of drawing the ADR-0125 lottery.
+    /// ADR-0151: the block cadence in milliseconds, for the economic-safety fold. The transition
+    /// holds only `PalwStateParamsV2`, which does not carry it, and the residual pricing needs it to
+    /// convert a liability horizon in DAA into the one-second rounds a lie could spend inside it.
+    pub(super) palw_target_time_per_block_ms: u64,
+    /// ADR-0151: `Params::palw_economic_safety`. Past it a quantum matures before it may be spent,
+    /// a convicted Final's unused quanta are forfeit, and a Valid seat's lock prices the rights the
+    /// lie could still realize.
+    pub(super) palw_economic_safety: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_execution_quanta: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0132 S: `Params::palw_single_lottery` — dormant everywhere; past it the lottery reads `max(W₀, W)`.
     pub(super) palw_single_lottery: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -973,6 +981,8 @@ impl VirtualStateProcessor {
             palw_fp_derived_work: params.palw_fp_derived_work,
             palw_objective_offence: params.palw_objective_offence,
             palw_seat_gate_possession: params.palw_seat_gate_possession,
+            palw_target_time_per_block_ms: params.pre_crescendo_target_time_per_block,
+            palw_economic_safety: params.palw_economic_safety,
             palw_execution_quanta: params.palw_execution_quanta,
             palw_single_lottery: params.palw_single_lottery,
             palw_verification_v2: params.palw_verification_v2,
@@ -8280,6 +8290,16 @@ impl VirtualStateProcessor {
                         .unwrap_or(0),
                 }
             }),
+            // **ADR-0151's economic-safety fold.** The two values the pricing needs that the
+            // transition cannot see: the cadence (a `Params` quantity — the transition holds only
+            // `PalwStateParamsV2`) and the declared worth of one stolen round. `None` where the
+            // fence is dormant, and then every path it touches is byte-identical.
+            economic_safety: self.palw_economic_safety_at(daa_score).then(|| {
+                kaspa_consensus_core::palw_state_v2::PalwEconomicSafetyFoldV1 {
+                    target_time_per_block_ms: self.palw_target_time_per_block_ms,
+                    permit_value_sompi: kaspa_consensus_core::palw_economic_safety_v1::PALW_T12_PERMIT_FEE_CEILING_SOMPI,
+                }
+            }),
             round_permit_uses: Vec::new(),
             // ADR-0126 Decision 3: the carve this block's own attempt escrows at — the block that
             // carried it is this one, and the block that pays it is its selected-chain child, always
@@ -8382,6 +8402,10 @@ impl VirtualStateProcessor {
 
     fn palw_execution_quanta_at(&self, daa_score: u64) -> bool {
         self.palw_execution_quanta.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    fn palw_economic_safety_at(&self, daa_score: u64) -> bool {
+        self.palw_economic_safety.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     fn palw_objective_offence_daa(&self) -> Option<u64> {

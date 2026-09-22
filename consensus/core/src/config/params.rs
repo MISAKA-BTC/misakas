@@ -14595,6 +14595,17 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // ADR-0145 §5/§6 (F2, CRITICAL): the free-prompt lane's work is derived, and a cached prefix is
     // not paid twice.
     params.palw_fp_derived_work = Some(at);
+    // **ADR-0151's economic-safety bundle** — the five rules that make a fraudulent Final's rights
+    // recoverable and price what is not. Armed here as ONE fence because each is unsound alone: the
+    // pricing without the maturity collateralises rights that are already recoverable, the maturity
+    // without the pricing freezes honest permits and still leaves the residual free, and the
+    // forfeiture without the lineage has nothing to forfeit against.
+    //
+    // Without it a held-2M Final's 270,029 execution permits are worth nothing to
+    // `palw_max_fraud_gain_v1`, and three colluding seats out-value the lie by TWO SOMPI — so one
+    // economic actor holding a claim's whole 3-of-5 quorum is profitable, which is the last thing
+    // `palw_admission_independence` leaves open ("it is a price, not a proof").
+    params.palw_economic_safety = Some(at);
 
     // ---- pass 2: every fence's height to 0, `never()` preserved ---------------------------------
     // The Layer-0 / EVM activations are this walk's only exceptions, restored by name below.
