@@ -82,7 +82,9 @@ pub(crate) fn dense_artifact_by_digest(
 /// court-capable one (the four-byte map, the same predicate `supports_court` answers) — the A16
 /// operand-inventory root derived from THAT profile, which is what an arithmetic close's openings
 /// prove against. The profile is the registration's own carriage, so the derivation cannot be a
-/// second mapping: it is `a16_inventory_v1` at the class's declared graph, per candidate holding.
+/// second mapping: it is the same inventory root, at the class's declared graph, per candidate holding
+/// — streamed (`a16_inventory_root_v1`), because "per candidate holding" is what makes a materialized
+/// walk here cost a multiple of the artifact.
 pub(crate) fn dense_artifact_by_registered_root(
     holdings: &[PalwLoadedArtifactV1],
     root: kaspa_hashes::Hash64,
@@ -104,10 +106,15 @@ pub(crate) fn dense_artifact_by_registered_root(
     if !misaka_palw_base0::qwen25_a16_backend::a16_court_capable_v1(profile) {
         return None;
     }
+    // **Streamed, because this runs once per CANDIDATE holding.** `a16_inventory_v1` materializes
+    // one row digest per leaf; at a 2M context that is `max_position` rotary rows for each holding
+    // this asks about, and the question is only ever "does its root equal these 64 bytes".
+    // `a16_inventory_root_v1` answers it from the frontier (`a16_streamed_root.rs` pins the two
+    // roots equal), so a resolve costs one peak per tree level instead of the whole inventory.
     holdings
         .iter()
         .filter_map(artifact_of)
-        .find(|a| misaka_palw_base0::inventory::a16_inventory_v1(a, profile).is_ok_and(|inv| inv.root() == root))
+        .find(|a| misaka_palw_base0::inventory::a16_inventory_root_v1(a, profile).is_ok_and(|r| r == root))
 }
 
 fn dense_artifacts(holdings: &[PalwLoadedArtifactV1]) -> Vec<Base0ArtifactV1> {

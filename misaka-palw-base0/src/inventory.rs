@@ -133,12 +133,48 @@ pub(crate) fn a16_inventory_digest_arc_v1(
     Ok(built)
 }
 
-/// Root only — the value `ClassRegistered` pins. Does not clone the leaf vector.
+/// **Process-local A16 inventory ROOTS.** Sixty-four bytes per `(artifact digest, profile id)`,
+/// against the digest cache's one entry per leaf — and the root is all a producer's class resolve,
+/// a registration preflight or a genesis check ever wanted from the walk.
+fn a16_inventory_root_cache_v1() -> &'static Mutex<HashMap<(Hash64, Hash64), Hash64>> {
+    static CACHE: OnceLock<Mutex<HashMap<(Hash64, Hash64), Hash64>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// **Root only — the value `ClassRegistered` pins, streamed.**
+///
+/// This is what `CanonicalClassV1::artifact_root` calls, and therefore what a producer's class
+/// resolve calls on every retry. It went through the materialized digest, so asking "is this the
+/// root the chain registered?" built and then RETAINED one `PalwArtifactRowDigestV1` per leaf: at a
+/// 2,097,152 context that is the rotary table's `max_position` rows and it cost a t12 producer
+/// 11.5 GiB of anon-rss, every thirty seconds, until the kernel killed it — for a 64-byte
+/// comparison. `a16_inventory_root_streamed_v1` keeps one peak per tree level instead, and
+/// `a16_streamed_root.rs` pins the two roots equal on every shipped graph version.
+///
+/// The openings path is unchanged: [`a16_inventory_digest_v1`] still materializes, because a leaf's
+/// proof needs the leaves. The two are separate on purpose — needing a root is not needing an
+/// inventory, and conflating them is what made a read cost a producer's worth of memory.
 pub fn a16_inventory_root_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
 ) -> Result<Hash64, InventoryBuildError> {
-    Ok(a16_inventory_digest_arc_v1(artifact, profile)?.root())
+    let key = a16_inventory_digest_key_v1(artifact, profile);
+    // A digest already built for openings answers without a second walk.
+    if let Ok(cache) = a16_inventory_digest_cache_v1().lock() {
+        if let Some(hit) = cache.get(&key) {
+            return Ok(hit.root());
+        }
+    }
+    if let Ok(cache) = a16_inventory_root_cache_v1().lock() {
+        if let Some(hit) = cache.get(&key) {
+            return Ok(*hit);
+        }
+    }
+    let root = a16_inventory_root_streamed_v1(artifact, profile)?;
+    if let Ok(mut cache) = a16_inventory_root_cache_v1().lock() {
+        cache.insert(key, root);
+    }
+    Ok(root)
 }
 
 fn a16_rope_row_at_v1(
@@ -319,15 +355,45 @@ pub fn base0_inventory_row_bytes_v1(
 /// materialised the whole inventory to root it rebooted a 24 GiB host).
 pub type A16RowSinkV1<'s> = dyn FnMut(&str, Option<u16>, u32, Vec<u8>) -> Result<(), InventoryBuildError> + 's;
 
+/// **Which rows of the walk reach the sink.**
+///
+/// The visitor emits in PROFILE NODE order, and the canonical inventory order is
+/// `(tensor_name, layer, row_start)`. Two shapes of caller need two different answers to that:
+///
+/// * [`A16RowGateV1::Dedup`] — the materialized build. Every row reaches the sink once, in node
+///   order, and the caller sorts. Its `seen` set holds one entry per LEAF, which at a 2M context is
+///   `max_position` rotary rows on its own; that is the O(leaves) term the streamed build exists to
+///   avoid, and it is still the right answer when the caller is going to hold every leaf anyway.
+/// * [`A16RowGateV1::Group`] — the streamed build. Only the named `(tensor_name, layer)` group
+///   reaches the sink, so the caller can walk the groups in canonical order and receive each one's
+///   rows already ascending and contiguous (every arm emits a group that way). Nothing is retained
+///   between rows.
+pub(crate) enum A16RowGateV1<'g> {
+    Dedup(&'g mut std::collections::BTreeSet<(String, Option<u16>, u32)>),
+    Group { tensor_name: &'g str, layer: Option<u16> },
+}
+
+impl A16RowGateV1<'_> {
+    /// Does this row reach the sink? `Dedup` answers once per distinct key; `Group` answers for the
+    /// one group it names, and never dedups — a group is emitted by ONE slot per walk, so a repeat
+    /// within it would be a layout fault, and the layout checker is the thing that must say so.
+    fn admits(&mut self, name: &str, layer: Option<u16>, start: u32) -> bool {
+        match self {
+            Self::Dedup(seen) => seen.insert((name.to_string(), layer, start)),
+            Self::Group { tensor_name, layer: want } => name == *tensor_name && layer == *want,
+        }
+    }
+}
+
 fn a16_push(
     sink: &mut A16RowSinkV1<'_>,
-    seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
+    gate: &mut A16RowGateV1<'_>,
     name: &str,
     layer: Option<u16>,
     start: u32,
     bytes: Vec<u8>,
 ) -> Result<(), InventoryBuildError> {
-    if seen.insert((name.to_string(), layer, start)) {
+    if gate.admits(name, layer, start) {
         sink(name, layer, start, bytes)?;
     }
     Ok(())
@@ -336,7 +402,7 @@ fn a16_push(
 #[allow(clippy::too_many_arguments)]
 fn a16_push_tiled(
     sink: &mut A16RowSinkV1<'_>,
-    seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
+    gate: &mut A16RowGateV1<'_>,
     name: &str,
     layer: Option<u16>,
     table: &[u8],
@@ -347,16 +413,164 @@ fn a16_push_tiled(
     let mut offset = 0usize;
     while offset < table.len() {
         let end = (offset + stride).min(table.len());
-        a16_push(sink, seen, name, layer, offset as u32, table[offset..end].to_vec())?;
+        a16_push(sink, gate, name, layer, offset as u32, table[offset..end].to_vec())?;
         offset = end;
     }
     Ok(())
 }
 
 /// **The A16 inventory's rows, streamed** in generation order (unsorted; the inventory sorts).
+/// **Every `(tensor_name, layer)` group this profile's inventory contains, with the one slot that
+/// produces it** — in canonical order, and without reading a single weight byte.
+///
+/// The group set is a pure function of the profile's kernels plus, for the optional `.sink0`
+/// convention, whether the store holds that tensor. There are a few hundred groups on the shipped
+/// classes (tensors x layers), against `max_position` LEAVES inside one rotary group alone at a 2M
+/// context — which is the whole reason the streamed root walks groups and not leaves.
+///
+/// **The lowest slot wins, and that is not cosmetic.** Two slots can name one group with different
+/// `tile_len`, and the materialized build's dedup keeps whichever row arrived first — node order. A
+/// streamed build that picked a different slot would produce a different, equally self-consistent
+/// root, which is the kind of disagreement that only shows up as a class nobody can serve.
+pub(crate) fn a16_inventory_groups_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<Vec<(String, Option<u16>, u32)>, InventoryBuildError> {
+    use kaspa_consensus_core::palw_step::kernel_semantics_id_v1 as kid;
+    use kaspa_consensus_core::palw_step_refute as kd;
+
+    let store = artifact.a16_params.as_ref().ok_or(InventoryBuildError::Operand(OperandError::UnknownTensor {
+        name: "the artifact carries no A16 parameter store".to_string(),
+    }))?;
+    let holds = |name: &str, layer: Option<u16>| -> bool {
+        let key = match layer {
+            Some(l) => name.replace("{layer}", &l.to_string()),
+            None => name.to_string(),
+        };
+        store.iter().any(|(n, _)| *n == key)
+    };
+
+    let k_mm = kid(kd::KDESC_A16_MATMUL_REQUANT);
+    let k_rs = kid(kd::KDESC_A16_MATMUL_RESCALE);
+    let k_req = kid(kd::KDESC_A16_REQUANTIZE);
+    let k_fused = kid(kd::KDESC_A16_ATTN_FUSED);
+    let k_none = [kid(kd::KDESC_A16_RMS_NORM), kid(kd::KDESC_A16_ADD_ELEM), kid(kd::KDESC_A16_MUL_ELEM), kid(kd::KDESC_Q36_SILU)];
+
+    // First slot wins, so insert-if-absent over a map keyed by the group.
+    let mut groups: std::collections::BTreeMap<(String, Option<u16>), u32> = std::collections::BTreeMap::new();
+    let claim = |groups: &mut std::collections::BTreeMap<(String, Option<u16>), u32>, name: String, layer, slot| {
+        groups.entry((name, layer)).or_insert(slot);
+    };
+
+    for slot in 0..profile.global_node_count() {
+        let Some((node, layer)) = profile.resolve_node_slot(slot) else { continue };
+        let name = node.weight_name.as_str();
+        let kidv = node.kernel_semantics_id;
+        if k_none.contains(&kidv) {
+            continue; // parameterless: nothing to open, nothing to emit
+        }
+        if kidv == k_fused {
+            // The fused site NAMES one tensor and reads four; the mapping is
+            // `palw_attn_fused_tensors_v1` and there must not be a second spelling of it.
+            let f = kd::palw_attn_fused_tensors_v1(name)
+                .ok_or_else(|| InventoryBuildError::Operand(OperandError::UnknownTensor { name: name.to_string() }))?;
+            for tensor in [&f.softmax_up, &f.scores, &f.probs, &f.values] {
+                claim(&mut groups, tensor.clone(), layer, slot);
+            }
+            continue;
+        }
+        claim(&mut groups, name.to_string(), layer, slot);
+        if kidv == k_mm || kidv == k_rs {
+            // The per-lane triple tables beside the codes, under the store's own spelling for the
+            // tied head — the same aliasing the arm does.
+            for variant in ["", ".sink0"] {
+                let triple = format!("{name}.a16{variant}");
+                let store_key =
+                    if name == "output.weight" { format!("token_embd.weight.a16{variant}") } else { triple.clone() };
+                if holds(&store_key, layer) {
+                    claim(&mut groups, triple, layer, slot);
+                }
+            }
+        } else if kidv == k_req && matches!(node.out_len, kaspa_consensus_core::palw_step::PalwStepOutLenV1::Fixed { .. }) {
+            let sink0 = format!("{name}.sink0");
+            if holds(&sink0, layer) {
+                claim(&mut groups, sink0, layer, slot);
+            }
+        }
+    }
+
+    // `BTreeMap` already orders by `(tensor_name, layer)`, which is the canonical order's first two
+    // components; `row_start` orders within a group and every arm emits it ascending.
+    Ok(groups.into_iter().map(|((name, layer), slot)| (name, layer, slot)).collect())
+}
+
+/// How many `(tensor_name, layer)` groups this profile's inventory has — the quantity the streamed
+/// build's memory follows, exposed so a test can hold it against the leaf count.
+pub fn a16_inventory_group_count_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<usize, InventoryBuildError> {
+    Ok(a16_inventory_groups_v1(artifact, profile)?.len())
+}
+
+/// **The A16 inventory root as a STREAM** — the value `ClassRegistered` pins, computed without
+/// holding the leaves.
+///
+/// Memory is `O(groups + log leaves + one row's bytes)`: the group list from
+/// [`a16_inventory_groups_v1`], the frontier's one peak per level (ADR-0106's
+/// [`PalwArtifactMerkleFrontierV1`]), and the layout checker's single previous key. The materialized
+/// build holds a `Vec<PalwArtifactRowDigestV1>` and a `BTreeSet` of every key instead, which at a 2M
+/// context is what put a producer at 11.5 GiB anon-rss and had the kernel kill it — for a value the
+/// producer only needed in order to compare it with a registered constant.
+///
+/// The layout checker runs over the streamed order, so a group set that does not tile its tensors
+/// from zero is refused here exactly as it is in the materialized constructor. That matters more in
+/// this direction than in the other: the stream has no second chance to notice, because it keeps
+/// nothing to look back at.
+pub fn a16_inventory_root_streamed_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<Hash64, InventoryBuildError> {
+    let groups = a16_inventory_groups_v1(artifact, profile)?;
+    let mut frontier = kaspa_consensus_core::palw_artifact::PalwArtifactMerkleFrontierV1::new();
+    let mut checker = kaspa_consensus_core::palw_artifact::PalwInventoryLayoutCheckerV1::new();
+    let mut layout: Result<(), kaspa_consensus_core::palw_artifact::PalwInventoryError> = Ok(());
+    for (name, layer, slot) in &groups {
+        let mut gate = A16RowGateV1::Group { tensor_name: name.as_str(), layer: *layer };
+        a16_visit_inventory_rows_gated_v1(artifact, profile, Some(*slot), &mut gate, &mut |n, l, start, bytes| {
+            if layout.is_ok() {
+                layout = checker.push(n, l, start, bytes.len() as u32);
+            }
+            frontier.push(kaspa_consensus_core::palw_artifact::artifact_leaf_parts_v1(n, l, start, &bytes));
+            Ok(())
+        })?;
+    }
+    layout.map_err(InventoryBuildError::NotCanonical)?;
+    checker.finish().map_err(InventoryBuildError::NotCanonical)?;
+    frontier.root().ok_or(InventoryBuildError::NotCanonical(kaspa_consensus_core::palw_artifact::PalwInventoryError::Empty))
+}
+
+/// **The whole-profile walk in node order, each row once** — the materialized build's shape, and
+/// the public spelling every existing caller uses.
 pub fn a16_visit_inventory_rows_v1(
     artifact: &Base0ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    sink: &mut A16RowSinkV1<'_>,
+) -> Result<(), InventoryBuildError> {
+    let mut seen: std::collections::BTreeSet<(String, Option<u16>, u32)> = std::collections::BTreeSet::new();
+    a16_visit_inventory_rows_gated_v1(artifact, profile, None, &mut A16RowGateV1::Dedup(&mut seen), sink)
+}
+
+/// **The walk, with the caller's own answer to "which rows".** See [`A16RowGateV1`].
+///
+/// `slots` narrows the walk to one profile node slot, which is what the streamed build uses: a
+/// group is produced by exactly one slot (the lowest that names it), so replaying only that slot
+/// costs one arm's work instead of the whole profile's.
+pub(crate) fn a16_visit_inventory_rows_gated_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    only_slot: Option<u32>,
+    gate: &mut A16RowGateV1<'_>,
     sink: &mut A16RowSinkV1<'_>,
 ) -> Result<(), InventoryBuildError> {
     use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
@@ -378,7 +592,6 @@ pub fn a16_visit_inventory_rows_v1(
     };
     let missing = |name: &str| InventoryBuildError::Operand(OperandError::UnknownTensor { name: name.to_string() });
 
-    let mut seen: std::collections::BTreeSet<(String, Option<u16>, u32)> = std::collections::BTreeSet::new();
 
     // A per-lane triple table for a `Fixed`-width site: the store's own table where it holds one,
     // the single triple expanded across the width where it holds one triple — the engine's own
@@ -428,6 +641,9 @@ pub fn a16_visit_inventory_rows_v1(
     let k_none = [kid(kd::KDESC_A16_RMS_NORM), kid(kd::KDESC_A16_ADD_ELEM), kid(kd::KDESC_A16_MUL_ELEM), kid(kd::KDESC_Q36_SILU)];
 
     for slot in 0..profile.global_node_count() {
+        if only_slot.is_some_and(|want| want != slot) {
+            continue;
+        }
         let Some((node, layer)) = profile.resolve_node_slot(slot) else { continue };
         let name = node.weight_name.as_str();
         let kidv = node.kernel_semantics_id;
@@ -440,7 +656,7 @@ pub fn a16_visit_inventory_rows_v1(
             for token in 0..artifact.embed.len() / width.max(1) {
                 a16_push(
                     sink,
-                    &mut seen,
+                    gate,
                     name,
                     layer,
                     (token * width) as u32,
@@ -456,7 +672,7 @@ pub fn a16_visit_inventory_rows_v1(
             let in_dim = codes.len() / out_dim;
             let tile = node.tile_len as usize;
             for (t, chunk) in codes.chunks(tile.max(1) * in_dim).enumerate() {
-                a16_push(sink, &mut seen, name, layer, (t * tile * in_dim) as u32, chunk.iter().map(|v| *v as u8).collect())?;
+                a16_push(sink, gate, name, layer, (t * tile * in_dim) as u32, chunk.iter().map(|v| *v as u8).collect())?;
             }
             for variant in ["", ".sink0"] {
                 let triple_name = format!("{name}.a16{variant}");
@@ -468,7 +684,7 @@ pub fn a16_visit_inventory_rows_v1(
                 match store_row(&store_key, layer) {
                     Some(bytes) => {
                         let table = lane_table(bytes, out_dim, &triple_name)?;
-                        a16_push_tiled(sink, &mut seen, &triple_name, layer, &table, w, tile)?;
+                        a16_push_tiled(sink, gate, &triple_name, layer, &table, w, tile)?;
                     }
                     None if variant == ".sink0" => {} // a site without the sink convention
                     None => return Err(missing(&triple_name)),
@@ -482,7 +698,7 @@ pub fn a16_visit_inventory_rows_v1(
                         match store_row(&triple_name, layer) {
                             Some(bytes) => {
                                 let table = lane_table(bytes, width, &triple_name)?;
-                                a16_push_tiled(sink, &mut seen, &triple_name, layer, &table, w, node.tile_len as usize)?;
+                                a16_push_tiled(sink, gate, &triple_name, layer, &table, w, node.tile_len as usize)?;
                             }
                             None if variant == ".sink0" => {}
                             None => return Err(missing(&triple_name)),
@@ -495,7 +711,7 @@ pub fn a16_visit_inventory_rows_v1(
                     if bytes.len() != w {
                         return Err(missing(&format!("{name}: a job-scaled site registers exactly one triple")));
                     }
-                    a16_push(sink, &mut seen, name, layer, 0, bytes.to_vec())?;
+                    a16_push(sink, gate, name, layer, 0, bytes.to_vec())?;
                 }
             }
         } else if kidv == k_scores || kidv == k_values {
@@ -503,13 +719,13 @@ pub fn a16_visit_inventory_rows_v1(
             if bytes.len() != w {
                 return Err(missing(&format!("{name}: the attention sites register exactly one triple")));
             }
-            a16_push(sink, &mut seen, name, layer, 0, bytes.to_vec())?;
+            a16_push(sink, gate, name, layer, 0, bytes.to_vec())?;
         } else if kidv == k_soft {
             let bytes = store_row(name, layer).ok_or_else(|| missing(name))?;
             if bytes.len() != 1 {
                 return Err(missing(&format!("{name}: the softmax widening is one registered byte")));
             }
-            a16_push(sink, &mut seen, name, layer, 0, bytes.to_vec())?;
+            a16_push(sink, gate, name, layer, 0, bytes.to_vec())?;
         } else if kidv == k_fused {
             // **ADR-0082 Decision 1: ONE node, FOUR registered operands, and the artifact is
             // unchanged.** A fused site reads exactly the tensors the four nodes it replaces read
@@ -527,20 +743,20 @@ pub fn a16_visit_inventory_rows_v1(
             if up.len() != 1 {
                 return Err(missing(&format!("{}: the softmax widening is one registered byte", t.softmax_up)));
             }
-            a16_push(sink, &mut seen, &t.softmax_up, layer, 0, up.to_vec())?;
+            a16_push(sink, gate, &t.softmax_up, layer, 0, up.to_vec())?;
             for triple in [&t.scores, &t.probs, &t.values] {
                 let bytes = store_row(triple, layer).ok_or_else(|| missing(triple))?;
                 if bytes.len() != w {
                     return Err(missing(&format!("{triple}: the attention sites register exactly one triple")));
                 }
-                a16_push(sink, &mut seen, triple, layer, 0, bytes.to_vec())?;
+                a16_push(sink, gate, triple, layer, 0, bytes.to_vec())?;
             }
         } else if kidv == k_rope {
             let mut offset = 0u32;
             for position in 0..artifact.shape.max_position {
                 let bytes = rope_row_bytes(&artifact.rope, artifact.shape.d_head, position);
                 let len = bytes.len() as u32;
-                a16_push(sink, &mut seen, name, layer, offset, bytes)?;
+                a16_push(sink, gate, name, layer, offset, bytes)?;
                 offset += len;
             }
         } else if k_none.contains(&kidv) {
