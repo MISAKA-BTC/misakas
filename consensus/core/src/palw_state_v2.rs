@@ -17537,6 +17537,24 @@ fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64, escrow_carve: Optio
 // ADR-0088 — the model registry: lines, versions, roles, proposals, evaluations, usage
 // ---------------------------------------------------------------------------------------------
 
+/// **ADR-0151's economic-safety fold** — what the block hands the transition so it can price the
+/// rights a fraudulent Final would realize before a conviction could take them.
+///
+/// Two quantities, and neither is a chain fact the state already holds: the lane's cadence (a
+/// `Params` value, and the transition sees only `PalwStateParamsV2`) and the declared value of one
+/// stolen round (`palw_economic_safety_v1::palw_permit_value_sompi_v1` — consensus bounds a block's
+/// mass and never its fee per unit of mass, so this is the one input an operator declares).
+///
+/// `None` where `Params::palw_economic_safety` is dormant, which is every preset but testnet-12 —
+/// and then every path below is byte-identical to what it was.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwEconomicSafetyFoldV1 {
+    /// `Params::target_time_per_block`, milliseconds: how many one-second rounds fit in a DAA tick.
+    pub target_time_per_block_ms: u64,
+    /// What one stolen algo-10 round is declared to be worth, in sompi.
+    pub permit_value_sompi: u64,
+}
+
 /// **ADR-0088 / ADR-0089: what a block's transition is told beyond its objects and its work.**
 /// `Default` is every shipped preset — every fence dormant — and is byte-identical to the
 /// transition before the struct existed.
@@ -17561,6 +17579,12 @@ pub struct PalwTransitionExtrasV1 {
     /// else already holds. `false` by `Default`, so a caller that does not set it keeps the
     /// behaviour every existing row was written under.
     pub operator_id_unique_active: bool,
+    /// **ADR-0151: `Params::palw_economic_safety` resolved at the block's DAA**, with the two values
+    /// the pricing needs. `Some` past the fence: an execution quantum matures before it may be
+    /// spent, a convicted Final's unused quanta are forfeit, a Valid seat's lock prices the rights
+    /// still realizable inside the gap and carries a tenth of margin. `None` by `Default` and on
+    /// every preset but testnet-12, and then nothing below changes.
+    pub economic_safety: Option<PalwEconomicSafetyFoldV1>,
     /// **ADR-0145: `Params::palw_canonical_work_daa()` — the fence's HEIGHT, not a yes/no at this
     /// block.** Past it the weight, exposure and work-price paths read the work the chain DERIVED
     /// from the class's graph instead of the step-leaf count its registrant declared.
@@ -41418,6 +41442,7 @@ pub(crate) mod tests {
 
         fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
             PalwTransitionExtrasV1 {
+                economic_safety: None,
                 work_target: None,
                 work_target_active: false,
                 artifact_root_ownership_active: false,
@@ -41658,6 +41683,7 @@ pub(crate) mod tests {
             assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
             // Below the fence the same actions write nothing.
             let dormant = PalwTransitionExtrasV1 {
+                economic_safety: None,
                 work_target: None,
                 work_target_active: false,
                 artifact_root_ownership_active: false,

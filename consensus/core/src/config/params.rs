@@ -1381,6 +1381,24 @@ pub struct Params {
     /// `None` on every preset; hashed Some-only. **Arming it changes the UNIT of `safe_weight` from
     /// step leaves to MAC-equivalents**, so it needs a drill that crosses it before any height is
     /// chosen — ADR-0144 §6 item 0: the design is proven first and the date after.
+    /// **ADR-0151's economic-safety bundle, as ONE fence** (the operator, 2026-09-22/23).
+    ///
+    /// Five rules that are unsound apart and correct together, so they may not arm at five heights:
+    ///
+    /// * an execution quantum matures before it may be spent
+    ///   ([`crate::palw_economic_safety_v1::palw_exec_quantum_matures_at_v1`]);
+    /// * a convicted Final's unused quanta are forfeit at every stage that can still hold one;
+    /// * `palw_claim_extra_economic_rights_v1` prices the rights a lie can realize before a
+    ///   conviction could take them, instead of returning zero;
+    /// * a Valid seat's lock carries a tenth of margin rather than one sompi;
+    /// * a permit records the quantum it came from, so the rights are traceable to their Final.
+    ///
+    /// Arming the pricing without the maturity would collateralise rights that are already
+    /// recoverable; arming the maturity without the pricing would freeze honest permits and still
+    /// leave the residual free; arming the forfeiture without the lineage would have nothing to
+    /// forfeit against. Hashed Some-only. `None` on every preset but testnet-12, which arms it from
+    /// genesis.
+    pub palw_economic_safety: Option<ForkActivation>,
     pub palw_canonical_work: Option<ForkActivation>,
     /// **A class is not judged by its own registrant** (the 2026-09-19 reward audit's F3, ADR-0145
     /// invariants I3 and I4). `palw_panel_eligible_bonds_v2` draws only from bonds that declared
@@ -5674,6 +5692,7 @@ impl Params {
             palw_class_receipt_window,
             palw_execution_quanta,
             palw_public_model_source_required,
+            palw_economic_safety: _,
             palw_canonical_work,
             palw_admission_independence,
             palw_context_ladder,
@@ -6285,6 +6304,7 @@ impl Params {
             palw_class_receipt_window,
             palw_execution_quanta,
             palw_public_model_source_required,
+            palw_economic_safety,
             palw_canonical_work,
             palw_admission_independence,
             palw_context_ladder,
@@ -6619,6 +6639,13 @@ impl Params {
             }
         }
         // ADR-0145's canonical-work fence.
+        match palw_economic_safety.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
         match palw_canonical_work.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
@@ -7144,6 +7171,7 @@ impl Params {
             palw_class_receipt_window,
             palw_execution_quanta,
             palw_public_model_source_required,
+            palw_economic_safety: _,
             palw_canonical_work,
             palw_admission_independence,
             palw_context_ladder,
@@ -8141,6 +8169,7 @@ impl Params {
             palw_class_receipt_window: self.palw_class_receipt_window,
             palw_execution_quanta: self.palw_execution_quanta,
             palw_public_model_source_required: None,
+            palw_economic_safety: None,
             palw_canonical_work: None,
             palw_admission_independence: None,
             palw_context_ladder: self.palw_context_ladder,
@@ -9102,7 +9131,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
-    palw_canonical_work: None,
+    palw_economic_safety: None,
+            palw_canonical_work: None,
     palw_admission_independence: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
@@ -9312,7 +9342,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
-    palw_canonical_work: None,
+    palw_economic_safety: None,
+            palw_canonical_work: None,
     palw_admission_independence: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
@@ -9504,7 +9535,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
-    palw_canonical_work: None,
+    palw_economic_safety: None,
+            palw_canonical_work: None,
     palw_admission_independence: None,
     palw_context_ladder: None,
     // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
@@ -15065,7 +15097,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_class_receipt_window: None,
     palw_execution_quanta: None,
     palw_public_model_source_required: None,
-    palw_canonical_work: None,
+    palw_economic_safety: None,
+            palw_canonical_work: None,
     palw_admission_independence: None,
     // **ARMED on devnet at genesis** — the testnet-11 5f genesis card §1's set, rehearsed here
     // first. Without the ladder the registered class cannot price a wide row, and the ladder is

@@ -162,14 +162,21 @@ pub const fn palw_permit_value_sompi_v1(permit_fee_ceiling_sompi: u64) -> u64 {
     permit_fee_ceiling_sompi
 }
 
-/// **testnet-12's declared ceiling for one stolen round: 1 MSK.**
+/// **testnet-12's declared ceiling for one stolen round: 0.01 MSK** — a hundred minimum-relay fees.
 ///
-/// A placeholder with a job, not a measurement: the lane's fee flow on this network is what t12
-/// exists to measure, and until it has, a round is priced at one whole MSK — far above any fee a
-/// near-empty testnet round actually carries, so the residual it feeds into `max_fraud_gain` errs
-/// high. **Mainnet must replace this with the measured figure**, which is ADR-0151's stated reason
-/// for running the short maturity here at all.
-pub const PALW_T12_PERMIT_FEE_CEILING_SOMPI: u64 = 100_000_000;
+/// Anchored rather than invented: `PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE` is 10,000 sompi, and
+/// a round block that filled itself with a hundred standard transactions at the floor rate would pay
+/// its holder 1,000,000. Restated here rather than imported because that constant lives in `mining`,
+/// downstream of consensus — a consensus rule may not depend on a mempool policy, and a rule that
+/// silently tracked one would change with it.
+///
+/// **This is the figure testnet-12 exists to replace.** The residual is
+/// `min(quanta, rounds_in_gap) × this`, and on the held 2M row the binding term is 216,000 rounds —
+/// so the whole collateral requirement is linear in a number nobody has measured. At 0.01 MSK the
+/// residual is ~2,160 MSK against a 2,703 MSK claim gain, which is affordable; ten times that and it
+/// is not, and the maturity would have to lengthen. Measuring the lane's real fee flow is the reason
+/// ADR-0151 runs the SHORT maturity on this network at all.
+pub const PALW_T12_PERMIT_FEE_CEILING_SOMPI: u64 = 1_000_000;
 
 /// **Whether a Final's rights are forfeit** — the revocation half of the bundle.
 ///
@@ -216,7 +223,11 @@ mod tests {
     const WINDOW_CHALLENGE: u64 = 1_200;
     const WINDOW_COURT: u64 = 3_000;
     const CADENCE_MS: u64 = 120_000;
-    const QUANTA: u32 = 2_963;
+    /// **The quanta one held-2M Final mints: 270,029, not 2,963.** Execution quanta mint from the
+    /// UNCLAMPED CanonicalWork scalar ("a heavier verified job earns more spend-once tickets"), so
+    /// the work-price unit that clamps the lottery does not clamp this. The first reading applied
+    /// that clamp and under-counted by 91x.
+    const QUANTA: u32 = 270_029;
     const PERMIT: u64 = PALW_T12_PERMIT_FEE_CEILING_SOMPI;
 
     fn facts(extra: u128) -> PalwClaimFraudFactsV1 {
@@ -245,14 +256,17 @@ mod tests {
     /// **testnet-12 runs the SHORT maturity, so the residual is real and priced.**
     ///
     /// 1,200 DAA of maturity against a 3,000-DAA liability horizon leaves 1,800 DAA in which a right
-    /// is both spendable and still convictable. At 120 rounds a DAA that is 216,000 rounds — far more
-    /// than the mint's 2,963 — so every quantum is realizable and the cap that bites is the mint's.
+    /// is both spendable and still convictable. At 120 rounds a DAA that is 216,000 rounds, against a
+    /// mint of 270,029 quanta — so the GAP is what binds, and lengthening the maturity is what
+    /// shrinks the bill.
     #[test]
     fn the_short_maturity_prices_every_quantum() {
         assert_eq!(palw_exec_quantum_maturity_daa_v1(WINDOW_CHALLENGE, WINDOW_COURT), WINDOW_CHALLENGE);
         assert_eq!(palw_exec_quantum_matures_at_v1(10_000, WINDOW_CHALLENGE, WINDOW_COURT), 11_200);
         assert_eq!(palw_rounds_per_daa_v1(CADENCE_MS), 120);
-        assert_eq!(residual(), u128::from(QUANTA) * u128::from(PERMIT), "the mint's own count is the binding cap");
+        // 1,800 DAA x 120 rounds = 216,000 rounds, against 270,029 quanta: the GAP binds, not the
+        // mint. That is the term a longer maturity shrinks, and the reason the knob works at all.
+        assert_eq!(residual(), 216_000 * u128::from(PERMIT), "the rounds in the gap are the binding cap");
         assert!(residual() > 0, "the point of the short maturity is that this path is REACHED");
     }
 
@@ -301,6 +315,6 @@ mod tests {
     #[test]
     fn a_permit_is_priced_at_fees_not_at_a_subsidy() {
         assert_eq!(palw_permit_value_sompi_v1(PERMIT), PERMIT);
-        assert_eq!(PALW_T12_PERMIT_FEE_CEILING_SOMPI, 100_000_000, "one MSK a stolen round, until t12 measures it");
+        assert_eq!(PALW_T12_PERMIT_FEE_CEILING_SOMPI, 1_000_000, "a hundred minimum-relay fees a round, until t12 measures it");
     }
 }
