@@ -159,6 +159,32 @@ card. That search is owed as a drill before deployment (§4) and belongs in the 
   its declared collateral was never gate-derived. `shipped_presets_have_pinned_fingerprints` and
   `every_genesis_commits_to_the_premine_this_build_mints` confirm every other preset is byte-identical.
 
+## 3a. The live evidence, taken 2026-09-23
+
+Run with the binary being shipped (`de857a71`, a release build of this branch), two nodes on a fresh
+testnet-12 genesis and no class artifact — the point being that the clock moves without one.
+
+```
+[palw-heartbeat-miner] starting — bondless heartbeat lane (ADR-0060), fee-only, one thread
+[palw-heartbeat-miner] heartbeat #1 8b557c1e… — the clock ticked
+[dns-bft] anchor=a8cabac47b96fe30…          ← the pinned t12 genesis
+Consensus rule manifest: … palw_work_target=1 palw_independence=1
+PALW court certified end-to-end for: PALW-BASE-0, PALW-QWEN36, PALW-QWEN25-A16, PALW-QWEN25-A16-V5
+```
+
+Four heartbeats in the first two minutes, eight blocks relayed to the peer, zero errors. **"Bondless"
+is D3 in the node's own words**: the lane that carries this chain's clock takes no bond, so no
+exposure ceiling and no collateral figure can stop it. That is the premise the collateral reduction
+rests on, now observed rather than argued.
+
+Restart and partition-rejoin were clean (0 errors, the surviving node kept minting, the returning one
+rejoined). **One drill defect worth recording rather than hiding:** the first pass used `--connect`
+for the peer links and measured an IBD node that never synced. `--connect` puts a node in
+outbound-only mode and it does not listen for inbound P2P at all — there is no "P2P Server starting"
+line — so the drill had silently built a topology with no listener. The live fleet already encodes
+this distinction (`--addpeer` on the two hosts that accept inbound, `--connect` on the local-only
+seats) and the switch plan must preserve it exactly.
+
 ## 4. The evidence still owed — a DEPLOYMENT blocker for testnet-12
 
 The collateral was lowered on a rule-level proof: `consensus/tests/palw_t12_liveness.rs` shows
