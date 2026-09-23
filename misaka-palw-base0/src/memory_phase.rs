@@ -15,6 +15,10 @@
 //! This crate carries no logger; the node arms [`arm_execution_phase_sink_v1`] with its own
 //! (`kaspad`'s `info!`), and an unarmed sink costs one atomic load per bracket. Nothing here feeds
 //! back into a figure: the profile is derived, and these lines are how it is checked against a run.
+//!
+//! **This module is off the execution path** (`tests/float_free.rs`, `EXEMPT`): it turns integer
+//! facts the engine hands it into GiB for a person, and that formatting is the only float in the
+//! attempt's whole path. The engine passes byte counts and milliseconds, never a float.
 
 use std::sync::OnceLock;
 
@@ -64,12 +68,18 @@ pub fn process_memory_v1() -> Option<ProcessMemoryV1> {
                 .map(|kb| kb.saturating_mul(1024))
                 .unwrap_or(0)
         };
-        Some(ProcessMemoryV1 { anon: field("Anonymous:"), file: field("Rss:").saturating_sub(field("Anonymous:")), swap: field("Swap:"), rss: field("Rss:") })
+        let (rss, anon, swap) = (field("Rss:"), field("Anonymous:"), field("Swap:"));
+        Some(ProcessMemoryV1 { anon, file: rss.saturating_sub(anon), swap, rss })
     }
     #[cfg(not(target_os = "linux"))]
     {
         None
     }
+}
+
+/// The process's anonymous bytes now, or zero where the platform cannot say.
+pub fn process_anon_bytes_v1() -> u64 {
+    process_memory_v1().map(|m| m.anon).unwrap_or(0)
 }
 
 pub fn gib(bytes: u64) -> f64 {
@@ -82,4 +92,85 @@ pub fn process_memory_line_v1() -> String {
         Some(m) => format!("process anon {:.2} file {:.2} swap {:.2} GiB", gib(m.anon), gib(m.file), gib(m.swap)),
         None => "process memory n/a (not Linux)".to_string(),
     }
+}
+
+/// What one bracket of an attempt reports — integers, as the engine holds them.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwBracketFactsV1<'a> {
+    pub at: &'a str,
+    pub positions: usize,
+    pub prefill: usize,
+    pub elapsed_ms: u64,
+    pub kv_bytes: u64,
+    pub storage: &'a str,
+    pub capture_bytes: u64,
+    pub capture_kind: &'a str,
+    pub filled_leaves: u64,
+    pub leaves: u64,
+    pub leg_bytes: u64,
+    /// The process's anonymous bytes when the attempt's cache was constructed — the baseline the
+    /// growth is measured from.
+    pub anon_at_start: u64,
+}
+
+/// One bracket line: the engine's terms, the process's, and the growth the terms do not explain.
+pub fn bracket_line_v1(f: &PalwBracketFactsV1<'_>) -> String {
+    let seconds = f.elapsed_ms as f64 / 1000.0;
+    let rate = f.positions as f64 / seconds.max(1e-3);
+    let (process, growth, unaccounted) = match process_memory_v1() {
+        Some(m) => {
+            let growth = m.anon.saturating_sub(f.anon_at_start);
+            let engine = f.kv_bytes.saturating_add(f.capture_bytes).saturating_add(f.leg_bytes);
+            (
+                format!("process anon {:.2} file {:.2} swap {:.2} GiB", gib(m.anon), gib(m.file), gib(m.swap)),
+                format!("{:.2} GiB", gib(growth)),
+                format!("{:+.2} GiB", gib(growth) - gib(engine)),
+            )
+        }
+        None => ("process memory n/a (not Linux)".to_string(), "n/a".to_string(), "n/a".to_string()),
+    };
+    format!(
+        "attempt {}: positions {} of {} ({rate:.1}/s, {seconds:.0} s); kv cache {:.2} GiB ({}); capture {:.2} GiB ({}, {} of {} leaves); \
+         checkpoint leg {:.2} GiB; {process}; anon growth {growth} − engine terms = {unaccounted}",
+        f.at,
+        f.positions,
+        f.prefill,
+        gib(f.kv_bytes),
+        f.storage,
+        gib(f.capture_bytes),
+        f.capture_kind,
+        f.filled_leaves,
+        f.leaves,
+        gib(f.leg_bytes),
+    )
+}
+
+/// The line at the capture's sealing.
+pub fn sealed_line_v1(leaves: u64, kv_bytes: u64, elapsed_ms: u64) -> String {
+    format!(
+        "attempt capture sealed: {leaves} leaves; kv cache {:.2} GiB; {}; {:.0} s",
+        gib(kv_bytes),
+        process_memory_line_v1(),
+        elapsed_ms as f64 / 1000.0
+    )
+}
+
+/// The line at the return: what the execution hands back, with its cache already dropped.
+pub fn returning_line_v1(tiles: usize, retained_tree: Option<usize>, checkpoint_leaves: usize, chunk_sets: usize, elapsed_ms: u64) -> String {
+    format!(
+        "attempt returning: {tiles} tiles, tree {}, {checkpoint_leaves} checkpoint leaves ({chunk_sets} chunk sets); cache dropped; {}; {:.0} s",
+        retained_tree.map(|n| format!("{n} retained")).unwrap_or_else(|| "none".into()),
+        process_memory_line_v1(),
+        elapsed_ms as f64 / 1000.0
+    )
+}
+
+/// The line once the retained material is encoded.
+pub fn material_line_v1(bytes: usize, folded: bool) -> String {
+    format!(
+        "attempt material encoded: {:.2} GiB ({}); {}",
+        gib(bytes as u64),
+        if folded { "folded, v2" } else { "dense tiles, v1" },
+        process_memory_line_v1()
+    )
 }

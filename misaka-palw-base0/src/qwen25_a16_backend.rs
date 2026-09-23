@@ -457,30 +457,31 @@ fn a16_execute_streaming_v1(
 
     // **The memory brackets** (`memory_phase`): what the engine holds, term by term, beside what the
     // process holds — at the cache's construction, every bracket of positions, and at each seal.
+    // Integer facts only on this path (`tests/float_free.rs`): the GiB and the rate are formatted
+    // in `memory_phase`, which is off the execution path.
     let started = std::time::Instant::now();
-    let anon_at_start = crate::memory_phase::process_memory_v1().map(|m| m.anon).unwrap_or(0);
+    let anon_at_start = crate::memory_phase::process_anon_bytes_v1();
     let bracket = |at: &str, positions: usize, cache: &A16Cache, capture: &crate::legs::Base0CaptureSinkV1, leg: &crate::legs::Base0CheckpointCaptureV1| {
         crate::memory_phase::execution_phase_v1(|| {
-            use crate::memory_phase::gib;
-            let (kv, cap, leg_bytes) = (cache.resident_bytes_v1(), capture.retained_bytes_v1(), leg.retained_bytes_v1());
-            let elapsed = started.elapsed().as_secs_f64();
-            let process = crate::memory_phase::process_memory_v1();
-            let growth = process.map(|m| m.anon.saturating_sub(anon_at_start));
-            format!(
-                "attempt {at}: positions {positions} of {prefill} ({:.1}/s, {elapsed:.0} s); kv cache {:.2} GiB ({}); capture {:.2} GiB ({:?}, \
-                 {} of {} leaves); checkpoint leg {:.2} GiB; {}; anon growth {} − engine terms = {}",
-                positions as f64 / elapsed.max(1e-3),
-                gib(kv),
-                cache.storage().name(),
-                gib(cap),
-                capture.kind(),
-                capture.progress().0,
-                capture.progress().1,
-                gib(leg_bytes),
-                crate::memory_phase::process_memory_line_v1(),
-                growth.map(|g| format!("{:.2} GiB", gib(g))).unwrap_or_else(|| "n/a".into()),
-                growth.map(|g| format!("{:+.2} GiB", gib(g) - gib(kv + cap + leg_bytes))).unwrap_or_else(|| "n/a".into()),
-            )
+            let (filled, leaves) = capture.progress();
+            let kind = match capture.kind() {
+                crate::legs::Base0CaptureKindV1::DenseTiles => "DenseTiles",
+                crate::legs::Base0CaptureKindV1::Fold => "Fold",
+            };
+            crate::memory_phase::bracket_line_v1(&crate::memory_phase::PalwBracketFactsV1 {
+                at,
+                positions,
+                prefill,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                kv_bytes: cache.resident_bytes_v1(),
+                storage: cache.storage().name(),
+                capture_bytes: capture.retained_bytes_v1(),
+                capture_kind: kind,
+                filled_leaves: filled,
+                leaves,
+                leg_bytes: leg.retained_bytes_v1(),
+                anon_at_start,
+            })
         });
     };
     bracket("cache constructed", 0, &cache, &capture, &checkpoints);
@@ -586,13 +587,7 @@ fn a16_execute_streaming_v1(
     let checkpoints = checkpoints.finish_canonical_v1().map_err(|e| format!("{e:?}"))?;
     let captured = capture.finish(max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
     crate::memory_phase::execution_phase_v1(|| {
-        format!(
-            "attempt capture sealed: {} leaves; kv cache {:.2} GiB; {}; {:.0} s",
-            captured.step_leaf_count,
-            crate::memory_phase::gib(cache.resident_bytes_v1()),
-            crate::memory_phase::process_memory_line_v1(),
-            started.elapsed().as_secs_f64()
-        )
+        crate::memory_phase::sealed_line_v1(captured.step_leaf_count, cache.resident_bytes_v1(), started.elapsed().as_millis() as u64)
     });
 
     // **This class's own trace scheme, not the floor's.** The retained rows ARE the selecting
@@ -624,14 +619,12 @@ fn a16_execute_streaming_v1(
     // the checkpoint leg and the logits rows.
     drop(cache);
     crate::memory_phase::execution_phase_v1(|| {
-        format!(
-            "attempt returning: {} tiles, tree {}, {} checkpoint leaves ({} chunk sets); cache dropped; {}; {:.0} s",
+        crate::memory_phase::returning_line_v1(
             tiles.tiles.len(),
-            step_tree.as_ref().map(|t| format!("{} retained", t.retained_len())).unwrap_or_else(|| "none".into()),
+            step_tree.as_ref().map(|t| t.retained_len()),
             checkpoints.leaves.len(),
             checkpoints.chunks.len(),
-            crate::memory_phase::process_memory_line_v1(),
-            started.elapsed().as_secs_f64()
+            started.elapsed().as_millis() as u64,
         )
     });
 
@@ -1920,14 +1913,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             } else {
                 crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?
             };
-            crate::memory_phase::execution_phase_v1(|| {
-                format!(
-                    "attempt material encoded: {:.2} GiB ({}); {}",
-                    crate::memory_phase::gib(material.len() as u64),
-                    if folds { "folded, v2" } else { "dense tiles, v1" },
-                    crate::memory_phase::process_memory_line_v1()
-                )
-            });
+            crate::memory_phase::execution_phase_v1(|| crate::memory_phase::material_line_v1(material.len(), folds));
             return Ok(PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
