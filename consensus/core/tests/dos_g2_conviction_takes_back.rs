@@ -81,6 +81,39 @@ fn step(
     (s, d)
 }
 
+/// [`step`] for an objects-only block, handing the fold's refusal back.
+fn try_step(
+    p: &Params,
+    sp: &PalwStateParamsV2,
+    parent: &PalwChainStateV2,
+    daa: u64,
+    objects: &[PalwConsensusObjectV2],
+    audit: bool,
+) -> Result<PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+    let f = flags(p, daa);
+    let mut e: PalwTransitionExtrasV1 = extras(p, daa);
+    e.audit_2026_09_23_active = audit;
+    if !audit {
+        e.settled_anchor_depth = None;
+    }
+    apply_palw_transition_v7(
+        parent,
+        sp,
+        None,
+        &ctx(0x6200_0000 + daa, daa, daa, 0),
+        objects,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        f.unavailable_abstains,
+        f.capability_bound,
+        f.uncertified_weightless,
+        f.da_court,
+        &e,
+    )
+    .map(|(s, _, _)| s)
+}
+
 /// The floor's registry row (what `step_model_registry` writes at a span boundary), so the fold's
 /// probe counters have a row to move.
 fn with_floor_lifecycle(p: &Params, s: &PalwChainStateV2) -> PalwChainStateV2 {
@@ -143,6 +176,7 @@ struct Finalized {
     floor: Hash64,
     claim_id: Hash64,
     execution_root: Hash64,
+    executor_bond: PalwBondKeyV2,
     executor_pubkey: Vec<u8>,
     valid_seats: Vec<PalwBondKeyV2>,
     before_final: PalwChainStateV2,
@@ -230,6 +264,7 @@ fn drive_to_final(audit: bool) -> Finalized {
         floor,
         claim_id,
         execution_root,
+        executor_bond: exec_bond,
         executor_pubkey: exec_pk,
         valid_seats,
         before_final,
@@ -260,18 +295,26 @@ fn attempt_on_root(
 /// `dos_repro_1`'s contradiction: an `ExecutorEquivocation` carriage, which the acceptance layer
 /// verifies and the fold takes as convicting the execution.
 fn false_valid(f: &Finalized, accused: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+    false_valid_signed_as(f, accused, f.executor_bond, f.executor_pubkey.clone())
+}
+
+/// [`false_valid`] with the equivocation accusing `named` and carried under `key` — the executor's
+/// own in [`false_valid`], anybody's in a forgery.
+fn false_valid_signed_as(f: &Finalized, accused: PalwBondKeyV2, named: PalwBondKeyV2, key: Vec<u8>) -> PalwConsensusObjectV2 {
     let attestation = |root: u64| kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
         version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,
         executor_id: h(0x1),
         job_context_hash: h(0x2),
         full_logits_trace_root: h(root),
         committed_root: h(root),
-        bond_outpoint: accused.0,
+        bond_outpoint: named.0,
         signature: Vec::new(),
     };
+    // The EXECUTOR's equivocation — its bond, the key it registered (`f.executor_pubkey` below).
+    // Past the 2026-09-24 review fix a carriage accusing anyone else is refused as forged.
     let equivocation = kaspa_consensus_core::palw_carriage::PalwEquivocationCarriageV1 {
         version: kaspa_consensus_core::palw_carriage::PALW_CARRIAGE_VERSION_V1,
-        accused_bond_outpoint: accused.0,
+        accused_bond_outpoint: named.0,
         certificate: kaspa_consensus_core::palw_slash::PalwClassContradictionCertificateV1 {
             version: kaspa_consensus_core::palw_slash::PALW_S_OBJECT_VERSION_V3,
             job_context: kaspa_consensus_core::palw_base0_profile::rc_job_context(&floor_profile(), 512, 256),
@@ -291,7 +334,7 @@ fn false_valid(f: &Finalized, accused: PalwBondKeyV2) -> PalwConsensusObjectV2 {
             signed_daa: 0,
             signature: Vec::new(),
         },
-        executor_pubkey: f.executor_pubkey.clone(),
+        executor_pubkey: key,
         contradiction: PalwPanelContradictionV1::ExecutorEquivocation(equivocation),
     };
     let evidence = borsh::to_vec(&payload).unwrap();
@@ -521,4 +564,54 @@ fn dos_g2_pruning_every_ticket_does_not_reopen_the_lottery() {
         "a pending snapshot the conviction emptied is dropped, as rotation drops one with no domain"
     );
     reloads(p, &s);
+}
+
+/// **Review (2026-09-24): a forged equivocation convicts nobody past the fence.**
+///
+/// `PanelFalseValid` with an `ExecutorEquivocation` contradiction was verified under
+/// `payload.executor_pubkey` and the bond the carriage names — both fields of the evidence — and
+/// nothing bound either to the claim (`review_economic_forged_false_valid` shows a stranger's real
+/// ML-DSA signatures pass the stateless verifier). With #7/#8 the same object voided an honest
+/// `Final`. Past the fence the fold requires the carriage to accuse the claim's executor bond and
+/// the key to be the one that bond registered, so neither forgery folds: the claim stays `Final`,
+/// its weight and the seat's collateral untouched. The executor's own equivocation still convicts
+/// (`dos_g2_a_conviction_after_final_takes_back_what_the_final_counted`).
+///
+/// Fails without the fix: both forgeries fold, the seat loses its lock and the Final is voided.
+#[test]
+fn dos_g2_review_a_forged_equivocation_convicts_nobody_past_the_fence() {
+    let f = drive_to_final(true);
+    let (p, sp) = (&f.p, &f.sp);
+    let seat = f.valid_seats[0];
+    let stranger_key = vec![0x5A; f.executor_pubkey.len()];
+    let forgeries = [
+        ("a stranger's key, accusing the seat", false_valid_signed_as(&f, seat, seat, stranger_key.clone())),
+        ("a stranger's key, naming the executor bond", false_valid_signed_as(&f, seat, f.executor_bond, stranger_key)),
+        ("the executor's key, accusing the seat", false_valid_signed_as(&f, seat, seat, f.executor_pubkey.clone())),
+    ];
+    for (what, object) in forgeries {
+        let refused = try_step(p, sp, &f.at_final, f.daa + 5, &[object], true);
+        assert!(
+            matches!(&refused, Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::ObjectiveOffenceRefused(_, why)) if why.contains("ExecutorEquivocation")),
+            "{what}: {refused:?}"
+        );
+    }
+    assert!(matches!(f.at_final.claim(&f.claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the honest Final stands");
+    // The executor's own equivocation is still a conviction.
+    let (s, _) = step(p, sp, &f.at_final, f.daa + 5, &[false_valid(&f, seat)], PalwBlockWorkV3::None, Hash64::default(), 0, true);
+    assert!(matches!(s.claim(&f.claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }), "the real contradiction convicts");
+}
+
+/// The review's forgery below the fence, where the rule is unchanged: a stranger's key accusing the
+/// seat folds and slashes the seat's lock.
+#[test]
+#[ignore = "PRE-FENCE DEFECT RECORD: below palw_audit_2026_09_23 a PanelFalseValid whose ExecutorEquivocation is signed by any key and names any bond convicts an honest Valid seat (review_economic_forged_false_valid); closed past the fence"]
+fn dos_g2_review_a_forged_equivocation_convicts_below_the_fence_defect_record() {
+    let f = drive_to_final(false);
+    let (p, sp) = (&f.p, &f.sp);
+    let seat = f.valid_seats[0];
+    let before = f.at_final.bond(&seat).unwrap().collateral;
+    let forged = false_valid_signed_as(&f, seat, seat, vec![0x5A; f.executor_pubkey.len()]);
+    let s = try_step(p, sp, &f.at_final, f.daa + 5, &[forged], false).expect("the forgery folds below the fence");
+    assert!(s.bond(&seat).unwrap().collateral < before, "and slashes the honest seat");
 }

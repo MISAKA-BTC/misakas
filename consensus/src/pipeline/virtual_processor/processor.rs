@@ -1869,7 +1869,18 @@ impl VirtualStateProcessor {
                                 // (state, params, point, object), so every node drops the same
                                 // ones. A dropped object simply does not fold, which is what "the
                                 // transaction was invalid" ought to mean.
-                                let (objects, folded) = self.palw_v2_accepted_objects(state, state_params, &point, objects, current);
+                                // The class of this block's own attempt, read off its header, for the
+                                // rehearsal's reservation (2026-09-24 DoS audit review of #11). An
+                                // undecodable commitment reserves nothing — admission refuses it below.
+                                let own_attempt_class = kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+                                    .then(|| {
+                                        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+                                            .ok()
+                                            .map(|envelope| envelope.attempt.class_id)
+                                    })
+                                    .flatten();
+                                let (objects, folded) =
+                                    self.palw_v2_accepted_objects(state, state_params, &point, objects, current, own_attempt_class);
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -3985,13 +3996,19 @@ impl VirtualStateProcessor {
         let tip_point =
             kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { block: tip, daa_score: tip_daa, blue_score: 0, subsidy: 0 };
         let work = self.palw_work_target_fold_for(&tip_point);
-        Some(kaspa_consensus_core::palw_model_registry_v1::palw_model_registry_read_v1(
+        // 2026-09-24 DoS audit review of #11: the read asks the class gate's questions — free-prompt
+        // claims counted past the audit fence, and room (not the cap) where the fold judges by room —
+        // so a producer's pre-check (`registry_holds_class`) refuses what the fold will refuse.
+        let panel_room_enforced = self.palw_work_target_at(tip_daa) && fold.as_ref().is_some_and(|f| f.governs_at(tip_daa));
+        Some(kaspa_consensus_core::palw_model_registry_v1::palw_model_registry_read_v2(
             &state,
             state_params,
             tip_daa,
             self.palw_model_registry.map(|f| f.daa_score()),
             fold.as_ref(),
             work.as_ref(),
+            self.palw_audit_2026_09_23_at(tip_daa),
+            panel_room_enforced,
         ))
     }
 
@@ -4465,6 +4482,15 @@ impl VirtualStateProcessor {
         let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
         let pricing = self.palw_fp_pricing();
 
+        // 2026-09-24 DoS audit #5: a convicted execution's quanta are refused at admission, so
+        // listing them would send a producer to build a block the network disqualifies. The set is
+        // built ONCE per call (the audit review): asking `palw_execution_root_is_forfeited_v1` per
+        // claim scanned every consumed offence for every Final free-prompt claim, O(claims ×
+        // offences) on the producer's path to being paid.
+        let forfeited = state
+            .last_point()
+            .is_some_and(|point| self.palw_audit_2026_09_23_at(point.daa_score))
+            .then(|| state.palw_forfeited_execution_roots_v1());
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
             if claim.bond != key {
@@ -4472,10 +4498,7 @@ impl VirtualStateProcessor {
             }
             let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { continue };
             let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else { continue };
-            // 2026-09-24 DoS audit #5: a convicted execution's quanta are refused at admission, so
-            // listing them would send a producer to build a block the network disqualifies.
-            let forfeit_armed = state.last_point().is_some_and(|point| self.palw_audit_2026_09_23_at(point.daa_score));
-            if forfeit_armed && state.palw_execution_root_is_forfeited_v1(&claim.execution_root) {
+            if forfeited.as_ref().is_some_and(|roots| roots.contains(&claim.execution_root)) {
                 continue;
             }
             // ADR-0148: the admission's own target expression for the claim's era — the pooled
@@ -4580,10 +4603,14 @@ impl VirtualStateProcessor {
         // audit, fix #1). One predicate for the lock and the burn beside it.
         let depth = self.palw_second_clock_depth_at(state, now_daa);
         let duty_gate = self.palw_audit_2026_09_23_at(now_daa);
+        // The second clock is bounded per obligation (2026-09-24 DoS audit review of fix #3): at
+        // most `2 × window_court` past the DAA clock. Read only where `depth` is `Some`; a node with
+        // no state params has no window to bound by and keeps v4's unbounded hold (fail closed).
+        let window_court = self.palw_state_params_v2.as_ref().map(|params| params.window_court()).unwrap_or(u64::MAX);
         state
             .bonds_iter()
             .filter(|(key, record)| {
-                kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v4(
+                kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v5(
                     state,
                     key,
                     record,
@@ -4591,6 +4618,7 @@ impl VirtualStateProcessor {
                     self.palw_bond_withdrawal_delay_at(now_daa),
                     depth,
                     duty_gate,
+                    window_court,
                 )
             })
             .map(|(key, _)| key.0)
@@ -4968,10 +4996,14 @@ impl VirtualStateProcessor {
         // The same predicate as the lock beside it — see `palw_v2_locked_bond_outpoints`.
         let depth = self.palw_second_clock_depth_at(state, now_daa);
         let duty_gate = self.palw_audit_2026_09_23_at(now_daa);
+        // The second clock is bounded per obligation (2026-09-24 DoS audit review of fix #3): at
+        // most `2 × window_court` past the DAA clock. Read only where `depth` is `Some`; a node with
+        // no state params has no window to bound by and keeps v4's unbounded hold (fail closed).
+        let window_court = self.palw_state_params_v2.as_ref().map(|params| params.window_court()).unwrap_or(u64::MAX);
         state
             .bonds_iter()
             .filter(|(key, record)| {
-                !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v4(
+                !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v5(
                     state,
                     key,
                     record,
@@ -4979,6 +5011,7 @@ impl VirtualStateProcessor {
                     self.palw_bond_withdrawal_delay_at(now_daa),
                     depth,
                     duty_gate,
+                    window_court,
                 )
             })
             .map(|(key, record)| (key.0, kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record)))
@@ -5040,7 +5073,7 @@ impl VirtualStateProcessor {
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block).0
+        self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block, None).0
     }
 
     /// Objects a test hands the filter directly, carried by nobody: `PALW_RENT_UNPRICED` so the
@@ -5067,7 +5100,7 @@ impl VirtualStateProcessor {
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
-        self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block)
+        self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block, None)
     }
 
     /// [`Self::palw_v2_accepted_objects`] with each object's carrier fee spelled out, so the
@@ -5082,7 +5115,7 @@ impl VirtualStateProcessor {
         block: BlockHash,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         let objects = objects.into_iter().map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee }).collect();
-        self.palw_v2_accepted_objects(state, state_params, point, objects, block)
+        self.palw_v2_accepted_objects(state, state_params, point, objects, block, None)
     }
 
     /// **The REAL one-shot block fold, over the whole accepted list, using the same fences the
@@ -5170,6 +5203,10 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: Vec<PalwCarriedObjectV1>,
         block: BlockHash,
+        // The class of the block's own attempt (from its header), `None` for a block with none: past
+        // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
+        // rehearsal must refuse the commitments the fold will.
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
         //
@@ -5638,7 +5675,10 @@ impl VirtualStateProcessor {
                             self.palw_capability_bound_at(point.daa_score),
                             self.palw_uncertified_weightless_at(point.daa_score),
                             self.palw_da_court_at(point.daa_score),
-                            &self.palw_transition_extras_for(point),
+                            &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                                own_attempt_class,
+                                ..self.palw_transition_extras_for(point)
+                            },
                         )
                     } else {
                         // The pre-audit path: rehearse the object through a whole-block transition
@@ -6101,7 +6141,31 @@ impl VirtualStateProcessor {
             &kept,
         )
         .ok()?;
-        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed { claim, receipts: kept })
+        let object = kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed { claim, receipts: kept };
+        // **2026-09-24 DoS audit review of #6: offer only a set the fold will license.** Past the
+        // audit fence an S2 set whose full-replay seat cannot post the door's whole-gain price is
+        // INERT — it folds, and the claim stays `PanelBound`. kaspad asks coverage, then this, then
+        // the V1 quorum (`.or_else` in `palw_panel.rs`), so returning that set here kept the V1
+        // quorum from ever being tried: the node resubmitted the same inert set every replan until
+        // the receipt window voided a claim three V1 receipts would have licensed. The fold is
+        // asked directly (`palw_v2_object_licenses_claim_v1`), so this filter is the fold's
+        // predicate, not a second copy of it.
+        if self.palw_audit_2026_09_23_at(point.daa_score)
+            && !kaspa_consensus_core::palw_state_v2::palw_v2_object_licenses_claim_v1(
+                &state,
+                state_params,
+                &point,
+                &object,
+                self.palw_unavailable_abstains_at(point.daa_score),
+                self.palw_capability_bound_at(point.daa_score),
+                self.palw_uncertified_weightless_at(point.daa_score),
+                self.palw_da_court_at(point.daa_score),
+                &self.palw_transition_extras_for(&point),
+            )
+        {
+            return None;
+        }
+        Some(object)
     }
 
     /// **The ladder this network froze, ADR-0084 U-08's one accessor.** `max_step_leaf_count` is a
@@ -7326,15 +7390,36 @@ impl VirtualStateProcessor {
                     if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid = kind {
                         let payload: kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1 =
                             borsh::from_slice(evidence).map_err(|_| "PanelFalseValid evidence does not decode".to_string())?;
-                        let (execution_root, artifact_root, class_id) = if let Some(claim) = state.claim(&payload.claim_id) {
+                        let (execution_root, artifact_root, class_id, executor_bond) = if let Some(claim) = state.claim(&payload.claim_id) {
                             let artifact = state.class(&claim.class_id).map(|c| c.artifact_root).unwrap_or_default();
-                            (claim.execution_root, artifact, claim.class_id)
+                            (claim.execution_root, artifact, claim.class_id, claim.bond)
                         } else if let Some(row) = state.panel_liability(&payload.claim_id) {
                             let artifact = state.class(&row.class_id).map(|c| c.artifact_root).unwrap_or_default();
-                            (row.execution_root, artifact, row.class_id)
+                            (row.execution_root, artifact, row.class_id, row.executor_bond)
                         } else {
                             return Err("PanelFalseValid names neither a live claim nor a liability row".into());
                         };
+                        // **2026-09-24 DoS audit review: the equivocation must be the EXECUTOR's.**
+                        // `palw_verify_objective_offence_v1` above checked the two attestations under
+                        // `payload.executor_pubkey` and the bond the carriage names — both supplied by
+                        // the evidence, so a fresh key convicted any seat whose `Valid` receipt was
+                        // public. Past the fence the carriage must accuse this claim's executor bond
+                        // and the key must be the one that bond registered; the fold asks the same
+                        // question (`bind_panel_false_valid`), so the object is dropped either way.
+                        if self.palw_audit_2026_09_23_at(point.daa_score)
+                            && let kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ExecutorEquivocation(carriage) =
+                                &payload.contradiction
+                        {
+                            if carriage.accused_bond_outpoint != executor_bond.0 {
+                                return Err("PanelFalseValid's equivocation does not accuse the claim's executor bond".into());
+                            }
+                            let registered = state
+                                .bond(&executor_bond)
+                                .ok_or_else(|| "PanelFalseValid names an executor bond this chain no longer holds".to_string())?;
+                            if registered.pubkey != payload.executor_pubkey {
+                                return Err("PanelFalseValid's equivocation is not signed under the executor bond's key".into());
+                            }
+                        }
                         let ladder = state.class_step_ladder_v1(&class_id, 64);
                         kaspa_consensus_core::palw_offence_v1::palw_panel_contradiction_convicts_execution_v1(
                             &payload.contradiction,
@@ -8428,6 +8513,9 @@ impl VirtualStateProcessor {
             // ADR-0133 §7: the HEIGHT, so the profile a row is derived with is a function of the
             // block that derived it and a resync folds what the live chain folded.
             seat_gate_possession_daa: self.palw_seat_gate_possession_daa(),
+            // Only the acceptance rehearsal sets it, from the block's header
+            // (`palw_v2_accepted_objects`); the fold takes it from the block's work.
+            own_attempt_class: None,
         }
     }
 
@@ -9397,8 +9485,12 @@ impl VirtualStateProcessor {
             return Err(format!("claim {} is not certified at this chain point", envelope.spend.claim_id));
         };
         // 2026-09-24 DoS audit #5: the fold's own refusal (`ReceiptRightsForfeited`), asked here at
-        // the same chain point and the same fence so an own block is disqualified — and a merged one
-        // unentitled — for the reason the fold would refuse it, not for a divergence.
+        // the same fence against the PARENT state, so an own block is disqualified — and a merged one
+        // unentitled — for the reason the fold would refuse it. A conviction carried by this very
+        // block's objects is not in the parent state; the fold refuses the spend at step 4 instead
+        // (`WrongPhase` for the named claim, `ReceiptRightsForfeited` for a sibling) and the block is
+        // disqualified the same way on every node — deliberately not skipped, because a skipped
+        // spend's block would still be paid its worker share (see the fold's step 4).
         if self.palw_audit_2026_09_23_at(point.daa_score) && state.palw_execution_root_is_forfeited_v1(&claim.execution_root) {
             return Err(format!(
                 "claim {}'s receipt rights are forfeit: its execution {} was convicted",

@@ -2020,6 +2020,59 @@ pub fn palw_bond_collateral_is_locked_v4(
         || (duty_gate && palw_bond_backs_live_duty_v1(state, key, now_daa, depth))
 }
 
+/// [`palw_bond_backs_live_duty_v1`] with each lock's second clock bounded
+/// ([`crate::palw_panel_var_v1::PalwSlashableLockV1::is_live_v3`]).
+pub fn palw_bond_backs_live_duty_v2(
+    state: &PalwChainStateV2,
+    key: &PalwBondKeyV2,
+    now_daa: u64,
+    depth: Option<u64>,
+    window_court: u64,
+) -> bool {
+    if state.reserved_exposure(key) > 0 {
+        return true;
+    }
+    let settled_now = state.settled_attempt_finals;
+    state
+        .slashable_locks
+        .range((*key, ZERO_HASH64)..)
+        .take_while(|((bond, _), _)| bond == key)
+        .any(|(_, lock)| lock.is_live_v3(now_daa, settled_now, depth, window_court))
+}
+
+/// **The withdrawal gate with the second clock bounded per obligation** (2026-09-24 DoS audit
+/// review of fix #3; [`crate::palw_panel_var_v1::palw_second_clock_holds_v1`]). v4 except that a
+/// retirement is held by the anchor count for at most `2 × window_court` past its withdrawal delay,
+/// and each lock for at most that long past its DAA expiry — so a trickle of licences can no longer
+/// multiply the freeze by `depth`. With `depth` `None` (below the fence, or escaped) this is v4.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_bond_collateral_is_locked_v5(
+    state: &PalwChainStateV2,
+    key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    now_daa: u64,
+    withdrawal_delay_daa: u64,
+    depth: Option<u64>,
+    duty_gate: bool,
+    window_court: u64,
+) -> bool {
+    if palw_bond_collateral_is_locked_v2(bond, now_daa, withdrawal_delay_daa) {
+        return true;
+    }
+    let retiring_held = match &bond.status {
+        PalwBondStatusV2::Retiring { since_daa, settled_at_since } => crate::palw_panel_var_v1::palw_second_clock_holds_v1(
+            depth,
+            state.settled_attempt_finals,
+            *settled_at_since,
+            since_daa.saturating_add(withdrawal_delay_daa),
+            now_daa,
+            window_court,
+        ),
+        PalwBondStatusV2::Active => false,
+    };
+    retiring_held || (duty_gate && palw_bond_backs_live_duty_v2(state, key, now_daa, depth, window_court))
+}
+
 pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
     match bond.status {
         PalwBondStatusV2::Active => true,
@@ -5718,8 +5771,10 @@ pub enum PalwStateV2Error {
     /// **2026-09-24 DoS audit #5, the forfeiture half: a receipt block of a convicted execution.**
     /// Past `palw_audit_2026_09_23` a `PanelFalseValid` conviction that named `execution_root`
     /// forfeits every downstream right of that execution (ADR-0151), and a free-prompt quantum's
-    /// receipt block is one of them. Refused at admission too (`palw_v2_check_receipt_spend`), so
-    /// the fold meets this only on a divergence.
+    /// receipt block is one of them. Refused at admission too (`palw_v2_check_receipt_spend`), but
+    /// admission reads the PARENT state: a conviction that arrives in the same block's own objects
+    /// is met here first, and the block is disqualified on every node alike — deliberately, see the
+    /// receipt-spend arm of the fold's step 4.
     #[error("claim {claim}'s receipt rights are forfeit: its execution {execution_root} was convicted")]
     ReceiptRightsForfeited { claim: Hash64, execution_root: Hash64 },
 }
@@ -7695,6 +7750,24 @@ impl PalwChainStateV2 {
         let mut safe_ceiling: u128 = 0;
         let mut immature: u128 = 0;
         let mut unresolved: BTreeSet<(u64, Hash64)> = BTreeSet::new();
+        // **2026-09-24 DoS audit review: the anchor ring's own invariants.** Every reader
+        // (`palw_second_clock_depth_v1`, `palw_settled_anchor_floor_daa_v1`, the ring prune) answers
+        // by `partition_point`, which is meaningful only on a sorted slice, and the floor's "pruned"
+        // branch reads `ring.len() < settled_attempt_finals`; the fold's own entries refuse an
+        // unsorted push or restore, so an honest fold never writes either, but a carriage decodes
+        // whatever its tail holds. Every entry is one settled anchor, so the ring can never be
+        // longer than the counter. An empty ring — every state below the fence — passes both
+        // trivially, so no dormant state's load moves.
+        if self.recent_anchor_daas.windows(2).any(|pair| pair[0] > pair[1]) {
+            return Err(PalwStateV2Error::CarriageInconsistent("the anchor ring is not sorted".into()));
+        }
+        if self.recent_anchor_daas.len() as u64 > self.settled_attempt_finals {
+            return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                "the anchor ring holds {} entries and the chain has settled only {} anchors",
+                self.recent_anchor_daas.len(),
+                self.settled_attempt_finals
+            )));
+        }
         // ADR-0124 Decision 3: a duty row names a live claim and nothing else — it is dropped on
         // every terminal write, and it is never written for a claim the state does not hold.
         for claim_id in self.panel_duties.keys() {
@@ -8819,6 +8892,42 @@ struct TransitionBuilder<'a> {
     /// The budget's horizon (`panel_room_v1`), cached for the same reason and dropped by every
     /// `write_model_lifecycle` and by `restore` — the rows it reads change nowhere else.
     panel_horizon: std::cell::Cell<Option<u64>>,
+    /// **The class this block's OWN attempt claims on, while step 3 folds the block's objects**
+    /// (2026-09-24 DoS audit review of #11). Past `palw_audit_2026_09_23` the class gate counts
+    /// free-prompt commitments, and step 3 folds this block's commitments BEFORE step 4 folds the
+    /// block's own attempt — so the commitments the block accepted from its mergeset could take the
+    /// last of the class's room and the attempt, which the processor admitted against the parent
+    /// state and never asks the gate, would disqualify its whole block (a held-class inference
+    /// wasted, and nothing a producer could see coming). The attempt cannot be skipped instead: a
+    /// skipped own attempt leaves no claim, so the coinbase withholds nothing and pays its worker
+    /// carve for work no panel will ever judge. So while step 3 runs, the gate counts the own
+    /// attempt as already in flight on its class, and a commitment that would leave it no room is
+    /// the one refused (dropped, the block standing). `None` outside step 3 and below the fence.
+    own_attempt_class: Option<Hash64>,
+}
+
+/// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its
+/// review) — `attempts` whole, and past `palw_audit_2026_09_23` the free-prompt claims in whole
+/// canonical jobs of the quanta they committed, rounded up over the class: `⌈fp_quanta /
+/// quanta_per_job⌉`.
+///
+/// #11 counted each free-prompt claim as one whole class claim whatever its size, so a one-quantum
+/// commitment — an eighth of the class's canonical job, reserving an eighth of an attempt's
+/// exposure, drawing nothing and escrowing nothing — took a whole slot of the panel budget the
+/// attempt lane is refused by (`review_economic_fp_room_amplification`: three one-quantum
+/// commitments at 65.9M sompi each closed a class an attempt reserves 527.6M for). A panel
+/// replays the quanta a claim committed, so the budget is charged in them. `quanta_per_job == 0`
+/// (a lane that prices nothing) keeps one per claim, the fail-closed count. Shared by the fold and
+/// the registry read (op 186), so a producer's pre-check counts what the gate counts.
+pub fn palw_inflight_claims_counted_v1(attempts: u64, fp_claims: u64, fp_quanta: u64, quanta_per_job: u64, count_fp: bool) -> u32 {
+    let fp = if !count_fp {
+        0
+    } else if quanta_per_job == 0 {
+        fp_claims
+    } else {
+        fp_quanta.div_ceil(quanta_per_job)
+    };
+    attempts.saturating_add(fp).min(u32::MAX as u64) as u32
 }
 
 /// One class's claims in flight, by lane — the value `TransitionBuilder::inflight_index` holds.
@@ -8828,6 +8937,8 @@ struct TransitionBuilder<'a> {
 struct PalwInflightTallyV1 {
     attempts: u64,
     free_prompts: u64,
+    /// The quanta those free-prompt claims committed ([`palw_inflight_claims_counted_v1`]).
+    free_prompt_quanta: u64,
 }
 
 impl PalwInflightTallyV1 {
@@ -8836,10 +8947,16 @@ impl PalwInflightTallyV1 {
     }
 
     /// What the registry counts as this class's claims in flight: attempts, and — past the
-    /// 2026-09-23 audit fence (#11) — free-prompt claims too, clamped as the walk clamped.
-    fn counted(&self, audit_2026_09_23_active: bool) -> u32 {
-        let counted = if audit_2026_09_23_active { self.attempts.saturating_add(self.free_prompts) } else { self.attempts };
-        counted.min(u32::MAX as u64) as u32
+    /// 2026-09-23 audit fence (#11) — free-prompt claims too, in whole jobs of their quanta
+    /// ([`palw_inflight_claims_counted_v1`]), clamped as the walk clamped.
+    fn counted(&self, audit_2026_09_23_active: bool, quanta_per_job: u32) -> u32 {
+        palw_inflight_claims_counted_v1(
+            self.attempts,
+            self.free_prompts,
+            self.free_prompt_quanta,
+            quanta_per_job as u64,
+            audit_2026_09_23_active,
+        )
     }
 }
 
@@ -8851,15 +8968,19 @@ fn palw_inflight_index_note_v1(index: &mut BTreeMap<Hash64, PalwInflightTallyV1>
         return;
     }
     let tally = index.entry(claim.class_id).or_default();
-    let slot = match claim.source {
-        PalwClaimSourceV2::Attempt => &mut tally.attempts,
-        PalwClaimSourceV2::FreePrompt { .. } => &mut tally.free_prompts,
+    let (slot, quanta) = match &claim.source {
+        PalwClaimSourceV2::Attempt => (&mut tally.attempts, None),
+        PalwClaimSourceV2::FreePrompt { quanta, .. } => (&mut tally.free_prompts, Some(*quanta as u64)),
     };
     if add {
         *slot = slot.saturating_add(1);
     } else {
         debug_assert!(*slot > 0, "an index in lockstep with the claims never removes what it did not count");
         *slot = slot.saturating_sub(1);
+    }
+    if let Some(quanta) = quanta {
+        tally.free_prompt_quanta =
+            if add { tally.free_prompt_quanta.saturating_add(quanta) } else { tally.free_prompt_quanta.saturating_sub(quanta) };
     }
     if tally.is_empty() {
         index.remove(&claim.class_id);
@@ -8889,6 +9010,7 @@ impl<'a> TransitionBuilder<'a> {
             seen_exec: std::collections::HashSet::new(),
             inflight_index: std::cell::RefCell::new(None),
             panel_horizon: std::cell::Cell::new(None),
+            own_attempt_class: None,
         }
     }
 
@@ -9857,7 +9979,7 @@ impl<'a> TransitionBuilder<'a> {
             .state
             .slashable_locks
             .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, depth))
+            .filter(|((b, _), lock)| b == bond && lock.is_live_v3(now_daa, settled_now, depth, self.params.window_court))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add);
         crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
@@ -9868,7 +9990,7 @@ impl<'a> TransitionBuilder<'a> {
         self.state
             .slashable_locks
             .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, depth))
+            .filter(|((b, _), lock)| b == bond && lock.is_live_v3(now_daa, settled_now, depth, self.params.window_court))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add)
     }
@@ -9908,7 +10030,8 @@ impl<'a> TransitionBuilder<'a> {
     /// the fence its refusal (`SeatValidLockRefused`) propagated as the transition's error and
     /// disqualified the block that carried the receipt set — one over-committed seat's signature,
     /// for a relay fee. Past the fence a set with any such seat is INERT: the claim stays
-    /// `PanelBound`, the assembler resubmits a backed set (it filters the same predicate), and
+    /// `PanelBound`, the S2 assembler offers only a set the fold licenses
+    /// (`palw_v2_object_licenses_claim_v1`, so kaspad falls through to the V1 quorum), and
     /// otherwise the receipt window voids the claim as if no quorum had signed.
     ///
     /// **Audit #6:** each seat is asked for the price of the `door` the set arrives through
@@ -10104,6 +10227,25 @@ impl<'a> TransitionBuilder<'a> {
                     .is_some_and(|row| row.valid_signers.iter().any(|(seat, _)| *seat == accused.0))
                 {
                     0
+                } else if self.extras.audit_2026_09_23_active {
+                    // **2026-09-24 DoS audit review (#12's paired change): a seat the chain never
+                    // relied on is not convicted at all.** Below the fence this arm slashed the
+                    // accused's WHOLE collateral: a seat that signed `Valid` and gossiped the
+                    // receipt, but that no licence carried (the fourth and fifth `Valid` of a 3-of-5
+                    // quorum, or any signer while the claim was still `PanelBound`), holds no lock
+                    // and is on no liability row — and lost 939,063 MSK where a carried signer of
+                    // the same claim lost its 1,174 MSK lock (`review_economic_whole_collateral_branch`).
+                    // Liability follows what the licence rested on: the lock is the price a
+                    // `Valid` was charged when it counted, and a `Valid` that counted for nothing
+                    // bought nothing a conviction could take back. Refused rather than priced at
+                    // some lock it never posted, so the object is dropped with the block standing
+                    // and the Final's reversal (#8) still runs through any carried signer, whose
+                    // conviction is the one the evidence is about. #12's pruning must keep this
+                    // branch closed: a pruned lock is a seat that falls through to here.
+                    return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                        offence_id,
+                        "the accused holds no Valid lock on this claim and no liability row lists it".into(),
+                    ));
                 } else {
                     self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0)
                 }
@@ -10322,6 +10464,45 @@ impl<'a> TransitionBuilder<'a> {
             PalwPanelContradictionV1::ConflictingPermit { span, round, permit_index } => {
                 if !self.state.round_equivocated(*span, *round, *permit_index) {
                     return Err(refused("ConflictingPermit names a permit this chain has not burned".into()));
+                }
+            }
+            // **2026-09-24 DoS audit review: an equivocation proves something only about the key
+            // that signed it, so it must be the CLAIM EXECUTOR's key.**
+            //
+            // The acceptance layer (`verify_palw_panel_false_valid_v1`) checks the two attestations
+            // under `payload.executor_pubkey` and adjudicates them against a bond record it builds
+            // from that key and `carriage.accused_bond_outpoint` — both taken from the evidence
+            // itself. The field's doc said the processor checks the key against the claim row; no
+            // code did. So anyone with a fresh ML-DSA key could sign two roots under
+            // `job_id = claim`, attach a seat's public `Valid` receipt, and convict that seat — and
+            // since #7/#8 the same object voided an honest `Final`, took back its weight and
+            // forfeited its root's rights, for one object fee and no bond
+            // (`review_economic_forged_false_valid`). Past the fence the carriage must name the
+            // claim's executor bond — the live claim's `bond`, or the liability row's
+            // `executor_bond` once the claim has retired — and the key must be the one that bond
+            // registered; a bond this state no longer holds cannot be asked, and is refused (the
+            // fail-closed side: no key the chain can vouch for, no conviction). The processor
+            // asks the same question before the signature is worth anything, so the two layers
+            // agree; the fold is what every node's state root rests on. Below the fence nothing is
+            // read and the arm is what it was.
+            PalwPanelContradictionV1::ExecutorEquivocation(carriage) if self.extras.audit_2026_09_23_active => {
+                let executor = self
+                    .state
+                    .claims
+                    .get(&payload.claim_id)
+                    .map(|c| c.bond)
+                    .or_else(|| self.state.panel_liabilities.get(&payload.claim_id).map(|r| r.executor_bond))
+                    .ok_or_else(|| refused("ExecutorEquivocation names neither a live claim nor a liability row".into()))?;
+                if carriage.accused_bond_outpoint != executor.0 {
+                    return Err(refused("ExecutorEquivocation does not accuse this claim's executor bond".into()));
+                }
+                let registered = self
+                    .state
+                    .bonds
+                    .get(&executor)
+                    .ok_or_else(|| refused("ExecutorEquivocation names an executor bond this chain no longer holds".into()))?;
+                if registered.pubkey != payload.executor_pubkey {
+                    return Err(refused("ExecutorEquivocation is not signed under the key the executor bond registered".into()));
                 }
             }
             PalwPanelContradictionV1::ExecutorEquivocation(_)
@@ -10993,7 +11174,10 @@ impl<'a> TransitionBuilder<'a> {
     /// Below the fence the answer is the attempt count it always was.
     fn model_registry_inflight(&self, class_id: &Hash64) -> u32 {
         let audit = self.extras.audit_2026_09_23_active;
-        self.with_inflight_index(|index| index.get(class_id).map(|tally| tally.counted(audit)).unwrap_or(0))
+        let per_job = self.params.fp_quanta_per_canonical_job;
+        let counted = self.with_inflight_index(|index| index.get(class_id).map(|tally| tally.counted(audit, per_job)).unwrap_or(0));
+        // Step 3's reservation for this block's own attempt (`own_attempt_class`).
+        counted.saturating_add(u32::from(self.own_attempt_class == Some(*class_id)))
     }
 
     /// Read the in-flight index (audit #13b), building it from the live claims on first use.
@@ -11072,14 +11256,24 @@ impl<'a> TransitionBuilder<'a> {
         // index and looking each class's row up is the walk's number. A class in flight with no
         // row contributed nothing to the walk (it iterated rows) and contributes nothing here.
         let audit = self.extras.audit_2026_09_23_active;
+        let per_job = self.params.fp_quanta_per_canonical_job;
         let inflight_replay: u128 = self.with_inflight_index(|index| {
             index
                 .iter()
                 .filter(|(id, _)| **id != base)
-                .filter_map(|(id, tally)| self.state.model_lifecycles.get(id).map(|r| (tally.counted(audit), r)))
+                .filter_map(|(id, tally)| self.state.model_lifecycles.get(id).map(|r| (tally.counted(audit, per_job), r)))
                 .map(|(inflight, r)| (inflight as u128).saturating_mul(r.work.economic_ccu_per_claim).saturating_mul(seat_count))
                 .fold(0u128, u128::saturating_add)
         });
+        // Step 3's reservation for this block's own attempt (`own_attempt_class`): one claim of its
+        // class on the budget, as if already in flight.
+        let inflight_replay = match self.own_attempt_class.filter(|id| *id != base) {
+            Some(id) => match self.state.model_lifecycles.get(&id) {
+                Some(r) => inflight_replay.saturating_add(r.work.economic_ccu_per_claim.saturating_mul(seat_count)),
+                None => inflight_replay,
+            },
+            None => inflight_replay,
+        };
         let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
         let per_span =
             ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
@@ -11088,7 +11282,10 @@ impl<'a> TransitionBuilder<'a> {
         (crate::palw_work_target_v1::palw_panel_room_v1(per_span, horizon, inflight_replay, cost), inflight_replay, budget, horizon)
     }
 
-    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+    /// `incoming` is how many of the class's claims the new one counts as — `1` for an attempt and
+    /// for every caller below the fence, a free-prompt claim's whole jobs of quanta past it
+    /// ([`palw_inflight_claims_counted_v1`]) — and the room and the cap must hold that many.
+    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64, incoming: u64) -> Result<(), PalwStateV2Error> {
         let Some(fold) = self.model_registry_fold() else { return Ok(()) };
         if *class_id == self.params.base_class_id() {
             return Ok(());
@@ -11114,13 +11311,13 @@ impl<'a> TransitionBuilder<'a> {
         if self.extras.work_target_active && fold.governs_at(now_daa) {
             // ADR-0137 D5: one network-wide replay budget in place of the per-class cap.
             let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
-            if room == 0 {
+            if room < incoming.max(1) {
                 return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
             }
             return Ok(());
         }
         let inflight = self.model_registry_inflight(class_id);
-        if inflight >= row.profile.max_inflight_claims {
+        if (inflight as u64).saturating_add(incoming.max(1)) > row.profile.max_inflight_claims as u64 {
             return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
         }
         Ok(())
@@ -13238,8 +13435,46 @@ pub fn palw_v2_apply_one_object_v1(
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let mut builder =
         TransitionBuilder::new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras);
+    // Step 3's reservation for the block's own attempt, as the fold takes it (see
+    // `PalwTransitionExtrasV1::own_attempt_class`).
+    builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
     apply_object(&mut builder, ctx, object)?;
     Ok(builder.checkpoint().0)
+}
+
+/// **Would this licence object actually LICENSE its claim on `base`?** (2026-09-24 DoS audit review
+/// of #6.) `true` only for a `ReceiptLicensed`, `ReceiptLicensedV2` or `OptimisticLicensed` that
+/// folds without error AND leaves its claim `ReceiptLicensed` — asked by folding it, so the answer
+/// is the fold's and cannot drift from it.
+///
+/// Past the audit fence a licence set whose `Valid` signer cannot post its door's price is INERT
+/// (`receipt_set_is_backed`): it folds, the block stands, and the claim stays `PanelBound`. The
+/// S2 door prices its one full-replay seat at the whole gain, about three times the quorum price,
+/// so a seat that bound at the quorum price can sign an S2 set that licenses nothing — and the
+/// node's assembler, which built the S2 set whenever the full seat's `Valid` was present and tried
+/// the V1 quorum only when S2 returned nothing, resubmitted that inert set every replan until the
+/// receipt window voided a claim three `Valid` V1 receipts would have licensed. The assembler asks
+/// this before it offers a set, and falls through to the next door when the answer is no.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_object_licenses_claim_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> bool {
+    let claim = match object {
+        PalwConsensusObjectV2::ReceiptLicensed { claim, .. }
+        | PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. }
+        | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => *claim,
+        _ => return false,
+    };
+    palw_v2_apply_one_object_v1(base, params, ctx, object, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)
+        .is_ok_and(|next| next.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })))
 }
 
 /// [`apply_palw_transition_v6`] with **ADR-0088's registry fence** (and, later, ADR-0089's EVM
@@ -13360,6 +13595,16 @@ pub fn apply_palw_transition_v7(
     apply_class_reclamation(&mut builder, parent, ctx)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
+    //
+    //    Past the 2026-09-23 audit fence the class gate holds room for the block's OWN attempt
+    //    while the objects fold (`TransitionBuilder::own_attempt_class`, the audit review of #11):
+    //    a free-prompt commitment that would leave the attempt no room is the object refused, not
+    //    the attempt at step 4. Released before step 4, where the attempt counts itself.
+    if extras.audit_2026_09_23_active
+        && let PalwBlockWorkV3::Attempt(envelope) = &block_work
+    {
+        builder.own_attempt_class = Some(envelope.attempt.class_id);
+    }
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
     }
@@ -13367,6 +13612,7 @@ pub fn apply_palw_transition_v7(
     //     order — each quoted on the row as it then stands, refused rather than failing the block,
     //     and each answered with a settlement the selected child will carry.
     apply_evm_market_actions(&mut builder, ctx)?;
+    builder.own_attempt_class = None;
 
     // 3a. Condition 12/13: any class whose activation score this block reaches becomes `Active`
     //     and takes its share. A CLOCK, not an object — nobody submits it, so there is nothing to
@@ -13385,7 +13631,12 @@ pub fn apply_palw_transition_v7(
     //    Past the 2026-09-23 audit fence an own attempt that the live ceiling refuses (finding 17,
     //    `AttemptExposureCeiling` in `apply_attempt`) is SKIPPED, exactly as step 4b skips merged
     //    work: the block stays valid and carries no claim. Any other refusal still fails the block,
-    //    as before — the processor already admitted this attempt, so only the ceiling can differ.
+    //    as before. The class gate (`check_class_admits_claim`) in particular is NOT skipped: a
+    //    skipped own attempt leaves no claim, so `palw_v2_escrow_withheld_at` withholds nothing and
+    //    the block's whole worker carve is paid with no panel ever drawn — a skip there would be a
+    //    way to be paid for an unverified attempt on a class the registry refuses. What keeps the
+    //    gate from being moved under the attempt by this block's own objects is the reservation
+    //    step 3 holds for it (`own_attempt_class`, 2026-09-24 DoS audit review).
     let mut merged_skips: Vec<(BlockHash, String)> = Vec::new();
     match block_work {
         PalwBlockWorkV3::None => {}
@@ -13427,6 +13678,13 @@ pub fn apply_palw_transition_v7(
                 Err(other) => return Err(other),
             }
         }
+        // A receipt spend is NOT skipped when this block's own objects convicted its execution
+        // (`WrongPhase` from #8's reversal, `ReceiptRightsForfeited` from #5): the processor
+        // admitted it against the parent state, and the fold refuses it here, so the block is
+        // disqualified on every node alike. Deliberately — unlike an attempt, a spend escrows
+        // nothing: the coinbase pays a chain block's worker share whatever its work turned out to be
+        // (the selected-parent exemption in the processor's `palw_v2_unentitled_blues`), so skipping would
+        // pay one receipt block for a convicted execution, which is what #5 closed.
         PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
     }
 
@@ -17907,7 +18165,7 @@ fn apply_object(
             // is exactly what it was. Below the fence nothing here runs and the arm is
             // byte-identical.
             if builder.extras.audit_2026_09_23_active {
-                builder.check_class_admits_claim(class_id, ctx.daa_score)?;
+                builder.check_class_admits_claim(class_id, ctx.daa_score, 1)?;
             }
             // **Priced in leaves against the class's own canonical job** (ADR-0074 Decision 5):
             // the quantum is a fraction of the class's job size, quanta are whole quanta of the
@@ -17990,6 +18248,17 @@ fn apply_object(
                 *consumed_prefix_state,
             )?;
             let (quanta, pwu, reserved, in_compute) = (price.quanta, price.pwu, price.reserved, price.priced_in_compute);
+            // **2026-09-24 DoS audit review of #11: the gate holds the jobs this claim will count as.**
+            // The early gate above asks for one claim's room; a commitment of more than one canonical
+            // job's quanta counts as `⌈quanta / per_job⌉` of the class's claims once in flight
+            // (`palw_inflight_claims_counted_v1`), so it must find that much room, or it would
+            // overshoot the budget it is measured against. Only past the fence, like the gate.
+            if builder.extras.audit_2026_09_23_active {
+                let jobs = (quanta as u64).div_ceil(per_job as u64);
+                if jobs > 1 {
+                    builder.check_class_admits_claim(class_id, ctx.daa_score, jobs)?;
+                }
+            }
             let derived = price.derived_work;
             // **Fail-closed on the one field the court cannot do without (audit C3).** A claim
             // carrying no execution root has nothing a refutation's binding can be tested
@@ -18802,6 +19071,14 @@ pub struct PalwTransitionExtrasV1 {
     /// `Default` and on every shipped preset, which derives each profile exactly as the rows on
     /// chain were written.
     pub seat_gate_possession_daa: Option<u64>,
+    /// **The class of the block's own attempt, for the acceptance REHEARSAL of step 3** (2026-09-24
+    /// DoS audit review of #11). The fold takes its own reservation for the attempt from the block's
+    /// work (`TransitionBuilder::own_attempt_class`), but the processor's rehearsal
+    /// (`palw_v2_apply_one_object_v1`) folds objects one at a time without the work, and must refuse
+    /// the same commitments the fold will or a commitment the rehearsal accepted would fail the
+    /// real fold's step 3 and the block with it. Read ONLY by that rehearsal, and only past
+    /// `palw_audit_2026_09_23`; `None` by `Default`.
+    pub own_attempt_class: Option<Hash64>,
 }
 
 /// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
@@ -19798,7 +20075,7 @@ fn apply_attempt(
     }
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.
-    builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score)?;
+    builder.check_class_admits_claim(&attempt.class_id, ctx.daa_score, 1)?;
     // **ADR-0145: past the fence the collateral is priced on the DERIVED work of one draw**, not on
     // the step-leaf count the class's registrant declared. `None` — every shipped preset — leaves
     // the reservation byte-identical.
@@ -24720,6 +24997,22 @@ pub(crate) mod tests {
             fp_commit_on(kimi_id(), claim_word, 1)
         }
 
+        /// A free-prompt commitment on Kimi of its WHOLE canonical job — 160 leaves, eight quanta —
+        /// which the class gate counts as one of Kimi's claims (the audit review of #11).
+        ///
+        /// Committed by bond 9 (`bond(9, 100_000)`, registered by the test and
+        /// never a seat — it proves no readiness, so the budget's ready count does not move): a
+        /// whole job reserves 800 sompi, most of bond 1's ceiling.
+        fn kimi_fp_commit_whole_job(claim_word: u64) -> PalwConsensusObjectV2 {
+            let mut commit = fp_commit_on(kimi_id(), claim_word, 9);
+            let PalwConsensusObjectV2::FreePromptCommitted { work_leaves, decode_tokens_executed, .. } = &mut commit else {
+                unreachable!("kimi_fp_commit builds a commitment")
+            };
+            *work_leaves = 160;
+            *decode_tokens_executed = 8;
+            commit
+        }
+
         /// The same commitment on `class` by bond `n` (whose key `bond(n, _)` registers).
         fn fp_commit_on(class: Hash64, claim_word: u64, n: u64) -> PalwConsensusObjectV2 {
             let mut commit = fp_commit(claim_word, 40, 2);
@@ -24822,9 +25115,12 @@ pub(crate) mod tests {
             let cost = 800_000u128 * 5;
             assert_eq!(palw_panel_room_v1(per_span, window, 0, cost), 3, "the premise: a budget of three Kimi claims");
 
+            // Whole-job commitments, each one of Kimi's claims on the budget (the audit review of
+            // #11 counts a commitment in jobs of its quanta; a fractional one is the test below).
             let fill = |extras: &PalwTransitionExtrasV1| {
-                let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[kimi_fp_commit(0x61)], None, extras);
-                let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[kimi_fp_commit(0x62)], None, extras);
+                let (s8, _) =
+                    step_with(&s7, &p, &funded(8, 131, 8), &[bond(9, 100_000), kimi_fp_commit_whole_job(0x61)], None, extras);
+                let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[kimi_fp_commit_whole_job(0x62)], None, extras);
                 let first = attempt_for_class(8, 700, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
                 step_with(&s9, &p, &funded(10, 133, 10), &[], Some(&first), extras).0
             };
@@ -24852,7 +25148,7 @@ pub(crate) mod tests {
                 &full,
                 &p,
                 &funded(11, 134, 11),
-                &[kimi_fp_commit(0x63)],
+                &[kimi_fp_commit_whole_job(0x63)],
                 None,
                 false,
                 false,
@@ -24874,21 +25170,125 @@ pub(crate) mod tests {
             step_with(&unaudited, &p, &funded(11, 134, 11), &[], Some(&second), &fenced);
         }
 
+        /// **Audit review of #11: a free-prompt claim counts in whole jobs of the quanta it
+        /// committed, not as one whole claim whatever its size.**
+        ///
+        /// The same budget of three Kimi claims. Three two-quanta commitments — six quanta, under
+        /// one eight-quanta job — and one attempt put two claims' worth on the budget, so a second
+        /// attempt still finds room. #11 counted each commitment as a whole claim: the third
+        /// commitment filled the budget and the attempt lane was closed by commitments that each
+        /// reserved a quarter of what an attempt does (`review_economic_fp_room_amplification`).
+        ///
+        /// Fails without the fix: the second attempt is refused `PanelRoomExhausted` (four claims
+        /// counted on a budget of three) — indeed the first attempt already is.
+        #[test]
+        fn audit_2026_09_24_review_a_fractional_commitment_takes_its_fraction_of_the_panel_budget() {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let mut small = fold(kimi_work());
+            small.globals.reference_work_per_span = 1_300_000;
+            let armed = audited(&PalwTransitionExtrasV1 {
+                work_target_active: true,
+                model_registry: Some(small),
+                ..priced_extras(Some(payout_fold(10_000, 0)))
+            });
+            let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[kimi_fp_commit(0x61)], None, &armed);
+            let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[kimi_fp_commit(0x62)], None, &armed);
+            let (s10, _) = step_with(&s9, &p, &funded(10, 133, 10), &[kimi_fp_commit(0x63)], None, &armed);
+            for word in [0x61, 0x62, 0x63] {
+                assert!(
+                    matches!(s10.claim(&h64(word)).map(|c| &c.source), Some(PalwClaimSourceV2::FreePrompt { quanta: 2, .. })),
+                    "commitment {word:#x} is in flight with two quanta"
+                );
+            }
+            let first = attempt_for_class(8, 700, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+            let (s11, _) = step_with(&s10, &p, &funded(11, 134, 11), &[], Some(&first), &armed);
+            let second = attempt_for_class(8, 701, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+            let (s12, _) = step_with(&s11, &p, &funded(12, 135, 12), &[], Some(&second), &armed);
+            assert!(s12.claim(&attempt_id_v2(&second.attempt)).is_some(), "six quanta and one attempt leave room for a second attempt");
+            s12.assert_internal_consistency(&p).expect("internal consistency after apply");
+        }
+
+        /// **Audit review of #11: step 3 holds room for the block's own attempt.**
+        ///
+        /// One claim's room left on Kimi. A block carrying an attempt on Kimi AND, from its mergeset,
+        /// a whole-job commitment on Kimi: the commitment is folded first (step 3) and, counted
+        /// since #11, took the last room — so the attempt, which the processor admitted against the
+        /// parent and never asks the class gate, failed step 4 and disqualified the whole block.
+        /// Past the fence the rehearsal the processor runs over the block's objects
+        /// (`palw_v2_apply_one_object_v1`, told the block's attempt class) refuses the COMMITMENT,
+        /// so it is dropped, and the fold then admits the attempt; a block without an attempt still
+        /// takes the commitment.
+        ///
+        /// Fails without the fix: the rehearsal accepts the commitment even when the block carries
+        /// an attempt on the class, and the fold then refuses that attempt `PanelRoomExhausted`.
+        #[test]
+        fn audit_2026_09_24_review_a_blocks_own_objects_cannot_take_the_room_its_own_attempt_needs() {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let mut small = fold(kimi_work());
+            small.globals.reference_work_per_span = 1_300_000;
+            let armed = audited(&PalwTransitionExtrasV1 {
+                work_target_active: true,
+                model_registry: Some(small),
+                ..priced_extras(Some(payout_fold(10_000, 0)))
+            });
+            let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[bond(9, 100_000), kimi_fp_commit_whole_job(0x61)], None, &armed);
+            let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[kimi_fp_commit_whole_job(0x62)], None, &armed);
+            // One claim's room left of three.
+            let point = funded(10, 133, 10);
+            let attempt = attempt_for_class(8, 700, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+            let base = palw_v2_pre_object_base_v1(&s9, &p, &point, false, false, false, false, &armed).expect("the pre-object base");
+            let commit = kimi_fp_commit_whole_job(0x63);
+            let rehearse = |own: Option<Hash64>| {
+                palw_v2_apply_one_object_v1(
+                    &base,
+                    &p,
+                    &point,
+                    &commit,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &PalwTransitionExtrasV1 { own_attempt_class: own, ..armed.clone() },
+                )
+            };
+            assert!(rehearse(None).is_ok(), "a block with no attempt takes the commitment into the last room");
+            assert!(
+                matches!(rehearse(Some(kimi_id())), Err(PalwStateV2Error::PanelRoomExhausted { class, .. }) if class == kimi_id()),
+                "a block whose own attempt is on Kimi drops the commitment instead"
+            );
+            // The fold holds the same reservation from the block's work, so the commitment the
+            // rehearsal would have let through is refused at step 3 (never the attempt at step 4)...
+            let both = apply_palw_transition_v2_with_extras(&s9, &p, &point, &[commit.clone()], Some(&attempt), false, false, false, false, &armed);
+            assert!(matches!(both, Err(PalwStateV2Error::PanelRoomExhausted { .. })), "{both:?}");
+            // ...and with the commitment dropped the attempt takes the last room.
+            let (s10, _) = step_with(&s9, &p, &point, &[], Some(&attempt), &armed);
+            assert!(s10.claim(&attempt_id_v2(&attempt.attempt)).is_some(), "the block's own attempt is admitted");
+            // Below the fence neither the reservation nor the free-prompt count exists.
+            let dormant = PalwTransitionExtrasV1 { audit_2026_09_23_active: false, own_attempt_class: Some(kimi_id()), ..armed.clone() };
+            let base_dormant = palw_v2_pre_object_base_v1(&s9, &p, &point, false, false, false, false, &dormant).expect("the base");
+            assert!(palw_v2_apply_one_object_v1(&base_dormant, &p, &point, &commit, false, false, false, false, &dormant).is_ok());
+        }
+
         /// The pre-#13b body of `panel_room_v1` and `model_registry_inflight`, kept verbatim as the
         /// reference the index is measured against: every lifecycle row walked, and every claim
         /// walked for each row.
+        /// (The free-prompt half counts in whole jobs of quanta since the audit review of #11 —
+        /// `palw_inflight_claims_counted_v1` over the same walk.)
         fn walked_inflight(state: &PalwChainStateV2, class_id: &Hash64, audit: bool) -> u32 {
-            state
+            let live = |claim: &&PalwClaimStateV2| claim.class_id == *class_id && !claim.phase.is_terminal();
+            let attempts = state.claims.values().filter(live).filter(|c| matches!(c.source, PalwClaimSourceV2::Attempt)).count();
+            let fp: Vec<u64> = state
                 .claims
                 .values()
-                .filter(|claim| {
-                    claim.class_id == *class_id
-                        && !claim.phase.is_terminal()
-                        && (matches!(claim.source, PalwClaimSourceV2::Attempt)
-                            || (audit && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })))
+                .filter(live)
+                .filter_map(|c| match &c.source {
+                    PalwClaimSourceV2::FreePrompt { quanta, .. } => Some(*quanta as u64),
+                    PalwClaimSourceV2::Attempt => None,
                 })
-                .count()
-                .min(u32::MAX as usize) as u32
+                .collect();
+            palw_inflight_claims_counted_v1(attempts as u64, fp.len() as u64, fp.iter().sum(), 8, audit)
         }
 
         fn walked_room(
@@ -43185,6 +43585,7 @@ pub(crate) mod tests {
                 canonical_work_daa: None,
                 admission_independence_daa: None,
                 seat_gate_possession_daa: None,
+                own_attempt_class: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -43428,6 +43829,7 @@ pub(crate) mod tests {
                 canonical_work_daa: None,
                 admission_independence_daa: None,
                 seat_gate_possession_daa: None,
+                own_attempt_class: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -44055,6 +44457,15 @@ pub(crate) mod tests {
         assert_eq!(s3.state_root(), empty.state_root(), "nothing moved but the block itself");
         assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the claim stays bound");
         assert!(s3.slashable_lock(full, claim_id).is_none() && s3.slashable_lock(auditor, claim_id).is_none());
+        // 2026-09-24 DoS audit review of #6: the assembler's question, answered by the fold — the
+        // inert set licenses nothing (so the node falls through to the V1 quorum), while the same
+        // set on the generously collateralised twin does.
+        let optimistic = optimistic_object(claim_id, &[full, auditor]);
+        let licenses = |state: &PalwChainStateV2| {
+            palw_v2_object_licenses_claim_v1(state, &p, &ctx(4, 103, 4), &optimistic, false, false, false, false, &armed)
+        };
+        assert!(!licenses(&s2), "an unbacked S2 set is reported as licensing nothing");
+        assert!(licenses(&probe), "a backed S2 set licenses");
 
         let others: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).filter(|bond| *bond != full).take(2).collect();
         let quorum: Vec<_> = std::iter::once(full).chain(others).map(|seat| valid_receipt(claim_id, seat, 103)).collect();
@@ -44106,6 +44517,35 @@ pub(crate) mod tests {
             );
         }
         assert_eq!(per_colluder(gain, PalwLicenceDoorV1::Coverage), per_colluder(gain, PalwLicenceDoorV1::Quorum));
+    }
+
+    /// **2026-09-24 DoS audit review: the loader checks the anchor ring's invariants.** A carriage
+    /// decodes whatever its tail holds, and every reader of the ring answers by `partition_point`
+    /// (meaningful only when sorted) while the D1 floor's "pruned" branch reads its length against
+    /// the counter. A sorted ring no longer than the counter loads; an unsorted one, or one longer
+    /// than the anchors the chain settled, is refused as inconsistent.
+    ///
+    /// Fails without the check: both bad carriages load.
+    #[test]
+    fn audit_2026_09_24_review_the_loader_refuses_an_unsorted_or_overlong_anchor_ring() {
+        let p = params();
+        let mut good = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        good.settled_attempt_finals = 3;
+        good.recent_anchor_daas = vec![10, 20, 20];
+        let loaded = good.clone().into_state(&p, None).expect("a sorted ring within the counter loads");
+        assert_eq!(loaded.recent_anchor_daas(), &[10, 20, 20]);
+        let mut unsorted = good.clone();
+        unsorted.recent_anchor_daas = vec![10, 30, 20];
+        assert!(
+            matches!(unsorted.into_state(&p, None), Err(PalwStateV2Error::CarriageInconsistent(why)) if why.contains("not sorted")),
+            "an unsorted ring is refused"
+        );
+        let mut overlong = good;
+        overlong.settled_attempt_finals = 2;
+        assert!(
+            matches!(overlong.into_state(&p, None), Err(PalwStateV2Error::CarriageInconsistent(why)) if why.contains("settled only")),
+            "a ring longer than the counter is refused"
+        );
     }
 
     /// **Audit #14: a shard part's `Valid` signers lock, as every whole-object door's do.**

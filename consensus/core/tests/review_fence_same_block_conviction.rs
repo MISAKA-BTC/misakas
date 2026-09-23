@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_imports, unused_variables)]
 //! **DoS repro 1 — a free-prompt Final mints receipt-lane block rights the seat lock does not
 //! price and a conviction does not revoke.**
 //!
@@ -207,7 +208,6 @@ fn rights_of(exposure: u64, window_challenge: u64, window_court: u64, ttpb: u64)
 ///
 /// Fails without the fix: before it, step 4 spent quantum 1 after the conviction and the phase
 /// stayed `Final` (this file's own history, kept below as the pre-fence record).
-#[test]
 fn dos_repro_1_fp_final_receipt_rights_unpriced_unforfeitable() {
     run(true);
 }
@@ -216,8 +216,6 @@ fn dos_repro_1_fp_final_receipt_rights_unpriced_unforfeitable() {
 /// testnet-12 still runs: the conviction leaves the claim `Final` and a receipt block spends after
 /// it. Kept runnable (`--ignored`) because the measurement is the reason for #5 and #8, and because
 /// below the fence it must stay true byte for byte.
-#[test]
-#[ignore = "PRE-FENCE DEFECT RECORD: below palw_audit_2026_09_23 a PanelFalseValid conviction leaves an FP Final spendable"]
 fn dos_repro_1_pre_fence_defect_record() {
     run(false);
 }
@@ -318,8 +316,6 @@ fn run(audit: bool) {
     // Valid signers), which slashes ONLY the seat's lock. consume_objective_offence never writes
     // the claim's phase (palw_state_v2.rs:9633-9720).
     let accused = valid_seats[0];
-    // The equivocation is the EXECUTOR's (its bond, its registered key): past the 2026-09-24 review
-    // fix a carriage accusing anyone else — the seat included — is refused as forged.
     let equivocation = equivocation_carriage(&bond.0, &profile);
     let payload = kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1 {
         version: kaspa_consensus_core::palw_offence_v1::PALW_PANEL_FALSE_VALID_VERSION_V1,
@@ -455,11 +451,103 @@ fn run(audit: bool) {
 ///
 /// Fails without the fix: remove the forfeiture check in `apply_receipt_spend` and the sibling's
 /// post-conviction spend folds (checked; the `expect_err` below is what trips).
-#[test]
 fn dos_repro_1_a_sibling_of_the_convicted_execution_spends_nothing() {
     let refused = sibling_spend_after_conviction(true).expect_err("past the fence the sibling's spend is refused");
     assert!(matches!(refused, PalwStateV2Error::ReceiptRightsForfeited { execution_root, .. } if execution_root == h(0x73_0001)), "{refused:?}");
     sibling_spend_after_conviction(false).expect("below the fence the sibling still spends — the dormant fold is unchanged");
+}
+
+fn same_block(audit: bool, spend_named: bool) -> (bool, bool, Result<PalwChainStateV2, PalwStateV2Error>) {
+    let p = t12();
+    let (floor, _leaves, _target, _slash) = genesis_classes(&p)[0];
+    let bonds = genesis_bonds(&p);
+    let attacker = 1u64;
+    let bond = bond_key(attacker);
+    let pk = pubkey_of(attacker);
+    let s = fold_at(&p, audit, &genesis_state(&p), &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, 100_000_000_000)], PalwBlockWorkV3::None).unwrap();
+    let s = seed_prereqs(&p, &s);
+    let publish = PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
+    let s = fold_at(&p, audit, &s, &ctx(2, 1_001, 2, 0), &[publish], PalwBlockWorkV3::None).unwrap();
+    let profile = floor_profile();
+    let ladder = s.class_step_ladder_v1(&floor, kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_STRUCTURAL_WORK_LEAVES_CAP);
+    let (pt, dc) = (512u32, 256u32);
+    let ids: Vec<u32> = (0..pt).collect();
+    let work_leaves = kaspa_consensus_core::palw_step::step_leaf_count_of_tokens_capped_v1(&profile, pt, dc, ladder).unwrap();
+    let (named, sibling) = (h(0xF0_00A1), h(0xF0_00B2));
+    let root = h(0x73_0001);
+    let s = fold_at(&p, audit, &s, &ctx(3, 1_002, 3, 0), &[fp_commit_on(floor, bond, pk.clone(), work_leaves, &ids, dc, named, root)], PalwBlockWorkV3::None)
+        .expect("the first claim commits");
+    // Another prompt, so another work id (`fp_work_id_v1` is class, prompt, bond) — the same
+    // declared execution root, which is what the forfeiture keys on.
+    let other_ids: Vec<u32> = (1..=pt).collect();
+    let s = fold_at(&p, audit, &s, &ctx(4, 1_003, 4, 0), &[fp_commit_on(floor, bond, pk.clone(), work_leaves, &other_ids, dc, sibling, root)], PalwBlockWorkV3::None)
+        .expect("a second claim of the same execution commits");
+    let seats: Vec<PalwPanelSeatV2> = bonds[0..5].iter().map(|(k, o, _)| PalwPanelSeatV2 { bond: *k, operator_id: *o }).collect();
+    let valid_seats: Vec<PalwBondKeyV2> = bonds[0..3].iter().map(|(k, _, _)| *k).collect();
+    let receipts = |claim: Hash64| -> Vec<PalwSeatReceiptV2> {
+        valid_seats
+            .iter()
+            .map(|k| PalwSeatReceiptV2 { claim, verdict: PalwReceiptVerdictV2::Valid, seat_bond: *k, signed_daa: 1_006, signature: Vec::new() })
+            .collect()
+    };
+    let s = fold_at(
+        &p,
+        audit,
+        &s,
+        &ctx(5, 1_005, 5, 0),
+        &[
+            PalwConsensusObjectV2::PanelBound { claim: named, anchor: h(0xA1), seats: seats.clone() },
+            PalwConsensusObjectV2::PanelBound { claim: sibling, anchor: h(0xA2), seats: seats.clone() },
+        ],
+        PalwBlockWorkV3::None,
+    )
+    .expect("both panels bind");
+    let s = fold_at(
+        &p,
+        audit,
+        &s,
+        &ctx(6, 1_006, 6, 0),
+        &[
+            PalwConsensusObjectV2::ReceiptLicensed { claim: named, receipts: receipts(named) },
+            PalwConsensusObjectV2::ReceiptLicensed { claim: sibling, receipts: receipts(sibling) },
+        ],
+        PalwBlockWorkV3::None,
+    )
+    .expect("both license");
+    let s = fold_at(&p, audit, &s, &ctx(7, 1_300, 7, 0), &[], PalwBlockWorkV3::None).unwrap();
+    for id in [named, sibling] {
+        assert!(matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{id} Final: {:?}", s.claim(&id).unwrap().phase);
+    }
+    // Before the conviction the sibling spends like any Final.
+    let s = fold_at(&p, audit, &s, &ctx(8, 1_800, 8, 0), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(sibling, 0, &bond.0, &pk)))
+        .expect("the sibling spends before any conviction");
+    let accused = valid_seats[0];
+    let payload = kaspa_consensus_core::palw_offence_v1::PalwPanelFalseValidEvidenceV1 {
+        version: kaspa_consensus_core::palw_offence_v1::PALW_PANEL_FALSE_VALID_VERSION_V1,
+        claim_id: named,
+        network_domain: h(0x0D05_0012),
+        accused_seat: accused.0,
+        valid_receipt: PalwSeatReceiptV2 { claim: named, verdict: PalwReceiptVerdictV2::Valid, seat_bond: accused, signed_daa: 1_006, signature: Vec::new() },
+        executor_pubkey: pk.clone(),
+        contradiction: kaspa_consensus_core::palw_offence_v1::PalwPanelContradictionV1::ExecutorEquivocation(equivocation_carriage(&bond.0, &profile)),
+    };
+    let evidence = borsh::to_vec(&payload).unwrap();
+    let evidence_id = kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence);
+    // The PARENT state the processor's own-work admission reads (processor.rs palw_v2_check_receipt_spend
+    // is called with `state`, the parent, at processor.rs:1903): claim Final, root not forfeited.
+    let target = if spend_named { named } else { sibling };
+    let parent_final = matches!(s.claim(&target).unwrap().phase, PalwClaimPhaseV2::Final { .. });
+    let parent_forfeit = s.palw_execution_root_is_forfeited_v1(&root);
+    // ONE block: its accepted objects carry the conviction (step 3), its own work spends (step 4).
+    let r = fold_at(
+        &p,
+        audit,
+        &s,
+        &ctx(9, 1_810, 9, 0),
+        &[PalwConsensusObjectV2::ObjectiveOffence { kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValid, accused, evidence_id, evidence }],
+        PalwBlockWorkV3::ReceiptSpend(&fp_spend(target, 1, &bond.0, &pk)),
+    );
+    (parent_final, parent_forfeit, r)
 }
 
 fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwStateV2Error> {
@@ -554,10 +642,9 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
     fold_at(&p, audit, &s, &ctx(10, 1_820, 10, 0), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(sibling, 1, &bond.0, &pk)))
 }
 
-/// A minimal `PalwEquivocationCarriageV1` for the ExecutorEquivocation contradiction, accusing
-/// `accused` — the claim's EXECUTOR bond. The acceptance layer verifies the two signatures; the
-/// fold does not, but past the 2026-09-24 review fix `bind_panel_false_valid` requires the carriage
-/// to accuse the claim's executor bond and the evidence's key to be the one it registered.
+/// A minimal `PalwEquivocationCarriageV1` for the ExecutorEquivocation contradiction, accusing the
+/// claim's EXECUTOR bond (`accused`) — past the 2026-09-24 review fix `bind_panel_false_valid`
+/// refuses one that accuses anyone else, or that the evidence carries under another key.
 fn equivocation_carriage(accused: &kaspa_consensus_core::tx::TransactionOutpoint, profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> kaspa_consensus_core::palw_carriage::PalwEquivocationCarriageV1 {
     let job_context = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, 512, 256);
     let att = |root: u64| kaspa_consensus_core::palw_slash::PalwExecutionAttestationV1 {
@@ -578,5 +665,34 @@ fn equivocation_carriage(accused: &kaspa_consensus_core::tx::TransactionOutpoint
             attestation_a: att(0xAA),
             attestation_b: att(0xBB),
         },
+    }
+}
+
+/// REVIEW (fence lens): a block whose accepted objects convict an execution and whose OWN work
+/// spends a receipt of that execution passes the processor's own-work admission (parent state:
+/// claim Final, root not forfeited) and is then refused by the fold's step 4, so the whole block
+/// is disqualified ("PALW state"). Below the fence the same block folds.
+///
+/// **Pinned as the intended rule (2026-09-24 review):** unlike an own attempt, an own receipt spend
+/// is NOT skipped on this refusal — a spend escrows nothing, and the coinbase pays the selected
+/// parent's worker share whatever its work turned out to be, so a skip would pay one receipt block
+/// for a convicted execution (what #5 closed). Every node refuses the block alike; the fold's
+/// step-4 comment says so. The refusal is the phase (#8 voided the named claim) or the forfeiture
+/// (#5, a sibling on the same root) — asserted by name so the test cannot pass on some other error.
+#[test]
+fn review_fence_same_block_conviction_and_own_spend() {
+    use kaspa_consensus_core::palw_state_v2::PalwStateV2Error;
+    for spend_named in [true, false] {
+        let (parent_final, parent_forfeit, r) = same_block(true, spend_named);
+        assert!(parent_final && !parent_forfeit, "the parent state admits the spend");
+        let err = r.expect_err("past the fence the fold refuses the block's own spend");
+        println!("spend_named={spend_named}: fold error past the fence: {err:?}");
+        if spend_named {
+            assert!(matches!(err, PalwStateV2Error::WrongPhase { edge: "ReceiptSpend", .. }), "{err:?}");
+        } else {
+            assert!(matches!(err, PalwStateV2Error::ReceiptRightsForfeited { .. }), "{err:?}");
+        }
+        let (_, _, below) = same_block(false, spend_named);
+        below.expect("below the fence the same block folds");
     }
 }

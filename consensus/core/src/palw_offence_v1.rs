@@ -84,8 +84,11 @@ pub struct PalwPanelFalseValidEvidenceV1 {
     pub network_domain: Hash64,
     pub accused_seat: TransactionOutpoint,
     pub valid_receipt: crate::palw_panel_v2::PalwSeatReceiptV2,
-    /// The claim executor's registered key. The processor checks it against the claim row;
-    /// [`palw_verify_objective_offence_v1`] checks the contradiction under this key.
+    /// The claim executor's registered key. [`palw_verify_objective_offence_v1`] checks the
+    /// contradiction under this key and cannot know whose it is; below `palw_audit_2026_09_23`
+    /// NOTHING checked it against the claim row (a fresh key convicted any seat). Past that fence
+    /// the processor and the fold (`bind_panel_false_valid`) require it to be the key the claim's
+    /// executor bond registered, and an `ExecutorEquivocation` carriage to accuse that bond.
     pub executor_pubkey: Vec<u8>,
     pub contradiction: PalwPanelContradictionV1,
 }

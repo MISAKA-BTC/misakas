@@ -1085,6 +1085,13 @@ pub struct PalwModelRegistryReadV1 {
     pub bonds: Vec<PalwRegistryBondReadV1>,
     /// Rowed classes by state: (active, active_limited, probation, prefetching, registered, held).
     pub counts: [u32; 6],
+    /// **Whether the fold judges a claim by `panel_room` at the tip** (ADR-0137 D5: the work target
+    /// in force and the registry past its grace) — otherwise by `max_inflight_claims`. A producer's
+    /// pre-check must ask the question the gate asks (2026-09-24 DoS audit review of #11).
+    pub panel_room_enforced: bool,
+    /// Whether `inflight_now` and `panel_room` count free-prompt claims in flight, as the class gate
+    /// does past `palw_audit_2026_09_23` ([`crate::palw_state_v2::palw_inflight_claims_counted_v1`]).
+    pub free_prompts_counted: bool,
 }
 
 /// Why a row is where it is, from its last boundary's reading.
@@ -1254,6 +1261,31 @@ pub fn palw_model_registry_ready_seats_v1(
     ready
 }
 
+/// [`palw_model_registry_inflight_v1`], and past `palw_audit_2026_09_23` (`count_free_prompts`)
+/// the class's free-prompt claims in flight too, in whole jobs of their quanta — the count the
+/// fold's class gate reads ([`crate::palw_state_v2::palw_inflight_claims_counted_v1`]).
+pub fn palw_model_registry_inflight_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    class_id: &Hash64,
+    count_free_prompts: bool,
+    quanta_per_job: u32,
+) -> u32 {
+    let (mut attempts, mut fp_claims, mut fp_quanta) = (0u64, 0u64, 0u64);
+    for (_, claim) in state.claims_iter() {
+        if claim.class_id != *class_id || claim.phase.is_terminal() {
+            continue;
+        }
+        match &claim.source {
+            crate::palw_state_v2::PalwClaimSourceV2::Attempt => attempts = attempts.saturating_add(1),
+            crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, .. } => {
+                fp_claims = fp_claims.saturating_add(1);
+                fp_quanta = fp_quanta.saturating_add(*quanta as u64);
+            }
+        }
+    }
+    crate::palw_state_v2::palw_inflight_claims_counted_v1(attempts, fp_claims, fp_quanta, quanta_per_job as u64, count_free_prompts)
+}
+
 /// Attempt claims of a class still in flight (accepted and not terminal).
 pub fn palw_model_registry_inflight_v1(state: &crate::palw_state_v2::PalwChainStateV2, class_id: &Hash64) -> u32 {
     state
@@ -1287,7 +1319,34 @@ pub fn palw_model_registry_read_v1(
     fold: Option<&PalwModelRegistryFoldV1>,
     work: Option<&crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
 ) -> PalwModelRegistryReadV1 {
+    palw_model_registry_read_v2(state, params, tip_daa, fence_daa, fold, work, false, false)
+}
+
+/// [`palw_model_registry_read_v1`] asking the gate's questions (2026-09-24 DoS audit review of
+/// #11): `count_free_prompts` past `palw_audit_2026_09_23` (the in-flight count and the panel's
+/// replay then include free-prompt claims as the fold's gate counts them), and
+/// `panel_room_enforced` where the fold judges by room rather than by the inflight cap. With both
+/// `false` this is v1.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_model_registry_read_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    tip_daa: u64,
+    fence_daa: Option<u64>,
+    fold: Option<&PalwModelRegistryFoldV1>,
+    work: Option<&crate::palw_work_target_v1::PalwWorkTargetFoldV1>,
+    count_free_prompts: bool,
+    panel_room_enforced: bool,
+) -> PalwModelRegistryReadV1 {
     use crate::palw_work_target_v1 as wt;
+    let per_job = params.fp_quanta_per_canonical_job();
+    let inflight_of = |class_id: &Hash64| -> u32 {
+        if count_free_prompts {
+            palw_model_registry_inflight_v2(state, class_id, true, per_job)
+        } else {
+            palw_model_registry_inflight_v1(state, class_id)
+        }
+    };
     let base = params.base_class_id();
     // ADR-0137 (shadow): every class's CCU (the fold's works, else its row's), the network-wide
     // in-flight replay, the budget's common horizon (the shortest admitted window) and the
@@ -1304,7 +1363,7 @@ pub fn palw_model_registry_read_v1(
     let panel_inflight_replay: u128 = state
         .classes_iter()
         .filter(|(id, _)| **id != base)
-        .map(|(id, _)| (palw_model_registry_inflight_v1(state, id) as u128).saturating_mul(ccu_of(id)).saturating_mul(seat_count))
+        .map(|(id, _)| (inflight_of(id) as u128).saturating_mul(ccu_of(id)).saturating_mul(seat_count))
         .fold(0u128, u128::saturating_add);
     let panel_horizon_spans = state
         .model_lifecycles_iter()
@@ -1345,7 +1404,7 @@ pub fn palw_model_registry_read_v1(
             is_base_class: *class_id == base,
             row: state.model_lifecycle(class_id).cloned(),
             ready_seats_now: fold.map(|f| palw_model_registry_ready_seats_v1(state, params, class_id, tip_daa, f)).unwrap_or(0),
-            inflight_now: palw_model_registry_inflight_v1(state, class_id),
+            inflight_now: inflight_of(class_id),
             share_permille: state.class_share_permille(class_id),
             reason: match (state.model_lifecycle(class_id), fold) {
                 (Some(row), Some(f)) => palw_lifecycle_reason_v1(row, *class_id == base, &f.globals),
@@ -1437,6 +1496,8 @@ pub fn palw_model_registry_read_v1(
         readiness,
         bonds,
         counts,
+        panel_room_enforced,
+        free_prompts_counted: count_free_prompts,
     }
 }
 

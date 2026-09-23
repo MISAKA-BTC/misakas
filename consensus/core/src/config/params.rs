@@ -2819,6 +2819,24 @@ impl Params {
                  moves voting power onto verified compute",
             ));
         }
+        // **The 2026-09-23 audit fence is armed at genesis or not at all** (2026-09-24 DoS audit
+        // review). Past it the second clock ticks at the licence and every tick enters the anchor
+        // ring; below it `Final` ticks the counter and nothing enters the ring. A crossing above
+        // genesis therefore starts with a counter the ring does not hold, and the D1 floor reads
+        // that surplus as pruned anchors (`palw_settled_anchor_floor_daa_v1` answers `Some(0)`:
+        // only genesis bonds mature) until `depth` licences refill the ring, while the second
+        // clock's escape reads the empty ring as a stretch with no anchor. Both are sound only on a
+        // chain whose ring and counter grew together from block one — which is how the one network
+        // that arms the fence (testnet-12) arms it. A later crossing needs its own migration of the
+        // ring; until one exists it is refused here, before a peer is dialed.
+        if let Some(fence) = self.palw_audit_2026_09_23
+            && fence.daa_score() != 0
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "palw_audit_2026_09_23 may only be armed at genesis (DAA 0): a later crossing starts the anchor ring empty \
+                 under a counter that pre-fence Finals already moved",
+            ));
+        }
         // ADR-0089 Decision 9's two preconditions: an EVM face of a market that does not exist,
         // or on a lane that is inert, is a design that has not been armed.
         if let Some(evm) = self.palw_model_evm {
@@ -15877,6 +15895,26 @@ mod consensus_params_id_tests {
     /// `ceil(2n/3) x min_bond` — a PRODUCT, and the count is the cheap half. These three
     /// constants were re-derived together and mean nothing apart, so they are asserted together:
     /// changing one without the others is the mistake this test exists to catch.
+    /// **The 2026-09-23 audit fence is armed at genesis or refused** (2026-09-24 DoS audit review):
+    /// testnet-12 arms it at DAA 0 and validates; the same card with the fence moved to any later
+    /// height is refused by name, because the anchor ring the fence's rules read would start empty
+    /// under a counter pre-fence `Final`s had already moved (the D1 floor then answers `Some(0)`).
+    ///
+    /// Fails without the check: the moved card validates.
+    #[test]
+    fn the_2026_09_23_audit_fence_is_armed_at_genesis_or_not_at_all() {
+        let t12 = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        assert_eq!(t12.palw_audit_2026_09_23.map(|f| f.daa_score()), Some(0), "testnet-12 arms it from genesis");
+        t12.validate_palw_v2().expect("testnet-12 validates");
+        let mut late = t12.clone();
+        late.palw_audit_2026_09_23 = Some(ForkActivation::new(1_000));
+        let refused = late.validate_palw_v2();
+        assert!(
+            matches!(refused, Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why)) if why.contains("only be armed at genesis")),
+            "{refused:?}"
+        );
+    }
+
     #[test]
     fn the_active_stake_gate_is_the_product_of_the_two_floors() {
         let dns = PRODUCTION_DNS_PARAMS;

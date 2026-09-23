@@ -201,6 +201,49 @@ impl PalwSlashableLockV1 {
             Some(depth) => self.is_live(now_daa) || settled_now.saturating_sub(self.settled_at_final) < depth,
         }
     }
+
+    /// [`Self::is_live_v2`] with the second clock bounded per obligation
+    /// ([`palw_second_clock_holds_v1`]): past its DAA expiry the lock is held by the anchor count
+    /// for at most `2 × window_court` more. `None` is the DAA-only rule, byte for byte.
+    pub fn is_live_v3(&self, now_daa: u64, settled_now: u64, depth: Option<u64>, window_court: u64) -> bool {
+        self.is_live(now_daa)
+            || palw_second_clock_holds_v1(depth, settled_now, self.settled_at_final, self.expiry_daa, now_daa, window_court)
+    }
+}
+
+/// **Does the second clock still hold an obligation whose DAA clock released it at `daa_release`?**
+/// (2026-09-24 DoS audit review of fix #3.)
+///
+/// The second clock keeps a lock, a liability or a retirement until `depth` anchors have settled
+/// since it began, and its liveness escape (`palw_second_clock_depth_v1`) waives it only after a
+/// stretch of `2 × window_court` with no licence ANYWHERE on the chain. Measured from the chain's
+/// last licence and not from the obligation, that left the count unbounded in DAA: one honest
+/// licence every `2 × window_court − 1` DAA — thirty attempts in all on testnet-12 — kept the escape
+/// from ever firing while the count crept up by one per licence, and froze every retiring bond on
+/// the network for `depth × 2 × window_court` DAA (~250 days on t12 instead of ~10;
+/// `review_economic_trickle_freeze`). Once the escape had let a withdrawal through, one later
+/// licence froze it again.
+///
+/// The bound: the second clock may extend an obligation by at most the escape's own stretch,
+/// `2 × window_court`, beyond the DAA clock that governs it. It is the same price the escape
+/// already concedes — a stretch of `2 × window_court` DAA an attacker drives with heartbeats
+/// releases the escape, and it releases this — so a heartbeat attacker gains nothing he did not
+/// have; what it removes is the trickle's multiplier and the re-freeze past the bound. `None`
+/// (below the fence, or escaped) holds nothing, as before.
+pub fn palw_second_clock_holds_v1(
+    depth: Option<u64>,
+    settled_now: u64,
+    settled_at: u64,
+    daa_release: u64,
+    now_daa: u64,
+    window_court: u64,
+) -> bool {
+    match depth {
+        None => false,
+        Some(depth) => {
+            settled_now.saturating_sub(settled_at) < depth && now_daa < daa_release.saturating_add(window_court.saturating_mul(2))
+        }
+    }
 }
 
 /// **Final does not erase liability.** A small record the chain can keep after the claim row
@@ -695,5 +738,28 @@ mod tests {
         assert!(seats.iter().all(|s| ledger.withdraw_allowed(s, expiry)));
         assert_eq!(ledger.total_live_var(&seats, expiry), 0);
         assert!(ledger.posted_is_never_counted_twice(expiry));
+    }
+
+    /// **2026-09-24 DoS audit review of fix #3: the second clock holds a lock at most
+    /// `2 × window_court` past its DAA expiry**, whatever the anchor count — so a trickle of one
+    /// licence per `2 × window_court − 1` DAA cannot keep a lock live for `depth × 2 × window_court`.
+    /// Inside the bound the anchor count still holds it; with the clock off (`None`) it is the DAA
+    /// rule byte for byte.
+    ///
+    /// Fails without the fix: `is_live_v2` (the rule before it) is still live at the bound.
+    #[test]
+    fn the_second_clock_holds_a_lock_for_at_most_two_court_windows_past_its_expiry() {
+        let (window_court, depth) = (3_000u64, 30u64);
+        let lock = PalwSlashableLockV1 { claim: Hash64::from_u64_word(1), amount: 7, expiry_daa: 10_000, settled_at_final: 5 };
+        let bound = lock.expiry_daa + 2 * window_court;
+        // Fewer than `depth` anchors since the liability began, throughout.
+        let settled = 5 + depth - 1;
+        assert!(lock.is_live_v3(lock.expiry_daa - 1, settled, Some(depth), window_court), "the DAA clock");
+        assert!(lock.is_live_v3(bound - 1, settled, Some(depth), window_court), "the anchor count holds it inside the bound");
+        assert!(!lock.is_live_v3(bound, settled, Some(depth), window_court), "and not one DAA past it");
+        assert!(lock.is_live_v2(bound, settled, Some(depth)), "PRE-FENCE DEFECT RECORD: v2 holds it on the count alone");
+        assert!(!lock.is_live_v3(lock.expiry_daa, 5 + depth, Some(depth), window_court), "enough anchors release it at expiry");
+        assert!(!lock.is_live_v3(lock.expiry_daa, settled, None, window_court), "no second clock: the DAA rule");
+        assert_eq!(lock.is_live_v3(lock.expiry_daa - 1, 0, None, window_court), lock.is_live(lock.expiry_daa - 1));
     }
 }
