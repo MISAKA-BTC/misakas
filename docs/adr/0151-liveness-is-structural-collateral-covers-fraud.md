@@ -264,4 +264,41 @@ Leftover nodes from a previous run hold their ports and ignore `SIGINT`; a ladde
 them. The three fixed memory phases bracket construction only; a periodic line and an external
 sampler are what bracket growth during operation.
 
-Post-fix ladder figures are appended below when the run completes.
+### The fourth path, and the gate, measured (item 6, continued)
+
+With the three above fixed, the producer sat flat at 2.3 GiB of anonymous memory until a peer
+arrived and blocks flowed — then rose 16.05 GiB in ONE minute and was killed. Not a leak: the K/V
+cache of one attempt. `A16Cache` is `Vec<Vec<Vec<i32>>>` twice, and the 2M row's canonical job
+prefills 262,143 positions: 28 × 2 × 256 × 4 B = 56 KiB a position, 14.55 GiB with headers. The
+producer's path had epoch and exposure gates and no memory gate; the panel's replay estimate was the
+artifact's file size plus 512 MiB (3.17 GiB), five times too small.
+
+`a16_attempt_working_set_bytes_v1` names the cost once, beside the cache; the producer asks
+`attempt_working_set_bytes(prefill)` right before it spawns and HOLDS; the panel's replay figure
+carries the K/V term (`82575797`). Verified on 5.104.81.23 (23 GiB, two nodes, budget 21 GiB / 4):
+
+```
+this attempt would allocate 17.23 GiB for a 262143-token prefill (its K/V cache plus scratch)
+and the host's replay budget is 13.74 GiB … — holding rather than being OOM-killed
+producer alive; 10 heartbeat blocks; no kill; steady anon 3.85 GiB
+```
+
+One transient remains unexplained: anon 1.08 → 9.79 GiB about a minute after start, released within
+two minutes, with the attempt already refused. It is a working-set term no figure names yet
+(candidates: the plan compile on the first resolve, the readiness material walk) and is assigned to
+the engine track below.
+
+**This gate is stage one, not the answer.** On 24 GiB hosts the 2M row is now a *named hold*
+rather than a crash, which also means it does not produce there. The operator's direction for the
+engine (tracked on `feat/kv-codec`): the runtime representation is not `CanonicalWork` — i32/i16/i8,
+paged/resident, mmap/RAM, CPU/GPU may all change while `execution_root`, verdict, `CanonicalWork`,
+payout and quanta stay byte-identical. Order: working-set canonicalization (producer / full seat /
+partial seat / checkpoint / KV-resident / scratch, derived from one canonical profile and separated
+from file size) → producer/panel/Court through one derivation → a node-local memory reservation
+ledger (`estimate → atomic reserve → execute → release`, because a correct per-attempt figure still
+OOMs when three seats each see "available") → S1 partial seats resuming only their segment → i16
+then i8 KV as versioned runtime profiles that never change a class's economic identity → RPC
+telemetry (`estimatedWorkingSet`, `reservedMemory`, `holdReason`, …) → cross-runtime determinism
+tests. Memory requirement is capacity; collateral is `max_fraud_gain`; the two are separate systems.
+
+Post-fix ladder figures (PSS per seat at 1 / 2 / 4 nodes) are appended when that run completes.
