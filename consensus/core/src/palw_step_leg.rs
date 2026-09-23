@@ -1405,6 +1405,12 @@ impl PalwStateSliceFrontierV4 {
         Self::default()
     }
 
+    /// Nodes this frontier holds — its closed peaks and the open one — for the capture that keeps
+    /// one of these per slice to account for what it retains.
+    pub fn retained_nodes(&self) -> usize {
+        self.closed.len() + usize::from(self.open.is_some())
+    }
+
     /// Blocks in the slice, the open one included.
     pub fn block_count(&self) -> u64 {
         self.closed_count + u64::from(self.open.is_some())

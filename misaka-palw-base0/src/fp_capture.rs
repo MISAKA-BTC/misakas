@@ -302,6 +302,11 @@ impl Base0SparseStepAccumulatorV1 {
     /// Fold one leaf hash. Order is the caller's obligation and the leaf index is derived from the
     /// count so far — a caller that pushed out of order would be committing a different tree, and
     /// the family's capture loops walk the canonical enumeration by construction.
+    /// Bytes this accumulator holds: its retained vector's capacity and the block in flight.
+    pub fn retained_bytes_v1(&self) -> u64 {
+        (self.retained.capacity() as u64 + self.block.capacity() as u64) * 64
+    }
+
     pub fn push(&mut self, leaf_hash: Hash64) -> Result<(), Base0SparseCaptureError> {
         if self.pushed >= self.leaf_count {
             return Err(Base0SparseCaptureError::CaptureOverrun { got: self.pushed + 1, expected: self.leaf_count });
@@ -347,6 +352,11 @@ pub struct Base0SparseStepTreeV1 {
 }
 
 impl Base0SparseStepTreeV1 {
+    /// Nodes the tree retains — one per `2^retain_level` leaves.
+    pub fn retained_len(&self) -> usize {
+        self.retained.len()
+    }
+
     pub fn leaf_count(&self) -> u64 {
         self.leaf_count
     }
@@ -1039,6 +1049,11 @@ impl Base0SparseStepCaptureV1 {
 
     /// How much of the step space this capture has folded — the sparse twin of
     /// [`crate::legs::Base0StepCaptureV1::progress`].
+    /// Bytes this fold holds — the accumulator's.
+    pub fn retained_bytes_v1(&self) -> u64 {
+        self.acc.retained_bytes_v1()
+    }
+
     pub fn progress(&self) -> (u64, u64) {
         self.acc.progress()
     }

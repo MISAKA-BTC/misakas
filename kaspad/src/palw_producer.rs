@@ -1066,6 +1066,9 @@ impl PalwProducerService {
             .to_vec();
             // The promise, kept before it is made. See `retain_execution`.
             let material = self.retain_execution(message, &run.material)?;
+            // The last bracket of the attempt (ADR-0151 follow-up): the material is on disk, the
+            // execution's buffers are gone, and this is what the process holds after one attempt.
+            crate::palw_backends::log_memory_phase_v1(PALW_PRODUCER, "attempt returned and its material retained", crate::palw_backends::armed_ram_scale_pub_v1());
             // **And the answer envelope beside it** (ADR-0084 Decision 4): the anchor, the prompt
             // the anchor derives, and the answer's ids — what a seat on the interval arm needs when
             // this capture (748 MB on the graph-v5 class) does not fit the transport. Best-effort:

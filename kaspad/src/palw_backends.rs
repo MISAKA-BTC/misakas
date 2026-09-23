@@ -541,6 +541,11 @@ fn armed_ram_scale_v1() -> f64 {
     *ARMED_RAM_SCALE.get().unwrap_or(&1.0)
 }
 
+/// The armed `--ram-scale`, for a caller outside this module that prints a memory phase.
+pub fn armed_ram_scale_pub_v1() -> f64 {
+    armed_ram_scale_v1()
+}
+
 /// **Whether `--palw-verify-class-manifest` was given**, set once by the daemon.
 ///
 /// A process-global rather than a parameter threaded through two service constructors: holdings are
