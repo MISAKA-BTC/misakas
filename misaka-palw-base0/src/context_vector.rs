@@ -1301,7 +1301,14 @@ mod tests {
             // document says about the EXECUTION moved: the same roots, the same 51,180 leaves, the same
             // verdicts, the same bytes — this vector is a dense graph-v7 row and the new family is a hybrid
             // one, which is exactly why only the ruleset field changed.
-            "d2803bc852aedc3a3417dddf94b833534752db66ad96446922e287cd7cf980f6c048090d76f54b509f1a381068162518dddb23bd630a397ce56584814234a6c4",
+            //
+            // **And a third time, for the economic audit's state schema v21** (`b5c5f324`, merged in
+            // `5d90a18f`): `PALW_STATE_V2_VERSION` and the rooted `settled_attempt_finals` sit in every V2
+            // bundle, so `devnet-held`'s `consensus_params_id` moved to `26cb91ff…`. The merge touched no
+            // file under `misaka-palw-base0` nor `palw_step`, `palw_state_chunk_map`, `palw_step_refute` or
+            // `palw_court_v2`, and the document still reads 51,180 leaves with every stage passing.
+            // Previous: `d2803bc8…`.
+            "9805d784f554054acf27dfe030c7280ce26493371f50c17d2e3c3addfafd7dca968b39e405e85f18cb0e27e7097364a6c096d6de4ca92762e1dc2fde833f0825",
         );
     }
 

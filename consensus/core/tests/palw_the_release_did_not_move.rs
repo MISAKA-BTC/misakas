@@ -33,8 +33,14 @@ use kaspa_consensus_core::config::params::{
 /// commit; this file was missed then and caught by the KV track's full run.
 /// Previous: params `79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640`,
 /// identity `12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2`.
-const T11_CONSENSUS_PARAMS_ID: &str = "33bdff0bf072c57fd27853899ae28a79b4bb8b43980a634c070257d9802bd634";
-const T11_CONSENSUS_IDENTITY_ID: &str = "ca11f05d1849a8cc28a6f6b27c7f3530947e6b26b80746c36ab057d8aa4dcfe1";
+///
+/// **Re-pinned again 2026-09-23 for the economic audit's state schema v21** (`b5c5f324`, merged in
+/// `5d90a18f`): `PALW_STATE_V2_VERSION` and the unconditionally-hashed `settled_attempt_finals` sit in
+/// every V2 bundle's state, so both ids move on every V2 preset while the schedule id does not (the
+/// audit's fence is `None` here, and Some-only). The params-id pin in `config::params` moved in
+/// `cca52e92`; this file was missed there. Previous: params `33bdff0b…`, identity `ca11f05d…`.
+const T11_CONSENSUS_PARAMS_ID: &str = "c99bb4f43891dc637e4d5634816c46b33d89f07a381875e2ce54bd3ef80ac74a";
+const T11_CONSENSUS_IDENTITY_ID: &str = "19dbdbb8afd374aafa14f7fd7457fac7304a19df697706f69b34be0e1e995d4e";
 /// **Re-pinned 2026-09-23 for ADR-0151's `palw_economic_safety`, and only this one of the three.**
 ///
 /// `consensus_schedule_id` writes every score `for_each_fence` visits, and a `None` Some-only fence
