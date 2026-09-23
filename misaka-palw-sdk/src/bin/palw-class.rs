@@ -287,7 +287,7 @@ fn manifest(view: &NetworkView, path: &std::path::Path, out: Option<PathBuf>, ch
     let sdk = sdk_for(view);
     let artifact = sdk.load_artifact(path)?;
     let bytes = std::fs::metadata(path).map(|m| m.len()).map_err(|e| format!("{}: {e}", path.display()))?;
-    let derived = misaka_palw_sdk::PalwClassManifestFileV1::derive_from_artifact(&sdk, &artifact, bytes);
+    let derived = misaka_palw_sdk::PalwClassManifestFileV1::derive_from_artifact(&sdk, &artifact, bytes).map_err(|e| e.to_string())?;
     let target = out.unwrap_or_else(|| misaka_palw_sdk::PalwClassManifestFileV1::path_beside(path));
 
     if check {

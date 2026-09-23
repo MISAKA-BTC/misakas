@@ -67,6 +67,10 @@ pub enum PalwClassManifestErrorV1 {
     /// `--palw-verify-class-manifest` exists for, and a refusal to start rather than a warning.
     RootDisagrees { class_id: PalwClassIdV1, manifest: PalwInventoryRootV1, recomputed: PalwInventoryRootV1 },
     Malformed(String),
+    /// The file's lineage has no digest this build can bind a manifest to. A refusal, never a
+    /// default: a manifest whose digest were the zero hash would "agree" with every file of that
+    /// lineage — the first Qwen3.6 sidecar (2026-09-23) would have been exactly that.
+    NoDigestForLineage { lineage_id: String },
 }
 
 impl std::fmt::Display for PalwClassManifestErrorV1 {
@@ -88,6 +92,10 @@ impl std::fmt::Display for PalwClassManifestErrorV1 {
                  same file — one of the two is not the root a registration can pin, and a producer that guesses gets slashed"
             ),
             Self::Malformed(why) => write!(f, "this manifest cannot be read: {why}"),
+            Self::NoDigestForLineage { lineage_id } => write!(
+                f,
+                "no digest binds a manifest to a `{lineage_id}` artifact in this build, so none is written or believed"
+            ),
         }
     }
 }
@@ -97,7 +105,12 @@ impl PalwClassManifestFileV1 {
     /// `CanonicalClassV1::artifact_root` — the same expression a producer's class resolve evaluates.
     /// A manifest generated any other way would be a second mapping, which is the defect this file
     /// exists to retire rather than to reproduce in a new place.
-    pub fn derive_from_artifact(sdk: &crate::PalwClassSdk, artifact: &crate::PalwLoadedArtifactV1, artifact_bytes: u64) -> Self {
+    pub fn derive_from_artifact(
+        sdk: &crate::PalwClassSdk,
+        artifact: &crate::PalwLoadedArtifactV1,
+        artifact_bytes: u64,
+    ) -> Result<Self, PalwClassManifestErrorV1> {
+        let artifact_digest = PalwArtifactDigestV1::measured_over_the_file(artifact_digest_of(artifact)?);
         let mut rows: Vec<PalwClassManifestRowV1> = sdk
             .pairings(artifact)
             .into_iter()
@@ -110,18 +123,13 @@ impl PalwClassManifestFileV1 {
             })
             .collect();
         rows.sort_by_key(|r| r.class_id.into_hash64());
-        Self {
-            artifact_digest: PalwArtifactDigestV1::measured_over_the_file(artifact_digest_of(artifact)),
-            artifact_bytes,
-            lineage_id: artifact.lineage_id.to_string(),
-            rows,
-        }
+        Ok(Self { artifact_digest, artifact_bytes, lineage_id: artifact.lineage_id.to_string(), rows })
     }
 
     /// Is this manifest about this file at all? The cheap check, and the one that must run before any
     /// row is believed.
     pub fn agrees_with_artifact(&self, artifact: &crate::PalwLoadedArtifactV1) -> Result<(), PalwClassManifestErrorV1> {
-        let measured = PalwArtifactDigestV1::measured_over_the_file(artifact_digest_of(artifact));
+        let measured = PalwArtifactDigestV1::measured_over_the_file(artifact_digest_of(artifact)?);
         if self.artifact_digest != measured {
             return Err(PalwClassManifestErrorV1::DigestMismatch { manifest: self.artifact_digest, artifact: measured });
         }
@@ -152,7 +160,7 @@ impl PalwClassManifestFileV1 {
         artifact: &crate::PalwLoadedArtifactV1,
     ) -> Result<(), PalwClassManifestErrorV1> {
         self.agrees_with_artifact(artifact)?;
-        let fresh = Self::derive_from_artifact(sdk, artifact, self.artifact_bytes);
+        let fresh = Self::derive_from_artifact(sdk, artifact, self.artifact_bytes)?;
         for row in &self.rows {
             match fresh.rows.iter().find(|r| r.class_id == row.class_id) {
                 Some(f) if f.inventory_root == row.inventory_root => {}
@@ -253,8 +261,19 @@ impl PalwClassManifestFileV1 {
 /// The file's own hash, from the dense container the holding carries. `None` becomes the zero hash,
 /// which no real artifact produces, so a holding this lineage cannot open fails the digest check
 /// rather than passing it vacuously.
-fn artifact_digest_of(artifact: &crate::PalwLoadedArtifactV1) -> Hash64 {
-    crate::lineages::dense::artifact_of(artifact).map(|a| a.artifact_digest()).unwrap_or_default()
+/// **The identity of the FILE a manifest is bound to, by lineage.** The dense tier's is its byte
+/// digest; the Qwen3.6 mapping's is the root computed over the mapping at load — one pass over the
+/// file, the value a graph-v2/v3 registration of it pins, and unlike a byte digest already in hand
+/// for a 36 GiB file. A lineage this does not know yields an ERROR: it used to yield the default
+/// (zero) hash, under which a Qwen3.6 sidecar would have agreed with every Qwen3.6 file.
+fn artifact_digest_of(artifact: &crate::PalwLoadedArtifactV1) -> Result<Hash64, PalwClassManifestErrorV1> {
+    if let Some(a) = crate::lineages::dense::artifact_of(artifact) {
+        return Ok(a.artifact_digest());
+    }
+    if let Some((computed_root, _)) = crate::lineages::qwen36::parts_of(artifact) {
+        return Ok(computed_root);
+    }
+    Err(PalwClassManifestErrorV1::NoDigestForLineage { lineage_id: artifact.lineage_id.to_string() })
 }
 
 #[cfg(test)]
@@ -276,6 +295,42 @@ mod tests {
             lineage_id: "base0-dense-v1".to_string(),
             rows: vec![row("Qwen/Qwen2.5-1.5B", 0x74C6, 0xF63A), row("Qwen/Qwen2.5-1.5B-512", 0x71BB, 0x1A74)],
         }
+    }
+
+    /// **A Qwen3.6 sidecar is bound to its file by the mapping's computed root, and a lineage with
+    /// no digest is refused rather than given the zero hash.** Before this the digest of every
+    /// non-dense holding was `Hash64::default()`, so a Qwen3.6 manifest would have "agreed" with any
+    /// Qwen3.6 artifact whatsoever.
+    #[test]
+    fn a_qwen36_sidecar_is_bound_by_the_mappings_root_and_an_unknown_lineage_is_refused() {
+        let artifact = std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
+        let holding = crate::lineages::qwen36::holding_from_artifact(artifact.clone(), None);
+        let digest = artifact_digest_of(&holding).expect("the mapping's root is the digest");
+        assert_eq!(digest, artifact.artifact_root());
+        assert_ne!(digest, Hash64::default(), "a real root, not the default");
+        let manifest = PalwClassManifestFileV1 {
+            artifact_digest: PalwArtifactDigestV1::measured_over_the_file(digest),
+            artifact_bytes: 1,
+            lineage_id: crate::lineages::qwen36::QWEN36_LINEAGE_ID.to_string(),
+            rows: Vec::new(),
+        };
+        manifest.agrees_with_artifact(&holding).expect("bound to its own file");
+        let other = std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 4));
+        let other_holding = crate::lineages::qwen36::holding_from_artifact(other, None);
+        assert!(
+            matches!(manifest.agrees_with_artifact(&other_holding), Err(PalwClassManifestErrorV1::DigestMismatch { .. })),
+            "another Qwen3.6 file is another digest"
+        );
+
+        let stranger = crate::PalwLoadedArtifactV1::from_parts("no-such-lineage", None, String::new(), std::sync::Arc::new(()));
+        match artifact_digest_of(&stranger) {
+            Err(PalwClassManifestErrorV1::NoDigestForLineage { lineage_id }) => assert_eq!(lineage_id, "no-such-lineage"),
+            other => panic!("an unknown lineage must be refused by name, got {other:?}"),
+        }
+        assert!(
+            matches!(manifest.agrees_with_artifact(&stranger), Err(PalwClassManifestErrorV1::NoDigestForLineage { .. })),
+            "…and never agreed with"
+        );
     }
 
     #[test]
