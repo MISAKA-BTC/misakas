@@ -230,8 +230,9 @@ enum KvSideV1 {
 
 impl KvSideV1 {
     fn empty(profile: KvStorageProfileV1) -> Self {
+        // The hybrid's name prices the same `i32` lanes; a dense cache asked for it holds them.
         match profile {
-            KvStorageProfileV1::A16KvI32 => KvSideV1::I32(Vec::new()),
+            KvStorageProfileV1::A16KvI32 | KvStorageProfileV1::Q36KvI32 => KvSideV1::I32(Vec::new()),
             KvStorageProfileV1::A16KvI16 => KvSideV1::I16(Vec::new()),
         }
     }
@@ -649,7 +650,7 @@ impl A16Cache {
 impl KvSideV1 {
     fn zeroed(profile: KvStorageProfileV1, elements: usize) -> Self {
         match profile {
-            KvStorageProfileV1::A16KvI32 => KvSideV1::I32(vec![0; elements]),
+            KvStorageProfileV1::A16KvI32 | KvStorageProfileV1::Q36KvI32 => KvSideV1::I32(vec![0; elements]),
             KvStorageProfileV1::A16KvI16 => KvSideV1::I16(vec![0; elements]),
         }
     }
