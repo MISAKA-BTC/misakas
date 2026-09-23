@@ -174,6 +174,7 @@ struct Selectors {
     too_many_actions_for_account: [u8; 4],
     bad_input: [u8; 4],
     seed_too_small: [u8; 4],
+    class_not_eligible: [u8; 4],
     // ERC-165
     imrc20_interface_id: [u8; 4],
 }
@@ -266,6 +267,7 @@ fn sel() -> &'static Selectors {
             too_many_actions_for_account: selector("TooManyActionsForAccount()"),
             bad_input: selector("BadInput()"),
             seed_too_small: selector("SeedTooSmall()"),
+            class_not_eligible: selector("ClassNotEligible()"),
             imrc20_interface_id: imrc20,
         }
     })
@@ -342,6 +344,13 @@ pub mod errors {
     }
     pub fn seed_too_small() -> [u8; 4] {
         super::sel().seed_too_small
+    }
+    /// `ClassNotEligible()`: a seed or a buy of a line whose class the model registry has not
+    /// admitted (Probation, ActiveLimited or Active), which the fold would refuse (the 2026-09-23
+    /// Position route matrix, P-B3). Raised only past `Params::palw_audit_2026_09_23`, where the
+    /// view's `market_refused_classes` is filled; a sell never raises it.
+    pub fn class_not_eligible() -> [u8; 4] {
+        super::sel().class_not_eligible
     }
 }
 
@@ -844,7 +853,9 @@ impl MarketHandlers {
                         .u64(m.burned_sompi)
                         .u64(m.registrant_paid_sompi)
                         .u64(m.contributor_paid_sompi)
-                        .bool(m.closed_to_buys)
+                        // P-B3: past the audit fence a line whose class the fold's market gate
+                        // refuses is closed to buys here too (the view's set is empty below it).
+                        .bool(m.closed_to_buys || self.view.market_refuses(&a.hash64(0)))
                         .bool(exists)
                         // ADR-0091: appended, so every word above keeps its offset.
                         .u64(m.buyback_sompi)
@@ -1380,6 +1391,14 @@ fn write_frame<EXT, DB: Database>(
     if market.view.line(&line).is_none() {
         return Ok(revert(errors::unknown_line(), gas, memory));
     }
+    // **The 2026-09-23 Position route matrix, P-B3: the fold's lifecycle gate, before the escrow.**
+    // A seed or a buy of a line whose class the registry has not admitted is refused by the fold
+    // (`ModelClassNotEligible`, settled as `Refused { NOT_ACTIVE }` with the escrow refunded one
+    // block later); reverting here asks the fold's question at the call, so the caller keeps its
+    // value in hand and pays only gas. Empty below the audit fence: testnet-11 reverts nothing new.
+    if id != PALW_EVM_ACTION_SELL && market.view.market_refuses(&line) {
+        return Ok(revert(errors::class_not_eligible(), gas, memory));
+    }
     if id == PALW_EVM_ACTION_BUY && market.view.markets.get(&line).is_some_and(|m| m.closed_to_buys) {
         return Ok(revert(errors::closed_to_buys(), gas, memory));
     }
@@ -1582,6 +1601,59 @@ mod tests {
         input.extend_from_slice(&unknown.as_byte_slice()[32..]);
         let Ok(zero) = m.amm(&input) else { panic!("a zero row") };
         assert_eq!(zero, vec![0u8; 11 * 32]);
+    }
+
+    /// **P-B3 (the 2026-09-23 Position route matrix): `market()`'s `closedToBuys` word asks the
+    /// fold's lifecycle gate too.** Past the audit fence consensus lists the classes the gate refuses
+    /// in the view; a line of one reads closed to buys, whatever its row says, and the writer's
+    /// revert names it `ClassNotEligible()`. With the list empty (below the fence) the word is the
+    /// row's, byte for byte.
+    #[test]
+    fn p_b3_a_line_the_gate_refuses_reads_closed_to_buys() {
+        use kaspa_consensus_core::evm::model_market::PalwEvmLineRowV1;
+        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+        let line = Hash64::from_u64_word(9);
+        let class = Hash64::from_u64_word(3);
+        let row = PalwEvmLineRowV1 {
+            class_id: class,
+            owner_payload: None,
+            developer_payload: None,
+            maintainer_payload: None,
+            name: b"line".to_vec(),
+            founded_daa: 1,
+            current: 1,
+            versions_published: 1,
+            preview_count: 0,
+            contributor_permille_of_leg: 0,
+            status: 0,
+        };
+        let mut view = PalwEvmViewV1 { chain_daa: 42, chain_id: 1, lines: vec![(line, row)], ..Default::default() };
+        view.markets.insert(line, PalwModelMarketV1::seed_v1(7, PALW_MODEL_SEED_MIN_SOMPI_V1, Hash64::from_u64_word(1)));
+        let fences = PalwEvmMarketFencesV1 {
+            market_active: true,
+            lines_active: true,
+            evm_active: true,
+            leg_v2_active: false,
+            seed_v2_active: false,
+        };
+        let closed = |view: &PalwEvmViewV1| {
+            let m = MarketHandlers::new(std::sync::Arc::new(view.clone()), fences, 1);
+            let mut input = sel().market.to_vec();
+            input.extend_from_slice(&line.as_byte_slice()[..32]);
+            input.extend_from_slice(&line.as_byte_slice()[32..]);
+            let Ok(out) = m.amm(&input) else { panic!("the window answers") };
+            (
+                u64::from_be_bytes(out[7 * 32 + 24..8 * 32].try_into().unwrap()),
+                u64::from_be_bytes(out[8 * 32 + 24..9 * 32].try_into().unwrap()),
+            )
+        };
+        assert_eq!(closed(&view), (0, 1), "below the fence: the row's own word, and the row exists");
+        view.market_refused_classes.insert(class);
+        assert!(view.market_refuses(&line));
+        assert_eq!(closed(&view), (1, 1), "past it: closed to buys, and still a market a holder can sell into");
+        view.market_refused_classes = [Hash64::from_u64_word(4)].into();
+        assert!(!view.market_refuses(&line), "another class's refusal is not this line's");
+        assert_eq!(errors::class_not_eligible(), selector("ClassNotEligible()"), "the revert names itself");
     }
 
     /// **ADR-0101 Decision 5 (settled by the operator, 2026-09-10): a Position never moves between

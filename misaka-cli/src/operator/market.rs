@@ -598,6 +598,17 @@ pub(crate) async fn market_open(
             }
             SeedPlan::Pay { amount, opens } => (amount, opens),
         };
+        // **The 2026-09-23 Position route matrix, P-B3: the registry's gate, before anything is
+        // paid.** The fold takes no seed on a class the registry has not admitted, and a refused seed
+        // still lands its carrier.
+        if let Some(why) = crate::palw_model::market_refusal(&m) {
+            return Err(Halt::Blocked(
+                Finding::error("E-MARKET-NOT-ELIGIBLE", exit::MODEL, "The registry has not admitted this model")
+                    .current(why)
+                    .reason("a seed into a model the chain does not serve is refused, and on this lane the MSK is burned")
+                    .fix(format!("misaka model status {selector}")),
+            ));
+        }
         flow.row(
             Severity::Info,
             "market",
@@ -816,6 +827,10 @@ pub(crate) async fn position_quote(
     match (msk_in, positions) {
         (Some(text), None) => {
             let amount = crate::palw_model::parse_msk_amount(text)?;
+            // P-B3 (the 2026-09-23 Position route matrix): the reason, not "the curve releases nothing".
+            if let Some(why) = crate::palw_model::market_refusal(&m) {
+                return Err(CliError::new(exit::GENERIC, why));
+            }
             let q = palw_model_buy_quote_with(&market, amount, served_schedule(&m)).ok_or_else(|| {
                 CliError::new(exit::GENERIC, "the curve releases nothing for that amount (closed to buys, not open, or too small)")
             })?;
@@ -876,6 +891,10 @@ pub(crate) async fn position_buy(
         .await
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
     let amount = crate::palw_model::parse_msk_amount(msk_text)?;
+    // P-B3 (the 2026-09-23 Position route matrix): the registry's gate, named before the quote.
+    if let Some(why) = crate::palw_model::market_refusal(&m) {
+        return Err(CliError::new(exit::GENERIC, why));
+    }
     let q = palw_model_buy_quote_with(&market_from_response(&m), amount, served_schedule(&m)).ok_or_else(|| {
         CliError::new(exit::GENERIC, "the curve releases nothing for that amount (closed to buys, not open, or too small)")
     })?;

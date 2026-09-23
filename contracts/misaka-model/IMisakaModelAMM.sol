@@ -41,7 +41,9 @@ interface IMisakaModelAMM {
     ///   ownerPaid       sompi paid to the line's owner (the 1 % leg), cumulative
     ///   contributorPaid sompi paid to an adopted contributor out of that leg, cumulative
     ///   closedToBuys    set when the line left Active (retired) — sells continue, buys are
-    ///                   refused (ADR-0087 D7, per line since ADR-0088 D6)
+    ///                   refused (ADR-0087 D7, per line since ADR-0088 D6); past the 2026-09-23
+    ///                   audit fence also set while the model registry has not admitted the
+    ///                   line's class (P-B3: the writer reverts `ClassNotEligible()` then)
     ///   exists          false until the market is seeded (ADR-0090 D2)
     ///   buybackSompi    sompi the MINING REWARD has put into the curve, cumulative — 5 % of every
     ///                   block's escrowed worker reward on this line, at the claim's Final

@@ -3071,11 +3071,22 @@ pub struct GetPalwModelMarketResponse {
     pub leg_permille: u64,
     /// ADR-0114: the DAA the five-percent leg takes effect at on this network (0 = not scheduled).
     pub leg_v2_activation_daa: u64,
+    /// **The 2026-09-23 Position route matrix, P-B3: the registry lifecycle of the line's class**
+    /// (`Prefetching`, `Probation { .. }`, `Active`, `Held`, …); empty where the registry holds no
+    /// row, and from a peer older than version 7.
+    #[serde(default)]
+    pub class_lifecycle: String,
+    /// **P-B3: why the fold at the node's next block would refuse a seed or a buy of this line on
+    /// its class's lifecycle; empty where it would take them.** A client asks this before it pays,
+    /// because a refused carrier seed or buy loses its sink output (P-B1). A sell is never refused
+    /// for it. A peer older than version 7 serves it empty — its fold asked no such question.
+    #[serde(default)]
+    pub market_refusal: String,
 }
 
 impl Serializer for GetPalwModelMarketResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &6, writer)?;
+        store!(u16, &7, writer)?;
         store!(bool, &self.found, writer)?;
         store!(String, &self.line_id, writer)?;
         store!(bool, &self.opened, writer)?;
@@ -3104,6 +3115,9 @@ impl Serializer for GetPalwModelMarketResponse {
         store!(u64, &self.burn_permille, writer)?;
         store!(u64, &self.leg_permille, writer)?;
         store!(u64, &self.leg_v2_activation_daa, writer)?;
+        // Version 7 (the 2026-09-23 Position route matrix, P-B3): the lifecycle and the market gate.
+        store!(String, &self.class_lifecycle, writer)?;
+        store!(String, &self.market_refusal, writer)?;
         Ok(())
     }
 }
@@ -3142,6 +3156,9 @@ impl Deserializer for GetPalwModelMarketResponse {
             let v1 = kaspa_consensus_core::palw_model_market_v1::PalwModelFeesV1::V1;
             (v1.burn_permille, v1.leg_permille, 0)
         };
+        // Version 7 (P-B3): an older peer's fold never asked the registry, so it names no refusal.
+        let (class_lifecycle, market_refusal) =
+            if version >= 7 { (load!(String, reader)?, load!(String, reader)?) } else { (String::new(), String::new()) };
         Ok(Self {
             found,
             line_id,
@@ -3167,6 +3184,8 @@ impl Deserializer for GetPalwModelMarketResponse {
             burn_permille,
             leg_permille,
             leg_v2_activation_daa,
+            class_lifecycle,
+            market_refusal,
         })
     }
 }
@@ -10398,5 +10417,58 @@ mod palw_derived_artifacts_wire_tests {
         assert_eq!(back.phase, "final");
         assert_eq!(back.derived_count, 2);
         assert!(back.is_free_prompt);
+    }
+}
+
+#[cfg(test)]
+mod palw_model_market_wire_tests {
+    use super::*;
+
+    fn a_market() -> GetPalwModelMarketResponse {
+        GetPalwModelMarketResponse {
+            found: true,
+            line_id: "74".repeat(64),
+            opened: true,
+            seed_pledged_sompi: 200_000_000,
+            seed_min_sompi: 100_000_000_000_000,
+            burn_permille: 50,
+            leg_permille: 50,
+            leg_v2_activation_daa: 3_500,
+            class_status: "Active".to_string(),
+            // Version 7, non-default so a lost field cannot pass as a carried one.
+            class_lifecycle: "Prefetching".to_string(),
+            market_refusal: "class 74… is Prefetching under the model registry".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **The 2026-09-23 Position route matrix, P-B3: the gate reaches the client.** A version-7 node
+    /// carries the lifecycle and the refusal; they are what `misaka palw model-seed` and `model-buy`
+    /// refuse on before a carrier's sink output is spent.
+    #[test]
+    fn the_lifecycle_and_the_market_refusal_survive_the_round_trip() {
+        let response = a_market();
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwModelMarketResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back.class_lifecycle, "Prefetching");
+        assert_eq!(back.market_refusal, response.market_refusal);
+        assert_eq!((back.seed_pledged_sompi, back.leg_v2_activation_daa), (200_000_000, 3_500), "the version-6 fields still land");
+    }
+
+    /// A version-6 peer's answer — the same bytes without the suffix — reads as no refusal: its fold
+    /// never asked the registry, so there is nothing to refuse on, and a client does what it did.
+    #[test]
+    fn a_version_6_peer_reads_as_no_refusal() {
+        let response = GetPalwModelMarketResponse { class_lifecycle: String::new(), market_refusal: String::new(), ..a_market() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        // Version 7 appended two strings; two empty borsh strings are two zero u32 lengths.
+        assert_eq!(&bytes[bytes.len() - 8..], &[0u8; 8]);
+        bytes.truncate(bytes.len() - 8);
+        bytes[..2].copy_from_slice(&6u16.to_le_bytes());
+        let back = <GetPalwModelMarketResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert!(back.class_lifecycle.is_empty() && back.market_refusal.is_empty());
+        assert_eq!((back.burn_permille, back.leg_permille, back.leg_v2_activation_daa), (50, 50, 3_500));
     }
 }

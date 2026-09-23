@@ -12824,6 +12824,33 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     );
 }
 
+/// **The 2026-09-23 Position route matrix, P-B3: the template asks the market gate the mempool
+/// asks** (the review's MEDIUM point). A carrier admitted to the mempool while its class served can
+/// be in the pool when the class regresses (Probation → Held); only a template-time check keeps
+/// this node from mining it into a fold that drops it. Pinned on the source: both
+/// `validate_mempool_transaction_impl` and `validate_block_template_transaction` call
+/// `palw_mempool_market_refusal`, the one function that asks `palw_model_market_carrier_refusal_v1`.
+#[test]
+fn p_b3_the_template_asks_the_market_gate_the_mempool_asks() {
+    let source = include_str!("processor.rs");
+    let body_of = |name: &str| -> String {
+        let start = source.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("{name} exists"));
+        let rest = &source[start..];
+        let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
+        assert!(
+            body_of(caller).contains("self.palw_mempool_market_refusal("),
+            "{caller} must ask the P-B3 market gate (palw_mempool_market_refusal)"
+        );
+    }
+    assert!(
+        body_of("palw_mempool_market_refusal").contains("palw_model_market_carrier_refusal_v1("),
+        "the gate is the core predicate the fold's refusal is tested against"
+    );
+}
+
 /// **`getPalwProducerFacts` answers from one tip materialization, not two per call** (mainnet
 /// audit M-5).
 ///

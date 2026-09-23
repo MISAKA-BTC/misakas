@@ -26,6 +26,21 @@ pub(crate) fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) ->
     PalwModelFeesV1 { burn_permille: r.burn_permille, leg_permille: r.leg_permille }
 }
 
+/// **The 2026-09-23 Position route matrix, P-B3: the fold's lifecycle gate, as the node served it.**
+/// `Some(why)` where the fold at the node's next block refuses a seed or a buy of this line because
+/// the registry has not admitted its class. Asked before a carrier is built: a refused carrier seed
+/// or buy still lands, and its sink output is the payment (P-B1). A node older than version 7 served
+/// no gate — its fold asked none — and reads as `None`. A sell never asks.
+pub(crate) fn market_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> Option<String> {
+    (!r.market_refusal.is_empty()).then(|| {
+        format!(
+            "line {} takes no seed and no buy now: {} — the chain would refuse the move and the MSK paid into the \
+             sink would not come back (sells stay open)",
+            r.line_id, r.market_refusal
+        )
+    })
+}
+
 /// "5 %", "1 %": a permille as the percentage the CLI prints.
 pub(crate) fn pct(permille: u64) -> String {
     if permille.is_multiple_of(10) { format!("{} %", permille / 10) } else { format!("{}.{} %", permille / 10, permille % 10) }
@@ -123,6 +138,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "supply_units": r.supply_units,
         "virtual_sompi": r.virtual_sompi,
         "class_status": r.class_status,
+        // P-B3: the registry's lifecycle, and the fold's refusal of a seed or a buy ("" = none).
+        "class_lifecycle": r.class_lifecycle,
+        "market_refusal": r.market_refusal,
         "burn_permille": r.burn_permille,
         "owner_leg_permille": r.leg_permille,
         "owner_leg_v2_activation_daa": r.leg_v2_activation_daa,
@@ -161,6 +179,13 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
     } else {
         println!("line {}", r.line_id);
         println!("  class status   {}{}", r.class_status, if r.closed_to_buys { " (closed to buys)" } else { "" });
+        if !r.class_lifecycle.is_empty() {
+            println!("  registry       {}", r.class_lifecycle);
+        }
+        if !r.market_refusal.is_empty() {
+            // P-B3: what the fold says of a seed or a buy here; a holder can still sell.
+            println!("  seed / buy     refused — {} (sells stay open)", r.market_refusal);
+        }
         println!(
             "  market         {}",
             if market_from_response(&r).is_open() {
@@ -376,6 +401,10 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     if !r.found {
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
+    // P-B3 (the 2026-09-23 Position route matrix): the registry's gate first, as the fold asks it.
+    if let Some(why) = market_refusal(&r) {
+        return Err(CliError::new(exit::GENERIC, why));
+    }
     // **Open is `seed_sompi > 0`, not the wire's `opened`** — that flag is "a market row exists",
     // and the first instalment creates one: the second instalment this command's own hint asks
     // for was refused here as "already seeded (0 MSK locked)".
@@ -458,6 +487,10 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
     if !r.found {
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
+    }
+    // P-B3 (the 2026-09-23 Position route matrix): named, before the quote the gate also closes.
+    if let Some(why) = market_refusal(&r) {
+        return Err(CliError::new(exit::GENERIC, why));
     }
     let market = market_from_response(&r);
     let Some(quote) = palw_model_buy_quote_with(&market, msk_in, served_schedule(&r)) else {
@@ -642,7 +675,24 @@ pub async fn sell(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_msk_amount;
+    use super::{market_refusal, parse_msk_amount};
+
+    /// P-B3 (the 2026-09-23 Position route matrix): the node's refusal stops a seed or a buy before
+    /// a carrier is built, and a node that served none — a version-6 peer — stops nothing.
+    #[test]
+    fn a_served_market_refusal_stops_the_seed_and_the_buy_and_an_empty_one_does_not() {
+        let quiet = kaspa_rpc_core::GetPalwModelMarketResponse { found: true, ..Default::default() };
+        assert_eq!(market_refusal(&quiet), None);
+        let refused = kaspa_rpc_core::GetPalwModelMarketResponse {
+            found: true,
+            line_id: "74".repeat(64),
+            class_lifecycle: "Prefetching".into(),
+            market_refusal: "class 74… is Prefetching under the model registry".into(),
+            ..Default::default()
+        };
+        let why = market_refusal(&refused).expect("refused");
+        assert!(why.contains("Prefetching") && why.contains("would not come back"), "{why}");
+    }
 
     /// **P-B4: below the 2026-09-23 fence a sell burns its proceeds, so the tool refuses to sign
     /// unless the seller names the burn.** Past the fence it signs with or without the flag.

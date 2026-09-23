@@ -5474,6 +5474,12 @@ pub enum PalwStateV2Error {
     ModelPayoutQueueFull { held: usize, want: usize, cap: usize },
     #[error("class {0} is frozen, so its line takes no seed")]
     ModelClassClosed(Hash64),
+    /// **The registry has not made the line's class eligible, so the pair takes no seed and the
+    /// market no buy** (the 2026-09-23 Position route matrix, P-B3). `state` is the registry row's
+    /// lifecycle, or "no row". Never raised by a sell: a holder is never trapped in a model the
+    /// registry has since held.
+    #[error("class {class} is {state} under the model registry, so its line takes no seed and its market no buy")]
+    ModelClassNotEligible { class: Hash64, state: String },
     // ADR-0088, the model registry.
     #[error("the model registry is not in force on this chain")]
     ModelLinesNotArmed,
@@ -7132,6 +7138,9 @@ impl PalwChainStateV2 {
             evaluations,
             markets: self.model_markets.clone(),
             positions: self.model_positions.clone(),
+            // P-B3: filled by the caller that holds the block's extras
+            // (`palw_evm_market_refused_classes_v1`), and only past the audit fence.
+            market_refused_classes: Default::default(),
         }
     }
 
@@ -8802,22 +8811,59 @@ impl PalwFoldReadV1<'_> {
         )
     }
 
+    /// **The lifecycle half of the claim gate, as one predicate: the state `class_id`'s registry row
+    /// holds it in, where that state admits nothing.** `None` where the registry is dormant at this
+    /// block, for the base class (never gated), for a class without a row below the work target, and
+    /// for a state `PalwModelLifecycleV1::admits_claims` lists — a positive list, so a state added
+    /// later admits nothing until someone writes it there. The claim gate and the market gate
+    /// ([`Self::check_model_market_admits`]) both ask it, so a claim and a position cannot disagree
+    /// about whether the chain serves a model (the 2026-09-23 Position route matrix, P-B3: they did —
+    /// a buy filled on a class whose every claim the registry refused).
+    fn class_lifecycle_refusal(&self, class_id: &Hash64) -> Option<String> {
+        self.extras.model_registry.as_ref()?;
+        if *class_id == self.params.base_class_id() {
+            return None;
+        }
+        match self.state.model_lifecycles.get(class_id) {
+            // ADR-0137: past the work target every model class is priced by its row; a class
+            // without one (registered before the fence without a carriage) is refused, not free.
+            None => self.extras.work_target_active.then(|| "no row".to_string()),
+            Some(row) => (!row.state.admits_claims()).then(|| format!("{:?}", row.state)),
+        }
+    }
+
+    /// **A line's market follows its class's registry lifecycle** (the 2026-09-23 Position route
+    /// matrix, P-B3). A seed — and so an instalment toward one (ADR-0094) — and a buy are taken only
+    /// where [`Self::class_lifecycle_refusal`] finds nothing: the question the claim gate asks first,
+    /// through the same expression. Measured before the fix: a buy of 449 units filled on a class the
+    /// registry held at `Prefetching`, and two live 1 MSK pledges landed on a private testnet-12's
+    /// `Prefetching` 74c67e63 — a tradable pair on a model the chain was refusing every claim of, and
+    /// for a class that never leaves `Candidate` a pledge locked for good in a pair nobody can trade.
+    /// ADR-0090 Decision 2's pre-activation seed was written for the class-status CLOCK, which always
+    /// arrives; a lifecycle is not a clock. A SELL never asks: a holder is never trapped in a model the
+    /// registry has since held. Below `Params::palw_audit_2026_09_23` nothing is asked, so
+    /// testnet-11 — which arms the market — folds every seed and buy exactly as it did.
+    fn check_model_market_admits(&self, class_id: &Hash64) -> Result<(), PalwStateV2Error> {
+        if !self.extras.audit_2026_09_23_active {
+            return Ok(());
+        }
+        match self.class_lifecycle_refusal(class_id) {
+            Some(state) => Err(PalwStateV2Error::ModelClassNotEligible { class: *class_id, state }),
+            None => Ok(()),
+        }
+    }
+
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
         let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
+        if let Some(state) = self.class_lifecycle_refusal(class_id) {
+            return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state });
+        }
+        // What the lifecycle let through without a row to read — the base class, and a class
+        // without a row below the work target — has no room to check either.
         if *class_id == self.params.base_class_id() {
             return Ok(());
         }
-        let Some(row) = self.state.model_lifecycles.get(class_id) else {
-            // ADR-0137: past the work target every model class is priced by its row; a class
-            // without one (registered before the fence without a carriage) is refused, not free.
-            if self.extras.work_target_active {
-                return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: "no row".to_string() });
-            }
-            return Ok(());
-        };
-        if !row.state.admits_claims() {
-            return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: format!("{:?}", row.state) });
-        }
+        let Some(row) = self.state.model_lifecycles.get(class_id) else { return Ok(()) };
         // **H-2 of the 2026-09-18 audit: the room check waits for the grace the registry already
         // computes.** The work target and the registry arm at the same height, and a readiness proof
         // is refused below that height — so on the flag day itself every class has zero ready seats,
@@ -8963,6 +9009,66 @@ pub fn palw_class_admits_claim_v1(
     now_daa: u64,
 ) -> Result<(), PalwStateV2Error> {
     PalwFoldReadV1 { state, params, extras }.check_class_admits_claim(class_id, now_daa)
+}
+
+/// **Would the fold at a block with these `extras` take a seed or a buy on a line of `class_id`, as
+/// far as the class's registry lifecycle decides?** The fold's own market gate (the 2026-09-23
+/// Position route matrix, P-B3), for a caller that must answer before anyone pays — the node's
+/// `getPalwModelMarket` above all, because on the carrier lane a refused seed or buy still lands
+/// its carrier and the sink output is the payment (P-B1). A sell is never gated.
+pub fn palw_model_market_admits_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    class_id: &Hash64,
+) -> Result<(), PalwStateV2Error> {
+    PalwFoldReadV1 { state, params, extras }.check_model_market_admits(class_id)
+}
+
+/// **The same gate for the EVM lane's pre-checks** (the 2026-09-23 Position route matrix, P-B3):
+/// every class whose seed and buy [`palw_model_market_admits_v1`] refuses under `extras`, for
+/// `PalwEvmViewV1::market_refused_classes`. Empty unless `extras.audit_2026_09_23_active` — the
+/// gate asks nothing below the fence — so testnet-11's EVM window is byte-identical. The base class
+/// is never gated, so it is never here.
+pub fn palw_evm_market_refused_classes_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+) -> BTreeSet<Hash64> {
+    if !extras.audit_2026_09_23_active {
+        return BTreeSet::new();
+    }
+    state.classes.keys().filter(|class_id| palw_model_market_admits_v1(state, params, extras, class_id).is_err()).copied().collect()
+}
+
+/// **The same gate for a carrier before it is mined** (the 2026-09-23 Position route matrix, P-B3):
+/// the refusal the fold would give the `ModelSeed` or `ModelBuy` that `tx` carries, on its class's
+/// registry lifecycle. The mempool asks it, because a carried refusal is a dropped object and a kept
+/// carrier whose sink output is the payment (P-B1). `extras` is built only for a seed or a buy of a
+/// line the chain holds. `None` for every other transaction, for a payload that does not decode at
+/// the current wire version (the extraction walk skips it), and for an unknown line (the fold's
+/// `ModelLineMissing`, not this gate's question).
+pub fn palw_model_market_carrier_refusal_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    tx: &crate::tx::Transaction,
+    extras: impl FnOnce() -> PalwTransitionExtrasV1,
+) -> Option<PalwStateV2Error> {
+    use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return None;
+    }
+    let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
+    let line_id = match payload.object {
+        PalwConsensusObjectV2::ModelSeed { line_id, .. } | PalwConsensusObjectV2::ModelBuy { line_id, .. }
+            if payload.version == PALW_LIFECYCLE_TX_VERSION_V2 =>
+        {
+            line_id
+        }
+        _ => return None,
+    };
+    let class_id = state.model_line_or_founding(&line_id)?.class_id;
+    palw_model_market_admits_v1(state, params, &extras(), &class_id).err()
 }
 
 /// The second clock's depth the lock ledger reads at a block with these `extras` (`None` is the
@@ -18742,6 +18848,11 @@ fn model_seed_v1(
     if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
         return Err(PalwStateV2Error::ModelClassClosed(line.class_id));
     }
+    // **The 2026-09-23 Position route matrix, P-B3: past the audit fence the registry decides too.**
+    // ADR-0090 Decision 2 lets a class wait for its activation CLOCK seeded, and a clock always
+    // arrives; a registry lifecycle may never leave `Candidate` or `Prefetching`, and a pledge into
+    // such a class is MSK locked in a pair nobody can trade.
+    builder.read().check_model_market_admits(&line.class_id)?;
     if !line.is_active() {
         return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
     }
@@ -18809,6 +18920,11 @@ fn model_buy_v1(
     if !matches!(class.status, PalwClassStatusV2::Active) {
         return Err(PalwStateV2Error::ModelClassNotActive(line.class_id));
     }
+    // **The 2026-09-23 Position route matrix, P-B3: `Active` above is the class's status, not
+    // whether the chain serves it.** Past the audit fence a buy also needs a registry lifecycle that
+    // admits claims — the claim gate's own predicate — so no position is sold in a model the chain
+    // refuses every claim of.
+    builder.read().check_model_market_admits(&line.class_id)?;
     if !line.is_active() {
         return Err(PalwStateV2Error::ModelLineNotActive(*line_id));
     }
@@ -18838,7 +18954,10 @@ fn model_buy_v1(
 
 /// **ADR-0087 Decision 3's sell, as one function.** `pay_net_via_coinbase: Some(payee)` is the
 /// carrier's way (a `PalwPayoutV2` to `payee` the coinbase honours); the EVM path passes `None`
-/// and credits the net leg through its settlement instead (ADR-0089 Decision 6).
+/// and credits the net leg through its settlement instead (ADR-0089 Decision 6). It never asks the
+/// registry's lifecycle, on purpose (the 2026-09-23 Position route matrix, P-B3): the seed and the
+/// buy wait for a class the chain serves, and a holder can always sell back out of one it has since
+/// held.
 fn model_sell_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -18920,7 +19039,11 @@ fn evm_refusal_reason(error: &PalwStateV2Error) -> u8 {
     use crate::evm::model_market::refusal::*;
     match error {
         PalwStateV2Error::ModelLineMissing(_) | PalwStateV2Error::MissingClass(_) => LINE_MISSING,
-        PalwStateV2Error::ModelClassNotActive(_) | PalwStateV2Error::ModelLineNotActive(_) => NOT_ACTIVE,
+        // P-B3 (the 2026-09-23 Position route matrix): a class the registry has not admitted is not
+        // active for its market either. Raised only past the audit fence, so no earlier byte moves.
+        PalwStateV2Error::ModelClassNotActive(_)
+        | PalwStateV2Error::ModelLineNotActive(_)
+        | PalwStateV2Error::ModelClassNotEligible { .. } => NOT_ACTIVE,
         PalwStateV2Error::ModelBuyReleasesNothing(_) => RELEASES_NOTHING,
         PalwStateV2Error::ModelBuyBelowFloor { .. } | PalwStateV2Error::ModelSellBelowFloor { .. } => BELOW_FLOOR,
         PalwStateV2Error::ModelMarketMissing(_) => MARKET_MISSING,
@@ -23076,6 +23199,154 @@ pub(crate) mod tests {
             let (s7, _) = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&base_env), Some(f.clone())).unwrap();
             assert!(matches!(s7.claim(&attempt_id_v2(&base_env.attempt)).unwrap().phase, PalwClaimPhaseV2::Provisional));
             assert_eq!(s7.class_shares.get(&h64(1)).copied(), Some(1000), "the base class holds the table while Kimi is held");
+        }
+
+        /// **The 2026-09-23 Position route matrix, P-B3: past the audit fence a line's market asks its
+        /// class's registry row the claim gate's own question.** Measured before the fix: a seed
+        /// opened, and a buy filled, on a class the registry held at `Prefetching`. Past the fence a
+        /// seed, an instalment and a buy wait for a state that admits claims — on the carrier lane and
+        /// on the EVM lane, whose escrow the refusal refunds — and a sell never waits. Below the fence
+        /// (testnet-11, which arms the market) the same blocks fold exactly as they did.
+        #[test]
+        fn p_b3_a_market_waits_for_the_registry_to_admit_its_class_and_a_sell_never_waits() {
+            use crate::evm::model_market::{PalwEvmMarketActionKindV1, PalwEvmMarketActionV1, PalwEvmSettlementOutcomeV1, refusal};
+            const MSK: u64 = 100_000_000;
+            const SEED: u64 = crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1;
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            // The market's own fences stand on both sides; only the audit fence differs.
+            let market = |audit: bool, actions: Vec<PalwEvmMarketActionV1>| PalwTransitionExtrasV1 {
+                model_benefits_active: true,
+                evm_market_active: true,
+                evm_actions: actions,
+                audit_2026_09_23_active: audit,
+                ..extras(Some(f.clone()))
+            };
+            let fold_at =
+                |parent: &PalwChainStateV2, c: &PalwBlockContextV2, objects: &[PalwConsensusObjectV2], e: &PalwTransitionExtrasV1| {
+                    apply_palw_transition_v2_with_extras(parent, &p, c, objects, None, false, false, false, false, e)
+                };
+            let refused_as = |r: Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error>, lifecycle: &str| match r {
+                Err(PalwStateV2Error::ModelClassNotEligible { class, state }) => class == kimi_id() && state == lifecycle,
+                _ => false,
+            };
+            let seed =
+                |msk_seed| PalwConsensusObjectV2::ModelSeed { line_id: kimi_id(), seeder: h64(0x5EED), msk_seed, sink_index: 1 };
+            // A real key's holder id: past the audit fence the fold binds a sell's key to its holder
+            // (P-B4), so the sell below must carry the key the position is held under.
+            let seller_key = crate::config::params::PALW_T12_GENESIS_BONDS[0].bond_pubkey;
+            let holder = crate::palw_model_market_v1::palw_model_holder_of_pubkey_v1(seller_key);
+            let buy =
+                PalwConsensusObjectV2::ModelBuy { line_id: kimi_id(), holder, msk_in: 1_000 * MSK, min_units_out: 0, sink_index: 1 };
+
+            // Kimi rowed at PREFETCHING — work, no Final, no ready seat — under a class status of Active.
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let (s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s2.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Prefetching, "the premise");
+            assert!(matches!(s2.class(&kimi_id()).unwrap().status, PalwClassStatusV2::Active), "the status alone lets it trade");
+
+            // Below the fence, testnet-11's rule byte for byte: the seed opens the pair and the buy fills.
+            let (t11_open, _) =
+                fold_at(&s2, &ctx(3, 111, 3), &[seed(SEED)], &market(false, vec![])).expect("below the fence the seed is taken");
+            assert!(t11_open.model_market(&kimi_id()).unwrap().is_open());
+            let (t11_bought, _) = fold_at(&t11_open, &ctx(4, 112, 4), std::slice::from_ref(&buy), &market(false, vec![]))
+                .expect("below the fence the buy fills");
+            let held = t11_bought.model_position(&kimi_id(), &holder);
+            assert!(held > 0, "the defect the matrix measured: a position in a model the chain does not serve");
+            assert!(palw_model_market_admits_v1(&s2, &p, &market(false, vec![]), &kimi_id()).is_ok(), "nothing is asked below");
+
+            // Past it the seed, an instalment toward one, and a buy are refused, naming the lifecycle.
+            assert!(refused_as(fold_at(&s2, &ctx(3, 111, 3), &[seed(SEED)], &market(true, vec![])), "Prefetching"), "the seed");
+            assert!(
+                refused_as(fold_at(&s2, &ctx(3, 111, 3), &[seed(SEED / 10)], &market(true, vec![])), "Prefetching"),
+                "an instalment (ADR-0094)"
+            );
+            assert!(
+                refused_as(fold_at(&t11_open, &ctx(4, 112, 4), std::slice::from_ref(&buy), &market(true, vec![])), "Prefetching"),
+                "a buy on a pair opened below the fence"
+            );
+            // The reader the node's `getPalwModelMarket` asks gives the fold's answer.
+            assert!(matches!(
+                palw_model_market_admits_v1(&s2, &p, &market(true, vec![]), &kimi_id()),
+                Err(PalwStateV2Error::ModelClassNotEligible { class, .. }) if class == kimi_id()
+            ));
+            assert!(palw_model_market_admits_v1(&s2, &p, &market(true, vec![]), &h64(1)).is_ok(), "the floor is never gated");
+            // The EVM lane's pre-check reads the same gate through the window's refused-class list:
+            // empty below the fence (testnet-11's window is unchanged), the fold's refusals past it.
+            assert!(palw_evm_market_refused_classes_v1(&s2, &p, &market(false, vec![])).is_empty(), "below: the window gates nothing");
+            let refused = palw_evm_market_refused_classes_v1(&s2, &p, &market(true, vec![]));
+            assert!(refused.contains(&kimi_id()) && !refused.contains(&h64(1)), "past it: Kimi, never the floor");
+            assert!(
+                refused.iter().all(|c| palw_model_market_admits_v1(&s2, &p, &market(true, vec![]), c).is_err()),
+                "every class listed is one the fold refuses"
+            );
+            // The mempool asks the same gate of the carrier itself, before its sink output can be lost.
+            let carrier = |object: PalwConsensusObjectV2| {
+                let payload = borsh::to_vec(&crate::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+                    version: crate::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+                    object,
+                })
+                .expect("a lifecycle payload serializes");
+                crate::tx::Transaction::new(0, Vec::new(), Vec::new(), 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload)
+            };
+            let asked = |tx: &crate::tx::Transaction, audit: bool| {
+                palw_model_market_carrier_refusal_v1(&s2, &p, tx, || market(audit, vec![])).map(|refusal| refusal.to_string())
+            };
+            let folded = fold_at(&s2, &ctx(3, 111, 3), &[seed(SEED)], &market(true, vec![])).err().map(|refusal| refusal.to_string());
+            assert_eq!(asked(&carrier(seed(SEED)), true), folded, "a seed carrier: the fold's own refusal, word for word");
+            assert!(asked(&carrier(buy.clone()), true).is_some(), "a buy carrier");
+            assert_eq!(asked(&carrier(seed(SEED)), false), None, "testnet-11's mempool refuses nothing new");
+
+            // The EVM lane asks through the same function; its refusal is a settlement, the escrow refunded.
+            let evm_buy = PalwEvmMarketActionV1 {
+                seq: 0,
+                account: crate::evm::EvmAddress::from_bytes([1; 20]),
+                line_id: kimi_id(),
+                kind: PalwEvmMarketActionKindV1::Buy { min_units_out: 0 },
+                gross_sompi: 100 * MSK,
+            };
+            let (evm, _) =
+                fold_at(&t11_open, &ctx(4, 112, 4), &[], &market(true, vec![evm_buy])).expect("a refusal is not a fault of the block");
+            let st = evm.evm_settlements()[0];
+            assert_eq!(
+                (st.escrow_sompi, st.outcome),
+                (100 * MSK, PalwEvmSettlementOutcomeV1::Refused { reason: refusal::NOT_ACTIVE })
+            );
+
+            // A SELL never waits: the pre-fence holder sells out of the Prefetching class past the fence.
+            let sell = PalwConsensusObjectV2::ModelSell {
+                line_id: kimi_id(),
+                holder,
+                units_in: held,
+                min_msk_out: 0,
+                held_units: held,
+                not_after_daa: u64::MAX,
+                pubkey: seller_key.to_vec(),
+                signature: vec![1],
+            };
+            assert_eq!(asked(&carrier(sell.clone()), true), None, "nor does the mempool refuse a sell carrier");
+            let (sold, _) = fold_at(&t11_bought, &ctx(5, 113, 5), std::slice::from_ref(&sell), &market(true, vec![]))
+                .expect("a holder is never trapped");
+            assert_eq!(sold.model_position(&kimi_id(), &holder), 0);
+
+            // HELD — a class that served and whose panel can no longer be drawn — takes no seed either.
+            let (held_class, _) = step(&kimi_with_a_final(&p, root), &p, &ctx(6, 130, 6), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(held_class.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held);
+            assert!(refused_as(fold_at(&held_class, &ctx(7, 131, 7), &[seed(SEED)], &market(true, vec![])), "Held"));
+
+            // Seven ready seats and a boundary admit Kimi to PROBATION: the pair opens and the buy fills.
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 11)).collect();
+            let (s3, _) = step(&s2, &p, &ctx(3, 111, 3), &proofs, None, Some(f.clone())).unwrap();
+            let (s4, _) = step(&s3, &p, &ctx(4, 120, 4), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s4.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Probation { probes_passed: 0 });
+            assert!(
+                !palw_evm_market_refused_classes_v1(&s4, &p, &market(true, vec![])).contains(&kimi_id()),
+                "admitted: the window opens too"
+            );
+            let (open, _) = fold_at(&s4, &ctx(5, 121, 5), &[seed(SEED)], &market(true, vec![])).expect("admitted: the seed opens it");
+            let (bought, _) = fold_at(&open, &ctx(6, 122, 6), &[buy], &market(true, vec![])).expect("and the buy fills");
+            assert!(bought.model_position(&kimi_id(), &holder) > 0);
         }
 
         #[test]

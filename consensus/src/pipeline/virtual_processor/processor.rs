@@ -1154,6 +1154,40 @@ impl VirtualStateProcessor {
         data
     }
 
+    /// **The 2026-09-23 Position route matrix, P-B3, at the mempool and at the template: the fold's
+    /// market gate on a carrier before it relays and before it is mined.**
+    /// `palw_model_market_carrier_refusal_v1` against the registry tip under the extras the virtual's
+    /// next block folds with — built only for a seed or a buy. Asked by
+    /// `validate_mempool_transaction_impl` when a carrier enters the pool AND by
+    /// `validate_block_template_transaction` every time a template is built, so a carrier admitted
+    /// while its class served and whose class has since regressed (Probation → Held, say) is
+    /// evicted as `InvalidInBlockTemplate` instead of mined into a refusal. Node-local: no block rule
+    /// reads it. `None` below `palw_audit_2026_09_23` (testnet-11), where the fold refuses nothing
+    /// on this ground, and off ConsensusV2.
+    ///
+    /// It reads the TIP's lifecycle, and the fold of the block the carrier lands in steps the
+    /// registry before it applies objects (fold step 1d), so the answer can be one lifecycle step
+    /// behind the fold's, in either direction. A carrier that slips through that step is refused by
+    /// the fold like any other; past the audit fence that refusal is refunded (P-B1).
+    fn palw_mempool_market_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            || !self.palw_audit_2026_09_23_at(virtual_daa_score)
+        {
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(&state, state_params, tx, || {
+            self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: chain_point,
+                daa_score: virtual_daa_score,
+                blue_score: 0,
+                subsidy: 0,
+            })
+        })
+        .map(|refusal| refusal.to_string())
+    }
+
     /// ADR-0109 Decision 3: the PALW bonds the registry holds locked at the virtual tip — the set the
     /// acceptance path skips spends of — memoised per (registry tip, DAA). `None` when the network
     /// has no V2 registry or the registry has no tip yet.
@@ -2191,7 +2225,7 @@ impl VirtualStateProcessor {
         crate::processes::evm::validate_evm_market_settlements(&own_payload, &expected_settlements)?;
         let market_view = match (market_fences.evm_active, palw_state, self.palw_state_params_v2.as_ref()) {
             (true, Some(state), Some(params)) => {
-                Some(std::sync::Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id())))
+                Some(std::sync::Arc::new(self.palw_evm_view_with_market_gate_v1(state, params, selected_parent, header.daa_score)))
             }
             _ => None,
         };
@@ -2727,9 +2761,12 @@ impl VirtualStateProcessor {
         let expected_settlements: Vec<kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1> =
             template_palw_state.as_ref().map(|s| s.evm_settlements()).unwrap_or_default();
         let market_view = match (&template_palw_state, self.palw_state_params_v2.as_ref()) {
-            (Some(state), Some(params)) => {
-                Some(std::sync::Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id())))
-            }
+            (Some(state), Some(params)) => Some(std::sync::Arc::new(self.palw_evm_view_with_market_gate_v1(
+                state,
+                params,
+                template_selected_parent,
+                header.daa_score,
+            ))),
             _ => None,
         };
         let market = kaspa_evm::EvmMarketInput {
@@ -4447,6 +4484,68 @@ impl VirtualStateProcessor {
                 .err()
                 .map(|refusal| refusal.to_string());
         Some(facts)
+    }
+
+    /// **ADR-0089 Decision 2's window, with the fold's market gate in it** (the 2026-09-23 Position
+    /// route matrix, P-B3). `evm_view_v1` of `state` — the EVM block's selected parent — and, past
+    /// `palw_audit_2026_09_23` at `daa_score` (the EVM block's own), the classes whose seed and buy
+    /// `palw_model_market_admits_v1` refuses under the extras that block folds with, so the writer
+    /// reverts those moves before it takes an escrow the fold would refund. The ONE builder the
+    /// block validator, the template and the RPC's simulator all call, with the selected parent as
+    /// the extras' point on both consensus sides (the gate reads only DAA-resolved fences and the
+    /// state's lifecycles, so the two sides fill the same set). Below the fence the set is empty
+    /// and the window is exactly `evm_view_v1`'s: testnet-11's EVM execution does not move.
+    pub fn palw_evm_view_with_market_gate_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        selected_parent: BlockHash,
+        daa_score: u64,
+    ) -> kaspa_consensus_core::evm::model_market::PalwEvmViewV1 {
+        let mut view = state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id());
+        if self.palw_audit_2026_09_23_at(daa_score) {
+            let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: selected_parent,
+                daa_score,
+                blue_score: 0,
+                subsidy: 0,
+            });
+            view.market_refused_classes =
+                kaspa_consensus_core::palw_state_v2::palw_evm_market_refused_classes_v1(state, params, &extras);
+        }
+        view
+    }
+
+    /// **The 2026-09-23 Position route matrix, P-B3: the fold's market gate, asked before anyone
+    /// pays.** The tip's state under the extras the virtual's next block folds with — resolved as the
+    /// producer's class gate above resolves them — through `palw_model_market_admits_v1`, the
+    /// function `model_seed_v1` and `model_buy_v1` themselves call, so the preview and the fold ask
+    /// one predicate. Its input is the tip's lifecycle, and the fold of the next block steps the
+    /// registry before it applies objects, so the answer can be one lifecycle step stale in either
+    /// direction. On the carrier lane a refused seed or buy still lands its carrier (refunded past
+    /// the audit fence, P-B1): a payer who asks here first is the one who does not wait for that.
+    pub fn palw_model_market_gate_v1_impl(
+        &self,
+        line_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::api::PalwModelMarketGateReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let class_id = state.model_line_or_founding(&line_id)?.class_id;
+        let virtual_read = self.virtual_stores.read();
+        let candidate_daa = virtual_read.state.get().ok()?.daa_score;
+        drop(virtual_read);
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: candidate_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        Some(kaspa_consensus_core::api::PalwModelMarketGateReadV1 {
+            lifecycle: state.model_lifecycle(&class_id).map(|row| format!("{:?}", row.state)).unwrap_or_default(),
+            refusal: kaspa_consensus_core::palw_state_v2::palw_model_market_admits_v1(&state, state_params, &extras, &class_id)
+                .err()
+                .map(|refusal| refusal.to_string()),
+        })
     }
 
     /// **The certified free-prompt quanta `bond` may spend into receipt blocks (FP-R5).**
@@ -11706,6 +11805,12 @@ impl VirtualStateProcessor {
         {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::SpendsNonReleasableBond(outpoint));
         }
+        // **The 2026-09-23 Position route matrix, P-B3:** a seed or a buy the fold would refuse on its
+        // class's registry lifecycle is refused here, before it relays; the template asks again
+        // (`validate_block_template_transaction`), because the lifecycle can move after admission.
+        if let Some(refusal) = self.palw_mempool_market_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
+        }
         self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
         Ok(())
     }
@@ -11799,6 +11904,15 @@ impl VirtualStateProcessor {
             virtual_state.daa_score,
             virtual_state.past_median_time,
         )?;
+        // **The 2026-09-23 Position route matrix, P-B3, at the template** (the review's MEDIUM
+        // point): the mempool asked the lifecycle gate when the carrier entered, and the class can
+        // regress between that and this template (Held tracks load and panel drawability). Asked
+        // again here, a refused carrier is `InvalidInBlockTemplate` — the mining manager evicts it —
+        // rather than mined into a fold that drops it. Node-local like the mempool check: a block
+        // another node mines is judged by the fold alone. `None` below the audit fence (testnet-11).
+        if let Some(refusal) = self.palw_mempool_market_refusal(tx, virtual_state.daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
+        }
         let ValidatedTransaction { calculated_fee, .. } =
             // `None`: mempool/template single-tx context, not mergeset acceptance (bond spend-gate inert here).
             self.validate_transaction_in_utxo_context(tx, utxo_view, virtual_state.daa_score, TxValidationFlags::Full, None)?;

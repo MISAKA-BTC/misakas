@@ -550,6 +550,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::G
         burn_permille: item.burn_permille,
         leg_permille: item.leg_permille,
         leg_v2_activation_daa: item.leg_v2_activation_daa,
+        class_lifecycle: item.class_lifecycle.clone(),
+        market_refusal: item.market_refusal.clone(),
         error: None,
     }
 });
@@ -2316,6 +2318,9 @@ try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_r
         burn_permille: if item.burn_permille == 0 && item.leg_permille == 0 { 50 } else { item.burn_permille },
         leg_permille: if item.burn_permille == 0 && item.leg_permille == 0 { 10 } else { item.leg_permille },
         leg_v2_activation_daa: item.leg_v2_activation_daa,
+        // P-B3: a gRPC peer from before the gate sends empty strings — no lifecycle, no refusal.
+        class_lifecycle: item.class_lifecycle.clone(),
+        market_refusal: item.market_refusal.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwModelPositionsRequestMessage, kaspa_rpc_core::GetPalwModelPositionsRequest, {

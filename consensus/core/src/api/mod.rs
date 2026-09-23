@@ -86,6 +86,19 @@ pub struct PalwModelLineReadV1 {
     pub benefits: Option<PalwModelBenefitsReadV1>,
 }
 
+/// **`getPalwModelMarket`'s lifecycle half** (the 2026-09-23 Position route matrix, P-B3): what the
+/// registry says of a line's class, and whether the fold at the next block takes a seed or a buy of
+/// the line — asked through `palw_model_market_admits_v1`, the function the fold itself calls.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwModelMarketGateReadV1 {
+    /// The registry lifecycle of the line's class as the tip holds it, `Debug`-printed; empty where
+    /// the registry holds no row for it.
+    pub lifecycle: String,
+    /// The fold's refusal of a seed or a buy of this line, as text; `None` where it would take them.
+    /// A sell is never refused for this.
+    pub refusal: Option<String>,
+}
+
 /// ADR-0088 Decision 12: `getPalwModelVersion`'s answer — the row and its evaluations, each
 /// with the bond that posted it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -381,6 +394,13 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         _line_id: kaspa_hashes::Hash64,
     ) -> Option<(crate::palw_model_market_v1::PalwModelMarketV1, bool, crate::palw_state_v2::PalwClassStatusV2)> {
+        None
+    }
+
+    /// **The fold's market gate, asked at the tip for the virtual's next block** (the 2026-09-23
+    /// Position route matrix, P-B3) — the line's class's registry lifecycle and the refusal a seed
+    /// or a buy of the line would meet. `None` off ConsensusV2 and for a line the chain does not hold.
+    fn palw_model_market_gate_v1(&self, _line_id: kaspa_hashes::Hash64) -> Option<PalwModelMarketGateReadV1> {
         None
     }
 

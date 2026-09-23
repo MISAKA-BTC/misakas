@@ -1217,6 +1217,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 ..Default::default()
             });
         };
+        // **The 2026-09-23 Position route matrix, P-B3: the fold's own market gate**, asked at the
+        // virtual's next block. A refusal closes the quote too, so a client that reads only
+        // `closed_to_buys` — an older CLI, the options site — is not offered a buy the fold refuses.
+        let gate = session.palw_model_market_gate_v1(line_id).unwrap_or_default();
+        let market_refusal = gate.refusal.unwrap_or_default();
         Ok(GetPalwModelMarketResponse {
             found: true,
             line_id: line_id.to_string(),
@@ -1227,7 +1232,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             sold_units: market.sold_units,
             burned_sompi: market.burned_sompi,
             registrant_paid_sompi: market.registrant_paid_sompi,
-            closed_to_buys: market.closed_to_buys || !matches!(status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active),
+            closed_to_buys: market.closed_to_buys
+                || !matches!(status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active)
+                || !market_refusal.is_empty(),
             price_sompi_per_position: market.price_sompi_per_position_v1(),
             supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
             virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
@@ -1242,6 +1249,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             burn_permille: schedule.burn_permille,
             leg_permille: schedule.leg_permille,
             leg_v2_activation_daa,
+            class_lifecycle: gate.lifecycle,
+            market_refusal,
         })
     }
 
