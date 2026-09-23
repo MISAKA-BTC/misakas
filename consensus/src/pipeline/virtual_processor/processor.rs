@@ -590,6 +590,9 @@ pub struct VirtualStateProcessor {
     /// ADR-0142: `Params::palw_clock_cursor`. Past it the heartbeat lane's admissibility is the
     /// rooted cursor, and only a heartbeat writes it.
     pub(super) palw_clock_cursor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-24 heartbeat audit's H3/H5 (`Params::palw_clock_floor`): templates keep a
+    /// heartbeat chain paced and stamp a step at or past its slot, as the header stage demands.
+    pub(super) palw_clock_floor: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
@@ -857,6 +860,7 @@ impl VirtualStateProcessor {
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
+            palw_clock_floor: params.palw_clock_floor,
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
@@ -11419,12 +11423,18 @@ impl VirtualStateProcessor {
         // or the F5 chain exemption — mirroring `check_mergeset_heartbeat_width` exactly, so a
         // template never builds what consensus refuses and never refuses what consensus admits.
         let track_heartbeats = self.palw_heartbeat_width_fence.is_some();
-        let mut heartbeat_set: Vec<(u64, BlockHash)> = Vec::new();
+        let mut heartbeat_set: Vec<(u64, BlockHash, u64)> = Vec::new();
+        // H3: whether the chain exemption must also be paced. Judged at the selected parent's score
+        // PLUS ONE — the highest score the block this template becomes can carry — so a template at
+        // the fence applies the rule wherever the header stage might, and never builds a block it
+        // refuses.
+        let mut paced = false;
         if track_heartbeats {
             let sp = self.headers_store.get_header(selected_parent).unwrap();
             if sp.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeat_set.push((sp.blue_score, selected_parent));
+                heartbeat_set.push((sp.blue_score, selected_parent, sp.timestamp));
             }
+            paced = self.palw_clock_floor.is_some_and(|fence| fence.is_active(sp.daa_score.saturating_add(1)));
         }
 
         // ADR-0125: one parent slot is kept for the round lane while it has a tip to offer, so a DAG
@@ -11440,7 +11450,7 @@ impl VirtualStateProcessor {
                     if !heartbeat_members.is_empty() {
                         let mut combined = heartbeat_set.clone();
                         combined.extend_from_slice(&heartbeat_members);
-                        if !self.heartbeat_set_admissible(&mut combined) {
+                        if !self.heartbeat_set_admissible(&mut combined, paced) {
                             // Over the flat bound and not one chain: this candidate widens the
                             // heartbeat lane past what consensus admits. Nothing to substitute —
                             // skip it; a later template absorbs it against a fresh mergeset.
@@ -11590,14 +11600,14 @@ impl VirtualStateProcessor {
 
         // `false` = the lane is not armed on this network, so no header can be a heartbeat and
         // the set is vacuously empty — skip the per-member header reads entirely.
-        let mut heartbeat_members: Vec<(u64, BlockHash)> = Vec::new();
+        let mut heartbeat_members: Vec<(u64, BlockHash, u64)> = Vec::new();
         let mut note_heartbeat = |hash: BlockHash| {
             if !track_heartbeats {
                 return;
             }
             let header = self.headers_store.get_header(hash).unwrap();
             if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeat_members.push((header.blue_score, hash));
+                heartbeat_members.push((header.blue_score, hash, header.timestamp));
             }
         };
         note_heartbeat(candidate);
@@ -11631,16 +11641,25 @@ impl VirtualStateProcessor {
     /// exemption) — the same predicate `check_mergeset_heartbeat_width` enforces: at most
     /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeats, or any number of them provided they form
     /// ONE chain (sorted by blue score, each adjacent pair ancestor-related; a blue-score tie
-    /// is never ancestor-related and fails). Sorts the given buffer in place.
-    fn heartbeat_set_admissible(&self, set: &mut [(u64, BlockHash)]) -> bool {
-        if set.len() as u64 <= kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET {
+    /// is never ancestor-related and fails) — and, where `paced` (H3, past `palw_clock_floor`),
+    /// no more than the chain's own timestamps pay for (`heartbeat_chain_capacity_v1`). Elements
+    /// are `(blue_score, hash, timestamp)`. Sorts the given buffer in place.
+    fn heartbeat_set_admissible(&self, set: &mut [(u64, BlockHash, u64)], paced: bool) -> bool {
+        let bound = kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET;
+        if set.len() as u64 <= bound {
             return true;
         }
-        set.sort_unstable_by_key(|(blue_score, _)| *blue_score);
-        set.windows(2).all(|pair| {
-            let ((_, older), (_, newer)) = (pair[0], pair[1]);
+        set.sort_unstable_by_key(|(blue_score, _, _)| *blue_score);
+        let one_chain = set.windows(2).all(|pair| {
+            let ((_, older, _), (_, newer, _)) = (pair[0], pair[1]);
             self.reachability_service.is_dag_ancestor_of(older, newer)
-        })
+        });
+        if !one_chain || !paced {
+            return one_chain;
+        }
+        let (oldest, newest) =
+            set.iter().fold((u64::MAX, 0u64), |(lo, hi), (_, _, timestamp)| (lo.min(*timestamp), hi.max(*timestamp)));
+        set.len() as u64 <= kaspa_consensus_core::palw_heartbeat_v1::heartbeat_chain_capacity_v1(newest.saturating_sub(oldest), bound)
     }
 
     fn remove_bounded_merge_breaking_parents(
@@ -13634,12 +13653,12 @@ enum MergesetIncreaseResult {
     Accepted {
         increase_size: u64,
         /// ADR-0068 Phase 1 (F3a/F5): the increase's heartbeat members as
-        /// `(blue_score, hash)`, empty when the lane is not armed. The CALLER decides
+        /// `(blue_score, hash, timestamp)`, empty when the lane is not armed. The CALLER decides
         /// admissibility over the whole accumulated set (`heartbeat_set_admissible`) —
         /// width with the chain exemption is a property of the final mergeset, not of one
         /// candidate's increase, and a rejected candidate is simply skipped (the excess IS
         /// a heartbeat or reaches one; there is nothing to substitute).
-        heartbeat_members: Vec<(u64, BlockHash)>,
+        heartbeat_members: Vec<(u64, BlockHash, u64)>,
     },
     Rejected {
         new_candidate: BlockHash,

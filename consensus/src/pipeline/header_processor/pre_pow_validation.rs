@@ -62,6 +62,25 @@ impl HeaderProcessor {
         //
         // So past this fence a beat may be minted whenever its producer can pay for it, and earns
         // the chain a DAA only when the cursor says a slot is open.
+        //
+        // **Past `palw_clock_floor` that last sentence is a rule (the 2026-09-24 heartbeat audit,
+        // H3).** "Whenever its producer can pay" turned out to be the lane's whole waste: every beat
+        // minted between two slots was a valid block that could never be granted — 89% of
+        // testnet-12's — each adding a blue score and a relay. So a heartbeat stamped before the
+        // slot its own window's cursor opens is invalid. The cursor is the one the DAA score was
+        // computed with (`DaaWindow::clock`), derived from this header's own parents, so every node
+        // answers alike; and it is the slot this beat could be GRANTED, so an honest beat — which
+        // the adapter stamps at `max(now, slot)` — never fails it, whatever its miner's clock says.
+        // A miner whose clock runs behind stamps the slot itself (up to the future-drift tolerance
+        // ahead of its own clock) rather than an earlier time, so skew costs it a wait, never a
+        // refusal. No margin below the slot is granted, because a beat below it earns nothing.
+        let clock = daa_window.clock;
+        if clock.floor
+            && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && let Err(early) = clock.heartbeat_stamp_admits(header.timestamp)
+        {
+            return Err(RuleError::HeartbeatBeforeItsSlot(header.hash, header.timestamp, early.next_slot_ms));
+        }
         let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(header.daa_score));
         if !clock_cursor_governs
             && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID

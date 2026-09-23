@@ -310,6 +310,27 @@ pub fn heartbeat_yield_hint_v2(
         .map_or(HeartbeatYieldHintV1::NothingToYieldTo, HeartbeatYieldHintV1::YieldUntil)
 }
 
+/// **H3: how many heartbeats a CHAIN spanning `span_ms` of timestamps may put in one mergeset** past
+/// `palw_clock_floor` — F5's chain exemption, priced again.
+///
+/// The exemption (`check_mergeset_heartbeat_width`) admits any number of beats over the flat bound
+/// provided they form one chain, on the reasoning that a chain's length "is already priced by the
+/// slot ladder". Past the cursor the ladder retired and nothing priced it: a chain of beats each
+/// hanging off a heavier attempt block at the same score (every one stamped at or past the same
+/// cursor, every one valid on its own) could be minted in a burst and merged whole, a blue score
+/// apiece.
+///
+/// An honest chain holds at most TWO beats a slot — the one stamped into the open slot and the one
+/// that merges it and steps the clock — and past the floor consecutive slots' references are at
+/// least one interval apart (H5), with every beat stamped at or past its slot (H3). So `n` honest
+/// members span at least `(⌈n/2⌉ − 1)` intervals less the clock skew between two honest miners, and
+/// `flat_bound + 2·⌈span / interval⌉` covers them while that skew is under two intervals (240 s —
+/// the future-drift tolerance alone keeps it under 132 s). A burst spanning nothing gets the flat
+/// bound and no more.
+pub fn heartbeat_chain_capacity_v1(span_ms: u64, flat_bound: u64) -> u64 {
+    flat_bound.saturating_add(span_ms.div_ceil(HEARTBEAT_RECOVERY_INTERVAL_MS).saturating_mul(2))
+}
+
 /// **H1: the yield hint with the clock's own answer on top** — node policy, like the hint it wraps.
 ///
 /// `clock` is the virtual's [`crate::palw_clock_cursor_v1::PalwClockStepV1`] where the cursor governs
@@ -345,6 +366,49 @@ mod tests {
     use super::*;
     use crate::pow_layer0::{PALW_HEARTBEAT_WORK_LOG2, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
 
+    /// **H3: F5's chain exemption, priced by the chain's own timestamps.** An honest chain — two
+    /// beats a slot, slots an interval apart — always fits, with up to two intervals of clock skew
+    /// between its miners; a burst stamped for one slot gets the flat bound and no more.
+    #[test]
+    fn an_honest_heartbeat_chain_fits_its_capacity_and_a_burst_does_not() {
+        use crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET as BOUND;
+        const I: u64 = HEARTBEAT_RECOVERY_INTERVAL_MS;
+        // A burst: any number of beats inside one interval gets the flat bound plus one slot's two.
+        assert_eq!(heartbeat_chain_capacity_v1(0, BOUND), BOUND);
+        assert_eq!(heartbeat_chain_capacity_v1(1, BOUND), BOUND + 2);
+        assert_eq!(heartbeat_chain_capacity_v1(I, BOUND), BOUND + 2);
+        assert_eq!(heartbeat_chain_capacity_v1(I + 1, BOUND), BOUND + 4);
+        // Honest chains: `slots` slots, two beats each (holder at the slot, step `lag` later), the
+        // next slot one interval after the step; the oldest member stamped up to `skew` late.
+        for slots in 1..=200u64 {
+            for lag in [0u64, 1, 1_000, 30_000, 119_999] {
+                for skew in [0u64, 1, 60_000, 132_000, 2 * I - 1] {
+                    let mut stamps = Vec::new();
+                    let mut slot = 1_000_000u64;
+                    for s in 0..slots {
+                        let holder = if s == 0 { slot + skew } else { slot };
+                        let step = slot + lag;
+                        stamps.push(holder);
+                        stamps.push(step);
+                        slot = step + I;
+                    }
+                    let span = stamps.iter().max().unwrap() - stamps.iter().min().unwrap();
+                    let count = stamps.len() as u64;
+                    assert!(
+                        count <= heartbeat_chain_capacity_v1(span, BOUND),
+                        "{slots} slots (lag {lag}, skew {skew}): {count} beats over {span} ms exceed {}",
+                        heartbeat_chain_capacity_v1(span, BOUND)
+                    );
+                }
+            }
+        }
+        // And the burst the rule exists for: eight beats hung off eight heavier blocks at one score,
+        // all stamped for the same slot within seconds of each other.
+        assert!(8 > heartbeat_chain_capacity_v1(7_000, BOUND));
+        // Saturation, not overflow.
+        assert_eq!(heartbeat_chain_capacity_v1(u64::MAX, u64::MAX), u64::MAX);
+    }
+
     /// **H1, the pure half: a beat is not worth mining while the slot is taken, and is the moment a
     /// beat is waiting to be stepped over.**
     ///
@@ -355,7 +419,7 @@ mod tests {
     fn a_taken_slot_holds_the_miner_until_the_next_one_opens() {
         use crate::palw_clock_cursor_v1::{PalwClockCursorV1, PalwClockStepV1};
         let cursor = |next| Some(PalwClockCursorV1 { next_slot_ms: next, slots_consumed: 0 });
-        let idle = PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted: false };
+        let idle = PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted: false, floor: false };
         let nothing = HeartbeatYieldHintV1::NothingToYieldTo;
         // Between two slots: taken, and the answer names when the next one opens.
         assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&idle), 9_999), HeartbeatYieldHintV1::SlotTaken(10_000));

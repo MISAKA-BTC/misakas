@@ -225,6 +225,9 @@ pub struct SampledDifficultyManager<T: HeaderStoreReader, U: GhostdagStoreReader
     /// which is what ADR-0138 needs and what the selected-parent slot rule could not give, because
     /// a block that advances no clock was moving the next opportunity to advance it.
     clock_cursor: Option<ForkActivation>,
+    /// **`Params::palw_clock_floor`** (the 2026-09-24 heartbeat audit's H3/H5): past it the clock's
+    /// decision is reported with `floor` set, which is what the header stage's stamp rules read.
+    clock_floor: Option<ForkActivation>,
 }
 
 impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U> {
@@ -245,6 +248,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         single_lottery: Option<ForkActivation>,
         anchor_clock: Option<ForkActivation>,
         clock_cursor: Option<ForkActivation>,
+        clock_floor: Option<ForkActivation>,
     ) -> Self {
         Self::check_min_difficulty_window_size(difficulty_window_size, min_difficulty_window_size);
         Self {
@@ -263,6 +267,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             round_lane,
             anchor_clock,
             clock_cursor,
+            clock_floor,
         }
     }
 
@@ -457,7 +462,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
             // Below the cursor the stand-in is unconditional, so it is a grant in every sense but
             // the cursor's: reported as one, with no cursor, so a reader never mistakes it for a
             // slot being held.
-            let clock = PalwClockStepV1 { governs: false, cursor: None, granted: stand_in };
+            let clock = PalwClockStepV1 { governs: false, cursor: None, granted: stand_in, floor: false };
             return (if stand_in { exempt.saturating_sub(1) } else { exempt }, clock);
         }
         // **ADR-0142 §6a: the reference is derived, not stored.** The block that took the score to
@@ -500,7 +505,8 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         // this block's own window — and whether it granted. That is not a carried value: it is
         // recomputed with the score on every call, and it has readers (the heartbeat adapter and
         // the miner's hint read it for the virtual; `DaaWindow::clock` is where they find it).
-        let clock = PalwClockStepV1 { governs: true, cursor: parent_cursor, granted };
+        let floor = self.clock_floor.is_some_and(|fence| fence.is_active(parent_daa));
+        let clock = PalwClockStepV1 { governs: true, cursor: parent_cursor, granted, floor };
         (if granted { exempt.saturating_sub(1) } else { exempt }, clock)
     }
 }

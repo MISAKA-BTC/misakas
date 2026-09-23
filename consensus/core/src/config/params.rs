@@ -1302,6 +1302,24 @@ pub struct Params {
     /// `Some` on testnet-11 at [`PALW_RC_ANCHOR_CLOCK_FENCE_DAA`] with the anchor clock; `None`
     /// elsewhere; hashed Some-only.
     pub palw_clock_cursor: Option<ForkActivation>,
+    /// **The clock floor (the 2026-09-24 heartbeat audit, H3 and H5; ADR-0142's amendment §9).**
+    /// Past it the cursor bounds the clock from BELOW as well as above:
+    ///
+    /// * **H3 — a heartbeat stamped before its slot is invalid.** Past the cursor a beat was
+    ///   admissible at any timestamp and earned a DAA only at or past the cursor, so every beat
+    ///   minted between two slots was a valid block that ticked nothing — 89% of testnet-12's.
+    ///   And a heartbeat CHAIN over the per-mergeset bound (F5's exemption) must be paced by its
+    ///   own timestamps: at most two beats a slot, which is all an honest chain can hold.
+    /// * **H5 — a block that steps the clock on a beat's grant is stamped at or past the cursor,
+    ///   and the reference is the EARLIEST of the tied steps.** Below this fence the step could
+    ///   carry any timestamp above the median, so with the 132 s future tolerance a beat stamped
+    ///   `ref + 120 s` was granted at once and the step stamped "now" became the next reference —
+    ///   nothing floored the spacing; and a future-stamped sibling step tied on blue score won the
+    ///   reference on its hash and pushed the next slot back by up to 132 s.
+    ///
+    /// Refines the cursor, so `validate_palw_v2` refuses it without `palw_clock_cursor` armed at or
+    /// below its height. `Some(0)` on testnet-12 only; `None` elsewhere; hashed Some-only.
+    pub palw_clock_floor: Option<ForkActivation>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -3060,6 +3078,20 @@ impl Params {
                 ));
             }
         }
+        // The clock floor (H3/H5) is a rule ABOUT the cursor — the slot a beat is stamped for, the
+        // stamp a step must carry, the reference among tied steps — so it cannot stand without one.
+        if let Some(floor) = self.palw_clock_floor
+            && floor != ForkActivation::never()
+        {
+            let cursor_below =
+                self.palw_clock_cursor.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= floor.daa_score());
+            if !cursor_below {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_clock_floor is armed without palw_clock_cursor armed at or below its height: the floor bounds the \
+                     cursor's slots, and without the cursor there is no slot to bound",
+                ));
+            }
+        }
         // **ADR-0147: an outsider-judged claim cannot be licensed by parts.** The stratified draw
         // (`palw_shard_licensing`, ADR-0100 Decision 4) seats each shard from the class's own
         // population and has no outsider seat, so a bought class drawn per shard would be judged
@@ -4571,6 +4603,10 @@ impl Params {
         if self.palw_clock_cursor == Some(ForkActivation::never()) {
             self.palw_clock_cursor = None;
         }
+        // The clock floor: Some-only hashed like the cursor it refines, so the same collapse.
+        if self.palw_clock_floor == Some(ForkActivation::never()) {
+            self.palw_clock_floor = None;
+        }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
         }
@@ -5786,6 +5822,7 @@ impl Params {
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
+            palw_clock_floor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -5883,6 +5920,7 @@ impl Params {
             ("palw_readiness_v2", *palw_readiness_v2),
             ("palw_anchor_clock", *palw_anchor_clock),
             ("palw_clock_cursor", *palw_clock_cursor),
+            ("palw_clock_floor", *palw_clock_floor),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -6227,6 +6265,12 @@ impl Params {
             h.write(b"palw_admission_audit_period_daa");
             h.write(period.to_le_bytes());
         }
+        // The clock floor (H3/H5), NAMED: it changes which heartbeat headers and which clock steps
+        // are valid, so an operator reading the schedule must see it. Some-only.
+        if let Some(activation) = self.palw_clock_floor {
+            h.write(b"palw_clock_floor");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -6417,6 +6461,7 @@ impl Params {
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
+            palw_clock_floor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6712,6 +6757,11 @@ impl Params {
                 absent = u64::MAX;
                 visit(&mut absent);
             }
+        }
+        // The clock floor (H3/H5). SOME-ONLY, unlike the cursor above: a `None` visited as a
+        // sentinel would put a new value into every preset's schedule id, testnet-11's included.
+        if let Some(activation) = palw_clock_floor.as_mut() {
+            fork(activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
         match palw_artifact_root_ownership.as_mut() {
@@ -7293,6 +7343,7 @@ impl Params {
             palw_readiness_v2,
             palw_anchor_clock,
             palw_clock_cursor,
+            palw_clock_floor,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7563,6 +7614,12 @@ impl Params {
         // leaves it unset — fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_clock_cursor {
             h.write(b"palw_clock_cursor");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // The clock floor (H3/H5): the height only, Some-only, so every preset that leaves it unset
+        // — all but testnet-12 — fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_clock_floor {
+            h.write(b"palw_clock_floor");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
@@ -8306,6 +8363,9 @@ impl Params {
             palw_readiness_v2: self.palw_readiness_v2,
             palw_anchor_clock: self.palw_anchor_clock,
             palw_clock_cursor: None,
+            // Rides with the cursor it refines: an override that drops the cursor drops the floor,
+            // or `validate_palw_v2` would refuse the result.
+            palw_clock_floor: None,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -9271,6 +9331,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_clock_floor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -9485,6 +9546,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_clock_floor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -9681,6 +9743,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_clock_floor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -15287,6 +15350,11 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // **ADR-0147's admission jury every 100 DAA** (`Params::palw_admission_audit_period_daa`), the
     // standard the user set on 2026-09-23, instead of once per 1,000-DAA epoch.
     params.palw_admission_audit_period_daa = Some(PALW_ADMISSION_AUDIT_PERIOD_DAA_STANDARD);
+    // **The clock floor** (`Params::palw_clock_floor`, the 2026-09-24 heartbeat audit's H3 and H5):
+    // a heartbeat stamped before its slot is invalid, a heartbeat chain is paced by its own stamps,
+    // a step is stamped at or past the cursor, and the reference is the earliest tied step. The
+    // cursor it refines is armed by pass 2 (testnet-11 schedules it; the walk moves it to 0).
+    params.palw_clock_floor = Some(at);
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -15791,6 +15859,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_readiness_v2: None,
     palw_anchor_clock: None,
     palw_clock_cursor: None,
+    palw_clock_floor: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,

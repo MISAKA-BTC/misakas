@@ -92,7 +92,7 @@ fn card_payout_spk(i: usize) -> ScriptPublicKey {
 /// **testnet-12 as shipped, with harness keys on its eight genesis cards** — see the module doc for
 /// the three differences and why each is forced. Returns the config, the bundle, the genesis UTXO
 /// set the harness imports and each card's fee float in that set.
-fn t12_with_harness_cards()
+pub(super) fn t12_with_harness_cards()
 -> (Config, PalwConsensusParamsV2, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) {
     use kaspa_consensus_core::config::params::PALW_T12_GENESIS_BONDS;
     use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint};

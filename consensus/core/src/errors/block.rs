@@ -137,6 +137,34 @@ pub enum RuleError {
     )]
     HeartbeatTooEarly(BlockHash, u64, u64, u64),
 
+    /// **The clock floor, H3 (the 2026-09-24 heartbeat audit):** past `palw_clock_floor` a
+    /// heartbeat stamped before the slot its own window's cursor opens is invalid. Such a beat can
+    /// never be granted a DAA, so it was a valid block that ticked nothing — 89% of testnet-12's.
+    #[error(
+        "heartbeat block {0} at timestamp {1} is stamped before its slot, which opens at {2}: a beat before its slot can \
+         never tick the clock (palw_clock_floor, H3)"
+    )]
+    HeartbeatBeforeItsSlot(BlockHash, u64, u64),
+
+    /// **The clock floor, H5:** past `palw_clock_floor` a block whose mergeset grants a heartbeat's
+    /// tick — the block that STEPS the clock — must itself be stamped at or past the cursor it was
+    /// granted against, since it becomes the next slot's reference. Stamped earlier, it would open
+    /// the next slot early and the clock could run faster than one tick per interval.
+    #[error(
+        "block {0} steps the clock at timestamp {1}, before the slot it was granted, which opened at {2}: the step is the \
+         next slot's reference and may not predate the slot it consumed (palw_clock_floor, H5)"
+    )]
+    ClockStepBeforeItsSlot(BlockHash, u64, u64),
+
+    /// **The clock floor, H3:** past `palw_clock_floor` a heartbeat chain over the per-mergeset
+    /// bound (F5's exemption) must be paced by its own timestamps — at most two beats a slot, which
+    /// is all an honest chain can hold — or the exemption admits a burst the slot rule once priced.
+    #[error(
+        "block merges a chain of {0} heartbeat blocks spanning {1} ms of timestamps: more than the {2} a chain paced by the \
+         clock can hold (palw_clock_floor, H3)"
+    )]
+    MergeSetHeartbeatChainUnpaced(u64, u64, u64),
+
     /// A header whose lane does not commit PALW state carries a non-zero `palw_state_root`. The
     /// field is hash-invisible on such a header (see `hashing::header::write_header_preimage`),
     /// so non-empty bytes there would be block-hash malleability — the

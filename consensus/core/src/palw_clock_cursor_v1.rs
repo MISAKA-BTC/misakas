@@ -147,6 +147,10 @@ pub struct PalwClockStepV1 {
     /// prices and a beat at or past the cursor. Exactly the condition that takes one beat out of
     /// the exempt count.
     pub granted: bool,
+    /// `palw_clock_floor` governs this block (the 2026-09-24 heartbeat audit's H3/H5), read at the
+    /// same selected-parent score as `governs`: a heartbeat must be stamped at or past `cursor`,
+    /// and so must a block that is `granted`. Never set where `governs` is not.
+    pub floor: bool,
 }
 
 impl PalwClockStepV1 {
@@ -156,6 +160,18 @@ impl PalwClockStepV1 {
     #[inline]
     pub fn next_slot_ms(&self) -> Option<u64> {
         if self.governs { self.cursor.map(|cursor| cursor.next_slot_ms) } else { None }
+    }
+
+    /// **H3: may a heartbeat header stamped `timestamp` stand on these parents?** Past the floor,
+    /// only at or past the cursor its own window derives — the slot it could be granted. `Ok`
+    /// wherever the floor does not govern or no reference is known ("no slot is known to be
+    /// taken", the grant's own reading of a missing reference).
+    #[inline]
+    pub fn heartbeat_stamp_admits(&self, timestamp: u64) -> Result<(), ClockSlotTooEarly> {
+        match self.cursor {
+            Some(cursor) if self.floor => palw_clock_slot_admits_v1(&cursor, timestamp),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -300,6 +316,23 @@ mod tests {
         assert_eq!(next.next_slot_ms, reference + 2 * I);
         // And a zero interval does not divide by zero here either.
         assert_eq!(palw_clock_cursor_from_reference_v1(10, 0).next_slot_ms, 11);
+    }
+
+    /// **H3's predicate: past the floor a beat is admitted at or after its slot and not before; with
+    /// no floor, or no known reference, it is admitted anywhere** (the grant's own reading of a
+    /// missing reference — "no slot is known to be taken").
+    #[test]
+    fn a_beat_is_stamped_at_or_after_its_slot_only_where_the_floor_governs() {
+        let cursor = Some(PalwClockCursorV1 { next_slot_ms: 10_000, slots_consumed: 0 });
+        let floored = PalwClockStepV1 { governs: true, cursor, granted: false, floor: true };
+        assert!(floored.heartbeat_stamp_admits(10_000).is_ok());
+        assert!(floored.heartbeat_stamp_admits(u64::MAX).is_ok());
+        let early = floored.heartbeat_stamp_admits(9_999).expect_err("one ms before the slot");
+        assert_eq!((early.next_slot_ms, early.proposed_ms), (10_000, 9_999));
+        assert!(PalwClockStepV1 { floor: false, ..floored }.heartbeat_stamp_admits(0).is_ok(), "no floor, no stamp rule");
+        assert!(PalwClockStepV1 { cursor: None, ..floored }.heartbeat_stamp_admits(0).is_ok(), "no reference, no slot taken");
+        assert_eq!(floored.next_slot_ms(), Some(10_000));
+        assert_eq!(PalwClockStepV1 { governs: false, ..floored }.next_slot_ms(), None);
     }
 
     /// The type is rooted state, so its encoding is a consensus fact: pin the byte layout.

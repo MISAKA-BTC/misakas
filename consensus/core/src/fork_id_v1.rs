@@ -615,6 +615,9 @@ mod tests {
             // the probe sets the cursor wherever it sets the clock; setting the cursor alone is
             // legal on its own.
             "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
+            // The clock floor (H3/H5) refines the cursor; `validate_palw_v2` wants the cursor at or
+            // below it, which the probe does not run — it asks only the hashers and the schedule.
+            "palw_clock_floor" => params.palw_clock_floor = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),
