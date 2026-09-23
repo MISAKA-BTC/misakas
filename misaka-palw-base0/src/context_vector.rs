@@ -1286,7 +1286,12 @@ mod tests {
     fn the_512_vector_passes_every_stage_and_is_pinned() {
         check_pinned(
             "0110-dense-v7-512",
-            "02818c104b734965a46c0a0d39f0886fbc35533b5d160280d368e793dc8e1da4c0292010e54f5eda06260016d176a924196b2b22e96bb22b2eabb7c189b95a6b",
+            // Re-pinned 2026-09-23: the document carries `ruleset.consensus_params_id` for `devnet-held`, and
+            // that id moved when ADR-0151's `palw_economic_safety` fence joined every preset's digest on this
+            // branch (a Some-only fence adds its sentinel to the fingerprint — the same move that re-pinned
+            // t11's schedule id). No root, count, size or verdict changed: `vector.*`, `consensus.commit.*`
+            // and `consensus.court.*` are the values the previous pin was taken over.
+            "42a38f48dd37d7f47a55b99d14de92e84092e07c5933b17ee80d329bea249b46e5ac56c9107af9f379aefed5371cb40059dad4415ca14e7e9ef70a82f5e667f1",
         );
     }
 
