@@ -148,6 +148,67 @@ pub struct ConsensusStorage {
     pub lkg_virtual_state: LkgVirtualState,
 }
 
+/// **The consensus caches' declared budget, as a number an operator can put beside an RSS reading.**
+///
+/// `ConsensusStorage::new` sizes fourteen caches from byte budgets scaled by `--ram-scale`, and the
+/// comment beside them has always said they "sum up to ~1GB". `~1GB` is not a figure anyone can
+/// subtract from a process's 11.5 GiB to find out what the other 10 were — which is exactly the
+/// position the testnet-12 fleet's operator was in. This gives the sum, at a stated scale, in bytes.
+///
+/// **It is a DECLARED bound, not a measurement**: a cache holds what it has been given, allocator
+/// overhead is on top (the comment's "obviously takes more low level alloc space"), and RocksDB's own
+/// block cache is separate (`--rocksdb-cache-size`). Its use is as the subtrahend in a decomposition,
+/// so "anonymous memory minus the caches" becomes a quantity with a name instead of a remainder.
+///
+/// The multipliers are the ones the constructor applies for levels and covering sets, kept here
+/// because a sum that ignored them would understate the whole point by 600 MB at scale 1.
+pub fn declared_cache_budget_bytes_v1(ram_scale: f64) -> u64 {
+    let scaled = |s: u64| (s as f64 * ram_scale) as u64;
+    scaled(30_000_000)      // daa_excluded
+        + scaled(30_000_000)  // statuses
+        + scaled(100_000_000) // reachability_data
+        + scaled(100_000_000) * 2 // reachability_sets: tree children and future covering set
+        + scaled(15_000_000) // ghostdag_compact
+        + scaled(5_000_000)  // headers_compact
+        + scaled(80_000_000) * 3 // parents: reachability and levels
+        + scaled(20_000_000) * 3 // children: reachability and levels
+        + scaled(80_000_000) * 2 // ghostdag: levels
+        + scaled(80_000_000) // headers
+        + scaled(40_000_000) // transactions
+        + scaled(40_000_000) // utxo_diffs
+        + scaled(200_000_000) * 2 // block_window: difficulty and median time
+        + scaled(40_000_000) // acceptance_data
+}
+
+#[cfg(test)]
+mod declared_budget_tests {
+    /// **Every `scaled(..)` budget in the constructor is in the sum.**
+    ///
+    /// A hand-written total is a second copy of a list, and a second copy goes stale the first time a
+    /// cache is added — silently, because a sum that is too small still looks like a sum. This counts
+    /// the constructor's own `scaled(` sites and holds the count, so adding one without adding it here
+    /// fails rather than quietly understating the caches by its size.
+    #[test]
+    fn the_sum_lists_every_scaled_budget() {
+        // The needle is built from pieces on purpose: spelled whole, it would appear in this test's
+        // own text and the count would include the line doing the counting. The identity module's
+        // source scan hit the same trap, from the other direction.
+        let needle = format!("_budget {} scaled(", "=");
+        let in_constructor = include_str!("storage.rs").matches(needle.as_str()).count();
+        assert_eq!(in_constructor, 14, "the constructor sizes {in_constructor} caches; update declared_cache_budget_bytes_v1");
+    }
+
+    /// The figure the constructor's own comment claims, and the scale it claims it at.
+    #[test]
+    fn the_budget_is_about_the_gigabyte_the_comment_promises() {
+        let at_one = super::declared_cache_budget_bytes_v1(1.0);
+        assert_eq!(at_one, 1_440_000_000, "fourteen caches with their level multipliers");
+        // And it follows the scale, which is what makes it usable beside a per-share --ram-scale.
+        assert_eq!(super::declared_cache_budget_bytes_v1(0.225), 324_000_000);
+        assert_eq!(super::declared_cache_budget_bytes_v1(0.0), 0);
+    }
+}
+
 impl ConsensusStorage {
     pub fn new(db: Arc<DB>, config: Arc<Config>) -> Arc<Self> {
         let scale_factor = config.ram_scale;

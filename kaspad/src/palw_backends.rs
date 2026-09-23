@@ -438,6 +438,18 @@ fn held_artifacts() -> &'static Mutex<HashMap<HeldArtifactKey, PalwLoadedArtifac
 /// Costs one streamed walk per class per artifact — 135 s at a 2,097,152 context, measured — which is
 /// why it is a flag and not the default. Absent sidecars are not failures: a node with none derives
 /// every root it is asked for, which is correct and slower.
+/// **This process's `--ram-scale`**, armed once by the daemon so the memory decomposition can name
+/// the caches' declared budget without every caller carrying the figure.
+static ARMED_RAM_SCALE: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+
+pub fn arm_ram_scale_v1(scale: f64) {
+    let _ = ARMED_RAM_SCALE.set(scale);
+}
+
+fn armed_ram_scale_v1() -> f64 {
+    *ARMED_RAM_SCALE.get().unwrap_or(&1.0)
+}
+
 /// **Whether `--palw-verify-class-manifest` was given**, set once by the daemon.
 ///
 /// A process-global rather than a parameter threaded through two service constructors: holdings are
@@ -480,6 +492,10 @@ pub fn load_class_holdings_v1(
     bound_bytes: u64,
     residency: misaka_palw_sdk::PalwWeightResidencyV1,
 ) -> Vec<PalwLoadedArtifactV1> {
+    // The scale this node was configured with, for the decomposition below. Read from the process's
+    // own armed value rather than threaded through two service constructors, for the same reason the
+    // manifest check is: both services must report the same arithmetic.
+    let ram_scale = armed_ram_scale_v1();
     // Held across the whole load on purpose: the guarantee is "once", so a second duty asking
     // for a file the first is still hashing waits for that holding rather than starting its own
     // pass. Nothing under the lock calls back in. A load that panicked (the root pass on a file
@@ -592,6 +608,9 @@ pub fn load_class_holdings_v1(
     }
     if !holdings.is_empty() {
         info!("[{role}] memory after loading {} class artifact(s): {}", holdings.len(), process_memory_line_v1());
+        // The decomposed form beside it, because "after loading" is the phase the fleet died in and the
+        // one-line form does not separate the caches from the rest of the anonymous memory.
+        log_memory_phase_v1(role, "after the class artifacts loaded", ram_scale);
     }
     holdings
 }
@@ -825,6 +844,51 @@ pub fn process_memory_line_v1() -> String {
             gib(m.swap_bytes)
         ),
         None => "process memory accounting is Linux-only here".to_string(),
+    }
+}
+
+/// **A producer's memory, decomposed and named, at a named phase** (ADR-0151 follow-up item 5).
+///
+/// The reason this exists: a testnet-12 seat reached 11.5 GiB of anonymous memory and was
+/// OOM-killed, and the only figure anyone had was that 11.5. `RSS` alone names no culprit — it does
+/// not say whether the growth was the artifact, the consensus caches, a class's KV/context, an
+/// operand inventory, RocksDB, or allocator fragmentation — so the diagnosis took a bespoke probe and
+/// a rebuild. Every one of those is separable, and most of them are already known to the process.
+///
+/// What each column is, and how far to trust it:
+///
+/// * `rss` / `pss` / `anon` / `file` / `swap` — measured, from `smaps_rollup`. `pss` divides
+///   shared pages by their sharers, which is the honest figure on a host running four seats over ONE
+///   mapped artifact: four processes each reporting the artifact's 2.68 GiB in `rss` would triple-count
+///   the host's memory, and `file` in `pss` does not.
+/// * `caches` — DECLARED, [`kaspa_consensus::consensus::storage::declared_cache_budget_bytes_v1`] at
+///   this node's `--ram-scale`. A bound, not an occupancy, and allocator overhead sits on top of it.
+/// * `unaccounted` — `anon` less `caches`. The residue is where a class's KV/context, an operand
+///   inventory walk and fragmentation live, and naming it as a residue is the point: a number with a
+///   name gets investigated, and a subtraction the reader has to perform does not.
+///
+/// A phase string rather than a timestamp, because the question is always "between which two points
+/// did it grow".
+pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
+    let caches = kaspa_consensus::consensus::storage::declared_cache_budget_bytes_v1(ram_scale);
+    match process_memory_v1() {
+        Some(m) => {
+            let unaccounted = m.pss_anon_bytes.saturating_sub(caches);
+            info!(
+                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation)",
+                gib(m.rss_bytes),
+                gib(m.pss_bytes),
+                gib(m.pss_anon_bytes),
+                gib(m.pss_file_bytes),
+                gib(m.swap_bytes),
+                gib(caches),
+                gib(unaccounted)
+            );
+        }
+        None => info!(
+            "[{role}] memory at {phase}: per-process accounting is Linux-only here; consensus caches declared {:.2} GiB at              --ram-scale {ram_scale:.3}",
+            gib(caches)
+        ),
     }
 }
 

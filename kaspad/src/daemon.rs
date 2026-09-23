@@ -447,6 +447,9 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // Before any service constructs its holdings, because the check has to be the same for all of
     // them (see `arm_class_manifest_verification_v1`).
     crate::palw_backends::arm_class_manifest_verification_v1(args.palw_verify_class_manifest);
+    crate::palw_backends::arm_ram_scale_v1(args.ram_scale);
+    // The first phase, before anything is opened — the baseline every later reading is a delta from.
+    crate::palw_backends::log_memory_phase_v1("palw-host", "startup, before the consensus stores open", args.ram_scale);
     // Item 4's guarantee: an impossible division is refused here, not settled by the OOM killer.
     if let Err(why) = crate::palw_backends::check_host_share_v1(
         args.palw_host_memory_budget,
@@ -2017,6 +2020,11 @@ Do you confirm? (y/n)";
     // Consensus must start first in order to init genesis in stores
     core.bind(consensus_manager);
     core.bind(async_runtime);
+
+    // The last phase construction controls: every store is open and every service is built, so the
+    // delta from the startup baseline is what the node cost itself before it saw a block. The phases
+    // after this one belong to the class artifacts (`load_class_holdings_v1`) and to the producer.
+    crate::palw_backends::log_memory_phase_v1("palw-host", "every store open and every service built", args.ram_scale);
 
     (core, rpc_core_service)
 }
