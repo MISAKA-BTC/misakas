@@ -401,3 +401,99 @@ fn review_economic_a_valid_signer_the_licence_did_not_carry_loses_its_whole_coll
     assert_eq!(lost_u, before_u, "the uncarried signer loses its whole collateral");
     assert!(lost_u as u128 > 100 * lock.amount);
 }
+
+/// **2026-09-24 DoS audit #12 (a): an obligation past its evidence horizon is pruned, and a
+/// conviction of it is REFUSED — never priced at the seat's whole collateral.**
+///
+/// The real t12 fold from the Final on: one claimless block per epoch boundary until the carried
+/// signer's lock and the claim's liability row leave the state together. The boundary before that
+/// still holds both (and a conviction there takes exactly the lock); the boundary that prunes them
+/// is at or past `expiry + window_court` and past the second clock's hold; the conviction on the
+/// pruned state is `ObjectiveOffenceRefused` with the collateral untouched; and the pruning block's
+/// delta reverts to its parent's root.
+///
+/// Fails without the fix: nothing is ever pruned, and the loop runs out of boundaries.
+#[test]
+fn fix12_a_pruned_obligation_is_refused_never_the_whole_collateral() {
+    let f = drive_to_final(true);
+    let (p, sp) = (&f.p, &f.sp);
+    let carried = f.valid_seats[0];
+    let lock = f.at_final.slashable_lock(carried, f.claim_id).copied().expect("a carried signer is locked");
+    let row = f.at_final.panel_liability(&f.claim_id).cloned().expect("the Final's liability row");
+    let horizon = row.expiry_daa + sp.window_court();
+    let epoch = sp.epoch_length();
+    let mut state = f.at_final.clone();
+    let mut daa = f.daa;
+    let (held, pruned, delta) = loop {
+        daa = (daa / epoch + 1) * epoch;
+        assert!(daa < horizon + 10 * epoch, "the obligation must be pruned within an epoch or two of its horizon");
+        let (next, delta) = step(p, sp, &state, daa, &[], PalwBlockWorkV3::None, Hash64::default(), 0, true);
+        if next.panel_liability(&f.claim_id).is_none() {
+            break (state, next, delta);
+        }
+        assert!(next.slashable_lock(carried, f.claim_id).is_some(), "the lock never leaves before its liability row");
+        state = next;
+    };
+    println!(
+        "Final at {}, liability expiry {}, horizon {horizon}; last boundary holding it {}, pruned at {daa}",
+        f.final_daa,
+        row.expiry_daa,
+        held.last_point().map(|c| c.daa_score).unwrap_or(0)
+    );
+    assert!(daa >= horizon, "pruned no earlier than expiry + window_court");
+    assert!(pruned.slashable_lock(carried, f.claim_id).is_none(), "the lock went with its liability row");
+    for seat in &f.valid_seats {
+        assert!(pruned.slashable_lock(*seat, f.claim_id).is_none());
+    }
+    // The boundary before: a conviction still takes exactly the lock.
+    let before_c = held.bond(&carried).unwrap().collateral;
+    let convicted = step(p, sp, &held, daa - 1, &[false_valid(&f, carried)], PalwBlockWorkV3::None, Hash64::default(), 0, true).0;
+    assert_eq!((before_c - convicted.bond(&carried).unwrap().collateral) as u128, lock.amount, "inside the horizon: the lock");
+    // The pruned state: refused, the collateral whole.
+    let refused = try_step(p, sp, &pruned, daa + 1, &[false_valid(&f, carried)], true);
+    println!("conviction after pruning: {refused:?}");
+    assert!(
+        matches!(refused, Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::ObjectiveOffenceRefused(..))),
+        "a pruned obligation convicts nobody: {refused:?}"
+    );
+    assert_eq!(pruned.bond(&carried).unwrap().collateral, before_c);
+    reloads(p, &pruned);
+    // A reorg across the pruning boundary un-prunes it exactly.
+    let back = revert_delta_v2(&pruned, &delta, sp).expect("the pruning block reverts");
+    assert_eq!(back.state_root(), held.state_root(), "every pruning delta reverts");
+    assert_eq!(back.panel_liability(&f.claim_id), Some(&row));
+}
+
+/// **2026-09-24 DoS audit #12 (a): a `BindTimeout` that no `Valid` signed leaves no liability row**
+/// past the fence; below it the row is written as it always was (the panel-less fallback).
+///
+/// Fails without the fix: the audited fold writes the row too.
+#[test]
+fn fix12_a_a_signerless_bind_timeout_writes_no_liability() {
+    let p = t12();
+    let sp = bundle(&p).state.clone();
+    let (floor, leaves, target, _) = genesis_classes(&p)[0];
+    let pwu = palw_pwu_v1(target, leaves);
+    let b = bundle(&p);
+    let (exec_bond, exec_pk, exec_op) = b
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => {
+                Some((*bond, pubkey.clone(), operator_pubkey.clone()))
+            }
+            _ => None,
+        })
+        .expect("a genesis bond");
+    for audit in [true, false] {
+        let s = with_floor_lifecycle(&p, &genesis_state(&p));
+        let (env, key, claim_id) = junk_attempt(floor, exec_bond, exec_pk.clone(), &exec_op, pwu, 5, 0x6B7);
+        let (s, _) = step(&p, &sp, &s, 1_001, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI, audit);
+        let (s, _) = step(&p, &sp, &s, 1_001 + sp.window_bind() + 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0, audit);
+        assert!(
+            matches!(s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }),
+            "the claim voided at BindTimeout"
+        );
+        assert_eq!(s.panel_liability(&claim_id).is_some(), !audit, "audit {audit}: a liability row only below the fence");
+    }
+}

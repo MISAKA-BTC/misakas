@@ -9,7 +9,11 @@
 //! fence arms this ledger together with PanelFalseValid.
 //!
 //! Registry floor stays the producer floor. Panel eligibility is a dynamic predicate on
-//! *available* slashable collateral, not a raised `min_collateral_sompi`.
+//! *available* slashable collateral, not a raised `min_collateral_sompi`. (Past
+//! `palw_audit_2026_09_23` a `BondRegistered` must post the PANEL floor —
+//! `palw_state_v2::palw_bond_registration_floor_v1`, 2026-09-24 DoS audit #12 (c) — to price the
+//! permanent registry row; `min_collateral_sompi` itself, and every exposure priced off it, is
+//! unchanged.)
 
 use crate::palw_offence_v1::{PALW_PANEL_COLLUDING_QUORUM_V1, palw_min_slashable_per_colluding_seat_v1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwClaimStateV2, PalwVoidReasonV2};
@@ -282,6 +286,47 @@ pub fn palw_liability_still_locks_v2(record: &PalwPanelLiabilityRecordV1, now_da
         None => palw_liability_still_locks_v1(record, now_daa),
         Some(depth) => palw_liability_still_locks_v1(record, now_daa) || settled_now.saturating_sub(record.settled_at_final) < depth,
     }
+}
+
+/// [`palw_liability_still_locks_v2`] with the second clock bounded per obligation, exactly as
+/// [`PalwSlashableLockV1::is_live_v3`] bounds a lock ([`palw_second_clock_holds_v1`]). `depth` is
+/// the ESCAPED depth (`palw_second_clock_depth_v1`); `None` is the DAA-only rule, byte for byte.
+pub fn palw_liability_still_locks_v3(
+    record: &PalwPanelLiabilityRecordV1,
+    now_daa: u64,
+    settled_now: u64,
+    depth: Option<u64>,
+    window_court: u64,
+) -> bool {
+    palw_liability_still_locks_v1(record, now_daa)
+        || palw_second_clock_holds_v1(depth, settled_now, record.settled_at_final, record.expiry_daa, now_daa, window_court)
+}
+
+/// **Has a lock or a liability row passed its evidence horizon?** (2026-09-24 DoS audit #12, the
+/// user's decision (a).) A row may be pruned once it is dead on BOTH clocks — its DAA expiry has
+/// passed and the second clock ([`palw_second_clock_holds_v1`], read at the escaped `depth`) no
+/// longer holds it — AND `window_court` more DAA have run past that expiry.
+///
+/// Why the extra `window_court`: "dead" answers "does this row still lock collateral", and a row
+/// that locks nothing was still the only thing a late `PanelFalseValid` could bind to — the
+/// liability is the claim's residue after the claim row retires, and the lock is what a
+/// conviction slashes. Keeping both for one further court window past the moment they stop
+/// locking gives a contradiction discovered at the edge of the liability the same window any
+/// other court move gets, and then the chain forgets the obligation for good: past this horizon a
+/// conviction of that seat is REFUSED (`consume_objective_offence`), never priced at the seat's
+/// whole collateral.
+///
+/// `expiry_daa` and `settled_at_final` are the row's own; both kinds of row carry them.
+pub fn palw_panel_obligation_prunable_v1(
+    expiry_daa: u64,
+    settled_at_final: u64,
+    now_daa: u64,
+    settled_now: u64,
+    depth: Option<u64>,
+    window_court: u64,
+) -> bool {
+    now_daa >= expiry_daa.saturating_add(window_court)
+        && !palw_second_clock_holds_v1(depth, settled_now, settled_at_final, expiry_daa, now_daa, window_court)
 }
 
 /// Producer-withholding / court-fraud bind after the claim row retires.
@@ -761,5 +806,51 @@ mod tests {
         assert!(!lock.is_live_v3(lock.expiry_daa, 5 + depth, Some(depth), window_court), "enough anchors release it at expiry");
         assert!(!lock.is_live_v3(lock.expiry_daa, settled, None, window_court), "no second clock: the DAA rule");
         assert_eq!(lock.is_live_v3(lock.expiry_daa - 1, 0, None, window_court), lock.is_live(lock.expiry_daa - 1));
+    }
+
+    /// **2026-09-24 DoS audit #12 (a): an obligation is prunable once it is dead on both clocks AND
+    /// `window_court` past its expiry — never while either clock could still hold it.** The horizon
+    /// is exact on the DAA side (`expiry + window_court − 1` keeps it, `expiry + window_court`
+    /// drops it); a second clock short of `depth` keeps it up to its `2 × window_court` bound; an
+    /// escaped second clock (`None`) leaves the DAA horizon alone. The liability predicate
+    /// (`palw_liability_still_locks_v3`) and the lock's (`is_live_v3`) agree on every point, and
+    /// nothing live is ever prunable.
+    #[test]
+    fn an_obligation_is_prunable_only_past_its_evidence_horizon_on_both_clocks() {
+        let (wc, depth, expiry, settled_at) = (3_000u64, 30u64, 10_000u64, 5u64);
+        let (short, full) = (settled_at + depth - 1, settled_at + depth);
+        let prunable = |now: u64, settled_now: u64, depth: Option<u64>| {
+            palw_panel_obligation_prunable_v1(expiry, settled_at, now, settled_now, depth, wc)
+        };
+        assert!(!prunable(expiry + wc - 1, full, Some(depth)), "dead on both clocks but inside the horizon");
+        assert!(prunable(expiry + wc, full, Some(depth)), "the horizon, both clocks run out");
+        assert!(prunable(expiry + wc, short, None), "an escaped second clock leaves the DAA horizon");
+        assert!(!prunable(expiry + 2 * wc - 1, short, Some(depth)), "the second clock still holds it");
+        assert!(prunable(expiry + 2 * wc, short, Some(depth)), "and not past its 2 x window_court bound");
+        let lock =
+            PalwSlashableLockV1 { claim: Hash64::from_u64_word(1), amount: 7, expiry_daa: expiry, settled_at_final: settled_at };
+        let record = PalwPanelLiabilityRecordV1 {
+            claim_id: Hash64::from_u64_word(1),
+            work_id: Hash64::from_u64_word(2),
+            class_id: Hash64::from_u64_word(3),
+            execution_root: Hash64::from_u64_word(4),
+            output_root: Hash64::from_u64_word(5),
+            executor_bond: bond(6),
+            voided_daa: None,
+            void_reason: None,
+            valid_signers: Vec::new(),
+            locked_sompi: 7,
+            expiry_daa: expiry,
+            settled_at_final: settled_at,
+        };
+        for now in [expiry - 1, expiry, expiry + wc - 1, expiry + wc, expiry + 2 * wc - 1, expiry + 2 * wc, expiry + 3 * wc] {
+            for settled_now in [short, full] {
+                for d in [Some(depth), None] {
+                    let live = lock.is_live_v3(now, settled_now, d, wc);
+                    assert_eq!(live, palw_liability_still_locks_v3(&record, now, settled_now, d, wc), "one rule for both rows");
+                    assert!(!(live && prunable(now, settled_now, d)), "nothing live is ever prunable (now {now})");
+                }
+            }
+        }
     }
 }

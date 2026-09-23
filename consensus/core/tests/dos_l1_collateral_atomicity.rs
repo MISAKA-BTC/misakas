@@ -36,8 +36,8 @@ use kaspa_consensus_core::palw_pwu::palw_pwu_v1;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwConsensusObjectV2, PalwMergedWorkV1,
     PalwPanelSeatV2, PalwPwuRuleV2, PalwStateDeltaV2, PalwStateParamsV2, PalwTransitionExtrasV1, apply_palw_transition_v7,
-    palw_bond_backs_live_duty_v1, palw_bond_collateral_is_locked_v3, palw_bond_collateral_is_locked_v4, palw_operator_id_v2,
-    palw_second_clock_depth_v1, revert_delta_v2,
+    palw_bond_backs_live_duty_v1, palw_bond_collateral_is_locked_v3, palw_bond_collateral_is_locked_v4,
+    palw_bond_collateral_is_locked_v5, palw_operator_id_v2, palw_second_clock_depth_v1, revert_delta_v2,
 };
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
@@ -216,6 +216,12 @@ fn probe_reserved(p: &PalwStateParamsV2, a: &PalwAdmissionParamsV2, class: (Hash
     s2.claim(&attempt_id_v2(&env.attempt)).expect("claim").reserved
 }
 
+/// The least collateral a `BondRegistered` folds at under `armed()` — the panel floor past the audit
+/// fence (2026-09-24 DoS audit #12 (c)), 4,000,000 sompi on t12.
+fn registration_floor(sp: &PalwStateParamsV2) -> u64 {
+    kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(sp.min_collateral_sompi(), true)
+}
+
 fn setup(class: (Hash64, u64, u128, u64), bonds: &[(u64, u64)]) -> Vec<PalwConsensusObjectV2> {
     let (class_id, leaves, target, slash) = class;
     let mut v = vec![PalwConsensusObjectV2::ClassRegistered {
@@ -299,7 +305,8 @@ fn dos_l1_q1_merged_parallel_attempts_are_rechecked_against_the_running_reservat
     let ratio = b.admission.max_exposure_ratio_permille();
     // Collateral whose ceiling holds exactly TWO claims.
     let collateral = ((2 * r * 1000) / ratio as u128) as u64 + 1;
-    let collateral = collateral.max(sp.min_collateral_sompi());
+    // #12 (c): past the audit fence the least a bond can register at is the panel floor.
+    let collateral = collateral.max(registration_floor(sp));
     let k = ceiling(collateral, ratio) / r;
     let f = Fold { p: sp, admission: &b.admission, extras: armed() };
     let (s1, _, _) = f.go(
@@ -353,8 +360,9 @@ fn dos_l1_q2_own_attempt_overruns_the_ceiling_after_same_block_seat_duty() {
     let ratio = b.admission.max_exposure_ratio_permille();
     let big = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
     let r = probe_reserved(sp, &b.admission, cls, big);
-    // Bond 1 (the executor): the registry's minimum bond (ceiling 200,000 sompi on t12).
-    let small = sp.min_collateral_sompi();
+    // Bond 1 (the executor): the registry's minimum bond — the panel floor past #12 (c), 4,000,000
+    // sompi on t12 (ceiling 2,000,000).
+    let small = registration_floor(sp);
     let f = Fold { p: sp, admission: &b.admission, extras: armed() };
     // Bond 2 produces a claim; bonds 1,3,4,5 will be its panel.
     let bonds = [(1, small), (2, big), (3, big), (4, big), (5, big)];
@@ -660,6 +668,14 @@ fn dos_l1_q4_a_seat_that_retires_between_draw_and_receipt_stays_locked_while_it_
 /// live on the second clock; `v4` must not. It releases only at the escape, `2 × window_court` after
 /// the last licence (`E − 1` locked, `E` and `E + 1` free). Every block — licences that push and
 /// prune the anchor ring included — reverts bit-for-bit.
+///
+/// **Since e5f247fe and #12 (a) the liability does not survive to the withdrawal DAA.** The second
+/// clock holds a lock at most `2 × window_court` past its DAA expiry (`palw_second_clock_holds_v1`,
+/// the in-force gate `palw_bond_collateral_is_locked_v5`), which on this history ends before the
+/// withdrawal delay does, and the epoch sweep then prunes X's lock and liability row together
+/// (`sweep_panel_obligations`). So the test asserts what the chain now holds at the withdrawal DAA:
+/// the obligation pruned, the in-force gate released, the superseded v3/v4 released too on the
+/// pruned state — and every block of the history, the pruning block included, reverting exactly.
 #[test]
 fn dos_l1_q4b_sparse_licences_do_not_release_a_retiring_seat_with_a_live_liability() {
     let p = t12();
@@ -789,33 +805,43 @@ fn dos_l1_q4b_sparse_licences_do_not_release_a_retiring_seat_with_a_live_liabili
     s = step(&s, ctx(blue, withdraw_daa, blue), vec![], None, 0);
     blue += 1;
     let settled = s.settled_attempt_finals();
-    let live = lock_live_escaped(&s, sp, bond_key(1), xid, withdraw_daa);
     let (clock, v3, v4) = withdrawal_gate(&s, sp, bond_key(1), withdraw_daa, delay);
+    let v5 = |s: &PalwChainStateV2, now: u64| {
+        let depth = palw_second_clock_depth_v1(Some(PALW_T12_SETTLED_ANCHOR_DEPTH), s.recent_anchor_daas(), now, wc);
+        palw_bond_collateral_is_locked_v5(s, &bond_key(1), s.bond(&bond_key(1)).expect("bond"), now, delay, depth, true, wc)
+    };
     println!("=== Q4b: {} licences between retirement and liability, then {sparse} sparse ones ===", depth + 1);
     println!("retire since_daa {since_daa}, settled_at_since {settled_at_since}; delay {delay}");
     println!("seat lock on X: amount {} expiry_daa {} settled_at_final {}", lock.amount, lock.expiry_daa, lock.settled_at_final);
     println!("at DAA {withdraw_daa}: counter {settled}, last licence {last_licence}, depth {clock:?}");
-    println!("  lock live {live}; v3 locked {v3}; v4 locked {v4}; ring {} entries", s.recent_anchor_daas().len());
+    println!(
+        "  lock on X still rooted {}; v3 locked {v3}; v4 locked {v4}; v5 (in force) locked {}; ring {} entries",
+        s.slashable_lock(bond_key(1), xid).is_some(),
+        v5(&s, withdraw_daa),
+        s.recent_anchor_daas().len()
+    );
     assert!(settled - settled_at_since >= depth, "the retiring bond's own second-clock half is satisfied");
     assert!(
         settled - lock.settled_at_final < depth,
-        "…but the liability's is not: {} licences since X's Final",
+        "…and the liability's is not: {} licences since X's Final",
         settled - lock.settled_at_final
     );
-    assert!(live, "seat 1's liability on X is live on the escaped clocks");
-    assert!(!v3, "v3 alone would release the collateral here — the audit's escape");
-    assert!(v4, "v4 must keep it locked while the liability is live");
+    // The bound e5f247fe put on the second clock ends the liability before the withdrawal DAA …
+    assert!(lock.expiry_daa + 2 * wc < withdraw_daa, "the second clock held X's lock at most to its expiry + 2 x window_court");
+    // … and #12 (a) then forgot it: lock and liability row pruned together at an epoch boundary.
+    assert!(s.slashable_lock(bond_key(1), xid).is_none(), "X's lock is pruned past its evidence horizon");
+    assert!(s.panel_liability(&xid).is_none(), "together with X's liability row");
+    assert!(!v5(&s, withdraw_daa), "the in-force gate releases the collateral: nothing live stands behind the bond");
+    assert!(!v3 && !v4, "and the superseded gates agree on the pruned state");
 
-    // With no further licence, the liveness escape releases it — and not a DAA before.
+    // With no further licence, nothing re-locks it on either side of the escape.
     let e = last_licence + 2 * wc;
     for now in [e - 1, e, e + 1] {
         s = step(&s, ctx(blue, now, blue), vec![], None, 0);
         blue += 1;
-        let live = lock_live_escaped(&s, sp, bond_key(1), xid, now);
         let (clock, v3, v4) = withdrawal_gate(&s, sp, bond_key(1), now, delay);
-        println!("at DAA {now} (E = {e}): depth {clock:?} lock live {live} v3 {v3} v4 {v4}");
-        assert!(!live || v4, "DAA {now}: never released under a live liability");
-        assert_eq!(v4, now < e, "DAA {now}: locked until E, released from E");
+        println!("at DAA {now} (E = {e}): depth {clock:?} v3 {v3} v4 {v4} v5 {}", v5(&s, now));
+        assert!(!v5(&s, now) && !v4, "DAA {now}: released");
     }
     // Q5: every block of this history reverts bit-for-bit — anchor pushes and prunes included.
     let pruned: usize = deltas
@@ -980,7 +1006,7 @@ fn dos_l1_q6_seat_duty_moves_the_claimants_reservation_onto_other_bonds_times_th
     // Attacker bond 9 at the registry minimum; seats 1..=seat_count honest genesis-sized bonds.
     let seats_n: Vec<u64> = (1..=seat_count as u64).collect();
     let mut bonds: Vec<(u64, u64)> = seats_n.iter().map(|n| (*n, big)).collect();
-    bonds.push((9, sp.min_collateral_sompi()));
+    bonds.push((9, registration_floor(sp)));
     let (s1, _, _) =
         f.go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &setup(cls, &bonds), PalwBlockWorkV3::None, &[], Hash64::default());
     let env = attempt(class_id, palw_pwu_v1(target, leaves), 9, 4242);
@@ -1040,7 +1066,7 @@ fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_priced_by_the_reward_not_the_res
     let f = Fold { p: sp, admission: &b.admission, extras };
     let seats_n: Vec<u64> = (1..=seat_count as u64).collect();
     let mut bonds: Vec<(u64, u64)> = seats_n.iter().map(|n| (*n, big)).collect();
-    bonds.push((9, sp.min_collateral_sompi()));
+    bonds.push((9, registration_floor(sp)));
     let (s1, _, _) =
         f.go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &setup(cls, &bonds), PalwBlockWorkV3::None, &[], Hash64::default());
     let env = attempt(class_id, palw_pwu_v1(target, leaves), 9, 4343);

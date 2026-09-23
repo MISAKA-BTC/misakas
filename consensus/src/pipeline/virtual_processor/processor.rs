@@ -5281,6 +5281,8 @@ impl VirtualStateProcessor {
         let mut certifications_graded = 0usize;
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
+        // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
+        let mut class_registrations_charged = 0usize;
         // **ADR-0042 Decision 10 / ADR-0087 Decision 3 (mainnet audit 2026-09-06, M-10): the payout
         // rows this block's CARRIER-borne market moves have already promised.**
         //
@@ -5647,6 +5649,34 @@ impl VirtualStateProcessor {
                     }
                     model_payout_rows_promised += rows;
                 }
+            }
+            // **2026-09-24 DoS audit #12 (b): at most `PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`
+            // bought registrations a block** (past `palw_audit_2026_09_23`; genesis rows are never
+            // here). Counted in transaction order like the two caps above and the extra one DROPPED
+            // with the block standing, for the reason they give. The slot is charged to a
+            // registration its registrant bond SIGNED, asked here before the graph gate runs: a
+            // stranger's carrier is dropped at the signature for no slot, and the gate — the one
+            // expensive thing a registration asks of every node — runs at most the cap's times per
+            // block. Charged even when the gate or the fold then refuses the object, because that
+            // is exactly the CPU the cap bounds; only the registrant itself can spend its slots
+            // that way, and only for its own fees. The fold holds the same number as its second
+            // lock (`ClassRegistrationsPerBlockExceeded`) and never sees more than this admits.
+            if self.palw_audit_2026_09_23_at(point.daa_score)
+                && kaspa_consensus_core::palw_state_v2::palw_class_registration_buyer_v1(&object).is_some()
+            {
+                if let Err(why) = self.palw_v2_class_registration_is_signed(&folded, &object) {
+                    info!("Block {block}: a class registration was dropped, and the block stands: {why}");
+                    continue;
+                }
+                if class_registrations_charged >= kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1 {
+                    info!(
+                        "Block {block}: a class registration was dropped, and the block stands: the block already carries {} \
+                         (PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1)",
+                        kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1
+                    );
+                    continue;
+                }
+                class_registrations_charged += 1;
             }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
@@ -6178,6 +6208,73 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|bundle| bundle.court.max_step_leaf_count())
             .unwrap_or(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES)
+    }
+
+    /// **Is this post-genesis `ClassRegistered` signed by the Active bond its carriage names?**
+    /// (launch blockers §3; factored out for the 2026-09-24 DoS audit #12 (b)).
+    ///
+    /// The registrant must hold an ACTIVE bond and have signed the class it is registering together
+    /// with the share it is taking, the four fields the signature used to leave open and the
+    /// canonical job the pwu rule is derived from (audit M2-6). Asked by the `ClassRegistered` arm of
+    /// [`Self::palw_v2_validate_objects`], and — past `palw_audit_2026_09_23` — by the acceptance walk
+    /// BEFORE the graph gate runs, so a registration charges a slot of
+    /// `PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1` only when its registrant really signed it: a
+    /// stranger's unsigned carrier costs one signature check and no slot, and the gate's graph walk
+    /// (`verify_class_admission_v9`, ~211 ms for a 1,024-layer held profile in a debug build) runs
+    /// at most that many times a block. `Err` for any other object, which callers never pass.
+    fn palw_v2_class_registration_is_signed(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Result<(), String> {
+        let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            share_permille,
+            admission,
+            activation_daa,
+            artifact_root,
+            slash_value_per_pwu,
+            initial_target,
+            pwu_rule,
+        } = object
+        else {
+            return Err("not a class registration".to_string());
+        };
+        let Some(carriage) = admission.as_ref() else {
+            return Err(format!("class {class_id} carries no registrant to have signed it"));
+        };
+        let registrant = state
+            .bond(&carriage.registrant_bond)
+            .ok_or_else(|| format!("class {class_id} is registered under a bond this chain does not have"))?;
+        if !matches!(registrant.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+            return Err(format!("class {class_id} is registered under a bond that is not Active"));
+        }
+        let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.network_id_bytes.as_slice(),
+                Some(self.genesis.hash),
+            ),
+            *class_id,
+            *share_permille,
+            *activation_daa,
+            &carriage.registrant_bond,
+            // The four fields the signature used to leave open, and the canonical job the pwu rule
+            // is derived from (audit M2-6).
+            *artifact_root,
+            *slash_value_per_pwu,
+            *initial_target,
+            pwu_rule,
+            &carriage.canonical,
+        );
+        if !Self::verify_mldsa87_with_context_bool(
+            &registrant.pubkey,
+            message.as_byte_slice(),
+            &carriage.signature,
+            kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+        ) {
+            return Err(format!("class {class_id}'s registration is not signed by the bond it names"));
+        }
+        Ok(())
     }
 
     pub(crate) fn palw_v2_validate_objects(
@@ -6772,11 +6869,12 @@ impl VirtualStateProcessor {
                     class_id,
                     share_permille,
                     admission,
-                    activation_daa,
-                    artifact_root,
-                    slash_value_per_pwu,
                     initial_target,
-                    pwu_rule,
+                    // Signed over by `palw_v2_class_registration_is_signed`, below.
+                    activation_daa: _,
+                    artifact_root: _,
+                    slash_value_per_pwu: _,
+                    pwu_rule: _,
                 } => {
                     // **ADR-0049 Decision H: the gate, where the refusal used to be.**
                     //
@@ -6909,37 +7007,7 @@ impl VirtualStateProcessor {
                     // registering together with the share it is taking. Not a permission system:
                     // the smallest answer to "who", denominated in the collateral every other
                     // authority on this chain is denominated in.
-                    let registrant = state
-                        .bond(&carriage.registrant_bond)
-                        .ok_or_else(|| format!("class {class_id} is registered under a bond this chain does not have"))?;
-                    if !matches!(registrant.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
-                        return Err(format!("class {class_id} is registered under a bond that is not Active"));
-                    }
-                    let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
-                            self.network_id_bytes.as_slice(),
-                            Some(self.genesis.hash),
-                        ),
-                        *class_id,
-                        *share_permille,
-                        *activation_daa,
-                        &carriage.registrant_bond,
-                        // The four fields the signature used to leave open, and the canonical job
-                        // the pwu rule is derived from (audit M2-6).
-                        *artifact_root,
-                        *slash_value_per_pwu,
-                        *initial_target,
-                        pwu_rule,
-                        &carriage.canonical,
-                    );
-                    if !Self::verify_mldsa87_with_context_bool(
-                        &registrant.pubkey,
-                        message.as_byte_slice(),
-                        &carriage.signature,
-                        kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
-                    ) {
-                        return Err(format!("class {class_id}'s registration is not signed by the bond it names"));
-                    }
+                    self.palw_v2_class_registration_is_signed(state, object)?;
                     // **The certified family set, from this build** (ADR-0069 Decision 5). The
                     // gate reads it only for a registration asking a nonzero share, and it refuses
                     // a set that does not hash to `bundle.court_e2e_root` — so a node whose court

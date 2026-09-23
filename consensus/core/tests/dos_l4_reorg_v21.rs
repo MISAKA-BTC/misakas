@@ -208,10 +208,11 @@ fn v21_fields_revert_exactly_and_round_trip_through_the_carriage() {
     println!("lock on the 3rd Final: expiry_daa {} settled_at_final {}", lock.expiry_daa, lock.settled_at_final);
     assert_eq!(lock.settled_at_final, 3, "re-stamped at the Final, after its own licence ticked");
 
-    // Every voided floor attempt left a liability row too.
+    // Every voided floor attempt left a liability row too — until 2026-09-24 DoS audit #12 (a): a
+    // `BindTimeout` that no `Valid` signed writes none past the audit fence. Only the Finals' rows.
     let voided_floor = chain.liabilities() - finals.len();
     println!("after DAA {}: {} liabilities ({} from never-bound floor voids)", chain.daa, chain.liabilities(), voided_floor);
-    assert!(voided_floor > 50, "voids persist liabilities: {voided_floor}");
+    assert_eq!(voided_floor, 0, "a never-bound BindTimeout void persists no liability");
 
     // The freeze is bounded (fix #3): with no licence after the third, the lock is past its DAA
     // expiry but live on the second clock until E − 1 = last licence + 2 × window_court − 1, and

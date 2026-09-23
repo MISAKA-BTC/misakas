@@ -1418,7 +1418,12 @@ impl PalwPanelService {
         else {
             return Err("this network has no ConsensusV2 bundle, so it has no bonds to register".to_string());
         };
-        let floor = bundle.state.min_collateral_sompi();
+        // 2026-09-24 DoS audit #12 (c): the floor the fold enforces — the panel's, past the audit
+        // fence (armed at genesis or not at all, so any DAA answers it).
+        let floor = kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(
+            bundle.state.min_collateral_sompi(),
+            self.consensus_config.params.palw_audit_2026_09_23_active_at(0),
+        );
 
         // **The class this bond will be asked to CARRY — the operator's, not the network's floor.**
         //
@@ -1852,10 +1857,17 @@ impl PalwPanelService {
         }
     }
 
-    /// This chain's minimum collateral, or `None` on a network with no bonds to register.
+    /// This chain's minimum REGISTRATION collateral, or `None` on a network with no bonds to
+    /// register — `palw_bond_registration_floor_v1`, the number `BondRegistered` is refused below
+    /// (the panel floor past the 2026-09-23 audit fence, 2026-09-24 DoS audit #12 (c)).
     fn collateral_floor(&self) -> Option<u64> {
         match &self.consensus_config.params.palw_consensus_mode {
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.min_collateral_sompi()),
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                Some(kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(
+                    bundle.state.min_collateral_sompi(),
+                    self.consensus_config.params.palw_audit_2026_09_23_active_at(0),
+                ))
+            }
             _ => None,
         }
     }

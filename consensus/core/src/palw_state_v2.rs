@@ -2105,6 +2105,28 @@ pub fn palw_bond_burn_obligation_v2(bond: &PalwBondStateV2) -> u64 {
     bond.slashed
 }
 
+/// **The collateral a `BondRegistered` must post** (2026-09-24 DoS audit #12 (c); the user's
+/// decision). Below `palw_audit_2026_09_23` it is `min_collateral_sompi`, byte for byte; past it,
+/// the PANEL floor — [`crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1`] of the same
+/// number, the collateral a bond must hold to be drawn as a seat at all (4,000,000 sompi on
+/// testnet-12, where the producer floor is 400,000).
+///
+/// The registry is append-only (`bond_of_pubkey_v2`: nothing writes a bond row away), so each
+/// registration roots ~2,837 B — an ML-DSA-87 key and all — for good, and at 400,000 sompi that
+/// was 0.004 MSK of RECYCLABLE capital per permanent row: withdrawn after the delay, the same
+/// money registered the next key (finding 14, `dos_l4_state_growth`, 709 KB of rooted state per
+/// MSK locked). The producer floor was never what a bond is FOR on this chain: a bond below the
+/// panel floor cannot be seated, and the only claim it can make is at the producer floor's
+/// exposure, which the exposure ceiling already sizes. Raising the entry price to the panel floor
+/// makes each permanent row cost ten times the capital, and a bond that can register can also judge.
+pub fn palw_bond_registration_floor_v1(min_collateral_sompi: u64, audit_2026_09_23_active: bool) -> u64 {
+    if audit_2026_09_23_active {
+        crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(min_collateral_sompi)
+    } else {
+        min_collateral_sompi
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwBondStateV2 {
     /// The key admission verifies commitment signatures under (Decision 6 item 2).
@@ -4406,6 +4428,58 @@ pub const PALW_CERTIFICATION_MAX_VECTORS: usize = 32;
 /// evidence. Two per block is one family per lane for one model tier per block.
 pub const PALW_CERTIFICATION_MAX_PER_BLOCK: usize = 2;
 
+/// **2026-09-24 DoS audit #12 (b): the most bought `ClassRegistered` objects one block may carry**
+/// (the user's decision; past `palw_audit_2026_09_23` only; genesis rows are not counted).
+///
+/// A registration is the one object whose acceptance is a graph walk (`verify_class_admission_v9`:
+/// coverage, the ladder, the court's cost, the counted pwu), and a held profile at
+/// `layer_count = 1024` costs every node ~211 ms of `model_fit_v2` in a debug build, ~35× a 40-layer
+/// row (finding 16, `dos_l2_registration`). The carrier fee bounds how many a block can be paid to
+/// carry; nothing bounded how many it may carry at all, and each one it carries writes a class, two
+/// target slots, a lifecycle row and an artifact-root owner into the root for good (finding 15).
+///
+/// The convention is [`PALW_CERTIFICATION_MAX_PER_BLOCK`]'s, for the reason it gives: the
+/// acceptance walk counts the registrations it ACCEPTS, in transaction order, and DROPS the fifth
+/// with the block standing — invalidating the block instead would let one stranger's carrier kill
+/// an honest miner's block, since admission on the lifecycle band is stateless. The fold holds the
+/// same number as the second lock on the door (`ClassRegistrationsPerBlockExceeded`), so a block
+/// that reached it with a fifth anyway — a node that skipped the walk — is refused rather than
+/// folded. Four is one registration per model tier the network carries today plus the floor.
+pub const PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1: usize = 4;
+
+/// **2026-09-24 DoS audit #12 (b): what a bought class registration destroys** — 1 MSK
+/// (`SOMPI_PER_KASPA` sompi), the user's decision; past `palw_audit_2026_09_23` only.
+///
+/// Rent was zero (`palw_state_v2.rs` `ClassRegistered`: the only price was
+/// `registration_exposure_sompi`, 40,000 sompi on testnet-12, RESERVED and returned at
+/// reclamation), so an Active bond could register a class, let it go Dormant, re-register it, and
+/// root ~908 B per registration for ever with collateral it kept. The burn is taken from the
+/// REGISTRANT BOND through the one path this chain already destroys bond money by: the bond's
+/// `collateral` falls and its `slashed` rises by the same amount, and `slashed` is what
+/// [`palw_bond_burn_obligation_v2`] makes the bond's release spend leave unclaimed by any output
+/// while the block's fee pool loses the same amount — burned by don't-mint, never paid to anyone.
+/// A registrant that cannot pay it on top of every exposure it already carries is refused
+/// (`ClassRegistrationBurnUnaffordable`), so the burn is never clamped to what happens to be left.
+pub const PALW_CLASS_REGISTRATION_BURN_SOMPI_V1: u64 = crate::constants::SOMPI_PER_KASPA;
+
+/// **The bond that BOUGHT this class registration, or `None` for a genesis row** (2026-09-24 DoS
+/// audit #12 (b)). A genesis registration carries no carriage, or one naming
+/// [`palw_genesis_registrant_bond_v1`] — the network decided it and nobody paid; everything else
+/// is a registration on a running chain, which the acceptance layer admits only with a carriage
+/// signed under an Active registrant bond. The per-block cap counts, and the burn charges, exactly
+/// the `Some` side — one predicate, so the fold and the acceptance walk cannot count different
+/// objects.
+pub fn palw_class_registration_buyer_v1(object: &PalwConsensusObjectV2) -> Option<PalwBondKeyV2> {
+    match object {
+        PalwConsensusObjectV2::ClassRegistered { admission: Some(carriage), .. }
+            if carriage.registrant_bond != palw_genesis_registrant_bond_v1() =>
+        {
+            Some(carriage.registrant_bond)
+        }
+        _ => None,
+    }
+}
+
 /// **ADR-0075 Decision 14: an object too large for one carrier rides in chunks.** A block carries
 /// at most ~125 KB of transaction bytes (`TRANSIENT_BYTE_TO_MASS_FACTOR` × bytes ≤
 /// `max_block_mass`, and a standard transaction is bounded the same way), and a family drill is
@@ -5777,6 +5851,17 @@ pub enum PalwStateV2Error {
     /// receipt-spend arm of the fold's step 4.
     #[error("claim {claim}'s receipt rights are forfeit: its execution {execution_root} was convicted")]
     ReceiptRightsForfeited { claim: Hash64, execution_root: Hash64 },
+    /// **2026-09-24 DoS audit #12 (b): a fifth bought registration in one block.** The acceptance
+    /// walk drops it with the block standing; this is the fold's second lock on the same number,
+    /// [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`].
+    #[error("class {class} is one bought registration more than a block may carry ({max})")]
+    ClassRegistrationsPerBlockExceeded { class: Hash64, max: usize },
+    /// **2026-09-24 DoS audit #12 (b): the registrant bond cannot pay the registration burn** on top
+    /// of what it already stands behind ([`PALW_CLASS_REGISTRATION_BURN_SOMPI_V1`]).
+    #[error(
+        "class {class}'s registrant {bond:?} cannot burn {burn} sompi: it already backs {already} of {collateral} collateral plus this registration's reservation"
+    )]
+    ClassRegistrationBurnUnaffordable { class: Hash64, bond: PalwBondKeyV2, burn: u64, already: u128, collateral: u64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -8904,6 +8989,10 @@ struct TransitionBuilder<'a> {
     /// attempt as already in flight on its class, and a commitment that would leave it no room is
     /// the one refused (dropped, the block standing). `None` outside step 3 and below the fence.
     own_attempt_class: Option<Hash64>,
+    /// **Bought `ClassRegistered` objects this builder has folded** (2026-09-24 DoS audit #12 (b)),
+    /// against [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`]. Not state: one builder is one block's
+    /// fold, and the count is the block's.
+    class_registrations: usize,
 }
 
 /// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its
@@ -9011,6 +9100,7 @@ impl<'a> TransitionBuilder<'a> {
             inflight_index: std::cell::RefCell::new(None),
             panel_horizon: std::cell::Cell::new(None),
             own_attempt_class: None,
+            class_registrations: 0,
         }
     }
 
@@ -10125,6 +10215,20 @@ impl<'a> TransitionBuilder<'a> {
                 }
             }
         }
+        // **2026-09-24 DoS audit #12 (a): a `BindTimeout` that no `Valid` signed leaves no
+        // liability** (the user's decision; past `palw_audit_2026_09_23` only). The row exists so a
+        // `Valid` signer can still be convicted after the claim row retires, and so a contradiction
+        // naming the void (`ProducerWithholding`, `CourtFraud`) can still bind. A claim that never
+        // bound its panel has neither: no lock was ever taken on it (locks are written at the
+        // licence, which a `Provisional` claim never reached) and no contradiction names a
+        // `BindTimeout`. The fallback below would list the panel's seats as signers of nothing — a
+        // free permanent row per abandoned claim, the cheapest entry in the audit's growth table.
+        if valid_signers.is_empty()
+            && self.extras.audit_2026_09_23_active
+            && matches!(voided, Some((_, PalwVoidReasonV2::BindTimeout)))
+        {
+            return Ok(());
+        }
         if valid_signers.is_empty() {
             if let Some(panel) = self.state.panels.get(&claim_id) {
                 for seat in &panel.seats {
@@ -10240,11 +10344,21 @@ impl<'a> TransitionBuilder<'a> {
                     // bought nothing a conviction could take back. Refused rather than priced at
                     // some lock it never posted, so the object is dropped with the block standing
                     // and the Final's reversal (#8) still runs through any carried signer, whose
-                    // conviction is the one the evidence is about. #12's pruning must keep this
-                    // branch closed: a pruned lock is a seat that falls through to here.
+                    // conviction is the one the evidence is about.
+                    //
+                    // **#12 (a) relies on this arm.** `sweep_panel_obligations` prunes a lock and
+                    // its liability row together once both are past their evidence horizon, and a
+                    // pruned seat is exactly a seat that falls through to here: below this refusal
+                    // every pruned obligation would have become a conviction of the seat's WHOLE
+                    // collateral, the opposite of forgetting it. The pruning runs only past the
+                    // same fence, so there is no network on which the rows are pruned and this arm
+                    // still slashes; `a_pruned_obligation_is_refused_never_the_whole_collateral`
+                    // pins the pair.
                     return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                         offence_id,
-                        "the accused holds no Valid lock on this claim and no liability row lists it".into(),
+                        "the accused holds no Valid lock on this claim and no liability row lists it (no locked Valid, \
+                         or the obligation is past its evidence horizon)"
+                            .into(),
                     ));
                 } else {
                     self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0)
@@ -12541,6 +12655,27 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// **2026-09-24 DoS audit #12 (b): destroy `amount` of a registrant's bond, whole.**
+    ///
+    /// The same write as [`Self::slash_bond`] — the bond's `collateral` falls, `slashed` rises, one
+    /// `Bond` delta entry — because `slashed` is the chain's one record of bond money that must
+    /// never be minted back: [`palw_bond_burn_obligation_v2`] makes the release spend leave it
+    /// unclaimed and takes it out of the block's fee pool. Unlike a slash it never clamps: a burn
+    /// that the bond cannot pay in full is refused (`ClassRegistrationBurnUnaffordable`) — the
+    /// caller checks affordability first, and this refuses again rather than burning less.
+    ///
+    /// `slashed` therefore also counts registration burns past the fence. Nothing reads it as
+    /// "convicted": the burn obligation reads it as what the release must destroy, and the
+    /// free-collateral views that subtract it (`palw_model_registry_v1`, `palw_panel_view_v1`)
+    /// understate a registrant's headroom by the burns — the conservative direction.
+    fn burn_registration_fee(&mut self, bond: PalwBondKeyV2, amount: u64) -> Result<(), PalwStateV2Error> {
+        let collateral = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
+        if collateral < amount {
+            return Err(PalwStateV2Error::Overflow("registration burn exceeds the registrant's collateral"));
+        }
+        self.slash_bond(bond, amount as u128)
+    }
+
     /// **C-03 (mainnet audit 2026-09-11 deep fence): bill court time to the LOSING party.**
     ///
     /// The court is clocked in DAA but nothing charged for consuming it, so a party that expects to
@@ -13412,6 +13547,9 @@ pub fn palw_v2_pre_object_base_v1(
     // ADR-0145 §6 / ADR-0148: the epoch boundary sweeps the paid-prompt rows whose retention ran
     // out — before this block's objects, so no commitment here is priced against one.
     sweep_fp_prompt_rows(&mut builder, parent, ctx);
+    // 2026-09-24 DoS audit #12 (a): the same boundary drops the panel locks and liability rows
+    // past their evidence horizon (past `palw_audit_2026_09_23` only).
+    sweep_panel_obligations(&mut builder, parent, ctx);
     apply_work_target_shadow(&mut builder, parent, ctx);
     apply_work_target(&mut builder, parent, ctx);
     apply_class_share_growth(&mut builder, parent, ctx);
@@ -13572,6 +13710,9 @@ pub fn apply_palw_transition_v7(
     // ADR-0145 §6 / ADR-0148: the epoch boundary sweeps the paid-prompt rows whose retention ran
     // out — before this block's objects, so no commitment here is priced against one.
     sweep_fp_prompt_rows(&mut builder, parent, ctx);
+    // 2026-09-24 DoS audit #12 (a): the same boundary drops the panel locks and liability rows
+    // past their evidence horizon (past `palw_audit_2026_09_23` only).
+    sweep_panel_obligations(&mut builder, parent, ctx);
     // ADR-0143 Decision 6: the one-time canonicalisation, before any object of this block is
     // folded — a block that crosses the fence AND founds a line must see the index the migration
     // built, not the empty one it found.
@@ -15840,6 +15981,91 @@ fn sweep_fp_prompt_rows(builder: &mut TransitionBuilder<'_>, parent: &PalwChainS
     }
 }
 
+/// **2026-09-24 DoS audit #12 (a): the panel's obligations leave the state once no court can
+/// reach them** (finding 13; the user's decision). Past `palw_audit_2026_09_23` only.
+///
+/// `slashable_locks` and `panel_liabilities` were written at every licence and every terminal
+/// claim and removed by nothing but the slash of one accused lock, so each terminal claim left
+/// 490–2,290 rooted bytes behind for ever (`dos_l4_state_growth`, `dos_l5_1_claim_flood`), every
+/// chain block re-hashed them into `state_root`, every virtual resolve re-serialized them as the
+/// tip carriage, and `slashable_available` walked every one of them on every lock and every
+/// admission. A row is pruned here once [`crate::palw_panel_var_v1::palw_panel_obligation_prunable_v1`]
+/// says it has passed its evidence horizon: dead on the DAA clock AND on the second clock (read at
+/// the ESCAPED depth, [`palw_second_clock_depth_v1`], the one every other reader of these rows
+/// uses) AND `window_court` further DAA past its expiry.
+///
+/// **Grouped by claim, so a conviction never meets half an obligation.** A liability row is
+/// pruned only together with every lock on its claim, and only when every one of them has passed
+/// its own horizon too (a lock's expiry is at most its liability's — the Final restarts both
+/// clocks, `persist_panel_liability` — so in practice they go together). Pruning the lock alone
+/// would leave the row that lists the seat and turn a slash of `lock.amount` into a conviction of
+/// nothing; pruning the row alone would leave a lock no binding can reach. A lock whose claim has
+/// no liability row goes on its own horizon, but only once its claim is terminal or retired: a
+/// claim still in court may be licensed long ago, and the `Final` or void it is waiting for is
+/// what writes its liability from the locks it finds.
+///
+/// **What a pruned seat can no longer be convicted of.** Nothing: `consume_objective_offence`
+/// refuses, past the same fence, a `PanelFalseValid` against a seat that holds no lock on the
+/// claim and appears on no liability row (`ObjectiveOffenceRefused`), and it could never reach
+/// the whole-collateral arm this pruning would otherwise have routed every late conviction into.
+///
+/// **Once an epoch, at its first block — the sweep `sweep_fp_prompt_rows` already runs**, and
+/// not per block. Neither map is ordered by expiry (locks are keyed by (bond, claim), liabilities
+/// by claim), so a per-block sweep is a scan of both maps on every block — the very linear
+/// per-block walk the audit found — or a second, expiry-ordered rooted index, which is layout
+/// for nothing the epoch sweep does not already give. Once per `epoch_length` (1,000 DAA on
+/// testnet-12, a third of `window_court`) the scan is amortised over the epoch, a row outlives
+/// its horizon by at most one epoch, and the residue is bounded by the rows the lane can write in
+/// `2 × window_court + epoch_length` DAA rather than by the chain's age. Every removal is the
+/// row's own delta entry (`SlashableLock` / `PanelLiability`, carrying the old value), so a reorg
+/// across the boundary restores exactly what it swept.
+fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+    use crate::palw_panel_var_v1::palw_panel_obligation_prunable_v1;
+    if !builder.extras.audit_2026_09_23_active {
+        return;
+    }
+    if builder.state.panel_liabilities.is_empty() && builder.state.slashable_locks.is_empty() {
+        return;
+    }
+    let Some(last) = &parent.last_point else { return };
+    let epoch_length = builder.params.epoch_length.max(1);
+    if ctx.daa_score / epoch_length <= last.daa_score / epoch_length {
+        return;
+    }
+    let now = ctx.daa_score;
+    let settled_now = builder.state.settled_attempt_finals;
+    let depth = builder.second_clock_depth(now);
+    let window_court = builder.params.window_court;
+    let prunable = |expiry_daa: u64, settled_at: u64| {
+        palw_panel_obligation_prunable_v1(expiry_daa, settled_at, now, settled_now, depth, window_court)
+    };
+    let mut locks_by_claim: BTreeMap<Hash64, Vec<((PalwBondKeyV2, Hash64), bool)>> = BTreeMap::new();
+    for (key, lock) in &builder.state.slashable_locks {
+        locks_by_claim.entry(key.1).or_default().push((*key, prunable(lock.expiry_daa, lock.settled_at_final)));
+    }
+    let mut pruned_liabilities: Vec<Hash64> = Vec::new();
+    let mut pruned_locks: Vec<(PalwBondKeyV2, Hash64)> = Vec::new();
+    for (claim_id, row) in &builder.state.panel_liabilities {
+        let locks = locks_by_claim.remove(claim_id).unwrap_or_default();
+        if prunable(row.expiry_daa, row.settled_at_final) && locks.iter().all(|(_, gone)| *gone) {
+            pruned_liabilities.push(*claim_id);
+            pruned_locks.extend(locks.into_iter().map(|(key, _)| key));
+        }
+    }
+    for (claim_id, locks) in locks_by_claim {
+        let settled = builder.state.claims.get(&claim_id).is_none_or(|claim| claim.phase.is_terminal());
+        if settled {
+            pruned_locks.extend(locks.into_iter().filter(|(_, gone)| *gone).map(|(key, _)| key));
+        }
+    }
+    for key in pruned_locks {
+        builder.write_slashable_lock(key, None);
+    }
+    for claim_id in pruned_liabilities {
+        builder.write_panel_liability(claim_id, None);
+    }
+}
+
 fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
     // One at a time, smallest (deadline, claim) first: resolving a claim mutates the set, and
     // the (deadline, claim) order is what makes the sweep identical on every node.
@@ -16002,7 +16228,10 @@ fn apply_object(
             }
             // Audit C5: a bond identity has to cost something, or panel dedup is a formality.
             // `min_collateral_sompi` existed in the atomic bundle and was read by nobody.
-            if *collateral < builder.params.min_collateral_sompi {
+            // 2026-09-24 DoS audit #12 (c): past `palw_audit_2026_09_23` the floor is the panel's
+            // (`palw_bond_registration_floor_v1`), 4,000,000 sompi on testnet-12.
+            let floor = palw_bond_registration_floor_v1(builder.params.min_collateral_sompi, builder.extras.audit_2026_09_23_active);
+            if *collateral < floor {
                 return Err(PalwStateV2Error::CollateralBelowMinimum { bond: *bond, got: *collateral });
             }
             if operator_pubkey.is_empty() {
@@ -16631,6 +16860,22 @@ fn apply_object(
                 Some(PalwClassStatusV2::Dormant { .. }) => {}
                 Some(_) => return Err(PalwStateV2Error::DuplicateClass(*class_id)),
             }
+            // **2026-09-24 DoS audit #12 (b): at most four bought registrations a block, and each
+            // burns 1 MSK of its registrant's bond** (the user's decisions; past
+            // `palw_audit_2026_09_23` only, genesis rows exempt). The cap is the fold's second lock
+            // — the acceptance walk drops the fifth first, with the block standing — see
+            // `PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`. The burn is checked below with the
+            // exposure it sits on top of, and taken where the reservation is.
+            let bought_by = if builder.extras.audit_2026_09_23_active { palw_class_registration_buyer_v1(object) } else { None };
+            if bought_by.is_some() {
+                if builder.class_registrations >= PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1 {
+                    return Err(PalwStateV2Error::ClassRegistrationsPerBlockExceeded {
+                        class: *class_id,
+                        max: PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1,
+                    });
+                }
+                builder.class_registrations += 1;
+            }
             if *initial_target == 0 {
                 return Err(PalwStateV2Error::ZeroClassTarget(*class_id));
             }
@@ -16739,6 +16984,22 @@ fn apply_object(
                             price,
                             collateral,
                         });
+                    }
+                    // #12 (b): the burn comes out of the same collateral the exposure is measured
+                    // against, so it must fit on top of everything the bond already stands behind
+                    // AND this registration's own reservation — a bond left backing more than it
+                    // holds would be the M2-16 defect again, one MSK at a time.
+                    if bought_by.is_some() {
+                        let burn = PALW_CLASS_REGISTRATION_BURN_SOMPI_V1 as u128;
+                        if already.saturating_add(price).saturating_add(burn) > collateral as u128 {
+                            return Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable {
+                                class: *class_id,
+                                bond: carriage_bond,
+                                burn: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+                                already,
+                                collateral,
+                            });
+                        }
                     }
                 }
             }
@@ -16905,6 +17166,14 @@ fn apply_object(
                 && carriage.registrant_bond != palw_genesis_registrant_bond_v1()
             {
                 builder.move_registration_exposure(carriage.registrant_bond, true)?;
+            }
+            // **#12 (b): the burn, taken.** Through `slash_bond`'s write — `collateral` down,
+            // `slashed` up — because `slashed` is what the bond's release spend must destroy
+            // (`palw_bond_burn_obligation_v2`): the sompi leave the bond now, stop counting as
+            // stake now, and are never minted back to anyone. A registrant bond the state does not
+            // hold is `MissingBond`, never a free registration.
+            if let Some(registrant) = bought_by {
+                builder.burn_registration_fee(registrant, PALW_CLASS_REGISTRATION_BURN_SOMPI_V1)?;
             }
             // A returning class starts its walk over: the counters are about the CURRENT
             // registration's production and nothing before it.
@@ -37918,7 +38187,20 @@ pub(crate) mod tests {
         collateral: impl Fn(u64) -> u64,
         extras: &PalwTransitionExtrasV1,
     ) -> (PalwChainStateV2, Hash64) {
-        let s1 = shard_registry_with(p, Some(bond_key(9)), collateral, extras);
+        shard_claim_bound_registered_under(p, seats, pwu, collateral, extras, extras)
+    }
+
+    /// [`shard_claim_bound_with`] whose registry block folds under `registration` — see
+    /// `door_claim_bound_registered_under` for why a test would register below the floor.
+    fn shard_claim_bound_registered_under(
+        p: &PalwStateParamsV2,
+        seats: Vec<PalwPanelSeatV2>,
+        pwu: u64,
+        collateral: impl Fn(u64) -> u64,
+        registration: &PalwTransitionExtrasV1,
+        extras: &PalwTransitionExtrasV1,
+    ) -> (PalwChainStateV2, Hash64) {
+        let s1 = shard_registry_with(p, Some(bond_key(9)), collateral, registration);
         let plan = PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: h64(1), shard_count: 2, signature: vec![9; 8] };
         let (s2, _) = shard_apply(&s1, p, &ctx(2, 101, 2), &[plan], None, extras).expect("the plan lands");
         let env = attempt(pwu, 1);
@@ -44311,9 +44593,22 @@ pub(crate) mod tests {
         extras: &PalwTransitionExtrasV1,
         collateral: impl Fn(u64) -> u64,
     ) -> (PalwChainStateV2, Hash64) {
+        door_claim_bound_registered_under(p, extras, extras, collateral)
+    }
+
+    /// [`door_claim_bound`] whose registration block folds under `registration` — a seat posting
+    /// less than the registration floor (#12 (c)) stands for a bond a slash has since brought
+    /// below it, which the fold cannot register directly past the fence.
+    fn door_claim_bound_registered_under(
+        p: &PalwStateParamsV2,
+        registration: &PalwTransitionExtrasV1,
+        extras: &PalwTransitionExtrasV1,
+        collateral: impl Fn(u64) -> u64,
+    ) -> (PalwChainStateV2, Hash64) {
         let mut objects = register_class_and_bond();
         objects.extend((2..=6).map(|n| seat_bond_reg(n, collateral(n))));
-        let (s0, _) = apply_door(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, extras).expect("the registry");
+        let (s0, _) =
+            apply_door(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, registration).expect("the registry");
         let env = attempt(160, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (s1, _) = apply_door(&s0, p, &ctx(2, 101, 2), &[], Some(&env), extras).expect("the claim lands");
@@ -44445,9 +44740,13 @@ pub(crate) mod tests {
         let gain = door_gain(&probe, claim_id);
         let (full, auditor) = full_seat_and_auditor(claim_id);
         let short = per_colluder(gain, PalwLicenceDoorV1::Quorum).max(u128::from(p.min_collateral_sompi()));
+        // Below the registration floor past the fence (#12 (c)): registered with the fence off,
+        // standing for a bond a slash has brought this low.
+        let below_floor = PalwTransitionExtrasV1 { audit_2026_09_23_active: false, ..armed.clone() };
         assert!(short < per_colluder(gain, PalwLicenceDoorV1::Optimistic), "the fixture's seat can bind but not back S2");
         let short = short as u64;
-        let (s2, again) = door_claim_bound(&p, &armed, |n| if bond_key(n) == full { short } else { 1_000_000_000 });
+        let (s2, again) =
+            door_claim_bound_registered_under(&p, &below_floor, &armed, |n| if bond_key(n) == full { short } else { 1_000_000_000 });
         assert_eq!(again, claim_id);
         assert_eq!(door_gain(&s2, claim_id), gain);
 
@@ -44606,9 +44905,19 @@ pub(crate) mod tests {
         let shard_price = per_colluder(gain, PalwLicenceDoorV1::ShardPart { quorum_per_shard: SHARD_Q });
         // Bond 3 posts enough to BIND (the quorum price) and not enough for the shard's.
         let short = per_colluder(gain, PalwLicenceDoorV1::Quorum).max(u128::from(p.min_collateral_sompi()));
+        // Below the registration floor past the fence (#12 (c)): registered with the fence off,
+        // standing for a bond a slash has brought this low.
+        let below_floor = PalwTransitionExtrasV1 { audit_2026_09_23_active: false, ..armed.clone() };
         assert!(short < shard_price, "the fixture's seat can bind but not back its shard");
         let short = short as u64;
-        let (s4, again) = shard_claim_bound_with(&p, stratified_seats(), 160, |n| if n == 3 { short } else { 1_000_000_000 }, &armed);
+        let (s4, again) = shard_claim_bound_registered_under(
+            &p,
+            stratified_seats(),
+            160,
+            |n| if n == 3 { short } else { 1_000_000_000 },
+            &below_floor,
+            &armed,
+        );
         assert_eq!(again, claim_id);
         let (s5, _) =
             shard_apply(&s4, &p, &ctx(5, 104, 5), &[shard_part(claim_id, 0, &[2, 3])], None, &armed).expect("inert, not an error");
