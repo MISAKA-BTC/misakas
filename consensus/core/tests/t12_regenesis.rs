@@ -251,3 +251,59 @@ fn the_fleets_premine_outpoints_are_unchanged() {
         );
     }
 }
+
+/// **The genesis card's dense root is the committed measurement, and it belongs to the class the
+/// card registers.**
+///
+/// `inventory_root_of_class` reads the manifest POSITIONALLY — keying it by class id would need that
+/// id as a second literal, which is the thing the manifest exists to remove. So the pairing is
+/// asserted here instead: the class id beside the root in the committed file must be the id the
+/// profile this card registers derives. A manifest regenerated over a different artifact, or a card
+/// that moved to a different `n_ctx`, fails here rather than registering a root for the wrong class.
+#[test]
+fn t12_genesis_reads_its_root_from_the_committed_manifest() {
+    use kaspa_consensus_core::config::class_manifest_const_v1 as manifest;
+
+    let read_root = manifest::inventory_root_of_class(manifest::QWEN25_A16_2M_MANIFEST_V1, 1);
+    let read_class = manifest::class_id_of_class(manifest::QWEN25_A16_2M_MANIFEST_V1, 1);
+
+    // The card registers exactly what it read.
+    assert_eq!(
+        PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT, read_root,
+        "the genesis constant is the manifest's root, not a copy of it"
+    );
+
+    // And the row the card builds is the class that manifest row is about.
+    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
+        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+            n_ctx: PALW_T12_DENSE_N_CTX,
+            ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+        },
+    )
+    .expect("the 2M graph-v7 profile projects");
+    assert_eq!(
+        profile.shape_profile_id(),
+        read_class,
+        "the manifest row this card reads is about the class this card registers"
+    );
+
+    // **The digest is in the same file and must never be the root.** The two substitutions that shut
+    // two networks' dense tiers were exactly this equality holding.
+    assert_ne!(
+        PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT,
+        manifest::artifact_digest_of(manifest::QWEN25_A16_2M_MANIFEST_V1),
+        "the card would be registering a flat artifact digest again"
+    );
+
+    // The registry really carries it — the card, not just the constant.
+    let p = Params::from(t12());
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+    assert!(
+        bundle.genesis_objects.iter().any(|o| matches!(
+            o,
+            PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. }
+                if *class_id == read_class && *artifact_root == read_root
+        )),
+        "testnet-12 registers the measured root for the measured class"
+    );
+}

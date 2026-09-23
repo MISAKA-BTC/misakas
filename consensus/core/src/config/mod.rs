@@ -1,6 +1,7 @@
 pub mod bps;
 pub mod constants;
 pub mod genesis;
+pub mod class_manifest_const_v1;
 pub mod params;
 pub mod premine;
 pub mod trusted_checkpoint;
