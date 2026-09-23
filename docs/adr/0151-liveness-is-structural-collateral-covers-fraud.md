@@ -214,3 +214,54 @@ predicate is not a wedge search, and this ADR does not claim it is.
 3. **Before mainnet** — D6 in full (the gate runs §4's search), and the removal of the
    `window_bind × dearest` code path entirely rather than its conditioning. A mainnet card must not be
    populated while that path can still be reached.
+
+## Addendum 2026-09-23 — what the first testnet-12 fleet and the item 6 acceptance run found
+
+Two of this ADR's numbers were posted in units no runtime path reads, and the acceptance ladder that
+followed found three memory paths that would have killed a 2M seat before it produced a claim. All
+are fixed on `feat/testnet-12-regenesis`; the genesis block is unchanged and only the params
+fingerprint moved (`fb8f378d…` → `c746f07c…` → `30848c6b…`).
+
+### The two defects of the first deployment
+
+1. **Collateral in the wrong unit.** §D1's carve priced each class on its own declared leaves;
+   the runtime reserves `palw_exposure_pwu_v3` — the derived MAC-eq draw renormalised by the
+   floor's leaves-per-MAC-eq — 44.25× larger on the 2M row. Every producer held at `produced=0`
+   from genesis. Collateral 60,088.18 → 516,429.80 MSK a seat (`2bd134ec`). The raw fork weight of
+   one 2M Final is 335,728,175.72 MSK, 3.36 % of the supply, so "collateral covers the fraud gain"
+   is a statement about the EXPOSURE unit; the weight unit is D1's remaining half.
+2. **A flat `artifact_digest` pinned where the operand-inventory root belonged** — the same
+   defect testnet-11's card records — over a byte-identical artifact. Every seat: `holds no artifact
+   whose registered root form is b5baca63…`. Closed structurally, not by pinning a third value:
+   distinct types with no conversion (`palw_class_identity_v1`), a `.palwmanifest` beside the
+   artifact written by the same derivation the runtime resolves with, the manifest committed and
+   parsed by a `const fn` so the genesis card carries no hand-written hash, and
+   `--palw-verify-class-manifest` refusing to start on a disagreement (`ea7ad7df`, `26030bc1`,
+   `077d4c7f`, `2f588a58`).
+
+### The three memory paths the acceptance ladder found (item 6)
+
+With the streamed root (`216641a4`) already in place, a lone 2M seat on an isolated chain grew from
+5.9 to 23.7 GiB of anonymous memory on nothing but heartbeats and the panel's per-tick pre-checks,
+and was OOM-killed twice without producing. Named and fixed:
+
+* `RopeTableV1::digest_bytes` built a 1.07 GiB `Vec` of the rotary table per `artifact_digest()`
+  call, and every class resolve, cache key and manifest check calls that, from three threads at
+  once. The digest now streams (`digest_into`), byte-identical, so no class id moves (`e40dfcd2`).
+* The panel's replay-budget pre-check resolved the class — compiling its plan and hashing the
+  artifact — on every tick. Memoized on (holdings, class, root) (`e40dfcd2`).
+* The readiness proof materialized the whole inventory (retained twice), copied every leaf hash,
+  and re-folded the tree per drawn leaf, and an unsubmittable proof was rebuilt every tick. The
+  material is now one streamed walk and the built proof is kept per (class, span) (`427a1b8d`).
+
+### What the ladder also taught about the ladder
+
+A node cannot mine alone (`peers=false` holds regardless of `--enable-unsynced-mining`), so a
+one-node rung measures idle and the manifest verify only; blocks appear at the rung where a peer
+exists. An isolated chain's first block needs `--enable-unsynced-mining` (in the fleet only `ibm`
+carries it). A verification flag that finds no manifest must refuse, not report "0, all agreeing".
+Leftover nodes from a previous run hold their ports and ignore `SIGINT`; a ladder starts by killing
+them. The three fixed memory phases bracket construction only; a periodic line and an external
+sampler are what bracket growth during operation.
+
+Post-fix ladder figures are appended below when the run completes.
