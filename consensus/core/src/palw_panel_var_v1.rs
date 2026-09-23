@@ -572,6 +572,7 @@ mod tests {
             work_leaves: 0,
             work_id: None,
             phase: PalwClaimPhaseV2::Provisional,
+            rights_reserved: 0,
         }
     }
 

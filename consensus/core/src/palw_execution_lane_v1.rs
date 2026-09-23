@@ -66,6 +66,12 @@ pub const PALW_EXEC_MAX_DOMAINS_V1: usize = 32;
 /// bond key. Bounds the schedule's bytes in the state root and a draw's work.
 pub const PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1: usize = 64;
 
+/// **How many spans past its target a matured snapshot may wait for a span that can seed it**, past
+/// ADR-0151's bundle (`rotate_round_lane`). A due snapshot is seeded at the first span whose
+/// predecessor recorded a seed anchor, one per span; this bounds how long the unseeded ones sit in
+/// `round_pending` — about two hours at testnet-12's one-DAA span.
+pub const PALW_EXEC_PENDING_GRACE_SPANS_V1: u64 = 64;
+
 /// **What the fold needs of the lane where it is open**: the span a schedule covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct PalwExecLaneFoldV1 {
@@ -529,6 +535,30 @@ pub fn palw_execution_schedule_assign_quanta_bounded_v1(
         maturity_rounds,
         forfeited_roots,
         max_quanta,
+    );
+}
+
+/// **The schedule's tickets past ADR-0151's bundle**: minted onto the span's own rounds by
+/// [`crate::palw_execution_quanta_v1::palw_execution_mint_quanta_windowed_v1`], at most
+/// `window_rounds` of them. `quantum == 0` leaves the lottery in force, as above.
+pub fn palw_execution_schedule_assign_quanta_windowed_v1(
+    schedule: &mut PalwExecScheduleV1,
+    quantum: u64,
+    open_round: u64,
+    window_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<crate::Hash64>,
+) {
+    if quantum == 0 {
+        schedule.quanta.clear();
+        return;
+    }
+    schedule.quanta = crate::palw_execution_quanta_v1::palw_execution_mint_quanta_windowed_v1(
+        &schedule.finals,
+        schedule.seed,
+        u128::from(quantum),
+        open_round,
+        window_rounds,
+        forfeited_roots,
     );
 }
 

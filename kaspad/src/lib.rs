@@ -12,6 +12,7 @@ pub mod palw_economics;
 /// and Decision 16's `PanelDa` gate. See the module's own header.
 pub mod palw_fp_seat;
 pub mod palw_heartbeat_miner;
+pub mod palw_lane_watch;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 pub mod palw_producer;

@@ -441,6 +441,13 @@ pub struct PalwAdmissionShapeV1 {
     /// same question the acceptance path does (`palw_model_registration_v1` reads the fence
     /// directly); without it a preflight answered "admissible" for a class the chain refuses.
     pub attention_geometry_bound: bool,
+    /// **F4 — the ladder is compared against the deepest job the class can legally run**:
+    /// `Params::palw_canonical_work` active at the height, which is what the acceptance path passes
+    /// (`self.palw_canonical_work_daa.is_some_and(|height| daa >= height)`). The SDK preflight
+    /// passed `false` here while the chain passed `true` on testnet-12, so a preflight could answer
+    /// "admissible" for a class the chain then refused — after the registrant had paid the carrier
+    /// (the 2026-09-23 route-matrix audit's #6).
+    pub legal_job_bound: bool,
 }
 
 /// **ADR-0103: what the held regime's gate reads at the height** — the caller's reading of two
@@ -489,6 +496,7 @@ pub fn palw_admission_shape_at_v1(
         held: PalwHeldAdmissionV1 { armed: held_armed, panel_da: params.palw_panel_da_at(daa_score) },
         kimi_family: params.palw_kimi_k3_at(daa_score),
         attention_geometry_bound: params.palw_audit_2026_09_23_active_at(daa_score),
+        legal_job_bound: params.palw_canonical_work_daa().is_some_and(|height| daa_score >= height),
     })
 }
 

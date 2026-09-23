@@ -741,6 +741,7 @@ impl PalwPanelService {
     /// Node-local panel facts for `getPalwPanelStatus`: artifact, working-set, replay, hold reason.
     fn publish_local_panel_status(
         &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
         read: &kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1,
         synced: bool,
     ) {
@@ -757,7 +758,9 @@ impl PalwPanelService {
             let mut artifact_root = String::new();
             let mut working_set_bytes = 0u64;
             let mut by_role: Option<(crate::palw_backends::PalwRoleMemoryNeedV1, crate::palw_backends::PalwRoleMemoryNeedV1)> = None;
-            match backends.resolve(class.class_id, class.artifact_root) {
+            // The same door the proofs resolve through (route-matrix #5), so the status says what
+            // the seat will actually do.
+            match self.resolve_backend(session, class.class_id, class.artifact_root) {
                 Ok(_) => {
                     artifact_loaded = true;
                     artifact_root = class.artifact_root.to_string();
@@ -855,7 +858,7 @@ impl PalwPanelService {
         }
         if self.flow_context.is_ibd_running() || !synced {
             if let Some(read) = session.palw_model_registry_v1() {
-                self.publish_local_panel_status(&read, false);
+                self.publish_local_panel_status(session, &read, false);
             }
             crate::palw_backends::note_throttled_v1("panel-proofs-unsynced", || {
                 format!(
@@ -873,7 +876,7 @@ impl PalwPanelService {
             *at = Some(std::time::Instant::now());
         }
         let Some(read) = session.palw_model_registry_v1() else { return Vec::new() };
-        self.publish_local_panel_status(&read, true);
+        self.publish_local_panel_status(session, &read, true);
         let (true, Some(globals)) = (read.active, read.globals) else { return Vec::new() };
         if read.span_daa == 0 {
             return Vec::new();
@@ -909,7 +912,6 @@ impl PalwPanelService {
             self.consensus_config.params.net.to_string().as_bytes(),
             Some(self.consensus_config.genesis.hash),
         );
-        let backends = self.backends();
         let mut out = Vec::new();
         for class in read.classes.iter().filter(|c| !c.is_base_class) {
             // **Node-local capacity, never consensus** (the operator's rule): a host without the
@@ -933,12 +935,19 @@ impl PalwPanelService {
             ) {
                 continue;
             }
-            let backend = match backends.resolve(class.class_id, class.artifact_root) {
+            // **Through the panel's one resolve door** (the 2026-09-23 route-matrix audit's #5): the
+            // tables, then — with `--palw-chain-classes` — the chain's own registration. The table-only
+            // resolve that stood here built no proof for a class this build does not tabulate, so a
+            // permissionless class could never gather its ready seats, whatever its seats held.
+            let backend = match self.resolve_backend(session, class.class_id, class.artifact_root) {
                 Ok(backend) => backend,
                 Err(e) => {
                     self.readiness_note(
                         class.class_id,
-                        format!("no proof — this node holds no artifact for it ({e}); not a seat for it"),
+                        format!(
+                            "no proof — this node holds no artifact for it ({e}){}; not a seat for it",
+                            if self.config.chain_classes { "" } else { " (a class the chain registered is served only with --palw-chain-classes)" }
+                        ),
                     );
                     continue;
                 }
@@ -1552,9 +1561,18 @@ impl PalwPanelService {
             &payout_payload,
             &capable_classes,
         );
-        let signature = self
-            .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT)
-            .ok_or("this node holds no key, so it cannot sign a bond registration")?;
+        // Read at the virtual DAA, the nearest fact to the block that will carry it. A carrier built
+        // just below a scheduled fence and mined past it is dropped as before, and the next start
+        // rebuilds it — the chain is asked first, so a bond is never registered twice.
+        let daa_now = self.consensus_manager.consensus().unguarded_session().get_virtual_daa_score();
+        let signature = bond_registration_signature_v1(
+            kp,
+            network_domain,
+            &kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(&bond),
+            &pubkey,
+            message,
+            self.consensus_config.params.palw_operator_id_unique_at(daa_now),
+        )?;
         Ok((
             PalwConsensusObjectV2::BondRegistered {
                 bond,
@@ -2702,8 +2720,9 @@ impl PalwPanelService {
                     // carrier binding, and a carrier whose object the extractor then drops is an
                     // accepted transaction that created no bond. The collateral output still
                     // exists and still pays this node's own address, so the money is recoverable;
-                    // nothing else happened. The likeliest cause is a chain whose nodes predate
-                    // the index-and-zero-id naming and refuse this form on extraction.
+                    // nothing else happened. The extractor logs why it dropped the object; the
+                    // node repeats that pointer below rather than guessing (a guess here named the
+                    // wrong cause on testnet-12, where the object lacked its second signature).
                     //
                     // So wait for the bond to EXIST before saying it does. Announcing an unchecked
                     // success is how an operator ends up debugging a producer that was never going
@@ -2766,8 +2785,11 @@ impl PalwPanelService {
                                      Its outputs are in the UTXO set, so the transaction was relayed, accepted and \
                                      included; the registration object inside it was dropped on extraction. The \
                                      collateral output {txid}:0 pays this node's own address and is \
-                                     spendable. The usual cause is a network still running a build that predates the \
-                                     index-and-zero-id carrier naming."
+                                     spendable. The chain's reason is in this node's log, on the line \
+                                     \"a PALW lifecycle object was dropped\" for the block that carried it — for \
+                                     example a registration with one signature where the operator-possession fence \
+                                     requires two (a build older than this one), or a network still running a build \
+                                     that predates the index-and-zero-id carrier naming."
                                 ),
                                 // Still queued. Nothing is lost; the chain has not included it.
                                 CarrierFate::Queued => warn!(
@@ -6109,6 +6131,41 @@ fn funding_is_foreign(
     ours.is_some_and(|ours| entry != ours)
 }
 
+/// **The `signature` field of this node's own `BondRegistered`.**
+///
+/// Below `palw_operator_id_unique` it is one ML-DSA-87 signature by the bond key over the
+/// registration message. **Past it, TWO: that one, then the operator key's proof that it holds the
+/// identity the registration declares** (audit 2026-09-19; the rule is `palw_v2_validate_objects`,
+/// which splits the field at `MLDSA87_SIG_LEN`). A node registers its own bond under its own key as
+/// the operator, so both are made by `kp`.
+///
+/// The builder signed only the first, so on testnet-12 — which arms the fence at DAA 0 — every
+/// `--palw-register-bond` carrier was mined and its object dropped on extraction ("carries 4627
+/// signature bytes"): no fresh key could become a bond operator at all (the 2026-09-23
+/// permissionless drill, blocker B1).
+fn bond_registration_signature_v1(
+    kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair,
+    network_domain: Hash64,
+    signed_bond: &PalwBondKeyV2,
+    pubkey: &[u8],
+    registration_message: Hash64,
+    operator_possession: bool,
+) -> Result<Vec<u8>, String> {
+    let sign = |message: Hash64, context: &[u8]| {
+        libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), context, [0u8; 32])
+            .map(|sig| sig.as_ref().to_vec())
+            .map_err(|e| format!("ML-DSA-87 sign failed: {e:?}"))
+    };
+    let mut signature =
+        sign(registration_message, kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT)?;
+    if operator_possession {
+        let possession =
+            kaspa_consensus_core::palw_state_v2::palw_operator_possession_message_v1(network_domain, signed_bond, pubkey, pubkey);
+        signature.extend(sign(possession, kaspa_consensus_core::palw_state_v2::PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT)?);
+    }
+    Ok(signature)
+}
+
 /// What became of a carrier this node's mempool accepted, once the deadline passes with no bond.
 ///
 /// Three outcomes the old warning collapsed into one sentence, and only the first is the
@@ -8405,6 +8462,68 @@ mod tests {
         assert_ne!(carrier_fate(false, false, true), CarrierFate::Extracted, "and it is NOT the cause the old line named");
         assert_eq!(carrier_fate(false, false, false), CarrierFate::Stranded, "this carrier can never be mined as built");
     }
+
+    /// **The node's own bond registration is signed the way the acceptance layer reads it, on both
+    /// sides of the operator-possession fence** (the 2026-09-23 permissionless drill, blocker B1).
+    ///
+    /// Testnet-12 arms `palw_operator_id_unique` at DAA 0, and this builder signed once: every
+    /// `--palw-register-bond` carrier was mined and its object dropped, so no fresh key could
+    /// become a bond operator. The checks below are `palw_v2_validate_objects`' own: past the fence
+    /// the field is exactly two signatures, split at `MLDSA87_SIG_LEN`, the first by the bond key
+    /// over the registration message and the second by the operator key over the possession
+    /// message; below it, one.
+    #[test]
+    fn a_node_built_bond_registration_carries_the_operator_possession_proof_past_the_fence() {
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT, palw_operator_possession_message_v1,
+        };
+        let t12 = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        assert!(t12.palw_operator_id_unique_at(0), "testnet-12 arms the operator-possession fence at genesis");
+
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x5Bu8; 32]);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let domain = Hash64::from_u64_word(0x7112);
+        let bond = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(&PalwBondKeyV2(
+            TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0),
+        ));
+        let registration = Hash64::from_u64_word(0xB0D);
+        let verify = |sig: &[u8], message: Hash64, context: &[u8]| {
+            kaspa_txscript::verify_mldsa87_with_context(&pubkey, message.as_byte_slice(), sig, context).unwrap_or(false)
+        };
+        let sig_len = kaspa_txscript::MLDSA87_SIG_LEN;
+
+        let past = bond_registration_signature_v1(&kp, domain, &bond, &pubkey, registration, true).unwrap();
+        assert_eq!(past.len(), 2 * sig_len, "past the fence the field is exactly two signatures");
+        let (bond_sig, operator_sig) = past.split_at(sig_len);
+        assert!(verify(bond_sig, registration, PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT), "the first is the bond key's");
+        let possession = palw_operator_possession_message_v1(domain, &bond, &pubkey, &pubkey);
+        assert!(verify(operator_sig, possession, PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT), "the second proves the operator key");
+        assert!(
+            !verify(operator_sig, possession, PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT),
+            "and it is bound to its own context, not the registration's"
+        );
+
+        let below = bond_registration_signature_v1(&kp, domain, &bond, &pubkey, registration, false).unwrap();
+        assert_eq!(below.len(), sig_len, "below the fence the field is the one signature it always was");
+        assert!(verify(&below, registration, PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT));
+    }
+
+    /// **Every panel duty resolves a class through the panel's one door** (the 2026-09-23
+    /// route-matrix audit's #5). `readiness_duties` called the table-only `backends.resolve`, so a
+    /// seat built no possession proof for a class this build does not tabulate and a permissionless
+    /// class could never gather its ready seats; the status publisher asked the same wrong door and
+    /// reported what the seat would not do.
+    #[test]
+    fn every_panel_duty_resolves_a_class_through_the_one_door() {
+        let whole = include_str!("palw_panel.rs");
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        for table_only in ["backends.resolve(", "backends().resolve("] {
+            assert!(!production.contains(table_only), "`{table_only}` skips the chain's registrations — use `resolve_backend`");
+        }
+        let readiness = &production[production.find("    fn readiness_duties(").expect("the readiness duty")..];
+        assert!(readiness.contains("self.resolve_backend(session, class.class_id, class.artifact_root)"), "proofs use the door");
+    }
 }
 
 #[cfg(test)]
@@ -8985,6 +9104,7 @@ mod own_claim_event_tests {
             payout_pending: None,
             work_leaves: 0,
             open_courts: 0,
+            exec_lane: None,
         }
     }
 

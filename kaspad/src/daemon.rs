@@ -1616,7 +1616,8 @@ Do you confirm? (y/n)";
             notify_service.notifier(),
             index_service.as_ref().map(|x| x.notifier()),
             mining_manager,
-            flow_context,
+            // Cloned, not moved: the lane watch registered below reads the same runtime.
+            flow_context.clone(),
             subscription_context,
             index_service.as_ref().map(|x| x.utxoindex().unwrap()),
             config.clone(),
@@ -1857,6 +1858,12 @@ Do you confirm? (y/n)";
     // panel seat, pool slot, a node restarted without either, a node still syncing. A producer's
     // captures outlive the process that wrote them, and a node an operator joins with has a small SSD
     // (see `palw_retention`).
+    // **The lane watch runs on every ConsensusV2 node too** (the route-matrix audit's #1): a chain
+    // that only ticks its clock looks alive by every block count, so the lanes are counted where
+    // every operator — producer, seat, seeder host, explorer backend — reads the node.
+    if palw_consensus_v2 {
+        async_runtime.register(Arc::new(crate::palw_lane_watch::PalwLaneWatch::new(consensus_manager.clone(), flow_context.clone())));
+    }
     if palw_consensus_v2 {
         async_runtime.register(Arc::new(crate::palw_retention::PalwRetentionJanitor::new(
             consensus_manager.clone(),

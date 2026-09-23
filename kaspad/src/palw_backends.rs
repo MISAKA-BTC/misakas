@@ -675,6 +675,78 @@ pub fn verify_class_manifests_v1(sdk: &PalwClassSdk, holdings: &[PalwLoadedArtif
     Ok(checked)
 }
 
+/// **Can this node ever produce for its `--palw-producer-class`?** (the 2026-09-23 route-matrix
+/// audit's #1.) `Some(why)` for a configuration that can NEVER produce, whatever the chain does:
+///
+/// * a model class and no class artifact held at all;
+/// * a model class that none of the held artifacts pairs with, when every held artifact carries a
+///   sidecar that says what it pairs with;
+/// * a GENESIS class whose registered root differs from the root the held artifact's sidecar gives
+///   it — the defect that left testnet-12's dense tier at zero blocks for a whole deployment while
+///   every producer said only "holding".
+///
+/// `None` otherwise — including where a held artifact has no sidecar, because deciding its pairing
+/// would walk its inventory at startup; that case is judged at resolve time, as before. The floor
+/// needs no artifact and is never refused here. A post-genesis class's root is on the chain, not in
+/// the params, so its mismatch is a resolve-time finding.
+pub fn producer_class_unproducible_v1(
+    class_id: &Hash64,
+    holdings: &[PalwLoadedArtifactV1],
+    params: &kaspa_consensus_core::config::params::Params,
+) -> Option<String> {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    if *class_id == bundle.base_class_id {
+        return None;
+    }
+    if holdings.is_empty() {
+        return Some(format!(
+            "class {class_id} is a model class and this node holds no class artifact (--palw-class-artifact names none, or              none loaded): there is nothing to run its inference on"
+        ));
+    }
+    let registered_root = bundle.genesis_objects.iter().find_map(|object| match object {
+        kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id: id, artifact_root, .. }
+            if id == class_id =>
+        {
+            Some(*artifact_root)
+        }
+        _ => None,
+    });
+    let mut listed: Vec<String> = Vec::new();
+    let mut every_holding_has_a_sidecar = true;
+    for holding in holdings {
+        let misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Agrees(manifest) = misaka_palw_sdk::class_manifest::manifest_beside(holding)
+        else {
+            every_holding_has_a_sidecar = false;
+            continue;
+        };
+        for row in &manifest.rows {
+            if row.class_id.into_hash64() != *class_id {
+                listed.push(format!("{} ({})", row.model_id, row.class_id));
+                continue;
+            }
+            match registered_root {
+                Some(root) if root != row.inventory_root.into_hash64() => {
+                    return Some(format!(
+                        "class {class_id} ({}) is registered at genesis with root {root}, and the artifact this node holds for it                          has root {} (its sidecar, checked against the file) — every claim would be refused as the wrong                          artifact, so this node could never produce for it",
+                        row.model_id, row.inventory_root
+                    ));
+                }
+                _ => return None,
+            }
+        }
+    }
+    if every_holding_has_a_sidecar {
+        return Some(format!(
+            "none of the {} held class artifact(s) pairs with class {class_id}; their sidecars list: {}",
+            holdings.len(),
+            if listed.is_empty() { "nothing".to_string() } else { listed.join(", ") }
+        ));
+    }
+    None
+}
+
 pub fn load_class_holdings_v1(
     role: &str,
     sdk: &PalwClassSdk,
@@ -1392,6 +1464,34 @@ pub use kaspa_consensus_core::palw_qwen36_profile::qwen36_class_id_v3 as qwen36_
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The startup refusal's two cheap verdicts, on the network it was written for** (the route-matrix
+    /// audit's #1): testnet-12's floor needs no artifact and is never refused; its 8k dense row with no
+    /// artifact held is refused by name. (The sidecar verdicts need a real artifact on disk and are
+    /// exercised where one exists: the drill host.)
+    #[test]
+    fn a_model_producer_class_with_nothing_to_run_it_on_is_refused_and_the_floor_never_is() {
+        let t12 = kaspa_consensus_core::config::params::Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+            kaspa_consensus_core::network::NetworkType::Testnet,
+            12,
+        ));
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else {
+            panic!("testnet-12 is ConsensusV2")
+        };
+        assert_eq!(producer_class_unproducible_v1(&bundle.base_class_id, &[], &t12), None, "the floor needs no artifact");
+        let dense_8k = kaspa_consensus_core::config::class_manifest_const_v1::class_id_of_class(
+            kaspa_consensus_core::config::class_manifest_const_v1::QWEN25_A16_8K_MANIFEST_V1,
+            1,
+        );
+        let why = producer_class_unproducible_v1(&dense_8k, &[], &t12).expect("a model class with no artifact cannot produce");
+        assert!(why.contains("holds no class artifact"), "{why}");
+        // A network with no ConsensusV2 bundle has nothing to judge against.
+        let legacy = kaspa_consensus_core::config::params::Params::from(kaspa_consensus_core::network::NetworkId::with_suffix(
+            kaspa_consensus_core::network::NetworkType::Testnet,
+            10,
+        ));
+        assert_eq!(producer_class_unproducible_v1(&dense_8k, &[], &legacy), None);
+    }
 
     fn court() -> PalwCourtParamsV2 {
         PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")

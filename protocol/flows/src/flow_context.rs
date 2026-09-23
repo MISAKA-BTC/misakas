@@ -572,6 +572,17 @@ pub struct PalwNodeRuntimeV1 {
     /// Who holds what, rendered: `producer of class … job … (7.90 GiB); …` — the line a hold
     /// names, so an OOM is never again diagnosed from `dmesg`.
     pub memory_holders: String,
+    /// **The selected chain's last blocks, by lane** (`palw_lane_watch`, the 2026-09-23 route-matrix
+    /// audit's #1): how many the window holds, how many carried PALW work (attempt, receipt,
+    /// execution, round), how many were heartbeats, the newest work block's DAA (0 = none in the
+    /// window), the one-line mix, and the alarm — empty unless a window old enough to judge holds no
+    /// PALW work at all. Lanes, not blocks: a heartbeat-only chain passes every block-count check.
+    pub lane_window_blocks: u64,
+    pub lane_work_blocks: u64,
+    pub lane_heartbeat_blocks: u64,
+    pub lane_last_work_daa: u64,
+    pub lane_mix: String,
+    pub lane_alarm: String,
 }
 
 /// One class this node's panel is (or is not) serving.

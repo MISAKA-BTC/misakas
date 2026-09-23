@@ -738,6 +738,13 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         quanta_spent: item.quanta_spent,
         work_leaves: item.work_leaves,
         open_courts: item.open_courts,
+        exec_stage: item.exec_stage.clone(),
+        exec_credit: item.exec_credit,
+        exec_span: item.exec_span,
+        exec_tickets: item.exec_tickets,
+        exec_tickets_spent: item.exec_tickets_spent,
+        exec_first_round: item.exec_first_round,
+        exec_last_round: item.exec_last_round,
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -811,6 +818,12 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwNodeStatusResponse>, protowire::Ge
         memory_available_bytes: item.memory_available_bytes,
         memory_bounded: item.memory_bounded,
         memory_holders: item.memory_holders.clone(),
+        lane_window_blocks: item.lane_window_blocks,
+        lane_work_blocks: item.lane_work_blocks,
+        lane_heartbeat_blocks: item.lane_heartbeat_blocks,
+        lane_last_work_daa: item.lane_last_work_daa,
+        lane_mix: item.lane_mix.clone(),
+        lane_alarm: item.lane_alarm.clone(),
         error: None,
     }
 });
@@ -2502,6 +2515,13 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         quanta_spent: item.quanta_spent,
         work_leaves: item.work_leaves,
         open_courts: item.open_courts,
+        exec_stage: item.exec_stage.clone(),
+        exec_credit: item.exec_credit,
+        exec_span: item.exec_span,
+        exec_tickets: item.exec_tickets,
+        exec_tickets_spent: item.exec_tickets_spent,
+        exec_first_round: item.exec_first_round,
+        exec_last_round: item.exec_last_round,
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {
@@ -2576,6 +2596,12 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         memory_available_bytes: item.memory_available_bytes,
         memory_bounded: item.memory_bounded,
         memory_holders: item.memory_holders.clone(),
+        lane_window_blocks: item.lane_window_blocks,
+        lane_work_blocks: item.lane_work_blocks,
+        lane_heartbeat_blocks: item.lane_heartbeat_blocks,
+        lane_last_work_daa: item.lane_last_work_daa,
+        lane_mix: item.lane_mix.clone(),
+        lane_alarm: item.lane_alarm.clone(),
     }
 });
 try_from!(&protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest);

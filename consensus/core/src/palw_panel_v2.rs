@@ -100,6 +100,37 @@ pub struct PalwPanelDrawPolicyV1 {
     /// **ADR-0147: independence by population** (`Params::palw_admission_independence`). `None`
     /// where the fence is not configured, which is byte-identical to the draw before it existed.
     pub independence: Option<PalwPanelIndependenceV1>,
+    /// **The bind's Valid-lock question, asked at the draw** (the 2026-09-23 route-matrix audit's
+    /// #3). `None` where the lock ledger is not armed at the binding block — byte-identical to the
+    /// draw before it existed.
+    pub valid_lock: Option<PalwPanelValidLockV1>,
+}
+
+/// **What a seat must be able to lock to be drawn at all**, resolved by the processor for ONE claim
+/// at the binding block (the 2026-09-23 route-matrix audit's #3).
+///
+/// The bind demands that every seat can post the lock one `Valid` signature on the claim takes
+/// (`palw_panel_valid_lock_required_v1`: 112.56 MSK for a testnet-12 floor claim), while the draw
+/// only asked for the panel floor and the exposure headroom — so a permissionless bond of 0.004 MSK
+/// was drawn, failed the bind, and held the claim unbound until its bind window voided it (one
+/// 10 MSK bond blocked 17 of 20 floor claims in the audit's probe). Here the draw skips such a bond,
+/// with the bind's own expression on the same state: `palw_slashable_available_v1(bond, now_daa,
+/// settled_anchor_depth) >= required`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPanelValidLockV1 {
+    /// What one `Valid` signature on this claim must lock, as the binding block's fold computes it.
+    pub required: u128,
+    /// The binding block's DAA — the clock a lock's liveness is read at.
+    pub now_daa: u64,
+    /// The second clock's depth at the binding block (`palw_settled_anchor_depth_v1`).
+    pub settled_anchor_depth: Option<u64>,
+}
+
+impl PalwPanelValidLockV1 {
+    /// Whether `bond` can post the lock on `state`.
+    pub fn admits(&self, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> bool {
+        state.palw_slashable_available_v1(bond, self.now_daa, self.settled_anchor_depth) >= self.required
+    }
 }
 
 /// **ADR-0147: what the draw needs to seat an outsider and to fix its population before its
@@ -720,7 +751,7 @@ pub fn derive_panel_v2_with_capability_proof(
         min_collateral_sompi,
         registered_by_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None, valid_lock: None },
     )
 }
 
@@ -779,6 +810,12 @@ pub fn derive_panel_v2_with_policy(
         policy.economy,
         params.seat_count,
     )?;
+    // The 2026-09-23 route-matrix audit's #3: a bond that cannot post the bind's Valid lock is not
+    // a candidate — drawn, it failed the bind and held the claim unbound.
+    let eligible: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = match policy.valid_lock {
+        Some(lock) => eligible.into_iter().filter(|(key, _)| lock.admits(state, key)).collect(),
+        None => eligible,
+    };
     // The outsider's operator holds one seat, never two: an operator that serves the network AND
     // proved it holds the class is drawn for the class's seats only when it is not the outsider.
     let (eligible, needed) = match &outsider {
@@ -911,6 +948,8 @@ pub fn palw_panel_outsider_seat_v1(
     let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = population
         .into_iter()
         .filter(|(key, bond)| Some(**key) != registrant && Some(bond.operator_id) != registrant_operator)
+        // The route-matrix audit's #3, for the outsider too: its seat is bound like every other.
+        .filter(|(key, _)| policy.valid_lock.is_none_or(|lock| lock.admits(state, key)))
         .collect();
     palw_panel_operator_entries_under_v1(claim_id, anchor_block, &population, palw_panel_outsider_ticket_v1)
         .into_iter()
@@ -1191,7 +1230,7 @@ pub fn validate_panel_bound_v2_with_shards(
         proposed_seats,
         bond_maturity_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None, valid_lock: None },
         stratified,
     )
 }
@@ -2277,7 +2316,7 @@ mod tests {
             reward_multiple_permille: 0,
         };
         assert_eq!(economy.panel_floor_sompi, 1_000);
-        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy), readiness: None, independence: None };
+        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy), readiness: None, independence: None, valid_lock: None };
 
         for i in 0..40u64 {
             let anchor = BlockHash::from_u64_word(0xB000 + i);
@@ -2293,7 +2332,7 @@ mod tests {
             }
             // One ticket a bond: the draw past the economy equals the legacy unweighted draw over the
             // same eligible set, whatever `weighted` says.
-            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy), readiness: None, independence: None };
+            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy), readiness: None, independence: None, valid_lock: None };
             assert_eq!(
                 derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, unweighted).unwrap(),
                 seats,
@@ -2398,6 +2437,7 @@ mod tests {
                 reward_multiple_permille,
             }),
             independence: None,
+            valid_lock: None,
         }
     }
 
@@ -2548,6 +2588,7 @@ mod tests {
                     reward_multiple_permille: 0,
                 }),
                 independence: None,
+                valid_lock: None,
             };
             let lottery = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, economy).unwrap();
             let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104 };
@@ -2580,6 +2621,88 @@ mod tests {
             }
         }
         assert!(refused_somewhere, "the two draws must differ somewhere, or the refusal above is vacuous");
+    }
+
+    /// **The 2026-09-23 route-matrix audit's #3: a bond that cannot post the bind's Valid lock is
+    /// not drawn, and the panel the draw names instead is one the bind takes.**
+    ///
+    /// Bond 4 clears the registry floor and backs the claim-priced stake, but its whole collateral
+    /// is one sompi short of what one `Valid` signature on the claim must lock. Drawn blind to the
+    /// lock, it lands on the panel for some anchors, and past the audit fence that `PanelBound` is
+    /// inert — the claim stays `Provisional` until its bind window voids it (the audit's probe: one
+    /// such bond blocked 17 of 20 floor claims). With the lock in the policy it is never drawn, the
+    /// panel is always bonds 2, 3 and 5, and the fold binds it.
+    #[test]
+    fn route_matrix_3_a_bond_that_cannot_post_the_valid_lock_is_not_drawn() {
+        use crate::palw_state_v2::{PalwClaimPhaseV2, PalwTransitionExtrasV1, apply_palw_transition_v2_with_extras};
+        let sp = state_params();
+        let extras =
+            PalwTransitionExtrasV1 { objective_offence_daa: Some(0), audit_2026_09_23_active: true, ..Default::default() };
+        let registry = |cheap: u64| {
+            vec![
+                adr0130_bond(1, 7, 0x21, 1_000_000), // executor — excluded from its own panel
+                adr0130_bond(2, 8, 0x22, 1_000_000),
+                adr0130_bond(3, 9, 0x23, 1_000_000),
+                adr0130_bond(4, 10, 0x24, cheap),
+                adr0130_bond(5, 11, 0x25, 1_000_000),
+            ]
+        };
+        // A 4,000-pwu attempt, so its lock sits well above the registry's 100-sompi floor.
+        let with_claim = |bonds: Vec<PalwConsensusObjectV2>| {
+            let mut objects = vec![adr0130_class()];
+            objects.extend(bonds);
+            let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+            let env = attempt(4_000, 1);
+            let (s2, _) = apply_palw_transition_v2(&s1, &sp, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+            (s2, attempt_id_v2(&env.attempt))
+        };
+        // The lock is a function of the claim alone, so price it once on an ample registry.
+        let (probe, probe_claim) = with_claim(registry(1_000_000));
+        let required =
+            crate::palw_state_v2::palw_panel_valid_lock_required_v1(&probe, &sp, &extras, probe.claim(&probe_claim).unwrap());
+        assert!(required > 101, "the lock ({required}) sits above the registry floor, or this test proves nothing");
+        let (state, claim_id) = with_claim(registry(required as u64 - 1));
+        assert_eq!(claim_id, probe_claim);
+        let lock = PalwPanelValidLockV1 { required, now_daa: 103, settled_anchor_depth: None };
+        let cheap = PalwBondKeyV2(bond_outpoint(4));
+        assert!(!lock.admits(&state, &cheap) && lock.admits(&state, &PalwBondKeyV2(bond_outpoint(2))));
+
+        let params = panel_params(); // seat_count 3
+        let with_lock = PalwPanelDrawPolicyV1 { valid_lock: Some(lock), ..Default::default() };
+        let bind = |seats: &[PalwPanelSeatV2]| {
+            let (next, _) = apply_palw_transition_v2_with_extras(
+                &state,
+                &sp,
+                &ctx(3, 103, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: BlockHash::from_u64_word(0x77), seats: seats.to_vec() }],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("an ineligible panel is inert past the fence, never the block's error");
+            matches!(next.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. })
+        };
+        let mut blind_drew_the_cheap_bond = false;
+        for i in 0..24u64 {
+            let anchor = BlockHash::from_u64_word(0x3A00 + i);
+            let blind = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, 100, None, false, PalwPanelDrawPolicyV1::default())
+                .unwrap();
+            if blind.iter().any(|seat| seat.bond == cheap) {
+                blind_drew_the_cheap_bond = true;
+                assert!(!bind(&blind), "anchor {i}: the bind refuses the seat that cannot post its lock");
+            }
+            let seats = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, 100, None, false, with_lock).unwrap();
+            let mut sat: Vec<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).collect();
+            sat.sort();
+            let mut backed: Vec<PalwBondKeyV2> = [2u64, 3, 5].iter().map(|n| PalwBondKeyV2(bond_outpoint(*n))).collect();
+            backed.sort();
+            assert_eq!(sat, backed, "anchor {i}: only bonds that can post the lock sit");
+            assert!(bind(&seats), "anchor {i}: and the bind takes that panel");
+        }
+        assert!(blind_drew_the_cheap_bond, "the blind draw must seat bond 4 somewhere, or the refusal above is vacuous");
     }
 
     /// **ADR-0130: a bond is drawn only while its free collateral can reserve the floor.** The claim

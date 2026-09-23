@@ -1440,6 +1440,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     quanta_spent: row.quanta_spent,
                     work_leaves: row.work_leaves,
                     open_courts: row.open_courts as u32,
+                    exec_stage: row.exec_lane.as_ref().map(|lane| lane.stage.to_string()).unwrap_or_default(),
+                    exec_credit: row.exec_lane.as_ref().map(|lane| lane.credit).unwrap_or(0),
+                    exec_span: row.exec_lane.as_ref().map(|lane| lane.span),
+                    exec_tickets: row.exec_lane.as_ref().map(|lane| lane.tickets).unwrap_or(0),
+                    exec_tickets_spent: row.exec_lane.as_ref().map(|lane| lane.tickets_spent).unwrap_or(0),
+                    exec_first_round: row.exec_lane.as_ref().and_then(|lane| lane.first_round),
+                    exec_last_round: row.exec_lane.as_ref().and_then(|lane| lane.last_round),
                 }
             })
             .collect();
@@ -1525,6 +1532,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             memory_available_bytes: rt.memory_available_bytes,
             memory_bounded: rt.memory_bounded,
             memory_holders: rt.memory_holders,
+            lane_window_blocks: rt.lane_window_blocks,
+            lane_work_blocks: rt.lane_work_blocks,
+            lane_heartbeat_blocks: rt.lane_heartbeat_blocks,
+            lane_last_work_daa: rt.lane_last_work_daa,
+            lane_mix: rt.lane_mix,
+            lane_alarm: rt.lane_alarm,
         })
     }
 
@@ -2031,7 +2044,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 priced_in_compute: price.priced_in_compute,
                 quanta: price.quanta,
                 pwu: price.pwu,
-                reserved_sompi: price.reserved.to_string(),
+                // The whole reservation the ledger will hold — the weight and, past the audit fence, a
+                // compute-priced claim's receipt rights (#5) — because a gateway checks exactly this
+                // against `bond_room_sompi`.
+                reserved_sompi: price.reserved.saturating_add(price.rights_reserved).to_string(),
                 bond_room_sompi,
             },
             Err(refusal) => GetPalwFreePromptPriceResponse {
@@ -2704,7 +2720,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             "no bond was named in this request — readiness is a property of a bond".to_string()
         } else {
             let key = facts.bond.as_ref().map(|b| b.registered_pubkey.as_slice()).unwrap_or(&[]);
-            facts.ready_to_produce(key).err().unwrap_or_default().to_string()
+            match (facts.ready_to_produce(key), facts.class_admission_refusal.as_deref()) {
+                // The sentence first — the CLI matches on it — then the gate's own words.
+                (Err(why), Some(detail)) if why == kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2 => {
+                    format!("{why} [{detail}]")
+                }
+                (verdict, _) => verdict.err().unwrap_or_default().to_string(),
+            }
         };
         Ok(response)
     }

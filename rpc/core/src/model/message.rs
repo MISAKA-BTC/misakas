@@ -3997,11 +3997,21 @@ pub struct RpcPalwClaimRow {
     pub quanta_spent: u32,
     pub work_leaves: u64,
     pub open_courts: u32,
+    /// **The execution lane's view of this claim's Final** (route-matrix #7): `credited`,
+    /// `maturing`, `scheduled`, or empty where it earned no credit or the state no longer keeps it.
+    pub exec_stage: String,
+    pub exec_credit: u64,
+    /// The span it was gathered in, waits for, or was scheduled by.
+    pub exec_span: Option<u64>,
+    pub exec_tickets: u32,
+    pub exec_tickets_spent: u32,
+    pub exec_first_round: Option<u64>,
+    pub exec_last_round: Option<u64>,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -4022,14 +4032,22 @@ impl Serializer for RpcPalwClaimRow {
         store!(u32, &self.quanta_spent, writer)?;
         store!(u64, &self.work_leaves, writer)?;
         store!(u32, &self.open_courts, writer)?;
+        // Version 2: the execution lane's view.
+        store!(String, &self.exec_stage, writer)?;
+        store!(u64, &self.exec_credit, writer)?;
+        store!(Option<u64>, &self.exec_span, writer)?;
+        store!(u32, &self.exec_tickets, writer)?;
+        store!(u32, &self.exec_tickets_spent, writer)?;
+        store!(Option<u64>, &self.exec_first_round, writer)?;
+        store!(Option<u64>, &self.exec_last_round, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwClaimRow {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {
+        let version = load!(u16, reader)?;
+        let mut row = Self {
             claim_id: load!(String, reader)?,
             is_free_prompt: load!(bool, reader)?,
             class_id: load!(String, reader)?,
@@ -4050,7 +4068,18 @@ impl Deserializer for RpcPalwClaimRow {
             quanta_spent: load!(u32, reader)?,
             work_leaves: load!(u64, reader)?,
             open_courts: load!(u32, reader)?,
-        })
+            ..Default::default()
+        };
+        if version >= 2 {
+            row.exec_stage = load!(String, reader)?;
+            row.exec_credit = load!(u64, reader)?;
+            row.exec_span = load!(Option<u64>, reader)?;
+            row.exec_tickets = load!(u32, reader)?;
+            row.exec_tickets_spent = load!(u32, reader)?;
+            row.exec_first_round = load!(Option<u64>, reader)?;
+            row.exec_last_round = load!(Option<u64>, reader)?;
+        }
+        Ok(row)
     }
 }
 
@@ -6988,11 +7017,19 @@ pub struct GetPalwNodeStatusResponse {
     pub memory_available_bytes: u64,
     pub memory_bounded: bool,
     pub memory_holders: String,
+    /// Version 3: the selected chain's last blocks by lane (`palw_lane_watch`) — see the node
+    /// runtime's fields of the same names.
+    pub lane_window_blocks: u64,
+    pub lane_work_blocks: u64,
+    pub lane_heartbeat_blocks: u64,
+    pub lane_last_work_daa: u64,
+    pub lane_mix: String,
+    pub lane_alarm: String,
 }
 
 impl Serializer for GetPalwNodeStatusResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(String, &self.consensus_params_id, writer)?;
         store!(Vec<u64>, &self.fence_schedule, writer)?;
         store!(String, &self.consensus_schedule_id, writer)?;
@@ -7018,6 +7055,13 @@ impl Serializer for GetPalwNodeStatusResponse {
         store!(u64, &self.memory_available_bytes, writer)?;
         store!(bool, &self.memory_bounded, writer)?;
         store!(String, &self.memory_holders, writer)?;
+        // Version 3: the lane mix.
+        store!(u64, &self.lane_window_blocks, writer)?;
+        store!(u64, &self.lane_work_blocks, writer)?;
+        store!(u64, &self.lane_heartbeat_blocks, writer)?;
+        store!(u64, &self.lane_last_work_daa, writer)?;
+        store!(String, &self.lane_mix, writer)?;
+        store!(String, &self.lane_alarm, writer)?;
         Ok(())
     }
 }
@@ -7054,6 +7098,15 @@ impl Deserializer for GetPalwNodeStatusResponse {
             out.memory_available_bytes = load!(u64, reader)?;
             out.memory_bounded = load!(bool, reader)?;
             out.memory_holders = load!(String, reader)?;
+        }
+        // A version-2 sender stops here; the lane fields stay at their defaults.
+        if version >= 3 {
+            out.lane_window_blocks = load!(u64, reader)?;
+            out.lane_work_blocks = load!(u64, reader)?;
+            out.lane_heartbeat_blocks = load!(u64, reader)?;
+            out.lane_last_work_daa = load!(u64, reader)?;
+            out.lane_mix = load!(String, reader)?;
+            out.lane_alarm = load!(String, reader)?;
         }
         Ok(out)
     }

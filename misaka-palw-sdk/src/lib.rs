@@ -311,6 +311,7 @@ mod tests {
             held: Default::default(),
             kimi_family: false,
             attention_geometry_bound: false,
+            legal_job_bound: false,
         };
         let err = s.preflight_admission(bundle, &row, root, &dormant).expect_err("no court, no fused row");
         assert!(err.contains("has no dissection to try it with"), "{err}");
@@ -375,6 +376,7 @@ mod tests {
             held: shape.held,
             kimi_family: false,
             attention_geometry_bound: false,
+            legal_job_bound: false,
         };
         let priced = s.preflight_admission(bundle, &row, root, &with_rules).expect("the same row, the rules stated");
         assert_eq!(format!("{priced:?}"), format!("{admitted:?}"), "one price for the fused row under one court");
@@ -412,5 +414,34 @@ mod tests {
         assert!(!before.held.armed, "the held regime is not armed at DAA {}", armed_at - 1);
         sdk.preflight_admission(bundle, &row, Hash64::from_u64_word(0x2A16_2A16), &shape)
             .expect("the 2M row is admissible through the exact held t11 registration gate");
+    }
+
+    /// **The preflight asks F4 the way the chain does** (the 2026-09-23 route-matrix audit's #6).
+    /// The acceptance path passes `palw_canonical_work` at the registering block — `true` on
+    /// testnet-12 from genesis — while the SDK passed a literal `false`, so a preflight could admit a
+    /// class the chain then refused after its carrier was paid for. The shape now carries the
+    /// reading, on both sides of each network's fence, and the preflight forwards it.
+    #[test]
+    fn the_preflight_reads_the_legal_job_bound_the_chain_reads() {
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        use kaspa_consensus_core::palw_class_admission_v2::palw_admission_shape_at_v1;
+        for suffix in [11u32, 12] {
+            let params = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, suffix));
+            let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+                panic!("testnet-{suffix} ships a ConsensusV2 bundle");
+            };
+            let sdk = PalwClassSdk::builtin_v1(bundle.court, params.palw_prompt_ids_form_v1(), params.net.to_string().into_bytes());
+            let row = sdk.ledger().into_iter().next().expect("a catalog row");
+            let height = params.palw_canonical_work_daa();
+            for daa in [0u64, height.unwrap_or(0).saturating_sub(1), height.unwrap_or(0), 1_000_000] {
+                let shape = palw_admission_shape_at_v1(&params, bundle, &row.profile, daa).expect("the shape derives");
+                // The processor's own expression (`palw_v2_validate_objects`, F4's argument).
+                assert_eq!(shape.legal_job_bound, height.is_some_and(|h| daa >= h), "testnet-{suffix} at DAA {daa}");
+            }
+        }
+        let t12 = kaspa_consensus_core::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        assert_eq!(t12.palw_canonical_work_daa(), Some(0), "testnet-12 bounds registrations by the legal job from genesis");
+        let source = include_str!("sdk.rs");
+        assert!(source.contains("shape.legal_job_bound,"), "and the preflight forwards the shape's reading");
     }
 }

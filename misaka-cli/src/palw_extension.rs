@@ -705,6 +705,23 @@ mod tests {
         assert!(not_a_class.msg.contains("extension submit"), "and it says which command files it: {}", not_a_class.msg);
     }
 
+    /// **The extension tools know every network the node does** (the 2026-09-23 route-matrix
+    /// audit's #4): `params_for` refused testnet-12, so `model add --manifest` and `extension verify`
+    /// could not register an unknown model on the public testnet. A suffix the node does not know is
+    /// still refused, rather than reaching the constructor that panics on it.
+    #[test]
+    fn the_extension_tools_know_testnet_12() {
+        let t12: NetworkId = "testnet-12".parse().expect("a network id");
+        let params = params_for(t12).expect("testnet-12 is a network this build knows");
+        assert_eq!(
+            params.consensus_params_id(),
+            kaspa_consensus_core::config::params::Params::from(t12).consensus_params_id(),
+            "the node's own parameters"
+        );
+        let t13: NetworkId = "testnet-13".parse().expect("a network id");
+        assert!(params_for(t13).is_err(), "an unknown suffix is refused, not panicked on");
+    }
+
     /// **A model the build's catalog does not carry becomes a `model add` entry** — the A16 dense
     /// row projected at a width no catalog row spells, verified at Full depth against the artifact.
     /// Needs the 1.7 GiB published artifact, so it runs where the file is:

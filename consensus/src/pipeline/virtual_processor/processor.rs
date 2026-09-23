@@ -4340,6 +4340,9 @@ impl VirtualStateProcessor {
                 .map(|fence| fence.daa_score()),
             canonical_work_daa: self.palw_canonical_work_daa,
             daa_score,
+            // The audit's #5: the rights the fold will reserve beside the weight, priced from the same
+            // carve and `W₀` the fold reads at this DAA — so the answer is the ledger's reservation.
+            receipt_rights: self.palw_fp_receipt_rights_inputs_at(daa_score),
         };
         // The claim id only names a refusal; no claim exists until the rail signs one.
         let price = kaspa_consensus_core::palw_state_v2::palw_fp_commitment_price_v1(
@@ -4427,6 +4430,19 @@ impl VirtualStateProcessor {
         // the fence at the SAME candidate score admission will judge the block at, so a producer
         // holds exactly when the chain would refuse and draws exactly when it would accept.
         facts.epoch_budget_release_armed = budget_fences.budget_release_active;
+        // **The route-matrix audit's #7: the fold's own class gate, asked before an inference is
+        // spent** — at the candidate's DAA under the fences the fold will read there (the block is
+        // not built yet, so its header facts are the tip's; the gate reads none of them).
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: candidate_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        facts.class_admission_refusal =
+            kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
+                .err()
+                .map(|refusal| refusal.to_string());
         Some(facts)
     }
 
@@ -6144,7 +6160,18 @@ impl VirtualStateProcessor {
                         // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy,
                         // resolved at the ANCHOR for the same purity reason — the assembler resolves
                         // it at the same point, so build and validate recompute one identical panel.
-                        self.palw_panel_draw_policy_at(anchor_fact.anchor_daa),
+                        // The Valid-lock question (route-matrix #3) is the BINDING block's, as the
+                        // assembler asks it.
+                        kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
+                            valid_lock: Self::palw_panel_valid_lock_of_v1(
+                                state,
+                                state_params,
+                                &self.palw_transition_extras_for(point),
+                                claim_record,
+                                point.daa_score,
+                            ),
+                            ..self.palw_panel_draw_policy_at(anchor_fact.anchor_daa)
+                        },
                         // ADR-0100 Decision 4: the same one-place decision the binding made.
                         self.palw_stratified_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
                     )
@@ -8205,6 +8232,29 @@ impl VirtualStateProcessor {
         Some(verdicts)
     }
 
+    /// **The bind's Valid-lock question, for the draw** (the 2026-09-23 route-matrix audit's #3):
+    /// what one `Valid` signature on `claim` must lock and the clocks a bond's free collateral is
+    /// read at, from the BINDING block's fold inputs (`extras`, `now_daa`) — the ones the fold's
+    /// `require_panel_lock_eligible` reads, so the draw never seats a bond the bind would refuse.
+    /// `None` below `palw_audit_2026_09_23` or where the lock ledger is not armed: testnet-11 arms
+    /// the ledger without the fence, and its derived panels must stay the ones it always drew.
+    pub(super) fn palw_panel_valid_lock_of_v1(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+        now_daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwPanelValidLockV1> {
+        if !(extras.audit_2026_09_23_active && extras.objective_offence_at(now_daa)) {
+            return None;
+        }
+        Some(kaspa_consensus_core::palw_panel_v2::PalwPanelValidLockV1 {
+            required: kaspa_consensus_core::palw_state_v2::palw_panel_valid_lock_required_v1(state, state_params, extras, claim),
+            now_daa,
+            settled_anchor_depth: kaspa_consensus_core::palw_state_v2::palw_settled_anchor_depth_v1(extras),
+        })
+    }
+
     /// **ADR-0124's draw policy at a claim's anchor** — the deep fence's weighting and the panel
     /// economy's floor and ceiling, resolved at ONE point so the assembler and the acceptance layer
     /// recompute one identical panel. `economy` is `None` while the fence is dormant at the anchor.
@@ -8237,6 +8287,8 @@ impl VirtualStateProcessor {
                 }),
                 _ => None,
             },
+            // Per claim, at the binding block: `palw_panel_valid_lock_of_v1` fills it where armed.
+            valid_lock: None,
         }
     }
 
@@ -8785,6 +8837,29 @@ impl VirtualStateProcessor {
 
     /// ADR-0137: `W₀` for a block of `daa_score` paying `subsidy`, where the work target is in
     /// force — the block's escrow at the payout's rate; `None` below the fence.
+    /// **The audit's #5: what a free-prompt claim accepted at `daa_score` prices its receipt rights
+    /// from** — the fold's `fp_receipt_rights_inputs_v1` from the node's side: the block's worker carve
+    /// and `W₀`, past `palw_audit_2026_09_23` and while the work target is in force.
+    pub(super) fn palw_fp_receipt_rights_inputs_at(
+        &self,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpRightsInputsV1> {
+        if !self.palw_audit_2026_09_23_at(daa_score) {
+            return None;
+        }
+        let subsidy = self.coinbase_manager.calc_block_subsidy(daa_score);
+        let work_floor = self.palw_work_target_floor_for(daa_score, subsidy)?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwFpRightsInputsV1 {
+            worker_carve: kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                subsidy,
+                self.palw_escrow_carve_at(daa_score, daa_score),
+            ),
+            work_floor,
+        })
+    }
+
     pub(super) fn palw_work_target_floor_for(&self, daa_score: u64, subsidy: u64) -> Option<u128> {
         if !self.palw_work_target_at(daa_score) {
             return None;
@@ -9520,6 +9595,14 @@ impl VirtualStateProcessor {
         // Log only, and before the loop so it is reported even on a block that binds no panel —
         // "no claims advanced" is exactly what a stalled chain looks like from here.
         self.palw_warn_if_maturity_outruns_the_registry(state, block_daa, min_collateral, panel_params);
+        // The binding block's fold inputs, for the bind's Valid-lock question (route-matrix #3). The
+        // lock reads none of the context's blue score or subsidy.
+        let binding_extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block,
+            daa_score: block_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
             if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
@@ -9545,7 +9628,10 @@ impl VirtualStateProcessor {
             // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
             // same anchor as the acceptance layer's sibling call — so this assembler builds the
             // exact panel that layer recomputes.
-            let policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
+            let mut policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
+            if let Some(state_params) = self.palw_state_params_v2.as_ref() {
+                policy.valid_lock = Self::palw_panel_valid_lock_of_v1(state, state_params, &binding_extras, claim, block_daa);
+            }
             // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
             // panel of a sharded class would ask shard seats to judge a whole model.
             let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {

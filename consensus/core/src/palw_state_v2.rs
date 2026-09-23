@@ -2553,6 +2553,29 @@ pub struct PalwClaimStateV2 {
     /// them, so the duplicate check it backs is rooted.
     pub work_id: Option<Hash64>,
     pub phase: PalwClaimPhaseV2,
+    /// **The receipt rights this claim's Final could realize, reserved on its bond** (the 2026-09-23
+    /// audit's #5, escrow half) — a free-prompt claim past `palw_audit_2026_09_23`, zero for every
+    /// other claim.
+    ///
+    /// A free-prompt Final mints receipt quanta, and every winning spend is a block that pays the
+    /// worker carve. At most `compute / W₀` of them can win — the pooled receipt target never offers
+    /// better odds than the attempt lane's ticket at `W` (`fp_pooled_target_ceiling_v1`) and `W` never
+    /// falls below `W₀` — so the rights are worth at most `compute × escrow / W₀`. That bound is fixed
+    /// HERE, at acceptance, because the target and `W₀` it is priced from cannot be recovered from the
+    /// claim later. Held with the weight, released with it, and forfeited with option A's escrow term on
+    /// a fraud or withholding void: the free-prompt lane's counterpart of that term, which is zero for a
+    /// commitment. Appended last — the v21 layout, which has not shipped, changes with it.
+    pub rights_reserved: u128,
+}
+
+/// **What a claim holds on its bond**: its weight (`reserved`), option A's escrow term past its
+/// height, and a free-prompt claim's priced receipt rights. ONE expression for every site that
+/// reserves, releases or re-derives it, so the ledger cannot disagree with itself about a claim.
+pub fn palw_claim_bond_reservation_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<u128> {
+    claim
+        .reserved
+        .checked_add(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
+        .and_then(|held| held.checked_add(claim.rights_reserved))
 }
 
 impl PalwClaimStateV2 {
@@ -6671,6 +6694,12 @@ impl PalwChainStateV2 {
         self.round_pending.values().next()
     }
 
+    /// ADR-0130 / ADR-0151: every snapshot waiting for its span, by target — past the economic-safety
+    /// bundle one per span of maturity.
+    pub fn round_pending_snapshots(&self) -> &BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecSnapshotV1> {
+        &self.round_pending
+    }
+
     /// ADR-0130: the latest attempt-carrying chain block of the open span, if one has been recorded.
     pub fn round_seed_anchor(&self) -> Option<&crate::palw_execution_lane_v1::PalwExecSeedAnchorV1> {
         self.round_seed_anchor.as_ref()
@@ -7245,6 +7274,22 @@ impl PalwChainStateV2 {
         self.model_lifecycles.insert(class_id, row);
     }
 
+    /// **What `bond` can still lock for a `Valid` signature at `now_daa`**: its posted collateral
+    /// less every lock still live on the two clocks (`settled_anchor_depth`: `None` is the DAA-only
+    /// rule). The fold's bind and licence checks and the panel draw read this one expression (the
+    /// 2026-09-23 route-matrix audit's #3).
+    pub fn palw_slashable_available_v1(&self, bond: &PalwBondKeyV2, now_daa: u64, settled_anchor_depth: Option<u64>) -> u128 {
+        let posted = self.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
+        let settled_now = self.settled_attempt_finals;
+        let locked = self
+            .slashable_locks
+            .iter()
+            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, settled_anchor_depth))
+            .map(|(_, lock)| lock.amount)
+            .fold(0u128, u128::saturating_add);
+        crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
+    }
+
     pub fn reserved_exposure(&self, key: &PalwBondKeyV2) -> u128 {
         self.reserved_exposure.get(key).copied().unwrap_or(0)
     }
@@ -7671,9 +7716,8 @@ impl PalwChainStateV2 {
                         && palw_claim_is_on_abandon_hold_v2(claim, params, point.daa_score)
                     {
                         let entry = exposure.entry(claim.bond).or_insert(0);
-                        *entry = entry
-                            .checked_add(claim.reserved)
-                            .and_then(|held| held.checked_add(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward)))
+                        *entry = palw_claim_bond_reservation_v1(params, claim)
+                            .and_then(|held| entry.checked_add(held))
                             .ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     }
                 }
@@ -7681,11 +7725,11 @@ impl PalwChainStateV2 {
                     immature =
                         immature.checked_add(claim.immature_contribution).ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
                     let entry = exposure.entry(claim.bond).or_insert(0);
-                    // Both halves of the claim's reservation (option A's escrow term is 0 below its
-                    // height), exactly as `reserve_for_claim` wrote them.
-                    *entry = entry
-                        .checked_add(claim.reserved)
-                        .and_then(|held| held.checked_add(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward)))
+                    // The claim's whole reservation (option A's escrow term is 0 below its height, the
+                    // receipt rights 0 for anything but a free-prompt claim past the audit fence),
+                    // exactly as `reserve_for_claim` wrote it.
+                    *entry = palw_claim_bond_reservation_v1(params, claim)
+                        .and_then(|held| entry.checked_add(held))
                         .ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     // **ADR-0124 Decision 3: every seat on duty holds its exposure**, rebuilt from the
                     // duty row so the ledger and the row cannot drift apart about who holds what —
@@ -8621,6 +8665,291 @@ pub fn palw_escrow_destroyed_by_delta_v2(delta: &PalwStateDeltaV2) -> u64 {
         .fold(0u64, |acc, v| acc.saturating_add(v))
 }
 
+
+/// **The fold's read-only inputs — the parent state, the params and the block's extras — for the
+/// rules a caller outside the fold must evaluate exactly as the fold does** (the 2026-09-23
+/// route-matrix audit's #3: the panel draw asks the bind's Valid-lock question before it names a
+/// seat). [`TransitionBuilder`]'s methods of the same names delegate here, so each rule has one
+/// expression whichever side asks.
+struct PalwFoldReadV1<'a> {
+    state: &'a PalwChainStateV2,
+    params: &'a PalwStateParamsV2,
+    extras: &'a PalwTransitionExtrasV1,
+}
+
+impl PalwFoldReadV1<'_> {
+    fn canonical_per_draw(&self, class_id: &Hash64, accepted_daa: u64) -> Option<u64> {
+        self.state
+            .palw_attempt_per_draw_v1(
+                &self.params.base_class_id,
+                class_id,
+                accepted_daa,
+                self.extras.canonical_work_daa,
+                self.base_known_draw(),
+            )
+            .map(|work| work.min(u64::MAX as u128) as u64)
+    }
+
+    fn base_known_draw(&self) -> Option<u128> {
+        self.extras.model_registry.as_ref()
+            .and_then(|fold| fold.genesis_works.get(&self.params.base_class_id))
+            .map(|work| work.economic_ccu_per_claim)
+    }
+
+    fn exposure_basis(&self, accepted_daa: u64) -> Option<PalwExposureBasisV1> {
+        self.state.palw_exposure_basis_v2(
+            &self.params.base_class_id,
+            accepted_daa,
+            self.extras.canonical_work_daa,
+            self.base_known_draw(),
+        )
+    }
+
+    fn settled_anchor_depth(&self) -> Option<u64> {
+        if self.extras.audit_2026_09_23_active { self.extras.settled_anchor_depth } else { None }
+    }
+
+    /// **What one Valid signature on this claim must lock** (ADR-0144 §9, ADR-0151 D1/D4).
+    ///
+    /// Three colluding seats must out-value the most the lie can earn
+    /// (`palw_colluding_quorum_covers_v1`), and past `Params::palw_economic_safety` that gain
+    /// includes the execution rights the Final mints — which
+    /// `palw_claim_extra_economic_rights_v1` valued at zero, on a claim whose Final mints 270,029
+    /// permit candidates. The margin also stops being one sompi.
+    fn panel_valid_lock_required(&self, claim: &PalwClaimStateV2) -> u128 {
+        let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
+        // **2026-09-23 audit C-3: the weight term in the unit the reservation was written in.**
+        // Below the fence the raw derived pwu met the collateral-unit price — 2,810x the unit — and
+        // the 2M row's seat lock came to 119.19x the collateral any genesis bond posts, so no panel
+        // could ever bind that class. Above it the term is what `reserved` already is.
+        let mut facts = if self.extras.audit_2026_09_23_active {
+            crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash)
+        } else {
+            crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim_pre_2026_09_23(claim, slash)
+        };
+        let Some(safety) = self.extras.economic_safety else {
+            // Dormant: byte-identical to the rule every existing lock was written under.
+            return crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+        };
+        // The audit's #5: a free-prompt claim's reserved receipt rights are rights its Final realizes
+        // too, so the seat that licenses it is priced for them as for an attempt's execution rights.
+        facts.extra_economic_rights_sompi = self.claim_realizable_rights_v1(claim, &safety).max(claim.rights_reserved);
+        crate::palw_economic_safety_v1::palw_seat_lock_required_v2(
+            crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts),
+            crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1,
+        )
+    }
+
+    /// **The execution rights this claim's Final could realize before a conviction could take them.**
+    ///
+    /// The quanta it mints are `credit / execution_quantum`, and the credit is the UNCLAMPED
+    /// CanonicalWork scalar — the same value `record_round_final` credits, read here the same way so
+    /// the lock and the mint cannot disagree about how many rights are at stake. Zero where the lane
+    /// mints no quanta at all, which is every network that leaves `palw_execution_quanta` dormant.
+    fn claim_realizable_rights_v1(&self, claim: &PalwClaimStateV2, safety: &PalwEconomicSafetyFoldV1) -> u128 {
+        let Some(lane) = self.extras.round_lane.filter(|lane| lane.execution_quantum > 0) else { return 0 };
+        let Some(class) = self.state.classes.get(&claim.class_id) else { return 0 };
+        // The same accessor `record_round_final` uses, so the lock and the mint cannot disagree.
+        let canonical = self.canonical_per_draw(&claim.class_id, claim.accepted_daa);
+        // 2026-09-23 audit C-2: the same unit `record_round_final` credits in, past the same fence.
+        let exposure = if self.extras.audit_2026_09_23_active {
+            palw_exposure_pwu_v3(class, claim.pwu, canonical, self.exposure_basis(claim.accepted_daa))
+        } else {
+            palw_exposure_pwu_v2(class, claim.pwu, canonical)
+        };
+        let counted = crate::palw_execution_quanta_v1::palw_execution_quantum_count_v1(
+            u128::from(exposure),
+            u128::from(lane.execution_quantum),
+            // The count is what the mint will produce; its fractional tie-break is seeded by a span
+            // the lock cannot see, so the ceiling (`whole + 1`) is the honest bound to price.
+            crate::Hash64::default(),
+            crate::Hash64::default(),
+        );
+        // And the same ceiling the mint stops at, so the lock never prices tickets no span issues.
+        let counted = if self.extras.audit_2026_09_23_active {
+            counted.min(crate::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 as u32)
+        } else {
+            counted
+        };
+        let quanta = counted.saturating_add(1);
+        crate::palw_economic_safety_v1::palw_realizable_before_maturity_v1(
+            quanta,
+            self.params.window_challenge(),
+            self.params.window_court,
+            safety.target_time_per_block_ms,
+            crate::palw_economic_safety_v1::palw_permit_value_sompi_v1(safety.permit_value_sompi),
+        )
+    }
+
+    fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        let Some(fold) = self.extras.model_registry.as_ref() else { return Ok(()) };
+        if *class_id == self.params.base_class_id() {
+            return Ok(());
+        }
+        let Some(row) = self.state.model_lifecycles.get(class_id) else {
+            // ADR-0137: past the work target every model class is priced by its row; a class
+            // without one (registered before the fence without a carriage) is refused, not free.
+            if self.extras.work_target_active {
+                return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: "no row".to_string() });
+            }
+            return Ok(());
+        };
+        if !row.state.admits_claims() {
+            return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: format!("{:?}", row.state) });
+        }
+        // **H-2 of the 2026-09-18 audit: the room check waits for the grace the registry already
+        // computes.** The work target and the registry arm at the same height, and a readiness proof
+        // is refused below that height — so on the flag day itself every class has zero ready seats,
+        // the room is zero, and every non-base class would refuse claims until seven seats prove
+        // possession, while their producers mined blocks their own chain rejected.
+        // `grace_until_daa` (activation + `readiness_probe_max_age_spans` spans) exists for exactly
+        // this window; inside it the class is bounded by the inflight cap below, as before the fence.
+        if self.extras.work_target_active && fold.governs_at(now_daa) {
+            // ADR-0137 D5: one network-wide replay budget in place of the per-class cap.
+            let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
+            if room == 0 {
+                return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
+            }
+            return Ok(());
+        }
+        let inflight = self.model_registry_inflight(class_id);
+        if inflight >= row.profile.max_inflight_claims {
+            return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
+        }
+        Ok(())
+    }
+
+    fn panel_room_v1(
+        &self,
+        class_id: &Hash64,
+        row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+        now_daa: u64,
+    ) -> (u64, u128, u128, u64) {
+        let base = self.params.base_class_id();
+        let g = &fold.globals;
+        let seat_count = g.seat_count as u128;
+        let horizon = self
+            .state
+            .model_lifecycles
+            .iter()
+            .filter(|(id, r)| **id != base && r.state.admission_permille() > 0)
+            .map(|(_, r)| r.profile.verification_window_spans as u64)
+            .min()
+            .unwrap_or(1)
+            .max(1);
+        let inflight_replay: u128 = self
+            .state
+            .model_lifecycles
+            .iter()
+            .filter(|(id, _)| **id != base)
+            .map(|(id, r)| {
+                (self.model_registry_inflight(id) as u128).saturating_mul(r.work.economic_ccu_per_claim).saturating_mul(seat_count)
+            })
+            .fold(0u128, u128::saturating_add);
+        let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
+        let per_span =
+            ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+        let budget = per_span.saturating_mul(horizon as u128);
+        let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
+        (crate::palw_work_target_v1::palw_panel_room_v1(per_span, horizon, inflight_replay, cost), inflight_replay, budget, horizon)
+    }
+
+    fn model_registry_ready_seats(
+        &self,
+        class_id: &Hash64,
+        now_daa: u64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+    ) -> u32 {
+        let ready = self
+            .state
+            .bonds
+            .iter()
+            .filter(|(bond_key, bond)| self.model_registry_seat_is_ready(bond_key, bond, class_id, now_daa, fold))
+            .count();
+        ready.min(u32::MAX as usize) as u32
+    }
+
+    fn model_registry_seat_is_ready(
+        &self,
+        bond_key: &PalwBondKeyV2,
+        bond: &PalwBondStateV2,
+        class_id: &Hash64,
+        now_daa: u64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+    ) -> bool {
+        // ADR-0133 §11.2: past readiness V2 a row stands for eight spans, not thirty, and a V1 row
+        // does not stand at all — the challenge rotates every span and the rotation has to bite.
+        let max_age_spans = if self.extras.readiness_v2_active {
+            crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1
+        } else {
+            fold.globals.readiness_probe_max_age_spans
+        };
+        let max_age_daa = (max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
+        let floor = self.params.min_collateral_sompi();
+        let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
+        if !matches!(bond.status, PalwBondStatusV2::Active) || !palw_bond_may_take_work_v2(bond, floor) {
+            return false;
+        }
+        let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { return false };
+        if self.extras.readiness_v2_active && row.proof_version < 2 {
+            return false; // a one-leaf proof is not possession past the fence
+        }
+        if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
+            return false;
+        }
+        let held = self.state.reserved_exposure(bond_key).saturating_add(self.state.registration_exposure(bond_key));
+        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+        free >= needed
+    }
+
+    fn model_registry_inflight(&self, class_id: &Hash64) -> u32 {
+        self.state
+            .claims
+            .values()
+            .filter(|claim| {
+                claim.class_id == *class_id && matches!(claim.source, PalwClaimSourceV2::Attempt) && !claim.phase.is_terminal()
+            })
+            .count()
+            .min(u32::MAX as usize) as u32
+    }
+}
+
+/// **What one `Valid` signature on `claim` must lock, as the fold that binds it computes it** —
+/// `extras` are the binding block's (the 2026-09-23 route-matrix audit's #3). The panel draw reads
+/// it so a seat that cannot post the lock is never drawn: drawn, it failed the bind, and the claim
+/// sat unbound until its bind window voided it.
+pub fn palw_panel_valid_lock_required_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim: &PalwClaimStateV2,
+) -> u128 {
+    PalwFoldReadV1 { state, params, extras }.panel_valid_lock_required(claim)
+}
+
+/// **Would the fold at a block with these `extras` accept a new claim of `class_id` at `now_daa`?**
+/// The fold's own class gate (`check_class_admits_claim`: the registry row's lifecycle, then the
+/// panel room or the inflight cap), for a caller that must answer before it spends an inference —
+/// the producer's facts above all (the 2026-09-23 route-matrix audit's #7: a class the registry
+/// held at `Prefetching` reported no reason not to produce, and its producer mined claims its own
+/// chain refused).
+pub fn palw_class_admits_claim_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    class_id: &Hash64,
+    now_daa: u64,
+) -> Result<(), PalwStateV2Error> {
+    PalwFoldReadV1 { state, params, extras }.check_class_admits_claim(class_id, now_daa)
+}
+
+/// The second clock's depth the lock ledger reads at a block with these `extras` (`None` is the
+/// DAA-only rule) — what [`PalwChainStateV2::palw_slashable_available_v1`] takes.
+pub fn palw_settled_anchor_depth_v1(extras: &PalwTransitionExtrasV1) -> Option<u64> {
+    if extras.audit_2026_09_23_active { extras.settled_anchor_depth } else { None }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Transition internals: a builder that records every write it makes
 // ---------------------------------------------------------------------------------------------
@@ -8664,6 +8993,12 @@ struct TransitionBuilder<'a> {
 }
 
 impl<'a> TransitionBuilder<'a> {
+    /// The fold's read-only inputs as one view ([`PalwFoldReadV1`]): the rules an outside caller
+    /// must evaluate exactly as this fold does live there, and the methods here delegate.
+    fn read(&self) -> PalwFoldReadV1<'_> {
+        PalwFoldReadV1 { state: &self.state, params: self.params, extras: self.extras }
+    }
+
     fn new(
         parent: &PalwChainStateV2,
         params: &'a PalwStateParamsV2,
@@ -9439,96 +9774,18 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::PanelLiability { key, old, new });
     }
 
-    /// **What one Valid signature on this claim must lock** (ADR-0144 §9, ADR-0151 D1/D4).
-    ///
-    /// Three colluding seats must out-value the most the lie can earn
-    /// (`palw_colluding_quorum_covers_v1`), and past `Params::palw_economic_safety` that gain
-    /// includes the execution rights the Final mints — which
-    /// `palw_claim_extra_economic_rights_v1` valued at zero, on a claim whose Final mints 270,029
-    /// permit candidates. The margin also stops being one sompi.
+    /// [`PalwFoldReadV1::panel_valid_lock_required`], on this fold's inputs.
     fn panel_valid_lock_required(&self, claim: &PalwClaimStateV2) -> u128 {
-        let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
-        // **2026-09-23 audit C-3: the weight term in the unit the reservation was written in.**
-        // Below the fence the raw derived pwu met the collateral-unit price — 2,810x the unit — and
-        // the 2M row's seat lock came to 119.19x the collateral any genesis bond posts, so no panel
-        // could ever bind that class. Above it the term is what `reserved` already is.
-        let mut facts = if self.extras.audit_2026_09_23_active {
-            crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash)
-        } else {
-            crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim_pre_2026_09_23(claim, slash)
-        };
-        let Some(safety) = self.extras.economic_safety else {
-            // Dormant: byte-identical to the rule every existing lock was written under.
-            return crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
-        };
-        facts.extra_economic_rights_sompi = self.claim_realizable_rights_v1(claim, &safety);
-        crate::palw_economic_safety_v1::palw_seat_lock_required_v2(
-            crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts),
-            crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1,
-        )
-    }
-
-    /// **The execution rights this claim's Final could realize before a conviction could take them.**
-    ///
-    /// The quanta it mints are `credit / execution_quantum`, and the credit is the UNCLAMPED
-    /// CanonicalWork scalar — the same value `record_round_final` credits, read here the same way so
-    /// the lock and the mint cannot disagree about how many rights are at stake. Zero where the lane
-    /// mints no quanta at all, which is every network that leaves `palw_execution_quanta` dormant.
-    fn claim_realizable_rights_v1(
-        &self,
-        claim: &PalwClaimStateV2,
-        safety: &PalwEconomicSafetyFoldV1,
-    ) -> u128 {
-        let Some(lane) = self.extras.round_lane.filter(|lane| lane.execution_quantum > 0) else { return 0 };
-        let Some(class) = self.state.classes.get(&claim.class_id) else { return 0 };
-        // The same accessor `record_round_final` uses, so the lock and the mint cannot disagree.
-        let canonical = self.canonical_per_draw(&claim.class_id, claim.accepted_daa);
-        // 2026-09-23 audit C-2: the same unit `record_round_final` credits in, past the same fence.
-        let exposure = if self.extras.audit_2026_09_23_active {
-            palw_exposure_pwu_v3(class, claim.pwu, canonical, self.exposure_basis(claim.accepted_daa))
-        } else {
-            palw_exposure_pwu_v2(class, claim.pwu, canonical)
-        };
-        let counted = crate::palw_execution_quanta_v1::palw_execution_quantum_count_v1(
-            u128::from(exposure),
-            u128::from(lane.execution_quantum),
-            // The count is what the mint will produce; its fractional tie-break is seeded by a span
-            // the lock cannot see, so the ceiling (`whole + 1`) is the honest bound to price.
-            crate::Hash64::default(),
-            crate::Hash64::default(),
-        );
-        // And the same ceiling the mint stops at, so the lock never prices tickets no span issues.
-        let counted = if self.extras.audit_2026_09_23_active {
-            counted.min(crate::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 as u32)
-        } else {
-            counted
-        };
-        let quanta = counted.saturating_add(1);
-        crate::palw_economic_safety_v1::palw_realizable_before_maturity_v1(
-            quanta,
-            self.params.window_challenge(),
-            self.params.window_court,
-            safety.target_time_per_block_ms,
-            crate::palw_economic_safety_v1::palw_permit_value_sompi_v1(safety.permit_value_sompi),
-        )
+        self.read().panel_valid_lock_required(claim)
     }
 
     /// The second clock's depth, where the fence carries it; `None` is the DAA-only rule.
     fn settled_anchor_depth(&self) -> Option<u64> {
-        if self.extras.audit_2026_09_23_active { self.extras.settled_anchor_depth } else { None }
+        self.read().settled_anchor_depth()
     }
 
     fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
-        let posted = self.state.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
-        let (settled_now, depth) = (self.state.settled_attempt_finals, self.settled_anchor_depth());
-        let locked = self
-            .state
-            .slashable_locks
-            .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, depth))
-            .map(|(_, lock)| lock.amount)
-            .fold(0u128, u128::saturating_add);
-        crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
+        self.state.palw_slashable_available_v1(bond, now_daa, self.settled_anchor_depth())
     }
 
     fn slashable_live_locked(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
@@ -10008,15 +10265,7 @@ impl<'a> TransitionBuilder<'a> {
     /// ADR-0149 §5: through [`PalwChainStateV2::palw_attempt_per_draw_v1`], so the floor's first
     /// row-less attempt is reserved on the draw its admission was priced on.
     fn canonical_per_draw(&self, class_id: &Hash64, accepted_daa: u64) -> Option<u64> {
-        self.state
-            .palw_attempt_per_draw_v1(
-                &self.params.base_class_id,
-                class_id,
-                accepted_daa,
-                self.extras.canonical_work_daa,
-                self.base_known_draw(),
-            )
-            .map(|work| work.min(u64::MAX as u128) as u64)
+        self.read().canonical_per_draw(class_id, accepted_daa)
     }
 
     /// **ADR-0149 §5: the floor's draw as the registry will write it**, for the blocks before it has
@@ -10026,20 +10275,13 @@ impl<'a> TransitionBuilder<'a> {
     /// number. `None` below the registry, where nothing past the canonical-work fence can be
     /// (`validate_palw_v2` keeps the registry at or below it).
     fn base_known_draw(&self) -> Option<u128> {
-        self.model_registry_fold()
-            .and_then(|fold| fold.genesis_works.get(&self.params.base_class_id))
-            .map(|work| work.economic_ccu_per_claim)
+        self.read().base_known_draw()
     }
 
     /// The floor class's leaves-to-derived-work ratio at this block, for the one place a pwu is
     /// multiplied by an absolute price rather than divided by a unit ([`PalwExposureBasisV1`]).
     fn exposure_basis(&self, accepted_daa: u64) -> Option<PalwExposureBasisV1> {
-        self.state.palw_exposure_basis_v2(
-            &self.params.base_class_id,
-            accepted_daa,
-            self.extras.canonical_work_daa,
-            self.base_known_draw(),
-        )
+        self.read().exposure_basis(accepted_daa)
     }
 
     /// **The pwu a class's DIFFICULTY is seeded from** — ADR-0145 I1 and the audit's invariant
@@ -10385,13 +10627,7 @@ impl<'a> TransitionBuilder<'a> {
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> u32 {
-        let ready = self
-            .state
-            .bonds
-            .iter()
-            .filter(|(bond_key, bond)| self.model_registry_seat_is_ready(bond_key, bond, class_id, now_daa, fold))
-            .count();
-        ready.min(u32::MAX as usize) as u32
+        self.read().model_registry_ready_seats(class_id, now_daa, fold)
     }
 
     /// **Is this bond READY for the class now** — the registry's five-clause predicate, spelled
@@ -10406,29 +10642,7 @@ impl<'a> TransitionBuilder<'a> {
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> bool {
-        // ADR-0133 §11.2: past readiness V2 a row stands for eight spans, not thirty, and a V1 row
-        // does not stand at all — the challenge rotates every span and the rotation has to bite.
-        let max_age_spans = if self.extras.readiness_v2_active {
-            crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1
-        } else {
-            fold.globals.readiness_probe_max_age_spans
-        };
-        let max_age_daa = (max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
-        let floor = self.params.min_collateral_sompi();
-        let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
-        if !matches!(bond.status, PalwBondStatusV2::Active) || !palw_bond_may_take_work_v2(bond, floor) {
-            return false;
-        }
-        let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { return false };
-        if self.extras.readiness_v2_active && row.proof_version < 2 {
-            return false; // a one-leaf proof is not possession past the fence
-        }
-        if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
-            return false;
-        }
-        let held = self.state.reserved_exposure(bond_key).saturating_add(self.state.registration_exposure(bond_key));
-        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
-        free >= needed
+        self.read().model_registry_seat_is_ready(bond_key, bond, class_id, now_daa, fold)
     }
 
     /// **ADR-0147: did this `Candidate` class's admission jury sit at this boundary, and does a
@@ -10507,14 +10721,7 @@ impl<'a> TransitionBuilder<'a> {
 
     /// Attempt claims of a class still in flight (accepted and not terminal).
     fn model_registry_inflight(&self, class_id: &Hash64) -> u32 {
-        self.state
-            .claims
-            .values()
-            .filter(|claim| {
-                claim.class_id == *class_id && matches!(claim.source, PalwClaimSourceV2::Attempt) && !claim.phase.is_terminal()
-            })
-            .count()
-            .min(u32::MAX as usize) as u32
+        self.read().model_registry_inflight(class_id)
     }
 
     /// **The class-local gate at acceptance** (ADR-0135 Decision 6 and ADR-0132 F1): the base class
@@ -10523,6 +10730,26 @@ impl<'a> TransitionBuilder<'a> {
     /// and be under its inflight cap.
     /// ADR-0137: `W₀` for this block where the work target is in force — the block's escrow at the
     /// payout's rate (the shadow's rate where, in a test, no payout folds).
+    /// **What this block prices a free-prompt claim's receipt rights from** (the audit's #5): its worker
+    /// carve and `W₀` itself — never the stepped `W` above it, because the pooled target may ease back
+    /// toward `W₀` after acceptance and a bound priced at a higher `W` would under-reserve then. `None`
+    /// below the audit fence or where the work target is not in force.
+    fn fp_receipt_rights_inputs_v1(&self, ctx: &PalwBlockContextV2) -> Option<PalwFpRightsInputsV1> {
+        if !self.extras.audit_2026_09_23_active || !self.extras.work_target_active {
+            return None;
+        }
+        let rate = self
+            .extras
+            .economic_payout
+            .map(|fold| fold.rate_sompi_per_giga)
+            .or_else(|| self.extras.work_target.as_ref().map(|fold| fold.rate_sompi_per_giga))
+            .unwrap_or(crate::palw_work_target_v1::PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1);
+        Some(PalwFpRightsInputsV1 {
+            worker_carve: worker_carve_v2(self.params, ctx.subsidy, self.extras.escrow_carve),
+            work_floor: palw_work_floor_for_block_v1(self.params, ctx.subsidy, self.extras.escrow_carve, rate),
+        })
+    }
+
     fn work_target_floor(&self, ctx: &PalwBlockContextV2) -> Option<u128> {
         if !self.extras.work_target_active {
             return None;
@@ -10553,71 +10780,11 @@ impl<'a> TransitionBuilder<'a> {
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
         now_daa: u64,
     ) -> (u64, u128, u128, u64) {
-        let base = self.params.base_class_id();
-        let g = &fold.globals;
-        let seat_count = g.seat_count as u128;
-        let horizon = self
-            .state
-            .model_lifecycles
-            .iter()
-            .filter(|(id, r)| **id != base && r.state.admission_permille() > 0)
-            .map(|(_, r)| r.profile.verification_window_spans as u64)
-            .min()
-            .unwrap_or(1)
-            .max(1);
-        let inflight_replay: u128 = self
-            .state
-            .model_lifecycles
-            .iter()
-            .filter(|(id, _)| **id != base)
-            .map(|(id, r)| {
-                (self.model_registry_inflight(id) as u128).saturating_mul(r.work.economic_ccu_per_claim).saturating_mul(seat_count)
-            })
-            .fold(0u128, u128::saturating_add);
-        let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
-        let per_span =
-            ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
-        let budget = per_span.saturating_mul(horizon as u128);
-        let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
-        (crate::palw_work_target_v1::palw_panel_room_v1(per_span, horizon, inflight_replay, cost), inflight_replay, budget, horizon)
+        self.read().panel_room_v1(class_id, row, fold, now_daa)
     }
 
     fn check_class_admits_claim(&self, class_id: &Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
-        let Some(fold) = self.model_registry_fold() else { return Ok(()) };
-        if *class_id == self.params.base_class_id() {
-            return Ok(());
-        }
-        let Some(row) = self.state.model_lifecycles.get(class_id) else {
-            // ADR-0137: past the work target every model class is priced by its row; a class
-            // without one (registered before the fence without a carriage) is refused, not free.
-            if self.extras.work_target_active {
-                return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: "no row".to_string() });
-            }
-            return Ok(());
-        };
-        if !row.state.admits_claims() {
-            return Err(PalwStateV2Error::ClassNotAdmitting { class: *class_id, state: format!("{:?}", row.state) });
-        }
-        // **H-2 of the 2026-09-18 audit: the room check waits for the grace the registry already
-        // computes.** The work target and the registry arm at the same height, and a readiness proof
-        // is refused below that height — so on the flag day itself every class has zero ready seats,
-        // the room is zero, and every non-base class would refuse claims until seven seats prove
-        // possession, while their producers mined blocks their own chain rejected.
-        // `grace_until_daa` (activation + `readiness_probe_max_age_spans` spans) exists for exactly
-        // this window; inside it the class is bounded by the inflight cap below, as before the fence.
-        if self.extras.work_target_active && fold.governs_at(now_daa) {
-            // ADR-0137 D5: one network-wide replay budget in place of the per-class cap.
-            let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
-            if room == 0 {
-                return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
-            }
-            return Ok(());
-        }
-        let inflight = self.model_registry_inflight(class_id);
-        if inflight >= row.profile.max_inflight_claims {
-            return Err(PalwStateV2Error::ClassInflightCapped { class: *class_id, inflight, cap: row.profile.max_inflight_claims });
-        }
-        Ok(())
+        self.read().check_class_admits_claim(class_id, now_daa)
     }
 
     /// Why a bind window closed: under the registry, a rowed class whose ready seats cannot fill a
@@ -10987,14 +11154,21 @@ impl<'a> TransitionBuilder<'a> {
     /// 3. **Reset** the seed anchor. `B`'s own attempt, if it carries one, records the next anchor
     ///    after this ([`Self::record_round_seed_anchor`]).
     ///
-    /// So credits earned in span `f` are spendable in span `f + 2`, and a span's producers are known
-    /// only once the block that opens it exists. Then, at every block, every schedule and permit row
+    /// So credits earned in span `f` are spendable in span `f + 2` and a span's producers are known
+    /// only once the block that opens it exists.
+    ///
+    /// **Where ADR-0151's economic safety is armed** (testnet-12; the 2026-09-23 route-matrix audit's
+    /// #2): the maturity delays the snapshot — its target is `n + 1 + maturity spans` — and the
+    /// finals of any earlier span are taken, not only the span just before; a due snapshot is
+    /// seeded at the first span whose predecessor recorded an anchor (oldest first, one per span,
+    /// dropped only `PALW_EXEC_PENDING_GRACE_SPANS_V1` spans past its target); and its tickets are
+    /// minted onto that span's own rounds. Then, at every block, every schedule and permit row
     /// older than the span before this block's is dropped: a round block anchored two spans back can
     /// no longer be accepted, so nothing it could collide with needs keeping.
     fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) {
         use crate::palw_execution_lane_v1::{
-            PalwExecFinalV1, palw_execution_schedule_assign_quanta_bounded_v1, palw_execution_schedule_seeded_v1,
-            palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
+            PalwExecFinalV1, palw_execution_schedule_assign_quanta_bounded_v1, palw_execution_schedule_assign_quanta_windowed_v1,
+            palw_execution_schedule_seeded_v1, palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
         };
         // **ADR-0151: what a conviction has taken back, and how long a fresh right waits.**
         //
@@ -11006,28 +11180,77 @@ impl<'a> TransitionBuilder<'a> {
         // Both are inert where `Params::palw_economic_safety` is dormant, which is every preset but
         // testnet-12: an empty set and a zero maturity make the mint below the one every other network
         // runs, ticket for ticket.
-        let (maturity_rounds, forfeited) = match self.extras.economic_safety {
-            Some(safety) => (
+        //
+        // **The maturity delays the SNAPSHOT, not the tickets** (the 2026-09-23 route-matrix audit's
+        // #2). It used to be added to every ticket's round — `span_open_round + maturity_rounds`, 1,200
+        // DAA × 120 = 144,000 rounds past the span that minted it — while that span's schedule is kept
+        // only until the span after next, and a round block is judged against its OWN anchor span's
+        // schedule. So every ticket's round fell ~40 hours after the only schedule that listed it had
+        // been deleted, and no permit, no algo-10 block and no fee attribution could ever follow a
+        // Final, for any class. Now a span's Finals are snapshotted for the span `maturity_spans` later
+        // than before, and that span's schedule places its tickets in its own rounds
+        // (`palw_execution_mint_quanta_windowed_v1`: consecutively from the span's opening round, at
+        // most as many as the span has rounds — the 2^16-round horizon of the older mint put nearly
+        // every ticket past its span even with no maturity at all). The right still waits out the
+        // whole window, the mint still drops any execution convicted meanwhile, and the ticket lives
+        // in the schedule its round is judged by.
+        let (maturity_daa, forfeited) = match self.extras.economic_safety {
+            Some(_) => (
                 crate::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1(
                     self.params.window_challenge(),
                     self.params.window_court,
-                )
-                .saturating_mul(crate::palw_economic_safety_v1::palw_rounds_per_daa_v1(safety.target_time_per_block_ms)),
+                ),
                 self.state.palw_forfeited_execution_roots_v1(),
             ),
             None => (0, std::collections::BTreeSet::new()),
         };
+        let maturity_spans = maturity_daa.div_ceil(span_daa.max(1));
         let span_now = palw_execution_span_v1(ctx.daa_score, span_daa);
         let opens_span = self.state.last_point.is_none_or(|last| palw_execution_span_v1(last.daa_score, span_daa) < span_now);
         if opens_span {
             // ADR-0135: the registry steps every class at the boundary, before the lane's own rotation.
             self.step_model_registry(ctx, span_now);
+            // **Past ADR-0151's bundle a matured snapshot waits for a span that can seed it** (the
+            // route-matrix audit's #2). Below it a due snapshot is dropped when the span before had no
+            // attempt-carrying chain block to anchor its seed, or when a merge of two blue blocks
+            // skipped its span's DAA — and on testnet-12, whose span is one DAA, either happens to
+            // ordinary spans, so a Final's rights were lost to the shape of the chain after they had
+            // waited out the whole maturity. Here the oldest due snapshot is seeded at the first span
+            // whose predecessor recorded an anchor, as that span's schedule (the seed reads the span it
+            // is seeded for, and that anchor did not exist when the snapshot was taken), one per span;
+            // the rest keep waiting, and a snapshot leaves unseeded only once
+            // `PALW_EXEC_PENDING_GRACE_SPANS_V1` spans have opened past its target.
+            let mut seeded_this_span = false;
             for target in self.state.round_pending.keys().copied().collect::<Vec<_>>() {
                 if target > span_now {
-                    // Unreachable: a snapshot targets the span after the one whose first block took it.
+                    // Not yet due: a snapshot targets the span after the one whose first block took
+                    // it — or, where ADR-0151's maturity is armed, the span that many spans later — and
+                    // waits in `round_pending` until that span opens.
                     continue;
                 }
                 let snapshot = self.state.round_pending.get(&target).cloned().expect("the key was just listed");
+                if let Some(safety) = self.extras.economic_safety {
+                    let anchor = self.state.round_seed_anchor.filter(|anchor| anchor.span + 1 == span_now);
+                    if let (false, Some(anchor), Some(lane)) = (seeded_this_span, anchor, self.extras.round_lane) {
+                        self.write_round_pending(target, None);
+                        let mut due = snapshot;
+                        due.target_span = span_now;
+                        let (frontier_blue_score, frontier) = self.state.safe_frontier();
+                        let mut schedule = palw_execution_schedule_seeded_v1(&due, &anchor, frontier_blue_score, frontier);
+                        palw_execution_schedule_assign_quanta_windowed_v1(
+                            &mut schedule,
+                            lane.execution_quantum,
+                            lane.span_open_round,
+                            crate::palw_execution_quanta_v1::palw_execution_span_rounds_v1(span_daa, safety.target_time_per_block_ms),
+                            &forfeited,
+                        );
+                        self.write_round_schedule(span_now, Some(schedule));
+                        seeded_this_span = true;
+                    } else if target.saturating_add(crate::palw_execution_lane_v1::PALW_EXEC_PENDING_GRACE_SPANS_V1) < span_now {
+                        self.write_round_pending(target, None);
+                    }
+                    continue;
+                }
                 self.write_round_pending(target, None);
                 if target == span_now
                     && let Some(anchor) = self.state.round_seed_anchor
@@ -11048,7 +11271,8 @@ impl<'a> TransitionBuilder<'a> {
                             &mut schedule,
                             lane.execution_quantum,
                             lane.span_open_round,
-                            maturity_rounds,
+                            // The maturity was served before this span's snapshot was taken (above).
+                            0,
                             &forfeited,
                             max_quanta,
                         );
@@ -11057,7 +11281,14 @@ impl<'a> TransitionBuilder<'a> {
                 }
             }
             if !self.state.round_finals.is_empty() {
-                if self.state.round_span + 1 == span_now {
+                // Past ADR-0151's bundle the finals of ANY earlier span are snapshotted — a span the
+                // DAA skipped does not take its predecessor's rights with it (#2, as above).
+                let takes_snapshot = if self.extras.economic_safety.is_some() {
+                    self.state.round_span < span_now
+                } else {
+                    self.state.round_span + 1 == span_now
+                };
+                if takes_snapshot {
                     // ADR-0151: a convicted execution does not enter the next span's snapshot either —
                     // the earliest of the three stages a forfeited right can be dropped at.
                     let finals: Vec<PalwExecFinalV1> = self
@@ -11067,9 +11298,10 @@ impl<'a> TransitionBuilder<'a> {
                         .copied()
                         .filter(|f| !crate::palw_economic_safety_v1::palw_exec_rights_are_forfeit_v1(&forfeited, &f.execution_root))
                         .collect();
-                    let snapshot = palw_execution_schedule_snapshot_v1(span_now + 1, &finals);
+                    let target = span_now.saturating_add(1).saturating_add(maturity_spans);
+                    let snapshot = palw_execution_schedule_snapshot_v1(target, &finals);
                     if !snapshot.domains.is_empty() {
-                        self.write_round_pending(span_now + 1, Some(snapshot));
+                        self.write_round_pending(target, Some(snapshot));
                     }
                 }
                 for key in self.state.round_finals.keys().copied().collect::<Vec<_>>() {
@@ -11725,11 +11957,10 @@ impl<'a> TransitionBuilder<'a> {
             }
         }
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
-        // Option A: the claim's escrow joins its weight on the bond past the fence (0 before it).
-        let escrow = self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
-        let next = current
-            .checked_add(claim.reserved)
-            .and_then(|held| held.checked_add(escrow))
+        // Option A: the claim's escrow joins its weight on the bond past the fence (0 before it), and a
+        // free-prompt claim's receipt rights join them past the audit fence (#5).
+        let next = palw_claim_bond_reservation_v1(self.params, claim)
+            .and_then(|held| current.checked_add(held))
             .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         self.write_exposure(claim.bond, Some(next));
         self.state.bounded_immature = self
@@ -11744,11 +11975,8 @@ impl<'a> TransitionBuilder<'a> {
     /// the immature contribution both belong only to non-terminal claims).
     fn release_for_claim(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
-        // What `reserve_for_claim` added, both halves — decided at the claim's own acceptance height.
-        let held = claim
-            .reserved
-            .checked_add(self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
-            .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        // What `reserve_for_claim` added, the whole of it — decided at the claim's own acceptance.
+        let held = palw_claim_bond_reservation_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         self.state.bounded_immature = self
@@ -11875,8 +12103,13 @@ impl<'a> TransitionBuilder<'a> {
             PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
             PalwVoidReasonV2::BindTimeout | PalwVoidReasonV2::NoCapablePanel => false,
         };
-        let escrow =
-            if escrow_forfeit { self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward) } else { 0 };
+        // A free-prompt claim's receipt rights (#5) are its fraud gain as the escrow is an attempt's,
+        // so they go on the same reasons.
+        let escrow = if escrow_forfeit {
+            self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward).saturating_add(claim.rights_reserved)
+        } else {
+            0
+        };
         self.slash_bond(claim.bond, claim.reserved.saturating_add(escrow))
     }
 
@@ -12361,12 +12594,9 @@ impl<'a> TransitionBuilder<'a> {
     /// released at the void.
     fn release_abandon_hold(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
-        // Both halves, as `release_for_claim` — the escrow term is zero for a free-prompt claim (the
-        // only kind that is held), and spelling it anyway keeps the three sites one expression.
-        let held = claim
-            .reserved
-            .checked_add(self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
-            .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        // The whole reservation, as `release_for_claim` — a held free-prompt claim's receipt rights
+        // come back with its weight (its escrow term is zero), and one expression keeps the sites one.
+        let held = palw_claim_bond_reservation_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         Ok(())
@@ -17391,6 +17621,7 @@ fn apply_object(
                     fp_derived_work_daa: builder.extras.fp_derived_work_daa,
                     canonical_work_daa: builder.extras.canonical_work_daa,
                     daa_score: ctx.daa_score,
+                    receipt_rights: builder.fp_receipt_rights_inputs_v1(ctx),
                 },
                 claim_id,
                 class_id,
@@ -17435,9 +17666,15 @@ fn apply_object(
                 .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
                 .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
                 / 1000;
-            let would_reserve = backed.checked_add(reserved).ok_or(PalwStateV2Error::Overflow("reserved exposure"))?;
+            // **The audit's #5 (escrow half): the receipt rights this claim's Final could realize**,
+            // priced now and held with the weight — see `PalwClaimStateV2::rights_reserved`. Only a
+            // compute-priced claim past the audit fence; zero otherwise, which keeps every other
+            // network's reservation and state byte-identical.
+            let rights_reserved = price.rights_reserved;
+            let claim_holds = reserved.checked_add(rights_reserved).ok_or(PalwStateV2Error::Overflow("claim reservation"))?;
+            let would_reserve = backed.checked_add(claim_holds).ok_or(PalwStateV2Error::Overflow("reserved exposure"))?;
             if would_reserve > ceiling {
-                return Err(PalwStateV2Error::FreePromptExposureCeiling { bond: *bond, backed, claim: reserved, ceiling });
+                return Err(PalwStateV2Error::FreePromptExposureCeiling { bond: *bond, backed, claim: claim_holds, ceiling });
             }
             let claim = PalwClaimStateV2 {
                 source: PalwClaimSourceV2::FreePrompt { quanta, spent: BTreeSet::new() },
@@ -17496,6 +17733,7 @@ fn apply_object(
                 work_leaves: *work_leaves,
                 work_id: Some(work_id),
                 phase: PalwClaimPhaseV2::Provisional,
+                rights_reserved,
             };
             builder.reserve_for_claim(&claim)?;
             let fp_pwu = claim.pwu;
@@ -17550,6 +17788,31 @@ pub struct PalwFpPriceInputsV1 {
     pub canonical_work_daa: Option<u64>,
     /// The DAA the commitment is accepted (or would be accepted) at.
     pub daa_score: u64,
+    /// **The audit's #5**: what a compute-priced claim's receipt rights are priced from, or `None`,
+    /// which prices none (below `palw_audit_2026_09_23`, or where the work target is not in force).
+    /// The fold and a node's price answer fill it from the same fences, so a gateway checks the
+    /// reservation the ledger will write.
+    pub receipt_rights: Option<PalwFpRightsInputsV1>,
+}
+
+/// **The two numbers a free-prompt claim's receipt rights are priced from** (the audit's #5): the
+/// block's worker carve — what one winning spend pays — and `W₀`, the least work one winning spend
+/// can stand for. See [`PalwClaimStateV2::rights_reserved`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwFpRightsInputsV1 {
+    pub worker_carve: u64,
+    pub work_floor: u128,
+}
+
+/// **The most a free-prompt claim's receipt rights can be worth**: `compute × worker_carve / W₀`,
+/// rounded up — at most `compute / W₀` winning spends, each paying the carve. Zero where either
+/// number prices nothing (no carve, or a floor that is zero or unbounded).
+pub fn palw_fp_receipt_rights_bound_v1(compute: u64, inputs: &PalwFpRightsInputsV1) -> u128 {
+    if inputs.worker_carve == 0 || inputs.work_floor == 0 || inputs.work_floor == u128::MAX {
+        return 0;
+    }
+    crate::palw_work_target_v1::mul_div_u128(u128::from(compute), u128::from(inputs.worker_carve), inputs.work_floor)
+        .saturating_add(1)
 }
 
 /// **What pricing one free-prompt commitment yields** — the fold's three numbers, which era priced
@@ -17559,6 +17822,10 @@ pub struct PalwFpPriceInputsV1 {
 pub struct PalwFpCommitmentPriceV1 {
     pub quanta: u32,
     pub pwu: u64,
+    /// The receipt rights the claim reserves beside `reserved` (the audit's #5) — zero outside the
+    /// compute era or below the audit fence. A gateway checks `reserved + rights_reserved` against the
+    /// bond's room, because that is what the ledger will hold.
+    pub rights_reserved: u128,
     /// What the claim reserves against its bond — the number the exposure ceiling is checked with.
     pub reserved: u128,
     /// ADR-0148: priced in compute (past the canonical-work fence) rather than in leaves.
@@ -17798,7 +18065,11 @@ pub fn palw_fp_commitment_price_from_state_v1(
         let reserved = (pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
         (quanta, pwu, reserved)
     };
-    Ok(PalwFpCommitmentPriceV1 { quanta, pwu, reserved, priced_in_compute: in_compute, derived_work: derived })
+    let rights_reserved = match (&inputs.receipt_rights, in_compute) {
+        (Some(rights), true) => palw_fp_receipt_rights_bound_v1(pwu, rights),
+        _ => 0,
+    };
+    Ok(PalwFpCommitmentPriceV1 { quanta, pwu, rights_reserved, reserved, priced_in_compute: in_compute, derived_work: derived })
 }
 
 /// **ADR-0148's reservation for a compute-priced claim** — its claimed compute in the floor's
@@ -19262,6 +19533,8 @@ fn apply_attempt(
             None
         },
         phase: PalwClaimPhaseV2::Provisional,
+        // An attempt's cash gain is its escrow; it mints no receipt quanta.
+        rights_reserved: 0,
     };
     // **2026-09-23 audit, finding 17: the ceiling holds on the state the claim actually joins.**
     //
@@ -19284,10 +19557,8 @@ fn apply_attempt(
             .reserved_exposure(&claim.bond)
             .checked_add(builder.state.registration_exposure(&claim.bond))
             .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
-        let adding = claim
-            .reserved
-            .checked_add(builder.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
-            .ok_or(PalwStateV2Error::Overflow("claim reservation"))?;
+        let adding =
+            palw_claim_bond_reservation_v1(builder.params, &claim).ok_or(PalwStateV2Error::Overflow("claim reservation"))?;
         let ceiling = (bond_record.collateral as u128)
             .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
             .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
@@ -22740,6 +23011,12 @@ pub(crate) mod tests {
             // A Kimi attempt is refused; a base-class attempt in the same span is accepted.
             let refused = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&kimi_attempt(2, root)), Some(f.clone()));
             assert!(matches!(refused, Err(PalwStateV2Error::ClassNotAdmitting { class, .. }) if class == kimi_id()), "{refused:?}");
+            // **Route-matrix #7: the producer's facts ask the same gate before the inference** —
+            // `palw_class_admits_claim_v1` on the parent state under the block's extras answers what
+            // the fold just did, for the held class and for the floor.
+            let asked = palw_class_admits_claim_v1(&s6, &p, &extras(Some(f.clone())), &kimi_id(), 131);
+            assert_eq!(asked.map_err(|e| e.to_string()), refused.map(|_| ()).map_err(|e| e.to_string()), "one gate, one answer");
+            assert!(palw_class_admits_claim_v1(&s6, &p, &extras(Some(f.clone())), &h64(1), 131).is_ok(), "the floor is never gated");
             let base_env = attempt(40, 3);
             let (s7, _) = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&base_env), Some(f.clone())).unwrap();
             assert!(matches!(s7.claim(&attempt_id_v2(&base_env.attempt)).unwrap().phase, PalwClaimPhaseV2::Provisional));
@@ -27402,6 +27679,87 @@ pub(crate) mod tests {
         assert!(s11.round_schedule(3).is_none(), "span 3's schedule is older than the span before this block's");
         assert!(!s11.round_permit_used(3, 10, 0), "and so is its ledger row");
         assert!(!s11.round_lane_is_written(), "with nothing left, the lane's block leaves the root again");
+    }
+
+    /// **The 2026-09-23 route-matrix audit's #2: past ADR-0151's bundle a Final's tickets are
+    /// spendable — each on a round its schedule is judged at — after the maturity, and a span that
+    /// cannot seed the schedule does not take them away.**
+    ///
+    /// Before: the maturity was added to every ticket's round (144,000 rounds on testnet-12) while a
+    /// schedule is kept for two spans and a round block is judged by its anchor's span's schedule,
+    /// and even with no maturity the mint spread tickets over 2^16 rounds against a span of ~120 — so
+    /// no permit, no algo-10 block and no fee attribution could follow any Final. Here, with a span
+    /// of 100 DAA at one second a DAA (100 rounds a span) and a challenge window of 20 DAA (one span
+    /// of maturity): span 1's Final is snapshotted at span 2 for span 4; span 3 records no anchor, so
+    /// at span 4 the snapshot WAITS instead of being dropped; span 4 records one, so span 5 seeds it
+    /// as span 5's schedule, with all four tickets on consecutive rounds right after span 5's
+    /// opening round; the first of them is granted and accepted. Below the bundle the same chain
+    /// drops the snapshot at span 3, as it always did.
+    #[test]
+    fn past_the_economic_safety_bundle_a_finals_tickets_land_where_their_schedule_is_judged() {
+        use crate::palw_execution_lane_v1::{PALW_EXEC_PENDING_GRACE_SPANS_V1, PalwExecPermitUseV1, palw_execution_permit_of_v1};
+        use crate::palw_execution_quanta_v1::PALW_EXEC_TICKET_LEAD_ROUNDS_V1;
+        let p = params().with_worker_carve_permille(620).unwrap();
+        assert_eq!(p.window_challenge(), 20, "one span of maturity at a 100-DAA span");
+        let safety = |open_round: u64, uses: Vec<PalwExecPermitUseV1>| PalwTransitionExtrasV1 {
+            economic_safety: Some(PalwEconomicSafetyFoldV1 { target_time_per_block_ms: 1_000, permit_value_sompi: 1 }),
+            ..round_extras_quanta(100, 10, open_round, uses)
+        };
+        let (s5, claim_id) = round_final_in_span_1(&p);
+
+        // Span 2 opens: span 1's Final is fixed as the participants of span 2 + 1 + 1 (maturity).
+        let s6 = apply_round(&s5, &p, &ctx(6, 200, 6), &[], &safety(20_000, Vec::new())).expect("span 2 opens");
+        let pending = s6.round_pending_snapshot().expect("the Final is a snapshot").clone();
+        assert_eq!(pending.target_span, 4, "the maturity delays the snapshot by one span");
+        assert!(s6.round_schedules().is_empty());
+
+        // Span 3 carries no attempt, so span 4 has no anchor to seed from: the snapshot waits.
+        let s7 = apply_round(&s6, &p, &ctx(7, 300, 7), &[], &safety(30_000, Vec::new())).expect("span 3 opens");
+        let s8 = apply_round(&s7, &p, &ctx(8, 400, 8), &[], &safety(40_000, Vec::new())).expect("span 4 opens");
+        assert!(s8.round_schedule(4).is_none(), "no anchor in span 3, so span 4 has no schedule");
+        assert_eq!(s8.round_pending_snapshot().map(|s| s.target_span), Some(4), "and the due snapshot is kept, not dropped");
+
+        // An attempt carried in span 4 is the anchor; span 5 seeds the waiting snapshot as its own schedule.
+        let (s9, _) = fold_round(&s8, &p, &ctx(9, 401, 9), &[], Some((&attempt(40, 2), h64(0xE9))), &safety(40_100, Vec::new()))
+            .expect("an attempt in span 4");
+        let open_round = 50_000;
+        let s10 = apply_round(&s9, &p, &ctx(10, 500, 10), &[], &safety(open_round, Vec::new())).expect("span 5 opens");
+        assert!(s10.round_pending_snapshot().is_none(), "the snapshot is spent");
+        let schedule = s10.round_schedule(5).expect("span 5 is scheduled").clone();
+        assert_eq!(schedule.span_index, 5, "seeded for the span it serves");
+        let rounds: Vec<u64> = schedule.quanta.iter().map(|q| q.scheduled_round).collect();
+        let first = open_round + PALW_EXEC_TICKET_LEAD_ROUNDS_V1;
+        assert_eq!(rounds, vec![first, first + 1, first + 2, first + 3], "credit 40 / quantum 10: four tickets, consecutive");
+        assert!(schedule.quanta.iter().all(|q| q.final_id == claim_id && q.bond == bond_key(1)));
+
+        // The first ticket's round is granted by the schedule its round block is judged against, and accepted.
+        let permit = palw_execution_permit_of_v1(&schedule, first, 1, 0, &bond_key(1)).expect("the ticket is a permit");
+        assert_eq!(permit.quantum_id, schedule.quanta[0].quantum_id, "traceable to the Final that earned it");
+        let used = PalwExecPermitUseV1 { span: 5, round: first, permit_index: 0 };
+        let s11 = apply_round(&s10, &p, &ctx(11, 501, 11), &[], &safety(50_120, vec![used])).expect("the permit is recorded");
+        assert!(s11.round_permit_used(5, first, 0));
+
+        // Route-matrix #7: the claim's own row says where its Final stands at every stage.
+        let lane = |state: &PalwChainStateV2| crate::palw_producer_v2::palw_claim_exec_lane_v1(state, &claim_id).expect("in the lane");
+        assert_eq!((lane(&s5).stage, lane(&s5).span, lane(&s5).credit), ("credited", 1, 40));
+        assert_eq!((lane(&s8).stage, lane(&s8).span, lane(&s8).tickets), ("maturing", 4, 0), "waiting for its span");
+        let scheduled = lane(&s11);
+        assert_eq!((scheduled.stage, scheduled.span, scheduled.tickets, scheduled.tickets_spent), ("scheduled", 5, 4, 1));
+        assert_eq!((scheduled.first_round, scheduled.last_round), (Some(first), Some(first + 3)));
+
+        // A due snapshot that never finds an anchor leaves once the grace has passed.
+        let late = 4 + PALW_EXEC_PENDING_GRACE_SPANS_V1 + 1;
+        let s_late = apply_round(&s8, &p, &ctx(12, late * 100, 12), &[], &safety(90_000, Vec::new())).expect("a late span opens");
+        assert!(s_late.round_pending_snapshot().is_none(), "past the grace the unseeded snapshot is dropped");
+        let s_grace = apply_round(&s8, &p, &ctx(13, (late - 1) * 100, 13), &[], &safety(90_000, Vec::new())).expect("inside the grace");
+        assert_eq!(s_grace.round_pending_snapshot().map(|s| s.target_span), Some(4), "inside it the snapshot still waits");
+
+        // Below the bundle: the snapshot targets span 3, and span 3 without an anchor drops it.
+        let legacy = round_extras_quanta(100, 10, 20_000, Vec::new());
+        let l6 = apply_round(&s5, &p, &ctx(6, 200, 6), &[], &legacy).expect("span 2 opens");
+        assert_eq!(l6.round_pending_snapshot().map(|s| s.target_span), Some(3));
+        let l7 = apply_round(&l6, &p, &ctx(7, 300, 7), &[], &legacy).expect("span 3 opens");
+        assert!(l7.round_pending_snapshot().is_none() && l7.round_schedule(3).is_none(), "below the bundle it is dropped");
     }
 
     /// **ADR-0125: a `Final` credits its domain the compute it certified, capped at ADR-0124's unit.**
@@ -32443,6 +32801,7 @@ pub(crate) mod tests {
                         fp_derived_work_daa: extras.fp_derived_work_daa,
                         canonical_work_daa: extras.canonical_work_daa,
                         daa_score: 103,
+                        receipt_rights: None,
                     };
                     let quoted = palw_fp_commitment_price_v1(
                         &s3,
@@ -32477,6 +32836,7 @@ pub(crate) mod tests {
                         fp_derived_work_daa: extras.fp_derived_work_daa,
                         canonical_work_daa: extras.canonical_work_daa,
                         daa_score: 103,
+                        receipt_rights: None,
                     },
                     &h64(0xEF),
                     &plain,
@@ -32486,6 +32846,98 @@ pub(crate) mod tests {
                     1,
                 );
                 assert!(matches!(quoted, Err(PalwStateV2Error::FreePromptWorkLeavesMismatch { .. })), "{era}: got {quoted:?}");
+            }
+        }
+
+        /// **The audit's #5 (escrow half): past the audit fence a compute-priced claim reserves the
+        /// receipt rights its Final could realize** — `compute × carve / W₀`, rounded up — beside its
+        /// weight; the entrance quotes the same figure, the bond's room moves by weight + rights, and a
+        /// proven fraud forfeits both. Below the fence (the test above) the rights are zero.
+        #[test]
+        fn past_the_audit_fence_a_compute_priced_claim_reserves_its_receipt_rights() {
+            let prompt: Vec<u32> = (1..=6).collect();
+            let decode = 4u32;
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, work_target_active: true, ..compute_era() };
+            let (p, mut s3, plain, _) = two_classes(&extras);
+            let p = p.with_worker_carve_permille(620).expect("a legal carve");
+            // The fixture's bond is sized for a weight-only reservation; the rights are the larger term,
+            // and the ceiling refusing them is the rule working (see below) — so give it room first.
+            let refused = {
+                let object = derived_commit_from(1, 0xE0, &prompt, decode, crate::palw_step::step_leaf_count_of_tokens_capped_v1(&derived_profile(), prompt.len() as u32, decode, 1 << 26).expect("the run counts"));
+                apply_derived(&s3, &p, &PalwBlockContextV2 { block: block(4), daa_score: 103, blue_score: 4, subsidy: 1_000_000 }, &[object], &extras)
+            };
+            assert!(
+                matches!(refused, Err(PalwStateV2Error::FreePromptExposureCeiling { .. })),
+                "the rights count against the ceiling: a bond sized for the weight alone cannot take the claim, got {refused:?}"
+            );
+            s3.bonds.get_mut(&bond_key(1)).expect("the producer's bond").collateral = u64::MAX / 4;
+            let funded = PalwBlockContextV2 { block: block(4), daa_score: 103, blue_score: 4, subsidy: 1_000_000 };
+            let leaves = crate::palw_step::step_leaf_count_of_tokens_capped_v1(&derived_profile(), prompt.len() as u32, decode, 1 << 26)
+                .expect("the run counts");
+            let object = derived_commit_from(1, 0xE0, &prompt, decode, leaves);
+            let rights_inputs = PalwFpRightsInputsV1 {
+                worker_carve: worker_carve_v2(&p, funded.subsidy, None),
+                work_floor: palw_work_floor_for_block_v1(
+                    &p,
+                    funded.subsidy,
+                    None,
+                    crate::palw_work_target_v1::PALW_WORK_TARGET_SHADOW_RATE_SOMPI_PER_GIGA_V1,
+                ),
+            };
+            assert_eq!(rights_inputs.worker_carve, 620_000, "the premise: the block carves an escrow");
+            let quoted = palw_fp_commitment_price_v1(
+                &s3,
+                &p,
+                PalwFpPriceInputsV1 {
+                    fp_derived_work_daa: extras.fp_derived_work_daa,
+                    canonical_work_daa: extras.canonical_work_daa,
+                    daa_score: 103,
+                    receipt_rights: Some(rights_inputs),
+                },
+                &h64(0xE0),
+                &plain,
+                &prompt,
+                prompt.len() as u32,
+                decode,
+                leaves,
+            )
+            .expect("the entrance prices it");
+            assert!(quoted.priced_in_compute, "the premise: a compute-era claim");
+            assert!(quoted.rights_reserved > 0, "a compute-priced claim carries receipt rights past the fence");
+            assert_eq!(quoted.rights_reserved, palw_fp_receipt_rights_bound_v1(quoted.pwu, &rights_inputs), "priced by the bound");
+
+            let room_before = palw_fp_bond_room_v1(&s3, &p, &bond_key(1), false).expect("the bond is held");
+            let (s4, _) = apply_derived(&s3, &p, &funded, &[object], &extras).expect("the commitment folds");
+            let claim = s4.claim(&h64(0xE0)).expect("the claim is created").clone();
+            assert_eq!(
+                (claim.reserved, claim.rights_reserved),
+                (quoted.reserved, quoted.rights_reserved),
+                "the ledger holds exactly what the entrance quoted, both terms"
+            );
+            let room_after = palw_fp_bond_room_v1(&s4, &p, &bond_key(1), false).expect("the bond is held");
+            assert_eq!(room_before - room_after, quoted.reserved + quoted.rights_reserved, "and the room moves by both");
+
+            // A proven fraud forfeits the weight and the rights (a free-prompt claim's escrow term is zero).
+            let before = s4.bond(&bond_key(1)).expect("held").collateral as u128;
+            let mut b = TransitionBuilder::new(&s4, &p, false, false, false, false, &extras);
+            b.void_and_slash(h64(0xE0), &claim, 140, PalwVoidReasonV2::CourtFraud).expect("the claim voids");
+            let after = b.state.bonds.get(&bond_key(1)).expect("the bond survives").collateral as u128;
+            assert_eq!(before - after, claim.reserved + claim.rights_reserved, "fraud takes the rights with the weight");
+        }
+
+        /// The bound's arithmetic: `compute × carve / W₀`, rounded up, and nothing where a number prices
+        /// nothing.
+        #[test]
+        fn the_receipt_rights_bound_is_compute_times_the_carve_over_the_floor() {
+            let inputs = PalwFpRightsInputsV1 { worker_carve: 620_000, work_floor: 1_000 };
+            assert_eq!(palw_fp_receipt_rights_bound_v1(10, &inputs), 6_201, "10 × 620,000 / 1,000, rounded up");
+            assert_eq!(palw_fp_receipt_rights_bound_v1(0, &inputs), 1, "rounded up even for no compute");
+            for dead in [
+                PalwFpRightsInputsV1 { worker_carve: 0, work_floor: 1_000 },
+                PalwFpRightsInputsV1 { worker_carve: 620_000, work_floor: 0 },
+                PalwFpRightsInputsV1 { worker_carve: 620_000, work_floor: u128::MAX },
+            ] {
+                assert_eq!(palw_fp_receipt_rights_bound_v1(10, &dead), 0, "{dead:?} prices nothing");
             }
         }
 
@@ -35701,6 +36153,7 @@ pub(crate) mod tests {
                 work_leaves: 0,
                 work_id: None,
                 phase: PalwClaimPhaseV2::Provisional,
+                rights_reserved: 0,
             },
         );
         state.claims.insert(
@@ -35725,6 +36178,7 @@ pub(crate) mod tests {
                 work_leaves: 31_600,
                 work_id: None,
                 phase: PalwClaimPhaseV2::Final { final_daa: 60 },
+                rights_reserved: 0,
             },
         );
         state.pending_payouts.insert(h64(0xEE), PalwPayoutV2 { payload: h64(0xA1), amount: 9 });
@@ -36028,12 +36482,16 @@ pub(crate) mod tests {
     /// empty root moves for the version and for the counter, which is hashed at zero; a root that
     /// stayed byte-identical at zero was never available, because a v20 carriage cannot decode under
     /// v21 whatever the counter does. The v20 pair was empty `966bae07…`, inhabited `a0b711e1…`.
+    /// Within v21, before it shipped: `PalwClaimStateV2` gained `rights_reserved` (the audit's #5,
+    /// escrow half), so the inhabited root moved for the claim record's new bytes and the empty root
+    /// (no claims) did not — the pair separating the two signals again. The inhabited root was
+    /// `51a8ddd5…`.
     #[test]
     fn the_version_21_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
         let want_empty = "d34ae7ed8a71a6269f19f4ca14d7b1c63cae3508b36f6e74d0ecf43e84a8af79333723fec55c8d3e6eab5a9bbc6e4818faf39dbfe675f8967c715fd3b1d94f9e";
-        let want_full = "51a8ddd5b1fb3d5975a2b35c020e56aa6082c93166350b9c4d2f9dbcdb8f34a3c33d74cd900d38114d370683c648b8091b256fade57944371e8c9186008b11f2";
+        let want_full = "0e0a7f732a1b559bce581789e53bc15825ef839e605079fcb7cb43bfd7985babf9e9ed31f180c237d2212ecd37f9de1532eaa6e627cd9b7a61837ea06826a776";
         assert!(
             empty == want_empty && full == want_full,
             "a version-21 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"

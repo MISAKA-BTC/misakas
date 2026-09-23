@@ -1773,6 +1773,13 @@ message RpcPalwClaimRow {
   uint32 quantaSpent = 18;
   uint64 workLeaves = 19;
   uint32 openCourts = 20;
+  string execStage = 21;
+  uint64 execCredit = 22;
+  optional uint64 execSpan = 23;
+  uint32 execTickets = 24;
+  uint32 execTicketsSpent = 25;
+  optional uint64 execFirstRound = 26;
+  optional uint64 execLastRound = 27;
 }
 
 message GetPalwClaimsResponseMessage {
@@ -1844,6 +1851,14 @@ message GetPalwNodeStatusResponseMessage {
   uint64 memoryAvailableBytes = 22;
   bool memoryBounded = 23;
   string memoryHolders = 24;
+  // The selected chain's last blocks by lane (palw_lane_watch): the window, how many carried PALW
+  // work, how many were heartbeats, the newest work block's DAA, the one-line mix, and the alarm.
+  uint64 laneWindowBlocks = 25;
+  uint64 laneWorkBlocks = 26;
+  uint64 laneHeartbeatBlocks = 27;
+  uint64 laneLastWorkDaa = 28;
+  string laneMix = 29;
+  string laneAlarm = 30;
   RPCError error = 1000;
 }
 

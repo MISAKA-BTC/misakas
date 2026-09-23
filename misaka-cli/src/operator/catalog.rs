@@ -8,7 +8,8 @@
 use crate::exit;
 use crate::operator::finding::Finding;
 use kaspa_consensus_core::palw_producer_v2::{
-    PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2, PALW_NOT_READY_KEY_MISMATCH_V2,
+    PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_CLASS_NOT_ADMITTING_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2,
+    PALW_NOT_READY_KEY_MISMATCH_V2,
 };
 
 const JOIN: &str = "docs/testnet11-join-mining.md";
@@ -180,6 +181,20 @@ pub(crate) fn not_ready(reason: &str, n: &HoldNumbers, bond: Option<&str>) -> Fi
     }
     if reason.starts_with(PALW_NOT_READY_KEY_MISMATCH_V2) {
         return key_mismatch(bond, None, None);
+    }
+    if reason.starts_with(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2) {
+        let mut f = Finding::error("E-MODEL-NOT-ADMITTING", exit::NOT_READY, "Not mining: the chain admits no new claim of this class now")
+            .reason(
+                "a registered model class takes claims only in Probation, ActiveLimited or Active, and then only while its \
+                 ready seats have room to verify them",
+            )
+            .docs(DOCS_CLASS);
+        if let Some((_, detail)) = reason.split_once(" [") {
+            f = f.current(detail.trim_end_matches(']').to_string());
+        }
+        return f
+            .fix("misaka panel list --class <id> shows the class's lifecycle state and its ready seats")
+            .fix("a Candidate waits for the admission audit; a Prefetching class for enough seats to prove they hold it");
     }
     if reason.starts_with(PALW_NOT_READY_EPOCH_BUDGET_V2) {
         let mut f = Finding::error("E-MODEL-EPOCH-BUDGET", exit::NOT_READY, "Not mining: this class's epoch budget is spent")

@@ -49,7 +49,7 @@ use kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_core::{info, trace, warn};
+use kaspa_core::{error, info, trace, warn};
 use kaspa_hashes::Hash64;
 use kaspa_mining::manager::MiningManagerProxy;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -260,6 +260,27 @@ fn free_prompt_retention_is_owed(
         && matches!(phase, P::Provisional | P::PanelBound { .. } | P::ReceiptLicensed { .. } | P::DefaultDisputed { .. })
 }
 
+/// **A hold that outlives this is not a hold; it is a producer that does not work** (the 2026-09-23
+/// route-matrix audit's #1). Half an hour: longer than any honest wait this loop knows (an epoch
+/// boundary, a registry span, a sync), far shorter than the deployment the first testnet-12 fleet spent
+/// holding at INFO.
+const PALW_PRODUCER_STARVED_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Log a hold at its own level while it is young, and at ERROR — saying how long nothing has been
+/// produced — once it has outlived [`PALW_PRODUCER_STARVED_AFTER`] since the producer last made progress.
+fn log_producer_hold_v1(detail: &str, loud: bool, since_progress: std::time::Duration) {
+    if since_progress >= PALW_PRODUCER_STARVED_AFTER {
+        error!(
+            "[{PALW_PRODUCER}] NOT PRODUCING for {} min — holding: {detail}",
+            since_progress.as_secs() / 60
+        );
+    } else if loud {
+        warn!("[{PALW_PRODUCER}] holding: {detail}");
+    } else {
+        info!("[{PALW_PRODUCER}] holding: {detail}");
+    }
+}
+
 impl PalwProducerService {
     pub fn new(
         config: PalwProducerConfig,
@@ -336,6 +357,24 @@ impl PalwProducerService {
             config.class_cache_bytes,
             config.class_residency,
         );
+        // **A producer class this node can never produce for refuses to start** (the 2026-09-23
+        // route-matrix audit's #1). The first testnet-12 fleet launched with a producer class whose
+        // registered root no artifact on it could match, and every producer said "holding" at INFO for
+        // a whole deployment while the chain ran on heartbeats — the launch was judged on the clock
+        // ticking. A configuration that cannot work is a startup refusal, said where the operator is
+        // looking (stdout as well as the log), not a hold.
+        if refusal.is_none()
+            && let Some(why) = crate::palw_backends::producer_class_unproducible_v1(&config.class_id, &class_holdings, &consensus_config.params)
+        {
+            let sentence = format!(
+                "--palw-producer-class: {why}\n\nThis node will not start as a producer. Give it the artifact that class \
+                 registered (convert it and check it with `palw-class manifest --check`), name a class one of its artifacts \
+                 pairs with (`palw-class inspect <artifact>`), or drop --palw-producer-class to produce for the floor."
+            );
+            println!("{sentence}");
+            error!("[{PALW_PRODUCER}] {sentence}");
+            std::process::exit(1);
+        }
         Self {
             config,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
@@ -459,6 +498,9 @@ impl PalwProducerService {
         // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
         let mut last_hold: Option<String> = None;
         let mut last_hold_at: Option<std::time::Instant> = None;
+        // When this producer last made progress — started, or produced a block. A hold measured from
+        // here past `PALW_PRODUCER_STARVED_AFTER` is logged as the failure it is (`log_producer_hold_v1`).
+        let mut last_progress_at = std::time::Instant::now();
         // Lost draws are the ordinary state and log nothing each; the count is what says whether
         // the lottery this node is drawing can be won at all (testnet-11 5f: 8 h at 40 % CPU and
         // not one line, against a chance per draw of 1e-7).
@@ -508,7 +550,7 @@ impl PalwProducerService {
                     self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                     let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                     if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                        info!("[{PALW_PRODUCER}] holding: {detail}");
+                        log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
                         last_hold = Some(detail);
                         last_hold_at = Some(std::time::Instant::now());
                     }
@@ -528,7 +570,7 @@ impl PalwProducerService {
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    info!("[{PALW_PRODUCER}] holding: {detail}");
+                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
                     last_hold = Some(detail);
                     last_hold_at = Some(std::time::Instant::now());
                 }
@@ -557,7 +599,7 @@ impl PalwProducerService {
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    info!("[{PALW_PRODUCER}] holding: {detail}");
+                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
                     last_hold = Some(detail);
                     last_hold_at = Some(std::time::Instant::now());
                 }
@@ -570,6 +612,7 @@ impl PalwProducerService {
                 match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
                     Ok(Some(hash)) => {
                         produced += 1;
+                        last_progress_at = std::time::Instant::now();
                         info!("[{PALW_PRODUCER}] produced RECEIPT block #{produced} {hash} (a certified free-prompt claim, mined)");
                         self.flow_context.update_palw_runtime(|r| {
                             r.receipt_blocks += 1;
@@ -598,7 +641,7 @@ impl PalwProducerService {
                 // budget table. Telling them apart took reading consensus source; the numbers that
                 // separate them are right here, so carry them.
                 let detail = format!(
-                    "{why} [class={} epoch={} produced={} budget={}{}]",
+                    "{why} [class={} epoch={} produced={} budget={}{}{}]",
                     facts.class_id,
                     facts.epoch_index,
                     facts.epoch_produced_blocks,
@@ -607,14 +650,16 @@ impl PalwProducerService {
                         Some(bond) =>
                             format!(" exposure={}/{} per_claim={}", bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure),
                         None => String::new(),
-                    }
+                    },
+                    // Route-matrix #7: the gate's own words when it is the registry that holds.
+                    facts.class_admission_refusal.as_deref().map(|why| format!(" registry=\"{why}\"")).unwrap_or_default()
                 );
                 // Once per change, then no more than once every 5 minutes while it persists: a
                 // hold that never changes is still worth seeing in a log an operator scrolls.
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    warn!("[{PALW_PRODUCER}] holding: {detail}");
+                    log_producer_hold_v1(&detail, true, last_progress_at.elapsed());
                     last_hold = Some(detail);
                     last_hold_at = Some(std::time::Instant::now());
                 }
@@ -639,6 +684,7 @@ impl PalwProducerService {
                 Ok(Some((hash, claim))) => {
                     draws += 1;
                     produced += 1;
+                    last_progress_at = std::time::Instant::now();
                     info!(
                         "[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket under target; Layer-0 as the fence reads it)"
                     );
