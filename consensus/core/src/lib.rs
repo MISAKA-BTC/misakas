@@ -327,6 +327,9 @@ pub mod palw_receipt;
 /// adjudication maths. Land-stage, consensus-inert.
 pub mod palw_reference;
 pub mod palw_registry;
+/// ADR-0151 follow-up, item 1: what a ROLE needs to execute a class — the one working-set
+/// derivation the producer, the panel and the court read; node-local capacity, never a chain fact.
+pub mod palw_resource_profile_v1;
 /// ADR-0145 §8: the reward properties, each stated as something an attacker cannot do, plus the
 /// 2026-09-19 audit's five counterexamples as in-tree fixtures. Test-only — gated by the
 /// `#[cfg(test)]` below, like `palw_adversarial`.

@@ -1005,6 +1005,156 @@ mod tests {
         assert_ne!(first, second, "a different token at a different position must move the logits");
         assert!(first.iter().any(|v| *v != 0), "an all-zero logit row is a dead pass");
     }
+
+    /// What the cache holds, counted: `(min, max, elements, inside ±127, inside ±32767, 64-code
+    /// blocks whose absmax is ≤ 127, blocks)`. The block figure is what a lossless block-packed
+    /// `i8` representation could store at one byte a code; every other block would stay at two.
+    pub(crate) fn kv_code_range_v1(cache: &A16Cache) -> (i32, i32, u64, u64, u64, u64, u64) {
+        let (mut min, mut max, mut n, mut in_i8, mut in_i16, mut blocks_fit, mut blocks) = (i32::MAX, i32::MIN, 0u64, 0u64, 0u64, 0u64, 0u64);
+        for side in [&cache.keys, &cache.values] {
+            for layer in side {
+                for row in layer {
+                    for value in row {
+                        min = min.min(*value);
+                        max = max.max(*value);
+                        n += 1;
+                        in_i8 += u64::from(value.unsigned_abs() <= 127);
+                        in_i16 += u64::from(value.unsigned_abs() <= A16_CODE_MAX_I32 as u32);
+                    }
+                    for block in row.chunks(64) {
+                        blocks += 1;
+                        blocks_fit += u64::from(block.iter().all(|v| v.unsigned_abs() <= 127));
+                    }
+                }
+            }
+        }
+        (min, max, n, in_i8, in_i16, blocks_fit, blocks)
+    }
+    const A16_CODE_MAX_I32: i32 = kaspa_consensus_core::palw_base0_a16::A16_CODE_MAX as i32;
+
+    /// **The value range of what the cache holds — the fact every compact representation rests on,
+    /// measured rather than argued.**
+    ///
+    /// Every K row is `a16_rope`'s output and every V row is `a16_matmul_requant`'s; both end in
+    /// `clamp16`, so each element is an A16 code in ±32,767 by construction, and every consumer of
+    /// the series (`as_a16` in the catalog, `check_codes` in the kernels) refuses an element outside
+    /// that range. So an `i16` holds every element losslessly and the committed `i32` little-endian
+    /// bytes regenerate from it exactly. The fraction inside ±127 is reported beside it: that is what
+    /// an `i8` could hold losslessly, and on the real row it is a minority of the elements (see the
+    /// ignored measurement below), which is why there is no `i8` profile that is not a quantization
+    /// — and a quantization of the cache changes what attention computes, i.e. the class.
+    #[test]
+    fn every_cached_code_fits_i16_on_the_court_fixture() {
+        use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v7};
+        // The court drill's own geometry (`tests/court_e2e.rs::GEOMETRY`), run to the end of its context.
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 2,
+            n_kv_heads: 2,
+            d_head: 4,
+            d_ff: 8,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("sorted and unique");
+        let g = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let plan = engine.plan_from_profile(&qwen25_a16_profile_v7(g).expect("v7")).expect("servable");
+        let mut cache = A16Cache::new(2);
+        for position in 0..31usize {
+            engine.forward_token_planned(&plan, &mut cache, (position * 7 + 3) % 64, position).expect("walks");
+        }
+        let (min, max, n, in_i8, in_i16, blocks_fit, blocks) = kv_code_range_v1(&cache);
+        eprintln!(
+            "court fixture K/V range: min {min} max {max} over {n} elements; inside ±127: {in_i8} ({:.1} %); inside ±32767: \
+             {in_i16}; 64-code blocks fitting i8: {blocks_fit}/{blocks}",
+            in_i8 as f64 * 100.0 / n as f64
+        );
+        assert_eq!(in_i16, n, "an element outside the code range would have been refused by the next attention read");
+        assert!(min >= -A16_CODE_MAX_I32 && max <= A16_CODE_MAX_I32);
+        assert!(n > 0);
+    }
+
+    /// **The same measurement on the shipped dense row** — off unless `MISAKA_PALW_KV_RANGE_ARTIFACT`
+    /// names the converted 1.5B artifact (1.7 GiB of weights are not a unit test's input), in release:
+    ///
+    /// ```text
+    /// MISAKA_PALW_KV_RANGE_ARTIFACT=/path/qwen25-1.5b-a16.palwart MISAKA_PALW_KV_RANGE_PREFILL=511 \
+    ///   cargo test --release -p misaka-palw-base0 --lib -- every_cached_code_fits_i16_on_the_real --ignored --nocapture
+    /// ```
+    ///
+    /// Prints, per layer and overall, the absmax and the share of elements and of 64-code blocks
+    /// inside ±127. The calibration sizes each site's scale on the post-rotation absmax with headroom
+    /// (`a16_rope`'s doc), so the codes are expected to use most of the 16-bit range — the number
+    /// this prints is the one that decides whether a lossless packed representation is worth its
+    /// decode points.
+    #[test]
+    #[ignore = "needs the converted dense artifact; see the doc comment"]
+    fn every_cached_code_fits_i16_on_the_real_dense_row() {
+        let Ok(path) = std::env::var("MISAKA_PALW_KV_RANGE_ARTIFACT") else {
+            eprintln!("kv range: skipped — set MISAKA_PALW_KV_RANGE_ARTIFACT to the dense .palwart to measure");
+            return;
+        };
+        let prefill: usize = std::env::var("MISAKA_PALW_KV_RANGE_PREFILL").ok().and_then(|v| v.parse().ok()).unwrap_or(511);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+        let artifact = crate::artifact::decode_artifact_file_v1(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"));
+        drop(bytes);
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_graph_v5_profile_v1().expect("the shipped dense row");
+        let engine = A16Engine::new(&artifact).expect("an A16 artifact");
+        let plan = engine.plan_from_profile(&profile).expect("the shipped row is servable");
+        let prompt: Vec<usize> = crate::qwen25_a16_backend::qwen25_a16_prompt_for_anchor(
+            kaspa_consensus_core::Hash64::from_u64_word(0x5A16_2026),
+            artifact.shape.vocab,
+            prefill as u32,
+        );
+        let started = std::time::Instant::now();
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        let mut at = 0usize;
+        while at < prompt.len() {
+            let end = (at + 64).min(prompt.len());
+            engine.forward_prefill_planned(&plan, &mut cache, &prompt[at..end], at, end == prompt.len()).expect("a run");
+            at = end;
+        }
+        eprintln!("kv range: {prefill} positions of the real row in {:.1} s", started.elapsed().as_secs_f64());
+        for li in 0..artifact.shape.n_layers {
+            let one = A16Cache { keys: vec![cache.keys[li].clone()], values: vec![cache.values[li].clone()] };
+            let (min, max, n, in_i8, _, blocks_fit, blocks) = kv_code_range_v1(&one);
+            let k_absmax = cache.keys[li].iter().flatten().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+            let v_absmax = cache.values[li].iter().flatten().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+            eprintln!(
+                "  layer {li:2}: K absmax {k_absmax:5}  V absmax {v_absmax:5}  min {min:6} max {max:5}  inside ±127 {:5.1} %  \
+                 blocks fitting i8 {:5.1} %",
+                in_i8 as f64 * 100.0 / n as f64,
+                blocks_fit as f64 * 100.0 / blocks as f64
+            );
+        }
+        let (min, max, n, in_i8, in_i16, blocks_fit, blocks) = kv_code_range_v1(&cache);
+        eprintln!(
+            "real row K/V range: min {min} max {max} over {n} elements; inside ±127: {in_i8} ({:.1} %); inside ±32767: {in_i16} \
+             ({:.1} %); 64-code blocks fitting i8: {blocks_fit}/{blocks} ({:.1} %)",
+            in_i8 as f64 * 100.0 / n as f64,
+            in_i16 as f64 * 100.0 / n as f64,
+            blocks_fit as f64 * 100.0 / blocks as f64
+        );
+        assert_eq!(in_i16, n, "every cached code is inside ±32767 on the real row too");
+    }
 }
 
 // =============================================================================================
@@ -1121,18 +1271,12 @@ pub const PALW_INTERPRETER_TRACE_BYTES_CEILING_V1: u64 = 64 << 20;
 ///
 /// Saturating throughout: this is called ON adversarial input, so an overflow that wrapped to a
 /// small number would be the exact failure the ceiling exists to prevent.
+///
+/// **One spelling, in consensus core** (`palw_resource_profile_v1::palw_committed_trace_bytes_v1`):
+/// the resource profile prices a prefill run's retained traces with the same number this ceiling
+/// bounds, so the two cannot disagree about what a token's trace costs.
 pub fn interpreted_trace_bytes_v1(profile: &PalwShapeProfileV3, max_kv_len: u64) -> u64 {
-    let row_elems = |node: &PalwStepNodeV1| -> u64 {
-        match node.out_len {
-            PalwStepOutLenV1::Fixed { elements } => elements as u64,
-            PalwStepOutLenV1::KvScaled { multiplier } => (multiplier as u64).saturating_mul(max_kv_len),
-        }
-    };
-    let table = |nodes: &[PalwStepNodeV1]| -> u64 { nodes.iter().fold(0u64, |acc, n| acc.saturating_add(row_elems(n))) };
-    let elems = table(&profile.pre_nodes)
-        .saturating_add(table(&profile.attn_nodes).saturating_mul(profile.layer_count as u64))
-        .saturating_add(table(&profile.post_nodes));
-    elems.saturating_mul(std::mem::size_of::<i32>() as u64)
+    kaspa_consensus_core::palw_resource_profile_v1::palw_committed_trace_bytes_v1(profile, max_kv_len)
 }
 
 /// A node's data input, resolved at plan time.
