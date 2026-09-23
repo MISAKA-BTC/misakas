@@ -241,6 +241,15 @@ pub enum HeartbeatYieldHintV1 {
     /// the latest `timestamp + HEARTBEAT_NOMINAL_INTERVAL_MS` over those blocks — the same hour the
     /// slot rule would have granted each of them had it been selected.
     YieldUntil(u64),
+    /// **Past the clock cursor: the slot is taken, and the next one opens at this timestamp**
+    /// (the 2026-09-24 heartbeat audit, H1).
+    ///
+    /// The clock has already advanced into the slot a beat minted now would claim, and no beat in
+    /// the virtual's mergeset is waiting for a step, so the beat could earn nothing: it would be
+    /// merged, weigh ε, add a blue score, and tick no DAA. Measured on testnet-12 before this
+    /// existed: 74% of blocks were heartbeats and 11% of beats got a tick. A miner told this waits
+    /// until the timestamp, then asks again.
+    SlotTaken(u64),
 }
 
 /// The hint, from facts the virtual state already holds: the selected parent's lane and, for every
@@ -301,10 +310,79 @@ pub fn heartbeat_yield_hint_v2(
         .map_or(HeartbeatYieldHintV1::NothingToYieldTo, HeartbeatYieldHintV1::YieldUntil)
 }
 
+/// **H1: the yield hint with the clock's own answer on top** — node policy, like the hint it wraps.
+///
+/// `clock` is the virtual's [`crate::palw_clock_cursor_v1::PalwClockStepV1`] where the cursor governs
+/// (`None` elsewhere, and on any read failure — the hint must never hold the clock on a node-local
+/// fact). The answer is [`HeartbeatYieldHintV1::SlotTaken`] exactly when a reference is known, the
+/// next slot has not opened (`next > now`), and no beat in the virtual's mergeset already holds the
+/// open slot (`!granted`).
+///
+/// **The `granted` case is deliberately NOT `SlotTaken`.** A granted beat waiting in the virtual means
+/// the next block built STEPS the clock — and on a chain whose only producer is this lane, nobody
+/// else will build it. The stepping block's timestamp is the next slot's reference, so every second
+/// it waits is a second added to every tick. The miner mines it at once; the header rules put its
+/// timestamp at or past the slot, so it cannot open the next one early.
+///
+/// A bonded selected parent that paces the clock keeps its own answer, because the ADR-0105 budget
+/// refills on it.
+pub fn heartbeat_slot_hint_v1(
+    yield_hint: HeartbeatYieldHintV1,
+    clock: Option<&crate::palw_clock_cursor_v1::PalwClockStepV1>,
+    now_ms: u64,
+) -> HeartbeatYieldHintV1 {
+    if yield_hint == HeartbeatYieldHintV1::BondedSelectedParent {
+        return yield_hint;
+    }
+    match clock.filter(|step| !step.granted).and_then(|step| step.next_slot_ms()) {
+        Some(next) if next > now_ms => HeartbeatYieldHintV1::SlotTaken(next),
+        _ => yield_hint,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pow_layer0::{PALW_HEARTBEAT_WORK_LOG2, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
+
+    /// **H1, the pure half: a beat is not worth mining while the slot is taken, and is the moment a
+    /// beat is waiting to be stepped over.**
+    ///
+    /// Before this the hint had no clock in it at all: past the cursor it answered
+    /// `NothingToYieldTo` between two slots, and the miner ground a beat that could earn nothing —
+    /// on testnet-12, nine beats in ten.
+    #[test]
+    fn a_taken_slot_holds_the_miner_until_the_next_one_opens() {
+        use crate::palw_clock_cursor_v1::{PalwClockCursorV1, PalwClockStepV1};
+        let cursor = |next| Some(PalwClockCursorV1 { next_slot_ms: next, slots_consumed: 0 });
+        let idle = PalwClockStepV1 { governs: true, cursor: cursor(10_000), granted: false };
+        let nothing = HeartbeatYieldHintV1::NothingToYieldTo;
+        // Between two slots: taken, and the answer names when the next one opens.
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&idle), 9_999), HeartbeatYieldHintV1::SlotTaken(10_000));
+        // At the boundary and after it the slot is open: mine.
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&idle), 10_000), nothing);
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&idle), 50_000), nothing);
+        // It outranks a yield to a waiting attempt block: there is no slot to yield.
+        assert_eq!(
+            heartbeat_slot_hint_v1(HeartbeatYieldHintV1::YieldUntil(99_999), Some(&idle), 1),
+            HeartbeatYieldHintV1::SlotTaken(10_000)
+        );
+        // **A granted beat waiting in the virtual is not "taken"**: the next block steps the clock,
+        // and on a heartbeat-only chain this lane is the only producer that will build it.
+        let pending = PalwClockStepV1 { granted: true, ..idle };
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&pending), 1), nothing);
+        // No cursor governs, or none is known: the hint is what it was.
+        let ungoverned = PalwClockStepV1 { governs: false, ..idle };
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&ungoverned), 1), nothing);
+        let unknown = PalwClockStepV1 { cursor: None, ..idle };
+        assert_eq!(heartbeat_slot_hint_v1(nothing, Some(&unknown), 1), nothing);
+        assert_eq!(heartbeat_slot_hint_v1(nothing, None, 1), nothing);
+        // A bonded selected parent keeps its answer — the ADR-0105 budget refills on it.
+        assert_eq!(
+            heartbeat_slot_hint_v1(HeartbeatYieldHintV1::BondedSelectedParent, Some(&idle), 1),
+            HeartbeatYieldHintV1::BondedSelectedParent
+        );
+    }
 
     /// **The ramp has exactly two steps, and which one applies is a question about ONE header.**
     ///

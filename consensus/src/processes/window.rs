@@ -37,11 +37,22 @@ pub struct DaaWindow {
     pub window: Arc<BlockWindowHeap>,
     pub daa_score: u64,
     pub mergeset_non_daa: BlockHashSet,
+    /// **ADR-0142: the clock's decision the score was computed from** — the cursor this block's
+    /// window derives at its selected parent's score, and whether a heartbeat in its mergeset was
+    /// granted. One computation with `daa_score` (`palw_clock_step_v1`), so a reader that needs the
+    /// cursor (the heartbeat adapter, the miner's hint) reads the answer the score used rather than
+    /// deriving a second one.
+    pub clock: kaspa_consensus_core::palw_clock_cursor_v1::PalwClockStepV1,
 }
 
 impl DaaWindow {
-    pub fn new(window: Arc<BlockWindowHeap>, daa_score: u64, mergeset_non_daa: BlockHashSet) -> Self {
-        Self { window, daa_score, mergeset_non_daa }
+    pub fn new(
+        window: Arc<BlockWindowHeap>,
+        daa_score: u64,
+        mergeset_non_daa: BlockHashSet,
+        clock: kaspa_consensus_core::palw_clock_cursor_v1::PalwClockStepV1,
+    ) -> Self {
+        Self { window, daa_score, mergeset_non_daa, clock }
     }
 }
 
@@ -351,9 +362,9 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
     }
 
     fn calc_daa_window(&self, ghostdag_data: &GhostdagData, window: Arc<BlockWindowHeap>) -> DaaWindow {
-        let (daa_score, mergeset_non_daa) =
+        let (daa_score, mergeset_non_daa, clock) =
             self.difficulty_manager.calc_daa_score_and_mergeset_non_daa_blocks(ghostdag_data, &window, self.ghostdag_store.deref());
-        DaaWindow::new(window, daa_score, mergeset_non_daa)
+        DaaWindow::new(window, daa_score, mergeset_non_daa, clock)
     }
 
     fn block_daa_window(&self, ghostdag_data: &GhostdagData) -> Result<DaaWindow, RuleError> {
@@ -361,8 +372,8 @@ impl<T: GhostdagStoreReader, U: BlockWindowCacheReader + BlockWindowCacheWriter,
         let window = self.build_block_window(ghostdag_data, WindowType::DifficultyWindow, |hash| {
             mergeset_non_daa.insert(hash);
         })?;
-        let daa_score = self.difficulty_manager.calc_daa_score(ghostdag_data, &mergeset_non_daa, &window);
-        Ok(DaaWindow::new(window, daa_score, mergeset_non_daa))
+        let (daa_score, clock) = self.difficulty_manager.calc_daa_score(ghostdag_data, &mergeset_non_daa, &window);
+        Ok(DaaWindow::new(window, daa_score, mergeset_non_daa, clock))
     }
 
     fn calculate_difficulty_bits(&self, ghostdag_data: &GhostdagData, daa_window: &DaaWindow) -> u32 {

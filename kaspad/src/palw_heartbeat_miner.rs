@@ -48,6 +48,20 @@ pub const PALW_HEARTBEAT: &str = "palw-heartbeat-miner";
 /// difficulty.
 const NONCES_PER_TEMPLATE: u64 = 1 << 25;
 
+/// **How often the grind looks up (the 2026-09-24 heartbeat audit, H1).** Every 2¹⁸ nonces — a
+/// sixty-fourth of the lane's 2²⁴ expectation, a fraction of a second on one core — the search asks
+/// whether it is still worth finishing: whether the node is shutting down, and whether the virtual
+/// has moved (a new sink, or a new tip: another beat that took the slot this one was ground for,
+/// or the step that opened a new one). The grind used to run all 2²⁵ nonces blind, so a beat that
+/// lost the race was still found, submitted and relayed, and the node's own next beat started late.
+/// A nonce search is memoryless, so abandoning one and starting over on fresh parents costs
+/// nothing in expectation.
+const NONCES_PER_CHECK: u64 = 1 << 18;
+
+/// The shortest wait the miner takes before it looks at the chain again, so a slot that is
+/// already open by the time the wait is computed cannot turn the loop into a spin.
+const MIN_WAIT_MS: u64 = 100;
+
 /// The longest single wait before the miner looks at the chain again — the slot wait's own cap,
 /// so a bonded block landing mid-wait (which ends the episode) is seen within a minute.
 const MAX_WAIT_MS: u64 = 60_000;
@@ -102,7 +116,9 @@ impl HeartbeatYieldBudget {
                 self.remaining_ms = HEARTBEAT_NOMINAL_INTERVAL_MS;
                 (0, 0)
             }
-            HeartbeatYieldHintV1::NothingToYieldTo => (0, 0),
+            // A taken slot is waited out by the worker before the budget is asked (H1); if one does
+            // reach here it is not a bonded block to stand aside for, and it spends no budget.
+            HeartbeatYieldHintV1::NothingToYieldTo | HeartbeatYieldHintV1::SlotTaken(_) => (0, 0),
             HeartbeatYieldHintV1::YieldUntil(until) => (until.saturating_sub(now_ms).min(self.remaining_ms).min(MAX_WAIT_MS), until),
         };
         if wait_ms == 0 {
@@ -113,6 +129,100 @@ impl HeartbeatYieldBudget {
         let started = !std::mem::replace(&mut self.yielding, true);
         HeartbeatYieldDecision::Wait { wait_ms, until, remaining_ms: self.remaining_ms, started }
     }
+}
+
+/// **What a minted beat did for the clock** — the operator line's subject (H1).
+///
+/// The miner used to print "the clock ticked" for every block it minted, and on testnet-12 nine
+/// beats in ten ticked nothing: a line that is true one time in ten is how a lane can waste most of
+/// its work while its log says it is healthy. The role is read off the adapted template itself —
+/// its own DAA score against its selected parent's, and the slot the adapter stamped it for — so it
+/// is the chain's arithmetic, not the miner's opinion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeartbeatRoleV1 {
+    /// **Granted.** Its own DAA score is above its selected parent's: it merged the beat that held
+    /// the slot and advanced the clock to `daa`.
+    Stepped { daa: u64 },
+    /// **Not granted yet**: stamped at or past an open slot that no beat held, so the block that
+    /// merges it ticks the clock to `daa`. Whether that block merges THIS beat or a rival's that
+    /// reached it first is the race the next line settles.
+    HoldsSlot { daa: u64 },
+    /// **Not granted**: stamped before the slot it would claim, so no block that merges it ticks.
+    /// With the hint and the adapter's `earliest` the miner never grinds one; the line exists so
+    /// that if something upstream answers wrongly, the log says so instead of "the clock ticked".
+    NotGranted { slot_ms: u64 },
+    /// The clock cursor does not govern this block: the pre-ADR-0142 lane, where every beat that
+    /// passes the slot rule is the clock.
+    Ungoverned,
+}
+
+impl HeartbeatRoleV1 {
+    /// Classify a beat from its own header facts and the slot the adapter stamped it for (`None`
+    /// where the cursor does not govern).
+    pub(crate) fn of(daa_score: u64, selected_parent_daa_score: u64, timestamp: u64, slot_ms: Option<u64>) -> Self {
+        if daa_score > selected_parent_daa_score {
+            return Self::Stepped { daa: daa_score };
+        }
+        match slot_ms {
+            None => Self::Ungoverned,
+            Some(slot_ms) if timestamp >= slot_ms => Self::HoldsSlot { daa: daa_score + 1 },
+            Some(slot_ms) => Self::NotGranted { slot_ms },
+        }
+    }
+}
+
+/// How a grind ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GrindOutcomeV1 {
+    Found(u64),
+    /// All the template's nonces were tried.
+    Exhausted,
+    /// The virtual moved under the template (H1): abandon it and build on the new one.
+    Superseded,
+    /// The node is shutting down.
+    Shutdown,
+}
+
+/// **The grind, cancellable** (H1). `solves(nonce)` is the proof-of-work check; every `check_every`
+/// nonces `shutting_down()` and `superseded()` are asked, in that order, and either ends the search.
+/// A pure function of its closures so the cancellation is testable without a chain or a hash.
+pub(crate) fn grind_nonces_v1(
+    max_nonces: u64,
+    check_every: u64,
+    solves: impl Fn(u64) -> bool,
+    shutting_down: impl Fn() -> bool,
+    mut superseded: impl FnMut() -> bool,
+) -> GrindOutcomeV1 {
+    let check_every = check_every.max(1);
+    let mut start = 0u64;
+    while start < max_nonces {
+        let end = start.saturating_add(check_every).min(max_nonces);
+        if let Some(nonce) = (start..end).find(|&nonce| solves(nonce)) {
+            return GrindOutcomeV1::Found(nonce);
+        }
+        start = end;
+        if shutting_down() {
+            return GrindOutcomeV1::Shutdown;
+        }
+        if start < max_nonces && superseded() {
+            return GrindOutcomeV1::Superseded;
+        }
+    }
+    GrindOutcomeV1::Exhausted
+}
+
+/// What one pass of the worker did, so the loop knows whether it has already rested.
+enum PassOutcomeV1 {
+    Minted {
+        hash: kaspa_consensus_core::BlockHash,
+        role: HeartbeatRoleV1,
+    },
+    /// The pass waited (a taken slot, a yield, a slot opening shortly): the wait was the rest.
+    Waited,
+    /// The virtual moved during the grind: rebuild at once on the new one.
+    Superseded,
+    /// Nothing minted and nothing waited: rest before the next pass.
+    Idle,
 }
 
 #[derive(Clone, Debug)]
@@ -227,10 +337,19 @@ impl PalwHeartbeatMinerService {
         };
         info!("[{PALW_HEARTBEAT}] starting — bondless heartbeat lane (ADR-0060), fee-only, one thread");
         let mut mined = 0u64;
+        let (mut stepped, mut holding, mut not_granted) = (0u64, 0u64, 0u64);
+        // A pass that waited has already rested, and one whose template went stale or that just
+        // minted should look again at once: the two-second rest between passes is the `a` of the
+        // audit's `tick = 120 s + a + b + c`, paid on the one pass where it cost a tick.
+        let mut rest = true;
         loop {
-            if !self.tick(std::time::Duration::from_secs(2)).await {
+            if rest && !self.tick(std::time::Duration::from_secs(2)).await {
                 break;
             }
+            if self.shutdown.listener.is_triggered() {
+                break;
+            }
+            rest = true;
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
@@ -260,12 +379,37 @@ impl PalwHeartbeatMinerService {
                 continue;
             }
             match self.mine_one(&session, miner_data.clone()).await {
-                Ok(Some(hash)) => {
+                Ok(PassOutcomeV1::Minted { hash, role }) => {
                     mined += 1;
                     self.say_hold(None);
-                    info!("[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — the clock ticked");
+                    match role {
+                        HeartbeatRoleV1::Stepped { daa } => {
+                            stepped += 1;
+                            info!(
+                                "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — granted: it merges the beat that held the slot \
+                                 and advanced the clock to DAA {daa}"
+                            );
+                        }
+                        HeartbeatRoleV1::HoldsSlot { daa } => {
+                            holding += 1;
+                            info!(
+                                "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — holds the open slot, not granted yet: the block \
+                                 that merges it ticks the clock to DAA {daa}"
+                            );
+                        }
+                        HeartbeatRoleV1::NotGranted { slot_ms } => {
+                            not_granted += 1;
+                            warn!(
+                                "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — NOT granted: stamped before its slot ({slot_ms}); \
+                                 it adds a blue score and ticks nothing"
+                            );
+                        }
+                        HeartbeatRoleV1::Ungoverned => info!("[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — the clock ticked"),
+                    }
+                    rest = false;
                 }
-                Ok(None) => {}
+                Ok(PassOutcomeV1::Waited | PassOutcomeV1::Superseded) => rest = false,
+                Ok(PassOutcomeV1::Idle) => {}
                 Err(err) => {
                     warn!("[{PALW_HEARTBEAT}] {err}");
                     if !self.tick(std::time::Duration::from_secs(5)).await {
@@ -274,7 +418,10 @@ impl PalwHeartbeatMinerService {
                 }
             }
         }
-        info!("[{PALW_HEARTBEAT}] stopping ({mined} heartbeats this run)");
+        info!(
+            "[{PALW_HEARTBEAT}] stopping ({mined} heartbeats this run: {stepped} advanced the clock, {holding} held an open \
+             slot, {not_granted} not granted)"
+        );
     }
 
     /// The budget, whatever state its lock is in. A poisoned lock means a pass panicked while
@@ -286,16 +433,38 @@ impl PalwHeartbeatMinerService {
         }
     }
 
-    /// One template, one adapt, at most one slot wait, one yield wait, one bounded nonce search.
+    /// One template, one adapt, at most one slot wait, one yield wait, one bounded nonce search —
+    /// and, past the clock cursor, no template at all while the slot is taken (H1).
     async fn mine_one(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         miner_data: MinerData,
-    ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
+    ) -> Result<PassOutcomeV1, String> {
         // ADR-0105 Decision 2: read the chain's state for the yield before the template, and let a
         // bonded selected parent refill the budget even on a pass the slot rule is about to hold.
         let hint = session.heartbeat_yield_hint();
         self.with_yield_budget(|budget| budget.observe(hint));
+        // **H1: a taken slot is waited out, not ground against.** The clock already advanced into
+        // the slot a beat minted now would claim; the beat would be merged, weigh ε, add a blue
+        // score and tick nothing. Wait for the next slot, then ask again with fresh facts.
+        if let HeartbeatYieldHintV1::SlotTaken(opens) = hint {
+            let now = kaspa_core::time::unix_now();
+            let away = opens.saturating_sub(now);
+            // Two intervals is more than any honest reference can put between now and the next
+            // slot (the future-drift bound is 132 s); say so, because a clock held that far out is
+            // a reference stamped in the future and an operator should see it.
+            if away > 2 * kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS {
+                self.say_hold(Some(format!(
+                    "the next slot opens {} s from now — more than two intervals, so the reference it is measured from \
+                     carries a timestamp ahead of this node's clock (check this host's clock, and the peers')",
+                    away / 1000
+                )));
+            } else {
+                trace!("[{PALW_HEARTBEAT}] the slot is taken; the next opens in {} ms", away);
+            }
+            self.tick(std::time::Duration::from_millis(away.clamp(MIN_WAIT_MS, MAX_WAIT_MS))).await;
+            return Ok(PassOutcomeV1::Waited);
+        }
         let template = self
             .mining_manager
             .clone()
@@ -304,24 +473,33 @@ impl PalwHeartbeatMinerService {
             .map_err(|e| format!("no block template: {e}"))?;
         let (mut template, earliest) =
             session.heartbeat_adapt_block_template(template).map_err(|e| format!("the lane refused the template: {e}"))?;
+        let cursor_governs =
+            self.flow_context.config.params.palw_clock_cursor.is_some_and(|fence| fence.is_active(template.block.header.daa_score));
         let now = kaspa_core::time::unix_now();
         if earliest > now {
-            // Inside the slot. Sleep up to the boundary (capped so a ladder change mid-wait is
-            // picked up by a fresh template) and try again with fresh facts.
-            let wait = (earliest - now).min(60_000u64);
-            self.say_hold(Some(format!(
-                "the slot rule holds this beat for {} s more (earliest {earliest}, now {now}): the lane's interval \
-                 from the selected parent has not elapsed. If this line repeats while the chain keeps producing, the \
-                 parent is being refreshed faster than the interval and the lane cannot mint at all — the state \
-                 ADR-0138 §3c and its template half exist to prevent",
-                (earliest - now) / 1000
-            )));
-            trace!("[{PALW_HEARTBEAT}] slot in {} s", wait / 1000);
+            let wait = (earliest - now).clamp(MIN_WAIT_MS, MAX_WAIT_MS);
+            if cursor_governs {
+                // Past the cursor this is the slot a beat waiting in the virtual was granted, a few
+                // seconds ahead of this node's clock (its miner's clock runs ahead of ours). The
+                // step has to be stamped at or past it, so wait the difference.
+                trace!("[{PALW_HEARTBEAT}] the step's slot opens in {} ms", earliest - now);
+            } else {
+                // Inside the slot. Sleep up to the boundary (capped so a ladder change mid-wait is
+                // picked up by a fresh template) and try again with fresh facts.
+                self.say_hold(Some(format!(
+                    "the slot rule holds this beat for {} s more (earliest {earliest}, now {now}): the lane's interval \
+                     from the selected parent has not elapsed. If this line repeats while the chain keeps producing, the \
+                     parent is being refreshed faster than the interval and the lane cannot mint at all — the state \
+                     ADR-0138 §3c and its template half exist to prevent",
+                    (earliest - now) / 1000
+                )));
+                trace!("[{PALW_HEARTBEAT}] slot in {} s", wait / 1000);
+            }
             // A slot wait can be a full minute — long enough to be the wait a SIGTERM lands in
             // (finding F1), so it is a tick like every other: on shutdown, hand back to the
-            // worker loop, whose own tick exits.
+            // worker loop, which checks the trigger.
             self.tick(std::time::Duration::from_millis(wait)).await;
-            return Ok(None);
+            return Ok(PassOutcomeV1::Waited);
         }
         // **ADR-0105 Decision 2: the slot is open — stand aside if a bonded block is waiting.**
         //
@@ -341,7 +519,7 @@ impl PalwHeartbeatMinerService {
                     trace!("[{PALW_HEARTBEAT}] still standing aside ({} s of budget left)", remaining_ms / 1000);
                 }
                 self.tick(std::time::Duration::from_millis(wait_ms)).await;
-                return Ok(None);
+                return Ok(PassOutcomeV1::Waited);
             }
             HeartbeatYieldDecision::Mine { ended_yield } => {
                 if ended_yield {
@@ -349,29 +527,55 @@ impl PalwHeartbeatMinerService {
                 }
             }
         }
-        // Grind. The lane's floor is ~2²⁴ hashes — seconds of one core — and the retarget can
-        // raise it when many nodes run this service; the search stays bounded and loud.
+        // Grind — cancellably (H1). The lane's floor is ~2²⁴ hashes, seconds of one core; every
+        // `NONCES_PER_CHECK` the search asks whether the node is stopping and whether the virtual
+        // still has the parents this template was built on. A rival beat for the same slot, or the
+        // step that opens the next one, moves the virtual — and a beat finished against the old
+        // parents would be one that loses the race, gets relayed and ticks nothing.
         let header0 = template.block.header.clone();
         let network_id = self.config.network_id;
-        let found = tokio::task::spawn_blocking(move || {
+        let parents: kaspa_consensus_core::BlockHashSet = header0.direct_parents().iter().copied().collect();
+        let watcher = session.clone();
+        let shutdown = self.shutdown.listener.clone();
+        let outcome = tokio::task::spawn_blocking(move || {
             let state = kaspa_pow::StateLayer0::new(&header0, network_id.to_string().as_bytes());
-            (0..NONCES_PER_TEMPLATE).find(|&nonce| state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false))
+            grind_nonces_v1(
+                NONCES_PER_TEMPLATE,
+                NONCES_PER_CHECK,
+                |nonce| state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false),
+                || shutdown.is_triggered(),
+                || watcher.get_virtual_parents() != parents,
+            )
         })
         .await
         .map_err(|e| format!("the nonce search task did not finish: {e}"))?;
-        let Some(nonce) = found else {
-            trace!("[{PALW_HEARTBEAT}] no nonce in {NONCES_PER_TEMPLATE} tries against this template");
-            return Ok(None);
+        let nonce = match outcome {
+            GrindOutcomeV1::Found(nonce) => nonce,
+            GrindOutcomeV1::Exhausted => {
+                trace!("[{PALW_HEARTBEAT}] no nonce in {NONCES_PER_TEMPLATE} tries against this template");
+                return Ok(PassOutcomeV1::Idle);
+            }
+            GrindOutcomeV1::Superseded => {
+                trace!("[{PALW_HEARTBEAT}] the virtual moved during the grind — rebuilding on it");
+                return Ok(PassOutcomeV1::Superseded);
+            }
+            GrindOutcomeV1::Shutdown => return Ok(PassOutcomeV1::Idle),
         };
         template.block.header.nonce = nonce;
         template.block.header.finalize();
+        let role = HeartbeatRoleV1::of(
+            template.block.header.daa_score,
+            template.selected_parent_daa_score,
+            template.block.header.timestamp,
+            cursor_governs.then_some(earliest),
+        );
         let block: kaspa_consensus_core::block::Block = template.block.to_immutable();
         let hash = block.hash();
         self.flow_context
             .submit_rpc_block(session, block)
             .await
             .map_err(|e| format!("the chain refused a heartbeat this node mined: {e}"))?;
-        Ok(Some(hash))
+        Ok(PassOutcomeV1::Minted { hash, role })
     }
 }
 
@@ -499,5 +703,88 @@ mod yield_budget_tests {
             budget.decide(HeartbeatYieldHintV1::YieldUntil(u64::MAX), T0),
             HeartbeatYieldDecision::Wait { wait_ms: MAX_WAIT_MS, .. }
         ));
+    }
+}
+
+#[cfg(test)]
+mod grind_and_role_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    /// **H1: the grind stops when the virtual moves, and when the node stops — at the next check,
+    /// not after 2²⁵ nonces.** Before this the search ran every nonce blind, so a beat that had
+    /// already lost its slot was still found, submitted and relayed.
+    #[test]
+    fn the_grind_is_abandoned_at_the_first_check_after_the_virtual_moves() {
+        let tried = Cell::new(0u64);
+        let checks = Cell::new(0u64);
+        // No nonce solves; the virtual moves after the second look.
+        let outcome = grind_nonces_v1(
+            NONCES_PER_TEMPLATE,
+            NONCES_PER_CHECK,
+            |_| {
+                tried.set(tried.get() + 1);
+                false
+            },
+            || false,
+            || {
+                checks.set(checks.get() + 1);
+                checks.get() >= 2
+            },
+        );
+        assert_eq!(outcome, GrindOutcomeV1::Superseded);
+        assert_eq!(tried.get(), 2 * NONCES_PER_CHECK, "abandoned at the second check, not after the whole template");
+        assert!(NONCES_PER_CHECK >= 1 << 16 && NONCES_PER_CHECK <= 1 << 20, "the audit's window: every 2^16..2^20 nonces");
+
+        // Shutdown is asked first and wins over a moved virtual.
+        let outcome = grind_nonces_v1(NONCES_PER_TEMPLATE, NONCES_PER_CHECK, |_| false, || true, || true);
+        assert_eq!(outcome, GrindOutcomeV1::Shutdown);
+
+        // A solution inside the first window is returned before anything is asked.
+        let asked = Cell::new(false);
+        let outcome = grind_nonces_v1(
+            NONCES_PER_TEMPLATE,
+            NONCES_PER_CHECK,
+            |nonce| nonce == 12_345,
+            || {
+                asked.set(true);
+                false
+            },
+            || {
+                asked.set(true);
+                false
+            },
+        );
+        assert_eq!(outcome, GrindOutcomeV1::Found(12_345));
+        assert!(!asked.get());
+
+        // And a template nobody moves runs to exhaustion exactly as before.
+        let outcome = grind_nonces_v1(1 << 20, NONCES_PER_CHECK, |_| false, || false, || false);
+        assert_eq!(outcome, GrindOutcomeV1::Exhausted);
+        // A zero check interval is not a spin on the closures.
+        assert_eq!(grind_nonces_v1(3, 0, |nonce| nonce == 2, || false, || false), GrindOutcomeV1::Found(2));
+    }
+
+    /// **H1: the line says whether the beat was granted.** "The clock ticked" was printed for every
+    /// block; the role is now read off the block's own score and the slot it was stamped for.
+    #[test]
+    fn a_beat_is_logged_as_granted_holding_or_not_granted_from_its_own_facts() {
+        // It merged the slot's beat: its score is above its parent's.
+        assert_eq!(HeartbeatRoleV1::of(11, 10, 5_000, Some(4_000)), HeartbeatRoleV1::Stepped { daa: 11 });
+        // At or past the open slot, not stepping: it holds the slot, and the block that merges it
+        // ticks the next score.
+        assert_eq!(HeartbeatRoleV1::of(10, 10, 4_000, Some(4_000)), HeartbeatRoleV1::HoldsSlot { daa: 11 });
+        // Before the slot: not granted — and no longer called a tick.
+        assert_eq!(HeartbeatRoleV1::of(10, 10, 3_999, Some(4_000)), HeartbeatRoleV1::NotGranted { slot_ms: 4_000 });
+        // No cursor: the old lane and the old line.
+        assert_eq!(HeartbeatRoleV1::of(10, 10, 3_999, None), HeartbeatRoleV1::Ungoverned);
+    }
+
+    /// A taken slot spends no yield budget: it is not a bonded block to stand aside for.
+    #[test]
+    fn a_taken_slot_spends_no_yield_budget() {
+        let mut budget = HeartbeatYieldBudget::new();
+        assert_eq!(budget.decide(HeartbeatYieldHintV1::SlotTaken(u64::MAX), 1), HeartbeatYieldDecision::Mine { ended_yield: false });
+        assert_eq!(budget, HeartbeatYieldBudget::new());
     }
 }

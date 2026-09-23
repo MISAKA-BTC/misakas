@@ -11881,11 +11881,16 @@ impl VirtualStateProcessor {
         // by the node that built it: past the anchor clock validation grants the recovery cadence
         // where the parent paces no clock, while the old call still stamped the nominal hour, which
         // the future-drift rule then rejects outright.
-        // **ADR-0142: past `palw_clock_cursor` there is no slot to wait for.** The rule retires
-        // with the validator's — a beat may be minted whenever its producer can pay for it, and it
-        // earns the chain a DAA only where the cursor says a slot is open. Stamping a future
-        // timestamp here would be the template refusing itself, which is the drift ADR-0066
-        // Decision 2 named and ADR-0138 §3c reintroduced.
+        // **ADR-0142: past `palw_clock_cursor` the slot RULE retires — and the slot does not.**
+        //
+        // The selected-parent rule is gone, but a beat still earns the chain a DAA only at or past
+        // the cursor, and this used to answer `earliest = now` regardless. The miner took that at
+        // its word and ground a beat the moment one slot was taken: measured on the live and
+        // private t12, 74% of blocks were heartbeats and 11% of beats got a tick, each of the other
+        // 89% adding a blue score and a relay for nothing. So `earliest` is the cursor's next
+        // slot, read from the SAME decision the DAA score is computed from (`DaaWindow::clock`,
+        // i.e. `palw_clock_step_v1`) for THIS template's own parents — not the virtual's, which may
+        // have moved since the template was built.
         let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
@@ -11896,9 +11901,11 @@ impl VirtualStateProcessor {
             self.palw_receipt_rows_unpriced,
         );
         let earliest = if clock_cursor_governs {
-            // Past the cursor there is nothing to wait for: the template stands as built, and the
-            // beat earns a DAA only where the cursor says a slot is open.
-            template.block.header.timestamp
+            // Past the cursor: the template's own timestamp, or the next slot if that is later — the
+            // shape the slot rule's answer always had (`Ok` → the template's time, `Err` → the
+            // boundary), so a caller that waits for `earliest` waits for exactly the slot.
+            let slot = self.palw_clock_step_for_parents(template.block.header.direct_parents())?.next_slot_ms();
+            template.block.header.timestamp.max(slot.unwrap_or(0))
         } else {
             match hb::check_heartbeat_slot_v2(
                 parent.timestamp,
@@ -11930,6 +11937,22 @@ impl VirtualStateProcessor {
         template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
         template.block.header.finalize();
         Ok((template, earliest))
+    }
+
+    /// **ADR-0142: the clock's decision for a block built on `parents`** — the cursor its window
+    /// derives at its selected parent's score and whether its mergeset carries a granted beat.
+    ///
+    /// Computed exactly as the header stage computes it for the block those parents make (GHOSTDAG,
+    /// then `block_daa_window`, whose `clock` is the half of `palw_clock_step_v1` the DAA score does
+    /// not read), so a template, the adapter and the validator cannot answer differently. Headers and
+    /// GHOSTDAG data are immutable once written, so the answer for a template's parents is the same
+    /// whenever it is asked — a template that has gone stale is still judged against its own slot.
+    pub(crate) fn palw_clock_step_for_parents(
+        &self,
+        parents: &[BlockHash],
+    ) -> Result<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockStepV1, RuleError> {
+        let ghostdag = self.ghostdag_manager.ghostdag(parents);
+        Ok(self.window_manager.block_daa_window(&ghostdag)?.clock)
     }
 
     /// **ADR-0125: the permits of one round, as the selected-parent snapshot grants them to a round
@@ -12184,7 +12207,18 @@ impl VirtualStateProcessor {
     ///
     /// **Every failure answers `NothingToYieldTo`**, i.e. "mine as before": a missing header here is
     /// a node-local fact, and the one thing this hint must never do is hold the clock on one.
+    ///
+    /// **Past `palw_clock_cursor` it answers `SlotTaken(next)` while the next slot is still in the
+    /// future** (the 2026-09-24 heartbeat audit, H1): the clock has already advanced into the slot a
+    /// beat minted now would claim, so the beat could earn nothing. The miner waits for `next`
+    /// instead of grinding a block that weighs ε, adds a blue score and ticks no DAA.
     pub fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        self.heartbeat_yield_hint_at(unix_now())
+    }
+
+    /// [`Self::heartbeat_yield_hint`] at an explicit wall clock — the node passes `unix_now()`, a
+    /// test passes its simulated time.
+    pub fn heartbeat_yield_hint_at(&self, now_ms: u64) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
         use kaspa_consensus_core::palw_heartbeat_v1 as hb;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
@@ -12216,13 +12250,21 @@ impl VirtualStateProcessor {
             self.palw_single_lottery,
             self.palw_receipt_rows_unpriced,
         );
-        hb::heartbeat_yield_hint_v2(
+        let yield_hint = hb::heartbeat_yield_hint_v2(
             selected_parent.pow_algo_id,
             anchor_clock_active,
             parent_advances_daa,
             attempt_advances_daa,
             merged,
-        )
+        );
+        // H1: the virtual's own clock decision — the one the next block's DAA score will be
+        // computed from. A failure to read it is a node-local fact and answers as before.
+        let clock = if self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
+            self.window_manager.block_daa_window(ghostdag).ok().map(|window| window.clock)
+        } else {
+            None
+        };
+        hb::heartbeat_slot_hint_v1(yield_hint, clock.as_ref(), now_ms)
     }
 
     fn build_block_template_with_selector_provider<F>(

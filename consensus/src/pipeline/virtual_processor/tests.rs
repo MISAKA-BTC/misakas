@@ -718,6 +718,99 @@ async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_tic
     );
 }
 
+/// The ADR-0142 fixture the cursor tests share: a V2 bundle with the heartbeat lane, the anchor
+/// clock and the cursor armed from genesis — and, when `floor` is set, the clock floor (H3/H5).
+fn clock_cursor_config(floor: bool) -> kaspa_consensus_core::config::Config {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+            p.palw_anchor_clock = Some(ForkActivation::always());
+            p.palw_clock_cursor = Some(ForkActivation::always());
+            let _ = floor;
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the clock and its cursor are a runnable ruleset");
+    config
+}
+
+/// Adapt a template built at `at` into a heartbeat, insert it, and return it with the `earliest`
+/// the adapter reported. The simulated clock follows the stamp, as a miner's would.
+async fn insert_beat_at(ctx: &mut TestContext, nonce: u64, at: u64) -> (kaspa_consensus_core::block::Block, u64) {
+    ctx.simulated_time = ctx.simulated_time.max(at);
+    let t = ctx.build_block_template(nonce, at);
+    let (t, earliest) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(t).expect("the lane adapts");
+    let block = t.block.to_immutable();
+    ctx.simulated_time = ctx.simulated_time.max(block.header.timestamp);
+    ctx.validate_and_insert_block(block.clone()).await.assert_valid_utxo_tip();
+    (block, earliest)
+}
+
+/// **H1 (the 2026-09-24 heartbeat audit): past the cursor the adapter's `earliest` IS the slot, and
+/// the hint says when a slot is taken.**
+///
+/// Measured on testnet-12: a tick took `120 s + a + b + c` (163–261 s per DAA), heartbeats were 74%
+/// of blocks and 11% of beats got a tick. The miner never waited, because the adapter answered
+/// `earliest = now` past the cursor — so it ground beats into a slot the clock had already advanced
+/// through, each one a blue score and a relay for nothing, and the beat that could have been granted
+/// started late. Both answers now come from the decision the DAA score itself is computed from.
+#[tokio::test]
+async fn h1_past_the_cursor_the_adapter_waits_for_the_slot_and_the_hint_names_it() {
+    use kaspa_consensus_core::palw_heartbeat_v1::{HEARTBEAT_RECOVERY_INTERVAL_MS as I, HeartbeatYieldHintV1};
+    kaspa_core::log::try_init_logger("info");
+    let config = clock_cursor_config(false);
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let daa = |ctx: &TestContext, h| ctx.consensus.virtual_processor().headers_store.get_daa_score(h).unwrap();
+
+    // Beat 0 merges the priced anchor, so the anchor ticks and beat 0 is the block at the new score:
+    // the reference. The next slot opens one interval after it.
+    let t0 = ctx.simulated_time + I;
+    let (beat0, _) = insert_beat_at(&mut ctx, 31, t0).await;
+    let slot = beat0.header.timestamp + I;
+
+    // **Ten seconds later the slot is taken.** The adapter used to answer "now" here.
+    let (early, earliest) = {
+        let t = ctx.build_block_template(32, beat0.header.timestamp + 10_000);
+        ctx.consensus.virtual_processor().heartbeat_adapt_block_template(t).expect("the lane adapts")
+    };
+    assert_eq!(earliest, slot, "past the cursor `earliest` is the next slot, not the template's own time");
+    assert_eq!(early.block.header.timestamp, slot, "and a template adapted early is stamped for the slot, never before it");
+    let vp = ctx.consensus.virtual_processor().clone();
+    assert_eq!(vp.heartbeat_yield_hint_at(beat0.header.timestamp + 10_000), HeartbeatYieldHintV1::SlotTaken(slot));
+    assert_eq!(vp.heartbeat_yield_hint_at(slot - 1), HeartbeatYieldHintV1::SlotTaken(slot), "until the last millisecond");
+    assert_ne!(vp.heartbeat_yield_hint_at(slot), HeartbeatYieldHintV1::SlotTaken(slot), "and open at the boundary");
+
+    // At the slot the beat is minted and holds it; a block that merges it steps. Between the two
+    // the hint does NOT say "taken" — the step is the next block, and this lane may be the only one
+    // that builds it.
+    let (beat1, earliest1) = insert_beat_at(&mut ctx, 33, slot).await;
+    assert_eq!(earliest1, slot);
+    assert_eq!(daa(&ctx, beat1.header.hash), daa(&ctx, beat0.header.hash), "a beat holding the slot has not stepped yet");
+    assert!(
+        !matches!(vp.heartbeat_yield_hint_at(slot + 1), HeartbeatYieldHintV1::SlotTaken(_)),
+        "a granted beat waiting in the virtual is not a taken slot: the next block steps the clock"
+    );
+    let (beat2, earliest2) = insert_beat_at(&mut ctx, 34, slot + 1_000).await;
+    assert_eq!(earliest2, slot + 1_000, "the step's slot is already open: its own time");
+    assert_eq!(daa(&ctx, beat2.header.hash), daa(&ctx, beat1.header.hash) + 1, "the step advanced the clock");
+
+    // …and now the slot IS taken, until one interval after the step: the step is the reference.
+    let next = beat2.header.timestamp + I;
+    assert_eq!(vp.heartbeat_yield_hint_at(beat2.header.timestamp + 1), HeartbeatYieldHintV1::SlotTaken(next));
+}
+
 #[tokio::test]
 async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;

@@ -127,6 +127,38 @@ pub fn palw_clock_cursor_from_reference_v1(reference_ms: u64, interval_ms: u64) 
     PalwClockCursorV1 { next_slot_ms: reference_ms.saturating_add(interval_ms.max(1)), slots_consumed: 0 }
 }
 
+/// **What the clock decided for one block — the other half of the DAA score's answer.**
+///
+/// `palw_clock_step_v1` computes, for every block, whether a heartbeat in its mergeset is granted a
+/// DAA. The exemption count is the half the score reads; this is the half everything else needs —
+/// the heartbeat adapter's `earliest`, the miner's hint and (behind their own fence) the header's
+/// timestamp rules. It rides in the DAA window beside the score, so each of those readers takes the
+/// decision the score was computed from instead of re-deriving it: ADR-0142 §5's "one function, and
+/// everything asks it", extended to the readers that came after it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PalwClockStepV1 {
+    /// `palw_clock_cursor` governs this block — read at its SELECTED PARENT's score, as the grant is.
+    pub governs: bool,
+    /// The cursor this block's own window derives at its selected parent's score. `None` where the
+    /// cursor does not govern, or where the window holds no block at that score (no slot is known
+    /// to be taken — the first block past the fence, or genesis).
+    pub cursor: Option<PalwClockCursorV1>,
+    /// This block steps the clock on a heartbeat's grant: its mergeset carries nothing `bits`
+    /// prices and a beat at or past the cursor. Exactly the condition that takes one beat out of
+    /// the exempt count.
+    pub granted: bool,
+}
+
+impl PalwClockStepV1 {
+    /// The earliest timestamp a beat built on these parents can carry and still be the beat a slot
+    /// grants — the cursor's next slot. `None` where no cursor governs or none is known, which is
+    /// "no slot to wait for".
+    #[inline]
+    pub fn next_slot_ms(&self) -> Option<u64> {
+        if self.governs { self.cursor.map(|cursor| cursor.next_slot_ms) } else { None }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
