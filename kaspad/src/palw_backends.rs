@@ -610,13 +610,95 @@ pub const PALW_CLASS_NODE_RESERVE_BYTES_V1: u64 = 16 << 30;
 /// page cache; a number is the number; nothing said is the default, measured against this host
 /// ([`palw_class_default_residency_v1`]).
 pub fn palw_class_residency_v1(resident_bytes: Option<u64>) -> misaka_palw_sdk::PalwWeightResidencyV1 {
+    palw_class_residency_within_share_v1(resident_bytes, None)
+}
+
+/// **The residency policy, measured against this process's SHARE of the host rather than the host**
+/// (ADR-0151 follow-up item 4).
+///
+/// `share` is `--palw-host-memory-budget / --palw-host-node-count`, or `None` when the operator
+/// declared no budget — in which case this is exactly [`palw_class_residency_v1`]'s old behaviour and
+/// every node on the host still sizes itself as though it were alone. That default is kept, rather
+/// than guessed at, because a budget is a fact only the operator has: a node cannot count its
+/// siblings without racing them, and the loser of that race is the process the kernel kills.
+///
+/// A STATED `--palw-class-resident-bytes` is still the number, share or no share. An operator who
+/// names a figure has made the division themselves, and silently shrinking it would make the flag
+/// mean something other than what it says.
+pub fn palw_class_residency_within_share_v1(
+    resident_bytes: Option<u64>,
+    share: Option<u64>,
+) -> misaka_palw_sdk::PalwWeightResidencyV1 {
     use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
     match resident_bytes {
-        None => palw_class_default_residency_v1(host_available_bytes_v1()),
+        None => match share {
+            // The share IS the headroom: it already excludes the other nodes, so the host-wide
+            // reserve is not subtracted a second time — that reserve exists to keep a node's own
+            // non-weight memory out of the weights' budget, and a share divides the same host.
+            Some(share) => palw_class_default_residency_v1(Some(share.saturating_add(PALW_CLASS_NODE_RESERVE_BYTES_V1))),
+            None => palw_class_default_residency_v1(host_available_bytes_v1()),
+        },
         Some(0) => Residency::PageCache,
         Some(bytes) => Residency::Bytes(bytes),
     }
 }
+
+/// **The floor a share must clear to run a node at all**, beyond any class it holds: the consensus
+/// stores, RocksDB's caches and the node's own working set at the smallest `--ram-scale` the daemon
+/// accepts (0.1).
+///
+/// Measured rather than chosen: on the t12 fleet a seat that held the 2M artifact and served the panel
+/// sat at 2.55–3.92 GiB with `--ram-scale=0.25`, of which 1.06 GiB was anonymous and 0.81–2.69 GiB was
+/// the artifact's file-backed pages shared with its siblings. 2 GiB is the anonymous half with room,
+/// and it is a FLOOR — a share that clears it is not thereby comfortable.
+pub const PALW_HOST_SHARE_FLOOR_BYTES_V1: u64 = 2 << 30;
+
+/// **Refuse a share that cannot run a node** (ADR-0151 follow-up item 4).
+///
+/// The point of a declared budget is that over-commitment becomes a statement the operator can be
+/// held to instead of a race the kernel settles. That only works if an impossible division is refused:
+/// `--palw-host-memory-budget=24GiB --palw-host-node-count=20` is not a cautious operator, it is a
+/// host that will thrash, and the honest moment to say so is before anything is served.
+///
+/// `Ok` for no declared budget — that is the old per-process behaviour, which this does not tighten
+/// behind the operator's back.
+pub fn check_host_share_v1(budget: Option<u64>, node_count: u32, share: Option<u64>) -> Result<(), String> {
+    let (Some(budget), Some(share)) = (budget, share) else { return Ok(()) };
+    if share >= PALW_HOST_SHARE_FLOOR_BYTES_V1 {
+        return Ok(());
+    }
+    Err(format!(
+        "--palw-host-memory-budget {:.2} GiB divided between {node_count} node(s) leaves {:.2} GiB for this one, under the \
+         {:.2} GiB a node needs for its consensus stores and caches before it holds any class weights at all. Raise the \
+         budget, lower --palw-host-node-count, or run fewer nodes on this host — a division this thin does not make the \
+         memory go further, it makes every node page.",
+        gib(budget),
+        gib(share),
+        gib(PALW_HOST_SHARE_FLOOR_BYTES_V1)
+    ))
+}
+
+/// **The host-budget arithmetic, printed once at startup.**
+///
+/// The failure this exists to make impossible was invisible: four seats each logged a residency budget
+/// that was individually reasonable, and nothing anywhere said that the four of them summed past the
+/// host. A line that names the budget, the count, the share and the derived scale is the difference
+/// between an operator who can see the over-commitment and one who finds out from `dmesg`.
+pub fn report_host_memory_budget_v1(budget: Option<u64>, node_count: u32, share: Option<u64>, ram_scale: f64) {
+    match (budget, share) {
+        (Some(budget), Some(share)) => info!(
+            "[palw-host] memory budget {:.2} GiB across {node_count} node(s) on this host = {:.2} GiB for this one;              --ram-scale {ram_scale:.3} and the class residency budget both follow that share, not the host's free memory.              The host reports {} available right now",
+            gib(budget),
+            gib(share),
+            host_available_bytes_v1().map_or("no figure on this platform".to_string(), |a| format!("{:.2} GiB", gib(a)))
+        ),
+        _ => info!(
+            "[palw-host] no --palw-host-memory-budget: this node sizes its caches and its class residency against the WHOLE              host's free memory, which is correct for one node and over-commits by a factor of N for N of them on one host.              Declare a budget and --palw-host-node-count when this host runs more than one"
+        ),
+    }
+}
+
+
 
 /// **The default, given what the host has available** (ADR-0112 Decision 2, amended 2026-09-11):
 /// a fifth of the weights within what is available less the node's own reserve — taken whole, in

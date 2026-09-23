@@ -83,6 +83,11 @@ impl std::fmt::Display for NodeProfile {
 }
 
 const VPS_8GB_RAM_SCALE: f64 = 0.3;
+/// **`ram_scale` per GiB of a process's share**, anchored on the shipped 8 GB profile rather than
+/// invented: `--vps-8gb` chooses 0.3 for a host of 8 GB, so 0.0375 a GiB is the same slope the tree
+/// already ships. Used to derive a scale from a declared per-host budget — see
+/// `--palw-host-memory-budget`.
+const PALW_RAM_SCALE_PER_SHARE_GIB: f64 = VPS_8GB_RAM_SCALE / 8.0;
 const VPS_8GB_ASYNC_THREADS: usize = 2;
 const VPS_8GB_OUTPEERS: usize = 4;
 const VPS_8GB_MAXINPEERS: usize = 32;
@@ -396,6 +401,14 @@ pub struct Args {
     #[serde(rename = "nogrpc")]
     pub disable_grpc: bool,
     pub ram_scale: f64,
+    /// ADR-0151 follow-up item 4: the memory ALL misaka nodes on this host may use together, in
+    /// bytes. `None` keeps the per-process behaviour, where each node sizes itself against the whole
+    /// host's `MemAvailable` and four of them on one host therefore promise away four times what is
+    /// there.
+    pub palw_host_memory_budget: Option<u64>,
+    /// How many nodes that budget is divided between. Declared rather than discovered: counting
+    /// siblings at startup is a race, and the sibling that loses it is the one that gets OOM-killed.
+    pub palw_host_node_count: u32,
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
@@ -542,6 +555,8 @@ impl Default for Args {
             disable_dns_seeding: false,
             disable_grpc: false,
             ram_scale: 1.0,
+            palw_host_memory_budget: None,
+            palw_host_node_count: 1,
             retention_period_days: None,
             override_params_file: None,
             rocksdb_preset: None,
@@ -1909,6 +1924,34 @@ Setting to 0 prevents the preallocation and sets the maximum to {}, leading to 0
 a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance especially for syncing peers faster"),
         )
         .arg(
+            Arg::new("palw-host-memory-budget")
+                .long("palw-host-memory-budget")
+                .env("KASPAD_PALW_HOST_MEMORY_BUDGET")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: the memory ALL misaka nodes on this host may use TOGETHER, in bytes. Divided by \
+                     --palw-host-node-count to give this process its share, and the share — not the host's MemAvailable \
+                     — is then what the class residency budget is measured against and what --ram-scale is derived from \
+                     when you have not set one. Unset keeps the per-process behaviour, in which every node sizes itself \
+                     against the whole host: four seats on a 24 GB host each computed a budget as though the other three \
+                     did not exist, took 22 of 23 GB with 14 GB of swap, and the kernel OOM-killed two of them. A budget \
+                     is how a host stops promising the same bytes four times.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-host-node-count")
+                .long("palw-host-node-count")
+                .env("KASPAD_PALW_HOST_NODE_COUNT")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u32))
+                .help(
+                    "MISAKA PALW: how many misaka nodes --palw-host-memory-budget is divided between, including this one. \
+                     DECLARED rather than discovered: counting siblings at startup is a race, and the sibling that loses \
+                     it is the one that gets OOM-killed. Default 1.",
+                ),
+        )
+        .arg(
             Arg::new("retention-period-days")
                 .long("retention-period-days")
                 .require_equals(true)
@@ -2233,6 +2276,8 @@ impl Args {
             disable_dns_seeding: arg_match_unwrap_or::<bool>(&m, "nodnsseed", defaults.disable_dns_seeding),
             disable_grpc: arg_match_unwrap_or::<bool>(&m, "nogrpc", defaults.disable_grpc),
             ram_scale: arg_match_unwrap_or::<f64>(&m, "ram-scale", defaults.ram_scale),
+            palw_host_memory_budget: m.get_one::<u64>("palw-host-memory-budget").copied().or(defaults.palw_host_memory_budget),
+            palw_host_node_count: arg_match_unwrap_or::<u32>(&m, "palw-host-node-count", defaults.palw_host_node_count),
             retention_period_days: m.get_one::<f64>("retention-period-days").cloned().or(defaults.retention_period_days),
 
             #[cfg(feature = "devnet-prealloc")]
@@ -2309,7 +2354,45 @@ impl Args {
     }
 }
 
+/// **This process's share of a declared per-host budget**, or `None` when none was declared.
+///
+/// The whole of item 4. Before this, every node asked the HOST what was available and took a fifth of
+/// its own artifact within that, less a 16 GiB reserve — a calculation that is right for one node and
+/// wrong by a factor of N for N of them. Four seats on a 24 GB host each did it, reached 22 of 23 GB
+/// with 14 of 19 GB of swap in use, and the kernel chose which two to kill.
+///
+/// Declared, not discovered: a node that counted its siblings would race them at startup, and the
+/// loser of that race is the process that dies.
+pub fn palw_host_share_bytes_v1(args: &Args) -> Option<u64> {
+    let budget = args.palw_host_memory_budget?;
+    Some(budget / args.palw_host_node_count.max(1) as u64)
+}
+
+/// **The `ram_scale` a share implies**, on the slope `--vps-8gb` already ships (0.3 at 8 GB).
+///
+/// This is the lever that actually moved the fleet: the residency budget is inert for a DENSE class
+/// (`residency_stats_of` is scoped to the MoE lineage, so a Qwen2.5 artifact logs no residency line at
+/// all), and what the four seats were really spending was the node's own consensus and RocksDB caches
+/// — which `--ram-scale` bounds. Setting it to 0.25 by hand took the host from 22/23 GB used with
+/// 14 GB of swap to 6/23 GB with 1 GB. A budget that did not reach this lever would leave the same
+/// hole under a better-sounding name.
+pub fn palw_ram_scale_for_share_v1(share_bytes: u64) -> f64 {
+    let gib = share_bytes as f64 / (1u64 << 30) as f64;
+    (gib * PALW_RAM_SCALE_PER_SHARE_GIB).clamp(0.1, 10.0)
+}
+
 fn apply_profile_defaults(args: &mut Args, m: &clap::ArgMatches, cfg: &Args) {
+    // **A declared share sizes the caches, whatever profile is in play.** Before the early return,
+    // because a host budget is not a profile: an operator running four seats has declared a fact about
+    // the host, and it must hold for a plain node as much as for `--vps-8gb`.
+    let stock_scale = Args::default().ram_scale;
+    let scale_set_by_hand = m.value_source("ram-scale").map(|src| src != DefaultValue).unwrap_or(false);
+    if let Some(share) = palw_host_share_bytes_v1(args)
+        && !scale_set_by_hand
+        && cfg.ram_scale == stock_scale
+    {
+        args.ram_scale = palw_ram_scale_for_share_v1(share);
+    }
     if !(args.vps_8gb || args.node_profile.is_sync_only()) {
         return;
     }

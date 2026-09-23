@@ -447,6 +447,22 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // Before any service constructs its holdings, because the check has to be the same for all of
     // them (see `arm_class_manifest_verification_v1`).
     crate::palw_backends::arm_class_manifest_verification_v1(args.palw_verify_class_manifest);
+    // Item 4's guarantee: an impossible division is refused here, not settled by the OOM killer.
+    if let Err(why) = crate::palw_backends::check_host_share_v1(
+        args.palw_host_memory_budget,
+        args.palw_host_node_count,
+        crate::args::palw_host_share_bytes_v1(args),
+    ) {
+        println!("{why}");
+        exit(1);
+    }
+    // Item 4's arithmetic, where the operator reads it — before any service sizes anything.
+    crate::palw_backends::report_host_memory_budget_v1(
+        args.palw_host_memory_budget,
+        args.palw_host_node_count,
+        crate::args::palw_host_share_bytes_v1(args),
+        args.ram_scale,
+    );
 
     let params = {
         let params: Params = network.into();
@@ -1427,7 +1443,10 @@ Do you confirm? (y/n)";
                         prompt_ids_form: config.params.palw_prompt_ids_form_v1(),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
-                        class_residency: crate::palw_backends::palw_class_residency_v1(args.palw_class_resident_bytes),
+                        class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
+                            args.palw_class_resident_bytes,
+                            crate::args::palw_host_share_bytes_v1(args),
+                        ),
                     },
                     consensus_manager.clone(),
                     mining_manager.clone(),
@@ -1698,7 +1717,10 @@ Do you confirm? (y/n)";
                         prompt_ids_form: config_for_palw_panel.params.palw_prompt_ids_form_v1(),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
-                        class_residency: crate::palw_backends::palw_class_residency_v1(args.palw_class_resident_bytes),
+                        class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
+                            args.palw_class_resident_bytes,
+                            crate::args::palw_host_share_bytes_v1(args),
+                        ),
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
                         canonical_claims: args.palw_canonical_claims,
                         canonical_class: args.palw_canonical_class.clone(),
