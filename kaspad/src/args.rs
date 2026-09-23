@@ -409,6 +409,12 @@ pub struct Args {
     /// How many nodes that budget is divided between. Declared rather than discovered: counting
     /// siblings at startup is a race, and the sibling that loses it is the one that gets OOM-killed.
     pub palw_host_node_count: u32,
+    /// THIS process's share of the host, in bytes, stated outright — for a host whose nodes are not
+    /// alike. `--palw-host-memory-budget / --palw-host-node-count` divides equally, and a producer
+    /// holding a 2M class beside three panel-only seats is not an equal division: under A16-KV-i16
+    /// the producer's attempt is ~11.6 GiB and a panel seat idles at ~1.75. Overrides the division
+    /// when set; the floor check and the reservation ledger read the result the same way.
+    pub palw_host_memory_share: Option<u64>,
     pub retention_period_days: Option<f64>,
 
     pub override_params_file: Option<String>,
@@ -557,6 +563,7 @@ impl Default for Args {
             ram_scale: 1.0,
             palw_host_memory_budget: None,
             palw_host_node_count: 1,
+            palw_host_memory_share: None,
             retention_period_days: None,
             override_params_file: None,
             rocksdb_preset: None,
@@ -1940,6 +1947,22 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
                 ),
         )
         .arg(
+            Arg::new("palw-host-memory-share")
+                .long("palw-host-memory-share")
+                .env("KASPAD_PALW_HOST_MEMORY_SHARE")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: THIS process's share of the host, in bytes, stated outright. Use it when the nodes on a \
+                     host are not alike — --palw-host-memory-budget divided by --palw-host-node-count is an equal split, \
+                     and a producer holding a 2M class (~11.6 GiB an attempt under A16-KV-i16) beside three panel-only \
+                     seats (~1.75 GiB each) is not one. Overrides the division when set. The 2 GiB floor, the derived \
+                     --ram-scale, the class residency budget and the reservation ledger all follow the stated share. \
+                     The operator is responsible for the shares summing to what the host has; the ledger's live \
+                     MemAvailable bound is the backstop when they do not.",
+                ),
+        )
+        .arg(
             Arg::new("palw-host-node-count")
                 .long("palw-host-node-count")
                 .env("KASPAD_PALW_HOST_NODE_COUNT")
@@ -2278,6 +2301,7 @@ impl Args {
             ram_scale: arg_match_unwrap_or::<f64>(&m, "ram-scale", defaults.ram_scale),
             palw_host_memory_budget: m.get_one::<u64>("palw-host-memory-budget").copied().or(defaults.palw_host_memory_budget),
             palw_host_node_count: arg_match_unwrap_or::<u32>(&m, "palw-host-node-count", defaults.palw_host_node_count),
+            palw_host_memory_share: m.get_one::<u64>("palw-host-memory-share").copied().or(defaults.palw_host_memory_share),
             retention_period_days: m.get_one::<f64>("retention-period-days").cloned().or(defaults.retention_period_days),
 
             #[cfg(feature = "devnet-prealloc")]
@@ -2364,6 +2388,10 @@ impl Args {
 /// Declared, not discovered: a node that counted its siblings would race them at startup, and the
 /// loser of that race is the process that dies.
 pub fn palw_host_share_bytes_v1(args: &Args) -> Option<u64> {
+    // An explicit share wins: the operator has done the division by role rather than by count.
+    if let Some(share) = args.palw_host_memory_share {
+        return Some(share);
+    }
     let budget = args.palw_host_memory_budget?;
     Some(budget / args.palw_host_node_count.max(1) as u64)
 }

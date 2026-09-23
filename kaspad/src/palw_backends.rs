@@ -886,6 +886,15 @@ pub fn check_host_share_v1(budget: Option<u64>, node_count: u32, share: Option<u
 /// between an operator who can see the over-commitment and one who finds out from `dmesg`.
 pub fn report_host_memory_budget_v1(budget: Option<u64>, node_count: u32, share: Option<u64>, ram_scale: f64) {
     match (budget, share) {
+        // A share stated outright, with or without a budget beside it.
+        (_, Some(share)) if budget.is_none_or(|b| b / node_count.max(1) as u64 != share) => info!(
+            "[palw-host] memory share for this node stated outright: {:.2} GiB (--palw-host-memory-share); --ram-scale \
+             {ram_scale:.3} and the class residency budget follow it, not the host's free memory. The host reports {} \
+             available right now; the shares on this host must sum to what it has, and the reservation ledger's live \
+             bound is the backstop when they do not",
+            gib(share),
+            host_available_bytes_v1().map_or("no figure on this platform".to_string(), |a| format!("{:.2} GiB", gib(a)))
+        ),
         (Some(budget), Some(share)) => info!(
             "[palw-host] memory budget {:.2} GiB across {node_count} node(s) on this host = {:.2} GiB for this one;              --ram-scale {ram_scale:.3} and the class residency budget both follow that share, not the host's free memory.              The host reports {} available right now",
             gib(budget),
