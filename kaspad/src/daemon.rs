@@ -1453,9 +1453,16 @@ Do you confirm? (y/n)";
                         prompt_ids_form: config.params.palw_prompt_ids_form_v1(),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
-                        class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
+                        // The attempt is carved out of the share before the weights are budgeted
+                        // (ADR-0151 follow-up): what this producer class needs for one attempt,
+                        // from the class table, comes off first.
+                        class_residency: crate::palw_backends::palw_class_residency_beside_the_attempt_v1(
                             args.palw_class_resident_bytes,
                             crate::args::palw_host_share_bytes_v1(args),
+                            crate::palw_backends::palw_producer_attempt_reserve_v1(
+                                &palw_court.expect("a ConsensusV2 bundle was matched above"),
+                                Some(class_id),
+                            ),
                         ),
                     },
                     consensus_manager.clone(),
