@@ -533,6 +533,9 @@ pub struct FlowContextInner {
 
     /// ADR-0125 §7.3: round blocks by permit — one relayed a permit, and the evidence of two.
     palw_round_relay: crate::palw_round_relay::PalwRoundRelayV1,
+
+    /// The 2026-09-24 heartbeat audit, H2: heartbeats by slot — one announced a slot.
+    palw_heartbeat_relay: crate::palw_heartbeat_relay::PalwHeartbeatRelayV1,
 }
 
 /// **This node's PALW runtime** (ADR-0122 §6.5): the producer's state and why, its counts and its
@@ -792,6 +795,7 @@ impl FlowContext {
                 consensus_manager,
                 palw_gossip: crate::palw_gossip::PalwGossipCenter::default(),
                 palw_round_relay: Default::default(),
+                palw_heartbeat_relay: Default::default(),
                 orphans_pool: AsyncRwLock::new(OrphanBlocksPool::new(max_orphans)),
                 shared_block_requests: Arc::new(Mutex::new(HashMap::new())),
                 transactions_spread: AsyncRwLock::new(TransactionsSpread::new(hub.clone())),
@@ -899,6 +903,52 @@ impl FlowContext {
             V::Equivocation => {
                 warn!(
                     "[palw-round-relay] round block {hash} is a second signed block for a permit already seen — kept, not relayed, filed as evidence"
+                );
+                false
+            }
+        }
+    }
+
+    /// **May this validated block be announced onward?** One door for both relay call sites:
+    /// ADR-0125 §7.3's round-lane rule and the heartbeat audit's H2 slot rule.
+    pub async fn palw_lane_relay_admits(&self, consensus: &ConsensusProxy, block: &Block) -> bool {
+        self.palw_round_relay_admits(consensus, block).await && self.palw_heartbeat_relay_admits(consensus, block).await
+    }
+
+    /// Whether the heartbeat lane's relay rules (H2) govern a block at `daa_score`: where the clock
+    /// cursor does. Below it the lane keeps ADR-0066's selected-parent slot rule, which bounds a
+    /// chain of beats by itself, and a `(score, parent score)` key names no slot.
+    pub fn palw_heartbeat_relay_governs(&self, daa_score: u64) -> bool {
+        self.config.params.palw_clock_cursor.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **H2 (the 2026-09-24 heartbeat audit): announce the first heartbeat per slot and no other.**
+    /// Every block but a heartbeat may be announced; a heartbeat may when it is the first this node
+    /// has validated for its `(DAA score, selected parent's DAA score)`. A second one is kept — it
+    /// is valid and can still be merged, and a descendant that needs it fetches it as an orphan
+    /// root — but it is not announced, so a slot's surplus beats stop at the first hop instead of
+    /// costing every peer a download and a validation. See [`crate::palw_heartbeat_relay`].
+    pub async fn palw_heartbeat_relay_admits(&self, consensus: &ConsensusProxy, block: &Block) -> bool {
+        use crate::palw_heartbeat_relay::PalwHeartbeatRelayVerdictV1 as V;
+        if block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
+            || !self.palw_heartbeat_relay_governs(block.header.daa_score)
+        {
+            return true;
+        }
+        let hash = block.hash();
+        // A read failure is a node-local fact: announce, as before, rather than silence a beat.
+        let Ok(ghostdag) = consensus.async_get_ghostdag_data(hash).await else {
+            return true;
+        };
+        let Ok(parent) = consensus.async_get_header(ghostdag.selected_parent).await else {
+            return true;
+        };
+        match self.palw_heartbeat_relay.observe(hash, &block.header, parent.daa_score) {
+            V::NotHeartbeat | V::First => true,
+            V::Repeat => {
+                debug!(
+                    "[palw-heartbeat-relay] heartbeat {hash} is not the first for its slot (DAA {} over {}) — kept, not announced",
+                    block.header.daa_score, parent.daa_score
                 );
                 false
             }
@@ -1356,8 +1406,9 @@ impl FlowContext {
             return Err(err)?;
         }
         // Broadcast as soon as the block has been validated and inserted into the DAG — a round
-        // block only if it is the first this node holds for its permit (ADR-0125 §7.3).
-        if self.palw_round_relay_admits(consensus, &block).await {
+        // block only if it is the first this node holds for its permit (ADR-0125 §7.3), a
+        // heartbeat only if it is the first for its slot (H2).
+        if self.palw_lane_relay_admits(consensus, &block).await {
             self.hub.broadcast(make_message!(Payload::InvRelayBlock, InvRelayBlockMessage { hash: Some(hash.into()) }), None).await;
         }
 

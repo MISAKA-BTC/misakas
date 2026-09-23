@@ -160,7 +160,7 @@ impl HeaderProcessor {
         for member in ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()) {
             let member_header = self.headers_store.get_header(*member).unwrap();
             if member_header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeats.push((member_header.blue_score, *member));
+                heartbeats.push((member_header.blue_score, *member, member_header.timestamp));
             }
         }
         if heartbeats.len() as u64 <= bound {
@@ -170,11 +170,26 @@ impl HeaderProcessor {
         // order on a chain and blue score respects it, so sorting by blue score and asking one
         // reachability query per adjacent pair decides the whole set. (Ties in blue score are
         // possible only for blocks that are NOT ancestor-related, so a tie already fails.)
-        heartbeats.sort_unstable_by_key(|(blue_score, _)| *blue_score);
+        heartbeats.sort_unstable_by_key(|(blue_score, _, _)| *blue_score);
         for pair in heartbeats.windows(2) {
-            let ((_, older), (_, newer)) = (pair[0], pair[1]);
+            let ((_, older, _), (_, newer, _)) = (pair[0], pair[1]);
             if !self.reachability_service.is_dag_ancestor_of(older, newer) {
                 return Err(RuleError::MergeSetTooManyHeartbeats(heartbeats.len() as u64, bound));
+            }
+        }
+        // **H3 (the 2026-09-24 heartbeat audit): past `palw_clock_floor` the chain must also be
+        // PACED.** "Its length is already priced by the slot ladder" stopped being true when the
+        // cursor retired the ladder: beats each hanging off a heavier block at one score are all
+        // stamped for one slot, each valid alone, and form one chain. An honest chain holds at most
+        // two beats a slot, so its own timestamps pay for its length
+        // (`heartbeat_chain_capacity_v1`); a burst's do not.
+        if self.palw_clock_floor.is_some_and(|fence| fence.is_active(header.daa_score)) {
+            let (oldest, newest) =
+                heartbeats.iter().fold((u64::MAX, 0u64), |(lo, hi), (_, _, timestamp)| (lo.min(*timestamp), hi.max(*timestamp)));
+            let span = newest.saturating_sub(oldest);
+            let capacity = kaspa_consensus_core::palw_heartbeat_v1::heartbeat_chain_capacity_v1(span, bound);
+            if heartbeats.len() as u64 > capacity {
+                return Err(RuleError::MergeSetHeartbeatChainUnpaced(heartbeats.len() as u64, span, capacity));
             }
         }
         Ok(())

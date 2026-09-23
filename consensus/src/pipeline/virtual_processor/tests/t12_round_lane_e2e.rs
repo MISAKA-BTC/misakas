@@ -92,7 +92,7 @@ fn card_payout_spk(i: usize) -> ScriptPublicKey {
 /// **testnet-12 as shipped, with harness keys on its eight genesis cards** — see the module doc for
 /// the three differences and why each is forced. Returns the config, the bundle, the genesis UTXO
 /// set the harness imports and each card's fee float in that set.
-fn t12_with_harness_cards()
+pub(super) fn t12_with_harness_cards()
 -> (Config, PalwConsensusParamsV2, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) {
     use kaspa_consensus_core::config::params::PALW_T12_GENESIS_BONDS;
     use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint_for};
@@ -700,9 +700,14 @@ async fn a_round_block_in_the_target_span(
         PALW_EXEC_ENVELOPE_VERSION_V1, PALW_EXEC_MLDSA87_CONTEXT, PalwExecEnvelopeV1, palw_exec_signing_message_v1,
         palw_execution_span_v1,
     };
-    // One second on: the beat it merges is the one that opened the span, so it earns no DAA and the
-    // span does not move.
-    at.chain.heartbeat(1_000, Vec::new()).await;
+    // One second on, a block that does not move the clock, so the opening block becomes the sink's
+    // selected parent — the anchor a round block hangs from — and the span does not move. It used to
+    // be a heartbeat stamped a second after the span opened, which earned no DAA only because it was
+    // stamped BEFORE its slot. The heartbeat audit's H1 stamps a beat for its slot and H3 refuses one
+    // before it (a beat that can never tick is the 89% the audit measured), so a beat here would hold
+    // the slot and the next block would step out of the span. An attempt block moves no clock on
+    // testnet-12; card 3 is not otherwise used by these scenarios.
+    at.chain.attempt(3, 1_000, Vec::new(), &|_| true).await;
     assert_eq!(palw_execution_span_v1(at.chain.sink_daa(), at.span_daa), at.target, "still the target span");
     assert_eq!(at.chain.vp().ghostdag_store.get_selected_parent(at.chain.sink()).unwrap(), at.opening);
 

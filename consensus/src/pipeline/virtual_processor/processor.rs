@@ -590,6 +590,9 @@ pub struct VirtualStateProcessor {
     /// ADR-0142: `Params::palw_clock_cursor`. Past it the heartbeat lane's admissibility is the
     /// rooted cursor, and only a heartbeat writes it.
     pub(super) palw_clock_cursor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-24 heartbeat audit's H3/H5 (`Params::palw_clock_floor`): templates keep a
+    /// heartbeat chain paced and stamp a step at or past its slot, as the header stage demands.
+    pub(super) palw_clock_floor: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
@@ -876,6 +879,7 @@ impl VirtualStateProcessor {
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
+            palw_clock_floor: params.palw_clock_floor,
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
@@ -11772,12 +11776,18 @@ impl VirtualStateProcessor {
         // or the F5 chain exemption — mirroring `check_mergeset_heartbeat_width` exactly, so a
         // template never builds what consensus refuses and never refuses what consensus admits.
         let track_heartbeats = self.palw_heartbeat_width_fence.is_some();
-        let mut heartbeat_set: Vec<(u64, BlockHash)> = Vec::new();
+        let mut heartbeat_set: Vec<(u64, BlockHash, u64)> = Vec::new();
+        // H3: whether the chain exemption must also be paced. Judged at the selected parent's score
+        // PLUS ONE — the highest score the block this template becomes can carry — so a template at
+        // the fence applies the rule wherever the header stage might, and never builds a block it
+        // refuses.
+        let mut paced = false;
         if track_heartbeats {
             let sp = self.headers_store.get_header(selected_parent).unwrap();
             if sp.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeat_set.push((sp.blue_score, selected_parent));
+                heartbeat_set.push((sp.blue_score, selected_parent, sp.timestamp));
             }
+            paced = self.palw_clock_floor.is_some_and(|fence| fence.is_active(sp.daa_score.saturating_add(1)));
         }
 
         // ADR-0125: one parent slot is kept for the round lane while it has a tip to offer, so a DAG
@@ -11793,7 +11803,7 @@ impl VirtualStateProcessor {
                     if !heartbeat_members.is_empty() {
                         let mut combined = heartbeat_set.clone();
                         combined.extend_from_slice(&heartbeat_members);
-                        if !self.heartbeat_set_admissible(&mut combined) {
+                        if !self.heartbeat_set_admissible(&mut combined, paced) {
                             // Over the flat bound and not one chain: this candidate widens the
                             // heartbeat lane past what consensus admits. Nothing to substitute —
                             // skip it; a later template absorbs it against a fresh mergeset.
@@ -11943,14 +11953,14 @@ impl VirtualStateProcessor {
 
         // `false` = the lane is not armed on this network, so no header can be a heartbeat and
         // the set is vacuously empty — skip the per-member header reads entirely.
-        let mut heartbeat_members: Vec<(u64, BlockHash)> = Vec::new();
+        let mut heartbeat_members: Vec<(u64, BlockHash, u64)> = Vec::new();
         let mut note_heartbeat = |hash: BlockHash| {
             if !track_heartbeats {
                 return;
             }
             let header = self.headers_store.get_header(hash).unwrap();
             if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeat_members.push((header.blue_score, hash));
+                heartbeat_members.push((header.blue_score, hash, header.timestamp));
             }
         };
         note_heartbeat(candidate);
@@ -11984,16 +11994,25 @@ impl VirtualStateProcessor {
     /// exemption) — the same predicate `check_mergeset_heartbeat_width` enforces: at most
     /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeats, or any number of them provided they form
     /// ONE chain (sorted by blue score, each adjacent pair ancestor-related; a blue-score tie
-    /// is never ancestor-related and fails). Sorts the given buffer in place.
-    fn heartbeat_set_admissible(&self, set: &mut [(u64, BlockHash)]) -> bool {
-        if set.len() as u64 <= kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET {
+    /// is never ancestor-related and fails) — and, where `paced` (H3, past `palw_clock_floor`),
+    /// no more than the chain's own timestamps pay for (`heartbeat_chain_capacity_v1`). Elements
+    /// are `(blue_score, hash, timestamp)`. Sorts the given buffer in place.
+    fn heartbeat_set_admissible(&self, set: &mut [(u64, BlockHash, u64)], paced: bool) -> bool {
+        let bound = kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET;
+        if set.len() as u64 <= bound {
             return true;
         }
-        set.sort_unstable_by_key(|(blue_score, _)| *blue_score);
-        set.windows(2).all(|pair| {
-            let ((_, older), (_, newer)) = (pair[0], pair[1]);
+        set.sort_unstable_by_key(|(blue_score, _, _)| *blue_score);
+        let one_chain = set.windows(2).all(|pair| {
+            let ((_, older, _), (_, newer, _)) = (pair[0], pair[1]);
             self.reachability_service.is_dag_ancestor_of(older, newer)
-        })
+        });
+        if !one_chain || !paced {
+            return one_chain;
+        }
+        let (oldest, newest) =
+            set.iter().fold((u64::MAX, 0u64), |(lo, hi), (_, _, timestamp)| (lo.min(*timestamp), hi.max(*timestamp)));
+        set.len() as u64 <= kaspa_consensus_core::palw_heartbeat_v1::heartbeat_chain_capacity_v1(newest.saturating_sub(oldest), bound)
     }
 
     fn remove_bounded_merge_breaking_parents(
@@ -12249,11 +12268,16 @@ impl VirtualStateProcessor {
         // by the node that built it: past the anchor clock validation grants the recovery cadence
         // where the parent paces no clock, while the old call still stamped the nominal hour, which
         // the future-drift rule then rejects outright.
-        // **ADR-0142: past `palw_clock_cursor` there is no slot to wait for.** The rule retires
-        // with the validator's — a beat may be minted whenever its producer can pay for it, and it
-        // earns the chain a DAA only where the cursor says a slot is open. Stamping a future
-        // timestamp here would be the template refusing itself, which is the drift ADR-0066
-        // Decision 2 named and ADR-0138 §3c reintroduced.
+        // **ADR-0142: past `palw_clock_cursor` the slot RULE retires — and the slot does not.**
+        //
+        // The selected-parent rule is gone, but a beat still earns the chain a DAA only at or past
+        // the cursor, and this used to answer `earliest = now` regardless. The miner took that at
+        // its word and ground a beat the moment one slot was taken: measured on the live and
+        // private t12, 74% of blocks were heartbeats and 11% of beats got a tick, each of the other
+        // 89% adding a blue score and a relay for nothing. So `earliest` is the cursor's next
+        // slot, read from the SAME decision the DAA score is computed from (`DaaWindow::clock`,
+        // i.e. `palw_clock_step_v1`) for THIS template's own parents — not the virtual's, which may
+        // have moved since the template was built.
         let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
@@ -12264,9 +12288,11 @@ impl VirtualStateProcessor {
             self.palw_receipt_rows_unpriced,
         );
         let earliest = if clock_cursor_governs {
-            // Past the cursor there is nothing to wait for: the template stands as built, and the
-            // beat earns a DAA only where the cursor says a slot is open.
-            template.block.header.timestamp
+            // Past the cursor: the template's own timestamp, or the next slot if that is later — the
+            // shape the slot rule's answer always had (`Ok` → the template's time, `Err` → the
+            // boundary), so a caller that waits for `earliest` waits for exactly the slot.
+            let slot = self.palw_clock_step_for_parents(template.block.header.direct_parents())?.next_slot_ms();
+            template.block.header.timestamp.max(slot.unwrap_or(0))
         } else {
             match hb::check_heartbeat_slot_v2(
                 parent.timestamp,
@@ -12298,6 +12324,22 @@ impl VirtualStateProcessor {
         template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
         template.block.header.finalize();
         Ok((template, earliest))
+    }
+
+    /// **ADR-0142: the clock's decision for a block built on `parents`** — the cursor its window
+    /// derives at its selected parent's score and whether its mergeset carries a granted beat.
+    ///
+    /// Computed exactly as the header stage computes it for the block those parents make (GHOSTDAG,
+    /// then `block_daa_window`, whose `clock` is the half of `palw_clock_step_v1` the DAA score does
+    /// not read), so a template, the adapter and the validator cannot answer differently. Headers and
+    /// GHOSTDAG data are immutable once written, so the answer for a template's parents is the same
+    /// whenever it is asked — a template that has gone stale is still judged against its own slot.
+    pub(crate) fn palw_clock_step_for_parents(
+        &self,
+        parents: &[BlockHash],
+    ) -> Result<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockStepV1, RuleError> {
+        let ghostdag = self.ghostdag_manager.ghostdag(parents);
+        Ok(self.window_manager.block_daa_window(&ghostdag)?.clock)
     }
 
     /// **ADR-0125: the permits of one round, as the selected-parent snapshot grants them to a round
@@ -12552,7 +12594,18 @@ impl VirtualStateProcessor {
     ///
     /// **Every failure answers `NothingToYieldTo`**, i.e. "mine as before": a missing header here is
     /// a node-local fact, and the one thing this hint must never do is hold the clock on one.
+    ///
+    /// **Past `palw_clock_cursor` it answers `SlotTaken(next)` while the next slot is still in the
+    /// future** (the 2026-09-24 heartbeat audit, H1): the clock has already advanced into the slot a
+    /// beat minted now would claim, so the beat could earn nothing. The miner waits for `next`
+    /// instead of grinding a block that weighs ε, adds a blue score and ticks no DAA.
     pub fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        self.heartbeat_yield_hint_at(unix_now())
+    }
+
+    /// [`Self::heartbeat_yield_hint`] at an explicit wall clock — the node passes `unix_now()`, a
+    /// test passes its simulated time.
+    pub fn heartbeat_yield_hint_at(&self, now_ms: u64) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
         use kaspa_consensus_core::palw_heartbeat_v1 as hb;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
@@ -12584,13 +12637,21 @@ impl VirtualStateProcessor {
             self.palw_single_lottery,
             self.palw_receipt_rows_unpriced,
         );
-        hb::heartbeat_yield_hint_v2(
+        let yield_hint = hb::heartbeat_yield_hint_v2(
             selected_parent.pow_algo_id,
             anchor_clock_active,
             parent_advances_daa,
             attempt_advances_daa,
             merged,
-        )
+        );
+        // H1: the virtual's own clock decision — the one the next block's DAA score will be
+        // computed from. A failure to read it is a node-local fact and answers as before.
+        let clock = if self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
+            self.window_manager.block_daa_window(ghostdag).ok().map(|window| window.clock)
+        } else {
+            None
+        };
+        hb::heartbeat_slot_hint_v1(yield_hint, clock.as_ref(), now_ms)
     }
 
     fn build_block_template_with_selector_provider<F>(
@@ -13090,13 +13151,28 @@ impl VirtualStateProcessor {
         let utxo_commitment = virtual_state.multiset.clone().finalize();
         // Past median time is the exclusive lower bound for valid block time, so we increase by 1 to get the valid min
         let min_block_time = virtual_state.past_median_time + 1;
+        // **H5 (the clock floor): a template that steps the clock on a beat's grant is stamped at or
+        // past the slot it consumes** — the header stage refuses it otherwise (`ClockStepBeforeItsSlot`).
+        // Raised here rather than left to the miner because every lane's template can be the step: on
+        // testnet-12 the first block of any lane built after a granted beat carries the tick. The
+        // raise is at most the granted beat's own lead over this node's clock, which peers accepted
+        // for the beat and accept for this block likewise. Decided on the virtual's own clock
+        // decision — the one this block's DAA score was computed from.
+        let timestamp = {
+            let proposed = u64::max(min_block_time, unix_now());
+            if self.palw_clock_floor.is_some() {
+                self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock.floor_stamp(proposed)
+            } else {
+                proposed
+            }
+        };
         let header = Header::new_finalized(
             version,
             parents_by_level,
             hash_merkle_root,
             accepted_id_merkle_root,
             utxo_commitment,
-            u64::max(min_block_time, unix_now()),
+            timestamp,
             virtual_state.bits,
             0,
             // kaspa-pq ADR-0007: the template declares the network-correct Layer-1 algo for this
@@ -13993,12 +14069,12 @@ enum MergesetIncreaseResult {
     Accepted {
         increase_size: u64,
         /// ADR-0068 Phase 1 (F3a/F5): the increase's heartbeat members as
-        /// `(blue_score, hash)`, empty when the lane is not armed. The CALLER decides
+        /// `(blue_score, hash, timestamp)`, empty when the lane is not armed. The CALLER decides
         /// admissibility over the whole accumulated set (`heartbeat_set_admissible`) —
         /// width with the chain exemption is a property of the final mergeset, not of one
         /// candidate's increase, and a rejected candidate is simply skipped (the excess IS
         /// a heartbeat or reaches one; there is nothing to substitute).
-        heartbeat_members: Vec<(u64, BlockHash)>,
+        heartbeat_members: Vec<(u64, BlockHash, u64)>,
     },
     Rejected {
         new_candidate: BlockHash,

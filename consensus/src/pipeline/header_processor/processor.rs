@@ -136,6 +136,10 @@ pub struct HeaderProcessor {
     pub(super) palw_anchor_clock: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0142: past this fence the heartbeat's slot rule retires and the clock cursor governs.
     pub(super) palw_clock_cursor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-24 heartbeat audit's H3: past this fence a heartbeat chain over the flat width
+    /// bound must be paced by its own timestamps (`heartbeat_chain_capacity_v1`). The per-header
+    /// stamp rules read the same fence through `DaaWindow::clock`.
+    pub(super) palw_clock_floor: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0083 Decision 1's fence, the third argument of `palw_lane_advances_daa_v1`.
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0125: the execution lane, mode folded in (`Params::palw_execution_lane_fence`) — its
@@ -257,6 +261,7 @@ impl HeaderProcessor {
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
+            palw_clock_floor: params.palw_clock_floor,
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
