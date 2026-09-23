@@ -1828,6 +1828,17 @@ enum KeyCmd {
         #[command(flatten)]
         key: KeyArgs,
     },
+    /// Print a key's PUBLIC half: the ML-DSA-87 verification key (what a bond registration or a
+    /// genesis card carries), its P2PKH address payload, the funding address and the validator id.
+    ///
+    /// Reads the seed with the same hardened loader every other command uses and prints nothing
+    /// secret. This is the value to hand a registrar, paste into a card row, or compare with
+    /// `misaka bond status --bond <outpoint> --output json` (`bond_registered_pubkey`) to prove a
+    /// key file is the one a bond was registered under.
+    Pubkey {
+        #[command(flatten)]
+        key: KeyArgs,
+    },
     /// Import an EXISTING 32-byte ML-DSA-87 seed — from stdin, or from a 0600 file — into a
     /// 0600 file.
     ///
@@ -2000,6 +2011,42 @@ fn key_address(ctx: &node::Ctx, ks: &keys::KeySource) -> CliResult {
     match ctx.output {
         OutputFormat::Human => println!("{addr}"),
         OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "address": addr.to_string() })),
+    }
+    Ok(())
+}
+
+/// `misaka key pubkey`: the public half of a key, in the forms the chain and the genesis tooling use.
+///
+/// Before this an operator had no way to read their own verification key from the CLI: a bond's
+/// registered key was visible on chain (`misaka bond status`), but the key FILE it has to match was
+/// not, so "is this the key my bond was registered under?" and "what goes in my card row?" had no
+/// answer short of building a tool.
+fn key_pubkey(ctx: &node::Ctx, ks: &keys::KeySource) -> CliResult {
+    let prefix = prefix_of(&ctx.network)?;
+    let key = ks.load_key()?;
+    let public_key = faster_hex::hex_string(key.public_key());
+    let addr = key.funding_address(prefix);
+    let payload = faster_hex::hex_string(&addr.payload);
+    let validator_id = key.validator_id.to_string();
+    match ctx.output {
+        OutputFormat::Human => {
+            println!("verification key (ML-DSA-87, {} bytes):", key.public_key().len());
+            println!("{public_key}");
+            println!("address payload (P2PKH-ML-DSA-87): {payload}");
+            println!("address:                           {addr}");
+            println!("validator id:                      {validator_id}");
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "ok": true,
+                "public_key": public_key,
+                "public_key_bytes": key.public_key().len(),
+                "address_payload": payload,
+                "address": addr.to_string(),
+                "validator_id": validator_id,
+            })
+        ),
     }
     Ok(())
 }
@@ -2708,6 +2755,7 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
+        Command::Key(KeyCmd::Pubkey { key }) => key_pubkey(&ctx, &key.source()),
         Command::Key(KeyCmd::Import { out, hex_stdin, hex_file }) => key_import(&ctx, &out, hex_stdin, hex_file.as_deref()),
         Command::Bond(BondCmd::Status { key, bond, class_id }) => {
             let source = key.source_opt();

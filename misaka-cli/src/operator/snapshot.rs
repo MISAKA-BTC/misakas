@@ -225,7 +225,7 @@ impl Snapshot {
         let node = connect(&profile, timeout).await;
         let params = kaspa_consensus_core::config::params::Params::from(
             NetworkId::from_str(&profile.network)
-                .unwrap_or(NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11)),
+                .unwrap_or(NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12)),
         );
         let base = match &params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id.to_string()),

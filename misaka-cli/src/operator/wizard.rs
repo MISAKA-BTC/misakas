@@ -614,12 +614,13 @@ impl<'a> Wizard<'a> {
             (None, _) => (None, ValidatorSection::default()),
         };
         // The network: the one named, else the file's, else the one node running here, else the
-        // public mining testnet — said on the first line either way.
+        // public mining testnet (testnet-12 since the 2026-09-22 regenesis) — said on the first line
+        // either way.
         let running = procs::find(procs::Component::Kaspad);
         let single = (running.len() == 1).then(|| procs::parse_kaspad_args(&running[0].args).network);
         let named = args.network.clone().or_else(|| parsed.as_ref().and_then(|f| f.mining.network.clone()));
         let network_guessed = named.is_none();
-        let network = named.or(single).unwrap_or_else(|| "testnet-11".to_string());
+        let network = named.or(single).unwrap_or_else(|| "testnet-12".to_string());
         // A file for another network is not this setup's starting point; it is replaced at the end
         // (with a question), and its values do not leak into this network's.
         let file = parsed.filter(|f| f.mining.network.as_deref().is_none_or(|n| n == network)).unwrap_or_default();

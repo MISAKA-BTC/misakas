@@ -265,7 +265,7 @@ async fn identity_checks(snap: &Snapshot, out: &mut Vec<Check>) {
     if let Some(pay) = &p.pay_address {
         let prefix = kaspa_consensus_core::config::params::Params::from(
             p.network.parse::<kaspa_consensus_core::network::NetworkId>().unwrap_or(
-                kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11),
+                kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 12),
             ),
         )
         .prefix();

@@ -239,7 +239,8 @@ impl Profile {
         let (network, network_source) = if network.is_empty() {
             match &kaspad {
                 Some((_, a)) => (a.network.clone(), Source::Process),
-                None => ("testnet-11".to_string(), Source::Default),
+                // The public network since the 2026-09-22 regenesis.
+                None => ("testnet-12".to_string(), Source::Default),
             }
         } else {
             (network, network_source)
