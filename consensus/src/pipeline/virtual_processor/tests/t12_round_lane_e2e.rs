@@ -27,9 +27,18 @@
 //!   it must on the live chain. The genesis `utxo_commitment` and hash are recomputed from that set
 //!   exactly as `set_genesis_utxo_commitment_from_config` does for a node, and the set is imported
 //!   through the node's own `import_pruning_point_utxo_set`.
-//! * **The EVM lane is inert** on a build without the `evm` feature, as in
-//!   `palw_rc_a_real_execution_produces_a_block_the_chain_accepts`: `evm_activation_daa_score` is
-//!   `u64::MAX` and `palw_model_evm` `None`. The lane is orthogonal to everything asserted here.
+//! * **The EVM lane is inert — on every build**: `evm_activation_daa_score` is `u64::MAX` and
+//!   `palw_model_evm` `None` (testnet-12 ships the lane active from DAA 0, asserted below). This
+//!   harness is testnet-12's clock: it stamps every template with a simulated time, because the
+//!   chain it needs is hundreds of 120 s slots long and the wall clock cannot drive that. On an
+//!   EVM-active network a template stamped after the build is a different block from the one the
+//!   builder committed — `evm_commitment_root` is executed against the header's timestamp — and
+//!   the node disqualifies it from the chain (the rule `TestContext::build_block_template` asserts;
+//!   every re-stamp here asserts it too). The lane used to be left on under the `evm` feature, which
+//!   `kaspad`'s default features switch on for this crate whenever the two are tested together, and
+//!   every harness block was then disqualified. The lane is orthogonal to everything asserted here;
+//!   the path a node actually mines — its own template, the heartbeat adapter, no re-stamp, the lane
+//!   as shipped — is `t12_clock_floor::t12_the_node_s_own_beats_tick_from_genesis_with_the_evm_lane_as_shipped`.
 //!
 //! PoW difficulty is skipped (`skip_proof_of_work`), as in every harness test; the class lottery
 //! (the attempt's `class_ticket_v3` under the class target) is NOT — every attempt here wins it.
@@ -91,11 +100,22 @@ fn card_payout_spk(i: usize) -> ScriptPublicKey {
 
 /// **testnet-12 as shipped, with harness keys on its eight genesis cards** — see the module doc for
 /// the three differences and why each is forced. Returns the config, the bundle, the genesis UTXO
-/// set the harness imports and each card's fee float in that set.
+/// set the harness imports and each card's fee float in that set. The EVM lane is inert: every
+/// harness that stamps its own clock onto templates uses this one.
 pub(super) fn t12_with_harness_cards()
 -> (Config, PalwConsensusParamsV2, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) {
+    t12_with_harness_cards_and_evm(false)
+}
+
+/// [`t12_with_harness_cards`], with `keep_evm` leaving the EVM lane exactly as testnet-12 ships it
+/// (active from DAA 0). Only a build with the `evm` feature can build a template for an active lane,
+/// and only a caller that never moves a template's timestamp after the build may keep it.
+pub(super) fn t12_with_harness_cards_and_evm(
+    keep_evm: bool,
+) -> (Config, PalwConsensusParamsV2, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) {
     use kaspa_consensus_core::config::params::PALW_T12_GENESIS_BONDS;
     use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint_for};
+    assert!(!keep_evm || cfg!(feature = "evm"), "a build without the `evm` feature cannot build a template for an active EVM lane");
     let shipped = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let mut params = shipped.clone();
     assert_eq!(PALW_T12_GENESIS_BONDS.len(), T12_GENESIS_CARDS);
@@ -140,16 +160,20 @@ pub(super) fn t12_with_harness_cards()
     params.genesis.utxo_commitment = multiset.finalize();
     params.genesis.hash = kaspa_consensus_core::header::Header::from(&params.genesis).hash;
 
+    // The divergence is stated, not assumed: testnet-12 ships the lane at genesis.
+    assert_eq!(shipped.evm_activation_daa_score, 0, "testnet-12 ships the EVM lane active from genesis");
     let config = ConfigBuilder::new(params)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            if !cfg!(feature = "evm") {
+            if !keep_evm {
                 p.evm_activation_daa_score = u64::MAX;
+                // ADR-0089 Decision 9: the market's EVM face may not be armed on a lane made inert.
                 p.palw_model_evm = None;
             }
         })
         .build();
     config.params.validate_palw_v2().expect("testnet-12 with harness cards is a runnable ruleset");
+    assert_eq!(config.params.is_evm_active(0), keep_evm, "the EVM lane is as asked");
 
     // What this test leans on is testnet-12's, and is asserted rather than assumed.
     assert_eq!(config.params.palw_execution_lane, shipped.palw_execution_lane, "the lane as shipped");
@@ -163,6 +187,19 @@ pub(super) fn t12_with_harness_cards()
     assert_eq!(bundle.panel, shipped_bundle.panel, "the panel as shipped");
     let bundle = bundle.clone();
     (config, bundle, utxos, floats)
+}
+
+/// **Stamp a built template with the harness's clock** — legal only where the EVM lane is inert at
+/// the template's score. The builder executed `evm_commitment_root` against ITS timestamp (in whole
+/// seconds), so a template stamped over it carries a commitment for another block and the node
+/// disqualifies it from the chain; a node's own miner never re-stamps (the heartbeat adapter
+/// re-commits the lane when it stamps a beat for its slot).
+pub(super) fn stamp_harness_time(params: &Params, header: &mut kaspa_consensus_core::header::Header, timestamp: u64) {
+    assert!(
+        !params.is_evm_active(header.daa_score),
+        "re-stamping a template whose EVM lane is active invalidates its evm_commitment_root — the harness runs with the lane inert"
+    );
+    header.timestamp = timestamp;
 }
 
 /// Sign input 0 of `tx`, which spends `utxo`, under card `i`'s key — the P2PKH-ML-DSA-87 spend
@@ -257,7 +294,7 @@ impl T12Chain {
             .consensus
             .build_block_template(new_miner_data(), Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard)
             .expect("a template");
-        t.block.header.timestamp = self.ctx.simulated_time;
+        stamp_harness_time(&self.config.params, &mut t.block.header, self.ctx.simulated_time);
         t.block.header.nonce = self.nonce;
         t.block.header.finalize();
         let (t, _) = self.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open on testnet-12");
@@ -298,7 +335,7 @@ impl T12Chain {
             kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id),
             "a ConsensusV2 template declares the attempt lane"
         );
-        t.block.header.timestamp = self.ctx.simulated_time;
+        stamp_harness_time(&self.config.params, &mut t.block.header, self.ctx.simulated_time);
         t.block.header.nonce = self.nonce;
         let facts = self
             .ctx
