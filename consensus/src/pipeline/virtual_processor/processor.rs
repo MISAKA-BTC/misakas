@@ -4636,15 +4636,62 @@ impl VirtualStateProcessor {
     /// Nothing here needs to change for that to be safe. It needs to be WRITTEN DOWN, because the
     /// sentence above ("the number withheld is the number that will be paid — by construction")
     /// reads as a claim about the whole queue and is one about half of it.
+    ///
+    /// **Past `palw_audit_2026_09_23`, an own attempt the fold SKIPPED still has its carve withheld**
+    /// (the 2026-09-23 re-audit of finding 17). Past that fence step 4 of the transition skips a chain
+    /// block's own attempt that the live exposure ceiling refuses (`AttemptExposureCeiling`): the
+    /// block stays valid and records no claim. Read from claims alone, this then withheld nothing and
+    /// the child's coinbase paid the selected parent's whole worker share — a payment with no claim,
+    /// no reservation, no panel and no court behind it, the defect S-04/M2-3 closed for merged blues.
+    /// And the skip is steerable: step 3 lands this block's own accepted objects (its free-prompt
+    /// commitments, whose receipt rights reserve ~500× their weight) on the bond first, so a producer
+    /// could fill its own ceiling to the sompi and be paid for an attempt nobody will ever examine. So
+    /// when the header carries an attempt whose claim the state does not hold as accepted here, the
+    /// carve it WOULD have escrowed — `worker_carve_at` of the block's own subsidy at the carve
+    /// resolved at its own DAA, the expression `apply_attempt` stores — is withheld anyway and never
+    /// released: burned, as a skipped merged blue's is. An admitted attempt's claim is found and
+    /// withheld from its record exactly as before, so the figure moves only for a skipped one.
     pub(super) fn palw_v2_escrow_withheld_at(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
     ) -> u64 {
-        state
+        let recorded = state
             .claims_iter()
             .filter(|(_, claim)| claim.accepted_block == block)
-            .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward))
+            .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward));
+        recorded.saturating_add(self.palw_v2_skipped_own_attempt_carve(state, block))
+    }
+
+    /// The carve of `block`'s own attempt where the fold skipped it — see
+    /// [`Self::palw_v2_escrow_withheld_at`]. Zero below `palw_audit_2026_09_23` (at the block's own
+    /// DAA, the height its fold resolved the fence at), for a block that carries no attempt, and for
+    /// one whose attempt the state holds as a claim accepted in it.
+    fn palw_v2_skipped_own_attempt_carve(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, block: BlockHash) -> u64 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return 0;
+        };
+        let Ok(header) = self.headers_store.get_header(block) else {
+            return 0;
+        };
+        if !self.palw_audit_2026_09_23_at(header.daa_score)
+            || !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+        {
+            return 0;
+        }
+        // The block is on the selected chain, so its attempt decoded and was admitted at the header
+        // and the chain walk; an envelope that does not decode here cannot have made a claim either.
+        let Ok(envelope) = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) else {
+            return 0;
+        };
+        let own = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
+        if state.claim(&own).is_some_and(|claim| claim.accepted_block == block) {
+            return 0;
+        }
+        state_params.worker_carve_at(
+            self.coinbase_manager.calc_block_subsidy(header.daa_score),
+            self.palw_escrow_carve_at(header.daa_score, header.daa_score),
+        )
     }
 
     /// **B-1 (mainnet audit 2026-09-11, deep fence): the worker carve withheld from each MERGED
@@ -7700,7 +7747,7 @@ impl VirtualStateProcessor {
                 // span's width, both signatures under the bond's REGISTERED key (not a key the
                 // evidence carries), and the permit not burned already.
                 Obj::RoundPermitEquivocated { evidence } => {
-                    use kaspa_consensus_core::palw_execution_lane_v1::{palw_execution_permit_of_v1, palw_execution_span_v1};
+                    use kaspa_consensus_core::palw_execution_lane_v1::{palw_execution_permit_of_v2, palw_execution_span_v1};
                     let lane = self
                         .palw_execution_lane_at(point.daa_score)
                         .ok_or_else(|| "round equivocation evidence where the execution lane is not open (ADR-0125)".to_string())?;
@@ -7715,12 +7762,13 @@ impl VirtualStateProcessor {
                     let schedule = state
                         .round_schedule(evidence.span)
                         .ok_or_else(|| format!("round equivocation names span {}, which has no schedule", evidence.span))?;
-                    palw_execution_permit_of_v1(
+                    palw_execution_permit_of_v2(
                         schedule,
                         evidence.round,
                         lane.width_of_span_len(evidence.span, span_daa),
                         evidence.permit_index,
                         &evidence.bond,
+                        self.palw_round_permits_are_tickets_at(point.daa_score),
                     )
                     .ok_or_else(|| {
                         format!(
@@ -8175,9 +8223,11 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
         use kaspa_consensus_core::palw_execution_lane_v1::{
-            PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v1, palw_execution_span_v1,
+            PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
         };
         let lane = self.palw_execution_lane_at(daa_score)?;
+        // Route-matrix #2: past ADR-0151's bundle with the quanta armed, a permit is a ticket.
+        let tickets_only = self.palw_round_permits_are_tickets_at(daa_score);
         let span_daa = lane.schedule_span_daa_at(daa_score);
         let span_now = palw_execution_span_v1(daa_score, span_daa);
         let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 {
@@ -8201,12 +8251,13 @@ impl VirtualStateProcessor {
                 }
                 let schedule = state.round_schedule(span)?;
                 // §7.2: the width of the anchor's span — the width the schedule was drawn at.
-                palw_execution_permit_of_v1(
+                palw_execution_permit_of_v2(
                     schedule,
                     envelope.round,
                     lane.width_of_span_len(span, span_daa),
                     envelope.permit_index,
                     &envelope.bond,
+                    tickets_only,
                 )?;
                 let bond = state.bond(&envelope.bond)?;
                 if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
@@ -8488,6 +8539,15 @@ impl VirtualStateProcessor {
 
     fn palw_economic_safety_at(&self, daa_score: u64) -> bool {
         self.palw_economic_safety.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Whether a round's permits are its schedule's tickets alone at `daa_score`** (the 2026-09-23
+    /// route-matrix audit's #2): ADR-0151's bundle and the quanta both armed. Every reader of a
+    /// schedule's permits — the verdict, the equivocation check and the producer's view — asks this
+    /// one question, so an armed mint that issued nothing grants nothing at all of them, and a network
+    /// that arms the quanta alone (testnet-11 at 7,800) keeps its lottery fallback byte for byte.
+    pub(super) fn palw_round_permits_are_tickets_at(&self, daa_score: u64) -> bool {
+        self.palw_economic_safety_at(daa_score) && self.palw_execution_quanta_at(daa_score)
     }
 
     fn palw_objective_offence_daa(&self) -> Option<u64> {
@@ -11904,9 +11964,14 @@ impl VirtualStateProcessor {
         );
         let (_at, state) = self.palw_v2_state_at(sink)?;
         let width = lane.width_of_span_len(span, span_daa);
+        // The verdict's own rule (route-matrix #2), read at virtual's score — the score the next chain
+        // block, which merges a round block built now, is judged at.
+        let tickets_only = self.palw_round_permits_are_tickets_at(virtual_state.daa_score);
         let permits = state
             .round_schedule(span)
-            .map(|schedule| kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, width))
+            .map(|schedule| {
+                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v2(schedule, round, width, tickets_only)
+            })
             .unwrap_or_default();
         let used = (0..width).filter(|index| state.round_permit_used(span, round, *index)).collect();
         let (finals_span, finals) = state.round_finals();
@@ -11923,6 +11988,7 @@ impl VirtualStateProcessor {
             accepted_in_span: state.round_permits_accepted(span),
             finals_span,
             finals: finals.len() as u64,
+            tickets_only,
         })
     }
 

@@ -157,6 +157,12 @@ pub struct PalwProducerService {
     key_seed: Option<[u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]>,
     bond: Option<TransactionOutpoint>,
     miner_data: Option<MinerData>,
+    /// **Why the ATTEMPT lane can never produce for `--palw-producer-class` on this node**, where
+    /// `producer_class_unproducible_v1` could say so for certain at startup (the route-matrix
+    /// audit's #1). A soft refusal, like every other one this constructor makes: the node, its seat,
+    /// its RPC and this producer's receipt lane (which is per bond and needs no artifact) keep running,
+    /// and the attempt lane holds with this sentence as its `disabled` status.
+    class_refusal: Option<String>,
 }
 
 /// `<txid>:<index>`, the same spelling `--stake-bond` uses.
@@ -357,24 +363,38 @@ impl PalwProducerService {
             config.class_cache_bytes,
             config.class_residency,
         );
-        // **A producer class this node can never produce for refuses to start** (the 2026-09-23
+        // **A producer class this node can never produce for is refused at startup** (the 2026-09-23
         // route-matrix audit's #1). The first testnet-12 fleet launched with a producer class whose
         // registered root no artifact on it could match, and every producer said "holding" at INFO for
         // a whole deployment while the chain ran on heartbeats — the launch was judged on the clock
         // ticking. A configuration that cannot work is a startup refusal, said where the operator is
         // looking (stdout as well as the log), not a hold.
-        if refusal.is_none()
+        //
+        // **And a SOFT one, like every other refusal above** (the route-matrix re-audit's #11). This
+        // called `process::exit(1)` during daemon construction, which took the whole kaspad down with
+        // it — the panel seat, the RPC, the relay, on a public host the public entry node — for a
+        // producer misconfiguration, and under systemd's `Restart=` turned it into a crash loop that
+        // re-mapped the class artifacts on every lap: the failure shape of the staged-script incident
+        // that killed a public node. Now the attempt lane is disabled with the sentence as its status,
+        // the ERROR line ends in `— production disabled` (the phrase `misaka-cli`'s nodelog parses),
+        // and the node, its seat and this producer's receipt lane keep running.
+        let class_refusal = if refusal.is_none()
             && let Some(why) = crate::palw_backends::producer_class_unproducible_v1(&config.class_id, &class_holdings, &consensus_config.params)
         {
-            let sentence = format!(
-                "--palw-producer-class: {why}\n\nThis node will not start as a producer. Give it the artifact that class \
-                 registered (convert it and check it with `palw-class manifest --check`), name a class one of its artifacts \
-                 pairs with (`palw-class inspect <artifact>`), or drop --palw-producer-class to produce for the floor."
+            let remedy = "Give it the artifact that class registered (convert it and check it with `palw-class manifest \
+                          --check`), name a class one of its artifacts pairs with (`palw-class inspect <artifact>`), or drop \
+                          --palw-producer-class to produce for the floor";
+            println!(
+                "--palw-producer-class: {why}\n\nThis node will not produce attempts for that class (the node, its panel seat \
+                 and the receipt lane keep running). {remedy}."
             );
-            println!("{sentence}");
-            error!("[{PALW_PRODUCER}] {sentence}");
-            std::process::exit(1);
-        }
+            error!("[{PALW_PRODUCER}] --palw-producer-class: {why} — production disabled");
+            error!("[{PALW_PRODUCER}] {remedy}.");
+            flow_context.update_palw_runtime(|r| r.set_producer("disabled", &why));
+            Some(why)
+        } else {
+            None
+        };
         Self {
             config,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
@@ -388,6 +408,7 @@ impl PalwProducerService {
             miner_data,
             class_holdings,
             network_draw_lost: std::sync::atomic::AtomicU64::new(0),
+            class_refusal,
         }
     }
 
@@ -632,6 +653,15 @@ impl PalwProducerService {
                         }
                     }
                 }
+            }
+            // Route-matrix #11: a class this node can never produce for disables the attempt lane
+            // alone — the receipt lane above keeps spending this bond's quanta.
+            if let Some(why) = &self.class_refusal {
+                self.flow_context.update_palw_runtime(|r| r.set_producer("disabled", why));
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
+                continue;
             }
             if let Err(why) = facts.ready_to_produce(&self.verification_key()) {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
@@ -970,12 +1000,15 @@ impl PalwProducerService {
         // the strength of a `MemAvailable` that has not yet seen it. A refusal names the need, the
         // bounds and every reservation already held, and holds — the same shape as every other
         // producer hold. The reservation lives until this function returns, on every path.
-        let need = self.backends().role_memory_need_for_backend_v1(
+        // The holding is found through the door the backend came through (the route-matrix
+        // re-audit's #5): a chain-registered class's artifact was priced at zero bytes off the tables.
+        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
             backend.as_ref(),
             facts.class_id,
             facts.artifact_root,
             Some(&job),
             kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer,
+            |id| if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None },
         );
         let reserved = crate::palw_memory_ledger::host_ledger_v1().reserve(
             crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "producer", class_id: facts.class_id, job: job.context_hash() },
@@ -1284,6 +1317,25 @@ mod retention_tests {
 #[cfg(test)]
 mod tests {
     use super::palw_da_court_in_force_v1;
+
+    /// **A producer misconfiguration never takes the node down** (the route-matrix re-audit's #11).
+    /// The unproducible-class refusal called `process::exit(1)` from the constructor, which under
+    /// systemd's `Restart=` is a crash loop of the whole kaspad — seat, RPC and public entry node with
+    /// it. Every startup refusal here is soft now; the class one says `— production disabled`, the
+    /// phrase `misaka-cli`'s nodelog reads a disabled producer by, and the worker holds on it after
+    /// the receipt lane rather than returning.
+    #[test]
+    fn a_producer_class_refusal_disables_the_attempt_lane_and_never_exits_the_process() {
+        let whole = include_str!("palw_producer.rs");
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        assert!(!production.contains("std::process::exit("), "a producer refusal must not exit the node");
+        assert!(production.contains("--palw-producer-class: {why} — production disabled"), "the nodelog phrase");
+        let worker = &production[production.find("pub async fn worker(").expect("the worker")..];
+        let receipt = worker.find("self.produce_receipt(").expect("the receipt lane");
+        let hold = worker.find("if let Some(why) = &self.class_refusal").expect("the attempt lane's hold");
+        let attempt = worker.find("facts.ready_to_produce(").expect("the attempt lane");
+        assert!(receipt < hold && hold < attempt, "the refusal holds the attempt lane after the receipt lane has run");
+    }
     use kaspa_consensus_core::config::Config;
     use kaspa_consensus_core::config::params::{devnet_shipped_params, palw_rc_shipped_params};
 

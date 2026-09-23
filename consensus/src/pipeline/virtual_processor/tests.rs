@@ -15196,3 +15196,8 @@ async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
     assert_eq!(straddles, 2, "the block on the height merged the pair from below, and only it straddles");
     assert!(merged_below >= 1 && merged_past >= 1, "a merged escrow on each side ({merged_below} below, {merged_past} past)");
 }
+
+// ---- testnet-12: the execution lane end to end, from a floor attempt to a paid round block ----
+// Test-only: the scenario lives in `tests/t12_round_lane_e2e.rs` beside this file, as a child of
+// this module so it reuses `TestContext` and the harness identities.
+mod t12_round_lane_e2e;

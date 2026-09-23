@@ -573,10 +573,12 @@ pub struct PalwNodeRuntimeV1 {
     /// names, so an OOM is never again diagnosed from `dmesg`.
     pub memory_holders: String,
     /// **The selected chain's last blocks, by lane** (`palw_lane_watch`, the 2026-09-23 route-matrix
-    /// audit's #1): how many the window holds, how many carried PALW work (attempt, receipt,
-    /// execution, round), how many were heartbeats, the newest work block's DAA (0 = none in the
-    /// window), the one-line mix, and the alarm — empty unless a window old enough to judge holds no
-    /// PALW work at all. Lanes, not blocks: a heartbeat-only chain passes every block-count check.
+    /// audit's #1): how many the window holds, how many carried PALW work (an attempt of either
+    /// attempt lane, or a receipt spend — never the round blocks merged beside them, which the mix
+    /// line counts apart), how many were heartbeats, the newest work block's DAA (0 = none in the
+    /// window), the one-line mix, and the alarm — empty unless the node is nearly synced and the
+    /// newest 30 selected-chain blocks carry no PALW work. Lanes, not blocks: a heartbeat-only chain
+    /// passes every block-count check.
     pub lane_window_blocks: u64,
     pub lane_work_blocks: u64,
     pub lane_heartbeat_blocks: u64,

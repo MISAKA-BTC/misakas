@@ -586,9 +586,18 @@ impl PalwPanelService {
         class_id: Hash64,
         artifact_root: Hash64,
     ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
-        self.backends().resolve_or_chain(class_id, artifact_root, |id| {
-            if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
-        })
+        self.backends().resolve_or_chain(class_id, artifact_root, |id| self.chain_carriage_v1(session, id))
+    }
+
+    /// The chain arm of the one door: the class's registered profile and canonical job, read from
+    /// this session — only with `--palw-chain-classes`. [`Self::resolve_backend`] and every memory
+    /// figure beside it (the route-matrix re-audit's #5) read a chain class through this one read.
+    fn chain_carriage_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+    ) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
+        if self.config.chain_classes { session.palw_registered_class_carriage_v1(class_id) } else { None }
     }
 
     /// **The prompt-ids form a class commits its jobs' ids in** (ADR-0118 Decision 3) — the one
@@ -768,15 +777,25 @@ impl PalwPanelService {
                     // and 6): the full seat's is what the pre-check compares and the ledger reserves
                     // for a replay; the producer's is what the attempt gate reserves. Both memoized
                     // per (holdings, class, root, role), so this per-tick publish resolves nothing.
-                    let full = backends.role_memory_need_v1(class.class_id, class.artifact_root, PalwResourceRoleV1::FullSeat);
-                    let producer = backends.role_memory_need_v1(class.class_id, class.artifact_root, PalwResourceRoleV1::Producer);
-                    working_set_bytes = full.as_ref().map(|n| n.total_bytes()).unwrap_or_else(|| {
-                        backends.holding_bytes_for_v1(class.class_id, class.artifact_root).unwrap_or(0)
-                    });
+                    // Through the same door as the resolve above (route-matrix re-audit #5): a
+                    // chain-registered class's figures come from the holding its registration matched.
+                    let full = backends.role_memory_need_or_chain_v1(
+                        class.class_id,
+                        class.artifact_root,
+                        PalwResourceRoleV1::FullSeat,
+                        |id| self.chain_carriage_v1(session, id),
+                    );
+                    let producer = backends.role_memory_need_or_chain_v1(
+                        class.class_id,
+                        class.artifact_root,
+                        PalwResourceRoleV1::Producer,
+                        |id| self.chain_carriage_v1(session, id),
+                    );
+                    working_set_bytes = full.as_ref().map(|n| n.total_bytes()).unwrap_or(0);
                     if let (Some(full), Some(producer)) = (full, producer) {
                         by_role = Some((producer, full));
                     }
-                    if self.replay_memory_budget_v1(Some((class.class_id, class.artifact_root))).is_err() {
+                    if self.replay_memory_budget_v1(session, Some((class.class_id, class.artifact_root))).is_err() {
                         hold = Some(PalwPanelHoldReasonV1::ReplayBudgetInsufficient);
                     }
                 }
@@ -918,7 +937,10 @@ impl PalwPanelService {
             // memory to replay this class proves nothing for it — the standing proof expires by
             // itself and the class counts one seat fewer. The chain judges the proof; the budget
             // is this node's own.
-            if let Err(why) = self.replay_memory_budget_v1(Some((class.class_id, class.artifact_root))) {
+            //
+            // The figure is the one [`Self::resolve_backend`] below would replay with — the tables,
+            // then the chain's registration (the route-matrix re-audit's #5) — not the widest holding.
+            if let Err(why) = self.replay_memory_budget_v1(session, Some((class.class_id, class.artifact_root))) {
                 self.readiness_note(class.class_id, format!("no proof — {why}"));
                 continue;
             }
@@ -1132,10 +1154,23 @@ impl PalwPanelService {
     /// beside the holding's bytes, through the ONE composition the producer's gate reads too
     /// (`role_memory_need_v1`; ADR-0151 follow-up, items 1–2). With no class named, the widest
     /// holding plus the scratch estimate: the conservative figure a node with nothing resolved has.
-    fn replay_memory_need_v1(&self, class: Option<(Hash64, Hash64)>) -> crate::palw_backends::PalwRoleMemoryNeedV1 {
+    ///
+    /// **Through the one door** (the route-matrix re-audit's #5): the tables, then — with
+    /// `--palw-chain-classes` — the chain's registration, the way [`Self::resolve_backend`] finds the
+    /// backend the replay will run. A table-only figure missed every chain-registered class and fell
+    /// back to the widest holding with no derived, KV or runtime bytes.
+    fn replay_memory_need_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class: Option<(Hash64, Hash64)>,
+    ) -> crate::palw_backends::PalwRoleMemoryNeedV1 {
         use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
         class
-            .and_then(|(class_id, artifact_root)| self.backends().role_memory_need_v1(class_id, artifact_root, PalwResourceRoleV1::FullSeat))
+            .and_then(|(class_id, artifact_root)| {
+                self.backends().role_memory_need_or_chain_v1(class_id, artifact_root, PalwResourceRoleV1::FullSeat, |id| {
+                    self.chain_carriage_v1(session, id)
+                })
+            })
             .unwrap_or_else(|| crate::palw_backends::PalwRoleMemoryNeedV1 {
                 role: PalwResourceRoleV1::FullSeat,
                 holding_bytes: self.class_holdings.iter().filter_map(crate::palw_backends::holding_replay_bytes_v1).max().unwrap_or(0),
@@ -1150,8 +1185,12 @@ impl PalwPanelService {
     /// figure the ledger has already promised to the producer or another seat in this process is
     /// not available, whatever the kernel says. The pre-check reserves nothing; the replay itself
     /// takes the reservation when it starts.
-    fn replay_memory_budget_v1(&self, class: Option<(Hash64, Hash64)>) -> Result<(), String> {
-        let need = self.replay_memory_need_v1(class);
+    fn replay_memory_budget_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class: Option<(Hash64, Hash64)>,
+    ) -> Result<(), String> {
+        let need = self.replay_memory_need_v1(session, class);
         crate::palw_backends::ledger_admits_v1(need.total_bytes()).map_err(|why| format!("a replay needs {} and {why}", need.describe()))
     }
 
@@ -4216,12 +4255,13 @@ impl PalwPanelService {
                         // here as a full seat — an upper bound over what the resume and the leaf's
                         // replay walk — and a court that cannot reserve waits for the next tick
                         // instead of dying mid-case with a session open against it.
-                        let court_need = self.backends().role_memory_need_for_backend_v1(
+                        let court_need = self.backends().role_memory_need_for_backend_or_chain_v1(
                             backend.as_ref(),
                             duty.class_id,
                             duty.artifact_root,
                             None,
                             kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
+                            |id| self.chain_carriage_v1(&session, id),
                         );
                         let court_reserved = match self.reserve_replay_v1("court", &court_need, duty.class_id, duty.claim_id) {
                             Ok(reserved) => reserved,
@@ -4542,7 +4582,7 @@ impl PalwPanelService {
                 // past its usable memory waits for a later tick instead of starting — swap is not
                 // capacity, and a host in swap finishes no replay at all. The deadline still runs;
                 // a seat that never fits answers nothing, which the quorum prices as silence.
-                if let Err(why) = self.replay_memory_budget_v1(Some((duty.class_id, duty.artifact_root))) {
+                if let Err(why) = self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root))) {
                     crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
                         format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
                     });
@@ -5207,12 +5247,13 @@ impl PalwPanelService {
                             // the blocking task starts and released when it returns, so a producer's
                             // attempt in this process cannot start beside it. A refusal defers the
                             // duty to a later tick, as the pre-check's did.
-                            let need = self.backends().role_memory_need_for_backend_v1(
+                            let need = self.backends().role_memory_need_for_backend_or_chain_v1(
                                 resolved.as_ref(),
                                 duty.class_id,
                                 duty.artifact_root,
                                 Some(&ctx),
                                 kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
+                                |id| self.chain_carriage_v1(&session, id),
                             );
                             let reserved = match self.reserve_replay_v1("full-seat", &need, duty.class_id, duty.claim_id) {
                                 Ok(reserved) => reserved,
@@ -8001,12 +8042,14 @@ impl PalwPanelService {
             // partial-seat need — the prefix to its end, plus the opening it decodes from — taken
             // from the ledger for the replay's life and returned when the segment is done. A
             // refusal waits for a later tick; the deadline runs, as it does for every other hold.
-            let need = self.backends().role_memory_need_for_backend_v1(
+            let session = self.consensus_manager.consensus().unguarded_session();
+            let need = self.backends().role_memory_need_for_backend_or_chain_v1(
                 backend,
                 duty.class_id,
                 duty.artifact_root,
                 Some(job),
                 kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: index },
+                |id| self.chain_carriage_v1(&session, id),
             );
             let _held_for_the_segment = match self.reserve_replay_v1("partial-seat", &need, duty.class_id, duty.claim_id) {
                 Ok(reserved) => reserved,
@@ -8520,6 +8563,13 @@ mod tests {
         let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
         for table_only in ["backends.resolve(", "backends().resolve("] {
             assert!(!production.contains(table_only), "`{table_only}` skips the chain's registrations — use `resolve_backend`");
+        }
+        // The route-matrix re-audit's #5: the memory figures beside a resolve go through the same door.
+        for table_only in ["role_memory_need_v1(", "holding_bytes_for_v1(", "role_memory_need_for_backend_v1(", "incremental_replay_bytes_for_v1("] {
+            assert!(
+                !production.contains(table_only),
+                "`{table_only}` prices a chain-registered class off the tables alone — use the `_or_chain_v1` figure"
+            );
         }
         let readiness = &production[production.find("    fn readiness_duties(").expect("the readiness duty")..];
         assert!(readiness.contains("self.resolve_backend(session, class.class_id, class.artifact_root)"), "proofs use the door");

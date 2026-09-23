@@ -1652,10 +1652,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .schedule
             .as_ref()
             .map(|schedule| {
-                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(
+                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v2(
                     schedule,
                     status.view.round + 1,
                     status.view.width,
+                    status.tickets_only,
                 )
                 .len() as u16
             })

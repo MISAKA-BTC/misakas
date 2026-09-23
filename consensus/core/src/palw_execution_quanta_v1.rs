@@ -225,9 +225,19 @@ pub fn palw_execution_mint_quanta_bounded_v1(
 }
 
 /// **Rounds between the block that opens a span and the first round its tickets may occupy**, past
-/// ADR-0151's bundle: the time for that block to reach a producer and for the producer to read the
-/// schedule it seeded. A round block's round is its own timestamp's second, so a ticket on the
+/// ADR-0151's bundle. A round block's round is its own timestamp's second, so a ticket on the
 /// opening block's own round is one no producer could have known of in time.
+///
+/// **Three rounds is not when a producer can read the schedule** (the 2026-09-23 route-matrix
+/// re-audit's #1, correcting this constant's first doc). A round block anchors at the sink's
+/// SELECTED PARENT, so span `n`'s schedule is what a producer builds against only once the next chain
+/// block on top of the opening block has arrived — on testnet-12 often a whole 120 s heartbeat later,
+/// and the opening block's own timestamp may be an attempt template's, taken before its forward.
+/// The loss this caused was at the HEAD of the window, not its tail. Consensus accepts a backdated
+/// round (a round block's timestamp need only be its round's and past the median time), so the
+/// shipped round producer signs every ticket of its bond the schedule shows on a round not yet past
+/// the median time, oldest first (`kaspad`'s `palw_round_producer`); what remains lost is a ticket
+/// whose round is still ahead when the view moves on to the next span.
 pub const PALW_EXEC_TICKET_LEAD_ROUNDS_V1: u64 = 3;
 
 /// **The rounds a span's schedule can grant, past ADR-0151's bundle: the span's length at the

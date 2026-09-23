@@ -128,7 +128,15 @@ pub struct PalwPanelValidLockV1 {
 
 impl PalwPanelValidLockV1 {
     /// Whether `bond` can post the lock on `state`.
+    ///
+    /// A bond whose POSTED collateral is below `required` is refused before its locks are read:
+    /// what it has free is at most what it posted, so no lock can change the answer, and the draw
+    /// asks this of every eligible bond of every pending claim (the route-matrix re-audit's #3).
     pub fn admits(&self, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> bool {
+        let posted = state.bond(bond).map(|b| b.collateral as u128).unwrap_or(0);
+        if posted < self.required {
+            return false;
+        }
         state.palw_slashable_available_v1(bond, self.now_daa, self.settled_anchor_depth) >= self.required
     }
 }

@@ -125,6 +125,7 @@ impl PalwBackendRegistry {
             class_id,
             artifact_root,
             role,
+            false,
         );
         let memoized = !matches!(role, PalwResourceRoleV1::PartialSeat { .. });
         if memoized
@@ -159,6 +160,117 @@ impl PalwBackendRegistry {
             .iter()
             .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
             .and_then(incremental_replay_bytes_v1)
+            .unwrap_or(0);
+        Self::compose_need_v1(backend, holding_bytes, job, role)
+    }
+
+    /// **The holding that serves `(class_id, artifact_root)`, through [`Self::resolve_or_chain`]'s
+    /// door** (the route-matrix re-audit's #5), with the backend it resolved to: each holding offered
+    /// on its own to the tables, then — where `fetch` answers — to the chain's own registration.
+    /// `None` when no holding serves the class by either door.
+    ///
+    /// The panel's readiness proofs and status resolve a chain-registered class through that door,
+    /// while the memory figures beside them asked the tables alone: for such a class they found no
+    /// holding, priced the replay at the widest holding with no derived, KV or runtime bytes, and a
+    /// seat proved readiness for a class it could not replay (drawable, then silent or OOM when
+    /// drawn) — or was refused a proof because it held a large unrelated artifact.
+    fn serving_holding_or_chain_v1<F>(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        fetch: F,
+    ) -> Option<(&PalwLoadedArtifactV1, Box<dyn PalwExecutionBackendV1>)>
+    where
+        F: FnOnce(
+            Hash64,
+        )
+            -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
+    {
+        if let Some(found) = self
+            .holdings
+            .iter()
+            .find_map(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok().map(|b| (holding, b)))
+        {
+            return Some(found);
+        }
+        // ADR-0067 SA-2: a class this node already failed to serve from chain data is not compiled
+        // again per holding here either.
+        if remembered_unservable(class_id, artifact_root, &self.holdings).is_some() {
+            return None;
+        }
+        let (profile, canonical) = fetch(class_id)?;
+        self.holdings.iter().find_map(|holding| {
+            self.sdk
+                .resolve_chain_registered(class_id, artifact_root, std::slice::from_ref(holding), &profile, &canonical)
+                .ok()
+                .map(|backend| (holding, backend))
+        })
+    }
+
+    /// [`Self::role_memory_need_v1`] through [`Self::resolve_or_chain`]'s door — the tables, then the
+    /// chain's registration where `fetch` answers (the route-matrix re-audit's #5). The table figure
+    /// is the one [`Self::role_memory_need_v1`] gives, memo and all; a chain figure is memoized once
+    /// found, and a miss is not (the registration may simply not have been read yet).
+    pub fn role_memory_need_or_chain_v1<F>(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        role: PalwResourceRoleV1,
+        fetch: F,
+    ) -> Option<PalwRoleMemoryNeedV1>
+    where
+        F: FnOnce(
+            Hash64,
+        )
+            -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
+    {
+        if let Some(need) = self.role_memory_need_v1(class_id, artifact_root, role) {
+            return Some(need);
+        }
+        let key = (
+            self.holdings.iter().map(|h| h.path.clone().unwrap_or_default()).collect::<Vec<_>>(),
+            class_id,
+            artifact_root,
+            role,
+            true,
+        );
+        let memoized = !matches!(role, PalwResourceRoleV1::PartialSeat { .. });
+        if memoized
+            && let Ok(memo) = replay_bytes_memo_v1().lock()
+            && let Some(Some(hit)) = memo.get(&key)
+        {
+            return Some(hit.clone());
+        }
+        let (holding, backend) = self.serving_holding_or_chain_v1(class_id, artifact_root, fetch)?;
+        let need = Self::compose_need_v1(backend.as_ref(), incremental_replay_bytes_v1(holding)?, None, role);
+        if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
+            memo.insert(key, Some(need.clone()));
+        }
+        Some(need)
+    }
+
+    /// [`Self::role_memory_need_for_backend_v1`] whose holding is found through
+    /// [`Self::resolve_or_chain`]'s door (the route-matrix re-audit's #5): a caller that resolved a
+    /// chain-registered class got a backend the tables do not know, and the table-only holding lookup
+    /// priced that replay's artifact at zero bytes.
+    pub fn role_memory_need_for_backend_or_chain_v1<F>(
+        &self,
+        backend: &dyn PalwExecutionBackendV1,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
+        role: PalwResourceRoleV1,
+        fetch: F,
+    ) -> PalwRoleMemoryNeedV1
+    where
+        F: FnOnce(
+            Hash64,
+        )
+            -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
+    {
+        let holding_bytes = self
+            .serving_holding_or_chain_v1(class_id, artifact_root, fetch)
+            .and_then(|(holding, _)| incremental_replay_bytes_v1(holding))
             .unwrap_or(0);
         Self::compose_need_v1(backend, holding_bytes, job, role)
     }
@@ -625,8 +737,9 @@ impl PalwRoleMemoryNeedV1 {
     }
 }
 
-/// The per-(holdings, class, root, role) need figures — see `role_memory_need_v1`.
-type NeedMemoKey = (Vec<PathBuf>, Hash64, Hash64, PalwResourceRoleV1);
+/// The per-(holdings, class, root, role, door) need figures — see `role_memory_need_v1`. The door
+/// flag keeps a table-only miss (`false`) from answering for the chain arm (`true`).
+type NeedMemoKey = (Vec<PathBuf>, Hash64, Hash64, PalwResourceRoleV1, bool);
 fn replay_bytes_memo_v1() -> &'static std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>> {
     static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>>> =
         std::sync::OnceLock::new();
@@ -676,19 +789,24 @@ pub fn verify_class_manifests_v1(sdk: &PalwClassSdk, holdings: &[PalwLoadedArtif
 }
 
 /// **Can this node ever produce for its `--palw-producer-class`?** (the 2026-09-23 route-matrix
-/// audit's #1.) `Some(why)` for a configuration that can NEVER produce, whatever the chain does:
+/// audit's #1.) `Some(why)` only for a configuration that can NEVER produce, whatever the chain does:
 ///
 /// * a model class and no class artifact held at all;
-/// * a model class that none of the held artifacts pairs with, when every held artifact carries a
-///   sidecar that says what it pairs with;
-/// * a GENESIS class whose registered root differs from the root the held artifact's sidecar gives
-///   it — the defect that left testnet-12's dense tier at zero blocks for a whole deployment while
-///   every producer said only "holding".
+/// * a GENESIS class that EVERY held artifact's sidecar lists, each under a root other than the one
+///   the class registered — the defect that left testnet-12's dense tier at zero blocks for a whole
+///   deployment while every producer said only "holding".
 ///
-/// `None` otherwise — including where a held artifact has no sidecar, because deciding its pairing
-/// would walk its inventory at startup; that case is judged at resolve time, as before. The floor
-/// needs no artifact and is never refused here. A post-genesis class's root is on the chain, not in
-/// the params, so its mismatch is a resolve-time finding.
+/// `None` otherwise (the route-matrix re-audit's #4 and #6: only definitive verdicts). A sidecar is
+/// written from THIS build's catalog, so one that carries no row for the class says nothing about a
+/// class the chain registered permissionlessly (served through `--palw-chain-classes`), nor about a
+/// row a newer build added — the SDK's own reader (`inventory_root_from_sidecar`) reads a missing
+/// row as "derive", and so does this. A held artifact with no sidecar is judged at resolve time, as
+/// before, because deciding its pairing would walk its inventory at startup. And one holding that
+/// lists the class under the wrong root does not condemn another that may carry the right
+/// conversion — adding the correct file beside the old one is the natural remedy, and the table
+/// resolve picks whichever holding matches. The floor needs no artifact and is never refused here.
+/// A post-genesis class's root is on the chain, not in the params, so its mismatch is a resolve-time
+/// finding.
 pub fn producer_class_unproducible_v1(
     class_id: &Hash64,
     holdings: &[PalwLoadedArtifactV1],
@@ -700,11 +818,6 @@ pub fn producer_class_unproducible_v1(
     if *class_id == bundle.base_class_id {
         return None;
     }
-    if holdings.is_empty() {
-        return Some(format!(
-            "class {class_id} is a model class and this node holds no class artifact (--palw-class-artifact names none, or              none loaded): there is nothing to run its inference on"
-        ));
-    }
     let registered_root = bundle.genesis_objects.iter().find_map(|object| match object {
         kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id: id, artifact_root, .. }
             if id == class_id =>
@@ -713,38 +826,53 @@ pub fn producer_class_unproducible_v1(
         }
         _ => None,
     });
-    let mut listed: Vec<String> = Vec::new();
-    let mut every_holding_has_a_sidecar = true;
-    for holding in holdings {
-        let misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Agrees(manifest) = misaka_palw_sdk::class_manifest::manifest_beside(holding)
-        else {
-            every_holding_has_a_sidecar = false;
-            continue;
-        };
-        for row in &manifest.rows {
-            if row.class_id.into_hash64() != *class_id {
-                listed.push(format!("{} ({})", row.model_id, row.class_id));
-                continue;
-            }
-            match registered_root {
-                Some(root) if root != row.inventory_root.into_hash64() => {
-                    return Some(format!(
-                        "class {class_id} ({}) is registered at genesis with root {root}, and the artifact this node holds for it                          has root {} (its sidecar, checked against the file) — every claim would be refused as the wrong                          artifact, so this node could never produce for it",
-                        row.model_id, row.inventory_root
-                    ));
-                }
-                _ => return None,
-            }
-        }
-    }
-    if every_holding_has_a_sidecar {
+    let sidecar_rows: Vec<Option<(String, Hash64)>> = holdings
+        .iter()
+        .map(|holding| match misaka_palw_sdk::class_manifest::manifest_beside(holding) {
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Agrees(manifest) => manifest
+                .rows
+                .iter()
+                .find(|row| row.class_id.into_hash64() == *class_id)
+                .map(|row| (row.model_id.clone(), row.inventory_root.into_hash64())),
+            _ => None,
+        })
+        .collect();
+    producer_class_verdict_v1(class_id, registered_root, &sidecar_rows)
+}
+
+/// [`producer_class_unproducible_v1`]'s verdict over what each held artifact's sidecar lists for the
+/// class — `Some((model id, root))` for a sidecar that agrees with its file and carries the class's
+/// row, `None` for everything that decides nothing (no sidecar, one that disagrees with its file, or
+/// one without the row). One entry per holding; none at all is "nothing held".
+fn producer_class_verdict_v1(
+    class_id: &Hash64,
+    registered_root: Option<Hash64>,
+    sidecar_rows: &[Option<(String, Hash64)>],
+) -> Option<String> {
+    if sidecar_rows.is_empty() {
         return Some(format!(
-            "none of the {} held class artifact(s) pairs with class {class_id}; their sidecars list: {}",
-            holdings.len(),
-            if listed.is_empty() { "nothing".to_string() } else { listed.join(", ") }
+            "class {class_id} is a model class and this node holds no class artifact (--palw-class-artifact names none, or \
+             none loaded): there is nothing to run its inference on"
         ));
     }
-    None
+    // A chain-registered class: its root is the chain's, read at resolve time.
+    let root = registered_root?;
+    let mut listed: Vec<String> = Vec::new();
+    for row in sidecar_rows {
+        match row {
+            // One holding this node cannot judge, or one that carries the registered root: it may
+            // produce, so nothing here is definitive.
+            None => return None,
+            Some((_, held)) if *held == root => return None,
+            Some((model_id, held)) => listed.push(format!("{model_id} at {held}")),
+        }
+    }
+    Some(format!(
+        "class {class_id} is registered at genesis with root {root}, and every artifact this node holds for it has another \
+         root (their sidecars, checked against the files: {}) — every claim would be refused as the wrong artifact, so this \
+         node could never produce for it",
+        listed.join(", ")
+    ))
 }
 
 pub fn load_class_holdings_v1(
@@ -1491,6 +1619,39 @@ mod tests {
             10,
         ));
         assert_eq!(producer_class_unproducible_v1(&dense_8k, &[], &legacy), None);
+    }
+
+    /// **Only definitive verdicts** (the route-matrix re-audit's #4 and #6). A sidecar that carries no
+    /// row for the class decides nothing — a chain-registered class never appears in one, and an older
+    /// build's sidecar lacks a newer row — and one holding with the wrong root does not condemn
+    /// another that carries the right one. Refused: nothing held, or a genesis class every holding
+    /// lists under another root.
+    #[test]
+    fn the_startup_refusal_gives_only_definitive_verdicts() {
+        let class = Hash64::from_u64_word(0xC1A5);
+        let (genesis_root, wrong_root, other_wrong) =
+            (Hash64::from_u64_word(0x600D), Hash64::from_u64_word(0xBAD), Hash64::from_u64_word(0xBAD2));
+        let row = |root: Hash64| Some(("qwen25-graph-v7".to_string(), root));
+        // Nothing held: definitive for a genesis class and a chain-registered one alike.
+        assert!(producer_class_verdict_v1(&class, Some(genesis_root), &[]).is_some());
+        assert!(producer_class_verdict_v1(&class, None, &[]).is_some());
+        // #4: a sidecar with no row for the class is unknown, not "pairs with nothing".
+        assert_eq!(producer_class_verdict_v1(&class, None, &[None]), None, "a chain-registered class is in no sidecar");
+        assert_eq!(producer_class_verdict_v1(&class, Some(genesis_root), &[None]), None, "an older build's sidecar lacks the row");
+        // A chain-registered class's root is the chain's: no sidecar root is compared against it.
+        assert_eq!(producer_class_verdict_v1(&class, None, &[row(wrong_root)]), None);
+        // The testnet-12 incident: the one artifact held lists the genesis class under another root.
+        let why = producer_class_verdict_v1(&class, Some(genesis_root), &[row(wrong_root)]).expect("every holding is wrong");
+        assert!(why.contains(&genesis_root.to_string()) && why.contains(&wrong_root.to_string()), "{why}");
+        // #6: the correct conversion added beside the wrong one — whichever order — is not refused.
+        assert_eq!(producer_class_verdict_v1(&class, Some(genesis_root), &[row(wrong_root), row(genesis_root)]), None);
+        assert_eq!(producer_class_verdict_v1(&class, Some(genesis_root), &[row(genesis_root), row(wrong_root)]), None);
+        // …nor beside a file with no sidecar, which the table resolve may still match.
+        assert_eq!(producer_class_verdict_v1(&class, Some(genesis_root), &[row(wrong_root), None]), None);
+        // Every holding wrong: refused, naming each.
+        let why = producer_class_verdict_v1(&class, Some(genesis_root), &[row(wrong_root), row(other_wrong)]).expect("all wrong");
+        assert!(why.contains(&wrong_root.to_string()) && why.contains(&other_wrong.to_string()), "{why}");
+        assert!(!why.contains('\n'), "one line, so the log line carrying it is one line: {why}");
     }
 
     fn court() -> PalwCourtParamsV2 {

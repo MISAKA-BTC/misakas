@@ -7158,13 +7158,26 @@ impl PalwChainStateV2 {
         self.panel_liabilities.get(claim)
     }
 
+    /// **Every Valid lock `bond` holds, in claim order** — a range over the bond's own keys of the
+    /// `(bond, claim)`-keyed map, never a scan of the whole map filtered by bond (the 2026-09-23
+    /// route-matrix re-audit's #3). The route-matrix #3 draw asks for each eligible bond of every
+    /// pending claim in every chain block, in the assembler and the acceptance alike, and the map is
+    /// never pruned; filtering the whole map made that O(bonds × all locks) per claim. The set read is
+    /// the same set, so every figure summed over it is unchanged on every network.
+    pub fn slashable_locks_of(
+        &self,
+        bond: &PalwBondKeyV2,
+    ) -> impl Iterator<Item = (&(PalwBondKeyV2, Hash64), &crate::palw_panel_var_v1::PalwSlashableLockV1)> + '_ {
+        let bond = *bond;
+        self.slashable_locks.range((bond, Hash64::default())..).take_while(move |((b, _), _)| *b == bond)
+    }
+
     /// [`Self::slashable_available`] on both clocks — see `PalwSlashableLockV1::is_live_v2`.
     pub fn slashable_available_v2(&self, bond: &PalwBondKeyV2, now_daa: u64, depth: Option<u64>) -> u128 {
         let posted = self.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
         let locked = self
-            .slashable_locks
-            .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, self.settled_attempt_finals, depth))
+            .slashable_locks_of(bond)
+            .filter(|(_, lock)| lock.is_live_v2(now_daa, self.settled_attempt_finals, depth))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add);
         crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
@@ -7173,9 +7186,8 @@ impl PalwChainStateV2 {
     pub fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
         let posted = self.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
         let locked = self
-            .slashable_locks
-            .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live(now_daa))
+            .slashable_locks_of(bond)
+            .filter(|(_, lock)| lock.is_live(now_daa))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add);
         crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
@@ -7282,9 +7294,8 @@ impl PalwChainStateV2 {
         let posted = self.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
         let settled_now = self.settled_attempt_finals;
         let locked = self
-            .slashable_locks
-            .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, settled_anchor_depth))
+            .slashable_locks_of(bond)
+            .filter(|(_, lock)| lock.is_live_v2(now_daa, settled_now, settled_anchor_depth))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add);
         crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
@@ -9791,9 +9802,8 @@ impl<'a> TransitionBuilder<'a> {
     fn slashable_live_locked(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
         let (settled_now, depth) = (self.state.settled_attempt_finals, self.settled_anchor_depth());
         self.state
-            .slashable_locks
-            .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, depth))
+            .slashable_locks_of(bond)
+            .filter(|(_, lock)| lock.is_live_v2(now_daa, settled_now, depth))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add)
     }
@@ -15328,8 +15338,20 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                     // (the audit's #10): two independent panels failing to conclude is the one
                     // observable a withholding producer cannot avoid, and before the fence it left the
                     // producer's whole reservation to come back untouched. `void_and_slash` takes the
-                    // escrow-inclusive reservation on this reason past the fence. The panel's silent
-                    // seats are charged above either way. A BindTimeout is not charged: the chain
+                    // escrow-inclusive reservation on this reason past the fence — and, for a
+                    // compute-priced free-prompt claim, its receipt rights (`rights_reserved`, the
+                    // audit's #5), which are ~500× the claim's weight reservation on testnet-12.
+                    //
+                    // **The silent seats are NOT charged** (the route-matrix re-audit's #8 corrects
+                    // this comment, which said they were "charged above either way"):
+                    // `slash_silent_seats` has an empty body, because the chain cannot observe
+                    // silence, and a seat that signed nothing locked nothing and left duty with its
+                    // exposure released at the first redraw. So the whole cost of two panels failing
+                    // to conclude falls on the producer, whoever caused the silence — a permissionless
+                    // seat Sybil pays nothing to cause it. Whether the receipt rights belong in this
+                    // availability charge, or only in `CourtFraud` and DA-confirmed
+                    // `ProducerWithholding`, is an open decision (see the re-audit report); until it
+                    // is taken this is the charge. A BindTimeout is not charged: the chain
                     // binds a panel itself the moment the anchor is reached, so a bind that never
                     // happened is the network's capacity failing, never a producer's choice — and
                     // charging it would charge the victims of a claim that occupied the seats.
@@ -26245,9 +26267,12 @@ pub(crate) mod tests {
 
     /// **2026-09-23 audit #10, at the call site: past the audit fence the second silent panel
     /// charges the producer.** The chain of `the_second_silent_panel_voids_the_claim`, folded with
-    /// the fence off and on. Both void at `ReceiptTimeout` and charge the silent seats alike; past the
-    /// fence the producer's bond also pays its reservation (its escrow is zero in this fixture, which
-    /// arms no escrow — the escrow half is the builder-level test's).
+    /// the fence off and on. Both void at `ReceiptTimeout`; neither charges the silent seats
+    /// (`slash_silent_seats` is a no-op — the chain cannot observe silence; the route-matrix
+    /// re-audit's #8 corrected this docstring, which said they were charged alike). Past the fence the
+    /// producer's bond pays its reservation (its escrow is zero in this fixture, which arms no escrow —
+    /// the escrow half is the builder-level test's). The fixture seats the executor's own bond, so the
+    /// seats' side is `slash_silent_seats`' empty body, not an assertion here.
     #[test]
     fn past_the_audit_fence_the_second_silent_panel_charges_the_producer() {
         let p = params();
@@ -26284,7 +26309,7 @@ pub(crate) mod tests {
         let (before_fence, reserved) = fold_chain(false);
         let (past_fence, _) = fold_chain(true);
         assert!(reserved > 0, "the premise: the claim reserved something to charge");
-        assert_eq!(before_fence - past_fence, reserved, "past the fence the producer pays its reservation on top of the seats' charge");
+        assert_eq!(before_fence - past_fence, reserved, "past the fence the producer pays its reservation");
     }
 
     /// **ADR-0065 D4 — an `Unavailable` quorum stops taking the producer's stake.**
