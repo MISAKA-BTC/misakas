@@ -9083,6 +9083,9 @@ struct PalwFoldReadV1<'a> {
     /// fold it is what the builder would take from these extras
     /// (`extras.own_attempt_class` past `palw_audit_2026_09_23`).
     own_attempt_class: Option<Hash64>,
+    /// The class whose OWN attempt step 4 is folding, when its room was read and found at step
+    /// 3's start (`TransitionBuilder::room_exempt_class`); `None` everywhere else.
+    room_exempt_class: Option<Hash64>,
 }
 
 impl<'a> PalwFoldReadV1<'a> {
@@ -9096,6 +9099,7 @@ impl<'a> PalwFoldReadV1<'a> {
             inflight_index: None,
             panel_horizon: None,
             own_attempt_class: extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active),
+            room_exempt_class: None,
         }
     }
 }
@@ -9355,10 +9359,54 @@ impl PalwFoldReadV1<'_> {
         // `grace_until_daa` (activation + `readiness_probe_max_age_spans` spans) exists for exactly
         // this window; inside it the class is bounded by the inflight cap below, as before the fence.
         if self.extras.work_target_active && fold.governs_at(now_daa) {
+            let audited = self.extras.audit_2026_09_23_active;
+            // **The block's own attempt, judged where step 3 began** (2026-09-24 audit #4 review,
+            // item 2). Step 3 folds objects that change the demand without asking this gate — an
+            // accusation re-opening a licensed claim, a court on one, a retirement that takes a
+            // ready seat — so a room read at step 4 could refuse the attempt the producer's
+            // pre-check admitted and disqualify the whole block. Past the fence the attempt's room
+            // is read once, before step 3's first object (`TransitionBuilder::own_attempt_fit`), and
+            // every gated object in step 3 is refused rather than taking it (below). Step 4 then
+            // asks only the lifecycle for it. The re-charges take effect for the next block.
+            let exempt = audited && incoming <= 1 && self.room_exempt_class == Some(*class_id);
+            // **A held class is held to its static cap past the fence too** (the review's item 1,
+            // ADR-0152 T-2(b)): c_2M = 1 until ADR-0153. The rate room alone lets a held class run
+            // as many claims as the panel's replay holds, which is exactly what the hold forbids.
+            if audited && !exempt && self.state.class_is_held_v1(class_id) {
+                let inflight = self.model_registry_inflight(class_id);
+                if (inflight as u64).saturating_add(incoming.max(1)) > row.profile.max_inflight_claims as u64 {
+                    return Err(PalwStateV2Error::ClassInflightCapped {
+                        class: *class_id,
+                        inflight,
+                        cap: row.profile.max_inflight_claims,
+                    });
+                }
+            }
             // ADR-0137 D5: one network-wide replay budget in place of the per-class cap.
-            let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
-            if room < incoming.max(1) {
-                return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
+            if !exempt {
+                let (room, inflight_replay, budget, horizon_spans) = self.panel_room_v1(class_id, row, fold, now_daa);
+                if room < incoming.max(1) {
+                    return Err(PalwStateV2Error::PanelRoomExhausted { class: *class_id, inflight_replay, budget, horizon_spans });
+                }
+            }
+            // **And a gated object of ANOTHER class may not take the own attempt's room** (the
+            // review's item 2): the budget a span is each class's own ready seats', so an object that
+            // fits its class can still leave the attempt's class short. Refused only where the
+            // attempt fitted before this object and would not after it.
+            if audited
+                && let Some(own) = self.own_attempt_class.filter(|own| own != class_id && *own != self.params.base_class_id())
+                && let Some(own_row) = self.state.model_lifecycles.get(&own)
+            {
+                let before = self.panel_rate_v1(&own, own_row, fold, now_daa, None);
+                let after = self.panel_rate_v1(&own, own_row, fold, now_daa, Some((*class_id, incoming.max(1) as u128)));
+                if before.fits() && !after.fits() {
+                    return Err(PalwStateV2Error::PanelRoomExhausted {
+                        class: own,
+                        inflight_replay: after.inflight_replay(),
+                        budget: after.per_span.saturating_mul(after.window as u128),
+                        horizon_spans: after.window,
+                    });
+                }
             }
             return Ok(());
         }
@@ -9436,13 +9484,14 @@ impl PalwFoldReadV1<'_> {
     }
 
     /// **The room by rate** (2026-09-24 audit #4): this class's ready seats' replay a span, less
-    /// the per-span demand of every model class's replay still owed — each class over its OWN
-    /// window ([`palw_panel_demand_scaled_v1`]) — over this class's window, in its claims.
+    /// the per-span terms of every OTHER class's owed replay — each over its own window — is the
+    /// class's capacity in its claims ([`PalwPanelRateV1`]); the room is that less what the class
+    /// owes. A held class is also held to its static cap (ADR-0152 T-2(b)).
     ///
-    /// Returns what [`Self::panel_room_v1`] returns, read over this class's window: the demand as
-    /// replay over `window` spans, the budget as `per_span × window`, and `window` as the horizon
-    /// — so `inflight / budget` is the demand a span over the budget a span, the utilization the
-    /// row reports, and no other class's window enters any of the four.
+    /// Returns what [`Self::panel_room_v1`] returns, read over this class's window: the whole
+    /// demand as replay over `window` spans, the budget as `per_span × window`, and `window` as the
+    /// horizon — so `inflight / budget` is the demand a span over the budget a span, the
+    /// utilization the row reports, and no other class's window enters any of the four.
     fn panel_room_by_rate_v1(
         &self,
         class_id: &Hash64,
@@ -9450,20 +9499,41 @@ impl PalwFoldReadV1<'_> {
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
         now_daa: u64,
     ) -> (u64, u128, u128, u64) {
-        use crate::palw_work_target_v1::{PALW_PANEL_DEMAND_SCALE_V1, palw_panel_room_by_rate_v1};
+        let rate = self.panel_rate_v1(class_id, row, fold, now_daa, None);
+        let mut room = rate.room();
+        if self.state.class_is_held_v1(class_id) {
+            room = room.min((row.profile.max_inflight_claims as u128).saturating_sub(rate.owed).min(u64::MAX as u128) as u64);
+        }
+        (room, rate.inflight_replay(), rate.per_span.saturating_mul(rate.window as u128), rate.window)
+    }
+
+    /// One class's [`PalwPanelRateV1`] reading, with `extra` claims of some class counted as owed.
+    fn panel_rate_v1(
+        &self,
+        class_id: &Hash64,
+        row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+        now_daa: u64,
+        extra: Option<(Hash64, u128)>,
+    ) -> PalwPanelRateV1 {
         let g = &fold.globals;
         let seat_count = g.seat_count as u128;
-        let demand = self.with_inflight_index(|index| {
-            palw_panel_demand_scaled_v1(self.state, self.params, seat_count, index, self.own_attempt_class)
+        let (owed, terms) = self.with_inflight_index(|index| {
+            let owed = palw_panel_owed_v1(self.state, self.params, index, self.own_attempt_class, extra);
+            let terms = palw_panel_terms_v1(self.state, seat_count, &owed);
+            (owed, terms)
         });
         let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
         let per_span =
             ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
-        let window = (row.profile.verification_window_spans as u64).max(1);
-        let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
-        let room = palw_panel_room_by_rate_v1(per_span, demand, window, cost);
-        let inflight_replay = demand.saturating_mul(window as u128).div_ceil(PALW_PANEL_DEMAND_SCALE_V1);
-        (room, inflight_replay, per_span.saturating_mul(window as u128), window)
+        PalwPanelRateV1::read(
+            class_id,
+            per_span,
+            row.profile.verification_window_spans as u64,
+            row.work.economic_ccu_per_claim.saturating_mul(seat_count),
+            &owed,
+            &terms,
+        )
     }
 
     fn model_registry_ready_seats(
@@ -9801,6 +9871,13 @@ struct TransitionBuilder<'a> {
     /// attempt as already in flight on its class, and a commitment that would leave it no room is
     /// the one refused (dropped, the block standing). `None` outside step 3 and below the fence.
     own_attempt_class: Option<Hash64>,
+    /// **Whether the block's own attempt had room when step 3 began** (2026-09-24 audit #4 review,
+    /// item 2) — read once, before the block's first object, past `palw_audit_2026_09_23`.
+    own_attempt_fit: bool,
+    /// **The class step 4 folds the block's own attempt on, while it does, if it fitted at step 3's
+    /// start** — the one claim the class gate does not re-measure against the room (see
+    /// `check_class_admits_claim`). `None` outside that one call.
+    room_exempt_class: Option<Hash64>,
     /// **Bought `ClassRegistered` objects this builder has folded** (2026-09-24 DoS audit #12 (b)),
     /// against [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`]. Not state: one builder is one block's
     /// fold, and the count is the block's.
@@ -9853,18 +9930,17 @@ impl PalwInflightTallyV1 {
         self.attempts == 0 && self.free_prompts == 0
     }
 
-    /// **The claims whose replay the panel still owes, counted as [`Self::counted`] counts**
-    /// (2026-09-24 audit #4): in flight and not yet licensed. A licensed claim's receipts are all
-    /// on chain, so the replay the budget exists to schedule has happened; what keeps the claim
-    /// live after that is the challenge window, which is not the panel's replay. A court opened
-    /// on a licensed claim puts its replay back ([`palw_panel_demand_scaled_v1`]).
-    fn replay_pending(&self, audit_2026_09_23_active: bool, quanta_per_job: u32) -> u32 {
-        palw_inflight_claims_counted_v1(
+    /// **The claims whose replay the panel still owes** (2026-09-24 audit #4): in flight and not
+    /// yet licensed, as `(attempts, free-prompt claims, their quanta)`. A licensed claim's receipts
+    /// are all on chain, so the replay the budget exists to schedule has happened; what keeps the
+    /// claim live after that is the challenge window, which is not the panel's replay. A court
+    /// opened on a licensed claim puts its replay back ([`palw_panel_owed_v1`]), and a held class
+    /// owes every claim to Final whatever this says.
+    fn replay_pending(&self) -> (u64, u64, u64) {
+        (
             self.attempts.saturating_sub(self.licensed_attempts),
             self.free_prompts.saturating_sub(self.licensed_free_prompts),
             self.free_prompt_quanta.saturating_sub(self.licensed_free_prompt_quanta),
-            quanta_per_job as u64,
-            audit_2026_09_23_active,
         )
     }
 
@@ -9934,70 +10010,184 @@ fn palw_inflight_index_build_v1(state: &PalwChainStateV2) -> BTreeMap<Hash64, Pa
     index
 }
 
-/// **The panel's per-span replay demand, scaled by [`crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1`]**
-/// (2026-09-24 audit #4) — what the rate rule charges before it admits one more claim:
+/// **What each model class owes the panel, in the class gate's claim units** (2026-09-24 audit #4
+/// and its review) — the count the rate rule charges before it admits one more claim:
 ///
-/// * each model class's claims whose replay is still owed ([`PalwInflightTallyV1::replay_pending`]:
-///   in flight and not yet licensed),
-/// * plus each LICENSED claim with a court open on it — a court puts jury replay back on the same
-///   panel, so the licence's release lasts only while no court is open, and a claim licensed and
-///   then challenged is charged again until its last court closes,
-/// * plus this block's own attempt (`own_attempt_class`), as the common-horizon rule reserved it,
+/// * an ordinary class owes its claims whose replay is still owed
+///   ([`PalwInflightTallyV1::replay_pending`]: in flight and not yet licensed — attempts and
+///   free-prompt claims alike, since a licence carries every receipt of either), plus each
+///   LICENSED claim with a court open on it (a court puts jury replay back on the same panel, so
+///   the licence's release lasts only while no court is open);
+/// * a HELD class (`class_is_held_v1`, the 2M regime) owes every claim in flight until Final —
+///   ADR-0152 T-2(b): its slot is held to Final until ADR-0153 measures its replay — so no licence
+///   releases it and a court adds nothing it does not already owe;
+/// * the block's own attempt (`own_attempt_class`) is one attempt more on its class, as the
+///   common-horizon rule reserved it;
+/// * `extra` — a claim some gate is asking about — is added last, in the same units.
 ///
-/// each class's count charged as ONE term over ITS OWN verification window, rounded up
-/// ([`crate::palw_work_target_v1::palw_panel_demand_term_v1`]). The base class, and a class without a
-/// lifecycle row, put nothing on the panel's budget, as before.
-fn palw_panel_demand_scaled_v1(
+/// Each class's attempts, free-prompt claims and quanta are POOLED before they are counted
+/// ([`palw_inflight_claims_counted_v1`], whole canonical jobs over the class), so a courted
+/// free-prompt claim rounds with the pending ones, as the in-flight count always pooled them. The
+/// base class owes nothing to a panel budget.
+fn palw_panel_owed_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
-    seat_count: u128,
     index: &BTreeMap<Hash64, PalwInflightTallyV1>,
     own_attempt_class: Option<Hash64>,
-) -> u128 {
+    extra: Option<(Hash64, u128)>,
+) -> BTreeMap<Hash64, u128> {
     let base = params.base_class_id();
-    let per_job = params.fp_quanta_per_canonical_job;
-    let mut owed: BTreeMap<Hash64, u128> =
-        index.iter().filter(|(id, _)| **id != base).map(|(id, tally)| (*id, tally.replay_pending(true, per_job) as u128)).collect();
+    let per_job = params.fp_quanta_per_canonical_job as u64;
+    // (attempts, free-prompt claims, free-prompt quanta), pooled per class.
+    let mut pooled: BTreeMap<Hash64, (u64, u64, u64)> = BTreeMap::new();
+    for (id, tally) in index.iter().filter(|(id, _)| **id != base) {
+        let row = if state.class_is_held_v1(id) {
+            (tally.attempts, tally.free_prompts, tally.free_prompt_quanta)
+        } else {
+            tally.replay_pending()
+        };
+        pooled.insert(*id, row);
+    }
     for (claim_key, open) in state.open_courts_by_claim.iter() {
         if *open == 0 {
             continue;
         }
         let Some(claim) = state.claims.get(claim_key) else { continue };
-        if claim.class_id == base || !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+        if claim.class_id == base
+            || state.class_is_held_v1(&claim.class_id)
+            || !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+        {
             continue;
         }
-        let counted = match &claim.source {
-            PalwClaimSourceV2::Attempt => palw_inflight_claims_counted_v1(1, 0, 0, per_job as u64, true),
+        let slot = pooled.entry(claim.class_id).or_default();
+        match &claim.source {
+            PalwClaimSourceV2::Attempt => slot.0 = slot.0.saturating_add(1),
             PalwClaimSourceV2::FreePrompt { quanta, .. } => {
-                palw_inflight_claims_counted_v1(0, 1, *quanta as u64, per_job as u64, true)
+                slot.1 = slot.1.saturating_add(1);
+                slot.2 = slot.2.saturating_add(*quanta as u64);
             }
-        };
-        let slot = owed.entry(claim.class_id).or_insert(0);
-        *slot = slot.saturating_add(counted as u128);
+        }
     }
     if let Some(id) = own_attempt_class.filter(|id| *id != base) {
-        let slot = owed.entry(id).or_insert(0);
-        *slot = slot.saturating_add(1);
+        let slot = pooled.entry(id).or_default();
+        slot.0 = slot.0.saturating_add(1);
     }
+    let mut owed: BTreeMap<Hash64, u128> = pooled
+        .into_iter()
+        .map(|(id, (attempts, fp, quanta))| (id, palw_inflight_claims_counted_v1(attempts, fp, quanta, per_job, true) as u128))
+        .collect();
+    if let Some((id, claims)) = extra.filter(|(id, _)| *id != base) {
+        let slot = owed.entry(id).or_insert(0);
+        *slot = slot.saturating_add(claims);
+    }
+    owed
+}
+
+/// **Each rowed class's term of the per-span demand, scaled by
+/// [`crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1`]** — its owed claims × its claim's
+/// replay over ITS OWN verification window, rounded up
+/// ([`crate::palw_work_target_v1::palw_panel_demand_term_v1`]). A class without a lifecycle row puts
+/// nothing on the budget, as before.
+fn palw_panel_terms_v1(state: &PalwChainStateV2, seat_count: u128, owed: &BTreeMap<Hash64, u128>) -> BTreeMap<Hash64, u128> {
     owed.iter()
         .filter_map(|(id, claims)| {
             state.model_lifecycles.get(id).map(|row| {
-                crate::palw_work_target_v1::palw_panel_demand_term_v1(
-                    *claims,
-                    row.work.economic_ccu_per_claim.saturating_mul(seat_count),
-                    row.profile.verification_window_spans as u64,
+                (
+                    *id,
+                    crate::palw_work_target_v1::palw_panel_demand_term_v1(
+                        *claims,
+                        row.work.economic_ccu_per_claim.saturating_mul(seat_count),
+                        row.profile.verification_window_spans as u64,
+                    ),
                 )
             })
         })
-        .fold(0u128, u128::saturating_add)
+        .collect()
 }
 
-/// **The rate rule's demand for a reader outside the fold** (op 186, the producer's pre-check):
-/// [`palw_panel_demand_scaled_v1`] over the index walked from `state`, with no own attempt —
-/// the same function the fold's gate reads, so the room a producer is shown is the room its
-/// claim meets. Scaled by [`crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1`].
-pub fn palw_panel_demand_scaled_read_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, seat_count: u32) -> u128 {
-    palw_panel_demand_scaled_v1(state, params, seat_count as u128, &palw_inflight_index_build_v1(state), None)
+/// One class's reading under the rate rule: the claims of it the budget holds beside every other
+/// class's term (`capacity`), the claims of it owed now (`owed`), and the whole demand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PalwPanelRateV1 {
+    capacity: u64,
+    owed: u128,
+    demand: u128,
+    per_span: u128,
+    window: u64,
+}
+
+impl PalwPanelRateV1 {
+    fn read(
+        class_id: &Hash64,
+        per_span: u128,
+        window: u64,
+        claim_replay: u128,
+        owed: &BTreeMap<Hash64, u128>,
+        terms: &BTreeMap<Hash64, u128>,
+    ) -> Self {
+        let others = terms.iter().filter(|(id, _)| *id != class_id).map(|(_, t)| *t).fold(0u128, u128::saturating_add);
+        Self {
+            capacity: crate::palw_work_target_v1::palw_panel_capacity_by_rate_v1(per_span, others, window, claim_replay),
+            owed: owed.get(class_id).copied().unwrap_or(0),
+            demand: terms.values().copied().fold(0u128, u128::saturating_add),
+            per_span,
+            window: window.max(1),
+        }
+    }
+
+    /// The claims of this class one more gate may still admit.
+    fn room(&self) -> u64 {
+        (self.capacity as u128).saturating_sub(self.owed).min(u64::MAX as u128) as u64
+    }
+
+    /// Whether what the class owes now still fits its capacity.
+    fn fits(&self) -> bool {
+        self.owed <= self.capacity as u128
+    }
+
+    /// The demand as replay over this class's window (fail-closed: `u128::MAX` where it does not fit).
+    fn inflight_replay(&self) -> u128 {
+        self.demand
+            .checked_mul(self.window as u128)
+            .map(|scaled| scaled.div_ceil(crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1))
+            .unwrap_or(u128::MAX)
+    }
+}
+
+/// **The rate rule for a reader outside the fold** (op 186, the producer's pre-check): each class's
+/// owed claims and each rowed class's term, over the index walked from `state`, with no own
+/// attempt — the functions the fold's gate reads, so the room a producer is shown is the room its
+/// claim meets.
+pub fn palw_panel_demand_read_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    seat_count: u32,
+) -> (BTreeMap<Hash64, u128>, BTreeMap<Hash64, u128>) {
+    let owed = palw_panel_owed_v1(state, params, &palw_inflight_index_build_v1(state), None, None);
+    let terms = palw_panel_terms_v1(state, seat_count as u128, &owed);
+    (owed, terms)
+}
+
+/// One class's room under the rate rule, as op 186 prints it: its capacity less what it owes, and
+/// for a HELD class no more than its static inflight cap leaves (ADR-0152 T-2(b), c_2M = 1).
+pub fn palw_panel_room_read_v1(
+    state: &PalwChainStateV2,
+    class_id: &Hash64,
+    per_span: u128,
+    claim_replay: u128,
+    owed: &BTreeMap<Hash64, u128>,
+    terms: &BTreeMap<Hash64, u128>,
+) -> u64 {
+    let Some(row) = state.model_lifecycles.get(class_id) else {
+        return PalwPanelRateV1::read(class_id, per_span, 1, claim_replay, owed, terms).room();
+    };
+    let rate = PalwPanelRateV1::read(class_id, per_span, row.profile.verification_window_spans as u64, claim_replay, owed, terms);
+    let room = rate.room();
+    if state.class_is_held_v1(class_id) {
+        room.min((row.profile.max_inflight_claims as u128).saturating_sub(rate.owed).min(u64::MAX as u128) as u64)
+    } else {
+        room
+    }
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -10011,6 +10201,7 @@ impl<'a> TransitionBuilder<'a> {
             inflight_index: Some(&self.inflight_index),
             panel_horizon: Some(&self.panel_horizon),
             own_attempt_class: self.own_attempt_class,
+            room_exempt_class: self.room_exempt_class,
         }
     }
 
@@ -10037,6 +10228,8 @@ impl<'a> TransitionBuilder<'a> {
             inflight_index: std::cell::RefCell::new(None),
             panel_horizon: std::cell::Cell::new(None),
             own_attempt_class: None,
+            own_attempt_fit: false,
+            room_exempt_class: None,
             class_registrations: 0,
         }
     }
@@ -14477,6 +14670,9 @@ pub fn apply_palw_transition_v7(
     if extras.audit_2026_09_23_active
         && let PalwBlockWorkV3::Attempt(envelope) = &block_work
     {
+        // The attempt's room, read before any object of this block moves the demand (audit #4
+        // review, item 2): step 4 asks it no room question again.
+        builder.own_attempt_fit = builder.check_class_admits_claim(&envelope.attempt.class_id, ctx.daa_score, 1).is_ok();
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     for object in accepted_objects {
@@ -14525,7 +14721,10 @@ pub fn apply_palw_transition_v7(
             let escrow_carve = builder.extras.escrow_carve;
             // ADR-0132 Upgrade C: this block's own `bits`, the lottery its own forward faced.
             let carrying_bits = builder.extras.economic_payout.map(|fold| fold.block_bits).unwrap_or(0);
-            match apply_attempt(
+            // Audit #4 review, item 2: the room this attempt found at step 3's start is its room.
+            builder.room_exempt_class =
+                (extras.audit_2026_09_23_active && builder.own_attempt_fit).then_some(envelope.attempt.class_id);
+            let own = apply_attempt(
                 &mut builder,
                 ctx,
                 envelope,
@@ -14538,7 +14737,9 @@ pub fn apply_palw_transition_v7(
                     execution_key: own_execution_key,
                     carrying_bits,
                 },
-            ) {
+            );
+            builder.room_exempt_class = None;
+            match own {
                 Ok(()) => {
                     // ADR-0130: the attempt was admitted, so this chain block is the open span's seed
                     // anchor — after step 1d's rotation, so a block that opens a span anchors the next
@@ -26714,52 +26915,59 @@ pub(crate) mod tests {
             let g = &fold.globals;
             let seat_count = g.seat_count as u128;
             if audit {
-                // 2026-09-24 audit #4, walked: every rowed model class's live claims whose replay is
-                // owed — not licensed, or licensed with a court open — plus the block's own attempt,
-                // one term a class over its own window.
-                use crate::palw_work_target_v1::{PALW_PANEL_DEMAND_SCALE_V1, palw_panel_demand_term_v1, palw_panel_room_by_rate_v1};
-                let demand = b
-                    .state
-                    .model_lifecycles
-                    .iter()
-                    .filter(|(id, _)| **id != base)
-                    .map(|(id, r)| {
-                        let (mut attempts, mut fp, mut quanta, mut reopened) = (0u64, 0u64, 0u64, 0u128);
-                        for (key, c) in b.state.claims.iter().filter(|(_, c)| c.class_id == *id && !c.phase.is_terminal()) {
-                            let licensed = matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. });
-                            let court = b.state.open_courts_by_claim.get(key).copied().unwrap_or(0) > 0;
-                            match (&c.source, licensed) {
-                                (PalwClaimSourceV2::Attempt, false) => attempts += 1,
-                                (PalwClaimSourceV2::FreePrompt { quanta: q, .. }, false) => {
+                // 2026-09-24 audit #4 and its review, walked: every rowed model class's live claims,
+                // pooled per class — an ordinary class owes the unlicensed ones and the licensed ones
+                // under a court, a held class owes every one to Final — plus the block's own attempt;
+                // one term a class over its own window; the class's capacity beside the OTHER terms,
+                // less what it owes; and a held class no further than its static cap.
+                use crate::palw_work_target_v1::{
+                    PALW_PANEL_DEMAND_SCALE_V1, palw_panel_capacity_by_rate_v1, palw_panel_demand_term_v1,
+                };
+                let owed_of = |id: &Hash64| -> u128 {
+                    let held = b.state.class_is_held_v1(id);
+                    let (mut attempts, mut fp, mut quanta) = (0u64, 0u64, 0u64);
+                    for (key, c) in b.state.claims.iter().filter(|(_, c)| c.class_id == *id && !c.phase.is_terminal()) {
+                        let licensed = matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. });
+                        let court = b.state.open_courts_by_claim.get(key).copied().unwrap_or(0) > 0;
+                        if held || !licensed || court {
+                            match &c.source {
+                                PalwClaimSourceV2::Attempt => attempts += 1,
+                                PalwClaimSourceV2::FreePrompt { quanta: q, .. } => {
                                     fp += 1;
                                     quanta += *q as u64;
                                 }
-                                (PalwClaimSourceV2::Attempt, true) if court => {
-                                    reopened += palw_inflight_claims_counted_v1(1, 0, 0, 8, true) as u128
-                                }
-                                (PalwClaimSourceV2::FreePrompt { quanta: q, .. }, true) if court => {
-                                    reopened += palw_inflight_claims_counted_v1(0, 1, *q as u64, 8, true) as u128
-                                }
-                                _ => {}
                             }
                         }
-                        let own = u128::from(b.own_attempt_class == Some(*id));
-                        let claims = palw_inflight_claims_counted_v1(attempts, fp, quanta, 8, true) as u128 + reopened + own;
-                        palw_panel_demand_term_v1(
-                            claims,
-                            r.work.economic_ccu_per_claim.saturating_mul(seat_count),
-                            r.profile.verification_window_spans as u64,
-                        )
-                    })
-                    .fold(0u128, u128::saturating_add);
+                    }
+                    if b.own_attempt_class == Some(*id) {
+                        attempts += 1;
+                    }
+                    palw_inflight_claims_counted_v1(attempts, fp, quanta, 8, true) as u128
+                };
+                let term_of = |id: &Hash64, r: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1| {
+                    palw_panel_demand_term_v1(
+                        owed_of(id),
+                        r.work.economic_ccu_per_claim.saturating_mul(seat_count),
+                        r.profile.verification_window_spans as u64,
+                    )
+                };
+                let rows: Vec<_> = b.state.model_lifecycles.iter().filter(|(id, _)| **id != base).collect();
+                let demand = rows.iter().map(|(id, r)| term_of(id, r)).fold(0u128, u128::saturating_add);
+                let others =
+                    rows.iter().filter(|(id, _)| *id != class_id).map(|(id, r)| term_of(id, r)).fold(0u128, u128::saturating_add);
                 let ready = b.model_registry_ready_seats(class_id, now_daa, fold) as u128;
                 let per_span =
                     ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
                 let window = (row.profile.verification_window_spans as u64).max(1);
                 let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
+                let owed = owed_of(class_id);
+                let mut room = (palw_panel_capacity_by_rate_v1(per_span, others, window, cost) as u128).saturating_sub(owed) as u64;
+                if b.state.class_is_held_v1(class_id) {
+                    room = room.min((row.profile.max_inflight_claims as u128).saturating_sub(owed) as u64);
+                }
                 return (
-                    palw_panel_room_by_rate_v1(per_span, demand, window, cost),
-                    demand.saturating_mul(window as u128).div_ceil(PALW_PANEL_DEMAND_SCALE_V1),
+                    room,
+                    demand.checked_mul(window as u128).map(|d| d.div_ceil(PALW_PANEL_DEMAND_SCALE_V1)).unwrap_or(u128::MAX),
                     per_span.saturating_mul(window as u128),
                     window,
                 );

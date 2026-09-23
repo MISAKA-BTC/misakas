@@ -236,8 +236,10 @@ pub fn palw_admission_claims_per_span_v1(work: &PalwModelWorkV1, g: &PalwRegistr
     // Past the fence the rate is at least the smallest the unit can express. It cannot over-commit
     // the panel: `max_inflight_claims` is `1` for exactly these classes, so a second claim is
     // refused until the first is Final, and the verification window — not the rate — is what
-    // paces them. A class with no work, or one the panel cannot hold a single claim of, still
-    // admits nothing.
+    // paces them. (Past the work target the class gate judges by the panel room; past
+    // `palw_audit_2026_09_23` it ALSO holds a held class to this cap and counts its claims to
+    // Final — the 2026-09-24 audit #4 review — so the sentence holds there too.) A class with no
+    // work, or one the panel cannot hold a single claim of, still admits nothing.
     if possession_gate && inflight > 0 {
         return rate.max(1).min(u64::MAX as u128) as u64;
     }
@@ -1190,18 +1192,20 @@ pub struct PalwModelRegistryReadV1 {
 
 /// Why a row is where it is, from its last boundary's reading.
 pub fn palw_lifecycle_reason_v1(row: &PalwModelLifecycleRowV1, is_base_class: bool, g: &PalwRegistryGlobalsV1) -> String {
-    palw_lifecycle_reason_v2(row, is_base_class, g, true)
+    palw_lifecycle_reason_v2(row, is_base_class, g, true, None)
 }
 
 /// [`palw_lifecycle_reason_v1`] under the rule in force: `utilization_gates` is `false` past
 /// `palw_audit_2026_09_23` (2026-09-24 audit #4), where utilization no longer holds a class, so
 /// a `Held` row with its seats is held for its window or its readiness — never "overloaded" by
-/// a utilization reading, which past the fence only the room check acts on.
+/// a utilization reading, which past the fence only the room check acts on. `window_fits` is the
+/// class's verification window against its receipt deadline, where the reader can ask it.
 pub fn palw_lifecycle_reason_v2(
     row: &PalwModelLifecycleRowV1,
     is_base_class: bool,
     g: &PalwRegistryGlobalsV1,
     utilization_gates: bool,
+    window_fits: Option<bool>,
 ) -> String {
     if is_base_class {
         return "base class: always active, never gated".to_string();
@@ -1246,17 +1250,30 @@ pub fn palw_lifecycle_reason_v2(
                 )
             } else if utilization_gates {
                 format!("held: overloaded ({} ‰ utilization at {} in flight)", row.utilization_permille, row.inflight_claims)
-            } else if row.ready_seats < row.profile.required_ready_seats {
-                format!(
-                    "held: {} seats were ready, {} are required to re-enter probation (compare readySeatsNow)",
-                    row.ready_seats, row.profile.required_ready_seats
-                )
             } else {
-                format!(
-                    "held: its verification window ({} spans) does not fit the receipt deadline — replay would outrun every claim \
-                     it admitted",
-                    row.profile.verification_window_spans
-                )
+                // Past the fence a class holding its panel seats is held for its window, its
+                // readiness, or both — each named when the reader can tell, never a utilization.
+                let short = row.ready_seats < row.profile.required_ready_seats;
+                let window = || {
+                    format!(
+                        "its verification window ({} spans) does not fit the receipt deadline — replay would outrun every claim it \
+                         admitted",
+                        row.profile.verification_window_spans
+                    )
+                };
+                let seats = || {
+                    format!(
+                        "{} seats were ready, {} are required to re-enter probation (compare readySeatsNow)",
+                        row.ready_seats, row.profile.required_ready_seats
+                    )
+                };
+                match (window_fits, short) {
+                    (Some(false), true) => format!("held: {}; and {}", window(), seats()),
+                    (Some(false), false) => format!("held: {}", window()),
+                    (_, true) => format!("held: {}", seats()),
+                    (Some(true), false) => "held: seats and window are back; it re-enters probation at the next boundary".to_string(),
+                    (None, false) => format!("held: {} (or its readiness lapsed at the boundary)", window()),
+                }
             }
         }
     }
@@ -1521,10 +1538,13 @@ pub fn palw_model_registry_read_v2(
     // of one span, so `panel_inflight_replay / (per_span × panel_horizon_spans)` stays the
     // utilization it always meant, and no class's window stands in for another's.
     let rate_rule = count_free_prompts;
-    let demand_scaled =
-        if rate_rule { crate::palw_state_v2::palw_panel_demand_scaled_read_v1(state, params, g.seat_count as u32) } else { 0 };
+    let (owed, terms) = if rate_rule {
+        crate::palw_state_v2::palw_panel_demand_read_v1(state, params, g.seat_count as u32)
+    } else {
+        Default::default()
+    };
     let (panel_inflight_replay, panel_horizon_spans) = if rate_rule {
-        (demand_scaled.div_ceil(wt::PALW_PANEL_DEMAND_SCALE_V1), 1)
+        (terms.values().copied().fold(0u128, u128::saturating_add).div_ceil(wt::PALW_PANEL_DEMAND_SCALE_V1), 1)
     } else {
         (panel_inflight_replay, panel_horizon_spans)
     };
@@ -1547,8 +1567,14 @@ pub fn palw_model_registry_read_v2(
                 let per_span =
                     ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
                 if rate_rule {
-                    let window = state.model_lifecycle(class_id).map(|row| row.profile.verification_window_spans as u64).unwrap_or(1);
-                    wt::palw_panel_room_by_rate_v1(per_span, demand_scaled, window, ccu_of(class_id).saturating_mul(seat_count))
+                    crate::palw_state_v2::palw_panel_room_read_v1(
+                        state,
+                        class_id,
+                        per_span,
+                        ccu_of(class_id).saturating_mul(seat_count),
+                        &owed,
+                        &terms,
+                    )
                 } else {
                     wt::palw_panel_room_v1(
                         per_span,
@@ -1568,7 +1594,16 @@ pub fn palw_model_registry_read_v2(
             inflight_now: inflight_of(class_id),
             share_permille: state.class_share_permille(class_id),
             reason: match (state.model_lifecycle(class_id), fold) {
-                (Some(row), Some(f)) => palw_lifecycle_reason_v2(row, *class_id == base, &f.globals, !rate_rule),
+                (Some(row), Some(f)) => palw_lifecycle_reason_v2(
+                    row,
+                    *class_id == base,
+                    &f.globals,
+                    !rate_rule,
+                    Some(
+                        (row.profile.verification_window_spans as u64).saturating_mul(f.span_daa.max(1))
+                            <= params.receipt_window_for_claim_v1(state, class_id, tip_daa),
+                    ),
+                ),
                 (Some(_), None) => "the registry is not in force".to_string(),
                 (None, _) => "no row (registered before the fence without a carriage): never gated".to_string(),
             },

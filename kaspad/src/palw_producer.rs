@@ -854,10 +854,11 @@ impl PalwProducerService {
         }
         // 2026-09-24 DoS audit review of #11: ask the question the fold's class gate asks — the
         // panel budget where ADR-0137 D5 governs, the inflight cap otherwise — on a read that counts
-        // free-prompt claims past the audit fence. The fold's own-attempt admission never asks the
-        // gate, so an attempt the gate refuses disqualifies its whole block: asking only the cap
-        // (and counting attempts only) mined held-class inferences into a full budget, e.g. every
-        // attempt on testnet-12's 2M row, whose room is zero on an empty panel.
+        // free-prompt claims past the audit fence. An attempt the gate refuses at step 4
+        // disqualifies its whole block, so the producer asks first. Past `palw_audit_2026_09_23`
+        // the read's `panel_room` is the fold's rate room (2026-09-24 audit #4), and for a HELD
+        // class (testnet-12's 2M row) no more than its static inflight cap leaves — c_2M = 1, held
+        // to Final — so one number answers both questions the gate asks.
         if read.panel_room_enforced {
             if class.panel_room == 0 {
                 return Some(format!("class {} has no panel room left in the network's verification budget", class.class_id));

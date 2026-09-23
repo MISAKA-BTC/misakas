@@ -160,30 +160,50 @@ pub const PALW_PANEL_DEMAND_SCALE_V1: u128 = 1 << 32;
 
 /// **One class's share of the panel's per-span replay demand** (2026-09-24 audit #4), scaled by
 /// [`PALW_PANEL_DEMAND_SCALE_V1`] and rounded UP: `claims × claim_replay / window_spans` — the
-/// replay those claims still owe, spread over the window each of them is judged by. Rounding up
-/// and saturating both over-count, so both refuse rather than admit.
+/// replay those claims still owe, spread over the window each of them is judged by. Fail-closed:
+/// a product that does not fit is `u128::MAX`, a demand no budget holds.
 pub fn palw_panel_demand_term_v1(claims: u128, claim_replay: u128, window_spans: u64) -> u128 {
-    claims.saturating_mul(claim_replay).saturating_mul(PALW_PANEL_DEMAND_SCALE_V1).div_ceil(window_spans.max(1) as u128)
+    claims
+        .checked_mul(claim_replay)
+        .and_then(|replay| replay.checked_mul(PALW_PANEL_DEMAND_SCALE_V1))
+        .map(|scaled| scaled.div_ceil(window_spans.max(1) as u128))
+        .unwrap_or(u128::MAX)
 }
 
-/// **The verification budget in one class's claims, by rate** (2026-09-24 audit #4; replaces
-/// [`palw_panel_room_v1`] past `palw_audit_2026_09_23`): the panel's replay a span less the
-/// demand every class's owed replay puts on each span (`demand_scaled`, a sum of
-/// [`palw_panel_demand_term_v1`]), over THIS class's window, divided by what one of its claims
-/// costs — `⌊(per_span − demand) × window / claim_replay⌋`, floored.
+/// **How many claims of one class the panel's budget holds beside every other class's demand**
+/// (2026-09-24 audit #4; replaces [`palw_panel_room_v1`] past `palw_audit_2026_09_23`) — the
+/// largest `n` whose term fits: `⌈n × claim_replay × 2^32 / window⌉ ≤ per_span × 2^32 − others`,
+/// which is `n ≤ (per_span × 2^32 − others) × window / (claim_replay × 2^32)`, floored.
+///
+/// The class's room is this less the class's own claims owed (`n_max − owed`). Because the bound is
+/// the feasibility of the class's WHOLE term, admitting `k` claims is exactly "the term with them
+/// still fits", so a room read before a claim and after it agree (a room built from a rounded-up
+/// term and a floored division did not: a room of 1 at step 3 could read 0 at step 4).
 ///
 /// The common-horizon rule measured every class's backlog against the SHORTEST admitted window,
-/// so admitting a class with a shorter window shrank every other class's budget after the fact
-/// (claims that were legal when admitted read as overload), and with no class admitting it fell
-/// back to one span, which made a hold self-reinforcing. Each class judged on its own window has
-/// neither: another class's window never enters this class's room, and there is no fallback.
-pub fn palw_panel_room_by_rate_v1(panel_replay_per_span: u128, demand_scaled: u128, window_spans: u64, claim_replay: u128) -> u64 {
+/// so admitting a class with a shorter window shrank every other class's budget after the fact,
+/// and with no class admitting it fell back to one span, which made a hold self-reinforcing. Here
+/// another class enters only through its own term, over its own window, and there is no fallback.
+///
+/// Fail-closed: any product that does not fit gives `0`.
+pub fn palw_panel_capacity_by_rate_v1(panel_replay_per_span: u128, others_scaled: u128, window_spans: u64, claim_replay: u128) -> u64 {
     if claim_replay == 0 {
         return 0;
     }
-    let free = panel_replay_per_span.saturating_mul(PALW_PANEL_DEMAND_SCALE_V1).saturating_sub(demand_scaled);
-    mul_div_u128(free, window_spans.max(1) as u128, claim_replay.saturating_mul(PALW_PANEL_DEMAND_SCALE_V1)).min(u64::MAX as u128)
-        as u64
+    let (Some(supply), Some(per_claim)) =
+        (panel_replay_per_span.checked_mul(PALW_PANEL_DEMAND_SCALE_V1), claim_replay.checked_mul(PALW_PANEL_DEMAND_SCALE_V1))
+    else {
+        return 0;
+    };
+    let free = supply.saturating_sub(others_scaled);
+    let window = window_spans.max(1) as u128;
+    // ⌊free × window / per_claim⌋ without the product: (free / d) × w + ((free % d) × w) / d.
+    let whole = (free / per_claim).checked_mul(window);
+    let part = (free % per_claim).checked_mul(window).map(|r| r / per_claim);
+    match (whole, part) {
+        (Some(whole), Some(part)) => whole.checked_add(part).map(|n| n.min(u64::MAX as u128) as u64).unwrap_or(0),
+        _ => 0,
+    }
 }
 
 /// **The reader's share**: each class's finalized work over the last `window_epochs` closed
