@@ -301,4 +301,19 @@ then i8 KV as versioned runtime profiles that never change a class's economic id
 telemetry (`estimatedWorkingSet`, `reservedMemory`, `holdReason`, …) → cross-runtime determinism
 tests. Memory requirement is capacity; collateral is `max_fraud_gain`; the two are separate systems.
 
-Post-fix ladder figures (PSS per seat at 1 / 2 / 4 nodes) are appended when that run completes.
+Post-fix ladder (gate in place, `82575797`, 21 GiB / 4): producer 5.00 GiB PSS alone; + one panel seat
+7.20 total; + two more **9.39 GiB total for four nodes** — each added panel seat costs ~1.07 GiB anonymous
+and the artifact's file pages are shared once across the four. Sub-linear, as required; no kill; the
+producer held on its working set 27 times and produced no model claim, which on that build is correct.
+
+**The engine track landed** (`feat/kv-codec`, merged at `5451aac2`, params fingerprint unchanged):
+K/V values are all within ±32,767 by construction (`a16_rope` and `a16_matmul_requant` both end in
+`clamp16`), so **A16-KV-i16 is a lossless repack** and ships as the default; i8 would re-quantize 89 % of
+the elements and change `execution_root` — a class change, not a runtime profile — and is refused by
+name. The 2M attempt's working set falls 14.84 → 7.84 GiB; on the fleet host (+2.67 GiB file, +1.07 GiB
+rotary table) ≈ 11.6 GiB, which fits a stated 13 GiB share (`--palw-host-memory-share`, `4e05f85d`)
+beside three 2.5 GiB panel seats but not an equal 5.25 GiB split — that needs paged KV, not started.
+Also landed: one resource profile for producer / full seat / partial seat, a node-local reservation
+ledger (RAII, refusals name the holder, races decided deterministically), S1 partial seats replaying
+only their prefix, and RPC/CLI telemetry. The i16 acceptance run (does the 2M producer now START an
+attempt?) is appended when it completes.

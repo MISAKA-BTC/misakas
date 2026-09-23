@@ -9,6 +9,8 @@
 >
 > **genesis ブロックは不変**（root は PALW bundle の `genesis_objects` にあり header/premine に入らない）。params fingerprint は `fb8f378d…` → `c746f07c…`（担保）→ `30848c6b…`（root）→ **`bcfbf2a3…`**（t11 で genesis 有効だった `palw_unavailable_abstains` が t12 で dormant に退行していたのを武装、`t12_arms_every_fence_t11_armed` が台帳として常駐）。fence schedule は `1000` の 1 本のまま。
 >
+> **engine 側（`feat/kv-codec` を `5451aac2` で merge、fingerprint 不変）**: K/V は実測で全要素が ±32,767 内（`clamp16` の帰結）なので **A16-KV-i16 は無損失**の再パックとして出荷既定に。i8 は 89% が再量子化＝クラス変更で名指し拒否。2M attempt の working set 14.84 → 7.84 GiB、fleet 上では +file 2.67 +rope 1.07 で ~11.6 GiB — 等分 share には収まらず paged KV（未着手）が要る。役割別 resource profile（producer/full/partial を 1 導出から）、node-local 予約台帳（RAII・拒否は保持者を名指し）、S1 partial seat の prefix 再実行、telemetry（RPC/CLI）。seat ホストの非対称トポロジ（producer 1 + panel 3）向けに `--palw-host-memory-share`（`4e05f85d`）で per-process share を明示可能。merge 後の全スイート緑（base0 475 / consensus-core 2,582 / kaspad 122 / sdk 35 / rpc-core 199）。
+>
 > 現在のフリート: 5.104.81.23 の 4 seat は**停止**（unit は残置、script は宣言予算に置換済）、.113 と ibm の public node は旧 fingerprint `c746f07c` で稼働中（heartbeat のみ）、seeder 4 本稼働。**再起動は項目 6（1 seat → 2 → 4 の acceptance と PSS 線形性）完了後、drill → 4 ホスト配備 → seeder 切替の順。** 以下は初回配備時点の記録。
 
 Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12-regenesis` — **初回配備時のビルド。設計修正後の tip は上の状態欄の commit 群を参照。**
