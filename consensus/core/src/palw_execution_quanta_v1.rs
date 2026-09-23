@@ -165,6 +165,30 @@ pub fn palw_execution_mint_quanta_matured_v1(
     maturity_rounds: u64,
     forfeited_roots: &std::collections::BTreeSet<Hash64>,
 ) -> Vec<PalwExecQuantumV1> {
+    palw_execution_mint_quanta_bounded_v1(finals, seed, quantum, open_round, maturity_rounds, forfeited_roots, usize::MAX)
+}
+
+/// **The most tickets one span's mint issues, past `Params::palw_audit_2026_09_23`: the
+/// round-assignment horizon.** `assign_round` probes a 2^16-round window; a ticket past the
+/// window's last free round falls to a linear scan from its far edge, so the mint is
+/// `Θ(E × (2^16 + E/2))` — measured: 65,000 tickets in 121 ms, 66,000 in 459 ms, 85,000 in
+/// 22,410 ms. One honest hybrid-512 Final minted 1,585,742 (533 MB of rooted state, hours of
+/// fold time) while its collateral unit says 565, and a 2M Final saturated `u32::MAX`. A round
+/// spends at most one ticket, so tickets beyond the horizon are rounds the span does not have.
+pub const PALW_EXEC_MAX_QUANTA_PER_SPAN_V1: usize = 1 << 16;
+
+/// [`palw_execution_mint_quanta_matured_v1`] with a ceiling on the tickets issued: the Finals are
+/// walked in the same order, and the mint stops at `max_quanta` tickets. With `usize::MAX` it is
+/// the unbounded mint, ticket for ticket.
+pub fn palw_execution_mint_quanta_bounded_v1(
+    finals: &[PalwExecFinalV1],
+    seed: Hash64,
+    quantum: u128,
+    open_round: u64,
+    maturity_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<Hash64>,
+    max_quanta: usize,
+) -> Vec<PalwExecQuantumV1> {
     let open_round = open_round.saturating_add(maturity_rounds);
     let mut by_work: Vec<&PalwExecFinalV1> = finals
         .iter()
@@ -180,6 +204,9 @@ pub fn palw_execution_mint_quanta_matured_v1(
         let work_id = palw_execution_canonical_work_id_v1(f.execution_root);
         let n = palw_execution_quantum_count_v1(u128::from(f.credit), quantum, seed, f.claim_id);
         for index in 0..n {
+            if issued.len() >= max_quanta {
+                break;
+            }
             let quantum_id = palw_execution_quantum_id_v1(work_id, f.claim_id, index);
             let scheduled_round = assign_round(seed, quantum_id, open_round, &mut taken);
             issued.push(PalwExecQuantumV1 {

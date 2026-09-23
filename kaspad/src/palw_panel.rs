@@ -2640,7 +2640,7 @@ impl PalwPanelService {
                     // the docs told an operator that, so the observed path was: retire, restart
                     // with --palw-register-bond, read "not registering another", and conclude the
                     // flag was a no-op rather than that the identity was finished.
-                    PalwBondStatusV2::Retiring { since_daa } => warn!(
+                    PalwBondStatusV2::Retiring { since_daa, .. } => warn!(
                         "[{PALW_PANEL}] this key's bond {txid}:{index} is RETIRING (since DAA {since_daa}), so it can \
                          take no new work — and it cannot be replaced from this key. The chain refuses a second \
                          registration from any key already in the bond registry (DuplicateBondKey) and retirement \

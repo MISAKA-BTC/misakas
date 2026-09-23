@@ -183,6 +183,10 @@ fn every_rule_is_in_force_from_genesis() {
         ("palw_validator_payout_bounds", p.palw_validator_payout_bounds),
         ("palw_prompt_ids_merkle", p.palw_prompt_ids_merkle),
         ("palw_signature_contexts_v2", p.palw_signature_contexts_v2),
+        // The 2026-09-23 economic audit's fixes, and the one testnet-11 rule the regenesis had
+        // dropped by omission (ADR-0065 D4) — both asserted so that omission cannot recur silently.
+        ("palw_audit_2026_09_23", p.palw_audit_2026_09_23),
+        ("palw_unavailable_abstains", p.palw_unavailable_abstains),
     ] {
         assert_eq!(f, Some(ForkActivation::always()), "{name} must be in force from DAA 0 on testnet-12");
     }

@@ -2272,6 +2272,49 @@ pub struct Params {
     /// set and one without advertise different schedules and diverge visibly at this height.
     pub palw_audit_2026_09_11_deep: Option<ForkActivation>,
 
+    /// **The 2026-09-23 economic audit's fence — the unit, replay and admission fixes that audit
+    /// proved with running tests, armed together.** `Some(0)` on testnet-12 (which arms every rule
+    /// from genesis), `None` on every other preset, so a build carrying these fixes fingerprints
+    /// byte-identically to one without them on testnet-11 and mainnet — the fixes are rule changes
+    /// inside armed rules, and a rule change with no fence is a silent fork of every node that has
+    /// not upgraded. Past it, and only past it:
+    ///
+    /// * the panel seat lock prices a claim's fork weight in the COLLATERAL unit its reservation was
+    ///   written in ([`crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim`]) — below it
+    ///   the raw derived pwu met a collateral-unit price and the 2M row's lock was 119.19x any
+    ///   genesis bond (C-3);
+    /// * an attempt claim carries its execution key as its `work_id`, so one execution is one claim
+    ///   ACROSS chain blocks and not only within one transition (C-1);
+    /// * the execution lane's credit is the same collateral-unit quantity, so the quantum constant
+    ///   divides the unit it was calibrated in, and a span mints at most
+    ///   [`crate::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1`] tickets (C-2);
+    /// * a `PanelBound` whose seats cannot post the lock binds nothing instead of disqualifying the
+    ///   block that carried it (C-3, the liveness half);
+    /// * a non-fused attention class is admitted only if the geometry its price is computed from
+    ///   fits the query row its graph actually reads (C-4).
+    pub palw_audit_2026_09_23: Option<ForkActivation>,
+
+    /// **The second clock: how many PALW anchors must settle before an ECONOMIC deadline may
+    /// elapse** (2026-09-23 heartbeat audit). A heartbeat block advances the DAA at 2^24 hashes
+    /// and no bond, and every economic deadline on the chain was a raw DAA count — a seat that
+    /// signed a false `Final` walked out after 10,500 heartbeats (350 wall-clock hours, zero
+    /// anchors, zero inference). `Some(depth)` makes four of those deadlines require BOTH clocks:
+    /// the DAA window as before AND `depth` further `Final` attempt claims settled since the event:
+    ///
+    /// * a Valid seat's slash liability (`PalwSlashableLockV1::is_live_v2`);
+    /// * a retiring bond's withdrawal delay (`palw_bond_collateral_is_locked_v3`);
+    /// * ADR-0065 D1's bond maturity before judging (`palw_bond_maturity_window_v2`);
+    /// * the mempool's long coinbase maturity (`coinbase_spend_settled`, policy layer).
+    ///
+    /// Operational timers — bind, receipt, challenge, court moves, replay expiry — stay on the DAA
+    /// clock: a chain with no producer must still be able to time out and clean up, which is what
+    /// the heartbeat lane exists for. `None` is the DAA-only rule on every deadline. Hashed
+    /// Some-only, so a build that carries the field fingerprints identically to one that does not
+    /// on every preset that leaves it `None`. Read by the fold through
+    /// `PalwTransitionExtrasV1::settled_anchor_depth`; only meaningful past
+    /// [`Self::palw_audit_2026_09_23`], which carries the state field it counts against.
+    pub palw_settled_anchor_depth: Option<u64>,
+
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
     /// Past this fence `calculate_difficulty_bits` sizes its expected duration by the rows in the
@@ -4661,6 +4704,14 @@ impl Params {
         if self.palw_audit_2026_09_11_deep == Some(ForkActivation::never()) {
             self.palw_audit_2026_09_11_deep = None;
         }
+        if self.palw_audit_2026_09_23 == Some(ForkActivation::never()) {
+            self.palw_audit_2026_09_23 = None;
+        }
+        // A zero depth is "no second clock", the same collapse the fences make: absence and the
+        // no-op value must fingerprint identically or two builds would split on a spelling.
+        if self.palw_settled_anchor_depth == Some(0) {
+            self.palw_settled_anchor_depth = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -5539,6 +5590,14 @@ impl Params {
         }
     }
 
+    /// The 2026-09-23 economic audit's fence, resolved off a ConsensusV2 ruleset.
+    pub fn palw_audit_2026_09_23_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_audit_2026_09_23) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
     pub fn palw_held_context_active_at(&self, daa_score: u64) -> bool {
         self.palw_held_context_fence().is_some_and(|f| f.is_active(daa_score))
     }
@@ -5564,6 +5623,10 @@ impl Params {
 
     pub fn palw_audit_2026_09_11_deep_active_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_11_deep_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    pub fn palw_audit_2026_09_23_active_at(&self, daa_score: u64) -> bool {
+        self.palw_audit_2026_09_23_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -5734,6 +5797,10 @@ impl Params {
             palw_prefill_draw,
             palw_audit_2026_09_11,
             palw_audit_2026_09_11_deep,
+            palw_audit_2026_09_23,
+            // A number beside the fences, not a fence: the visitor rewrites HEIGHTS, and a
+            // settled-anchor depth is neither a height nor normalisable to one.
+            palw_settled_anchor_depth: _,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -5864,6 +5931,7 @@ impl Params {
             ("palw_prefill_draw", *palw_prefill_draw),
             ("palw_audit_2026_09_11", *palw_audit_2026_09_11),
             ("palw_audit_2026_09_11_deep", *palw_audit_2026_09_11_deep),
+            ("palw_audit_2026_09_23", *palw_audit_2026_09_23),
             ("palw_difficulty_priced_rows", *palw_difficulty_priced_rows),
             ("palw_receipt_rows_unpriced", *palw_receipt_rows_unpriced),
             ("palw_attempt_header_pins", *palw_attempt_header_pins),
@@ -6107,6 +6175,14 @@ impl Params {
             h.write(b"palw_audit_2026_09_11_deep");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = self.palw_audit_2026_09_23 {
+            h.write(b"palw_audit_2026_09_23");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(depth) = self.palw_settled_anchor_depth {
+            h.write(b"palw_settled_anchor_depth");
+            h.write(depth.to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -6336,6 +6412,10 @@ impl Params {
             palw_prefill_draw,
             palw_audit_2026_09_11,
             palw_audit_2026_09_11_deep,
+            palw_audit_2026_09_23,
+            // A number beside the fences, not a fence: the visitor rewrites HEIGHTS, and a
+            // settled-anchor depth is neither a height nor normalisable to one.
+            palw_settled_anchor_depth: _,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -6857,6 +6937,9 @@ impl Params {
         if let Some(activation) = palw_audit_2026_09_11_deep.as_mut() {
             fork(activation, visit);
         }
+        if let Some(activation) = palw_audit_2026_09_23.as_mut() {
+            fork(activation, visit);
+        }
         // ADR-0083 Decision 1. Some-only, likewise.
         if let Some(activation) = palw_difficulty_priced_rows.as_mut() {
             fork(activation, visit);
@@ -7203,6 +7286,8 @@ impl Params {
             palw_prefill_draw,
             palw_audit_2026_09_11,
             palw_audit_2026_09_11_deep,
+            palw_audit_2026_09_23,
+            palw_settled_anchor_depth,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -7723,6 +7808,14 @@ impl Params {
             h.write(b"palw_audit_2026_09_11_deep");
             h.write(activation.daa_score().to_le_bytes());
         }
+        if let Some(activation) = palw_audit_2026_09_23 {
+            h.write(b"palw_audit_2026_09_23");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(depth) = palw_settled_anchor_depth {
+            h.write(b"palw_settled_anchor_depth");
+            h.write(depth.to_le_bytes());
+        }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
         // header past the fence must carry, so it belongs in the fingerprint — and every shipped
         // preset leaves it `None` and fingerprints byte-identically to a build without the field.
@@ -8201,6 +8294,8 @@ impl Params {
             palw_prefill_draw: self.palw_prefill_draw,
             palw_audit_2026_09_11: self.palw_audit_2026_09_11,
             palw_audit_2026_09_11_deep: self.palw_audit_2026_09_11_deep,
+            palw_audit_2026_09_23: self.palw_audit_2026_09_23,
+            palw_settled_anchor_depth: self.palw_settled_anchor_depth,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -9166,6 +9261,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_prefill_draw: None,
     palw_audit_2026_09_11: None,
     palw_audit_2026_09_11_deep: None,
+    palw_audit_2026_09_23: None,
+    palw_settled_anchor_depth: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -9377,6 +9474,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_prefill_draw: None,
     palw_audit_2026_09_11: None,
     palw_audit_2026_09_11_deep: None,
+    palw_audit_2026_09_23: None,
+    palw_settled_anchor_depth: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -9570,6 +9669,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_prefill_draw: None,
     palw_audit_2026_09_11: None,
     palw_audit_2026_09_11_deep: None,
+    palw_audit_2026_09_23: None,
+    palw_settled_anchor_depth: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -10119,6 +10220,19 @@ pub fn palw_v2_params_with_class_rows_v1(
     // ADR-0151 D3, read before the bundle is borrowed: does this chain's clock need a claim?
     let clock_advances_without_a_claim = palw_clock_advances_without_a_claim_v1(&params);
     // ADR-0151 D1, same reason: the escrow a claim carries is the cash half of its fraud gain.
+    // **KNOWN DEFECT, deliberately left wired as it was (2026-09-23 audit U2).** This reads
+    // `pre_deflationary_phase_base_subsidy` (370,468,345 sompi), but every ConsensusV2 preset sets
+    // `deflationary_phase_daa_score = 0`, so no block is ever pre-deflationary: the real genesis-era
+    // subsidy is `palw_genesis_block_subsidy_sompi` (444,562,014,000 sompi on t12), 1,200x this, and
+    // the escrow this card collateralizes is 1,200x too small.
+    //
+    // It is NOT switched here on its own because it cannot be: the card declares
+    // `max(derived, PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI)`, and with the true subsidy the derived
+    // figure (46,627,776.51 MSK/seat at the floor's 7,201-claim concurrency) exceeds what the premine
+    // carves, so `verify_palw_genesis_v2` refuses with `BondCollateralNotHeld` and testnet-12 does
+    // not assemble. The subsidy, the floor concurrency the card sizes for, and the premine pin have
+    // to move in ONE change — the operator's option A (floor concurrency K = 64, the runtime
+    // reservation carrying the escrow) — or the network does not boot.
     let base_subsidy_and_carve = (params.pre_deflationary_phase_base_subsidy, params.palw_overlay_carve.map(|c| c.worker_carve_permille));
     // **Which prompt-id form the dense row is PRICED at, read before the bundle is borrowed.**
     //
@@ -13604,6 +13718,19 @@ pub fn palw_arm_held_regime_at_v1(params: &mut Params, daa: u64) {
 /// day. 7,000 from 2026-09-12; 6,000 from 2026-09-17 (the operator: the wait was too long).
 pub const PALW_RC_AUDIT_DEEP_FENCE_DAA: u64 = 7_100;
 
+/// **testnet-12's second clock: settled anchors an economic deadline needs beside its DAA window.**
+///
+/// Thirty `Final` attempt claims. Not derived — a drill's starting point, chosen so that (a) it is
+/// far more than a colluding quorum can produce alone (each anchor is a won class draw AND a
+/// licensed panel, so a quorum that also runs producers pays a full inference per anchor and still
+/// needs the other seats' locks), and (b) at the cadence the fleet showed on testnet-11 (about one
+/// `Final` per 10 DAA when producing) it sits well inside the shortest economic window it gates
+/// (`window_court` = 3,000 DAA), so an honest seat's liability expires on the DAA clock as before.
+/// A network with no producer at all leaves every economic deadline open — which is the point: on
+/// heartbeat-only history nothing is secured, so nothing economic may conclude. Retune from the
+/// drill's measured anchor cadence, never from a calendar.
+pub const PALW_T12_SETTLED_ANCHOR_DEPTH: u64 = 30;
+
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
 ///
@@ -14514,6 +14641,28 @@ pub fn palw_clock_advances_without_a_claim_v1(params: &Params) -> bool {
 /// (ADR-0151 D1). The pre-deflationary base subsidy through the overlay's worker carve, which is
 /// what `worker_carve_v2` computes for a block; stated as its own function so the collateral
 /// derivation and a reader are looking at one spelling.
+/// **The block subsidy at genesis, as `calc_block_subsidy(0)` pays it** — `kaspa-consensus`'s
+/// coinbase manager is not reachable from this crate, so the two inputs it reads are restated here:
+/// the pre-deflationary figure while `deflationary_phase_daa_score > 0`, and otherwise the
+/// emission table's month-0 base scaled to the block time, `ceil(3,704,683,450 x ttpb_ms / 1000)`.
+/// `consensus/src/processes/coinbase.rs` pins the equality in a test so the two spellings cannot
+/// drift apart silently.
+pub fn palw_genesis_block_subsidy_sompi(params: &Params) -> u64 {
+    if params.deflationary_phase_daa_score > 0 {
+        return params.pre_deflationary_phase_base_subsidy;
+    }
+    (PALW_SUBSIDY_MONTH0_BASE_SOMPI as u128 * params.target_time_per_block_history().after() as u128).div_ceil(1000).min(u64::MAX as u128) as u64
+}
+
+/// `SUBSIDY_BY_MONTH_TABLE[0]` of `consensus/src/processes/coinbase.rs` — the month-0 emission per
+/// second of block time, before the block-time scaling. Pinned here for the same reason the genesis
+/// collateral is: the derivation lives in a crate this one cannot call.
+pub const PALW_SUBSIDY_MONTH0_BASE_SOMPI: u64 = 3_704_683_450;
+
+/// **What testnet-12's first block pays** — [`palw_genesis_block_subsidy_sompi`] at its 120,000 ms
+/// block time, pinned so the card's escrow input is a number an operator can read.
+pub const PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI: u64 = 444_562_014_000;
+
 fn escrow_for_a_genesis_claim_v1((subsidy, carve_permille): &(u64, Option<u16>)) -> u64 {
     let permille = carve_permille.unwrap_or(0) as u64;
     subsidy / 1_000 * permille
@@ -14711,6 +14860,21 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // economic actor holding a claim's whole 3-of-5 quorum is profitable, which is the last thing
     // `palw_admission_independence` leaves open ("it is a price, not a proof").
     params.palw_economic_safety = Some(at);
+    // **The 2026-09-23 economic audit's fixes** (`Params::palw_audit_2026_09_23`): the seat lock's
+    // unit, the cross-block execution replay, the execution-credit unit and quanta bound, the inert
+    // ineligible PanelBound, and the non-fused attention-geometry admission check. Every one is a
+    // rule change inside a rule this network already arms, so on this network it is armed with them.
+    params.palw_audit_2026_09_23 = Some(at);
+    // **The second clock** (`Params::palw_settled_anchor_depth`): an economic deadline on this
+    // network elapses only after its DAA window AND this many further settled anchors. The value is
+    // the drill's starting point, not a derivation — see the constant's own note.
+    params.palw_settled_anchor_depth = Some(PALW_T12_SETTLED_ANCHOR_DEPTH);
+    // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
+    // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
+    // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
+    // material voided it as `ProducerDefaulted` and slashed the producer. Armed now, beside the
+    // admission check above that closes the pricing lever the abstention used to mask.
+    params.palw_unavailable_abstains = Some(at);
 
     // ---- pass 2: every fence's height to 0, `never()` preserved ---------------------------------
     // The Layer-0 / EVM activations are this walk's only exceptions, restored by name below.
@@ -15285,6 +15449,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_prefill_draw: None,
     palw_audit_2026_09_11: None,
     palw_audit_2026_09_11_deep: None,
+    palw_audit_2026_09_23: None,
+    palw_settled_anchor_depth: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,

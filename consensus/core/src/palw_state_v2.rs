@@ -233,7 +233,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// folds moves except the version itself; but a class record is inside the state root and a 19
 /// build would neither decode this one nor root it identically, so the number moves and the
 /// ADR-0043 golden vectors move with it.
-pub const PALW_STATE_V2_VERSION: u16 = 20;
+pub const PALW_STATE_V2_VERSION: u16 = 21;
 
 /// **Where a class's receipt-lane target starts** (ADR-0074 follow-up): one draw in two per
 /// quantum, whatever the class's attempt-lane `initial_target` says. See the `ClassRegistered`
@@ -1840,6 +1840,9 @@ pub enum PalwBondStatusV2 {
     /// and PR-09's; the state records the fact.
     Retiring {
         since_daa: u64,
+        /// The settled-anchor count when retirement was requested (2026-09-23 audit): past
+        /// `palw_settled_anchor_depth` the withdrawal delay also needs that many further anchors.
+        settled_at_since: u64,
     },
 }
 
@@ -1879,10 +1882,29 @@ pub fn palw_bond_may_take_work_v2(bond: &PalwBondStateV2, min_collateral_sompi: 
     matches!(bond.status, PalwBondStatusV2::Active) && bond.collateral > 0 && bond.collateral >= min_collateral_sompi
 }
 
+/// [`palw_bond_collateral_is_locked_v2`] on both clocks (2026-09-23 heartbeat audit): a retiring
+/// bond's collateral also stays locked until `depth` anchors have settled since the retirement was
+/// requested. `None` is the DAA-only rule, byte for byte.
+pub fn palw_bond_collateral_is_locked_v3(
+    bond: &PalwBondStateV2,
+    now_daa: u64,
+    withdrawal_delay_daa: u64,
+    settled_now: u64,
+    depth: Option<u64>,
+) -> bool {
+    if palw_bond_collateral_is_locked_v2(bond, now_daa, withdrawal_delay_daa) {
+        return true;
+    }
+    match (&bond.status, depth) {
+        (PalwBondStatusV2::Retiring { settled_at_since, .. }, Some(depth)) => settled_now.saturating_sub(*settled_at_since) < depth,
+        _ => false,
+    }
+}
+
 pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
     match bond.status {
         PalwBondStatusV2::Active => true,
-        PalwBondStatusV2::Retiring { since_daa } => match since_daa.checked_add(withdrawal_delay_daa) {
+        PalwBondStatusV2::Retiring { since_daa, .. } => match since_daa.checked_add(withdrawal_delay_daa) {
             // An overflowing delay never elapses, which is the safe direction.
             None => true,
             Some(release_at) => now_daa < release_at,
@@ -2479,8 +2501,12 @@ pub struct PalwClaimStateV2 {
     /// The capture's leaf count a free-prompt claim was priced from (ADR-0074 Decision 5);
     /// zero on an attempt, whose price is `pwu` itself.
     pub work_leaves: u64,
-    /// The work identity a free-prompt claim holds while it lives (ADR-0074 Decision 4);
-    /// `None` on an attempt.
+    /// The work identity a claim holds while it lives (ADR-0074 Decision 4): a free-prompt
+    /// claim's prompt identity, and — past `palw_audit_2026_09_23` — an attempt claim's pre_pow-
+    /// inclusive execution commitment (`execution_commitment_v3`), so one execution is one claim
+    /// across chain blocks and not only within one transition. `None` on an attempt below that
+    /// fence. The index over this field (`work_ids`) is derived from the claims and reverts with
+    /// them, so the duplicate check it backs is rooted.
     pub work_id: Option<Hash64>,
     pub phase: PalwClaimPhaseV2,
 }
@@ -5839,6 +5865,13 @@ pub struct PalwChainStateV2 {
     ///
     /// Zero on every state of a network that does not retire.
     retired_safe_weight: u128,
+    /// **The second clock** (2026-09-23 heartbeat audit): how many attempt claims have EVER reached
+    /// `Final` on this chain. Monotone, rooted, and — unlike a walk over the live claims — not
+    /// lowered by retirement, so a liability that began at count `c` can ask "have `depth` anchors
+    /// settled since?" as `settled_attempt_finals - c >= depth` for as long as it lives. Counts on
+    /// every network (it is a fact, not a rule); only the deadlines past `palw_audit_2026_09_23`
+    /// read it. Schema v21.
+    settled_attempt_finals: u64,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -5935,6 +5968,7 @@ impl PalwChainStateV2 {
             safe_frontier: ZERO_HASH64,
             last_point: None,
             retired_safe_weight: 0,
+            settled_attempt_finals: 0,
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -7046,6 +7080,18 @@ impl PalwChainStateV2 {
         self.panel_liabilities.get(claim)
     }
 
+    /// [`Self::slashable_available`] on both clocks — see `PalwSlashableLockV1::is_live_v2`.
+    pub fn slashable_available_v2(&self, bond: &PalwBondKeyV2, now_daa: u64, depth: Option<u64>) -> u128 {
+        let posted = self.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
+        let locked = self
+            .slashable_locks
+            .iter()
+            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, self.settled_attempt_finals, depth))
+            .map(|(_, lock)| lock.amount)
+            .fold(0u128, u128::saturating_add);
+        crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
+    }
+
     pub fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
         let posted = self.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
         let locked = self
@@ -7201,6 +7247,11 @@ impl PalwChainStateV2 {
     /// every test green.
     pub fn retired_safe_weight(&self) -> u128 {
         self.retired_safe_weight
+    }
+
+    /// The second clock's reading: attempt claims that have ever reached `Final` (rooted, monotone).
+    pub fn settled_attempt_finals(&self) -> u64 {
+        self.settled_attempt_finals
     }
 
     pub fn safe_frontier(&self) -> (u64, BlockHash) {
@@ -7407,6 +7458,7 @@ impl PalwChainStateV2 {
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
+        state.update(&self.settled_attempt_finals.to_le_bytes());
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -8463,6 +8515,12 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
         new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
     },
+    /// The second clock's counter (2026-09-23 audit), appended last: its own entry, like
+    /// `RetiredWeight`, because it moves on its own event (an attempt reaching `Final`).
+    SettledFinals {
+        old: u64,
+        new: u64,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -9333,7 +9391,15 @@ impl<'a> TransitionBuilder<'a> {
     /// permit candidates. The margin also stops being one sompi.
     fn panel_valid_lock_required(&self, claim: &PalwClaimStateV2) -> u128 {
         let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
-        let mut facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash);
+        // **2026-09-23 audit C-3: the weight term in the unit the reservation was written in.**
+        // Below the fence the raw derived pwu met the collateral-unit price — 2,810x the unit — and
+        // the 2M row's seat lock came to 119.19x the collateral any genesis bond posts, so no panel
+        // could ever bind that class. Above it the term is what `reserved` already is.
+        let mut facts = if self.extras.audit_2026_09_23_active {
+            crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, slash)
+        } else {
+            crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim_pre_2026_09_23(claim, slash)
+        };
         let Some(safety) = self.extras.economic_safety else {
             // Dormant: byte-identical to the rule every existing lock was written under.
             return crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
@@ -9360,16 +9426,27 @@ impl<'a> TransitionBuilder<'a> {
         let Some(class) = self.state.classes.get(&claim.class_id) else { return 0 };
         // The same accessor `record_round_final` uses, so the lock and the mint cannot disagree.
         let canonical = self.canonical_per_draw(&claim.class_id, claim.accepted_daa);
-        let exposure = palw_exposure_pwu_v2(class, claim.pwu, canonical);
-        let quanta = crate::palw_execution_quanta_v1::palw_execution_quantum_count_v1(
+        // 2026-09-23 audit C-2: the same unit `record_round_final` credits in, past the same fence.
+        let exposure = if self.extras.audit_2026_09_23_active {
+            palw_exposure_pwu_v3(class, claim.pwu, canonical, self.exposure_basis(claim.accepted_daa))
+        } else {
+            palw_exposure_pwu_v2(class, claim.pwu, canonical)
+        };
+        let counted = crate::palw_execution_quanta_v1::palw_execution_quantum_count_v1(
             u128::from(exposure),
             u128::from(lane.execution_quantum),
             // The count is what the mint will produce; its fractional tie-break is seeded by a span
             // the lock cannot see, so the ceiling (`whole + 1`) is the honest bound to price.
             crate::Hash64::default(),
             crate::Hash64::default(),
-        )
-        .saturating_add(1);
+        );
+        // And the same ceiling the mint stops at, so the lock never prices tickets no span issues.
+        let counted = if self.extras.audit_2026_09_23_active {
+            counted.min(crate::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 as u32)
+        } else {
+            counted
+        };
+        let quanta = counted.saturating_add(1);
         crate::palw_economic_safety_v1::palw_realizable_before_maturity_v1(
             quanta,
             self.params.window_challenge(),
@@ -9379,23 +9456,30 @@ impl<'a> TransitionBuilder<'a> {
         )
     }
 
+    /// The second clock's depth, where the fence carries it; `None` is the DAA-only rule.
+    fn settled_anchor_depth(&self) -> Option<u64> {
+        if self.extras.audit_2026_09_23_active { self.extras.settled_anchor_depth } else { None }
+    }
+
     fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
         let posted = self.state.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
+        let (settled_now, depth) = (self.state.settled_attempt_finals, self.settled_anchor_depth());
         let locked = self
             .state
             .slashable_locks
             .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live(now_daa))
+            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, depth))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add);
         crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
     }
 
     fn slashable_live_locked(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
+        let (settled_now, depth) = (self.state.settled_attempt_finals, self.settled_anchor_depth());
         self.state
             .slashable_locks
             .iter()
-            .filter(|((b, _), lock)| b == bond && lock.is_live(now_daa))
+            .filter(|((b, _), lock)| b == bond && lock.is_live_v2(now_daa, settled_now, depth))
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add)
     }
@@ -9421,9 +9505,33 @@ impl<'a> TransitionBuilder<'a> {
         let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.params.window_court);
         self.write_slashable_lock(
             (seat, claim_id),
-            Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { claim: claim_id, amount: required, expiry_daa }),
+            Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
+                claim: claim_id,
+                amount: required,
+                expiry_daa,
+                settled_at_final: self.state.settled_attempt_finals,
+            }),
         );
         Ok(())
+    }
+
+    /// **2026-09-23 audit, the receipt half of C-3: is every `Valid` seat in this set able to post
+    /// its lock?** A `Valid` signature that no collateral stands behind is worth nothing, and below
+    /// the fence its refusal (`SeatValidLockRefused`) propagated as the transition's error and
+    /// disqualified the block that carried the receipt set — one over-committed seat's signature,
+    /// for a relay fee. Past the fence a set with any such seat is INERT: the claim stays
+    /// `PanelBound`, the assembler resubmits a backed set (it filters the same predicate), and
+    /// otherwise the receipt window voids the claim as if no quorum had signed.
+    fn receipt_set_is_backed(&self, claim_id: Hash64, claim: &PalwClaimStateV2, receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2], now_daa: u64) -> bool {
+        if !self.extras.objective_offence_at(now_daa) {
+            return true;
+        }
+        let required = self.panel_valid_lock_required(claim);
+        receipts.iter().all(|receipt| {
+            !matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)
+                || self.state.slashable_locks.contains_key(&(receipt.seat_bond, claim_id))
+                || self.slashable_available(&receipt.seat_bond, now_daa) >= required
+        })
     }
 
     fn lock_valid_receipts(
@@ -9483,7 +9591,11 @@ impl<'a> TransitionBuilder<'a> {
                 locked_sompi = locked_sompi.saturating_add(lock.amount);
                 valid_signers.push((key.0.0, key.1));
                 if lock.expiry_daa < expiry_daa {
-                    self.write_slashable_lock(key, Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa, ..lock }));
+                    // The liability begins at the Final: both clocks start here.
+                    self.write_slashable_lock(
+                        key,
+                        Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa, settled_at_final: self.state.settled_attempt_finals, ..lock }),
+                    );
                 }
             }
         }
@@ -9512,6 +9624,7 @@ impl<'a> TransitionBuilder<'a> {
                 valid_signers,
                 locked_sompi,
                 expiry_daa,
+                settled_at_final: self.state.settled_attempt_finals,
             }),
         );
         Ok(())
@@ -10823,7 +10936,7 @@ impl<'a> TransitionBuilder<'a> {
     /// no longer be accepted, so nothing it could collide with needs keeping.
     fn rotate_round_lane(&mut self, ctx: &PalwBlockContextV2, span_daa: u64) {
         use crate::palw_execution_lane_v1::{
-            PalwExecFinalV1, palw_execution_schedule_assign_quanta_matured_v1, palw_execution_schedule_seeded_v1,
+            PalwExecFinalV1, palw_execution_schedule_assign_quanta_bounded_v1, palw_execution_schedule_seeded_v1,
             palw_execution_schedule_snapshot_v1, palw_execution_span_v1,
         };
         // **ADR-0151: what a conviction has taken back, and how long a fresh right waits.**
@@ -10866,12 +10979,21 @@ impl<'a> TransitionBuilder<'a> {
                     let (frontier_blue_score, frontier) = self.state.safe_frontier();
                     let mut schedule = palw_execution_schedule_seeded_v1(&snapshot, &anchor, frontier_blue_score, frontier);
                     if let Some(lane) = self.extras.round_lane {
-                        palw_execution_schedule_assign_quanta_matured_v1(
+                        // 2026-09-23 audit C-2: a span issues at most as many tickets as its
+                        // round-assignment horizon holds; past that the mint's probe went linear
+                        // and one honest Final cost hours of fold time. Unbounded below the fence.
+                        let max_quanta = if self.extras.audit_2026_09_23_active {
+                            crate::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1
+                        } else {
+                            usize::MAX
+                        };
+                        palw_execution_schedule_assign_quanta_bounded_v1(
                             &mut schedule,
                             lane.execution_quantum,
                             lane.span_open_round,
                             maturity_rounds,
                             &forfeited,
+                            max_quanta,
                         );
                     }
                     self.write_round_schedule(span_now, Some(schedule));
@@ -10972,7 +11094,17 @@ impl<'a> TransitionBuilder<'a> {
         // earns nothing rather than a guessed credit.
         let exposure = {
             let Some(class) = self.state.classes.get(&claim.class_id) else { return Ok(()) };
-            palw_exposure_pwu_v2(class, claim.pwu, canonical)
+            // **2026-09-23 audit C-2: in the unit the quantum was calibrated in.** The lane
+            // divides this by `PALW_EXECUTION_QUANTUM_V1`, a constant denominated in collateral
+            // pwu, and `class_seed_pwu`'s rule applies: normalise where a pwu meets a constant.
+            // The raw derived MAC-eq met it below the fence, 2,810x the unit, and one honest
+            // hybrid-512 Final minted 1,585,742 tickets (533 MB of rooted state) where the
+            // collateral unit mints 565.
+            if self.extras.audit_2026_09_23_active {
+                palw_exposure_pwu_v3(class, claim.pwu, canonical, self.exposure_basis(claim.accepted_daa))
+            } else {
+                palw_exposure_pwu_v2(class, claim.pwu, canonical)
+            }
         };
         // Lottery quotas stay clamped at the work-price unit. Execution quanta mint from the
         // unclamped CanonicalWork scalar so a heavier verified job earns more spend-once tickets.
@@ -11922,6 +12054,14 @@ impl<'a> TransitionBuilder<'a> {
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
         self.write_claim(id, Some(finalized.clone()));
+        // The second clock ticks: one more anchor has settled. Counted on every network — it is a
+        // fact about the chain — and read only by the deadlines past `palw_audit_2026_09_23`.
+        if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            let old = self.state.settled_attempt_finals;
+            let new = old.checked_add(1).ok_or(PalwStateV2Error::Overflow("settled_attempt_finals"))?;
+            self.state.settled_attempt_finals = new;
+            self.entries.push(PalwDeltaEntryV2::SettledFinals { old, new });
+        }
         self.disarm_deadline(id);
         self.arm_retirement(id, &finalized)?;
         Ok(())
@@ -12682,6 +12822,7 @@ pub fn apply_palw_transition_v7(
                             work_target_floor: builder.work_target_floor(ctx),
                             canonical_work_daa: builder.extras.canonical_work_daa,
                             base_known_draw: builder.base_known_draw(),
+                            audit_2026_09_23_active: builder.extras.audit_2026_09_23_active,
                             ..Default::default()
                         },
                     ) {
@@ -15504,7 +15645,7 @@ fn apply_object(
                         }
                     }
                     let mut retiring = record;
-                    retiring.status = PalwBondStatusV2::Retiring { since_daa: ctx.daa_score };
+                    retiring.status = PalwBondStatusV2::Retiring { since_daa: ctx.daa_score, settled_at_since: builder.state.settled_attempt_finals };
                     // **ADR-0071 SA-2: retirement releases the declaration's reservation.** A
                     // retiring bond is already unseatable (`palw_bond_may_take_work_v2` refuses a
                     // non-Active status), so dropping the set costs it nothing it still had — and
@@ -16139,7 +16280,18 @@ fn apply_object(
             // this replaces asked here whether some seat's identity differed from the registrant's;
             // every field it compared is one the registrant writes, so it priced self-judgement at
             // one payout address per seat and stopped nothing.
-            builder.require_panel_lock_eligible(*claim_id, &claim, seats, ctx.daa_score)?;
+            // **2026-09-23 audit C-3 (the liveness half): a panel that cannot post the lock binds
+            // NOTHING, and the block that carried the object stays valid.** Below the fence the
+            // refusal propagated as the transition's error and the virtual processor disqualified
+            // the whole carrier block — one unsigned 0x4b object, correctly derived from public
+            // state, for a 10,000-sompi relay fee. Past it the object is inert: the claim stays
+            // `Provisional`, a later eligible `PanelBound` may still bind it, and otherwise
+            // `window_bind` voids it exactly as if nobody had published a panel at all.
+            match builder.require_panel_lock_eligible(*claim_id, &claim, seats, ctx.daa_score) {
+                Ok(()) => {}
+                Err(_) if builder.extras.audit_2026_09_23_active => return Ok(()),
+                Err(e) => return Err(e),
+            }
             builder.write_panel(*claim_id, Some(PalwPanelStateV2 { anchor: *anchor, seats: seats.clone(), bound_daa: ctx.daa_score }));
             // ADR-0124 Decision 3: past the fence the drawn seats go on duty — a duty row, and each
             // seat's exposure reserved for the claim's life. Below it nothing is written.
@@ -16181,6 +16333,9 @@ fn apply_object(
                 // rather than a disagreement: both verdicts cannot reach quorum, so exactly one of
                 // them is refuted by the record. It pays what it tried to take: the same `reserved`
                 // the producer would have lost.
+                if builder.extras.audit_2026_09_23_active && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score) {
+                    return Ok(());
+                }
                 let verdicts = palw_seat_verdicts_of_v2(receipts);
                 // **ADR-0147: the outsider's answer is a condition of the licence, not a vote in it.**
                 // `2·quorum > seat_count` is satisfied by four seats of five, so a registrant holding
@@ -16591,6 +16746,9 @@ fn apply_object(
                 return Err(PalwStateV2Error::LicensedByParts(*claim_id));
             }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
+            if builder.extras.audit_2026_09_23_active && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score) {
+                return Ok(());
+            }
             let verdicts = palw_seat_verdicts_of_v2(&inner);
             // ADR-0147: the coverage licence is a licence, and it takes the outsider's `Valid`
             // exactly as the V1 quorum does. Before this rule the V2 arm carried no independence
@@ -16621,6 +16779,9 @@ fn apply_object(
                 return Err(PalwStateV2Error::LicensedByParts(*claim_id));
             }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
+            if builder.extras.audit_2026_09_23_active && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score) {
+                return Ok(());
+            }
             let verdicts = palw_seat_verdicts_of_v2(&inner);
             palw_licence_names_its_outsider_v1(
                 &builder.state,
@@ -17826,6 +17987,15 @@ pub struct PalwTransitionExtrasV1 {
     /// the fixed behavior. Separate from `audit_2026_09_11_active` so the deep set activates at its
     /// own height, distinct from the shallow fence.
     pub audit_2026_09_11_deep_active: bool,
+    /// `Params::palw_audit_2026_09_23` resolved at the block's DAA — the 2026-09-23 economic audit's
+    /// fixes (the seat lock's unit, the cross-block execution replay, the execution-credit unit and
+    /// quanta bound, the inert ineligible `PanelBound`). `false` by `Default` selects the pre-fix
+    /// fold byte for byte; `true` selects the fixed one.
+    pub audit_2026_09_23_active: bool,
+    /// `Params::palw_settled_anchor_depth`, carried only where `audit_2026_09_23_active` — the
+    /// second clock every economic deadline in the fold reads (`is_live_v2`,
+    /// `palw_bond_collateral_is_locked_v3`). `None` is the DAA-only rule, byte for byte.
+    pub settled_anchor_depth: Option<u64>,
     /// `Params::palw_share_growth_final` resolved at the block's DAA (ADR-0107). Below it a class
     /// grows its cadence share on the blocks it had ACCEPTED in the closed epoch; past it growth
     /// also needs that many of its attempt claims to have reached `Final` in the same span. `false`
@@ -18841,6 +19011,24 @@ fn apply_attempt(
     if builder.extras.audit_2026_09_11_deep_active && builder.seen_exec.contains(&origin.execution_key) {
         return Err(PalwStateV2Error::DuplicateExecution(origin.execution_key));
     }
+    // **2026-09-23 audit C-1: and one inference is one claim ACROSS blocks.** `seen_exec` is a
+    // `HashSet` the builder constructs empty for every chain block, so a producer that spread its
+    // within-bucket nonce siblings over eight chain blocks minted eight claims, eight escrows and
+    // eight times the immature weight from one execution — the rule existed and its scope reset
+    // for free. The rooted answer is the one the free-prompt lane already gives its prompts:
+    // `work_ids`, the index derived from the live claims' `work_id` and reverted with them. A
+    // retired claim's key leaves the index, and that is safe here for a reason it is not for a
+    // prompt: the commitment is pre_pow-inclusive, so it cannot be re-presented from another block.
+    // A zero key is "no key" — the free-prompt lane refuses a zero root outright
+    // (`UnadjudicableCommitment`), and here it is simply not indexed: a hash preimage of zero is not
+    // something a producer can present, so nothing is lost, and a fixture that carries no commitment
+    // folds as it did. Everything else is indexed and refused on sight.
+    if builder.extras.audit_2026_09_23_active
+        && origin.execution_key != Hash64::default()
+        && let Some(holder) = builder.state.work_ids.get(&origin.execution_key)
+    {
+        return Err(PalwStateV2Error::DuplicateWork { work_id: origin.execution_key, claim: *holder });
+    }
     let bond_key = PalwBondKeyV2(attempt.executor_bond);
     let bond = builder.state.bonds.get(&bond_key).ok_or(PalwStateV2Error::MissingBond(bond_key))?;
     if let PalwBondStatusV2::Retiring { .. } = bond.status {
@@ -18868,8 +19056,13 @@ fn apply_attempt(
     // what the ledger could not afford to record. Both sides now run `palw_exposure_pwu_v3` over
     // the same basis; see `PalwExposureBasisV1`.
     let exposure_basis = builder.exposure_basis(ctx.daa_score);
+    // 2026-09-23 audit H-1: times the attempts the claim's weight carries, past the fence — the
+    // same expression the admission ceiling and the producer's headroom read
+    // (`palw_claim_attempts_v1`), so the three cannot disagree.
+    let attempts = if builder.extras.audit_2026_09_23_active { crate::palw_pwu::palw_claim_attempts_v1(attempt.pwu, canonical_draw) } else { 1 };
     let reserved = (palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
+        .and_then(|sompi| sompi.checked_mul(attempts as u128))
         .ok_or(PalwStateV2Error::Overflow("reserve"))?;
     let claim = PalwClaimStateV2 {
         source: PalwClaimSourceV2::Attempt,
@@ -18925,7 +19118,13 @@ fn apply_attempt(
             0
         },
         work_leaves: 0,
-        work_id: None,
+        // 2026-09-23 audit C-1: the execution key is the claim's work identity past the fence, so
+        // the rooted `work_ids` index refuses a second claim over it in any later block.
+        work_id: if builder.extras.audit_2026_09_23_active && origin.execution_key != Hash64::default() {
+            Some(origin.execution_key)
+        } else {
+            None
+        },
         phase: PalwClaimPhaseV2::Provisional,
     };
     builder.reserve_for_claim(&claim)?;
@@ -19091,6 +19290,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                 return Err(PalwStateV2Error::DeltaMismatch("retired weight does not match the delta's expectation"));
             }
             state.retired_safe_weight = *install;
+        }
+        PalwDeltaEntryV2::SettledFinals { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.settled_attempt_finals != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("settled finals do not match the delta's expectation"));
+            }
+            state.settled_attempt_finals = *install;
         }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
@@ -19353,6 +19559,8 @@ pub struct PalwStateCarriageV2 {
     /// Launch blockers §8: the `safe_weight` of retired claims. Primary data — it is not
     /// derivable from the claims, precisely because the claims it summarizes are gone.
     pub retired_safe_weight: u128,
+    /// The second clock's counter — primary data, like the row above (schema v21).
+    pub settled_attempt_finals: u64,
     pub bounded_immature: u128,
     pub safe_frontier_blue_score: u64,
     /// The block that carried the deepest `Final` work, and its blue score above.
@@ -19520,6 +19728,10 @@ const PALW_CARRIAGE_FP_DERIVED_WORK_TAIL_V1: u8 = 0xAF;
 /// any exists (past `Params::palw_objective_offence`). Rooted. Empty is omitted, so a dormant
 /// chain's carriage is byte-identical to a carriage before this tail existed.
 const PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1: u8 = 0xB2;
+/// 2026-09-23 audit: the second clock's counter (`settled_attempt_finals`), once it is non-zero —
+/// i.e. once this chain has ever settled an anchor. Rooted. Zero is omitted, so a chain that has
+/// produced no `Final` writes a carriage byte-identical to one before this tail existed.
+const PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1: u8 = 0xB3;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -19654,6 +19866,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.slashable_locks.serialize(writer)?;
             self.panel_liabilities.serialize(writer)?;
         }
+        if self.settled_attempt_finals != 0 {
+            PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1.serialize(writer)?;
+            self.settled_attempt_finals.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -19725,9 +19941,11 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut fp_claim_prompts = BTreeMap::new();
         let mut seen_fp_derived_work = false;
         let mut consumed_offences = BTreeMap::new();
+        let mut settled_attempt_finals = 0u64;
         let mut slashable_locks = BTreeMap::new();
         let mut panel_liabilities = BTreeMap::new();
         let mut seen_objective_offence = false;
+        let mut seen_settled_finals = false;
         let mut seen_round_scheduler = false;
         loop {
             let mut tail = [0u8; 1];
@@ -19819,6 +20037,10 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     fp_work_profiles = BTreeMap::deserialize_reader(reader)?;
                     fp_claim_prompts = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1 if !seen_settled_finals => {
+                    seen_settled_finals = true;
+                    settled_attempt_finals = u64::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -19901,6 +20123,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             consumed_offences,
             slashable_locks,
             panel_liabilities,
+            settled_attempt_finals,
         })
     }
 }
@@ -19970,6 +20193,7 @@ impl PalwStateCarriageV2 {
             evm_settlements: state.evm_settlements.clone(),
             safe_weight: state.safe_weight,
             retired_safe_weight: state.retired_safe_weight,
+            settled_attempt_finals: state.settled_attempt_finals,
             bounded_immature: state.bounded_immature,
             safe_frontier_blue_score: state.safe_frontier_blue_score,
             safe_frontier: state.safe_frontier,
@@ -20098,6 +20322,7 @@ impl PalwStateCarriageV2 {
             evm_settlements: self.evm_settlements,
             safe_weight: self.safe_weight,
             retired_safe_weight: self.retired_safe_weight,
+            settled_attempt_finals: self.settled_attempt_finals,
             bounded_immature: self.bounded_immature,
             safe_frontier_blue_score: self.safe_frontier_blue_score,
             safe_frontier: self.safe_frontier,
@@ -21030,14 +21255,14 @@ pub(crate) mod tests {
 
         // Retiring: locked until the withdrawal delay elapses, and the release side is inclusive —
         // the delay is over AT `since + delay`.
-        let retiring = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: 1_000 }, ..base.clone() };
+        let retiring = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: 1_000, settled_at_since: 0 }, ..base.clone() };
         assert!(palw_bond_collateral_is_locked_v2(&retiring, 1_000, DELAY));
         assert!(palw_bond_collateral_is_locked_v2(&retiring, 6_999, DELAY));
         assert!(!palw_bond_collateral_is_locked_v2(&retiring, 7_000, DELAY), "the delay is over at since + delay");
         assert!(!palw_bond_collateral_is_locked_v2(&retiring, u64::MAX, DELAY));
 
         // A delay that would overflow never elapses — the safe direction, not a wrap.
-        let late = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: u64::MAX - 1 }, ..base.clone() };
+        let late = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: u64::MAX - 1, settled_at_since: 0 }, ..base.clone() };
         assert!(palw_bond_collateral_is_locked_v2(&late, u64::MAX, DELAY));
 
         // **Slashed: the lock is the ordinary one, and the burn is what makes the slash cost
@@ -21045,7 +21270,7 @@ pub(crate) mod tests {
         // for a rule that did not exist. The rule exists, so the collateral releases on schedule
         // and the SPEND carries the obligation — the remainder is the owner's and the slashed sompi
         // are nobody's.
-        let slashed = PalwBondStateV2 { slashed: 7, status: PalwBondStatusV2::Retiring { since_daa: 1_000 }, ..base.clone() };
+        let slashed = PalwBondStateV2 { slashed: 7, status: PalwBondStatusV2::Retiring { since_daa: 1_000, settled_at_since: 0 }, ..base.clone() };
         assert!(palw_bond_collateral_is_locked_v2(&slashed, 6_999, DELAY), "the delay still applies to a slashed bond");
         assert!(!palw_bond_collateral_is_locked_v2(&slashed, 7_000, DELAY), "and it ends on the ordinary schedule");
         assert_eq!(palw_bond_burn_obligation_v2(&slashed), 7, "what it lost is what its spend must destroy");
@@ -23694,7 +23919,7 @@ pub(crate) mod tests {
 
                 // The rule without the floor's known draw — the rule as it stood: nobody can produce.
                 assert!(
-                    palw_producer_facts_v3(&s1, &p, &admission, c.block, FENCE, h64(1), Some(&bond_key(2)), None, Some(FENCE), None)
+                    palw_producer_facts_v3(&s1, &p, &admission, c.block, FENCE, h64(1), Some(&bond_key(2)), None, Some(FENCE), None, false)
                         .is_none(),
                     "a floor with no row and no known draw has no facts: every producer holds"
                 );
@@ -23716,6 +23941,7 @@ pub(crate) mod tests {
                     None,
                     Some(FENCE),
                     Some(floor_draw()),
+                    false,
                 )
                 .expect("the floor has facts before its row");
                 assert_eq!(facts.pwu, derived, "the producer's pwu is the derivation");
@@ -23754,7 +23980,7 @@ pub(crate) mod tests {
                     "the row carries the number the row-less claim was priced on"
                 );
                 let next =
-                    palw_producer_facts_v3(&s3, &p, &admission, h64(3), 111, h64(1), Some(&bond_key(2)), None, Some(FENCE), None)
+                    palw_producer_facts_v3(&s3, &p, &admission, h64(3), 111, h64(1), Some(&bond_key(2)), None, Some(FENCE), None, false)
                         .expect("row-backed facts");
                 assert_eq!(next.pwu, derived, "the row and the known draw are one price");
                 check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 111, 4), &floor_attempt(derived, 3), fences(None))
@@ -34677,6 +34903,7 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::ConsumedOffence { .. } => "consumed_offence",
                     PalwDeltaEntryV2::SlashableLock { .. } => "slashable_lock",
                     PalwDeltaEntryV2::PanelLiability { .. } => "panel_liability",
+                    PalwDeltaEntryV2::SettledFinals { .. } => "settled_finals",
                 });
             }
         }
@@ -34743,6 +34970,8 @@ pub(crate) mod tests {
             (60, PalwDeltaEntryV2::ConsumedOffence { key, old: None, new: None }),
             (61, PalwDeltaEntryV2::SlashableLock { key: (bond_key(1), key), old: None, new: None }),
             (62, PalwDeltaEntryV2::PanelLiability { key, old: None, new: None }),
+            // 2026-09-23 audit, appended last.
+            (63, PalwDeltaEntryV2::SettledFinals { old: 0, new: 1 }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -35003,6 +35232,7 @@ pub(crate) mod tests {
             s.update(spec_collection_root(b"receipt_epoch_counters", &c.receipt_epoch_counters).as_byte_slice());
             s.update(&c.safe_weight.to_le_bytes());
             s.update(&c.retired_safe_weight.to_le_bytes());
+            s.update(&c.settled_attempt_finals.to_le_bytes());
             s.update(&c.bounded_immature.to_le_bytes());
             s.update(&c.safe_frontier_blue_score.to_le_bytes());
             s.update(c.safe_frontier.as_byte_slice());
@@ -35043,7 +35273,7 @@ pub(crate) mod tests {
                 operator_id: op_id(2),
                 collateral: 500_000,
                 slashed: 0,
-                status: PalwBondStatusV2::Retiring { since_daa: 40 },
+                status: PalwBondStatusV2::Retiring { since_daa: 40, settled_at_since: 0 },
                 registered_daa: 1,
                 payout_payload: h64(0xA2),
                 capable_classes: Default::default(),
@@ -35200,6 +35430,7 @@ pub(crate) mod tests {
             .insert(h64(0xC1), PalwEpochCounterV2 { epoch_index: 3, produced_pwu: 15_800, produced_blocks: 1 });
         state.safe_weight = 15_800;
         state.retired_safe_weight = 31_600;
+        state.settled_attempt_finals = 4;
         state.bounded_immature = 1_580;
         state.safe_frontier_blue_score = 11;
         state.safe_frontier = block(0xB2);
@@ -35290,6 +35521,8 @@ pub(crate) mod tests {
             artifact_owners: _,
             safe_weight: _,
             retired_safe_weight: _,
+            // 2026-09-23 audit: the second clock's counter, hashed beside the weights it sits with.
+            settled_attempt_finals: _,
             bounded_immature: _,
             safe_frontier_blue_score: _,
             safe_frontier: _,
@@ -35355,6 +35588,7 @@ pub(crate) mod tests {
             ),
             ("safe_weight", Box::new(|s| s.safe_weight += 1)),
             ("retired_safe_weight", Box::new(|s| s.retired_safe_weight += 1)),
+            ("settled_attempt_finals", Box::new(|s| s.settled_attempt_finals += 1)),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
             ("safe_frontier", Box::new(|s| s.safe_frontier = block(0xB9))),
@@ -41586,6 +41820,8 @@ pub(crate) mod tests {
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
                 audit_2026_09_11_deep_active: false,
+                audit_2026_09_23_active: false,
+                settled_anchor_depth: None,
                 share_growth_final_active: false,
                 epoch_budget_release_active: false,
                 panel_economy_active: false,
@@ -41825,6 +42061,8 @@ pub(crate) mod tests {
                 held_context_ladder: None,
                 audit_2026_09_11_active: false,
                 audit_2026_09_11_deep_active: false,
+                audit_2026_09_23_active: false,
+                settled_anchor_depth: None,
                 share_growth_final_active: false,
                 epoch_budget_release_active: false,
                 panel_economy_active: false,
@@ -41950,7 +42188,7 @@ pub(crate) mod tests {
         let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
             reserved: 200,
             escrowed_reward: 0,
-            pwu: 40,
+            exposure_pwu: 40,
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };
@@ -41986,7 +42224,7 @@ pub(crate) mod tests {
         let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
             reserved: 200,
             escrowed_reward: 0,
-            pwu: 40,
+            exposure_pwu: 40,
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };
@@ -42033,14 +42271,14 @@ pub(crate) mod tests {
         let light = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
             reserved: 200,
             escrowed_reward: 0,
-            pwu: 40,
+            exposure_pwu: 40,
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };
         let heavy = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
             reserved: 800,
             escrowed_reward: 0,
-            pwu: 160,
+            exposure_pwu: 160,
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };
@@ -42061,7 +42299,7 @@ pub(crate) mod tests {
         let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
             reserved: 200,
             escrowed_reward: 0,
-            pwu: 40,
+            exposure_pwu: 40,
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };
@@ -42119,7 +42357,7 @@ pub(crate) mod tests {
         let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1 {
             reserved: 200,
             escrowed_reward: 0,
-            pwu: 40,
+            exposure_pwu: 40,
             slash_value_per_pwu: 5,
             extra_economic_rights_sompi: 0,
         };

@@ -1065,6 +1065,17 @@ build_wrpc_wasm_bindgen_interface!(
         /// Retrieves the virtual chain corresponding to a specified block hash.
         /// Returned information: Virtual chain information. (Version 2)
         /// May be used to get fully populated transactions
-        GetVirtualChainFromBlockV2
+        GetVirtualChainFromBlockV2,
+        /// **Economic settlement depth of a DAA score** — how many PALW anchors have settled past
+        /// it. This is the number a merchant, wallet or explorer must read for payment finality:
+        /// `virtualDaaScore`, `blueScore` and `minConfirmationCount` all advance on heartbeat
+        /// blocks, which carry no bond and no PALW compute, and so measure TIME, never security.
+        /// Returned information: settled flag, anchor depth, pending anchors, safe frontier.
+        GetPalwSettlement,
+        /// DNS-overlay confirmation of a block: work depth, stake depth and DNS finality, each
+        /// against its required threshold. The other half of economic depth beside
+        /// `getPalwSettlement`; neither is a DAA or blue-score delta.
+        /// Returned information: DNS confirmation record.
+        GetDnsConfirmation
     ]
 );

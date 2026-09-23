@@ -78,8 +78,19 @@ impl UtxoEntryReferenceExtension for UtxoEntryReference {
             return true;
         }
         let anchor = params.dns_confirmed_anchor_daa();
-        let settlement =
-            DnsCoinbaseSettlement { long_maturity_daa: long_maturity, confirmed_anchor_daa: (anchor > 0).then_some(anchor) };
+        // **The wallet's estimate reads the DAA clock only.** The 2026-09-23 heartbeat audit added a
+        // second clock to the mempool's coinbase policy (`settled_anchor_armed` /
+        // `settled_anchor_floor_daa`: past `Params::palw_audit_2026_09_23` a coinbase also waits for
+        // `palw_settled_anchor_depth` settled anchors), and this client-side estimate has no read of
+        // that floor — it would need the node's settlement RPC. So it keeps the DAA-only answer it
+        // always gave; on a network that arms the fence (testnet-12) the node's mempool is the
+        // authority, and a spend this estimate calls settled may be held there until the anchors land.
+        let settlement = DnsCoinbaseSettlement {
+            long_maturity_daa: long_maturity,
+            confirmed_anchor_daa: (anchor > 0).then_some(anchor),
+            settled_anchor_armed: false,
+            settled_anchor_floor_daa: None,
+        };
         coinbase_spend_settled(self.block_daa_score(), current_daa_score, 0, Some(&settlement))
     }
 }
