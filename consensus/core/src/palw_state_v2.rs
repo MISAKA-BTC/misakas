@@ -9376,6 +9376,12 @@ impl PalwFoldReadV1<'_> {
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
         now_daa: u64,
     ) -> (u64, u128, u128, u64) {
+        // **2026-09-24 audit #4: past `palw_audit_2026_09_23` the room is a rate** — each class's
+        // owed replay over its own window ([`Self::panel_room_by_rate_v1`]). Below it (testnet-11
+        // has run the registry since 6,001) the common-horizon rule stands verbatim.
+        if self.extras.audit_2026_09_23_active {
+            return self.panel_room_by_rate_v1(class_id, row, fold, now_daa);
+        }
         let base = self.params.base_class_id();
         let g = &fold.globals;
         let seat_count = g.seat_count as u128;
@@ -9427,6 +9433,37 @@ impl PalwFoldReadV1<'_> {
         let budget = per_span.saturating_mul(horizon as u128);
         let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
         (crate::palw_work_target_v1::palw_panel_room_v1(per_span, horizon, inflight_replay, cost), inflight_replay, budget, horizon)
+    }
+
+    /// **The room by rate** (2026-09-24 audit #4): this class's ready seats' replay a span, less
+    /// the per-span demand of every model class's replay still owed — each class over its OWN
+    /// window ([`palw_panel_demand_scaled_v1`]) — over this class's window, in its claims.
+    ///
+    /// Returns what [`Self::panel_room_v1`] returns, read over this class's window: the demand as
+    /// replay over `window` spans, the budget as `per_span × window`, and `window` as the horizon
+    /// — so `inflight / budget` is the demand a span over the budget a span, the utilization the
+    /// row reports, and no other class's window enters any of the four.
+    fn panel_room_by_rate_v1(
+        &self,
+        class_id: &Hash64,
+        row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+        now_daa: u64,
+    ) -> (u64, u128, u128, u64) {
+        use crate::palw_work_target_v1::{PALW_PANEL_DEMAND_SCALE_V1, palw_panel_room_by_rate_v1};
+        let g = &fold.globals;
+        let seat_count = g.seat_count as u128;
+        let demand = self.with_inflight_index(|index| {
+            palw_panel_demand_scaled_v1(self.state, self.params, seat_count, index, self.own_attempt_class)
+        });
+        let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
+        let per_span =
+            ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+        let window = (row.profile.verification_window_spans as u64).max(1);
+        let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
+        let room = palw_panel_room_by_rate_v1(per_span, demand, window, cost);
+        let inflight_replay = demand.saturating_mul(window as u128).div_ceil(PALW_PANEL_DEMAND_SCALE_V1);
+        (room, inflight_replay, per_span.saturating_mul(window as u128), window)
     }
 
     fn model_registry_ready_seats(
@@ -9487,15 +9524,7 @@ impl PalwFoldReadV1<'_> {
     /// Read the in-flight index (audit #13b), building it from the live claims on first use.
     /// Outside the fold (no cache) the index is built for this one read.
     fn with_inflight_index<R>(&self, read: impl FnOnce(&BTreeMap<Hash64, PalwInflightTallyV1>) -> R) -> R {
-        let build = || {
-            let mut index = BTreeMap::new();
-            for (_, key) in self.state.unresolved.iter() {
-                if let Some(claim) = self.state.claims.get(key) {
-                    palw_inflight_index_note_v1(&mut index, claim, true);
-                }
-            }
-            index
-        };
+        let build = || palw_inflight_index_build_v1(self.state);
         match self.inflight_index {
             Some(cache) => {
                 let mut slot = cache.borrow_mut();
@@ -9811,11 +9840,32 @@ struct PalwInflightTallyV1 {
     free_prompts: u64,
     /// The quanta those free-prompt claims committed ([`palw_inflight_claims_counted_v1`]).
     free_prompt_quanta: u64,
+    /// **The part of the above whose replay is DONE** (2026-09-24 audit #4): the claims in
+    /// `ReceiptLicensed` — every receipt carried, the licence issued. A subset of the three counts
+    /// above, kept so the rate rule can charge the panel only for the replay still owed.
+    licensed_attempts: u64,
+    licensed_free_prompts: u64,
+    licensed_free_prompt_quanta: u64,
 }
 
 impl PalwInflightTallyV1 {
     fn is_empty(&self) -> bool {
         self.attempts == 0 && self.free_prompts == 0
+    }
+
+    /// **The claims whose replay the panel still owes, counted as [`Self::counted`] counts**
+    /// (2026-09-24 audit #4): in flight and not yet licensed. A licensed claim's receipts are all
+    /// on chain, so the replay the budget exists to schedule has happened; what keeps the claim
+    /// live after that is the challenge window, which is not the panel's replay. A court opened
+    /// on a licensed claim puts its replay back ([`palw_panel_demand_scaled_v1`]).
+    fn replay_pending(&self, audit_2026_09_23_active: bool, quanta_per_job: u32) -> u32 {
+        palw_inflight_claims_counted_v1(
+            self.attempts.saturating_sub(self.licensed_attempts),
+            self.free_prompts.saturating_sub(self.licensed_free_prompts),
+            self.free_prompt_quanta.saturating_sub(self.licensed_free_prompt_quanta),
+            quanta_per_job as u64,
+            audit_2026_09_23_active,
+        )
     }
 
     /// What the registry counts as this class's claims in flight: attempts, and — past the
@@ -9840,9 +9890,12 @@ fn palw_inflight_index_note_v1(index: &mut BTreeMap<Hash64, PalwInflightTallyV1>
         return;
     }
     let tally = index.entry(claim.class_id).or_default();
-    let (slot, quanta) = match &claim.source {
-        PalwClaimSourceV2::Attempt => (&mut tally.attempts, None),
-        PalwClaimSourceV2::FreePrompt { quanta, .. } => (&mut tally.free_prompts, Some(*quanta as u64)),
+    let licensed = matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. });
+    let (slot, licensed_slot, quanta) = match &claim.source {
+        PalwClaimSourceV2::Attempt => (&mut tally.attempts, &mut tally.licensed_attempts, None),
+        PalwClaimSourceV2::FreePrompt { quanta, .. } => {
+            (&mut tally.free_prompts, &mut tally.licensed_free_prompts, Some(*quanta as u64))
+        }
     };
     if add {
         *slot = slot.saturating_add(1);
@@ -9850,13 +9903,101 @@ fn palw_inflight_index_note_v1(index: &mut BTreeMap<Hash64, PalwInflightTallyV1>
         debug_assert!(*slot > 0, "an index in lockstep with the claims never removes what it did not count");
         *slot = slot.saturating_sub(1);
     }
+    if licensed {
+        *licensed_slot = if add { licensed_slot.saturating_add(1) } else { licensed_slot.saturating_sub(1) };
+    }
     if let Some(quanta) = quanta {
         tally.free_prompt_quanta =
             if add { tally.free_prompt_quanta.saturating_add(quanta) } else { tally.free_prompt_quanta.saturating_sub(quanta) };
+        if licensed {
+            tally.licensed_free_prompt_quanta = if add {
+                tally.licensed_free_prompt_quanta.saturating_add(quanta)
+            } else {
+                tally.licensed_free_prompt_quanta.saturating_sub(quanta)
+            };
+        }
     }
     if tally.is_empty() {
         index.remove(&claim.class_id);
     }
+}
+
+/// The in-flight index as the walk sees it: every live claim noted once (audit #13b). The one
+/// builder, for the fold's lazy cache and for a reader outside it.
+fn palw_inflight_index_build_v1(state: &PalwChainStateV2) -> BTreeMap<Hash64, PalwInflightTallyV1> {
+    let mut index = BTreeMap::new();
+    for (_, key) in state.unresolved.iter() {
+        if let Some(claim) = state.claims.get(key) {
+            palw_inflight_index_note_v1(&mut index, claim, true);
+        }
+    }
+    index
+}
+
+/// **The panel's per-span replay demand, scaled by [`crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1`]**
+/// (2026-09-24 audit #4) — what the rate rule charges before it admits one more claim:
+///
+/// * each model class's claims whose replay is still owed ([`PalwInflightTallyV1::replay_pending`]:
+///   in flight and not yet licensed),
+/// * plus each LICENSED claim with a court open on it — a court puts jury replay back on the same
+///   panel, so the licence's release lasts only while no court is open, and a claim licensed and
+///   then challenged is charged again until its last court closes,
+/// * plus this block's own attempt (`own_attempt_class`), as the common-horizon rule reserved it,
+///
+/// each class's count charged as ONE term over ITS OWN verification window, rounded up
+/// ([`crate::palw_work_target_v1::palw_panel_demand_term_v1`]). The base class, and a class without a
+/// lifecycle row, put nothing on the panel's budget, as before.
+fn palw_panel_demand_scaled_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    seat_count: u128,
+    index: &BTreeMap<Hash64, PalwInflightTallyV1>,
+    own_attempt_class: Option<Hash64>,
+) -> u128 {
+    let base = params.base_class_id();
+    let per_job = params.fp_quanta_per_canonical_job;
+    let mut owed: BTreeMap<Hash64, u128> =
+        index.iter().filter(|(id, _)| **id != base).map(|(id, tally)| (*id, tally.replay_pending(true, per_job) as u128)).collect();
+    for (claim_key, open) in state.open_courts_by_claim.iter() {
+        if *open == 0 {
+            continue;
+        }
+        let Some(claim) = state.claims.get(claim_key) else { continue };
+        if claim.class_id == base || !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+            continue;
+        }
+        let counted = match &claim.source {
+            PalwClaimSourceV2::Attempt => palw_inflight_claims_counted_v1(1, 0, 0, per_job as u64, true),
+            PalwClaimSourceV2::FreePrompt { quanta, .. } => {
+                palw_inflight_claims_counted_v1(0, 1, *quanta as u64, per_job as u64, true)
+            }
+        };
+        let slot = owed.entry(claim.class_id).or_insert(0);
+        *slot = slot.saturating_add(counted as u128);
+    }
+    if let Some(id) = own_attempt_class.filter(|id| *id != base) {
+        let slot = owed.entry(id).or_insert(0);
+        *slot = slot.saturating_add(1);
+    }
+    owed.iter()
+        .filter_map(|(id, claims)| {
+            state.model_lifecycles.get(id).map(|row| {
+                crate::palw_work_target_v1::palw_panel_demand_term_v1(
+                    *claims,
+                    row.work.economic_ccu_per_claim.saturating_mul(seat_count),
+                    row.profile.verification_window_spans as u64,
+                )
+            })
+        })
+        .fold(0u128, u128::saturating_add)
+}
+
+/// **The rate rule's demand for a reader outside the fold** (op 186, the producer's pre-check):
+/// [`palw_panel_demand_scaled_v1`] over the index walked from `state`, with no own attempt —
+/// the same function the fold's gate reads, so the room a producer is shown is the room its
+/// claim meets. Scaled by [`crate::palw_work_target_v1::PALW_PANEL_DEMAND_SCALE_V1`].
+pub fn palw_panel_demand_scaled_read_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2, seat_count: u32) -> u128 {
+    palw_panel_demand_scaled_v1(state, params, seat_count as u128, &palw_inflight_index_build_v1(state), None)
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -12174,6 +12315,13 @@ impl<'a> TransitionBuilder<'a> {
                         / (ready as u128).saturating_mul(window))
                     .min(u32::MAX as u128) as u32
                 };
+                // **2026-09-24 audit #4: past `palw_audit_2026_09_23` utilization is not a lifecycle
+                // input.** The room check refuses a claim the panel cannot schedule; holding the
+                // CLASS for it added only hysteresis and a probe reset — and the budget is one
+                // network-wide number, so a class with nothing in flight was held for another's
+                // backlog and could not collect the probes that would release it. The row still
+                // records the reading (`utilization_permille` below), for an operator.
+                let utilization_gates = !self.extras.audit_2026_09_23_active;
                 let obs = PalwLifecycleObservationV1 {
                     manifest: if row.work.ops_supported {
                         PalwManifestVerdictV1Flag::Valid
@@ -12183,7 +12331,7 @@ impl<'a> TransitionBuilder<'a> {
                     ready_seats: ready,
                     probes_passed_this_span: row.probes_passed_this_span,
                     probes_failed_this_span: row.probes_failed_this_span,
-                    utilization_permille: utilization,
+                    utilization_permille: if utilization_gates { utilization } else { 0 },
                     collateral_ok: ready >= profile.required_ready_seats,
                     cap_ok,
                     // ADR-0133 §11.3: the derived window against the deadline a claim of this
@@ -12198,7 +12346,9 @@ impl<'a> TransitionBuilder<'a> {
                     // deadline cannot disagree.
                     window_fits_receipt: (profile.verification_window_spans as u64).saturating_mul(fold.span_daa.max(1))
                         <= self.params.receipt_window_for_claim_v1(&self.state, class_id, ctx.daa_score),
-                    span_stable: utilization < 1_000 && row.probes_failed_this_span == 0 && ready >= profile.required_ready_seats,
+                    span_stable: (!utilization_gates || utilization < 1_000)
+                        && row.probes_failed_this_span == 0
+                        && ready >= profile.required_ready_seats,
                     // ADR-0147: the only reading that moves a class out of `Candidate`, and the
                     // only transition it is read by. Drawn just for a row that IS in `Candidate`
                     // — a state nothing writes below the fence — so no other class pays for a
@@ -26563,6 +26713,57 @@ pub(crate) mod tests {
             let base = b.params.base_class_id();
             let g = &fold.globals;
             let seat_count = g.seat_count as u128;
+            if audit {
+                // 2026-09-24 audit #4, walked: every rowed model class's live claims whose replay is
+                // owed — not licensed, or licensed with a court open — plus the block's own attempt,
+                // one term a class over its own window.
+                use crate::palw_work_target_v1::{PALW_PANEL_DEMAND_SCALE_V1, palw_panel_demand_term_v1, palw_panel_room_by_rate_v1};
+                let demand = b
+                    .state
+                    .model_lifecycles
+                    .iter()
+                    .filter(|(id, _)| **id != base)
+                    .map(|(id, r)| {
+                        let (mut attempts, mut fp, mut quanta, mut reopened) = (0u64, 0u64, 0u64, 0u128);
+                        for (key, c) in b.state.claims.iter().filter(|(_, c)| c.class_id == *id && !c.phase.is_terminal()) {
+                            let licensed = matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. });
+                            let court = b.state.open_courts_by_claim.get(key).copied().unwrap_or(0) > 0;
+                            match (&c.source, licensed) {
+                                (PalwClaimSourceV2::Attempt, false) => attempts += 1,
+                                (PalwClaimSourceV2::FreePrompt { quanta: q, .. }, false) => {
+                                    fp += 1;
+                                    quanta += *q as u64;
+                                }
+                                (PalwClaimSourceV2::Attempt, true) if court => {
+                                    reopened += palw_inflight_claims_counted_v1(1, 0, 0, 8, true) as u128
+                                }
+                                (PalwClaimSourceV2::FreePrompt { quanta: q, .. }, true) if court => {
+                                    reopened += palw_inflight_claims_counted_v1(0, 1, *q as u64, 8, true) as u128
+                                }
+                                _ => {}
+                            }
+                        }
+                        let own = u128::from(b.own_attempt_class == Some(*id));
+                        let claims = palw_inflight_claims_counted_v1(attempts, fp, quanta, 8, true) as u128 + reopened + own;
+                        palw_panel_demand_term_v1(
+                            claims,
+                            r.work.economic_ccu_per_claim.saturating_mul(seat_count),
+                            r.profile.verification_window_spans as u64,
+                        )
+                    })
+                    .fold(0u128, u128::saturating_add);
+                let ready = b.model_registry_ready_seats(class_id, now_daa, fold) as u128;
+                let per_span =
+                    ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+                let window = (row.profile.verification_window_spans as u64).max(1);
+                let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
+                return (
+                    palw_panel_room_by_rate_v1(per_span, demand, window, cost),
+                    demand.saturating_mul(window as u128).div_ceil(PALW_PANEL_DEMAND_SCALE_V1),
+                    per_span.saturating_mul(window as u128),
+                    window,
+                );
+            }
             let horizon = b
                 .state
                 .model_lifecycles
@@ -26668,6 +26869,22 @@ pub(crate) mod tests {
                 b.write_claim(live[0], Some(voided));
                 b.write_claim(live[1], None);
                 assert_index_is_the_walk(&b, &fold, now, "after a void and a drop");
+                // 2026-09-24 audit #4: a licence (the replay done) and a court on a licensed claim
+                // (the replay owed again), each measured against the walk; then the court closes.
+                let mut licensed = fresh.clone();
+                licensed.source = PalwClaimSourceV2::Attempt;
+                b.write_claim(h64(0x4447), Some(licensed.clone()));
+                licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: now };
+                b.write_claim(h64(0x4447), Some(licensed.clone()));
+                licensed.source = PalwClaimSourceV2::FreePrompt { quanta: 3, spent: BTreeSet::new() };
+                b.write_claim(h64(0x4448), Some(licensed));
+                assert_index_is_the_walk(&b, &fold, now, "after two licences");
+                b.state.open_courts_by_claim.insert(h64(0x4448), 1);
+                b.state.open_courts_by_claim.insert(h64(0x4447), 2);
+                assert_index_is_the_walk(&b, &fold, now, "with courts open on licensed claims");
+                b.state.open_courts_by_claim.remove(&h64(0x4448));
+                b.state.open_courts_by_claim.remove(&h64(0x4447));
+                assert_index_is_the_walk(&b, &fold, now, "after the court closed");
                 // A row that moves the horizon.
                 let mut held = b.state.model_lifecycles[&kimi_id()].clone();
                 held.state = PalwModelLifecycleV1::Held;
@@ -26683,6 +26900,159 @@ pub(crate) mod tests {
                 assert_index_is_the_walk(&b, &fold, now, "before the restore");
                 b.restore(checkpoint);
                 assert_index_is_the_walk(&b, &fold, now, "after the restore");
+            }
+        }
+
+        /// Kimi active with three attempts in flight, and the two extras the audit #4 tests compare:
+        /// armed past `palw_audit_2026_09_23` (the rate rule) and the same below it.
+        fn audit_4_premise() -> (PalwStateParamsV2, PalwChainStateV2, Hash64, PalwTransitionExtrasV1, PalwTransitionExtrasV1) {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let priced = priced_extras(Some(payout_fold(10_000, 0)));
+            let armed = PalwTransitionExtrasV1 { work_target_active: true, ..audited(&priced) };
+            let dormant = PalwTransitionExtrasV1 { audit_2026_09_23_active: false, ..armed.clone() };
+            let mut s = step_with(&s7, &p, &funded(8, 131, 8), &[bond(9, 1_000_000)], None, &armed).0;
+            for i in 0..3u64 {
+                let kimi = attempt_for_class(8, 900 + i, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+                s = step_with(&s, &p, &funded(9 + i, 132 + i, 9 + i), &[], Some(&kimi), &armed).0;
+            }
+            let live = s.claims.values().filter(|c| c.class_id == kimi_id() && !c.phase.is_terminal()).count();
+            assert_eq!(live, 3, "the premise: three Kimi claims in flight");
+            (p, s, root, armed, dormant)
+        }
+
+        fn audit_4_room(
+            p: &PalwStateParamsV2,
+            state: &PalwChainStateV2,
+            extras: &PalwTransitionExtrasV1,
+            class_id: &Hash64,
+            now: u64,
+        ) -> (u64, u128, u128, u64) {
+            let fold = extras.model_registry.clone().expect("the registry is in force");
+            let b = TransitionBuilder::new(state, p, false, false, false, false, extras);
+            let row = state.model_lifecycles[class_id].clone();
+            b.panel_room_v1(class_id, &row, &fold, now)
+        }
+
+        /// **2026-09-24 audit #4 (a) and (b): past the fence a class's room is judged on its own
+        /// window.** On the private t12 a window-2 class entering `Probation` shrank the common
+        /// horizon from 3 to 2 under an 8k class's five legal claims, which then read 1,292 ‰ and
+        /// were held; with no class admitting, the fallback horizon of one span read 2,583 ‰ and
+        /// held everything. Here: a shorter-window class admitting beside Kimi leaves Kimi's room
+        /// where it was, and every class held leaves it there too — no fallback exists. Below the
+        /// fence the old rule stands verbatim (testnet-11 runs it), and the test records its defect.
+        #[test]
+        fn audit_2026_09_24_4_a_shorter_window_class_neither_shrinks_another_class_s_room_nor_does_a_hold() {
+            let (p, s, _root, armed, dormant) = audit_4_premise();
+            let now = 140;
+            let kimi_row = s.model_lifecycles[&kimi_id()].clone();
+            let window = kimi_row.profile.verification_window_spans;
+            assert!(window >= 2, "the premise: a window a shorter class can undercut ({window})");
+            let armed_before = audit_4_room(&p, &s, &armed, &kimi_id(), now);
+            let dormant_before = audit_4_room(&p, &s, &dormant, &kimi_id(), now);
+            assert!(armed_before.0 > 0 && dormant_before.0 > 0, "{armed_before:?} {dormant_before:?}");
+            assert_eq!(armed_before.3, window as u64, "the rate rule reads Kimi over Kimi's own window");
+            let mut short = kimi_row.clone();
+            short.state = PalwModelLifecycleV1::Probation { probes_passed: 0 };
+            short.profile.verification_window_spans = window - 1;
+            let mut s2 = s.clone();
+            s2.set_model_lifecycle_for_tests(h64(3), short);
+            assert_eq!(
+                audit_4_room(&p, &s2, &armed, &kimi_id(), now),
+                armed_before,
+                "past the fence another class's window never enters Kimi's room"
+            );
+            let dormant_shrunk = audit_4_room(&p, &s2, &dormant, &kimi_id(), now);
+            assert!(dormant_shrunk.0 < dormant_before.0, "below the fence, the defect: {dormant_shrunk:?} < {dormant_before:?}");
+            let mut s3 = s2.clone();
+            for id in [kimi_id(), h64(3)] {
+                let mut held = s3.model_lifecycles[&id].clone();
+                held.state = PalwModelLifecycleV1::Held;
+                s3.set_model_lifecycle_for_tests(id, held);
+            }
+            assert_eq!(audit_4_room(&p, &s3, &armed, &kimi_id(), now), armed_before, "no class admitting: no fallback horizon");
+            assert_eq!(audit_4_room(&p, &s3, &dormant, &kimi_id(), now).3, 1, "below the fence, the fallback of one span");
+        }
+
+        /// **2026-09-24 audit #4: a licensed claim's replay is done, until a court puts it back.**
+        /// The licence carries every receipt, so the rate rule stops charging the panel for the
+        /// claim (the 120-DAA challenge window is not replay); a court opened on it charges the
+        /// replay again at its class's cost over its window, and the court closing releases it.
+        /// The room is a function of the state alone — the index is a cache rebuilt from it — so a
+        /// reorg that un-licenses restores the charge with the claim (checkpoint/restore below, and
+        /// the walked-equals-indexed test). Op 186's read shows the room the fold's gate meets.
+        #[test]
+        fn audit_2026_09_24_4_a_licensed_claim_frees_its_replay_until_a_court_reopens_it() {
+            use crate::palw_model_registry_v1::palw_model_registry_read_v2;
+            let (p, s, _root, armed, dormant) = audit_4_premise();
+            let now = 140;
+            let fold = armed.model_registry.clone().unwrap();
+            let read_room = |state: &PalwChainStateV2| {
+                let read = palw_model_registry_read_v2(state, &p, now, Some(0), Some(&fold), None, true, true);
+                read.classes.iter().find(|c| c.class_id == kimi_id()).unwrap().panel_room
+            };
+            let owed = audit_4_room(&p, &s, &armed, &kimi_id(), now);
+            assert_eq!(read_room(&s), owed.0, "op 186 shows the gate's room");
+            let key = *s.claims.iter().find(|(_, c)| c.class_id == kimi_id() && !c.phase.is_terminal()).unwrap().0;
+            let mut licensed = s.claims[&key].clone();
+            licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: now };
+            let mut s1 = s.clone();
+            s1.claims.insert(key, licensed);
+            let freed = audit_4_room(&p, &s1, &armed, &kimi_id(), now);
+            assert!(freed.0 > owed.0 && freed.1 < owed.1, "the licence releases the claim's replay: {freed:?} vs {owed:?}");
+            assert_eq!(read_room(&s1), freed.0);
+            assert_eq!(
+                audit_4_room(&p, &s1, &dormant, &kimi_id(), now),
+                audit_4_room(&p, &s, &dormant, &kimi_id(), now),
+                "below the fence a licensed claim holds its replay to Final, as before"
+            );
+            let mut s2 = s1.clone();
+            s2.open_courts_by_claim.insert(key, 1);
+            assert_eq!(audit_4_room(&p, &s2, &armed, &kimi_id(), now), owed, "a court on the licensed claim charges its replay again");
+            assert_eq!(read_room(&s2), owed.0);
+            let mut s3 = s2.clone();
+            s3.open_courts_by_claim.remove(&key);
+            assert_eq!(audit_4_room(&p, &s3, &armed, &kimi_id(), now), freed, "the court resolved: released again");
+            // A rollback across the licence: the builder's cache follows the restored claim.
+            let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &armed);
+            let row = s.model_lifecycles[&kimi_id()].clone();
+            assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), owed);
+            let checkpoint = b.checkpoint();
+            b.write_claim(key, Some(s1.claims[&key].clone()));
+            assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), freed, "licensed in the builder");
+            b.restore(checkpoint);
+            assert_eq!(b.panel_room_v1(&kimi_id(), &row, &fold, now), owed, "un-licensed by the rollback: charged again");
+        }
+
+        /// **2026-09-24 audit #4 (c): past the fence utilization holds no class.** Kimi's claim in
+        /// flight is priced above the whole budget, so the class reads ≥ 1,000 ‰ at its boundary.
+        /// Below the fence that holds it (and resets its probes on the way back); past it the class
+        /// stays where it was, the row still RECORDS the reading, and the room check is what
+        /// refuses the next claim.
+        #[test]
+        fn audit_2026_09_24_4_utilization_is_recorded_but_holds_no_class_past_the_fence() {
+            let (p, s, _root, armed, dormant) = audit_4_premise();
+            let budget = audit_4_room(&p, &s, &armed, &kimi_id(), 140).2;
+            let mut heavy = s.model_lifecycles[&kimi_id()].clone();
+            heavy.work.economic_ccu_per_claim = budget.max(1);
+            let mut s = s;
+            s.set_model_lifecycle_for_tests(kimi_id(), heavy);
+            assert!(s.model_lifecycles[&kimi_id()].utilization_permille < 1_000, "the premise: under the budget before the boundary");
+            for (extras, holds) in [(&dormant, true), (&armed, false)] {
+                let (b, _) = step_with(&s, &p, &funded(20, 140, 20), &[], None, extras);
+                let row = b.model_lifecycle(&kimi_id()).unwrap();
+                assert_eq!(row.inflight_claims, 3, "the premise: the three claims are live at the boundary");
+                assert!(row.utilization_permille >= 1_000, "the premise: over the budget ({})", row.utilization_permille);
+                assert_eq!(
+                    row.state == PalwModelLifecycleV1::Held,
+                    holds,
+                    "audit fence {}: {:?}",
+                    extras.audit_2026_09_23_active,
+                    row.state
+                );
+                if !holds {
+                    assert_eq!(audit_4_room(&p, &b, extras, &kimi_id(), 1005).0, 0, "the room refuses instead");
+                }
             }
         }
 

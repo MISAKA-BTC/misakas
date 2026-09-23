@@ -154,6 +154,38 @@ pub fn palw_panel_room_v1(panel_replay_per_span: u128, horizon_spans: u64, infli
     (free / claim_replay).min(u64::MAX as u128) as u64
 }
 
+/// The fixed point of the panel's per-span replay demand (2026-09-24 audit #4): Q32, so a term
+/// rounded up per class over-counts by at most 2^-32 of one replay unit a span.
+pub const PALW_PANEL_DEMAND_SCALE_V1: u128 = 1 << 32;
+
+/// **One class's share of the panel's per-span replay demand** (2026-09-24 audit #4), scaled by
+/// [`PALW_PANEL_DEMAND_SCALE_V1`] and rounded UP: `claims × claim_replay / window_spans` — the
+/// replay those claims still owe, spread over the window each of them is judged by. Rounding up
+/// and saturating both over-count, so both refuse rather than admit.
+pub fn palw_panel_demand_term_v1(claims: u128, claim_replay: u128, window_spans: u64) -> u128 {
+    claims.saturating_mul(claim_replay).saturating_mul(PALW_PANEL_DEMAND_SCALE_V1).div_ceil(window_spans.max(1) as u128)
+}
+
+/// **The verification budget in one class's claims, by rate** (2026-09-24 audit #4; replaces
+/// [`palw_panel_room_v1`] past `palw_audit_2026_09_23`): the panel's replay a span less the
+/// demand every class's owed replay puts on each span (`demand_scaled`, a sum of
+/// [`palw_panel_demand_term_v1`]), over THIS class's window, divided by what one of its claims
+/// costs — `⌊(per_span − demand) × window / claim_replay⌋`, floored.
+///
+/// The common-horizon rule measured every class's backlog against the SHORTEST admitted window,
+/// so admitting a class with a shorter window shrank every other class's budget after the fact
+/// (claims that were legal when admitted read as overload), and with no class admitting it fell
+/// back to one span, which made a hold self-reinforcing. Each class judged on its own window has
+/// neither: another class's window never enters this class's room, and there is no fallback.
+pub fn palw_panel_room_by_rate_v1(panel_replay_per_span: u128, demand_scaled: u128, window_spans: u64, claim_replay: u128) -> u64 {
+    if claim_replay == 0 {
+        return 0;
+    }
+    let free = panel_replay_per_span.saturating_mul(PALW_PANEL_DEMAND_SCALE_V1).saturating_sub(demand_scaled);
+    mul_div_u128(free, window_spans.max(1) as u128, claim_replay.saturating_mul(PALW_PANEL_DEMAND_SCALE_V1)).min(u64::MAX as u128)
+        as u64
+}
+
 /// **The reader's share**: each class's finalized work over the last `window_epochs` closed
 /// epochs, in permille of every class's, class-id order; empty where nothing finalized.
 pub fn palw_final_work_shares_v1(final_work: &BTreeMap<u64, BTreeMap<Hash64, u128>>, window_epochs: u64) -> Vec<(Hash64, u16)> {
