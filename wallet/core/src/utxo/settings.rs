@@ -127,15 +127,27 @@ static TESTNET11_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| Netw
     dns_confirmed_anchor_daa: AtomicU64::new(0),
 });
 
-// testnet-12 had its own static here for the same reason testnet-11 has one: two live networks
-// that happen to agree today are still two networks. It is gone because the network is — the
-// PALW-RC network moved onto suffix 11 and consensus refuses 12 outright, so a table entry for it
-// would describe a network `Params::from` will not build.
-//
-// The comparison test that owns this table found it BOTH times the set moved: once when consensus
-// gained 12 and this did not, and again when consensus dropped it and this still had it. A wallet
-// that supports a different set of networks than the node is a wallet that aborts on exactly the
-// network the branch cares about.
+/// testnet-12 — the 2026-09-22 regenesis that replaces testnet-11 on the public fleet
+/// (`palw_t12_shipped_params`). Its own static for testnet-11's reason: two live networks that agree
+/// today are still two networks.
+///
+/// The values are testnet-11's because the preset is: `palw_t12_base_params` is
+/// `palw_rc_base_params` with the suffix, the genesis and the fence heights moved, and none of those
+/// is a field this table mirrors. `settlement_knob_mirrors_consensus_params` holds the one mirrored
+/// value to testnet-12's OWN preset, so the day the two presets part the assertion follows.
+///
+/// This entry was removed once already, when suffix 12 was consolidated into 11, and the comparison
+/// test that owns this table has now caught the set moving three times: consensus gained 12 and this
+/// did not; consensus dropped 12 and this still had it; consensus regained 12 for the regenesis and
+/// this did not — which left every wallet operation on the public network aborting.
+static TESTNET12_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
+    coinbase_transaction_maturity_period_daa: AtomicU64::new(1_000),
+    coinbase_transaction_stasis_period_daa: 500,
+    user_transaction_maturity_period_daa: AtomicU64::new(100),
+    additional_compound_transaction_mass: 100,
+    coinbase_settlement_long_maturity_daa: 600,
+    dns_confirmed_anchor_daa: AtomicU64::new(0),
+});
 
 static SIMNET_NETWORK_PARAMS: LazyLock<NetworkParams> = LazyLock::new(|| NetworkParams {
     coinbase_transaction_maturity_period_daa: AtomicU64::new(1_000),
@@ -174,6 +186,7 @@ impl NetworkParams {
             NetworkType::Testnet => match value.suffix {
                 Some(10) => &TESTNET10_NETWORK_PARAMS,
                 Some(11) => &TESTNET11_NETWORK_PARAMS,
+                Some(12) => &TESTNET12_NETWORK_PARAMS,
                 Some(x) => panic!("Testnet suffix {} is not supported", x),
                 None => panic!("Testnet suffix not provided"),
             },
@@ -251,6 +264,11 @@ mod tests {
             consensus_settlement(&kaspa_consensus_core::config::params::palw_rc_shipped_params()),
             "testnet-11 wallet params must mirror the RC's own preset"
         );
+        assert_eq!(
+            TESTNET12_NETWORK_PARAMS.coinbase_settlement_long_maturity_daa(),
+            consensus_settlement(&kaspa_consensus_core::config::params::palw_t12_shipped_params()),
+            "testnet-12 wallet params must mirror its own preset"
+        );
     }
 
     /// **The two suffix tables must accept the same set**, compared by behaviour rather than by a
@@ -292,8 +310,8 @@ mod tests {
         // Not vacuous: if both tables somehow refused everything the comparison above would still
         // hold, and a wallet that supports no testnet is not the property wanted.
         assert!(consensus.contains(&10) && consensus.contains(&11), "expected testnet-10 and -11, got {consensus:?}");
-        // And 12 must be gone from BOTH, not merely absent from one: it was consolidated into 11,
-        // and a table that still answers for it would hand a wallet a network no node will build.
-        assert!(!consensus.contains(&12) && !wallet.contains(&12), "testnet-12 was consolidated into 11 and must build nowhere");
+        // And 12 must be in BOTH, not merely in one: it is the public network again (the 2026-09-22
+        // regenesis), and a wallet without it aborts on every operation there.
+        assert!(consensus.contains(&12) && wallet.contains(&12), "testnet-12 is the public network and must build on both sides");
     }
 }
