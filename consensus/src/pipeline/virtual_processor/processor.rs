@@ -11433,26 +11433,11 @@ impl VirtualStateProcessor {
             .get()
             .ok()
             .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score));
-        // The second clock (2026-09-23 heartbeat audit): past the fence, the long fallback also
-        // needs `depth` PALW anchors settled since the coinbase's block. The anchors are the
-        // `Final` attempt claims the PALW state holds at the tip — a lower bound past retirement,
-        // which a 600-DAA maturity never reaches. Policy layer, like the rest of this record.
-        let now_daa = self.lkg_virtual_state.load().daa_score;
-        let depth = self.palw_settled_anchor_depth_at(now_daa);
-        // The second clock's reading: the DAA of the `depth`-th most recent settled anchor, over
-        // the whole chain (`u64::MAX` bounds nothing). The same one-place walk the panel floor
-        // uses, so the two rules cannot come to disagree about what "settled" counts.
-        let settled_anchor_floor_daa = depth.and_then(|depth| {
-            let params = self.palw_state_params_v2.as_ref()?;
-            let (_, state) = self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten()?;
-            kaspa_consensus_core::palw_panel_v2::palw_settled_anchor_floor_daa_v1(&state, u64::MAX, depth)
-        });
-        Some(DnsCoinbaseSettlement {
-            long_maturity_daa,
-            confirmed_anchor_daa,
-            settled_anchor_armed: depth.is_some(),
-            settled_anchor_floor_daa,
-        })
+        // **DAA-based maturity only** (the user's Mainnet Decision A, 2026-09-24): no second clock
+        // on a coinbase. The long fallback matures it by the DAA alone, or a DNS-final anchor
+        // releases it early; the attempt lane's settled anchors are not asked (they still gate
+        // locks, liabilities, retiring bonds and the D1 maturity floor).
+        Some(DnsCoinbaseSettlement { long_maturity_daa, confirmed_anchor_daa })
     }
 
     /// Both stake walks run under the CANONICAL bond set: a bond created on the candidate branch

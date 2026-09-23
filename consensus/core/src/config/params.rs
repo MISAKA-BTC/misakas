@@ -8175,6 +8175,13 @@ impl Params {
     /// selects an illegal one. Issue #81 is what asking the floor alone does: the validator kept
     /// choosing a 427-DAA-old coinbase ("mature" by the floor of 1) while the node refused it for
     /// 600, and attestation stopped for exactly the remaining maturity window.
+    ///
+    /// **It is the mempool's whole rule, bar the DNS-final acceleration** (the user's Mainnet
+    /// Decision A, 2026-09-24): a coinbase's spendability is DAA-based maturity only. The
+    /// settled-anchor second clock the 2026-09-23 heartbeat audit had put on the mempool's coinbase
+    /// policy is gone, so a validator or a wallet that selects by this number no longer offers the
+    /// node a coinbase it holds back for anchors (the sweep's finding: the validator looked at the
+    /// 600 DAA and nothing else, while the mempool waited on anchors too).
     pub fn coinbase_spend_maturity(&self) -> u64 {
         self.coinbase_maturity().max(self.coinbase_settlement_long_maturity_daa())
     }
