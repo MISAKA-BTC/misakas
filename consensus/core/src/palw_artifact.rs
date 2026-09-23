@@ -110,6 +110,12 @@ impl PalwArtifactLeafHasherV1 {
     }
 }
 
+/// The tree's internal node hash, public so a streamed opening builder folds with the SAME function
+/// the verifier folds with. Two spellings of the node hash would be a proof that verifies nowhere.
+pub fn artifact_node_v1(left: &Hash64, right: &Hash64) -> Hash64 {
+    node(left, right)
+}
+
 fn node(left: &Hash64, right: &Hash64) -> Hash64 {
     let mut state = Params::new().hash_length(64).key(PALW_ARTIFACT_DOMAIN_NODE).to_state();
     state.update(left.as_byte_slice());

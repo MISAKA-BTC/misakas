@@ -483,8 +483,11 @@ pub struct PalwPanelService {
     /// the artifact digests this seat rooted (one pass per class per run), and the reason a class
     /// gets no proof from this node, logged once.
     readiness_submitted: std::sync::Mutex<HashMap<Hash64, u64>>,
-    readiness_digests:
-        std::sync::Mutex<HashMap<Hash64, std::sync::Arc<kaspa_consensus_core::palw_artifact::PalwArtifactInventoryDigestV1>>>,
+    /// **The multiproof built for a (class, span), kept until the span moves.** The duty is "due"
+    /// again on every tick until a submission succeeds, and a node with no peers cannot submit —
+    /// so without this a seat rebuilt the whole proof per tick. Measured on the item 6 acceptance
+    /// run: three builds in three minutes, 23.7 GiB, killed.
+    readiness_built: std::sync::Mutex<HashMap<Hash64, (u64, kaspa_consensus_core::palw_artifact::PalwArtifactMultiproofV1)>>,
     readiness_logged: std::sync::Mutex<HashMap<Hash64, String>>,
     readiness_read_at: std::sync::Mutex<Option<std::time::Instant>>,
     /// **What this node has already opened, so a second ask is not a second replay.**
@@ -719,7 +722,7 @@ impl PalwPanelService {
             sample_refusals_logged: std::sync::Mutex::new(HashSet::new()),
             leaf_pursuits: std::sync::Mutex::new(HashMap::new()),
             readiness_submitted: std::sync::Mutex::new(HashMap::new()),
-            readiness_digests: std::sync::Mutex::new(HashMap::new()),
+            readiness_built: std::sync::Mutex::new(HashMap::new()),
             readiness_logged: std::sync::Mutex::new(HashMap::new()),
             readiness_read_at: std::sync::Mutex::new(None),
             shutdown: SingleTrigger::default(),
@@ -902,114 +905,115 @@ impl PalwPanelService {
                     continue;
                 }
             };
-            let digest = {
-                let cached = self.readiness_digests.lock().unwrap().get(&class.class_id).cloned();
-                match cached {
-                    Some(digest) => digest,
-                    None => {
-                        let started = std::time::Instant::now();
-                        match backend.artifact_inventory_digest() {
-                            Ok(digest) => {
-                                info!(
-                                    "[{PALW_PANEL}] rooted the artifact of class {} in {:.1} s: {} leaves, root {}",
-                                    class.class_id,
-                                    started.elapsed().as_secs_f64(),
-                                    digest.leaf_count(),
-                                    digest.root()
-                                );
-                                let digest = std::sync::Arc::new(digest);
-                                self.readiness_digests.lock().unwrap().insert(class.class_id, digest.clone());
-                                digest
-                            }
-                            Err(e) => {
-                                self.readiness_note(class.class_id, format!("no proof — the held artifact cannot be rooted ({e})"));
-                                continue;
-                            }
-                        }
-                    }
+            // **Root and count, never the inventory.** Both come streamed and cached from the backend;
+            // the inventory that used to be materialized here — and retained in two places — is what
+            // put the 2M seat at 23.7 GiB in the item 6 acceptance run before it ever produced.
+            let (held_root, leaf_count) = match backend.artifact_root_and_leaf_count() {
+                Ok(pair) => pair,
+                Err(e) => {
+                    self.readiness_note(class.class_id, format!("no proof — the held artifact cannot be rooted ({e})"));
+                    continue;
                 }
             };
-            if digest.root() != class.artifact_root {
+            if held_root != class.artifact_root {
                 self.readiness_note(
                     class.class_id,
-                    format!("no proof — the held artifact roots {} but the class registered {}", digest.root(), class.artifact_root),
+                    format!("no proof — the held artifact roots {held_root} but the class registered {}", class.artifact_root),
                 );
                 continue;
             }
             let seed = palw_readiness_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
             // **ADR-0133 §11.2: past readiness V2 the proof is a multiproof over the whole
             // artifact.** The challenge names sixteen leaves of the inventory for this (class, bond,
-            // span); the seat opens each one, builds one proof from the digest's own leaf hashes,
-            // and signs the leaves it opened. Below the fence it is V1's single leaf, unchanged.
+            // span); the seat opens each one, builds one proof from the inventory's leaf hashes, and
+            // signs the leaves it opened. Below the fence it is V1's single leaf, unchanged.
             if self.consensus_config.params.palw_readiness_v2_at(current_daa) {
                 use kaspa_consensus_core::palw_model_registry_v1::{
                     PALW_READINESS_V2_BUDGET_BYTES_V1, PALW_READINESS_V2_LEAF_MAX_BYTES_V1, PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT,
                     palw_readiness_v2_challenge_seed_v1, palw_readiness_v2_draw_v1, palw_readiness_v2_opening_is_the_challenge_v1,
                     palw_seat_readiness_message_v2,
                 };
-                let leaves: Vec<kaspa_hashes::Hash64> = digest.rows().iter().map(|row| row.leaf_hash).collect();
-                let seed_v2 = palw_readiness_v2_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
-                // **The draw is spent in bytes, in the draw's own order** — the prover opens leaves
-                // until the budget is reached and stops there, because the whole proof has to ride
-                // ONE carrier. Opening all sixteen made a 184,037-byte object for the shipped A16
-                // class (the 2026-09-20 measurement): no transaction carried it, and this seat then
-                // proved nothing at all in that span.
-                let draw = palw_readiness_v2_draw_v1(&seed_v2, digest.leaf_count());
-                let mut opened: Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)> =
-                    Vec::with_capacity(draw.len());
-                let mut bytes = 0usize;
-                let mut failed = None;
-                for index in &draw {
-                    if bytes >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
-                        break;
-                    }
-                    match backend.artifact_row_opening(*index) {
-                        Ok(opening) => {
-                            if opening.operand.bytes.len() > PALW_READINESS_V2_LEAF_MAX_BYTES_V1 {
+                // Built once per (class, span): the draw is a function of (class, bond, span), so the
+                // proof is too, and a tick that could not submit it must not pay for it again.
+                let cached = self.readiness_built.lock().unwrap().get(&class.class_id).filter(|(span, _)| *span == span_now).map(|(_, p)| p.clone());
+                let proof = match cached {
+                    Some(proof) => proof,
+                    None => {
+                        let seed_v2 = palw_readiness_v2_challenge_seed_v1(&class.class_id, &bond_bytes, span_now);
+                        let draw = palw_readiness_v2_draw_v1(&seed_v2, leaf_count);
+                        let started = std::time::Instant::now();
+                        let (_, leaves, drawn) = match backend.artifact_readiness_material(&draw) {
+                            Ok(material) => material,
+                            Err(e) => {
+                                self.readiness_note(class.class_id, format!("no proof — the drawn leaves cannot be opened ({e})"));
+                                continue;
+                            }
+                        };
+                        // **The draw is spent in bytes, in the draw's own order** — the prover opens
+                        // leaves until the budget is reached and stops there, because the whole proof
+                        // has to ride ONE carrier. Opening all sixteen made a 184,037-byte object for
+                        // the shipped A16 class (the 2026-09-20 measurement): no transaction carried
+                        // it, and this seat then proved nothing at all in that span.
+                        let mut opened: Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)> =
+                            Vec::with_capacity(drawn.len());
+                        let mut bytes = 0usize;
+                        let mut failed = None;
+                        for (index, operand) in drawn {
+                            if bytes >= PALW_READINESS_V2_BUDGET_BYTES_V1 {
+                                break;
+                            }
+                            if operand.bytes.len() > PALW_READINESS_V2_LEAF_MAX_BYTES_V1 {
                                 failed = Some(format!(
-                                    "leaf {index} is {} bytes and no leaf above {PALW_READINESS_V2_LEAF_MAX_BYTES_V1} can ride a                                      proof — this class's inventory cannot be proved as it is built",
-                                    opening.operand.bytes.len()
+                                    "leaf {index} is {} bytes and no leaf above {PALW_READINESS_V2_LEAF_MAX_BYTES_V1} can ride a \
+                                     proof — this class's inventory cannot be proved as it is built",
+                                    operand.bytes.len()
                                 ));
                                 break;
                             }
-                            bytes += opening.operand.bytes.len();
-                            opened.push((*index, opening.operand));
+                            bytes += operand.bytes.len();
+                            opened.push((index, operand));
                         }
-                        Err(e) => {
-                            failed = Some(format!("leaf {index} cannot be opened ({e})"));
-                            break;
+                        if let Some(why) = failed {
+                            self.readiness_note(class.class_id, format!("no proof — {why}"));
+                            continue;
                         }
+                        // The same rule every validator applies, applied before a fee is spent on it.
+                        if let Err(why) = palw_readiness_v2_opening_is_the_challenge_v1(
+                            &draw,
+                            &opened.iter().map(|(index, operand)| (*index, operand.bytes.len())).collect::<Vec<_>>(),
+                        ) {
+                            self.readiness_note(class.class_id, format!("no proof — {why}"));
+                            continue;
+                        }
+                        opened.sort_by_key(|(index, _)| *index);
+                        let Some(proof) = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened) else {
+                            self.readiness_note(class.class_id, "no proof — the opened leaves are not the inventory's".to_string());
+                            continue;
+                        };
+                        drop(leaves);
+                        if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, class.artifact_root) {
+                            self.readiness_note(class.class_id, format!("no proof — the multiproof does not open the registered root ({e})"));
+                            continue;
+                        }
+                        info!(
+                            "[{PALW_PANEL}] built the readiness multiproof of class {} for span {span_now} in {:.1} s: {} leaves opened of {leaf_count}, {bytes} bytes, {} siblings",
+                            class.class_id,
+                            started.elapsed().as_secs_f64(),
+                            proof.opened.len(),
+                            proof.siblings.len()
+                        );
+                        self.readiness_built.lock().unwrap().insert(class.class_id, (span_now, proof.clone()));
+                        proof
                     }
-                }
-                if let Some(why) = failed {
-                    self.readiness_note(class.class_id, format!("no proof — {why}"));
-                    continue;
-                }
-                // The same rule every validator applies, applied before a fee is spent on it.
-                if let Err(why) = palw_readiness_v2_opening_is_the_challenge_v1(
-                    &draw,
-                    &opened.iter().map(|(index, operand)| (*index, operand.bytes.len())).collect::<Vec<_>>(),
-                ) {
-                    self.readiness_note(class.class_id, format!("no proof — {why}"));
-                    continue;
-                }
-                opened.sort_by_key(|(index, _)| *index);
-                let Some(proof) = kaspa_consensus_core::palw_artifact::palw_artifact_multiproof_v1(&leaves, &opened) else {
-                    self.readiness_note(class.class_id, "no proof — the opened leaves are not the inventory's".to_string());
-                    continue;
                 };
-                if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_multiproof_v1(&proof, class.artifact_root) {
-                    self.readiness_note(class.class_id, format!("no proof — the multiproof does not open the registered root ({e})"));
-                    continue;
-                }
+                let bytes: usize = proof.opened.iter().map(|(_, o)| o.bytes.len()).sum();
                 let message = palw_seat_readiness_message_v2(domain, &bond_bytes, &class.class_id, span_now, &proof);
                 let Some(signature) = self.sign(message.as_byte_slice(), PALW_SEAT_READINESS_V2_MLDSA87_CONTEXT) else { continue };
                 self.readiness_note(
                     class.class_id,
                     format!(
-                        "proving {} leaves of {} for span {span_now} ({bytes} bytes against a {PALW_READINESS_V2_BUDGET_BYTES_V1}-byte budget, {} siblings)",
+                        "proving {} leaves of {leaf_count} for span {span_now} ({bytes} bytes against a {PALW_READINESS_V2_BUDGET_BYTES_V1}-byte budget, {} siblings)",
                         proof.opened.len(),
-                        digest.leaf_count(),
                         proof.siblings.len()
                     ),
                 );
@@ -1022,10 +1026,10 @@ impl PalwPanelService {
                 });
                 continue;
             }
-            let (start, width) = palw_readiness_window_v1(&seed, digest.leaf_count());
+            let (start, width) = palw_readiness_window_v1(&seed, leaf_count);
             let mut opened = None;
             for offset in 0..width.max(1) {
-                let index = (start as u64 + offset as u64) % digest.leaf_count().max(1) as u64;
+                let index = (start as u64 + offset as u64) % leaf_count.max(1) as u64;
                 match backend.artifact_row_opening(index as u32) {
                     Ok(opening) if opening.operand.bytes.len() <= PALW_READINESS_OPENING_MAX_BYTES_V1 => {
                         if let Err(e) = kaspa_consensus_core::palw_artifact::verify_artifact_opening_v1(&opening, class.artifact_root)
@@ -1052,9 +1056,8 @@ impl PalwPanelService {
             self.readiness_note(
                 class.class_id,
                 format!(
-                    "proving leaf {} of {} for span {span_now} ({} bytes)",
+                    "proving leaf {} of {leaf_count} for span {span_now} ({} bytes)",
                     opening.leaf_index,
-                    digest.leaf_count(),
                     opening.operand.bytes.len()
                 ),
             );

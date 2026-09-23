@@ -544,6 +544,35 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family cannot open its artifact".to_string())
     }
 
+    /// **The artifact's root and leaf count, without its inventory** (ADR-0151 follow-up, item 6's
+    /// finding). A readiness challenge draws against the leaf count and compares against the root,
+    /// and neither needs a leaf materialized. The default goes through the digest, which is correct
+    /// and is what a family that can stream overrides.
+    fn artifact_root_and_leaf_count(&self) -> Result<(crate::Hash64, u32), String> {
+        let digest = self.artifact_inventory_digest()?;
+        Ok((digest.root(), digest.leaf_count()))
+    }
+
+    /// **What a readiness multiproof is built from, in one pass**: the root, every leaf's hash, and
+    /// the drawn leaves' bytes — the inputs of `palw_artifact_multiproof_v1`, in the draw's order.
+    ///
+    /// The per-row verb above is fine for one leaf and ruinous for sixteen at a 2M context: each call
+    /// re-folds the whole tree and re-streams the artifact for one row's bytes. A family that can walk
+    /// its inventory once answers this directly; the default composes the per-row verb so a family
+    /// that never overrides it keeps working — correctly, and as slowly as before.
+    fn artifact_readiness_material(
+        &self,
+        draw: &[u32],
+    ) -> Result<(crate::Hash64, Vec<crate::Hash64>, Vec<(u32, crate::palw_artifact::PalwArtifactOperandV1)>), String> {
+        let digest = self.artifact_inventory_digest()?;
+        let leaves: Vec<crate::Hash64> = digest.rows().iter().map(|row| row.leaf_hash).collect();
+        let opened = draw
+            .iter()
+            .map(|i| self.artifact_row_opening(*i).map(|o| (*i, o.operand)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((digest.root(), leaves, opened))
+    }
+
     /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each
     /// generated id in decode order, as soon as it is selected, from the SAME run whose capture
     /// and commitment the returned [`PalwFpRunV1`] carries — never from a second inference. The

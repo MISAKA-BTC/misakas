@@ -136,8 +136,8 @@ pub(crate) fn a16_inventory_digest_arc_v1(
 /// **Process-local A16 inventory ROOTS.** Sixty-four bytes per `(artifact digest, profile id)`,
 /// against the digest cache's one entry per leaf — and the root is all a producer's class resolve,
 /// a registration preflight or a genesis check ever wanted from the walk.
-fn a16_inventory_root_cache_v1() -> &'static Mutex<HashMap<(Hash64, Hash64), Hash64>> {
-    static CACHE: OnceLock<Mutex<HashMap<(Hash64, Hash64), Hash64>>> = OnceLock::new();
+fn a16_inventory_root_cache_v1() -> &'static Mutex<HashMap<(Hash64, Hash64), (Hash64, u32)>> {
+    static CACHE: OnceLock<Mutex<HashMap<(Hash64, Hash64), (Hash64, u32)>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -166,15 +166,148 @@ pub fn a16_inventory_root_v1(
         }
     }
     if let Ok(cache) = a16_inventory_root_cache_v1().lock() {
+        if let Some((root, _)) = cache.get(&key) {
+            return Ok(*root);
+        }
+    }
+    Ok(a16_inventory_root_and_count_v1(artifact, profile)?.0)
+}
+
+/// **Root and leaf count, streamed and cached together** — the two numbers a readiness challenge
+/// needs BEFORE it can draw (`palw_readiness_v2_draw_v1(seed, leaf_count)`), so the draw never
+/// costs a materialized inventory just to learn how many leaves there are.
+pub fn a16_inventory_root_and_count_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<(Hash64, u32), InventoryBuildError> {
+    let key = a16_inventory_digest_key_v1(artifact, profile);
+    if let Ok(cache) = a16_inventory_digest_cache_v1().lock() {
+        if let Some(hit) = cache.get(&key) {
+            return Ok((hit.root(), hit.leaf_count()));
+        }
+    }
+    if let Ok(cache) = a16_inventory_root_cache_v1().lock() {
         if let Some(hit) = cache.get(&key) {
             return Ok(*hit);
         }
     }
-    let root = a16_inventory_root_streamed_v1(artifact, profile)?;
+    let (root, leaves, _) = a16_readiness_material_streamed_v1(artifact, profile, &[])?;
+    let count = leaves.len() as u32;
     if let Ok(mut cache) = a16_inventory_root_cache_v1().lock() {
-        cache.insert(key, root);
+        cache.insert(key, (root, count));
     }
-    Ok(root)
+    Ok((root, count))
+}
+
+/// **The material a readiness proof is built from, in ONE streamed walk**: the root, every leaf's
+/// hash (64 bytes each, no names), and the bytes of the drawn leaves alone.
+///
+/// What the panel did per tick, and why a seat holding the 2M class died at 23.7 GiB of anonymous
+/// memory in the item 6 acceptance run without ever producing: `artifact_inventory_digest()`
+/// materialized the whole inventory (one `String` per leaf, `max_position` rotary leaves alone at a
+/// 2M context) and kept it in a process cache AND a panel map; `digest.rows()` was copied into a
+/// fresh `Vec` of every leaf hash; and each of the sixteen drawn leaves then called `opening_v1`,
+/// which re-folds every level of the tree from all the leaves — sixteen times — while a separate
+/// streaming pass fetched each leaf's bytes. Per tick, because an unsubmittable proof was "due" again
+/// on the next tick.
+///
+/// This walks the groups once, in canonical order (the same walk as the streamed root). The sink
+/// counts positions, pushes every leaf hash into one vector, and keeps the bytes of the DRAWN
+/// positions only. The vector is what `palw_artifact_multiproof_v1` folds shared siblings from — the
+/// same function the panel already called, so the proof's shape is unchanged.
+///
+/// Memory: 64 bytes a leaf (128 MiB at 2M) plus the drawn bytes, once per build, nothing retained.
+/// Not yet the O(k·log n) ideal — the vector is the one term left — but it is the difference between
+/// a proof and a process the kernel kills. Returns the drawn operands in the order of `draw`; an
+/// index outside the inventory is a named refusal; an empty `draw` is the root and the vector alone.
+pub fn a16_readiness_material_streamed_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    draw: &[u32],
+) -> Result<(Hash64, Vec<Hash64>, Vec<(u32, kaspa_consensus_core::palw_artifact::PalwArtifactOperandV1)>), InventoryBuildError> {
+    use kaspa_consensus_core::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_parts_v1};
+    let groups = a16_inventory_groups_v1(artifact, profile)?;
+    let wanted: std::collections::BTreeSet<u32> = draw.iter().copied().collect();
+    let mut leaves: Vec<Hash64> = Vec::new();
+    let mut kept: std::collections::BTreeMap<u32, PalwArtifactOperandV1> = std::collections::BTreeMap::new();
+    let mut frontier = kaspa_consensus_core::palw_artifact::PalwArtifactMerkleFrontierV1::new();
+    let mut checker = kaspa_consensus_core::palw_artifact::PalwInventoryLayoutCheckerV1::new();
+    let mut layout: Result<(), kaspa_consensus_core::palw_artifact::PalwInventoryError> = Ok(());
+    for (name, layer, slot) in &groups {
+        let mut gate = A16RowGateV1::Group { tensor_name: name.as_str(), layer: *layer };
+        a16_visit_inventory_rows_gated_v1(artifact, profile, Some(*slot), &mut gate, &mut |n, l, start, bytes| {
+            if layout.is_ok() {
+                layout = checker.push(n, l, start, bytes.len() as u32);
+            }
+            let position = leaves.len() as u32;
+            let leaf = artifact_leaf_parts_v1(n, l, start, &bytes);
+            leaves.push(leaf);
+            frontier.push(leaf);
+            if wanted.contains(&position) {
+                kept.insert(position, PalwArtifactOperandV1 { tensor_name: n.to_string(), layer: l, row_start: start, bytes });
+            }
+            Ok(())
+        })?;
+    }
+    layout.map_err(InventoryBuildError::NotCanonical)?;
+    checker.finish().map_err(InventoryBuildError::NotCanonical)?;
+    let leaf_count = leaves.len() as u32;
+    if let Some(&out) = wanted.iter().find(|i| **i >= leaf_count) {
+        return Err(InventoryBuildError::Operand(OperandError::UnknownTensor {
+            name: format!("leaf {out} is outside an inventory of {leaf_count}"),
+        }));
+    }
+    let root = frontier
+        .root()
+        .ok_or(InventoryBuildError::NotCanonical(kaspa_consensus_core::palw_artifact::PalwInventoryError::Empty))?;
+    let opened = draw.iter().map(|i| (*i, kept.remove(i).expect("every drawn position was kept"))).collect();
+    Ok((root, leaves, opened))
+}
+
+/// **Per-leaf openings for a draw, from the streamed material** — `opening_v1`'s fold generalised
+/// to k cursors, so the promotion rule is the verifier's by construction. One fold for all of them.
+pub fn a16_readiness_openings_streamed_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    draw: &[u32],
+) -> Result<(Hash64, u32, Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>), InventoryBuildError> {
+    use kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1;
+    let (root, leaves, opened) = a16_readiness_material_streamed_v1(artifact, profile, draw)?;
+    let leaf_count = leaves.len() as u32;
+    let mut paths: std::collections::BTreeMap<u32, Vec<Hash64>> = draw.iter().map(|i| (*i, Vec::new())).collect();
+    let mut cursors: Vec<(u32, usize)> = paths.keys().map(|i| (*i, *i as usize)).collect();
+    let mut level = leaves;
+    while level.len() > 1 {
+        for (origin, at) in cursors.iter_mut() {
+            let promoted = *at == level.len() - 1 && level.len() % 2 == 1;
+            if !promoted {
+                let sibling = if at.is_multiple_of(2) { level[*at + 1] } else { level[*at - 1] };
+                paths.get_mut(origin).expect("every cursor has a path").push(sibling);
+            }
+            *at /= 2;
+        }
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < level.len() {
+            next.push(kaspa_consensus_core::palw_artifact::artifact_node_v1(&level[i], &level[i + 1]));
+            i += 2;
+        }
+        if i < level.len() {
+            next.push(level[i]); // promote
+        }
+        level = next;
+    }
+    debug_assert_eq!(level.first().copied(), Some(root), "the fold and the frontier are the same tree");
+    let openings = opened
+        .into_iter()
+        .map(|(i, operand)| PalwArtifactOpeningV1 {
+            operand,
+            leaf_index: i,
+            leaf_count,
+            path: paths.remove(&i).expect("every drawn position has a path"),
+        })
+        .collect();
+    Ok((root, leaf_count, openings))
 }
 
 fn a16_rope_row_at_v1(
