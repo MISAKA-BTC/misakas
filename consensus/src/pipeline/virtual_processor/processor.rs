@@ -9376,6 +9376,9 @@ impl VirtualStateProcessor {
                 &globals,
             ),
             admission_audit_period_daa: self.palw_admission_audit_period_daa,
+            // Which freshness rule a readiness row is judged by at this DAA — the same resolution
+            // the fold's extras carry (`readiness_v2_active`), for the readers holding only the fold.
+            readiness_v2_active: self.palw_readiness_v2_at(daa_score),
         })
     }
 
@@ -9426,11 +9429,17 @@ impl VirtualStateProcessor {
             return None;
         }
         let state = self.palw_state_params_v2.as_ref()?;
-        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1 {
-            now_daa: anchor_daa,
-            max_age_daa: (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1)),
-            base_class_id: state.base_class_id(),
-        })
+        // **The readiness-age sweep (2026-09-24): the draw judges a row by the registry's rule** —
+        // readiness V2's eight spans and no V1 row — but only past the 2026-09-23 audit fence, since
+        // the draw is consensus (the panel a claim is bound to). Below it (testnet-11) the old rule
+        // stands byte for byte: any row, the V1 age.
+        let readiness_v2 = self.palw_audit_2026_09_23_at(anchor_daa) && self.palw_readiness_v2_at(anchor_daa);
+        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
+            &fold,
+            anchor_daa,
+            state.base_class_id(),
+            readiness_v2,
+        ))
     }
 
     /// **ADR-0075 SA-1/SA-2, resolved in exactly one place.** `false` on every shipped preset.

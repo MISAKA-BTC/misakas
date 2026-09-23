@@ -5680,6 +5680,9 @@ pub struct GetPalwModelRegistryResponse {
     pub utilization_permille: u32,
     pub probation_claims: u32,
     pub stable_epochs: u32,
+    /// The readiness age a seat's possession proof is judged by NOW, in spans — readiness V2's eight
+    /// past `Params::palw_readiness_v2`, the registry globals' thirty before it (a node before the
+    /// 2026-09-24 readiness-age sweep served the globals' thirty whatever the fence).
     pub readiness_probe_max_age_spans: u32,
     pub readiness_collateral_multiple: u32,
     pub classes: Vec<RpcPalwModelLifecycle>,

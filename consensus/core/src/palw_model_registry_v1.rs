@@ -731,6 +731,12 @@ pub struct PalwModelRegistryFoldV1 {
     /// **The admission-audit period in DAA** (`Params::palw_admission_audit_period_daa`). `None`
     /// is ADR-0147's one-epoch period ([`palw_admission_audit_period_spans_v1`]), byte for byte.
     pub admission_audit_period_daa: Option<u64>,
+    /// **`Params::palw_readiness_v2` at the fold's DAA — which rule a readiness row's freshness is
+    /// judged by** ([`palw_readiness_row_is_fresh_v1`]). The fold itself reads
+    /// `PalwTransitionExtrasV1::readiness_v2_active`, resolved at the same DAA from the same fence;
+    /// this copy is for the readers that hold only the fold — the registry read the RPC serves
+    /// (`readySeatsNow`, each seat's `fresh`), so they judge a row the way the fold counts it.
+    pub readiness_v2_active: bool,
 }
 
 impl PalwModelRegistryFoldV1 {
@@ -739,10 +745,52 @@ impl PalwModelRegistryFoldV1 {
         daa_score >= self.grace_until_daa
     }
 
+    /// The readiness age this fold judges a row by, in DAA ([`palw_readiness_max_age_daa_v1`]).
+    pub fn readiness_max_age_daa(&self) -> u64 {
+        palw_readiness_max_age_daa_v1(self.span_daa, &self.globals, self.readiness_v2_active)
+    }
+
+    /// Is `row` fresh at `now_daa` under this fold's rule ([`palw_readiness_row_is_fresh_v1`])?
+    pub fn readiness_row_is_fresh(&self, row: &PalwSeatReadinessRowV1, now_daa: u64) -> bool {
+        palw_readiness_row_is_fresh_v1(row, now_daa, self.span_daa, &self.globals, self.readiness_v2_active)
+    }
+
     /// One readiness age past the fence: the grace every activation gets.
     pub fn grace_until_v1(activation_daa: u64, span_daa: u64, globals: &PalwRegistryGlobalsV1) -> u64 {
         activation_daa.saturating_add((globals.readiness_probe_max_age_spans as u64).saturating_mul(span_daa.max(1)))
     }
+}
+
+/// **How long a readiness row stands, in DAA — the one rule** (the 2026-09-24 readiness-age sweep).
+/// Past `Params::palw_readiness_v2` a row stands for [`PALW_READINESS_V2_MAX_AGE_SPANS_V1`] spans
+/// (the challenge rotates every span, and the rotation has to bite); before it, for the globals'
+/// `readiness_probe_max_age_spans` (thirty).
+pub fn palw_readiness_max_age_daa_v1(span_daa: u64, g: &PalwRegistryGlobalsV1, readiness_v2: bool) -> u64 {
+    let spans = if readiness_v2 { PALW_READINESS_V2_MAX_AGE_SPANS_V1 } else { g.readiness_probe_max_age_spans };
+    (spans as u64).saturating_mul(span_daa.max(1))
+}
+
+/// **Is a readiness row fresh at `now_daa` — the ONE predicate** every judge of a row asks: the
+/// fold's ready-seat count and ADR-0147's jury (`model_registry_seat_is_ready`), the registry read
+/// the RPC serves (`readySeatsNow`, each seat's `fresh` and `not_ready_reason`), the panel view and
+/// — past `Params::palw_audit_2026_09_23` — the panel draw ([`PalwReadinessPolicyV1`]). Past
+/// readiness V2 a V1 (one-leaf) row is not fresh at any age, and a V2 row stands
+/// [`palw_readiness_max_age_daa_v1`]; before it, any row stands the thirty-span V1 age.
+///
+/// Found by the sweep: the draw and the RPC counted a row fresh for the V1 age (30 DAA on
+/// testnet-12's one-DAA spans) while the registry's count used the V2 age (8), so the RPC reported
+/// more ready seats than the registry counted, and the draw seated bonds the registry held out.
+pub fn palw_readiness_row_is_fresh_v1(
+    row: &PalwSeatReadinessRowV1,
+    now_daa: u64,
+    span_daa: u64,
+    g: &PalwRegistryGlobalsV1,
+    readiness_v2: bool,
+) -> bool {
+    if readiness_v2 && row.proof_version < 2 {
+        return false; // a one-leaf proof is not possession past the fence
+    }
+    now_daa.saturating_sub(row.proved_daa) <= palw_readiness_max_age_daa_v1(span_daa, g, readiness_v2)
 }
 
 /// **The draw's readiness policy** under the registry: a seat may judge a class only with a
@@ -753,6 +801,34 @@ pub struct PalwReadinessPolicyV1 {
     pub now_daa: u64,
     pub max_age_daa: u64,
     pub base_class_id: Hash64,
+    /// **Whether the draw judges a row by the readiness-V2 rule** — the one the registry counts by
+    /// ([`palw_readiness_row_is_fresh_v1`]): a V1 row never, a V2 row for eight spans. Set only past
+    /// `Params::palw_audit_2026_09_23` AND `Params::palw_readiness_v2` at the anchor, so on every
+    /// network without the audit fence (testnet-11) the draw keeps its old rule byte for byte: any
+    /// row, for `max_age_daa` (the V1 age).
+    pub readiness_v2: bool,
+}
+
+impl PalwReadinessPolicyV1 {
+    /// The policy at `anchor_daa` under `fold`: `readiness_v2` is the caller's resolution of the
+    /// two fences above, and `max_age_daa` follows it through the one age rule.
+    pub fn at(fold: &PalwModelRegistryFoldV1, anchor_daa: u64, base_class_id: Hash64, readiness_v2: bool) -> Self {
+        Self {
+            now_daa: anchor_daa,
+            max_age_daa: palw_readiness_max_age_daa_v1(fold.span_daa, &fold.globals, readiness_v2),
+            base_class_id,
+            readiness_v2,
+        }
+    }
+
+    /// May a seat whose row for the class is `row` judge it under this policy? Below the V2 rule,
+    /// exactly the old test (`now - proved <= max_age_daa`, any version).
+    pub fn admits(&self, row: &PalwSeatReadinessRowV1) -> bool {
+        if self.readiness_v2 && row.proof_version < 2 {
+            return false;
+        }
+        self.now_daa.saturating_sub(row.proved_daa) <= self.max_age_daa
+    }
 }
 
 /// One opening per proof, capped: an artifact leaf is a tensor row range and rides the object
@@ -1093,6 +1169,11 @@ pub struct PalwModelRegistryReadV1 {
     pub grace_until_daa: u64,
     pub span_daa: u64,
     pub globals: Option<PalwRegistryGlobalsV1>,
+    /// **The readiness age the registry judges a row by now, in DAA** — the one rule
+    /// ([`palw_readiness_max_age_daa_v1`]): readiness V2's eight spans past its fence, the globals'
+    /// thirty before it; 0 without a registry fold. A seat's proof `expires` this long after it was
+    /// dated, and what a reader prints as "the readiness age" is this, not the globals' V1 number.
+    pub readiness_max_age_daa: u64,
     pub classes: Vec<PalwModelRegistryClassReadV1>,
     pub readiness: Vec<PalwSeatReadinessReadV1>,
     pub bonds: Vec<PalwRegistryBondReadV1>,
@@ -1203,7 +1284,8 @@ pub struct PalwSeatReadinessReadV1 {
     pub not_ready_reason: String,
 }
 
-/// Why a seat with a proof does not count as ready for a class now, or `None` while it does.
+/// Why a seat with a proof does not count as ready for a class now, or `None` while it does —
+/// under the fold's own freshness rule ([`PalwModelRegistryFoldV1::readiness_v2_active`]).
 pub fn palw_seat_not_ready_reason_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     params: &crate::palw_state_v2::PalwStateParamsV2,
@@ -1212,7 +1294,25 @@ pub fn palw_seat_not_ready_reason_v1(
     now_daa: u64,
     fold: &PalwModelRegistryFoldV1,
 ) -> Option<&'static str> {
-    let max_age_daa = (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
+    palw_seat_not_ready_reason_under_v1(state, params, bond_key, row, now_daa, fold, fold.readiness_v2_active)
+}
+
+/// **The registry's five-clause ready predicate, spelled once** (ADR-0135 Decision 4): active,
+/// above the floor, a FRESH possession proof ([`palw_readiness_row_is_fresh_v1`] under
+/// `readiness_v2`), and free collateral for the readiness multiple of the network's floor. `None`
+/// is ready; otherwise the first clause that fails. The fold's `model_registry_seat_is_ready` (the
+/// ready-seat count and ADR-0147's jury) is `row present && this is None`, with `readiness_v2` from
+/// its extras; the RPC's `readySeatsNow` and each seat's reason are this with the fold's copy — so
+/// the chain and the RPC cannot count two different numbers of ready seats again.
+pub fn palw_seat_not_ready_reason_under_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    bond_key: &crate::palw_state_v2::PalwBondKeyV2,
+    row: &PalwSeatReadinessRowV1,
+    now_daa: u64,
+    fold: &PalwModelRegistryFoldV1,
+    readiness_v2: bool,
+) -> Option<&'static str> {
     let floor = params.min_collateral_sompi();
     let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
     let Some(bond) = state.bond(bond_key) else { return Some("bond missing") };
@@ -1222,7 +1322,7 @@ pub fn palw_seat_not_ready_reason_v1(
     if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor) {
         return Some("below floor");
     }
-    if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
+    if !palw_readiness_row_is_fresh_v1(row, now_daa, fold.span_daa, &fold.globals, readiness_v2) {
         return Some("stale");
     }
     let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
@@ -1233,9 +1333,10 @@ pub fn palw_seat_not_ready_reason_v1(
     None
 }
 
-/// The seats ready for a class now (ADR-0135 Decision 4), as the fold counts them: active, above
-/// the floor, with a possession proof no older than the readiness age, and free collateral for
-/// the readiness multiple of the network's floor.
+/// The seats ready for a class now (ADR-0135 Decision 4), as the fold counts them — through the
+/// one predicate ([`palw_seat_not_ready_reason_under_v1`]) under the fold's freshness rule. It
+/// used the thirty-span V1 age and took V1 rows past readiness V2, so on testnet-12 the RPC's
+/// `readySeatsNow` counted seats the registry did not.
 pub fn palw_model_registry_ready_seats_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     params: &crate::palw_state_v2::PalwStateParamsV2,
@@ -1243,26 +1344,12 @@ pub fn palw_model_registry_ready_seats_v1(
     now_daa: u64,
     fold: &PalwModelRegistryFoldV1,
 ) -> u32 {
-    let max_age_daa = (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
-    let floor = params.min_collateral_sompi();
-    let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
     let mut ready = 0u32;
-    for (bond_key, bond) in state.bonds_iter() {
-        if !matches!(bond.status, crate::palw_state_v2::PalwBondStatusV2::Active)
-            || !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor)
-        {
-            continue;
-        }
+    for (bond_key, _) in state.bonds_iter() {
         let Some(row) = state.seat_readiness(bond_key, class_id) else { continue };
-        if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
-            continue;
+        if palw_seat_not_ready_reason_v1(state, params, bond_key, row, now_daa, fold).is_none() {
+            ready = ready.saturating_add(1);
         }
-        let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
-        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
-        if free < needed {
-            continue;
-        }
-        ready = ready.saturating_add(1);
     }
     ready
 }
@@ -1381,14 +1468,13 @@ pub fn palw_model_registry_read_v1(
                 .min(u32::MAX as usize) as u32,
         })
         .collect();
-    let max_age_daa = fold.map(|f| (f.globals.readiness_probe_max_age_spans as u64).saturating_mul(f.span_daa.max(1)));
     let readiness = state
         .seat_readiness_iter()
         .map(|((bond, class_id), row)| PalwSeatReadinessReadV1 {
             bond: *bond,
             class_id: *class_id,
             row: *row,
-            fresh: max_age_daa.is_some_and(|age| tip_daa.saturating_sub(row.proved_daa) <= age),
+            fresh: fold.is_some_and(|f| f.readiness_row_is_fresh(row, tip_daa)),
             not_ready_reason: fold
                 .and_then(|f| palw_seat_not_ready_reason_v1(state, params, bond, row, tip_daa, f))
                 .unwrap_or("")
@@ -1446,6 +1532,7 @@ pub fn palw_model_registry_read_v1(
         grace_until_daa: fold.map(|f| f.grace_until_daa).unwrap_or(0),
         span_daa: fold.map(|f| f.span_daa).unwrap_or(0),
         globals: fold.map(|f| f.globals),
+        readiness_max_age_daa: fold.map(|f| f.readiness_max_age_daa()).unwrap_or(0),
         classes,
         readiness,
         bonds,
@@ -1530,8 +1617,7 @@ pub fn palw_readiness_duty_due_v2(
     if last_submitted_span == Some(span_now) {
         return false;
     }
-    let spans = if readiness_v2 { PALW_READINESS_V2_MAX_AGE_SPANS_V1 } else { g.readiness_probe_max_age_spans };
-    let age_daa = (spans as u64).saturating_mul(span_daa.max(1));
+    let age_daa = palw_readiness_max_age_daa_v1(span_daa, g, readiness_v2);
     match row {
         None => true,
         Some(row) if readiness_v2 && row.proof_version < 2 => true, // a one-leaf row counts for nothing now
@@ -1945,6 +2031,79 @@ mod tests {
             .map(|(w, p)| w.economic_ccu_per_claim.saturating_mul(p.admission_claims_per_span_milli as u128) / 1_000)
             .sum();
         assert!(spent <= 3 * G.budget_ccu_per_span, "each class spends at most the budget; a global cap then scales them");
+    }
+
+    /// **The readiness age is one rule** (the 2026-09-24 readiness-age sweep). Past readiness V2 a
+    /// V1 row is never fresh and a V2 row stands eight spans; before it any row stands thirty. The
+    /// draw's policy asks the same rule only when its caller resolved both the 2026-09-23 audit
+    /// fence and readiness V2 — and on testnet-11 that resolution is false at every height, so its
+    /// draw is the old one byte for byte: any row, the thirty-span age.
+    #[test]
+    fn the_readiness_age_is_one_rule_and_testnet_11s_draw_keeps_the_old_one() {
+        use crate::config::params::Params;
+        use crate::network::{NetworkId, NetworkType};
+        let g = PALW_REGISTRY_GLOBALS_V1;
+        let span = 5u64;
+        let row = |proved_daa: u64, proof_version: u8| PalwSeatReadinessRowV1 {
+            proved_daa,
+            proved_span: proved_daa / span,
+            leaf_index: 0,
+            proof_version,
+            chunks: 1,
+        };
+        let v1_age = g.readiness_probe_max_age_spans as u64 * span;
+        let v2_age = PALW_READINESS_V2_MAX_AGE_SPANS_V1 as u64 * span;
+        assert_eq!((palw_readiness_max_age_daa_v1(span, &g, false), palw_readiness_max_age_daa_v1(span, &g, true)), (v1_age, v2_age));
+        let now = 10_000;
+        // Before readiness V2: any row, the V1 age.
+        assert!(palw_readiness_row_is_fresh_v1(&row(now - v1_age, 1), now, span, &g, false));
+        assert!(!palw_readiness_row_is_fresh_v1(&row(now - v1_age - 1, 2), now, span, &g, false));
+        // Past it: a V1 row at no age, a V2 row for eight spans.
+        assert!(!palw_readiness_row_is_fresh_v1(&row(now, 1), now, span, &g, true), "a one-leaf proof is not possession");
+        assert!(palw_readiness_row_is_fresh_v1(&row(now - v2_age, 2), now, span, &g, true));
+        assert!(!palw_readiness_row_is_fresh_v1(&row(now - v2_age - 1, 2), now, span, &g, true), "nine spans is stale");
+
+        // The draw's policy: below the flag, exactly the struct and the test the processor built
+        // before the sweep; past it, the registry's rule.
+        let fold = |readiness_v2_active: bool| PalwModelRegistryFoldV1 {
+            globals: g,
+            span_daa: span,
+            genesis_works: BTreeMap::new(),
+            grace_until_daa: 0,
+            admission_audit_period_daa: None,
+            readiness_v2_active,
+        };
+        let base = Hash64::from_u64_word(1);
+        for fold_v2 in [false, true] {
+            let old = PalwReadinessPolicyV1::at(&fold(fold_v2), now, base, false);
+            assert_eq!(old, PalwReadinessPolicyV1 { now_daa: now, max_age_daa: v1_age, base_class_id: base, readiness_v2: false });
+            for (proved, version) in [(now, 1), (now - v2_age - 1, 1), (now - v1_age, 1), (now - v1_age - 1, 1), (now - v2_age - 1, 2)]
+            {
+                assert_eq!(
+                    old.admits(&row(proved, version)),
+                    now.saturating_sub(proved) <= v1_age,
+                    "below the flag the draw's test is `now - proved <= V1 age`, whatever the row's version"
+                );
+            }
+            let new = PalwReadinessPolicyV1::at(&fold(fold_v2), now, base, true);
+            assert_eq!(new.max_age_daa, v2_age);
+            for (proved, version) in [(now, 1), (now - v2_age, 2), (now - v2_age - 1, 2), (now - v1_age, 1)] {
+                assert_eq!(
+                    new.admits(&row(proved, version)),
+                    palw_readiness_row_is_fresh_v1(&row(proved, version), now, span, &g, true)
+                );
+            }
+        }
+
+        // The flag the processor resolves (`palw_audit_2026_09_23_at && palw_readiness_v2_at`):
+        // false on testnet-11 at every height — its draw does not move — and true on testnet-12.
+        let t11 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let flag = |p: &Params, daa: u64| p.palw_audit_2026_09_23_active_at(daa) && p.palw_readiness_v2_at(daa);
+        for daa in [0, 5_999, 6_000, 6_001, 6_100, 7_000, 7_001, 100_000, u64::MAX / 2] {
+            assert!(!flag(&t11, daa), "testnet-11 at {daa}: the draw keeps the V1 readiness rule");
+        }
+        assert!(flag(&t12, 0) && flag(&t12, 1_000_000), "testnet-12: the draw judges rows as its registry counts them");
     }
 
     #[test]

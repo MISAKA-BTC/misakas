@@ -297,10 +297,9 @@ pub fn palw_panel_network_view_v1(
     let verification = schedule.at(tip_daa);
     let geometry = verification.panel_geometry();
     let floor = params.min_collateral_sompi();
-    let max_age_daa = registry
-        .globals
-        .map(|g| (g.readiness_probe_max_age_spans as u64).saturating_mul(registry.span_daa.max(1)))
-        .unwrap_or(0);
+    // The age the registry judges a row by now (the readiness-age sweep, 2026-09-24), so a seat's
+    // `expires` here is the moment the registry stops counting it.
+    let max_age_daa = registry.readiness_max_age_daa;
 
     let mut assigned_by_class: std::collections::BTreeMap<(PalwBondKeyV2, Hash64), u32> = std::collections::BTreeMap::new();
     let mut selected_by_class: std::collections::BTreeMap<Hash64, std::collections::BTreeSet<PalwBondKeyV2>> =

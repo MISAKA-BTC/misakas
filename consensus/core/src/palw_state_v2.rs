@@ -571,9 +571,12 @@ pub fn palw_bond_may_judge_class_v4(
     readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
 ) -> bool {
     match readiness {
-        Some(policy) if *class_id != policy.base_class_id => state
-            .seat_readiness(bond_key, class_id)
-            .is_some_and(|row| policy.now_daa.saturating_sub(row.proved_daa) <= policy.max_age_daa),
+        // The readiness row's freshness under the draw's policy: below the 2026-09-23 audit fence the
+        // old rule, byte for byte (any row, the V1 age); past it the registry's own rule
+        // (`palw_readiness_row_is_fresh_v1`), so the draw seats exactly the rows the registry counts.
+        Some(policy) if *class_id != policy.base_class_id => {
+            state.seat_readiness(bond_key, class_id).is_some_and(|row| policy.admits(row))
+        }
         _ => palw_bond_may_judge_class_v3(state, bond_key, bond, class_id, require_production),
     }
 }
@@ -8974,34 +8977,30 @@ impl PalwFoldReadV1<'_> {
     fn model_registry_seat_is_ready(
         &self,
         bond_key: &PalwBondKeyV2,
-        bond: &PalwBondStateV2,
+        // The bond the caller iterated; the predicate reads it by key from the same state.
+        _bond: &PalwBondStateV2,
         class_id: &Hash64,
         now_daa: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> bool {
         // ADR-0133 §11.2: past readiness V2 a row stands for eight spans, not thirty, and a V1 row
         // does not stand at all — the challenge rotates every span and the rotation has to bite.
-        let max_age_spans = if self.extras.readiness_v2_active {
-            crate::palw_model_registry_v1::PALW_READINESS_V2_MAX_AGE_SPANS_V1
-        } else {
-            fold.globals.readiness_probe_max_age_spans
-        };
-        let max_age_daa = (max_age_spans as u64).saturating_mul(fold.span_daa.max(1));
-        let floor = self.params.min_collateral_sompi();
-        let needed = (floor as u128).saturating_mul(fold.globals.readiness_collateral_multiple as u128);
-        if !matches!(bond.status, PalwBondStatusV2::Active) || !palw_bond_may_take_work_v2(bond, floor) {
-            return false;
-        }
+        // **The one predicate** (the 2026-09-24 readiness-age sweep): the same five clauses the
+        // registry read serves as `readySeatsNow` — `palw_seat_not_ready_reason_under_v1`, under
+        // THIS block's `readiness_v2_active` — so the count and the RPC cannot disagree. Clause for
+        // clause what this function tested before: active, above the floor, a row, fresh (a V1 row
+        // never past V2), free collateral for the readiness multiple.
         let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { return false };
-        if self.extras.readiness_v2_active && row.proof_version < 2 {
-            return false; // a one-leaf proof is not possession past the fence
-        }
-        if now_daa.saturating_sub(row.proved_daa) > max_age_daa {
-            return false;
-        }
-        let held = self.state.reserved_exposure(bond_key).saturating_add(self.state.registration_exposure(bond_key));
-        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
-        free >= needed
+        crate::palw_model_registry_v1::palw_seat_not_ready_reason_under_v1(
+            self.state,
+            self.params,
+            bond_key,
+            row,
+            now_daa,
+            fold,
+            self.extras.readiness_v2_active,
+        )
+        .is_none()
     }
 
     fn model_registry_inflight(&self, class_id: &Hash64) -> u32 {
@@ -22423,7 +22422,14 @@ pub(crate) mod tests {
                 PalwModelWorkV1 { verification_ccu: 1_000, economic_ccu_per_claim: 500, ops_supported: true, ..Default::default() },
             );
             genesis_works.insert(kimi_id(), kimi_work);
-            PalwModelRegistryFoldV1 { globals: PALW_REGISTRY_GLOBALS_V1, span_daa: SPAN, genesis_works, grace_until_daa: 0, admission_audit_period_daa: None }
+            PalwModelRegistryFoldV1 {
+                globals: PALW_REGISTRY_GLOBALS_V1,
+                span_daa: SPAN,
+                genesis_works,
+                grace_until_daa: 0,
+                admission_audit_period_daa: None,
+                readiness_v2_active: false,
+            }
         }
 
         /// A Kimi-class work the floor's globals derive a small profile from: window 2, 7 ready seats.
@@ -23547,6 +23553,53 @@ pub(crate) mod tests {
             let (open, _) = fold_at(&s4, &ctx(5, 121, 5), &[seed(SEED)], &market(true, vec![])).expect("admitted: the seed opens it");
             let (bought, _) = fold_at(&open, &ctx(6, 122, 6), &[buy], &market(true, vec![])).expect("and the buy fills");
             assert!(bought.model_position(&kimi_id(), &holder) > 0);
+        }
+
+        /// **The readiness-age sweep (2026-09-24): the fold's ready-seat count, the RPC's
+        /// `readySeatsNow`, each seat's `fresh`, and the draw judge a readiness row by one rule.**
+        /// Seven V1 proofs make Kimi's seats. Under readiness V2 the fold counts none of them (a
+        /// one-leaf proof is not possession past the fence), and the RPC read — which used the V1
+        /// age and took V1 rows — reported seven. Now both say the same thing at every height and
+        /// under both rules, and the draw's policy past the audit fence agrees with them.
+        #[test]
+        fn the_fold_the_rpc_and_the_draw_count_ready_seats_by_one_readiness_rule() {
+            use crate::palw_model_registry_v1::{
+                PalwReadinessPolicyV1, palw_model_registry_read_v1, palw_model_registry_ready_seats_v1,
+            };
+            let p = params();
+            let (operands, root) = inventory();
+            let f = fold(kimi_work());
+            let (s1, _) = step(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &network(root), None, Some(f.clone())).unwrap();
+            let (s2, _) = step(&s1, &p, &ctx(2, 110, 2), &[], None, Some(f.clone())).unwrap();
+            let proofs: Vec<PalwConsensusObjectV2> = (2..=8).map(|n| proof(&operands, bond_key(n), 11)).collect();
+            let (s3, _) = step(&s2, &p, &ctx(3, 111, 3), &proofs, None, Some(f.clone())).unwrap();
+            for readiness_v2 in [false, true] {
+                let f = PalwModelRegistryFoldV1 { readiness_v2_active: readiness_v2, ..f.clone() };
+                let e = PalwTransitionExtrasV1 { readiness_v2_active: readiness_v2, ..extras(Some(f.clone())) };
+                let fold_read = PalwFoldReadV1 { state: &s3, params: &p, extras: &e };
+                for now in (110..=500).step_by(10) {
+                    let chain = fold_read.model_registry_ready_seats(&kimi_id(), now, &f);
+                    let rpc = palw_model_registry_ready_seats_v1(&s3, &p, &kimi_id(), now, &f);
+                    assert_eq!(rpc, chain, "readiness V2 {readiness_v2}, DAA {now}: the RPC counts what the chain counts");
+                    let read = palw_model_registry_read_v1(&s3, &p, now, Some(0), Some(&f), None);
+                    let fresh = read.readiness.iter().filter(|r| r.class_id == kimi_id() && r.fresh).count() as u32;
+                    assert!(fresh >= chain, "every counted seat reads fresh");
+                    let class = read.classes.iter().find(|c| c.class_id == kimi_id()).expect("Kimi is read");
+                    assert_eq!(class.ready_seats_now, chain, "readySeatsNow is the chain's count");
+                    assert_eq!(read.readiness_max_age_daa, f.readiness_max_age_daa());
+                    // The draw past the audit fence: a seat it admits is a seat whose row is fresh.
+                    let policy = PalwReadinessPolicyV1::at(&f, now, p.base_class_id(), readiness_v2);
+                    for n in 2..=8 {
+                        let row = s3.seat_readiness(&bond_key(n), &kimi_id()).expect("the proof wrote a row");
+                        assert_eq!(policy.admits(row), f.readiness_row_is_fresh(row, now));
+                    }
+                }
+            }
+            // The mismatch the sweep found, at one height: 91 DAA after the proofs (inside the V1
+            // age, past the V2 age), the V2 chain counts none, and so does the RPC now.
+            let f_v2 = PalwModelRegistryFoldV1 { readiness_v2_active: true, ..f.clone() };
+            assert_eq!(palw_model_registry_ready_seats_v1(&s3, &p, &kimi_id(), 201, &f_v2), 0, "not the seven the V1 age counted");
+            assert_eq!(palw_model_registry_ready_seats_v1(&s3, &p, &kimi_id(), 201, &f), 7, "below readiness V2 the seven stand");
         }
 
         #[test]
