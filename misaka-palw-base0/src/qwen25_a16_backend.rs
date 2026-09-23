@@ -1231,14 +1231,19 @@ impl Qwen25A16Backend {
         material: &crate::produce::Base0FpMaterialV2,
     ) -> Result<crate::produce::Base0ExecutionV1, String> {
         let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
-        let run = a16_execute_for_attempt_streaming_capped_v1(
+        // An HONEST dense re-execution, in this instance's own cache representation: a fold is judged
+        // by re-deriving it, and a re-derivation that reproduced a lie would be evidence of nothing.
+        let run = a16_execute_in_storage_v1(
             &self.artifact,
             &material.binding.shape_profile,
             self.plan.as_ref(),
             &material.binding.job_context,
             &prompt,
             self.network_ladder,
+            crate::legs::Base0CaptureKindV1::DenseTiles,
             &mut |_| {},
+            None,
+            self.runtime_profile,
         )?;
         if run.binding.committed_execution_root != material.binding.committed_execution_root {
             return Err("the retained fold and its re-execution are not one execution".to_string());
@@ -2951,12 +2956,13 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if !self.court_capable {
             return Err("the v1 class carries no capture to tamper with".to_string());
         }
-        if kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&self.profile) {
-            return Err("a held class's attempt is captured folded (its dense capture is terabytes by construction), and this \
-                        drill tampers a retained tile — drill a held class through execute_free_prompt_with_injected_fault, \
-                        whose lie is made in the stream"
-                .to_string());
-        }
+        // **The drill tampers a DENSE capture on every class, the held one included.** Production's
+        // held attempt folds (`execute`), but this verb's whole purpose is a lie in a RETAINED tile that
+        // the same instance then judges honestly — the seat's replay finds the fault, the court's
+        // refutation carries the lying tile and convicts — and a fold holds no tile to lie in while a
+        // lie made in the stream would poison this instance's own replays. Never reached on a network
+        // carrying value (the trait's contract); at fixture scale the dense capture is small, and a 2M
+        // drill on this lane is as impossible as it was before — it goes through the free-prompt drill.
         let mut run =
             a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt, self.network_ladder)?;
         let ctx_hash = job.context_hash();
@@ -3288,12 +3294,15 @@ mod free_prompt_tests {
         assert_eq!(refutation.binding.committed_execution_root, folded.execution_root);
         assert_eq!(refutation.output_preimage, from_dense.output_preimage, "the same leaf, the same preimage");
 
-        // The drill's tile tamper needs a dense capture and says so; the profile prices the fold.
-        let refused = match backend.execute_with_injected_fault(&job, &prompt, 3) {
-            Err(why) => why,
-            Ok(_) => panic!("a held class's attempt is folded; the tile tamper must be refused"),
-        };
-        assert!(refused.contains("folded"), "{refused}");
+        // The drill tampers a DENSE capture even on the held class: its lie is a retained tile, the
+        // roots move, the seat check reads `Mismatch` against the honest claim, and the leaf opens
+        // from the tiles while this instance's replays stay honest.
+        let guilty = backend.execute_with_injected_fault(&job, &prompt, 3).expect("the drill's dense tamper commits");
+        assert_ne!(guilty.execution_root, folded.execution_root, "the lie moved the commitment");
+        assert!(matches!(crate::produce::base0_material_decode_any_v1(&guilty.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert_eq!(backend.verify_material(&guilty.material, claim), PalwMaterialVerdictV1::Mismatch, "a lie is not the honest claim");
+        assert!(backend.refutation_for_index(&guilty.material, 3).is_ok(), "the tampered leaf opens from the retained tiles");
+        assert_eq!(backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root, folded.execution_root, "the replays stay honest");
         let profile = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::Producer).expect("derives");
         assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
         assert_eq!(profile.leaves, leaves);
