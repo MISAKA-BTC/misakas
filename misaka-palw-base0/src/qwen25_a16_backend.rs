@@ -1593,26 +1593,45 @@ impl Qwen25A16Backend {
             first_call: first.call_index,
             last_call: last.call_index,
         };
-        let start = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
-            crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: prompt }
-        } else {
+        let resumes = !opened.chunks.is_empty() && opened.covered_decode_call > 0;
+        let start = if resumes {
             crate::fp_interval::Base0FpIntervalStartV1::Checkpoint {
                 covered_decode_call: opened.covered_decode_call,
                 chunks: &opened.chunks,
                 seed_token: opened.seed_token,
                 prompt_tokens: prompt,
             }
-        };
-        let first_call = if opened.chunks.is_empty() || opened.covered_decode_call == 0 {
-            0
         } else {
-            opened.covered_decode_call.saturating_add(1)
+            crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: prompt }
         };
-        let fp_window = crate::fp_interval::Base0FpWindowV1::from_calls_v1(
-            job.declared_prefill_tokens,
-            first_call,
-            last.call_index,
-        );
+        // **The window in STEPS, under the class's cadence** (ADR-0133 S1's runtime half; ADR-0151
+        // follow-up, item 4). It was spelled in CALLS — `from_calls_v1(prefill, covered + 1,
+        // last_call)` — which has two consequences a partial seat pays for: a segment anywhere in
+        // the prefill is call 0, so every such segment replayed the WHOLE prefill whatever its own
+        // end (on the 2M attempt, three segments each replaying 262,143 positions); and a
+        // checkpoint counted in positions (the held map's) cannot be a call boundary, so a
+        // mid-prefill resume could not be expressed at all. The minimum state a dense segment
+        // `[a, b)` needs is rows `[0, a)` loaded and `[a, b)` re-executed — the resource profile's
+        // `(resume_rows, end_rows)` — and that is a window of steps: the one after the checkpoint's
+        // rows (`palw_checkpoint_positions_at_v1` converts the leaf's counter, calls or positions,
+        // to rows) through the segment's last leaf's own step. A genesis segment starts at step 1
+        // and still stops at its end. `a_partial_seat_replays_its_segments_prefix_and_resumes_at_
+        // its_start` pins both against the derivation.
+        let prefill = u64::from(job.declared_prefill_tokens);
+        let first_step = if resumes {
+            u64::from(kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
+                &self.profile,
+                job,
+                opened.covered_decode_call,
+            )) + 1
+        } else {
+            1
+        };
+        let last_step = if last.call_index == 0 { u64::from(last.position) + 1 } else { prefill + u64::from(last.call_index) };
+        if first_step > last_step {
+            return Err("the checkpoint already covers this segment's last step; nothing to replay".to_string());
+        }
+        let fp_window = crate::fp_interval::Base0FpWindowV1 { first_step, last_step };
         let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, job, self.step_ladder_cap())
             .map_err(|e| e.to_string())?;
         let kernels = A16IntervalKernels {
@@ -1634,7 +1653,9 @@ impl Qwen25A16Backend {
         Ok(kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1 {
             window,
             leaf_hashes: hashes,
-            calls_replayed: window.calls_from_covered(opened.covered_decode_call).unwrap_or(0),
+            // The STEPS this seat re-executed — `end_rows − resume_rows` in the resource profile's
+            // terms — which for a per-call resume is the calls since the checkpoint, as before.
+            calls_replayed: u32::try_from(last_step - first_step + 1).unwrap_or(u32::MAX),
             matches,
         })
     }
@@ -3073,6 +3094,114 @@ mod free_prompt_tests {
             }
             assert!(resumed >= 1, "{name}: at least the genesis segment resumes");
         }
+    }
+
+    /// **A partial seat replays its segment's prefix, and resumes at its start when it is served the
+    /// checkpoint there** (ADR-0133 S1's runtime half; ADR-0151 follow-up, item 4) — pinned against
+    /// the resource profile's `(resume_rows, end_rows)`, on both runtime profiles.
+    ///
+    /// On a prefill-only job of the held class (the shape of the 2M attempt), cut into three:
+    /// * a genesis opening of segment `i` replays steps `1 ..= end_rows(i)` — its own end, not the
+    ///   whole prefill — and its attested hashes are the capture's;
+    /// * an opening carrying the per-position checkpoint at segment 1's first position (built here
+    ///   from a reference walk's cache, the way a cache-backed server would build it) replays steps
+    ///   `resume_rows + 1 ..= end_rows` only, attests the same hashes, and holds `end_rows` rows —
+    ///   the minimum state a dense segment has.
+    #[test]
+    fn a_partial_seat_replays_its_segments_prefix_and_resumes_at_its_start() {
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7;
+        use kaspa_consensus_core::palw_resource_profile_v1::{PalwResourceRoleV1, PalwRuntimeProfileV1, palw_role_rows_v1};
+        use kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2;
+        let (artifact, _) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let profile = qwen25_a16_profile_v7(geometry).expect("the held row projects");
+        assert!(map::palw_map_is_held_v4(&profile.state_chunk_map_id));
+        let (prefill, seats) = (12u32, 4u16);
+        let k = palw_segment_count_v2(seats);
+        let backends: Vec<Qwen25A16Backend> = PalwRuntimeProfileV1::ALL
+            .into_iter()
+            .map(|runtime| {
+                Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (prefill, 1))
+                    .expect("servable")
+                    .with_runtime_profile(runtime)
+            })
+            .collect();
+        let producer = &backends[0];
+        let (job, prompt) = producer.job_for_anchor(Hash64::from_u64_word(0x0133_0004)).expect("a job");
+        let capture = producer.execute(&job, &prompt).expect("the producer executes").material;
+        let leaf_count = crate::produce::base0_material_decode_v1(&capture).expect("decodes").0.step_leaf_count;
+
+        // (a) Every genesis segment stops at its own end.
+        let mut genesis_replays = Vec::new();
+        for segment in 0..k {
+            let (resume, end) = palw_role_rows_v1(&profile, &job, leaf_count, PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment })
+                .expect("the derivation names the segment");
+            let opening = producer.open_segment_checkpoint_v1(&capture, seats, segment).expect("a folded retention serves genesis");
+            let opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(&opening).expect("decodes");
+            assert!(opened.chunks.is_empty(), "segment {segment}: the folded retention carries no checkpoint");
+            for backend in &backends {
+                let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &opening).expect("replays");
+                assert!(replay.matches, "segment {segment}: the seat's hashes are the capture's");
+                assert_eq!(u64::from(replay.calls_replayed), end, "segment {segment}: a genesis replay runs steps 1..=end_rows ({end})");
+                assert_eq!(resume, if segment == 0 { 0 } else { resume }, "the derivation's resume point is the segment's first position");
+            }
+            genesis_replays.push(backends[0].replay_segment_from_checkpoint_v1(&job, &prompt, &opening).expect("replays"));
+        }
+        assert!(
+            u64::from(genesis_replays[0].calls_replayed) < u64::from(prefill),
+            "segment 0 no longer replays the whole prefill: {} of {prefill} steps",
+            genesis_replays[0].calls_replayed
+        );
+
+        // (b) Segment 1, served the checkpoint at its first position: loads [0, a), replays [a, b).
+        let segment = 1u16;
+        let (a, b) = palw_role_rows_v1(&profile, &job, leaf_count, PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment })
+            .expect("derives");
+        assert!(a > 0 && a < b, "segment 1 starts inside the prefill: [{a}, {b})");
+        // The checkpoint's chunks at `a` rows, from a reference walk — what a server holding the
+        // producer's cache re-derives (`base0_checkpoint_chunks_at_v1`).
+        let engine = A16Engine::new(&artifact).expect("engine");
+        let plan = engine.plan_from_profile(&profile).expect("plan");
+        let mut reference = A16Cache::new(artifact.shape.n_layers);
+        for (position, token) in prompt.iter().enumerate().take(a as usize) {
+            engine.forward_token_planned(&plan, &mut reference, *token, position).expect("walks");
+        }
+        let chunks = crate::legs::base0_checkpoint_chunks_at_v1(&profile, &job, a as u32, |entry| reference.state_chunk_bytes_v1(entry))
+            .expect("the checkpoint at a rows chunks");
+        let genesis_opening = producer.open_segment_checkpoint_v1(&capture, seats, segment).expect("genesis");
+        let mut opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(&genesis_opening).expect("decodes");
+        opened.covered_decode_call = a as u32;
+        opened.chunks = chunks;
+        let resuming = opened.encode_v1().expect("encodes");
+        let whole = &genesis_replays[segment as usize];
+        for backend in &backends {
+            let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &resuming).expect("resumes");
+            assert!(replay.matches, "{}: the resumed segment attests the capture's hashes", backend.runtime_profile_v1().unwrap().name());
+            assert_eq!(u64::from(replay.calls_replayed), b - a, "the seat re-executed exactly [a, b)");
+            assert_eq!(
+                replay.attested_hashes().collect::<Vec<_>>(),
+                whole.attested_hashes().collect::<Vec<_>>(),
+                "the same attested hashes as the walk from the prompt"
+            );
+            assert!(replay.leaf_hashes.len() < whole.leaf_hashes.len(), "and fewer leaves were recomputed to get them");
+            assert!(replay.leaf_hashes[0].0 > whole.leaf_hashes[0].0, "nothing before the segment's start was re-executed");
+        }
+        // A checkpoint past the segment's end is a named refusal, not a silent empty window.
+        opened.covered_decode_call = b as u32 + 1;
+        let past = opened.encode_v1().expect("encodes");
+        assert!(backends[1].replay_segment_from_checkpoint_v1(&job, &prompt, &past).is_err());
     }
 
     #[test]
