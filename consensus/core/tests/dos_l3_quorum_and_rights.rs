@@ -11,7 +11,8 @@ use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, palw_canonical_draw_work_v1};
 use kaspa_consensus_core::palw_economic_safety_v1::{
-    PALW_T12_PERMIT_FEE_CEILING_SOMPI, palw_permit_value_sompi_v1, palw_realizable_before_maturity_v1, palw_seat_lock_required_v2,
+    PALW_SEAT_LOCK_MARGIN_PERMILLE_V1, PALW_T12_PERMIT_FEE_CEILING_SOMPI, PalwLicenceDoorV1, palw_door_colluding_signers_v1,
+    palw_permit_value_sompi_v1, palw_realizable_before_maturity_v1, palw_seat_lock_required_v2,
 };
 use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, PalwExecScheduleV1, palw_execution_permits_v1};
 use kaspa_consensus_core::palw_execution_quanta_v1::{
@@ -175,7 +176,100 @@ fn min_valid_per_door(f: &T12Facts) -> (u32, u32, u32, u32, f64) {
     (f.quorum as u32, v2_min, s2_min, s2o_worst, s2o_sum as f64 / trials as f64)
 }
 
+/// **Audit #6, fixed: per door, the smallest licensing set out-values the gain with ADR-0151's margin.**
+///
+/// Each door's lock is `palw_seat_lock_required_v2(G, palw_door_colluding_signers_v1(door))` — the
+/// count the fold divides by (`palw_state_v2.rs`, `door_lock_prices`). The smallest colluding
+/// set is the brute-forced one above, charged at the prices the fold writes:
+///
+/// * V1 — three seats at the quorum price;
+/// * V2 — the whole panel (five on t12) at the quorum price (the door is priced at the quorum it
+///   guarantees, not at the geometry's five);
+/// * S2 genesis — the full-replay seat alone, at the one-seat price;
+/// * S2 outsider-judged — the full seat at the one-seat price and the outsider at the quorum price
+///   (the outsider is an auditor to the door's pricing);
+/// * a shard part — `quorum_per_shard` seats of the lying shard (t12 arms no sharding; priced for
+///   the 2-of-3 shard the fold fixtures use).
+///
+/// For every class and door: `slashable ≥ G·(1 + margin)` up to one sompi of floor rounding per
+/// seat, the colluders' post-Final cash is negative, and the S2 full seat's lock fits in one
+/// genesis bond's posted collateral, so the door stays usable on t12.
 #[test]
+fn dos_l3_colluding_quorum_inequality_per_door_fixed() {
+    let f = facts_t12();
+    let (v1, v2, s2, s2o_worst, _) = min_valid_per_door(&f);
+    assert_eq!((v1, v2, s2, s2o_worst), (3, 5, 1, 2), "the doors' smallest licensing sets are what the defect record measured");
+    let p = t12();
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("ConsensusV2") };
+    let posted = bundle
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, .. } => {
+                Some(u128::from(*collateral))
+            }
+            _ => None,
+        })
+        .expect("t12 registers genesis bonds");
+    let price = |gain: u128, door: PalwLicenceDoorV1| palw_seat_lock_required_v2(gain, palw_door_colluding_signers_v1(door));
+    assert_eq!(palw_door_colluding_signers_v1(PalwLicenceDoorV1::Quorum), u64::from(f.quorum));
+    assert_eq!(palw_door_colluding_signers_v1(PalwLicenceDoorV1::Coverage), u64::from(f.quorum));
+    assert_eq!(palw_door_colluding_signers_v1(PalwLicenceDoorV1::Optimistic), u64::from(s2));
+    let shard = PalwLicenceDoorV1::ShardPart { quorum_per_shard: 2 };
+    println!("\n=== per class, per door, at the FIXED prices (margin {PALW_SEAT_LOCK_MARGIN_PERMILLE_V1} permille) ===");
+    println!(
+        "  {:14} {:>12} | {:>7} {:>13} {:>13} {:>10} {:>13}",
+        "class", "G MSK", "door", "slashable", "G(1+m)", "slash/G", "cash-slash"
+    );
+    for (name, d) in &f.classes {
+        let exposure = palw_exposure_unit_pwu_v1(*d, f.floor_declared, f.floor_draw);
+        let facts = PalwClaimFraudFactsV1 {
+            reserved: u128::from(exposure) * 5,
+            escrowed_reward: f.escrow,
+            exposure_pwu: exposure,
+            slash_value_per_pwu: 5,
+            extra_economic_rights_sompi: rights_of(&f, exposure),
+        };
+        let gain = palw_max_fraud_gain_v1(&facts);
+        let q = price(gain, PalwLicenceDoorV1::Quorum);
+        let full = price(gain, PalwLicenceDoorV1::Optimistic);
+        let rows: [(&str, u128, u128); 5] = [
+            ("V1", q * u128::from(v1), u128::from(v1)),
+            ("V2", price(gain, PalwLicenceDoorV1::Coverage) * u128::from(v2), u128::from(v2)),
+            ("S2", full, 1),
+            ("S2-out", full + q, 2),
+            ("shard2", price(gain, shard) * 2, 2),
+        ];
+        for (door, slashable, seats) in rows {
+            let with_margin = gain + gain * u128::from(PALW_SEAT_LOCK_MARGIN_PERMILLE_V1) / 1_000;
+            let cash_net = f.escrow as f64 / MSK - msk(slashable);
+            println!(
+                "  {:14} {:>12.2} | {:>7} {:>13.2} {:>13.2} {:>10.3} {:>13.2}",
+                name,
+                msk(gain),
+                door,
+                msk(slashable),
+                msk(with_margin),
+                slashable as f64 / gain as f64,
+                cash_net
+            );
+            assert!(slashable > gain, "{name} {door}: the smallest licensing set out-values the gain");
+            assert!(slashable + seats >= with_margin, "{name} {door}: …by ADR-0151's margin, up to a sompi of rounding per seat");
+            assert!(cash_net < 0.0, "{name} {door}: a convicted Final costs the colluders more than the escrow they kept");
+        }
+        assert!(
+            full <= posted,
+            "{name}: the S2 full seat's lock fits in one genesis bond ({:.2} of {:.2} MSK)",
+            msk(full),
+            msk(posted)
+        );
+    }
+}
+
+/// The measurement the audit took on the code before the fix: every door priced for three
+/// colluders, so the S2 door's one seat locked 0.367·G and kept the escrow after its conviction.
+#[test]
+#[ignore = "PRE-FENCE DEFECT RECORD: every door priced at palw_seat_lock_required_v2(G, 3); S2's one seat covers 0.367·G (fixed past palw_audit_2026_09_23 by audit #6)"]
 fn dos_l3_colluding_quorum_inequality_per_door_attempt_claims() {
     let f = facts_t12();
     let (v1, v2, s2, s2o_worst, s2o_mean) = min_valid_per_door(&f);

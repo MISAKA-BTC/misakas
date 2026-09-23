@@ -210,6 +210,45 @@ pub fn palw_seat_lock_required_v2(max_fraud_gain: u128, colluding_quorum: u64) -
     base.saturating_add(base.saturating_mul(u128::from(PALW_SEAT_LOCK_MARGIN_PERMILLE_V1)) / 1_000)
 }
 
+/// **The licensing door a `Valid` receipt set arrives through** (2026-09-23 audit #6).
+///
+/// It names a fold arm, not a wire field: nothing is encoded by it. It is public so the
+/// arithmetic every audit test re-derives — "the smallest licensing set out-values the gain" —
+/// reads the colluding count from the one function the fold reads it from,
+/// [`palw_door_colluding_signers_v1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwLicenceDoorV1 {
+    /// V1 `ReceiptLicensed`, and the supplementary receipts that ride it: a quorum of `Valid`s.
+    Quorum,
+    /// ADR-0133 `ReceiptLicensedV2`: the V1 quorum and coverage.
+    Coverage,
+    /// ADR-0133 S2 `OptimisticLicensed`: the full-replay seat's `Valid` alone.
+    Optimistic,
+    /// ADR-0100 Decision 4 `ShardReceiptLicensed`: `quorum_per_shard` seats of one shard.
+    ShardPart { quorum_per_shard: u16 },
+}
+
+/// **How many colluding `Valid` signatures a licence through `door` needs at the least** — the
+/// count [`palw_seat_lock_required_v2`] divides the gain by, past `palw_audit_2026_09_23`.
+///
+/// * `Quorum` — [`crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1`], three.
+/// * `Coverage` — the same three. The door ALSO needs coverage, and on testnet-12's assignment
+///   coverage takes the whole panel, but that is a property of one `K = seats − 1` geometry the
+///   fold never re-derives; the quorum is the bound the door guarantees. A larger count here
+///   would LOWER every coverage lock on an assumption, so it is not taken.
+/// * `Optimistic` — one: S2 licenses on the full-replay seat's `Valid` alone.
+/// * `ShardPart` — `quorum_per_shard` of one shard, because a lie lives in one shard's work and
+///   the other shards license honestly. Clamped to `1..=3`: never a count the whole-object
+///   quorum would not also price, and never zero.
+pub fn palw_door_colluding_signers_v1(door: PalwLicenceDoorV1) -> u64 {
+    let quorum = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1;
+    match door {
+        PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage => quorum,
+        PalwLicenceDoorV1::Optimistic => 1,
+        PalwLicenceDoorV1::ShardPart { quorum_per_shard } => u64::from(quorum_per_shard).clamp(1, quorum),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

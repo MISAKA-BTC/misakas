@@ -90,6 +90,7 @@
 
 use crate::BlockHash;
 use crate::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2};
+use crate::palw_economic_safety_v1::PalwLicenceDoorV1;
 use crate::palw_fork_choice::PalwCandidateOrderV1;
 use crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3;
 use crate::tx::TransactionOutpoint;
@@ -9580,6 +9581,15 @@ impl<'a> TransitionBuilder<'a> {
     /// `palw_claim_extra_economic_rights_v1` valued at zero, on a claim whose Final mints 270,029
     /// permit candidates. The margin also stops being one sompi.
     fn panel_valid_lock_required(&self, claim: &PalwClaimStateV2) -> u128 {
+        self.panel_valid_lock_required_for(claim, crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1)
+    }
+
+    /// [`Self::panel_valid_lock_required`] for a colluding set of `colluding` `Valid` signers:
+    /// `palw_seat_lock_required_v2(G, colluding)`. Every caller below `palw_audit_2026_09_23` asks
+    /// for [`crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1`], and at that count this is the
+    /// function it replaced, byte for byte — the dormant branch still calls
+    /// `palw_panel_seat_required_v1`, not an arithmetic twin of it.
+    fn panel_valid_lock_required_for(&self, claim: &PalwClaimStateV2, colluding: u64) -> u128 {
         let slash = self.state.classes.get(&claim.class_id).map(|c| c.slash_value_per_pwu).unwrap_or(0);
         // **2026-09-23 audit C-3: the weight term in the unit the reservation was written in.**
         // Below the fence the raw derived pwu met the collateral-unit price — 2,810x the unit — and
@@ -9592,13 +9602,82 @@ impl<'a> TransitionBuilder<'a> {
         };
         let Some(safety) = self.extras.economic_safety else {
             // Dormant: byte-identical to the rule every existing lock was written under.
-            return crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+            if colluding == crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 {
+                return crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts);
+            }
+            return crate::palw_offence_v1::palw_min_slashable_per_colluding_seat_v1(
+                crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts),
+                colluding,
+            );
         };
         facts.extra_economic_rights_sompi = self.claim_realizable_rights_v1(claim, &safety);
-        crate::palw_economic_safety_v1::palw_seat_lock_required_v2(
-            crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts),
-            crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1,
-        )
+        crate::palw_economic_safety_v1::palw_seat_lock_required_v2(crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts), colluding)
+    }
+
+    /// **2026-09-23 audit #6: what each `Valid` signer of a set arriving through `door` must lock.**
+    ///
+    /// The lock was priced for three colluders on every door, and the doors do not all need three.
+    /// The inequality ADR-0151 D1 rests on is "the smallest set of `Valid` signatures that LICENSES
+    /// out-values the gain", and the smallest such set is a property of the door:
+    ///
+    /// * **V1 `ReceiptLicensed`** — a quorum (`validate_receipt_quorum_v2`, three of five on every
+    ///   ConsensusV2 preset). Priced at three, as before.
+    /// * **V2 `ReceiptLicensedV2`** — the V1 quorum AND coverage (`validate_receipt_coverage_v2`).
+    ///   The coverage half needs the whole panel on testnet-12's `K = seats − 1` assignment
+    ///   (five, brute-forced in `dos_l3_quorum_and_rights`), but the fold does not re-derive
+    ///   coverage, and "five" is a property of one assignment shape, not of the door. The quorum
+    ///   half is the lower bound the door GUARANTEES, so it is priced there — at three. Pricing
+    ///   it at five would cut every coverage lock to three-fifths on the strength of a geometry
+    ///   the rule never checks.
+    /// * **S2 `OptimisticLicensed`** — the full-replay seat's `Valid` is necessary and SUFFICIENT
+    ///   (`palw_optimistic_licence_v2`; the processor tolerates `NoQuorum`). The colluding set is
+    ///   that one seat (two on an outsider-judged claim, and one is the conservative count), so
+    ///   the full seat locks `palw_seat_lock_required_v2(G, 1)` — the whole gain plus the margin
+    ///   on one bond. Priced at three it locked 0.367·G: a Final whose escrow the colluders kept
+    ///   with 1,515 MSK to spare after the conviction. The other seats of an S2 set are auditors
+    ///   the door does not need; their `Valid` locks at the quorum price, as it did, because
+    ///   the inequality does not rest on them and pricing them at `G` would cut every auditor's
+    ///   concurrency by three for nothing.
+    /// * **A shard part** (`ShardReceiptLicensed`) — `quorum_per_shard` seats of ONE shard. A lie
+    ///   lives in one shard's work, the honest shards license honestly, so the colluders need
+    ///   only the lying shard's quorum: each of its `Valid` signers locks `G / quorum_per_shard`
+    ///   (never priced below the whole-object count's share: `min(quorum_per_shard, 3)`).
+    ///
+    /// Below the fence every door is the quorum price, which is what every lock on every other
+    /// network was written at.
+    fn door_lock_prices(&self, claim_id: Hash64, claim: &PalwClaimStateV2, door: PalwLicenceDoorV1) -> PalwDoorLockPricesV1 {
+        let quorum = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1;
+        let every = self.panel_valid_lock_required_for(claim, quorum);
+        if !self.extras.audit_2026_09_23_active {
+            return PalwDoorLockPricesV1 { every, load_bearing: None };
+        }
+        let colluding = crate::palw_economic_safety_v1::palw_door_colluding_signers_v1(door);
+        match door {
+            PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage => PalwDoorLockPricesV1 { every, load_bearing: None },
+            PalwLicenceDoorV1::Optimistic => {
+                let full_price = self.panel_valid_lock_required_for(claim, colluding);
+                // The seat the acceptance layer licensed from, derived the way it derived it
+                // (`palw_optimistic_receipts_license_v2`: the panel's anchor, the claim, the seat
+                // count). A panel that names no full seat cannot have passed that check; if one
+                // ever did, every `Valid` of the set carries the one-seat price rather than none.
+                match self.optimistic_full_seat(claim_id) {
+                    Some(full) => PalwDoorLockPricesV1 { every, load_bearing: Some((full, full_price)) },
+                    None => PalwDoorLockPricesV1 { every: full_price, load_bearing: None },
+                }
+            }
+            PalwLicenceDoorV1::ShardPart { .. } => {
+                PalwDoorLockPricesV1 { every: self.panel_valid_lock_required_for(claim, colluding), load_bearing: None }
+            }
+        }
+    }
+
+    /// The full-replay seat S2 licenses from: `palw_optimistic_full_seat_bond_v2` over this
+    /// claim's bound panel, exactly as the processor's `OptimisticLicensed` acceptance names it.
+    fn optimistic_full_seat(&self, claim_id: Hash64) -> Option<PalwBondKeyV2> {
+        let panel = self.state.panels.get(&claim_id)?;
+        let seats: Vec<PalwBondKeyV2> = panel.seats.iter().map(|seat| seat.bond).collect();
+        let assignment = crate::palw_verification_v2::palw_segment_assignment_v2(panel.anchor, claim_id, seats.len() as u16);
+        crate::palw_optimistic_licence_v2::palw_optimistic_full_seat_bond_v2(&assignment, &seats)
     }
 
     /// **The execution rights this claim's Final could realize before a conviction could take them.**
@@ -9715,7 +9794,7 @@ impl<'a> TransitionBuilder<'a> {
         &mut self,
         seat: PalwBondKeyV2,
         claim_id: Hash64,
-        claim: &PalwClaimStateV2,
+        required: u128,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
         if !self.extras.objective_offence_at(now_daa) {
@@ -9724,7 +9803,6 @@ impl<'a> TransitionBuilder<'a> {
         if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
             return Ok(());
         }
-        let required = self.panel_valid_lock_required(claim);
         let available = self.slashable_available(&seat, now_daa);
         if available < required {
             return Err(PalwStateV2Error::SeatValidLockRefused { seat, claim: claim_id, required, available });
@@ -9749,31 +9827,46 @@ impl<'a> TransitionBuilder<'a> {
     /// for a relay fee. Past the fence a set with any such seat is INERT: the claim stays
     /// `PanelBound`, the assembler resubmits a backed set (it filters the same predicate), and
     /// otherwise the receipt window voids the claim as if no quorum had signed.
-    fn receipt_set_is_backed(&self, claim_id: Hash64, claim: &PalwClaimStateV2, receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2], now_daa: u64) -> bool {
+    ///
+    /// **Audit #6:** each seat is asked for the price of the `door` the set arrives through
+    /// ([`Self::door_lock_prices`]) — so an S2 set whose full-replay seat cannot post the whole
+    /// gain is inert here, and never an error.
+    fn receipt_set_is_backed(
+        &self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+        now_daa: u64,
+        door: PalwLicenceDoorV1,
+    ) -> bool {
         if !self.extras.objective_offence_at(now_daa) {
             return true;
         }
-        let required = self.panel_valid_lock_required(claim);
+        let prices = self.door_lock_prices(claim_id, claim, door);
         receipts.iter().all(|receipt| {
             !matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)
                 || self.state.slashable_locks.contains_key(&(receipt.seat_bond, claim_id))
-                || self.slashable_available(&receipt.seat_bond, now_daa) >= required
+                || self.slashable_available(&receipt.seat_bond, now_daa) >= prices.of(&receipt.seat_bond)
         })
     }
 
+    /// Every `Valid` signer of `receipts` locks the price of the `door` they license through
+    /// ([`Self::door_lock_prices`]); a seat already locked on this claim keeps its lock.
     fn lock_valid_receipts(
         &mut self,
         claim_id: Hash64,
         claim: &PalwClaimStateV2,
         receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
         now_daa: u64,
+        door: PalwLicenceDoorV1,
     ) -> Result<(), PalwStateV2Error> {
         if !self.extras.objective_offence_at(now_daa) {
             return Ok(());
         }
+        let prices = self.door_lock_prices(claim_id, claim, door);
         for receipt in receipts {
             if matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
-                self.lock_valid_seat(receipt.seat_bond, claim_id, claim, now_daa)?;
+                self.lock_valid_seat(receipt.seat_bond, claim_id, prices.of(&receipt.seat_bond), now_daa)?;
             }
         }
         Ok(())
@@ -11695,7 +11788,8 @@ impl<'a> TransitionBuilder<'a> {
         // object's, already written.
         let _ = claim;
         self.credit_seat_receipts(claim_id, receipts, ctx.daa_score);
-        self.lock_valid_receipts(claim_id, claim, receipts, ctx.daa_score)?;
+        // A supplementary `Valid` is not part of the set that licensed: it locks the quorum price.
+        self.lock_valid_receipts(claim_id, claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?;
         Ok(())
     }
 
@@ -15947,9 +16041,28 @@ fn apply_object(
             let seat_verdicts = palw_seat_verdicts_of_v2(&part.receipts);
             match quorum {
                 crate::palw_shard_licensing_v1::PalwShardQuorumV1::Licensed { .. } => {
+                    // **2026-09-23 audit #14: a part's `Valid` signers lock, as every whole-object
+                    // door's do.** Below the fence this arm wrote no lock at all, so a claim that
+                    // licensed by parts reached `Final` with nothing slashable behind any signature
+                    // and a `PanelFalseValid` had no lock to take — `G` wholly unbacked, on the one
+                    // door that never called the ledger. Past it the part is the door: a part whose
+                    // `Valid` signers cannot post the shard price is INERT (nothing moves; the
+                    // shard stays open for a backed part, else the receipt window voids the claim),
+                    // and a backed part locks each signer as it lands. The lock's clocks run from
+                    // here and are restarted at `Final` by `persist_panel_liability`, which reads
+                    // every lock on the claim, so the parts that landed first are carried too.
+                    let door = PalwLicenceDoorV1::ShardPart { quorum_per_shard: params.quorum_per_shard };
+                    if builder.extras.audit_2026_09_23_active
+                        && !builder.receipt_set_is_backed(claim_id, &claim, &part.receipts, ctx.daa_score, door)
+                    {
+                        return Ok(());
+                    }
                     builder.slash_dissenting_seats(&claim_id, &claim, &seat_verdicts, true)?;
                     // ADR-0124 Decision 2: a shard's `Valid` seats are credited as the part lands.
                     builder.credit_seat_receipts(claim_id, &part.receipts, ctx.daa_score);
+                    if builder.extras.audit_2026_09_23_active {
+                        builder.lock_valid_receipts(claim_id, &claim, &part.receipts, ctx.daa_score, door)?;
+                    }
                     progress.mark(shard).map_err(|e| refused(e.to_string()))?;
                     if progress.is_complete() {
                         // The claim licenses; `write_claim` drops the progress row with the phase.
@@ -16785,7 +16898,9 @@ fn apply_object(
                 // rather than a disagreement: both verdicts cannot reach quorum, so exactly one of
                 // them is refuted by the record. It pays what it tried to take: the same `reserved`
                 // the producer would have lost.
-                if builder.extras.audit_2026_09_23_active && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score) {
+                if builder.extras.audit_2026_09_23_active
+                    && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)
+                {
                     return Ok(());
                 }
                 let verdicts = palw_seat_verdicts_of_v2(receipts);
@@ -16809,7 +16924,7 @@ fn apply_object(
                 // ADR-0124 Decision 2: the seats whose `Valid` receipts this object carries are
                 // credited — the licensing object is the first carrier of who answered.
                 builder.credit_seat_receipts(*claim_id, receipts, ctx.daa_score);
-                builder.lock_valid_receipts(*claim_id, &claim, receipts, ctx.daa_score)?;
+                builder.lock_valid_receipts(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?;
                 builder.license_claim(*claim_id, claim, ctx.daa_score)?;
             }
         }
@@ -17198,7 +17313,9 @@ fn apply_object(
                 return Err(PalwStateV2Error::LicensedByParts(*claim_id));
             }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
-            if builder.extras.audit_2026_09_23_active && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score) {
+            if builder.extras.audit_2026_09_23_active
+                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)
+            {
                 return Ok(());
             }
             let verdicts = palw_seat_verdicts_of_v2(&inner);
@@ -17216,7 +17333,7 @@ fn apply_object(
             builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
-            builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score)?;
+            builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)?;
             builder.license_claim(*claim_id, claim, ctx.daa_score)?;
         }
         PalwConsensusObjectV2::OptimisticLicensed { claim: claim_id, receipts } => {
@@ -17231,7 +17348,11 @@ fn apply_object(
                 return Err(PalwStateV2Error::LicensedByParts(*claim_id));
             }
             let inner: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = receipts.iter().map(|r| r.receipt.clone()).collect();
-            if builder.extras.audit_2026_09_23_active && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score) {
+            // Audit #6: the full-replay seat is the whole colluding set of this door, so it must be
+            // able to post the whole gain; if it cannot, the set is inert and the other doors stay open.
+            if builder.extras.audit_2026_09_23_active
+                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)
+            {
                 return Ok(());
             }
             let verdicts = palw_seat_verdicts_of_v2(&inner);
@@ -17245,7 +17366,7 @@ fn apply_object(
             builder.slash_dissenting_seats(claim_id, &claim, &verdicts, true)?;
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
-            builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score)?;
+            builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)?;
             builder.license_claim(*claim_id, claim, ctx.daa_score)?;
         }
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
@@ -18542,6 +18663,23 @@ pub struct PalwTransitionExtrasV1 {
     /// `Default` and on every shipped preset, which derives each profile exactly as the rows on
     /// chain were written.
     pub seat_gate_possession_daa: Option<u64>,
+}
+
+/// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
+/// rests on alone (S2's full-replay seat), which locks its own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PalwDoorLockPricesV1 {
+    every: u128,
+    load_bearing: Option<(PalwBondKeyV2, u128)>,
+}
+
+impl PalwDoorLockPricesV1 {
+    fn of(&self, seat: &PalwBondKeyV2) -> u128 {
+        match self.load_bearing {
+            Some((bond, price)) if bond == *seat => price,
+            _ => self.every,
+        }
+    }
 }
 
 impl PalwTransitionExtrasV1 {
@@ -36762,9 +36900,19 @@ pub(crate) mod tests {
     /// Class `h64(1)` registered by bond 9 (so it has a registrant), bonds 1 (the executor) and
     /// 2..=7 (seats); returns the state and the registration's objects for reuse.
     fn shard_registry(p: &PalwStateParamsV2, registrant: Option<PalwBondKeyV2>) -> PalwChainStateV2 {
+        shard_registry_with(p, registrant, |_| 1_000, &shard_extras())
+    }
+
+    /// [`shard_registry`] with each of bonds 1..=7 posting `collateral(bond)`, folded under `extras`.
+    fn shard_registry_with(
+        p: &PalwStateParamsV2,
+        registrant: Option<PalwBondKeyV2>,
+        collateral: impl Fn(u64) -> u64,
+        extras: &PalwTransitionExtrasV1,
+    ) -> PalwChainStateV2 {
         let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
             .expect("the floor's geometry projects");
-        let mut objects: Vec<PalwConsensusObjectV2> = (1..=7).map(|v| shard_bond(v, 1_000)).collect();
+        let mut objects: Vec<PalwConsensusObjectV2> = (1..=7).map(|v| shard_bond(v, collateral(v))).collect();
         objects.push(shard_bond(9, 1_000_000_000_000));
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(1),
@@ -36783,8 +36931,8 @@ pub(crate) mod tests {
                 })
             }),
         });
-        let (s1, _) = shard_apply(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, &shard_extras())
-            .expect("the registry applies");
+        let (s1, _) =
+            shard_apply(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, extras).expect("the registry applies");
         s1
     }
 
@@ -36906,21 +37054,33 @@ pub(crate) mod tests {
     /// The plan declared, a claim accepted, and a panel bound — `seats` decides whether it is the
     /// stratified shape (six) or a flat one (three).
     fn shard_claim_bound(p: &PalwStateParamsV2, seats: Vec<PalwPanelSeatV2>) -> (PalwChainStateV2, Hash64) {
-        let s1 = shard_registry(p, Some(bond_key(9)));
+        shard_claim_bound_with(p, seats, 40, |_| 1_000, &shard_extras())
+    }
+
+    /// [`shard_claim_bound`] for a claim of `pwu`, bonds posting `collateral(bond)`, under `extras`.
+    fn shard_claim_bound_with(
+        p: &PalwStateParamsV2,
+        seats: Vec<PalwPanelSeatV2>,
+        pwu: u64,
+        collateral: impl Fn(u64) -> u64,
+        extras: &PalwTransitionExtrasV1,
+    ) -> (PalwChainStateV2, Hash64) {
+        let s1 = shard_registry_with(p, Some(bond_key(9)), collateral, extras);
         let plan = PalwConsensusObjectV2::ClassShardPlanDeclared { class_id: h64(1), shard_count: 2, signature: vec![9; 8] };
-        let (s2, _) = shard_apply(&s1, p, &ctx(2, 101, 2), &[plan], None, &shard_extras()).expect("the plan lands");
-        let env = attempt(40, 1);
+        let (s2, _) = shard_apply(&s1, p, &ctx(2, 101, 2), &[plan], None, extras).expect("the plan lands");
+        let env = attempt(pwu, 1);
         let claim_id = attempt_id_v2(&env.attempt);
-        let (s3, _) = shard_apply(&s2, p, &ctx(3, 102, 3), &[], Some(&env), &shard_extras()).expect("the claim lands");
+        let (s3, _) = shard_apply(&s2, p, &ctx(3, 102, 3), &[], Some(&env), extras).expect("the claim lands");
         let (s4, _) = shard_apply(
             &s3,
             p,
             &ctx(4, 103, 4),
             &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
             None,
-            &shard_extras(),
+            extras,
         )
         .expect("the panel binds");
+        assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the panel bound");
         (s4, claim_id)
     }
 
@@ -43256,6 +43416,316 @@ pub(crate) mod tests {
         assert!(s4.slashable_lock(bond_key(1), claim_id).is_none());
         let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s4)).unwrap();
         assert!(!bytes.contains(&PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1));
+    }
+
+    // ---- 2026-09-23 audit #6 and #14: a Valid lock is priced by the door that licenses ------
+    //
+    // No economic-safety fold here, so the price is the margin-free `gain / n + 1` of
+    // `palw_min_slashable_per_colluding_seat_v1`; the margin is the t12 arithmetic's to check
+    // (`dos_l3_quorum_and_rights`), and what these pin is the COUNT each door divides by and
+    // which seats the fold charges it to.
+
+    /// The fences this fixture folds under: the lock ledger, V2 and S2 always; the audit fence as asked.
+    fn door_extras(audit: bool) -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 {
+            objective_offence_daa: Some(0),
+            audit_2026_09_23_active: audit,
+            verification_v2_active: true,
+            verification_s2_active: true,
+            ..Default::default()
+        }
+    }
+
+    fn apply_door(
+        parent: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        c: &PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        att: Option<&PalwAttemptEnvelopeV2>,
+        extras: &PalwTransitionExtrasV1,
+    ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+        let applied = apply_palw_transition_v2_with_extras(parent, p, c, objects, att, false, false, false, false, extras)?;
+        applied.0.assert_internal_consistency(p).expect("internal consistency after apply");
+        applied.0.assert_deadline_consistency(p).expect("deadline consistency after apply");
+        Ok(applied)
+    }
+
+    /// A 160-pwu claim bound to the five sybil seats, seat `n` posting `collateral(n)`.
+    fn door_claim_bound(
+        p: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+        collateral: impl Fn(u64) -> u64,
+    ) -> (PalwChainStateV2, Hash64) {
+        let mut objects = register_class_and_bond();
+        objects.extend((2..=6).map(|n| seat_bond_reg(n, collateral(n))));
+        let (s0, _) = apply_door(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &objects, None, extras).expect("the registry");
+        let env = attempt(160, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s1, _) = apply_door(&s0, p, &ctx(2, 101, 2), &[], Some(&env), extras).expect("the claim lands");
+        let (s2, _) = apply_door(
+            &s1,
+            p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: sybil_seats() }],
+            None,
+            extras,
+        )
+        .expect("the panel binds");
+        assert!(matches!(s2.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the panel bound");
+        (s2, claim_id)
+    }
+
+    /// `G` as the fold prices it past the fence (`PalwClaimFraudFactsV1::from_claim`).
+    fn door_gain(state: &PalwChainStateV2, claim_id: Hash64) -> u128 {
+        let claim = state.claim(&claim_id).expect("the claim");
+        crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, 5))
+    }
+
+    fn per_colluder(gain: u128, door: crate::palw_economic_safety_v1::PalwLicenceDoorV1) -> u128 {
+        crate::palw_offence_v1::palw_min_slashable_per_colluding_seat_v1(
+            gain,
+            crate::palw_economic_safety_v1::palw_door_colluding_signers_v1(door),
+        )
+    }
+
+    /// The full-replay seat S2 licenses from, and one auditor, derived as the processor derives them.
+    fn full_seat_and_auditor(claim_id: Hash64) -> (PalwBondKeyV2, PalwBondKeyV2) {
+        let bonds: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).collect();
+        let assignment = crate::palw_verification_v2::palw_segment_assignment_v2(h64(77), claim_id, bonds.len() as u16);
+        let full = crate::palw_optimistic_licence_v2::palw_optimistic_full_seat_bond_v2(&assignment, &bonds).expect("a full seat");
+        let auditor = *bonds.iter().find(|bond| **bond != full).expect("an auditor");
+        (full, auditor)
+    }
+
+    fn valid_receipt(claim: Hash64, seat: PalwBondKeyV2, signed_daa: u64) -> crate::palw_panel_v2::PalwSeatReceiptV2 {
+        crate::palw_panel_v2::PalwSeatReceiptV2 {
+            claim,
+            verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+            seat_bond: seat,
+            signed_daa,
+            signature: Vec::new(),
+        }
+    }
+
+    fn optimistic_object(claim_id: Hash64, signers: &[PalwBondKeyV2]) -> PalwConsensusObjectV2 {
+        let bonds: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).collect();
+        let assignment = crate::palw_verification_v2::palw_segment_assignment_v2(h64(77), claim_id, bonds.len() as u16);
+        PalwConsensusObjectV2::OptimisticLicensed {
+            claim: claim_id,
+            receipts: signers
+                .iter()
+                .map(|seat| {
+                    let index = bonds.iter().position(|bond| bond == seat).expect("a seat of the panel") as u16;
+                    crate::palw_panel_v2::PalwSeatReceiptV3 {
+                        receipt: valid_receipt(claim_id, *seat, 103),
+                        segments: assignment.mask_of(index),
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// **Audit #6: an S2 licence rests on ONE seat, so that seat locks the whole gain.**
+    ///
+    /// `OptimisticLicensed` licenses on the full-replay seat's `Valid` alone, and priced for three
+    /// colluders its lock was a third of the gain: the one colluding seat kept the escrow with
+    /// 1,515 MSK to spare after its own conviction (t12's floor class). Past the fence the full
+    /// seat locks `G / 1 + 1` — alone, it out-values the lie — and an auditor riding the same set,
+    /// whose `Valid` the door does not need, keeps the quorum price. Below the fence both lock
+    /// the quorum price, exactly as every lock on every other network was written.
+    ///
+    /// Fails without the fix: the full seat's lock is `G / 3 + 1`, not `G + 1`.
+    #[test]
+    fn audit_6_an_optimistic_licence_locks_the_whole_gain_on_the_one_seat_it_rests_on() {
+        use crate::palw_economic_safety_v1::PalwLicenceDoorV1;
+        let p = params();
+        let generous = |_| 1_000_000_000u64;
+        let armed = door_extras(true);
+        let (s2, claim_id) = door_claim_bound(&p, &armed, generous);
+        let gain = door_gain(&s2, claim_id);
+        assert!(gain > 0, "the fixture's claim is worth something");
+        let (full, auditor) = full_seat_and_auditor(claim_id);
+        let object = optimistic_object(claim_id, &[full, auditor]);
+        let (s3, d3) = apply_door(&s2, &p, &ctx(4, 103, 4), std::slice::from_ref(&object), None, &armed).expect("S2 licenses");
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        let full_lock = s3.slashable_lock(full, claim_id).expect("the full seat locks").amount;
+        let auditor_lock = s3.slashable_lock(auditor, claim_id).expect("the auditor locks").amount;
+        assert_eq!(full_lock, per_colluder(gain, PalwLicenceDoorV1::Optimistic), "the door's whole colluding set is one seat");
+        assert_eq!(full_lock, gain + 1);
+        assert!(crate::palw_offence_v1::palw_colluding_quorum_covers_v1(full_lock, 1, gain), "one seat out-values the lie alone");
+        assert_eq!(auditor_lock, per_colluder(gain, PalwLicenceDoorV1::Quorum), "an auditor is not load-bearing");
+        assert_eq!(revert_delta_v2(&s3, &d3, &p).unwrap().state_root(), s2.state_root(), "the locks revert with the licence");
+        assert_eq!(apply_delta_v2(&s2, &d3, &p).unwrap().state_root(), s3.state_root());
+
+        // Below the fence: the quorum price on every signer — the full seat's one lock is a third of
+        // the gain it alone licensed (the pre-fence defect, kept as the byte-identical rule).
+        let dormant = door_extras(false);
+        let (b2, b_claim) = door_claim_bound(&p, &dormant, generous);
+        assert_eq!(b_claim, claim_id);
+        let (b3, _) = apply_door(&b2, &p, &ctx(4, 103, 4), &[object], None, &dormant).expect("S2 licenses below the fence");
+        let (bf, ba) = (b3.slashable_lock(full, claim_id).unwrap().amount, b3.slashable_lock(auditor, claim_id).unwrap().amount);
+        assert_eq!(bf, ba, "below the fence every Valid of the set locks one price");
+        let pre_gain = crate::palw_panel_var_v1::palw_max_fraud_gain_v1(
+            &crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim_pre_2026_09_23(b2.claim(&claim_id).unwrap(), 5),
+        );
+        assert_eq!(bf, crate::palw_offence_v1::palw_min_slashable_per_colluding_seat_v1(pre_gain, 3));
+        assert!(!crate::palw_offence_v1::palw_colluding_quorum_covers_v1(bf, 1, pre_gain), "…which one seat cannot cover");
+    }
+
+    /// **Audit #6, the liveness half: an S2 set whose full seat cannot post the whole gain is
+    /// INERT, not an error — and the quorum door stays open to the same seat.**
+    ///
+    /// The bind-time gate cannot know which door will license, so it keeps the quorum price and
+    /// the seat binds. At the licence the S2 price is the door's; the set that cannot meet it
+    /// moves nothing (the `receipt_set_is_backed` rule), the block that carried it stays valid, and
+    /// a V1 quorum including the very same seat licenses at the quorum price.
+    ///
+    /// Fails without the fix: the S2 set licenses, with the full seat locking `G / 3 + 1`.
+    #[test]
+    fn audit_6_an_optimistic_set_whose_full_seat_cannot_post_the_gain_is_inert_and_the_quorum_door_stays_open() {
+        use crate::palw_economic_safety_v1::PalwLicenceDoorV1;
+        let p = params();
+        let armed = door_extras(true);
+        let (probe, claim_id) = door_claim_bound(&p, &armed, |_| 1_000_000_000);
+        let gain = door_gain(&probe, claim_id);
+        let (full, auditor) = full_seat_and_auditor(claim_id);
+        let short = per_colluder(gain, PalwLicenceDoorV1::Quorum).max(u128::from(p.min_collateral_sompi()));
+        assert!(short < per_colluder(gain, PalwLicenceDoorV1::Optimistic), "the fixture's seat can bind but not back S2");
+        let short = short as u64;
+        let (s2, again) = door_claim_bound(&p, &armed, |n| if bond_key(n) == full { short } else { 1_000_000_000 });
+        assert_eq!(again, claim_id);
+        assert_eq!(door_gain(&s2, claim_id), gain);
+
+        let (s3, _) = apply_door(&s2, &p, &ctx(4, 103, 4), &[optimistic_object(claim_id, &[full, auditor])], None, &armed)
+            .expect("an unbacked set is inert, never the block's error");
+        let (empty, _) = apply_door(&s2, &p, &ctx(4, 103, 4), &[], None, &armed).expect("an empty block");
+        assert_eq!(s3.state_root(), empty.state_root(), "nothing moved but the block itself");
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the claim stays bound");
+        assert!(s3.slashable_lock(full, claim_id).is_none() && s3.slashable_lock(auditor, claim_id).is_none());
+
+        let others: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).filter(|bond| *bond != full).take(2).collect();
+        let quorum: Vec<_> = std::iter::once(full).chain(others).map(|seat| valid_receipt(claim_id, seat, 103)).collect();
+        let (s4, _) = apply_door(
+            &s3,
+            &p,
+            &ctx(5, 104, 5),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: quorum }],
+            None,
+            &armed,
+        )
+        .expect("the quorum door licenses");
+        assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        assert_eq!(s4.slashable_lock(full, claim_id).map(|lock| lock.amount), Some(per_colluder(gain, PalwLicenceDoorV1::Quorum)));
+    }
+
+    /// **Audit #6: the coverage door is priced at the quorum it guarantees, not the whole panel its
+    /// geometry happens to need** — so every coverage signer locks `G / 3 + 1`, as before the fence.
+    #[test]
+    fn audit_6_the_coverage_door_keeps_the_quorum_price() {
+        use crate::palw_economic_safety_v1::PalwLicenceDoorV1;
+        let p = params();
+        let armed = door_extras(true);
+        let (s2, claim_id) = door_claim_bound(&p, &armed, |_| 1_000_000_000);
+        let gain = door_gain(&s2, claim_id);
+        let bonds: Vec<PalwBondKeyV2> = sybil_seats().iter().map(|seat| seat.bond).collect();
+        let assignment = crate::palw_verification_v2::palw_segment_assignment_v2(h64(77), claim_id, bonds.len() as u16);
+        let receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV3> = bonds
+            .iter()
+            .enumerate()
+            .map(|(i, bond)| crate::palw_panel_v2::PalwSeatReceiptV3 {
+                receipt: valid_receipt(claim_id, *bond, 103),
+                segments: assignment.mask_of(i as u16),
+            })
+            .collect();
+        let (s3, _) = apply_door(
+            &s2,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensedV2 { claim: claim_id, receipts }],
+            None,
+            &armed,
+        )
+        .expect("V2 licenses");
+        for bond in bonds {
+            assert_eq!(
+                s3.slashable_lock(bond, claim_id).map(|lock| lock.amount),
+                Some(per_colluder(gain, PalwLicenceDoorV1::Coverage))
+            );
+        }
+        assert_eq!(per_colluder(gain, PalwLicenceDoorV1::Coverage), per_colluder(gain, PalwLicenceDoorV1::Quorum));
+    }
+
+    /// **Audit #14: a shard part's `Valid` signers lock, as every whole-object door's do.**
+    ///
+    /// Below the fence the shard arm wrote no lock at all: a claim licensed by parts reached
+    /// `Final` with nothing slashable behind any of its signatures. Past it each part locks its
+    /// signers at the shard price — the lying shard's quorum is the whole colluding set, so
+    /// `G / quorum_per_shard + 1` each — the locks revert with the part, the parts that landed
+    /// first keep theirs when the last one licenses, and `Final` carries them all into the liability.
+    ///
+    /// Fails without the fix: no part writes a lock (the below-the-fence half, asserted last).
+    #[test]
+    fn audit_14_a_shard_part_locks_its_valid_signers_as_every_whole_object_door_does() {
+        use crate::palw_economic_safety_v1::PalwLicenceDoorV1;
+        let p = params();
+        let armed = PalwTransitionExtrasV1 { objective_offence_daa: Some(0), audit_2026_09_23_active: true, ..shard_extras() };
+        let (s4, claim_id) = shard_claim_bound_with(&p, stratified_seats(), 160, |_| 1_000_000_000, &armed);
+        let gain = door_gain(&s4, claim_id);
+        let price = per_colluder(gain, PalwLicenceDoorV1::ShardPart { quorum_per_shard: SHARD_Q });
+        assert_eq!(price, gain / u128::from(SHARD_Q) + 1);
+        assert!(
+            crate::palw_offence_v1::palw_colluding_quorum_covers_v1(price, u64::from(SHARD_Q), gain),
+            "one shard's quorum covers G"
+        );
+
+        let (s5, d5) = shard_apply(&s4, &p, &ctx(5, 104, 5), &[shard_part(claim_id, 0, &[2, 3])], None, &armed).expect("shard 0");
+        for bond in [2, 3] {
+            assert_eq!(s5.slashable_lock(bond_key(bond), claim_id).map(|lock| lock.amount), Some(price), "bond {bond}");
+        }
+        assert!(s5.slashable_lock(bond_key(4), claim_id).is_none(), "a seat that did not sign locks nothing");
+        assert_eq!(revert_delta_v2(&s5, &d5, &p).unwrap().state_root(), s4.state_root(), "a part's locks revert with it");
+
+        let (s6, _) = shard_apply(&s5, &p, &ctx(6, 105, 6), &[shard_part(claim_id, 1, &[5, 7])], None, &armed).expect("shard 1");
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 105 }));
+        for bond in [2, 3, 5, 7] {
+            assert_eq!(s6.slashable_lock(bond_key(bond), claim_id).map(|lock| lock.amount), Some(price), "bond {bond} at licence");
+        }
+
+        // Below the fence, the rule every dormant network folds: a part locks nothing.
+        let dormant = PalwTransitionExtrasV1 { objective_offence_daa: Some(0), ..shard_extras() };
+        let (b4, b_claim) = shard_claim_bound_with(&p, stratified_seats(), 160, |_| 1_000_000_000, &dormant);
+        assert_eq!(b_claim, claim_id);
+        let (b5, _) = shard_apply(&b4, &p, &ctx(5, 104, 5), &[shard_part(claim_id, 0, &[2, 3])], None, &dormant).expect("shard 0");
+        assert!(b5.slashable_lock(bond_key(2), claim_id).is_none(), "PRE-FENCE DEFECT RECORD: a shard part locks nothing");
+    }
+
+    /// **Audit #14: a part whose `Valid` signer cannot post the shard price is INERT** — nothing
+    /// moves, the shard stays open, and a backed part for the same shard licenses it.
+    ///
+    /// Fails without the fix: the unbacked part licenses shard 0 (and locks nothing).
+    #[test]
+    fn audit_14_a_shard_part_whose_signer_cannot_post_the_shard_price_is_inert() {
+        use crate::palw_economic_safety_v1::PalwLicenceDoorV1;
+        let p = params();
+        let armed = PalwTransitionExtrasV1 { objective_offence_daa: Some(0), audit_2026_09_23_active: true, ..shard_extras() };
+        let (probe, claim_id) = shard_claim_bound_with(&p, stratified_seats(), 160, |_| 1_000_000_000, &armed);
+        let gain = door_gain(&probe, claim_id);
+        let shard_price = per_colluder(gain, PalwLicenceDoorV1::ShardPart { quorum_per_shard: SHARD_Q });
+        // Bond 3 posts enough to BIND (the quorum price) and not enough for the shard's.
+        let short = per_colluder(gain, PalwLicenceDoorV1::Quorum).max(u128::from(p.min_collateral_sompi()));
+        assert!(short < shard_price, "the fixture's seat can bind but not back its shard");
+        let short = short as u64;
+        let (s4, again) = shard_claim_bound_with(&p, stratified_seats(), 160, |n| if n == 3 { short } else { 1_000_000_000 }, &armed);
+        assert_eq!(again, claim_id);
+        let (s5, _) =
+            shard_apply(&s4, &p, &ctx(5, 104, 5), &[shard_part(claim_id, 0, &[2, 3])], None, &armed).expect("inert, not an error");
+        let (empty, _) = shard_apply(&s4, &p, &ctx(5, 104, 5), &[], None, &armed).expect("an empty block");
+        assert_eq!(s5.state_root(), empty.state_root(), "nothing moved but the block itself");
+        assert!(s5.shard_licensing_of(&claim_id).is_none(), "no progress row: shard 0 is still open");
+        assert!(s5.slashable_lock(bond_key(2), claim_id).is_none());
+        let (s6, _) = shard_apply(&s5, &p, &ctx(6, 105, 6), &[shard_part(claim_id, 0, &[2, 4])], None, &armed).expect("a backed part");
+        assert!(s6.shard_licensing_of(&claim_id).is_some_and(|progress| progress.is_licensed(0)));
+        assert_eq!(s6.slashable_lock(bond_key(4), claim_id).map(|lock| lock.amount), Some(shard_price));
     }
 }
 
