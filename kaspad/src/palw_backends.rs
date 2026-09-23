@@ -594,7 +594,8 @@ impl PalwRoleMemoryNeedV1 {
     pub fn describe(&self) -> String {
         match self.profile {
             Some(p) => format!(
-                "{:.2} GiB as {} (artifact {:.2} GiB + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB{}) under {}",
+                "{:.2} GiB as {} (artifact {:.2} GiB + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB \
+                 + capture {:.2} GiB ({:?}) + checkpoint leg {:.2} GiB{}) under {}",
                 gib(self.total_bytes()),
                 self.role.name(),
                 gib(self.holding_bytes),
@@ -603,6 +604,9 @@ impl PalwRoleMemoryNeedV1 {
                 if p.opening_bytes > 0 { format!(" + opening {:.2} GiB", gib(p.opening_bytes)) } else { String::new() },
                 gib(p.attention_scratch_bytes),
                 gib(p.trace_scratch_bytes),
+                gib(p.capture_retained_bytes),
+                p.capture,
+                gib(p.checkpoint_leg_bytes),
                 if p.retained_checkpoint_bytes > 0 {
                     format!(" + retained checkpoints {:.2} GiB", gib(p.retained_checkpoint_bytes))
                 } else {
@@ -1148,9 +1152,14 @@ fn host_headroom_of_v1(available: u64) -> u64 {
     available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1).saturating_mul(PALW_REPLAY_BUDGET_PERMILLE_V1) / 1_000
 }
 
-/// [`host_headroom_of_v1`] of the host now, or `None` where the platform cannot say.
-pub fn host_headroom_bytes_v1() -> Option<u64> {
-    host_available_bytes_v1().map(host_headroom_of_v1)
+/// The host's headroom now, in both readings the ledger chooses between (`palw_memory_ledger`'s
+/// doc), or `None` where the platform cannot say.
+pub fn host_headroom_v1() -> Option<crate::palw_memory_ledger::PalwHostHeadroomV1> {
+    let available = host_available_bytes_v1()?;
+    Some(crate::palw_memory_ledger::PalwHostHeadroomV1 {
+        past_reserve: available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1),
+        haircut: host_headroom_of_v1(available),
+    })
 }
 
 /// **Whether the reservation ledger could cover `need_bytes` now** — the dry run every
