@@ -130,6 +130,7 @@ fn one_final(credit: u64) -> PalwExecFinalV1 {
 /// ~131k tickets from one mint the fallback walk at :214-217 restarts from `open_round + 2^16`
 /// every time and the cost becomes quadratic.
 #[test]
+#[ignore = "MEASUREMENT, not a guard: times the PRE-FENCE mint up to 200,000 tickets (minutes at 100% CPU in a debug build); its one assertion is that the tickets it asked for were issued. The live guard on the bounded mint is audit_repro_01's repro_06."]
 fn a3_the_mint_cost_is_quadratic_past_the_probe_horizon() {
     println!("\n=== palw_execution_mint_quanta_v1 wall time vs ticket count ===");
     let mut last: Option<(u64, f64)> = None;

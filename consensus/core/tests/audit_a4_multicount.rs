@@ -213,6 +213,7 @@ fn final_of(credit: u64) -> PalwExecFinalV1 {
 }
 
 #[test]
+#[ignore = "MEASUREMENT, not a guard: times the PRE-FENCE mint up to 200,000 tickets and asserts nothing (minutes at 100% CPU in a debug build). The live guard on the bounded mint is audit_repro_01's repro_06."]
 fn q4b_the_mint_cost_scales_quadratically_in_the_ticket_count() {
     println!("\n=== palw_execution_mint_quanta_v1: measured wall time vs ticket count ===");
     println!("  (assign_round probes a 2^16 horizon then linear-walks; `taken` is per-mint)");

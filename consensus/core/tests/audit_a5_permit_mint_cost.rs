@@ -32,6 +32,7 @@ fn one_final(credit: u64) -> PalwExecFinalV1 {
 /// as the credit of ONE Final grows. The credits are the real t12 per-draw MAC-eq numbers where
 /// they fit inside the time budget of a test.
 #[test]
+#[ignore = "MEASUREMENT, not a guard: times one Final's mint as its credit grows (minutes at 100% CPU in a debug build). The live guard on the bounded mint is audit_repro_01's repro_06."]
 fn the_mint_cost_of_one_final_grows_superlinearly() {
     let q = u128::from(PALW_EXECUTION_QUANTUM_V1);
     let seed = h(99);
