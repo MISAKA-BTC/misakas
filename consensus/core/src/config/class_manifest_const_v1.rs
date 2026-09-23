@@ -24,6 +24,17 @@ use crate::Hash64;
 /// `palw-class manifest` wrote it (169.58.39.220, 2026-09-23).
 pub const QWEN25_A16_2M_MANIFEST_V1: &str = include_str!("class-manifests/qwen25-1.5b-a16-2m.palwmanifest");
 
+/// **The manifest the fleet's Qwen3.6 mapping measured** (`qwen36.palwq36`, the 512-context
+/// conversion the hybrid tier has run since testnet-11), byte for byte as `palw-class manifest`
+/// wrote it (169.58.39.220, 2026-09-23).
+///
+/// Four rows, sorted by class id, and the reason this file exists is the pair of them that disagree:
+/// the `graph-v3` and v1 rows register the mapping's own `artifact_root` (`f4aad4fd…`), while the two
+/// HELD `graph-v7` rows register the operand-inventory root under that graph (`f01230ae…`). Testnet-12
+/// registers a held row and pinned `f4aad4fd…` for it — the third instance of the substitution this
+/// module was written to end, found the day the sidecar was first derived for this artifact.
+pub const QWEN36_512_MANIFEST_V1: &str = include_str!("class-manifests/qwen36-35b-a3b-512.palwmanifest");
+
 /// One nibble, or `None` for a byte that is not lowercase hex. Named rather than inlined so the
 /// refusal below can say WHICH character it choked on.
 const fn nibble(b: u8) -> Option<u8> {

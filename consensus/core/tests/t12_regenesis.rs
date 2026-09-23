@@ -409,3 +409,72 @@ fn t12_certifies_both_lanes_of_the_classes_it_registers() {
     }
     assert_eq!(covered, 2, "both held rows carry a profile and are covered");
 }
+
+/// **Every root testnet-12's genesis registers is read out of a committed measurement — all of them,
+/// keyed by the class that registers it.**
+///
+/// Three instances of one substitution (the flat artifact digest, or the mapping's own root, where the
+/// operand-inventory root belonged) is a mechanism failing rather than three mistakes:
+///
+/// * testnet-11's dense tier: `artifact_digest()` pinned as the root → zero blocks;
+/// * testnet-12's dense tier: the same, over a byte-identical artifact → zero blocks;
+/// * testnet-12's HELD HYBRID row (found 2026-09-23, the day this artifact's sidecar was first
+///   derived): `PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT` — the mapping's own root, and the right value
+///   for testnet-11's `graph-v3` row — pinned into a `graph-v7` row, which registers the inventory
+///   root. `f4aad4fd…` where `f01230ae…` belonged. No node had failed on it only because none of them
+///   holds the hybrid artifact yet.
+///
+/// `t12_genesis_reads_its_root_from_the_committed_manifest` asserted the dense row alone, so the
+/// hybrid row was outside every check. This one enumerates the card's OWN registrations and demands a
+/// committed sidecar row for each, so a class added to the card without one fails here — which is the
+/// only version of this check that cannot be escaped by adding a row.
+///
+/// The one exception is named and substantive: the floor class's artifact is DERIVED in-process
+/// (`misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1`), there is no file to measure and no
+/// sidecar to commit, so its root must be the pinned `PALW_RC_GENESIS_ARTIFACT_ROOT` and nothing else.
+#[test]
+fn t12_genesis_roots_are_all_read_from_committed_manifests() {
+    use kaspa_consensus_core::config::class_manifest_const_v1 as manifest;
+
+    // (class id, inventory root) of every row of every committed sidecar, read through the SAME
+    // const fn the genesis constants read, so the test cannot agree with a value the card does not use.
+    let mut committed: Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64)> = Vec::new();
+    for (name, text) in [("qwen25-1.5b-a16-2m", manifest::QWEN25_A16_2M_MANIFEST_V1), ("qwen36-35b-a3b-512", manifest::QWEN36_512_MANIFEST_V1)] {
+        let rows = text.matches("\"inventory_root\"").count();
+        assert!(rows > 0, "{name}: a committed sidecar with no rows measures nothing");
+        for occurrence in 1..=rows {
+            committed.push((manifest::class_id_of_class(text, occurrence), manifest::inventory_root_of_class(text, occurrence)));
+        }
+    }
+
+    let p = Params::from(t12());
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+    let floor = bundle.base_class_id;
+    let mut checked = 0;
+    for object in &bundle.genesis_objects {
+        let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } = object else { continue };
+        if *class_id == floor {
+            assert_eq!(
+                *artifact_root, PALW_RC_GENESIS_ARTIFACT_ROOT,
+                "the floor's artifact is derived in-process, so its root is the pin and never a third value"
+            );
+            checked += 1;
+            continue;
+        }
+        let measured = committed.iter().find(|(id, _)| id == class_id).map(|(_, root)| *root).unwrap_or_else(|| {
+            panic!(
+                "genesis registers class {class_id} and no committed sidecar measures it — derive one with \
+                 `palw-class manifest --network testnet-12 <artifact>` on the host that holds the file and commit it \
+                 beside the card, rather than pasting a hash into the card"
+            )
+        });
+        assert_eq!(
+            *artifact_root, measured,
+            "class {class_id}: the card registers a root the committed measurement of its own artifact does not give. \
+             This is the substitution that shut two dense tiers and the held hybrid row — a producer holding the \
+             artifact derives the measured value and is refused by ClassResolveError::ArtifactRoot"
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 3, "the floor and the two held rows are what this card registers");
+}

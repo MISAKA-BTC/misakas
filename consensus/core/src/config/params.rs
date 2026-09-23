@@ -10759,6 +10759,31 @@ pub const PALW_T12_DENSE_N_CTX: u32 = crate::palw_base0_a16::A16_MAX_ATTN_HISTOR
 /// and `palw_held_context` are all armed from DAA 0 here.
 pub const PALW_T12_HYBRID_N_CTX: u32 = 512;
 
+/// **The root testnet-12's HELD hybrid row registers — the operand-inventory root under graph-v7,
+/// read out of the committed sidecar exactly as the dense row's is.**
+///
+/// [`PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT`] is the mapping's own `artifact_root` (`f4aad4fd…`), and it
+/// is the right value for testnet-11's `graph-v3` row: that graph does not register an inventory root
+/// (`misaka_palw_base0::inventory::qwen36_registers_inventory_root_v1` is false for it). A HELD
+/// `graph-v7` row DOES, and the two are different values over the very same file — `f01230ae…`.
+///
+/// **Testnet-12 registered the mapping root for its held hybrid class, which is the same
+/// substitution that shut both networks' dense tiers, found 2026-09-23 the first time this artifact's
+/// sidecar was derived.** No node on the fleet had noticed because none of them holds the hybrid
+/// artifact yet; one that did would have been refused by `ClassResolveError::ArtifactRoot` and the
+/// class would have produced nothing, exactly as the dense tier did twice.
+///
+/// Occurrence 3 of the sidecar, whose rows are sorted by class id: `graph-v3` (1),
+/// `graph-v7@2097152` (2), `graph-v7@512` (3), the v1 row (4). The positional read is held to the
+/// class the card registers by `t12_genesis_roots_are_all_read_from_committed_manifests`, which
+/// checks EVERY genesis registration against a committed sidecar rather than this one row — because
+/// three instances of one substitution is a mechanism failing, not three mistakes.
+pub const PALW_T12_GENESIS_QWEN36_HELD_512_ARTIFACT_ROOT: crate::Hash64 =
+    crate::config::class_manifest_const_v1::inventory_root_of_class(
+        crate::config::class_manifest_const_v1::QWEN36_512_MANIFEST_V1,
+        3,
+    );
+
 pub fn palw_rc_qwen25_a16_is_registered() -> bool {
     PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
 }
@@ -14004,7 +14029,11 @@ pub fn palw_t12_shipped_params() -> Params {
     let params = palw_v2_params_with_class_rows_v1(
         base,
         PALW_RC_GENESIS_ARTIFACT_ROOT,
-        PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+        // **The HELD row's root, not the mapping's** — see
+        // `PALW_T12_GENESIS_QWEN36_HELD_512_ARTIFACT_ROOT`. Passing
+        // `PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT` here (as this card did until 2026-09-23) registers
+        // the value testnet-11's graph-v3 row needs into a graph-v7 row that needs the other one.
+        PALW_T12_GENESIS_QWEN36_HELD_512_ARTIFACT_ROOT,
         Some(PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT),
         bonds,
         genesis_utxos,
