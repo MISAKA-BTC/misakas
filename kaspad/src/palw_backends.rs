@@ -117,11 +117,16 @@ impl PalwBackendRegistry {
                 return *hit;
             }
         }
-        let figure = self
-            .holdings
-            .iter()
-            .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
-            .and_then(incremental_replay_bytes_v1);
+        // The holding's own bytes, PLUS the K/V cache one canonical attempt of this class allocates —
+        // the term the file-size proxy never had. Asked of the resolved backend once, here, because
+        // this figure is memoized and a resolve is what this memo exists to stop repeating.
+        let figure = self.holdings.iter().find_map(|holding| {
+            let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
+            let holding_bytes = incremental_replay_bytes_v1(holding)?;
+            let prefill = backend.canonical_job_prefill_tokens().unwrap_or(0);
+            let kv = backend.attempt_working_set_bytes(prefill).unwrap_or(0);
+            Some(holding_bytes.saturating_add(kv))
+        });
         if let Ok(mut memo) = replay_bytes_memo_v1().lock() {
             memo.insert(key, figure);
         }

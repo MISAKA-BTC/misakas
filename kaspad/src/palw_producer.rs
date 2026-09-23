@@ -914,6 +914,22 @@ impl PalwProducerService {
         // Trivial at genesis difficulty and not trivial at all once the retarget pulls the search
         // out to the 120 s cadence, at which point that thread is busy essentially all the time and
         // every other service on the runtime is short one worker.
+        // **Fail closed on the attempt's own working set** (ADR-0151 follow-up, item 6). The K/V
+        // cache of a held-context attempt is sized by the prefill, not by the artifact: the 2M row's
+        // canonical job prefills 262,143 positions and its cache is ~15 GiB of `i32` rows. The run
+        // that found this had a 5.25 GiB share, no gate, and a dmesg line. A refusal here names the
+        // need and the budget, and holds — the same shape as every other producer hold.
+        if let Some(need) = backend.attempt_working_set_bytes(prompt.len()) {
+            let need = need.saturating_add(crate::palw_backends::PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1);
+            if let Err(why) = crate::palw_backends::replay_memory_budget_v1(need) {
+                return Err(format!(
+                    "this attempt would allocate {:.2} GiB for a {}-token prefill (its K/V cache plus scratch) and {why} — \
+                     holding rather than being OOM-killed; a narrower class, or a host with the memory, produces",
+                    need as f64 / (1u64 << 30) as f64,
+                    prompt.len()
+                ));
+            }
+        }
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
         // ADR-0112 Decision 8: what one draw reads from storage, printed beside the draw. The

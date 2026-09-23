@@ -544,6 +544,22 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family cannot open its artifact".to_string())
     }
 
+    /// **What one attempt with this many prefill tokens will allocate**, in bytes, or `None` for a
+    /// family that cannot say. The producer refuses an attempt whose figure does not fit the host
+    /// (`replay_memory_budget_v1`) instead of starting it and being killed — the item 6 acceptance
+    /// run's 2M producer allocated ~16 GiB in the first minute of its first attempt on a host with a
+    /// 5.25 GiB share, and nothing in its path had asked.
+    /// The prefill length of this class's canonical job — what a replay or an attempt of it will
+    /// prefill — so a caller can size the working set without building a job. `None` where the family
+    /// has no canonical job.
+    fn canonical_job_prefill_tokens(&self) -> Option<usize> {
+        None
+    }
+
+    fn attempt_working_set_bytes(&self, _prefill_tokens: usize) -> Option<u64> {
+        None
+    }
+
     /// **The artifact's root and leaf count, without its inventory** (ADR-0151 follow-up, item 6's
     /// finding). A readiness challenge draws against the leaf count and compares against the root,
     /// and neither needs a leaf materialized. The default goes through the digest, which is correct

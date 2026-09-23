@@ -2648,6 +2648,15 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         crate::inventory::a16_inventory_digest_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))
     }
 
+    fn canonical_job_prefill_tokens(&self) -> Option<usize> {
+        Some(self.canonical_job.0 as usize)
+    }
+
+    fn attempt_working_set_bytes(&self, prefill_tokens: usize) -> Option<u64> {
+        let shape = &self.artifact.shape;
+        Some(crate::engine_a16::a16_attempt_working_set_bytes_v1(shape.n_layers, shape.kv_dim(), prefill_tokens))
+    }
+
     fn artifact_root_and_leaf_count(&self) -> Result<(kaspa_consensus_core::Hash64, u32), String> {
         crate::inventory::a16_inventory_root_and_count_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))
     }

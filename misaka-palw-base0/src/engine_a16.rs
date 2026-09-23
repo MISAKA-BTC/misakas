@@ -153,6 +153,38 @@ pub struct A16Engine<'a> {
     layers: Vec<LayerParams>,
 }
 
+/// **What one attempt's K/V cache costs, in bytes, for a prefill of `prefill_tokens`** — the number
+/// that was missing when the item 6 acceptance run's 2M producer went from 2.3 to 20.8 GiB of
+/// anonymous memory in one minute and was OOM-killed.
+///
+/// [`A16Cache`] is `Vec<Vec<Vec<i32>>>` twice: per layer, per position, one `Vec<i32>` of `kv_dim`
+/// for K and one for V (`walk_table` pushes `rope_heads(..)` and `v[i].clone()` per position). So a
+/// position costs `layers × 2 × kv_dim × 4` bytes of payload plus two heap vectors per layer — the
+/// allocator's header and the `Vec`'s own 24 bytes, taken here as 40 a vector, which is glibc's
+/// rounding for a 1 KiB request plus the header.
+///
+/// For the shipped 2M held row (28 layers, `kv_dim` 256, canonical prefill 262,143) that is
+/// 14.7 GiB of payload and ~0.5 GiB of headers: the 15–16 GiB the run measured. A panel's replay
+/// estimate was the artifact's FILE SIZE plus 512 MiB (3.17 GiB) — five times too small, because a
+/// file-size proxy says nothing about a context that is two hundred thousand positions wide.
+///
+/// This is a payload figure for a DENSE `i32` cache. The committed representation is already `i8`
+/// (`state_chunk_bytes_v1` narrows on the way out), so the same context could be held in a quarter
+/// of this with flat per-layer buffers; that is an engine change and a decision, not a gate.
+pub fn a16_attempt_working_set_bytes_v1(n_layers: usize, kv_dim: usize, prefill_tokens: usize) -> u64 {
+    const VEC_OVERHEAD_BYTES: u64 = 40;
+    /// **Measured, not chosen.** The payload-plus-headers figure for the 2M canonical attempt is
+    /// 14.55 GiB; the run's anonymous memory rose 16.05 GiB in the minute that attempt started. The
+    /// difference is what 14.7 million one-kilobyte vectors cost an allocator beyond their headers.
+    /// A gate that under-states by a tenth is a gate that lets the kill through, so the figure carries
+    /// the slack by name rather than by a rounder number somewhere else.
+    const ALLOCATOR_SLACK_PERMILLE: u64 = 150;
+    let per_position_payload = (n_layers as u64) * 2 * (kv_dim as u64) * 4;
+    let per_position_headers = (n_layers as u64) * 2 * VEC_OVERHEAD_BYTES;
+    let exact = (prefill_tokens as u64).saturating_mul(per_position_payload + per_position_headers);
+    exact.saturating_add(exact / 1000 * ALLOCATOR_SLACK_PERMILLE)
+}
+
 pub struct A16Cache {
     keys: Vec<Vec<Vec<i32>>>,
     values: Vec<Vec<Vec<i32>>>,
@@ -828,6 +860,23 @@ pub fn derived_a16_store(shape: &Base0ShapeV1) -> Vec<(String, Vec<u8>)> {
 
 #[cfg(test)]
 mod tests {
+    /// The 2M held row's canonical attempt, as the item 6 run measured it: 28 layers, kv_dim 256,
+    /// prefill 262,143 → about 15 GiB. If this number moves, the gate in the producer moves with it.
+    #[test]
+    fn the_2m_attempt_costs_what_the_acceptance_run_measured() {
+        let bytes = super::a16_attempt_working_set_bytes_v1(28, 256, 262_143);
+        let gib = bytes as f64 / (1u64 << 30) as f64;
+        // Exact payload + headers: 59,584 B a position x 262,143 = 14.55 GiB; with the 15 % allocator
+        // slack the gate reads 16.73 GiB, above the 16.05 GiB the run measured — the gate must not
+        // under-state, or it lets the kill through.
+        assert!((gib - 16.73).abs() < 0.05, "expected 16.73 GiB for the 2M canonical attempt, got {gib:.2}");
+        assert!(gib > 16.05, "the gate's figure must exceed the 16.05 GiB the acceptance run measured");
+        // And the 512-context row the fleet ran for weeks is small — which is why nobody hit this before 2M.
+        let small = super::a16_attempt_working_set_bytes_v1(28, 256, 512) as f64 / (1u64 << 20) as f64;
+        assert!((small - 33.4).abs() < 0.5, "a 512 prefill is 512 x 59,584 B x 1.15 = 33.4 MiB, got {small:.1}");
+        assert!(small < 2.67 * 1024.0 / 50.0, "and under a fiftieth of the 2.67 GiB artifact, which is why nobody hit this before 2M");
+    }
+
     use super::*;
     use crate::artifact::LN_THETA_10000_GEN_Q;
 
