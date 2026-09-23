@@ -21,6 +21,7 @@ use kaspa_consensus_core::palw_panel_var_v1::{
 use kaspa_consensus_core::palw_settlement_v1::palw_settlement_v1;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwTransitionExtrasV1, apply_palw_transition_v7,
+    palw_second_clock_depth_v1,
 };
 use kaspa_consensus_core::pow_layer0::{PALW_HEARTBEAT_MAX_PER_MERGESET, PALW_HEARTBEAT_WORK_LOG2};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -77,14 +78,28 @@ fn a_slash_liability_expires_on_the_heartbeat_clock() {
 
     // **THE FIX** (`Params::palw_settled_anchor_depth`, past `palw_audit_2026_09_23`): the lock is
     // live while EITHER clock still runs. The heartbeat history above settles no anchor, so the
-    // second clock has not moved at all and the liability does not expire — at its DAA expiry, or
-    // ever, until the chain produces `depth` more `Final` attempt claims.
+    // second clock has not moved at all and the liability does not expire at its DAA expiry — it
+    // waits for `depth` more anchors, which past the fence are attempt LICENCES, not `Final`s
+    // (2026-09-24 DoS audit, fix #2: the DAA sweep reaches `Final` on heartbeats alone).
     let lock = *ledger.locks.get(&(bond, claim)).expect("the lock is in the ledger");
     let depth = kaspa_consensus_core::config::params::PALW_T12_SETTLED_ANCHOR_DEPTH;
     assert!(lock.is_live_v2(expiry, 0, Some(depth)), "armed: zero anchors settled, so the liability stands at its DAA expiry");
     assert!(
         lock.is_live_v2(expiry + 1_000_000, 0, Some(depth)),
-        "armed: no amount of heartbeat-only history expires it — only settled anchors do"
+        "armed, raw predicate: no amount of heartbeat-only history expires it — only settled anchors do"
+    );
+    // …but the fold and the processor never hand the raw depth past the liveness escape (fix #3,
+    // `palw_second_clock_depth_v1`): once no anchor has settled for `2 × window_court` the second
+    // clock is waived, so a stalled lane bounds the freeze instead of making it eternal. The last
+    // anchor here settled no later than the lie's `Final`.
+    let escaped = |now: u64| palw_second_clock_depth_v1(Some(depth), &[final_daa], now, window_court);
+    assert!(
+        lock.is_live_v2(final_daa + 2 * window_court - 1, 0, escaped(final_daa + 2 * window_court - 1)),
+        "armed: bound up to E − 1"
+    );
+    assert!(
+        !lock.is_live_v2(final_daa + 2 * window_court, 0, escaped(final_daa + 2 * window_court)),
+        "armed: from E the DAA clock alone decides"
     );
     assert!(
         lock.is_live_v2(expiry - 1, depth, Some(depth)),
@@ -111,7 +126,7 @@ fn a_slash_liability_expires_on_the_heartbeat_clock() {
     println!("--- attacker cost to consume it ---");
     println!("heartbeats needed                = {ticks}  (1 DAA per beat, stand-in rule)");
     println!("bond required for a heartbeat    = 0        (bondless, claimless lane)");
-    println!("PALW anchors (Final claims) made = 0");
+    println!("PALW anchors (licences) made     = 0");
     println!("LLM inference performed          = 0");
     println!("hashes                           = {hashes} (= {ticks} x 2^{PALW_HEARTBEAT_WORK_LOG2})");
     println!("wall clock at {cadence_ms} ms/tick    = {wall_hours:.1} h");
