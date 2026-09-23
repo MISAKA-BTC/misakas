@@ -26,9 +26,10 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
   carrier was mined and its bond was dropped. It now carries both signatures.
 * **Model classes pass through a lifecycle** before they pay (§8). A class you register yourself
   starts in `Candidate` and waits for an admission audit.
-* **The CLI defaults.** The operator commands (`mining`, `verifier`, `doctor`, the status snapshot)
-  use testnet-12 when you name no network. Every other `misaka` command still falls back to
-  testnet-10, so set the network once (§3).
+* **The CLI defaults.** Every `misaka` command — the operator commands (`mining`, `verifier`,
+  `doctor`, the status snapshot) and `bond`, `wallet`, `key` and the rest alike — uses testnet-12
+  when you name no network. `--network`, `MISAKA_NETWORK` and `~/.misaka/config.toml` still win, in
+  that order (§3).
 
 ## 1. Build
 
@@ -84,8 +85,9 @@ Consensus fence schedule: 1000 (schedule id …)
 A datadir from the first testnet-12 deployment (genesis `a8cabac4…`) is refused at startup with a
 genesis mismatch. Move it aside. Do not point the new node at it.
 
-Point `misaka` at testnet-12 once, so commands outside the operator group do not fall back to
-testnet-10:
+`misaka` already defaults to testnet-12 for every command. If you also run commands against another
+network from the same shell, name it each time, or pin testnet-12 once so a stray setting cannot
+move you:
 
 ```bash
 export MISAKA_NETWORK=testnet-12        # or: misaka --network testnet-12 config init

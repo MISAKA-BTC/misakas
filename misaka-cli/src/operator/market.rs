@@ -24,8 +24,9 @@ use kaspa_consensus_core::palw_model_market_v1::{
 use kaspa_rpc_core::api::rpc::RpcApi;
 use serde_json::json;
 
-/// A context for `profile`'s network: every market read is a read of one chain, and the CLI's
-/// global default (testnet-10) is not the one a miner's profile names.
+/// A context for `profile`'s network: every market read is a read of one chain, and the one a
+/// miner's profile names (the flag, mining.toml or the running node) wins over the CLI's global
+/// default.
 fn ctx_for(ctx: &crate::node::Ctx, profile: &Profile) -> crate::node::Ctx {
     crate::node::Ctx {
         output: ctx.output,

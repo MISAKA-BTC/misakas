@@ -152,13 +152,13 @@ struct Cli {
     #[arg(long, global = true, value_enum, default_value = "human")]
     output: OutputFormat,
 
-    /// Network id (e.g. testnet-10). Sets default RPC ports + the node-network match check.
-    /// Resolution: CLI > env MISAKA_NETWORK > ~/.misaka/config.toml > testnet-10.
+    /// Network id (e.g. testnet-12). Sets default RPC ports + the node-network match check.
+    /// Resolution: CLI > env MISAKA_NETWORK > ~/.misaka/config.toml > testnet-12 (every command).
     #[arg(long, global = true, visible_alias = "network-id", env = "MISAKA_NETWORK")]
     network: Option<String>,
 
     /// Node wRPC Borsh endpoint host:port (validator/wallet/operator transport).
-    /// Default derives from --network (testnet-10 => 127.0.0.1:27210). NOTE: this is
+    /// Default derives from --network (e.g. testnet-10 => 127.0.0.1:27210). NOTE: this is
     /// the CODE default; some deployments bind borsh on a non-standard port (e.g.
     /// 27610) — pass it here. This is NOT node gRPC (26210) nor EVM JSON-RPC (8545).
     #[arg(long, global = true, visible_alias = "node-wrpc-borsh", env = "MISAKA_RPC")]
@@ -2370,7 +2370,7 @@ async fn main() -> std::process::ExitCode {
     };
     let ctx = node::Ctx {
         output: cli.output,
-        network: cli.network.clone().or(cfg.network_id.clone()).unwrap_or_else(|| "testnet-10".to_string()),
+        network: node::resolve_network(cli.network.clone(), cfg.network_id.clone()),
         rpc: cli.rpc.clone().or_else(|| cfg.node.wrpc_borsh.clone()),
         node_grpc: cli.node_grpc.clone().or_else(|| cfg.node.grpc.clone()),
         evm_rpc: cli.evm_rpc.clone().or_else(|| cfg.evm.rpc_url.clone()).unwrap_or_else(|| "http://127.0.0.1:8545".to_string()),
@@ -2379,8 +2379,8 @@ async fn main() -> std::process::ExitCode {
     };
 
     // ADR-0122: a mining command takes the network the operator NAMED (the flag, the env, the
-    // config file) and otherwise reads it from mining.toml or the running node — never the CLI's
-    // testnet-10 default, which is not a network anyone mines.
+    // config file) and otherwise reads it from mining.toml or the running node, falling back to the
+    // same `node::DEFAULT_NETWORK` every other command uses only when neither says.
     let named_network = cli.network.clone().or_else(|| cfg.network_id.clone());
     let profile =
         |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
@@ -3079,5 +3079,38 @@ mod cli_surface_tests {
         let listed =
             Cli::try_parse_from(["misaka", "wallet", "utxo", "list", "--address", "misakatest:q", "--recent", "3"]).expect("parses");
         assert!(matches!(listed.command, Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { recent: 3, .. }))));
+    }
+
+    /// **Every command defaults to testnet-12 through the one default the operator commands use,
+    /// and a named network still wins** (docs/testnet12-join-mining.md: `misaka bond`, `wallet` and
+    /// `key` used to fall back to testnet-10 while `misaka mining` fell back to testnet-12).
+    #[test]
+    fn every_command_defaults_to_the_one_network_and_a_named_one_wins() {
+        use crate::node::{DEFAULT_NETWORK, resolve_network};
+        assert_eq!(DEFAULT_NETWORK, "testnet-12", "the public network since the 2026-09-22 regenesis");
+        assert_eq!(resolve_network(None, None), DEFAULT_NETWORK);
+        assert_eq!(resolve_network(None, Some("testnet-11".into())), "testnet-11", "~/.misaka/config.toml beats the default");
+        assert_eq!(
+            resolve_network(Some("testnet-10".into()), Some("testnet-11".into())),
+            "testnet-10",
+            "flag / MISAKA_NETWORK beat it"
+        );
+        // The global flag is read the same way by every command family; with no flag the value is
+        // the env's (clap), and only an unset env reaches the default. The env is read, never set,
+        // so this test cannot move a neighbour's.
+        let env = std::env::var("MISAKA_NETWORK").ok();
+        for argv in [
+            vec!["misaka", "bond", "status", "--bond", "aa:0"],
+            vec!["misaka", "wallet", "utxo", "list", "--address", "misakatest:q"],
+            vec!["misaka", "key", "pubkey", "--key-file", "/tmp/never-read"],
+        ] {
+            let plain = Cli::try_parse_from(&argv).expect("parses");
+            assert_eq!(plain.network, env, "{argv:?}: no flag → the env's value or none");
+            assert_eq!(resolve_network(plain.network.clone(), None), env.clone().unwrap_or_else(|| DEFAULT_NETWORK.to_string()));
+            let mut named = argv.clone();
+            named.insert(1, "--network=testnet-11");
+            let named = Cli::try_parse_from(&named).expect("parses");
+            assert_eq!(resolve_network(named.network, Some("testnet-10".into())), "testnet-11", "{argv:?}: the flag wins");
+        }
     }
 }
