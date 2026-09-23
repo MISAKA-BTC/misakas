@@ -115,7 +115,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "schema": "misaka.palw.model-market.v1",
         "found": r.found,
         "line_id": r.line_id,
-        // `opened` is the wire's "a market row exists" (a pledge makes one); `open` is a market.
+        // `open` is a market, read off the row itself. `opened` is the node's flag as served: the
+        // same fact from a node with the 2026-09-23 Position route matrix's P10 repair, and "a
+        // market row exists" (a pledge makes one) from a node without it.
         "opened": r.opened,
         "open": market_from_response(r).is_open(),
         "opened_daa": r.opened_daa,
@@ -195,8 +197,9 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
             }
         );
         println!("  reserve        {}", msk(r.msk_reserve));
-        // `opened` on the wire is "a market row exists", which a pledge alone creates (ADR-0094):
-        // the pair is a market once it holds a seed.
+        // Openness is read off the row (`seed_sompi > 0`), not the wire's `opened`: a node without
+        // the 2026-09-23 P10 repair serves `opened` as "a market row exists", which a pledge alone
+        // creates (ADR-0094). The pair is a market once it holds a seed.
         if market_from_response(&r).is_open() {
             println!("  seed (locked)  {} by {}", msk(r.seed_sompi), r.seeded_by);
         } else if r.seed_pledged_sompi > 0 {
@@ -405,9 +408,10 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     if let Some(why) = market_refusal(&r) {
         return Err(CliError::new(exit::GENERIC, why));
     }
-    // **Open is `seed_sompi > 0`, not the wire's `opened`** — that flag is "a market row exists",
-    // and the first instalment creates one: the second instalment this command's own hint asks
-    // for was refused here as "already seeded (0 MSK locked)".
+    // **Open is `seed_sompi > 0`, not the wire's `opened`** — a node without the 2026-09-23 P10
+    // repair serves that flag as "a market row exists", and the first instalment creates one: the
+    // second instalment this command's own hint asks for was refused here as "already seeded (0 MSK
+    // locked)". Reading the row works against every node.
     if market_from_response(&r).is_open() {
         return Err(CliError::new(
             exit::GENERIC,

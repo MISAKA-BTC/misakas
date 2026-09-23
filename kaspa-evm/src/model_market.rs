@@ -856,7 +856,11 @@ impl MarketHandlers {
                         // P-B3: past the audit fence a line whose class the fold's market gate
                         // refuses is closed to buys here too (the view's set is empty below it).
                         .bool(m.closed_to_buys || self.view.market_refuses(&a.hash64(0)))
-                        .bool(exists)
+                        // P10 on the EVM lane (the 2026-09-23 Position route matrix): past the audit
+                        // fence `exists` is "a market" — the fold's `is_open` — not "a row", which a
+                        // pledge alone writes (ADR-0094) and which IMisakaModelAMM documents as
+                        // "false until the market is seeded". Below it, the old word byte for byte.
+                        .bool(if self.fences.audit_2026_09_23_active { exists && m.is_open() } else { exists })
                         // ADR-0091: appended, so every word above keeps its offset.
                         .u64(m.buyback_sompi)
                         .u64(m.retired_units)
@@ -1534,6 +1538,7 @@ mod tests {
                     evm_active: true,
                     leg_v2_active,
                     seed_v2_active: false,
+                    audit_2026_09_23_active: false,
                 },
                 1,
             );
@@ -1578,6 +1583,7 @@ mod tests {
                 evm_active: true,
                 leg_v2_active: false,
                 seed_v2_active: false,
+                audit_2026_09_23_active: false,
             },
             1,
         );
@@ -1635,6 +1641,7 @@ mod tests {
             evm_active: true,
             leg_v2_active: false,
             seed_v2_active: false,
+            audit_2026_09_23_active: false,
         };
         let closed = |view: &PalwEvmViewV1| {
             let m = MarketHandlers::new(std::sync::Arc::new(view.clone()), fences, 1);
@@ -1656,6 +1663,40 @@ mod tests {
         assert_eq!(errors::class_not_eligible(), selector("ClassNotEligible()"), "the revert names itself");
     }
 
+    /// **P10 on the EVM lane (the 2026-09-23 Position route matrix): past the audit fence
+    /// `market().exists` is "a market", not "a row".** A pledge-only row (ADR-0094) used to read
+    /// `exists = true` although nothing is in the curve and every buy is refused — the defect the
+    /// RPC's `opened` had. Past the fence it reads false until the pledge reaches the floor; below it
+    /// (testnet-11) the word is the old one, byte for byte. A seeded market reads true either way.
+    #[test]
+    fn p10_exists_is_a_market_past_the_fence_and_a_row_below_it() {
+        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelMarketV1};
+        let (pledged_line, seeded_line) = (Hash64::from_u64_word(9), Hash64::from_u64_word(10));
+        let mut view = PalwEvmViewV1 { chain_daa: 42, chain_id: 1, ..Default::default() };
+        view.markets.insert(pledged_line, PalwModelMarketV1::pledge_v1(5, 2 * 100_000_000, Hash64::from_u64_word(1)));
+        view.markets.insert(seeded_line, PalwModelMarketV1::seed_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, Hash64::from_u64_word(1)));
+        let view = std::sync::Arc::new(view);
+        let exists = |audit: bool, line: Hash64| {
+            let fences = PalwEvmMarketFencesV1 {
+                market_active: true,
+                lines_active: true,
+                evm_active: true,
+                leg_v2_active: false,
+                seed_v2_active: false,
+                audit_2026_09_23_active: audit,
+            };
+            let m = MarketHandlers::new(view.clone(), fences, 1);
+            let mut input = sel().market.to_vec();
+            input.extend_from_slice(&line.as_byte_slice()[..32]);
+            input.extend_from_slice(&line.as_byte_slice()[32..]);
+            let Ok(out) = m.amm(&input) else { panic!("the window answers") };
+            u64::from_be_bytes(out[8 * 32 + 24..9 * 32].try_into().unwrap())
+        };
+        assert_eq!(exists(false, pledged_line), 1, "below the fence: a pledge row reads as existing, as it always did");
+        assert_eq!(exists(true, pledged_line), 0, "past it: a pledge is not a market");
+        assert_eq!((exists(false, seeded_line), exists(true, seeded_line)), (1, 1), "a seeded market exists on both sides");
+    }
+
     /// **ADR-0101 Decision 5 (settled by the operator, 2026-09-10): a Position never moves between
     /// holders and is never a means of payment — and the EVM window has no door for either.**
     /// ERC-20's transfer half — `transfer`, `transferFrom`, `approve`, `allowance` — answers
@@ -1672,6 +1713,7 @@ mod tests {
                 evm_active: true,
                 leg_v2_active: false,
                 seed_v2_active: false,
+                audit_2026_09_23_active: false,
             },
             1,
         );

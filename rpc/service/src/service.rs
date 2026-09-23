@@ -303,6 +303,80 @@ fn palw_class_context_row(
     }
 }
 
+/// **`getPalwModelMarket`'s answer, from the tip's read of the line** — the row (or the unopened
+/// market synthesised for a line that has none), whether a row exists, and the class's status.
+///
+/// **`opened` is "this line is a market", not "this line has a row"** (the 2026-09-23 Position
+/// route matrix, P10). Since ADR-0094 a seed's first instalment writes a row that is not yet a
+/// market — nothing in the curve, no price, every buy refused (`ModelMarketMissing`) — and this
+/// answer said `opened: true` for it, so a reader that trusted the flag would offer a buy the fold
+/// refuses. The flag is now the fold's own predicate, `PalwModelMarketV1::is_open`. What a row
+/// does mean stays where it is read: a pledged line still names its first payer (ADR-0094
+/// Decision 3), and `seed_pledged_sompi` says how far it has come. The field and its version are
+/// unchanged, so every client that reads `opened` from the wire — the CLI's JSON, any RPC consumer
+/// — reads the corrected value. (The options site derives "open" from the reserve instead and
+/// does not read this flag.)
+///
+/// **`gate` is the fold's P-B3 market gate** (`ConsensusApi::palw_model_market_gate_v1`) at the
+/// virtual's next block: the class's registry lifecycle and, where the fold would refuse a seed or
+/// a buy, its refusal. A refusal is also OR'd into `closed_to_buys`, so a client that reads only
+/// that flag — an older CLI, the options site — is not offered a buy the fold refuses.
+fn rpc_palw_model_market(
+    line_id: kaspa_hashes::Hash64,
+    read: Option<(
+        kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+        bool,
+        kaspa_consensus_core::palw_state_v2::PalwClassStatusV2,
+    )>,
+    gate: kaspa_consensus_core::api::PalwModelMarketGateReadV1,
+    schedule: kaspa_consensus_core::palw_model_market_v1::PalwModelFeesV1,
+    seed_min_sompi: u64,
+    leg_v2_activation_daa: u64,
+) -> GetPalwModelMarketResponse {
+    use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
+    let Some((market, row, status)) = read else {
+        return GetPalwModelMarketResponse {
+            line_id: line_id.to_string(),
+            seed_min_sompi,
+            burn_permille: schedule.burn_permille,
+            leg_permille: schedule.leg_permille,
+            leg_v2_activation_daa,
+            ..Default::default()
+        };
+    };
+    let market_refusal = gate.refusal.unwrap_or_default();
+    GetPalwModelMarketResponse {
+        found: true,
+        line_id: line_id.to_string(),
+        opened: row && market.is_open(),
+        opened_daa: market.opened_daa,
+        msk_reserve: market.msk_reserve,
+        position_units: market.position_units,
+        sold_units: market.sold_units,
+        burned_sompi: market.burned_sompi,
+        registrant_paid_sompi: market.registrant_paid_sompi,
+        closed_to_buys: market.closed_to_buys
+            || !matches!(status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active)
+            || !market_refusal.is_empty(),
+        price_sompi_per_position: market.price_sompi_per_position_v1(),
+        supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
+        virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
+        class_status: format!("{status:?}"),
+        contributor_paid_sompi: market.contributor_paid_sompi,
+        seed_sompi: market.seed_sompi,
+        seeded_by: if row { market.seeded_by.to_string() } else { String::new() },
+        seed_min_sompi,
+        seed_pledged_sompi: market.seed_pledged_sompi,
+        buyback_sompi: market.buyback_sompi,
+        retired_units: market.retired_units,
+        burn_permille: schedule.burn_permille,
+        leg_permille: schedule.leg_permille,
+        leg_v2_activation_daa,
+        class_lifecycle: gate.lifecycle,
+        market_refusal,
+    }
+}
+
 /// Parse a "txid_hex:index" stake-bond outpoint (txid = 64-byte Hash64) for the
 /// kaspa-pq Phase 12 (ADR-0011) validator RPCs. A malformed value is a client error.
 fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::TransactionOutpoint> {
@@ -1196,7 +1270,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwModelMarketRequest,
     ) -> RpcResult<GetPalwModelMarketResponse> {
-        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
         let line_id = parse_hash64(&request.line_id, "line id")?;
         let session = self.consensus_manager.consensus().unguarded_session();
         // ADR-0114: the schedule the fold would settle a move under at the virtual's DAA — served
@@ -1207,51 +1280,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // ADR-0120: the least seed the fold would open this pair at, at the virtual's DAA — served with
         // an unseeded line too, which is the one a seeder is reading it for.
         let seed_min_sompi = params.palw_model_seed_min_sompi_at(session.get_virtual_daa_score());
-        let Some((market, opened, status)) = session.palw_model_market_v1(line_id) else {
-            return Ok(GetPalwModelMarketResponse {
-                line_id: line_id.to_string(),
-                seed_min_sompi,
-                burn_permille: schedule.burn_permille,
-                leg_permille: schedule.leg_permille,
-                leg_v2_activation_daa,
-                ..Default::default()
-            });
-        };
+        let read = session.palw_model_market_v1(line_id);
         // **The 2026-09-23 Position route matrix, P-B3: the fold's own market gate**, asked at the
-        // virtual's next block. A refusal closes the quote too, so a client that reads only
-        // `closed_to_buys` — an older CLI, the options site — is not offered a buy the fold refuses.
-        let gate = session.palw_model_market_gate_v1(line_id).unwrap_or_default();
-        let market_refusal = gate.refusal.unwrap_or_default();
-        Ok(GetPalwModelMarketResponse {
-            found: true,
-            line_id: line_id.to_string(),
-            opened,
-            opened_daa: market.opened_daa,
-            msk_reserve: market.msk_reserve,
-            position_units: market.position_units,
-            sold_units: market.sold_units,
-            burned_sompi: market.burned_sompi,
-            registrant_paid_sompi: market.registrant_paid_sompi,
-            closed_to_buys: market.closed_to_buys
-                || !matches!(status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active)
-                || !market_refusal.is_empty(),
-            price_sompi_per_position: market.price_sompi_per_position_v1(),
-            supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
-            virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
-            class_status: format!("{status:?}"),
-            contributor_paid_sompi: market.contributor_paid_sompi,
-            seed_sompi: market.seed_sompi,
-            seeded_by: if opened { market.seeded_by.to_string() } else { String::new() },
-            seed_min_sompi,
-            seed_pledged_sompi: market.seed_pledged_sompi,
-            buyback_sompi: market.buyback_sompi,
-            retired_units: market.retired_units,
-            burn_permille: schedule.burn_permille,
-            leg_permille: schedule.leg_permille,
-            leg_v2_activation_daa,
-            class_lifecycle: gate.lifecycle,
-            market_refusal,
-        })
+        // virtual's next block — only for a line the chain holds.
+        let gate = if read.is_some() { session.palw_model_market_gate_v1(line_id).unwrap_or_default() } else { Default::default() };
+        Ok(rpc_palw_model_market(line_id, read, gate, schedule, seed_min_sompi, leg_v2_activation_daa))
     }
 
     async fn get_palw_model_line_call(
@@ -4465,5 +4498,74 @@ mod palw_class_context_tests {
         );
         let no_ledger = palw_class_context_row(two, None, None);
         assert_eq!(no_ledger.source, "unknown", "a node built without a ledger answers from the chain alone");
+    }
+}
+
+#[cfg(test)]
+mod palw_model_market_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelFeesV1, PalwModelMarketV1};
+    use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
+
+    fn answer(read: Option<(PalwModelMarketV1, bool, PalwClassStatusV2)>) -> GetPalwModelMarketResponse {
+        answer_gated(read, Default::default())
+    }
+
+    fn answer_gated(
+        read: Option<(PalwModelMarketV1, bool, PalwClassStatusV2)>,
+        gate: kaspa_consensus_core::api::PalwModelMarketGateReadV1,
+    ) -> GetPalwModelMarketResponse {
+        rpc_palw_model_market(kaspa_hashes::Hash64::from_u64_word(7), read, gate, PalwModelFeesV1::V1, PALW_MODEL_SEED_MIN_SOMPI_V1, 0)
+    }
+
+    /// **P-B3 carried through the P10 refactor: the gate's refusal closes the quote and is served
+    /// word for word; no refusal changes nothing.**
+    #[test]
+    fn a_gate_refusal_closes_buys_and_is_served() {
+        let seeded = PalwModelMarketV1::seed_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, kaspa_hashes::Hash64::from_u64_word(0xF1));
+        let open = answer(Some((seeded, true, PalwClassStatusV2::Active)));
+        assert!(open.opened && !open.closed_to_buys && open.market_refusal.is_empty() && open.class_lifecycle.is_empty());
+        let gate = kaspa_consensus_core::api::PalwModelMarketGateReadV1 {
+            lifecycle: "Prefetching".to_string(),
+            refusal: Some("class 07… is Prefetching under the model registry".to_string()),
+        };
+        let refused = answer_gated(Some((seeded, true, PalwClassStatusV2::Active)), gate);
+        assert!(refused.opened, "a market the gate refuses buys on is still a market a holder sells into");
+        assert!(refused.closed_to_buys, "the refusal is OR'd into closed_to_buys for clients that read only that");
+        assert_eq!(refused.class_lifecycle, "Prefetching");
+        assert_eq!(refused.market_refusal, "class 07… is Prefetching under the model registry");
+        let admitted = kaspa_consensus_core::api::PalwModelMarketGateReadV1 { lifecycle: "Active".to_string(), refusal: None };
+        let admitted = answer_gated(Some((seeded, true, PalwClassStatusV2::Active)), admitted);
+        assert!(!admitted.closed_to_buys && admitted.market_refusal.is_empty() && admitted.class_lifecycle == "Active");
+    }
+
+    /// **A line paid into but short of its floor is not `opened`** (the 2026-09-23 Position route
+    /// matrix, P10: the live pledge-only line read `opened: true`). It still says who started it and
+    /// how much is collected; a line with no row is not opened and names nobody; the market the
+    /// crossing payment opens is opened, and so is one seeded whole.
+    #[test]
+    fn opened_is_a_market_not_a_row() {
+        let first = kaspa_hashes::Hash64::from_u64_word(0xF1);
+        let pledged = PalwModelMarketV1::pledge_v1(5, 2 * 100_000_000, first);
+        let r = answer(Some((pledged, true, PalwClassStatusV2::Active)));
+        assert!(r.found);
+        assert!(!r.opened, "two MSK toward a {PALW_MODEL_SEED_MIN_SOMPI_V1}-sompi floor is not a market");
+        assert_eq!((r.seed_sompi, r.seed_pledged_sompi, r.position_units), (0, 2 * 100_000_000, 0));
+        assert_eq!(r.seeded_by, first.to_string(), "ADR-0094 Decision 3: the row names its first payer");
+
+        let unopened = PalwModelMarketV1::seed_v1(5, 0, kaspa_hashes::Hash64::default());
+        let r = answer(Some((unopened, false, PalwClassStatusV2::Active)));
+        assert!(r.found && !r.opened && r.seeded_by.is_empty(), "no row: nothing opened, nobody named");
+
+        let crossed = PalwModelMarketV1::pledge_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, first).open_from_pledge_v1(9);
+        let r = answer(Some((crossed, true, PalwClassStatusV2::Active)));
+        assert!(r.opened, "the payment that reaches the floor opens it");
+        assert_eq!((r.seed_sompi, r.opened_daa, r.seeded_by), (PALW_MODEL_SEED_MIN_SOMPI_V1, 9, first.to_string()));
+
+        let seeded = PalwModelMarketV1::seed_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, first);
+        assert!(answer(Some((seeded, true, PalwClassStatusV2::Active))).opened);
+
+        let missing = answer(None);
+        assert!(!missing.found && !missing.opened);
     }
 }

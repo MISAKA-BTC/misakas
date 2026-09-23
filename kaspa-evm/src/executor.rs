@@ -1670,6 +1670,7 @@ mod tests {
                 evm_active,
                 leg_v2_active: false,
                 seed_v2_active: false,
+                audit_2026_09_23_active: false,
             },
             expected_settlements: expected,
             chain_id: EVM_CHAIN_ID,

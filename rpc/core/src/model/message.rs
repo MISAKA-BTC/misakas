@@ -3030,7 +3030,11 @@ pub struct GetPalwModelMarketResponse {
     /// ConsensusV2).
     pub found: bool,
     pub line_id: String,
-    /// False until the first buy folded a row; the numbers below are then the unopened market's.
+    /// **True once the line is a market** — its seed reached the floor (ADR-0094 Decision 2) and
+    /// the curve holds the supply. A line still collecting its floor has a row, a first payer in
+    /// `seeded_by` and a total in `seed_pledged_sompi`, and reads false here, as does a line nothing
+    /// was paid into (the numbers below are then the unopened market's). Until the 2026-09-23
+    /// Position route matrix (P10) a node answered "a row exists", so a pledge alone read true.
     pub opened: bool,
     pub opened_daa: u64,
     pub msk_reserve: u64,

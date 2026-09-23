@@ -389,7 +389,9 @@ pub trait ConsensusApi: Send + Sync {
     /// reader still reads what ADR-0087 wrote. `None` when the line (or its class) does not exist;
     /// a line with no market row yet reads as an unopened market (the whole supply in the curve,
     /// no MSK) beside its class's status, so a reader can quote before the first move. The `bool`
-    /// says whether a row exists.
+    /// says whether a row exists — which is not whether the line is a market: since ADR-0094 a
+    /// seed's first instalment writes a row, and the RPC's `opened` is `PalwModelMarketV1::is_open`
+    /// (the 2026-09-23 Position route matrix, P10).
     fn palw_model_market_v1(
         &self,
         _line_id: kaspa_hashes::Hash64,

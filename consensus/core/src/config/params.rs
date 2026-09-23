@@ -5359,6 +5359,7 @@ impl Params {
             evm_active: self.palw_model_evm_active_at(daa_score),
             leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
             seed_v2_active: self.palw_model_seed_v2_active_at(daa_score),
+            audit_2026_09_23_active: self.palw_audit_2026_09_23_active_at(daa_score),
         }
     }
 
@@ -19243,6 +19244,8 @@ mod consensus_params_id_tests {
                 // ADR-0114 moves what a quote says, never whether a window exists; nor does ADR-0120.
                 leg_v2_active: bits & 1 != 0,
                 seed_v2_active: bits & 2 != 0,
+                // Nor does the 2026-09-23 audit: it changes what `market().exists` means (P10).
+                audit_2026_09_23_active: bits & 4 != 0,
             };
             assert_eq!(f.any_active(), bits != 0, "one window iff some fence is in force");
         }

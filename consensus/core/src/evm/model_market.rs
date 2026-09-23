@@ -317,6 +317,12 @@ pub struct PalwEvmMarketFencesV1 {
     /// writer takes any non-zero seed either way (ADR-0094: the fold collects it), so this changes no
     /// handler and no address either.
     pub seed_v2_active: bool,
+    /// `Params::palw_audit_2026_09_23` (testnet-12 only). The AMM's `market(line)` `exists` word
+    /// means "this line is a market" (`PalwModelMarketV1::is_open`) past it, where below it the word
+    /// is "a row exists" — which a pledge alone writes (the 2026-09-23 Position route matrix, P10,
+    /// on the EVM lane; the RPC's `opened` had the same defect). Changes no handler and no address,
+    /// so it is not part of [`Self::any_active`]; below it every word is byte-identical.
+    pub audit_2026_09_23_active: bool,
 }
 
 impl PalwEvmMarketFencesV1 {

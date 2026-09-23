@@ -6357,10 +6357,21 @@ impl PalwChainStateV2 {
     /// The tenure is the MOST RECENT of the ids' clocks: a person who sold from one of their own
     /// addresses last block has sold, and taking the oldest clock would let a holder keep a long
     /// tenure in one hand while trading with the other.
+    ///
+    /// **Each id counts once, however often the list names it** (the 2026-09-23 Position route
+    /// matrix, P11). The list is the caller's — a gateway's, a wallet's, the holder's own — and
+    /// summing it as given let one holding be counted twice: the same id listed twice turned tier 0
+    /// into tier 1. A set of ids is a set. No consensus path reads this sum (its only readers are
+    /// the two tier functions above, which nothing in the fold, the processor or the EVM window
+    /// calls), so the repair changes no state root on any network and takes no fence.
     pub fn model_position_across(&self, line_id: &Hash64, holders: &[Hash64], daa: u64) -> (u64, u64) {
         let mut units = 0u64;
         let mut tenure = u64::MAX;
+        let mut counted = BTreeSet::new();
         for h in holders {
+            if !counted.insert(*h) {
+                continue;
+            }
             let held = self.model_position(line_id, h);
             if held == 0 {
                 continue;
@@ -41841,6 +41852,46 @@ pub(crate) mod tests {
             assert_eq!(s1.model_market(&class).copied(), before.0, "no reserve, no units, no retirement");
             assert_eq!(s1.model_positions_of(&h64(9)).len(), before.1);
             assert!(s1.model_benefits(&class).is_some(), "only its own row");
+        }
+
+        /// **N3 — a person is a SET of ids: one listed twice is one holding** (the 2026-09-23
+        /// Position route matrix, P11). The tier sums the ids a person proved, and it summed the list
+        /// as handed to it, so a holder just under the second tier who named their own id twice was
+        /// read as inside it. Two different ids still add up — that is §4.3's whole point — and the
+        /// order and the repeats of the list change nothing.
+        #[test]
+        fn an_id_listed_twice_is_one_holding_and_buys_no_tier() {
+            const MSK: u64 = 100_000_000;
+            let (p, s, class) = chain();
+            let (a, b) = (h64(0xB0_0001), h64(0xB0_0002));
+            let buy = |holder: Hash64| PalwConsensusObjectV2::ModelBuy {
+                line_id: class,
+                holder,
+                msk_in: 1_000 * MSK,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: class,
+                seeder: h64(0xB0_0009),
+                msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            let s1 = apply_b(&s, &p, &ctx(3, 251, 3), &[seed, buy(a), buy(b)]);
+            let (held_a, held_b) = (s1.model_position(&class, &a), s1.model_position(&class, &b));
+            assert!(held_a > 0 && held_b > 0, "both bought");
+            // Tier 1 starts one unit above what `a` holds alone.
+            let ladder = vec![tier(1, grant::SUPPORT, 0, 0), tier(held_a + 1, grant::SUPPORT | grant::PRIVATE_BETA, 0, 0)];
+            let s2 = apply_b(&s1, &p, &ctx(4, 252, 4), &[declare(class, ladder, 0, 0)]);
+            let tier_of = |ids: &[Hash64]| s2.model_benefit_tier_across(&class, ids, 252).map(|(index, _)| index);
+
+            assert_eq!(s2.model_position_across(&class, &[a, a], 252).0, held_a, "the same id twice is one holding");
+            assert_eq!(tier_of(&[a]), Some(0));
+            assert_eq!(tier_of(&[a, a]), Some(0), "naming one's own id again buys no tier");
+            assert_eq!(s2.model_benefit_tier(&class, &a, 252).map(|(index, _)| index), Some(0));
+            assert_eq!(s2.model_position_across(&class, &[b, a, b, a], 252).0, held_a + held_b, "two ids, each once");
+            assert_eq!(tier_of(&[a, b]), Some(1), "two ids a person proved do add up");
+            assert_eq!(tier_of(&[b, a, b, a]), Some(1), "and the repeats change nothing");
         }
     }
 
