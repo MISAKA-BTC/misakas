@@ -5714,6 +5714,13 @@ pub enum PalwStateV2Error {
     // fail, so an oversized preimage never reaches acceptance, let alone the transition — and the
     // transition stores no part of it. A third copy of the bound here would be a rule this file
     // declares and can never apply, which is the shape that makes a gate's own size unreadable.
+    /// **2026-09-24 DoS audit #5, the forfeiture half: a receipt block of a convicted execution.**
+    /// Past `palw_audit_2026_09_23` a `PanelFalseValid` conviction that named `execution_root`
+    /// forfeits every downstream right of that execution (ADR-0151), and a free-prompt quantum's
+    /// receipt block is one of them. Refused at admission too (`palw_v2_check_receipt_spend`), so
+    /// the fold meets this only on a divergence.
+    #[error("claim {claim}'s receipt rights are forfeit: its execution {execution_root} was convicted")]
+    ReceiptRightsForfeited { claim: Hash64, execution_root: Hash64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -7213,6 +7220,16 @@ impl PalwChainStateV2 {
             .filter(|row| row.execution_root != Hash64::default())
             .map(|row| row.execution_root)
             .collect()
+    }
+
+    /// **Whether one execution's rights are forfeit** — [`Self::palw_forfeited_execution_roots_v1`]
+    /// asked about a single root, without building the set (2026-09-24 DoS audit #5).
+    ///
+    /// The zero root is never forfeit: a conviction below ADR-0151's bundle records it for "no
+    /// execution named", and a claim that carries it names none either, so reading it as a match
+    /// would forfeit every unrooted claim on the first conviction of the chain's life.
+    pub fn palw_execution_root_is_forfeited_v1(&self, execution_root: &Hash64) -> bool {
+        *execution_root != Hash64::default() && self.consumed_offences.values().any(|row| row.execution_root == *execution_root)
     }
 
     pub fn panel_liability(&self, claim: &Hash64) -> Option<&crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1> {
@@ -9873,6 +9890,9 @@ impl<'a> TransitionBuilder<'a> {
         }
         // ADR-0151: the execution a conviction forfeits the rights of. Set by the arm that knows one.
         let mut convicted_execution_root = Hash64::default();
+        // 2026-09-24 DoS audit #8: the claim a `PanelFalseValid` names — the one whose `Final`, if
+        // it has one, the conviction takes back. Set by that arm alone.
+        let mut convicted_claim: Option<Hash64> = None;
         let amount = match kind {
             PalwOffenceKindV1::ExecutorEquivocation => self.state.bonds.get(&accused).map(|b| b.collateral).unwrap_or(0),
             PalwOffenceKindV1::PanelFalseValid => {
@@ -9895,6 +9915,7 @@ impl<'a> TransitionBuilder<'a> {
                 let ladder = class_id.and_then(|id| self.state.class_step_ladders.get(&id).copied()).unwrap_or(64);
                 let (execution_root, artifact_root) = self.false_valid_execution_roots(&payload)?;
                 convicted_execution_root = execution_root;
+                convicted_claim = Some(payload.claim_id);
                 palw_panel_contradiction_convicts_execution_v1(&payload.contradiction, execution_root, artifact_root, ladder)
                     .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(offence_id, e.to_string()))?;
                 if let Some(lock) = self.state.slashable_locks.get(&(accused, payload.claim_id)).copied() {
@@ -9914,6 +9935,9 @@ impl<'a> TransitionBuilder<'a> {
             PalwOffenceKindV1::CourtExecutorGuilty => 0,
         };
         self.slash_bond(accused, amount as u128)?;
+        // ADR-0151: recorded only where the bundle is armed, so a dormant network's
+        // `consumed_offences` rows — and therefore its state root — are what they were.
+        let recorded_root = if self.extras.economic_safety.is_some() { convicted_execution_root } else { Hash64::default() };
         self.write_consumed_offence(
             offence_id,
             Some(PalwConsumedOffenceV1 {
@@ -9921,11 +9945,132 @@ impl<'a> TransitionBuilder<'a> {
                 accused: accused.0,
                 amount,
                 accepted_daa: ctx.daa_score,
-                // ADR-0151: recorded only where the bundle is armed, so a dormant network's
-                // `consumed_offences` rows — and therefore its state root — are what they were.
-                execution_root: if self.extras.economic_safety.is_some() { convicted_execution_root } else { Hash64::default() },
+                execution_root: recorded_root,
             }),
         );
+        // **2026-09-24 DoS audit #7 and #8: what a conviction takes back.** Both behind the audit
+        // fence (testnet-12 only); below it a conviction slashes and records, exactly as before.
+        if self.extras.audit_2026_09_23_active
+            && let Some(claim_id) = convicted_claim
+        {
+            // #7: the tickets and permits the convicted work already holds in a minted schedule or
+            // a pending snapshot. Reads the root the forfeiture set will read, so the two stages
+            // cannot disagree about which work was convicted (zero where ADR-0151 is dormant, and
+            // then this is a no-op like the rest of the forfeiture).
+            self.forfeit_minted_round_rights(&recorded_root);
+            // #8: the named claim's own `Final` — its weight, its probe pass, its usage.
+            self.reverse_convicted_final(ctx, claim_id)?;
+        }
+        Ok(())
+    }
+
+    /// **2026-09-24 DoS audit #7: forfeiture reaches the execution schedule already minted.**
+    ///
+    /// ADR-0151 filters a convicted root when the next snapshot is taken and when the next mint
+    /// runs; a conviction that lands after either left the tickets it would have filtered in
+    /// `round_schedules` (or the Finals in `round_pending`), and the round verdict
+    /// (`palw_round_verdicts_v1`) grants whatever the parent state's schedule grants. Rewriting the
+    /// rows at the conviction — rather than teaching every reader of a schedule to consult the
+    /// forfeiture set — keeps "what a round may be won by" in ONE rooted place: the verdict, the
+    /// producer's round view and the equivocation check all read the same pruned schedule, and a
+    /// reorg that unwinds the conviction restores the rows through the entries written here
+    /// (`RoundSchedule` / `RoundPending`, each carrying its old value). At most two schedules and
+    /// one snapshot are kept at a time, so this touches at most three rows.
+    fn forfeit_minted_round_rights(&mut self, forfeited_root: &Hash64) {
+        use crate::palw_execution_lane_v1::{palw_execution_schedule_forfeit_v1, palw_execution_snapshot_forfeit_v1};
+        if *forfeited_root == Hash64::default() {
+            return;
+        }
+        for span in self.state.round_schedules.keys().copied().collect::<Vec<_>>() {
+            let pruned = self
+                .state
+                .round_schedules
+                .get(&span)
+                .and_then(|schedule| palw_execution_schedule_forfeit_v1(schedule, forfeited_root));
+            if let Some(pruned) = pruned {
+                self.write_round_schedule(span, Some(pruned));
+            }
+        }
+        for target in self.state.round_pending.keys().copied().collect::<Vec<_>>() {
+            let pruned = self
+                .state
+                .round_pending
+                .get(&target)
+                .and_then(|snapshot| palw_execution_snapshot_forfeit_v1(snapshot, forfeited_root));
+            if let Some(pruned) = pruned {
+                // A snapshot is written only when it lists a domain (`rotate_round_lane`); one the
+                // conviction emptied is dropped the same way, and its span is idle, explicitly.
+                self.write_round_pending(target, (!pruned.domains.is_empty()).then_some(pruned));
+            }
+        }
+    }
+
+    /// **2026-09-24 DoS audit #8: a conviction after `Final` takes back what the `Final` counted.**
+    ///
+    /// A `PanelFalseValid` conviction proves the Valid receipt that licensed this claim was false,
+    /// and before this it changed nothing about the claim: the phase stayed `Final`, the claim's
+    /// `safe_weight` stayed in fork choice (59,742.94 MSK of it for one 2M claim, the audit's
+    /// finding 20), the class kept a probe pass it never earned, the version its usage, and every
+    /// receipt block the Final licensed kept its weight. Past the fence the claim is VOIDED —
+    /// `CourtFraud`, the reason a proven-false execution already carries when a court finds it —
+    /// and each thing its `Final` counted is subtracted where it was counted:
+    ///
+    /// * **Weight.** An attempt's `Final` added its contribution; a free-prompt `Final` added
+    ///   nothing and each spend added `per_quantum`. The amount subtracted is the one
+    ///   `retire_claim` would have moved to `retired_safe_weight` — `canonical.unwrap_or(pwu)` for
+    ///   an attempt, `per_quantum × |spent|` for a free-prompt claim — i.e. the claim's half of the
+    ///   CEILING `assert_internal_consistency_v3` re-derives. That is exact wherever ADR-0069
+    ///   Decision 7 is dormant (contribution == ceiling). Where it is armed the contribution the
+    ///   `Final` actually added may have been zero (a weightless class) and is recorded nowhere, so
+    ///   subtracting the CEILING is the only choice that provably keeps `safe_weight <= ceiling`:
+    ///   subtracting less could leave `safe_weight` above the bound the claim's removal lowers, and
+    ///   `load_tip` refuses such a tip on every node. Understating is the harmless direction (the
+    ///   check says so), and saturating keeps a conviction from ever failing the block over it.
+    /// * **The spent set is cleared** with the weight: a free-prompt claim with spends outside
+    ///   `Final` is refused by the consistency check ("spent before Final"), and a voided claim can
+    ///   never spend again, so nothing reads it.
+    /// * **Probe**: the pass `finalize_claim` noted is withdrawn from the running total — and from
+    ///   the span's, when the `Final` fell in the span the registry is still observing (the span
+    ///   step resets that counter, so an older pass is no longer in it) — and a failure is noted, as
+    ///   `void_claim` notes one for `CourtFraud`.
+    /// * **Usage**: `uncount_claim_usage`, `void_claim`'s own subtraction.
+    /// * **Deadline**: the `Final` retirement is disarmed and the `Voided` one armed from the
+    ///   conviction's DAA, as `void_claim` arms it.
+    ///
+    /// **Not reversed, deliberately:** `final_work` — a reader-only shadow that is never in the
+    ///   root (op 186's share), whose per-claim amount was the economics snapshot `finalize_claim`
+    ///   deletes, so an exact subtraction needs a record the state does not keep; the safe frontier,
+    ///   which never retreats by construction (fork choice's first key); payouts, which the next
+    ///   block's coinbase has already carried; and the receipt census, a retarget measurement of
+    ///   blocks that were in fact produced.
+    ///
+    /// Only the NAMED claim, never its siblings by root: the forfeiture of downstream rights is by
+    /// root (ADR-0151, #5, #7), but voiding a `Final` another producer reached on the same root
+    /// would let one self-convicted copy strip an honest claim's weight. A claim already retired,
+    /// or not `Final`, is left alone: its weight moved to `retired_safe_weight` with no record left
+    /// to re-derive it from, or it has counted nothing yet.
+    fn reverse_convicted_final(&mut self, ctx: &PalwBlockContextV2, id: Hash64) -> Result<(), PalwStateV2Error> {
+        let Some(claim) = self.state.claims.get(&id).cloned() else { return Ok(()) };
+        let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return Ok(()) };
+        let weight = match &claim.source {
+            PalwClaimSourceV2::Attempt => self.canonical_claim_weight(&claim).unwrap_or(claim.pwu as u128),
+            PalwClaimSourceV2::FreePrompt { quanta, spent } => {
+                let per_quantum = palw_fp_spend_weight_v1(&self.state, &claim, *quanta, &self.fp_pricing());
+                per_quantum.checked_mul(spent.len() as u128).ok_or(PalwStateV2Error::Overflow("convicted free-prompt weight"))?
+            }
+        };
+        self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
+        self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score);
+        self.note_model_probe(&claim, false);
+        self.uncount_claim_usage(&id, &claim);
+        let mut voided = claim.clone();
+        voided.phase = PalwClaimPhaseV2::Voided { voided_daa: ctx.daa_score, reason: PalwVoidReasonV2::CourtFraud };
+        if let PalwClaimSourceV2::FreePrompt { spent, .. } = &mut voided.source {
+            spent.clear();
+        }
+        self.write_claim(id, Some(voided.clone()));
+        self.disarm_deadline(id);
+        self.arm_retirement(id, &voided)?;
         Ok(())
     }
 
@@ -10802,6 +10947,31 @@ impl<'a> TransitionBuilder<'a> {
             next.probes_failed = next.probes_failed.saturating_add(1);
         }
         self.write_model_lifecycle(claim.class_id, Some(next));
+    }
+
+    /// **2026-09-24 DoS audit #8: withdraw the probe pass a convicted `Final` was credited.**
+    ///
+    /// The inverse of [`Self::note_model_probe`]`(claim, true)` under the same gates. The running
+    /// total always loses the pass. The span's counter loses it only while the registry is still
+    /// observing the span the `Final` fell in: `step_model_registry` resets `_this_span` at every
+    /// boundary (it runs from `rotate_round_lane`, first thing in the block), so a pass from an
+    /// earlier span is no longer in that counter and subtracting it would take a pass from some
+    /// other claim. Without an open lane the registry never steps and there is only one span.
+    /// Saturating, as the counting side is.
+    fn unnote_model_probe_pass(&mut self, claim: &PalwClaimStateV2, final_daa: u64, now_daa: u64) {
+        if self.model_registry_fold().is_none() || !matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            return;
+        }
+        let Some(mut row) = self.state.model_lifecycles.get(&claim.class_id).cloned() else { return };
+        row.probes_passed = row.probes_passed.saturating_sub(1);
+        let same_span = self.extras.round_lane.is_none_or(|lane| {
+            crate::palw_execution_lane_v1::palw_execution_span_v1(final_daa, lane.schedule_span_daa)
+                == crate::palw_execution_lane_v1::palw_execution_span_v1(now_daa, lane.schedule_span_daa)
+        });
+        if same_span {
+            row.probes_passed_this_span = row.probes_passed_this_span.saturating_sub(1);
+        }
+        self.write_model_lifecycle(claim.class_id, Some(row));
     }
 
     /// **The registry's span step** (ADR-0135 Decisions 5 and 6), at every span boundary: rows are
@@ -17999,6 +18169,22 @@ fn apply_receipt_spend(
     };
     if !matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) {
         return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "ReceiptSpend" });
+    }
+    // **2026-09-24 DoS audit #5, the forfeiture half.** A free-prompt `Final` licenses receipt
+    // blocks, each paid the unescrowed worker base at the coinbase — the audit measured one W₀ of
+    // fabricated compute at ~3,200 MSK of such blocks against a seat lock of ~7 MSK. ADR-0151
+    // forfeits a convicted execution's rights at every stage of the EXECUTION lane (snapshot,
+    // mint, and since #7 the minted schedule), but this lane checked only the phase, and a
+    // `PanelFalseValid` conviction never moved it: spends went on after the conviction exactly as
+    // before it (`dos_repro_1`). Past the fence the conviction's root closes the lane too.
+    //
+    // By ROOT, as ADR-0151 forfeits: a sibling claim that carries the same execution certified
+    // the same convicted work. The named claim itself no longer reaches here past the fence — the
+    // conviction voids it (`reverse_convicted_final`, #8) and the phase check above refuses it —
+    // so this arm is what reaches the copies. Below the fence nothing is read, so a dormant
+    // network's spends fold exactly as they did.
+    if builder.extras.audit_2026_09_23_active && builder.state.palw_execution_root_is_forfeited_v1(&claim.execution_root) {
+        return Err(PalwStateV2Error::ReceiptRightsForfeited { claim: claim_id, execution_root: claim.execution_root });
     }
     if spend.quantum_index >= *quanta {
         return Err(PalwStateV2Error::QuantumOutOfRange { claim: claim_id, index: spend.quantum_index, quanta: *quanta });

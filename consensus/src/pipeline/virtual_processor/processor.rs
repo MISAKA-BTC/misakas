@@ -4472,6 +4472,12 @@ impl VirtualStateProcessor {
             }
             let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { continue };
             let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else { continue };
+            // 2026-09-24 DoS audit #5: a convicted execution's quanta are refused at admission, so
+            // listing them would send a producer to build a block the network disqualifies.
+            let forfeit_armed = state.last_point().is_some_and(|point| self.palw_audit_2026_09_23_at(point.daa_score));
+            if forfeit_armed && state.palw_execution_root_is_forfeited_v1(&claim.execution_root) {
+                continue;
+            }
             // ADR-0148: the admission's own target expression for the claim's era — the pooled
             // target scaled by the compute a quantum carries, or the class's target below the fence.
             let target = match pricing.as_ref() {
@@ -9390,6 +9396,15 @@ impl VirtualStateProcessor {
         let kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::Final { final_daa } = claim.phase else {
             return Err(format!("claim {} is not certified at this chain point", envelope.spend.claim_id));
         };
+        // 2026-09-24 DoS audit #5: the fold's own refusal (`ReceiptRightsForfeited`), asked here at
+        // the same chain point and the same fence so an own block is disqualified — and a merged one
+        // unentitled — for the reason the fold would refuse it, not for a divergence.
+        if self.palw_audit_2026_09_23_at(point.daa_score) && state.palw_execution_root_is_forfeited_v1(&claim.execution_root) {
+            return Err(format!(
+                "claim {}'s receipt rights are forfeit: its execution {} was convicted",
+                envelope.spend.claim_id, claim.execution_root
+            ));
+        }
         let slot = fp_draw_slot_v3(final_daa, freeprompt.receipt_maturity_daa())
             .ok_or_else(|| "the draw slot overflows the DAA space".to_string())?;
         // Derived from the block's OWN selected parent, so the walk is the candidate's and the

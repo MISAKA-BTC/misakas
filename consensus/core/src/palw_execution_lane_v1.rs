@@ -532,6 +532,56 @@ pub fn palw_execution_schedule_assign_quanta_bounded_v1(
     );
 }
 
+/// **2026-09-24 DoS audit #7: a conviction reaches the tickets already minted.**
+///
+/// ADR-0151 forfeits a convicted execution at the three stages a right waits in BEFORE it is
+/// minted — the gathered Finals, the pending snapshot, the mint — and at none after. A Final of
+/// span `n` mints at the first block of `n + 2`; a conviction that lands after that left every
+/// ticket of the convicted work a valid permit, because the round verdict reads the schedule and
+/// nothing else (`dos_l3_forfeiture_does_not_reach_a_minted_schedule`). Where the maturity equals
+/// the court window and leaves no remainder, that is all of them.
+///
+/// So the schedule itself is rewritten, as though the convicted work had been filtered when the
+/// snapshot was taken:
+///
+/// * every Final that carries `forfeited_root` leaves `finals` — by root, as the mint forfeits,
+///   since the mint collapsed copies of one execution into the ticket set of the first;
+/// * every ticket minted from one of those Finals leaves `quanta`. The survivors keep the rounds
+///   they were assigned: a round is a promise already made to an honest ticket, and re-probing
+///   would move tickets the conviction has nothing to do with;
+/// * `domains` are re-derived from the surviving Finals by the snapshot's own function, so the
+///   ADR-0125 lottery — which draws from `domains` whenever `quanta` is empty — cannot hand the
+///   convicted bond the permits its tickets just lost. Without this, pruning the LAST ticket of a
+///   span would have turned the lottery back on with the convicted work still counted in it.
+///
+/// `None` when the schedule holds nothing of that root (the caller writes nothing, so no delta
+/// entry exists for a schedule the conviction did not touch), and for the zero root, which a
+/// conviction records when it named no execution. Deterministic in its inputs; the fold writes
+/// the result through `write_round_schedule`, whose entry carries the old value for a revert.
+pub fn palw_execution_schedule_forfeit_v1(schedule: &PalwExecScheduleV1, forfeited_root: &Hash64) -> Option<PalwExecScheduleV1> {
+    if *forfeited_root == Hash64::default() || !schedule.finals.iter().any(|f| f.execution_root == *forfeited_root) {
+        return None;
+    }
+    let dropped: BTreeSet<Hash64> =
+        schedule.finals.iter().filter(|f| f.execution_root == *forfeited_root).map(|f| f.claim_id).collect();
+    let finals: Vec<PalwExecFinalV1> = schedule.finals.iter().copied().filter(|f| f.execution_root != *forfeited_root).collect();
+    let quanta = schedule.quanta.iter().copied().filter(|q| !dropped.contains(&q.final_id)).collect();
+    let domains = palw_execution_schedule_snapshot_v1(schedule.span_index, &finals).domains;
+    Some(PalwExecScheduleV1 { span_index: schedule.span_index, seed: schedule.seed, domains, finals, quanta })
+}
+
+/// [`palw_execution_schedule_forfeit_v1`] for a snapshot not yet seeded: the snapshot re-taken
+/// from its Finals less the convicted work. The mint at seeding filters the forfeited root on its
+/// own, but it reads the snapshot's `domains` for the lottery fallback, so the snapshot is
+/// rewritten for the same reason the schedule's domains are. `None` exactly as there.
+pub fn palw_execution_snapshot_forfeit_v1(snapshot: &PalwExecSnapshotV1, forfeited_root: &Hash64) -> Option<PalwExecSnapshotV1> {
+    if *forfeited_root == Hash64::default() || !snapshot.finals.iter().any(|f| f.execution_root == *forfeited_root) {
+        return None;
+    }
+    let finals: Vec<PalwExecFinalV1> = snapshot.finals.iter().copied().filter(|f| f.execution_root != *forfeited_root).collect();
+    Some(palw_execution_schedule_snapshot_v1(snapshot.target_span, &finals))
+}
+
 /// The most permits one domain may hold in a round of `width`: a third, rounded up.
 pub fn palw_execution_domain_cap_v1(width: u16) -> u16 {
     width.div_ceil(3).max(1)
