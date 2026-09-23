@@ -838,18 +838,82 @@ pub fn palw_class_residency_within_share_v1(
     resident_bytes: Option<u64>,
     share: Option<u64>,
 ) -> misaka_palw_sdk::PalwWeightResidencyV1 {
+    palw_class_residency_beside_the_attempt_v1(resident_bytes, share, 0)
+}
+
+/// **The residency policy with the ATTEMPT carved out of the share first** (ADR-0151 follow-up,
+/// item 3's other half).
+///
+/// On ibm, 2026-09-23: a 7 GiB share, and `residency … budget 6.65 GiB = 1.86 GiB pinned + 4.79 GiB
+/// for routed experts` — anonymous, i.e. the residency took the whole share and the attempt that
+/// followed had nothing, whatever the gate said. `attempt_reserve` is what this node's producer
+/// class needs for one attempt (`palw_producer_attempt_reserve_v1`: the class's resource profile,
+/// folded), and it comes off the share BEFORE the fifth is measured against it, so the weights are
+/// budgeted from what the attempt leaves. Zero for a node that produces nothing.
+pub fn palw_class_residency_beside_the_attempt_v1(
+    resident_bytes: Option<u64>,
+    share: Option<u64>,
+    attempt_reserve: u64,
+) -> misaka_palw_sdk::PalwWeightResidencyV1 {
     use misaka_palw_sdk::PalwWeightResidencyV1 as Residency;
     match resident_bytes {
         None => match share {
             // The share IS the headroom: it already excludes the other nodes, so the host-wide
             // reserve is not subtracted a second time — that reserve exists to keep a node's own
-            // non-weight memory out of the weights' budget, and a share divides the same host.
-            Some(share) => palw_class_default_residency_v1(Some(share.saturating_add(PALW_CLASS_NODE_RESERVE_BYTES_V1))),
+            // non-weight memory out of the weights' budget, and a share divides the same host. The
+            // attempt's reserve IS subtracted: it is memory this process will allocate beside the
+            // weights, and a residency that ignored it would be sized for a node that never produces.
+            Some(share) => palw_class_default_residency_v1(Some(
+                share.saturating_sub(attempt_reserve).saturating_add(PALW_CLASS_NODE_RESERVE_BYTES_V1),
+            )),
             None => palw_class_default_residency_v1(host_available_bytes_v1()),
         },
         Some(0) => Residency::PageCache,
         Some(bytes) => Residency::Bytes(bytes),
     }
+}
+
+/// **What one attempt of this node's producer class needs, from the class table alone** — before
+/// any artifact is loaded, so the residency can be carved around it. The class's profile and
+/// canonical job come from the genesis table (`canonical_classes_v1`), the capture is the lane's
+/// (a held class folds), the representation is the family's shipped one, and the leaf count is
+/// priced at the class's own ladder. Zero for no producer class, an unknown one, or a class the
+/// derivation cannot price — a producer that then holds is the gate's business, not this carve's.
+pub fn palw_producer_attempt_reserve_v1(court: &PalwCourtParamsV2, producer_class: Option<Hash64>) -> u64 {
+    use kaspa_consensus_core::palw_resource_profile_v1::{
+        PalwCaptureRetentionV1, PalwResourceRoleV1, PalwRuntimeLimitsV1, PalwRuntimeProfileV1, palw_attempt_capture_folds_v1,
+        palw_profile_max_tile_len_v1, palw_resource_profile_v1,
+    };
+    let Some(class_id) = producer_class else { return 0 };
+    let classes = misaka_palw_base0::classes::canonical_classes_v1(court);
+    let Some(entry) = classes.iter().find(|c| c.profile.shape_profile_id() == class_id) else { return 0 };
+    let profile = &entry.profile;
+    let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, entry.canonical_job.0, entry.canonical_job.1);
+    let ladder = kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(court.max_step_leaf_count(), profile);
+    let Ok(leaf_count) = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, &job, ladder) else { return 0 };
+    let hybrid = kaspa_consensus_core::palw_resource_profile_v1::palw_recurrence_layers_v1(profile) > 0;
+    let runtime = if hybrid { PalwRuntimeProfileV1::Q36KvI32 } else { misaka_palw_base0::engine_a16::KV_STORAGE_SHIPPED_V1 };
+    let capture = if palw_attempt_capture_folds_v1(profile) {
+        PalwCaptureRetentionV1::Fold {
+            retain_level: misaka_palw_base0::fp_capture::palw_base0_sparse_retain_level_for_class_v1(profile, ladder),
+        }
+    } else {
+        PalwCaptureRetentionV1::DenseTiles { tile_len: palw_profile_max_tile_len_v1(profile) }
+    };
+    // The same run-length rule each backend's own derivation applies: the dense engine walks the
+    // prefill `A16_PREFILL_RUN_POSITIONS` at a time; the hybrid engine walks a per-position class one
+    // position at a time and a per-call class in one pass over the prefill.
+    let run_positions = if !hybrid {
+        misaka_palw_base0::qwen25_a16_backend::A16_PREFILL_RUN_POSITIONS as u32
+    } else if kaspa_consensus_core::palw_state_chunk_map::palw_map_addresses_history_tiles_v1(profile) {
+        1
+    } else {
+        job.declared_prefill_tokens.max(1)
+    };
+    let limits = PalwRuntimeLimitsV1 { threads: std::thread::available_parallelism().map_or(1, |n| n.get() as u32), prefill_run_positions: run_positions };
+    palw_resource_profile_v1(profile, &job, leaf_count, runtime, PalwResourceRoleV1::Producer, limits, capture)
+        .map(|p| p.working_set_bytes())
+        .unwrap_or(0)
 }
 
 /// **The floor a share must clear to run a node at all**, beyond any class it holds: the consensus
@@ -1541,6 +1605,20 @@ mod tests {
             "40 GiB available, 16 of them the node's own"
         );
         assert_eq!(palw_class_default_residency_v1(Some(8 << 30)), Residency::FifthWithin(0), "a host in swap spares nothing");
+        // **The attempt is carved out of the share before the weights are budgeted.** ibm, 2026-09-23:
+        // a 7 GiB share let the residency take 6.65 GiB and the attempt that followed was killed. With
+        // the producer's attempt reserved first the weights get what the attempt leaves; a node that
+        // produces nothing reserves nothing and reads as before.
+        assert_eq!(palw_class_residency_within_share_v1(None, Some(7 << 30)), Residency::FifthWithin(7 << 30));
+        assert_eq!(palw_class_residency_beside_the_attempt_v1(None, Some(7 << 30), 0), Residency::FifthWithin(7 << 30));
+        assert_eq!(
+            palw_class_residency_beside_the_attempt_v1(None, Some(7 << 30), 1 << 30),
+            Residency::FifthWithin(6 << 30),
+            "a 1 GiB attempt leaves 6 GiB for the weights"
+        );
+        assert_eq!(palw_class_residency_beside_the_attempt_v1(None, Some(7 << 30), 9 << 30), Residency::FifthWithin(0), "an attempt past the share leaves none");
+        assert_eq!(palw_class_residency_beside_the_attempt_v1(Some(5 << 30), Some(7 << 30), 9 << 30), Residency::Bytes(5 << 30), "a stated figure is still the figure");
+        assert_eq!(palw_producer_attempt_reserve_v1(&PalwCourtParamsV2::new(1 << 26, 4, 2).unwrap(), None), 0, "no producer class, no reserve");
 
         let declined = load_class_holdings_v1("test-declined", &sdk(), std::slice::from_ref(&path), 0, Residency::FifthWithin(0));
         assert_eq!(declined.len(), 1, "a default the host cannot spare still holds the class");

@@ -589,6 +589,21 @@ pub fn qwen36_execute_for_attempt_streaming_capped_v1(
 /// enumeration, one set of roots, and a retention of one node per `2^retain_level` leaves instead
 /// of every tile of every node of every position (~298 k leaves a position here).
 #[allow(clippy::too_many_arguments)]
+/// **The attempt lane's run under the sink the CLASS chooses** — the fold for a held hybrid row
+/// (its dense capture at the 63 + 2 canonical job is ~10 GiB of tiles, the term that killed ibm's
+/// producer on 2026-09-23), the dense tiles otherwise. Same loop, same roots either way.
+pub fn qwen36_execute_for_attempt_with_sink_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    kind: crate::legs::Base0CaptureKindV1,
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    qwen36_execute_streaming_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, kind, &mut |_| {})
+}
+
 pub fn qwen36_execute_free_prompt_streaming_v1(
     artifact: &Qwen36ArtifactV1,
     profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
@@ -644,6 +659,36 @@ fn qwen36_execute_streaming_v1(
     let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut cache = Qwen36Cache::new(&artifact.shape);
 
+    // **The memory brackets** (`memory_phase`), as the dense tier prints them: the cache's, the
+    // sink's and the leg's own bytes beside the process's, at each phase. The hybrid producer that
+    // died on ibm printed nothing between its start and `dmesg`; this is what says.
+    let started = std::time::Instant::now();
+    let anon_at_start = crate::memory_phase::process_anon_bytes_v1();
+    let bracket = |at: &str, positions: usize, cache: &Qwen36Cache, capture: &crate::legs::Base0CaptureSinkV1, leg: &crate::legs::Base0CheckpointCaptureV1| {
+        crate::memory_phase::execution_phase_v1(|| {
+            let (filled, leaves) = capture.progress();
+            let kind = match capture.kind() {
+                crate::legs::Base0CaptureKindV1::DenseTiles => "DenseTiles",
+                crate::legs::Base0CaptureKindV1::Fold => "Fold",
+            };
+            crate::memory_phase::bracket_line_v1(&crate::memory_phase::PalwBracketFactsV1 {
+                at,
+                positions,
+                prefill,
+                elapsed_ms: started.elapsed().as_millis() as u64,
+                kv_bytes: cache.resident_bytes_v1(),
+                storage: kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1::Q36KvI32.name(),
+                capture_bytes: capture.retained_bytes_v1(),
+                capture_kind: kind,
+                filled_leaves: filled,
+                leaves,
+                leg_bytes: leg.retained_bytes_v1(),
+                anon_at_start,
+            })
+        });
+    };
+    bracket("cache constructed", 0, &cache, &capture, &checkpoints);
+
     let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(decode_tokens);
     let mut generated: Vec<u32> = Vec::with_capacity(decode_tokens);
 
@@ -688,6 +733,7 @@ fn qwen36_execute_streaming_v1(
             last_logits = logits;
         }
     }
+    bracket("prefill done", prefill, &cache, &capture, &checkpoints);
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
     generated.push(next);
     on_token(next);
@@ -720,8 +766,12 @@ fn qwen36_execute_streaming_v1(
     // NOT `decode_calls / interval` in general: a class that registers the composed map is on the
     // per-position cadence and its canonical count is `prefill + decode_calls`, which is what the
     // two push sites above now file (audit B, C-3 and L-1 item 3).
+    bracket("decode done", prefill + decode_tokens.saturating_sub(1), &cache, &capture, &checkpoints);
     let checkpoints = checkpoints.finish_canonical_v1().map_err(|e| format!("{e:?}"))?;
     let captured = capture.finish(max_step_leaf_count).map_err(|e| format!("{e:?}"))?;
+    crate::memory_phase::execution_phase_v1(|| {
+        crate::memory_phase::sealed_line_v1(captured.step_leaf_count, cache.resident_bytes_v1(), started.elapsed().as_millis() as u64)
+    });
 
     // The retained rows ARE the selecting rows — row `r` is the one `generated[r]` was chosen
     // from — and the tiled root commits them directly.
@@ -747,6 +797,16 @@ fn qwen36_execute_streaming_v1(
     // The consensus derivation (ADR-0072 Decision 8): admission pins the manifest root to
     // `attempt_trace_manifest_root_v1(trace_root, 1)`, whichever family produced it.
     let trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, 1);
+    drop(cache);
+    crate::memory_phase::execution_phase_v1(|| {
+        crate::memory_phase::returning_line_v1(
+            tiles.tiles.len(),
+            step_tree.as_ref().map(|t| t.retained_len()),
+            checkpoints.leaves.len(),
+            checkpoints.chunks.len(),
+            started.elapsed().as_millis() as u64,
+        )
+    });
 
     Ok(crate::produce::Base0ExecutionV1 {
         trace_root,
@@ -1421,8 +1481,30 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // order is this build's hardcode cannot commit a step space the COURT's coordinates
         // describe unless the two provably correspond, and the plan is that proof.
         if let (Some(plan), Some(profile)) = (&self.plan, &self.profile) {
-            let run = qwen36_execute_for_attempt_capped_v1(&self.artifact, profile, plan, job, prompt, self.network_ladder)?;
-            let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+            // **A held hybrid row's attempt FOLDS** — the dense tier's rule (`Qwen25A16Backend::execute`)
+            // for the same reason: the dense sink keeps every tile of every position, ~10 GiB at the
+            // held row's 63 + 2 canonical job, which grew ibm's producer from 5.87 to 14.63 GiB of anon
+            // and killed it (2026-09-23 08:07Z). The fold is the sink the free-prompt lane and every
+            // seat already use for this class; its roots are the dense sink's by construction, and its
+            // material is the v2 codec the court verbs read, with the anchor's prompt aboard.
+            let folds = kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(profile);
+            let kind = if folds { crate::legs::Base0CaptureKindV1::Fold } else { crate::legs::Base0CaptureKindV1::DenseTiles };
+            let run = qwen36_execute_for_attempt_with_sink_v1(
+                &self.artifact,
+                profile,
+                plan,
+                job,
+                prompt,
+                if folds { self.step_ladder_cap() } else { self.network_ladder },
+                kind,
+            )?;
+            let material = if folds {
+                let prompt_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+                crate::produce::base0_fp_material_encode_v2(&run, &prompt_ids).map_err(|e| e.to_string())?
+            } else {
+                crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?
+            };
+            crate::memory_phase::execution_phase_v1(|| crate::memory_phase::material_line_v1(material.len(), folds));
             return Ok(PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
@@ -1453,6 +1535,78 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     /// the same captured step leg the attempt lane commits, priced by its own leaf count
     /// (ADR-0074 Decision 5). Only a backend serving a registered graph can commit it: the
     /// composite path keeps no capture, and a claim without a step leg is not a claim.
+    /// The producer's figure for a `prefill_tokens` attempt, through the resource profile — the
+    /// verb the gate read as "this family derives no resource profile" until it did. The attempt
+    /// the producer runs is the CANONICAL job, so its decode count is the class's, not a floor of
+    /// one: a figure for fewer decode calls than the attempt makes would under-state it.
+    fn attempt_working_set_bytes(&self, prefill_tokens: usize) -> Option<u64> {
+        let profile = self.profile.as_ref()?;
+        let job = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+            profile,
+            u32::try_from(prefill_tokens).ok()?,
+            self.canonical_job.1.max(1),
+        );
+        self.resource_profile_v1(Some(&job), kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer)
+            .map(|p| p.working_set_bytes())
+    }
+
+    fn runtime_profile_v1(&self) -> Option<kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1> {
+        Some(kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1::Q36KvI32)
+    }
+
+    /// **What a role needs on this backend** (ADR-0151 follow-up, item 1, the hybrid's half): the
+    /// same derivation the dense tier answers with, on this class's graph — its attention rows, its
+    /// recurrence state, the capture its lane keeps (a held row's attempt and the verdict replay
+    /// fold; a segment replay keeps its hashes), the leg's retention and the run's scratch. The
+    /// mapping's residency is the HOLDING's term, priced by the node beside this.
+    fn resource_profile_v1(
+        &self,
+        job: Option<&PalwJobContextV2>,
+        role: kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1,
+    ) -> Option<kaspa_consensus_core::palw_resource_profile_v1::PalwResourceProfileV1> {
+        use kaspa_consensus_core::palw_resource_profile_v1::{
+            PalwCaptureRetentionV1, PalwResourceRoleV1, PalwRuntimeLimitsV1, PalwRuntimeProfileV1, palw_attempt_capture_folds_v1,
+            palw_profile_max_tile_len_v1,
+        };
+        let profile = self.profile.as_ref()?;
+        let canonical;
+        let job = match job {
+            Some(job) => job,
+            None => {
+                canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, self.canonical_job.0, self.canonical_job.1);
+                &canonical
+            }
+        };
+        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, job, self.step_ladder_cap()).ok()?;
+        let fold = PalwCaptureRetentionV1::Fold {
+            retain_level: crate::fp_capture::palw_base0_sparse_retain_level_for_class_v1(profile, self.step_ladder_cap()),
+        };
+        let capture = match role {
+            PalwResourceRoleV1::Producer if !palw_attempt_capture_folds_v1(profile) => {
+                PalwCaptureRetentionV1::DenseTiles { tile_len: palw_profile_max_tile_len_v1(profile) }
+            }
+            PalwResourceRoleV1::Producer | PalwResourceRoleV1::FullSeat => fold,
+            PalwResourceRoleV1::PartialSeat { .. } => PalwCaptureRetentionV1::ReplayHashes,
+        };
+        // A held hybrid row walks its prefill a position at a time (a checkpoint after every one),
+        // so one position's committed trace is what the run holds; a per-call row walks the whole
+        // prefill in one pass and holds every position's trace until captured.
+        let run_positions = if kaspa_consensus_core::palw_state_chunk_map::palw_map_addresses_history_tiles_v1(profile) {
+            1
+        } else {
+            job.declared_prefill_tokens.max(1)
+        };
+        kaspa_consensus_core::palw_resource_profile_v1::palw_resource_profile_v1(
+            profile,
+            job,
+            leaf_count,
+            PalwRuntimeProfileV1::Q36KvI32,
+            role,
+            PalwRuntimeLimitsV1 { threads: rayon::current_num_threads().max(1) as u32, prefill_run_positions: run_positions },
+            capture,
+        )
+    }
+
     fn execute_free_prompt(
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
@@ -3494,5 +3648,100 @@ mod tests {
                 coord_of(index).call_index
             );
         }
+    }
+
+    /// **A held hybrid row's attempt folds, and stays adjudicable** — the dense tier's theorem
+    /// (`a_held_classs_attempt_folds_and_stays_adjudicable`) on the hybrid graph, and the fix for
+    /// the producer ibm lost on 2026-09-23: `Qwen3.6-35B-A3B/graph-v7@512` at 63 + 2 under the
+    /// dense sink grew 9 GiB of tiles beside a 6.65 GiB residency on a 7 GiB share and was killed.
+    /// Here the same fixture graph on the held (v7) composition: the attempt's material is the
+    /// fold (no tiles, the anchor's prompt aboard), its four roots are the dense sink's to the
+    /// bit, the verdict replay agrees, the seat check reads `Matches`, the ladder's rungs and a
+    /// leaf's refutation are answered from the fold as from the tiles, the drill's tamper stays
+    /// a DENSE capture that the honest claim refuses, and the resource profile prices the fold.
+    #[test]
+    fn a_held_hybrid_classs_attempt_folds_and_stays_adjudicable() {
+        use kaspa_consensus_core::palw_resource_profile_v1::{PalwCaptureRetentionV1, PalwResourceRoleV1, palw_attempt_capture_folds_v1};
+        let (artifact, v5) = crate::fuzz_qwen36::tiny_class_v5_for_tests();
+        let geometry = kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+            n_ctx: v5.n_ctx,
+            ..crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4)
+        };
+        let v7 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(geometry).expect("the v7 projection");
+        assert!(palw_attempt_capture_folds_v1(&v7) && !palw_attempt_capture_folds_v1(&v5), "held folds, per-call keeps its tiles");
+        let artifact = std::sync::Arc::new(artifact);
+        let backend = Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), v7.clone(), (3, 4))
+            .expect("the held hybrid is servable");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0151_9336)).expect("a job");
+        let folded = backend.execute(&job, &prompt).expect("the held attempt executes");
+        let material = crate::produce::base0_material_decode_any_v1(&folded.material).expect("decodes");
+        let crate::produce::Base0RetentionV1::Folded(m) = &material else { panic!("a held attempt retains the fold") };
+        assert!(material.tiles().is_none(), "no tiles were retained");
+        assert!(m.step_tree.retained_len() >= 1);
+        assert_eq!(m.prompt_token_ids, prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(), "the anchor's prompt rides the material");
+
+        // The roots are the dense sink's, to the bit.
+        let plan = backend.plan.as_ref().expect("a registered graph has a plan");
+        let dense = qwen36_execute_for_attempt_capped_v1(&artifact, &v7, plan, &job, &prompt, backend.step_ladder_cap())
+            .expect("the dense capture of the same job");
+        assert_eq!(folded.execution_root, dense.execution_root, "the fold's execution root is the dense capture's");
+        assert_eq!(folded.trace_root, dense.trace_root);
+        assert_eq!(folded.output_root, dense.output_root);
+        assert_eq!(folded.trace_manifest_root, dense.trace_manifest_root);
+        let verdict = backend.execute_for_verdict(&job, &prompt).expect("the verdict replay");
+        assert_eq!((verdict.execution_root, verdict.trace_root), (folded.execution_root, folded.trace_root));
+
+        // The seat check and the court verbs read the folded material.
+        let claim = PalwClaimRootsV1 {
+            execution_root: folded.execution_root,
+            trace_root: folded.trace_root,
+            anchor: job.job_id,
+            attempt_draw: None,
+        };
+        assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
+        let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");
+        let leaves = dense.binding.step_leaf_count;
+        for index in [0u64, leaves / 3, leaves / 2, leaves - 1] {
+            assert_eq!(
+                backend.bisect_prefix_state(&folded.material, index),
+                backend.bisect_prefix_state(&dense_material, index),
+                "a rung at {index} is answered from the fold as from the tiles"
+            );
+        }
+        let refutation = backend.refutation_for_index(&folded.material, leaves / 2 + 1).expect("a leaf opens from the fold");
+        let from_dense = backend.refutation_for_index(&dense_material, leaves / 2 + 1).expect("and from the tiles");
+        assert_eq!(refutation.binding.committed_execution_root, folded.execution_root);
+        assert_eq!(refutation.output_preimage, from_dense.output_preimage, "the same leaf, the same preimage");
+
+        // The drill tampers a DENSE capture even on the held class.
+        let guilty = backend.execute_with_injected_fault(&job, &prompt, 3).expect("the drill's dense tamper commits");
+        assert_ne!(guilty.execution_root, folded.execution_root, "the lie moved the commitment");
+        assert!(matches!(crate::produce::base0_material_decode_any_v1(&guilty.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        assert_eq!(backend.verify_material(&guilty.material, claim), PalwMaterialVerdictV1::Mismatch, "a lie is not the honest claim");
+        assert!(backend.refutation_for_index(&guilty.material, 3).is_ok(), "the tampered leaf opens from the retained tiles");
+        assert_eq!(backend.execute_for_verdict(&job, &prompt).expect("replays").execution_root, folded.execution_root, "the replays stay honest");
+
+        // The profile prices the fold, the recurrence state and the attention rows — and the
+        // producer's figure the gate asks for is the same derivation.
+        let profile = backend.resource_profile_v1(Some(&job), PalwResourceRoleV1::Producer).expect("derives");
+        assert!(matches!(profile.capture, PalwCaptureRetentionV1::Fold { .. }), "{:?}", profile.capture);
+        assert_eq!(profile.leaves, leaves);
+        assert!(profile.recurrence_layers >= 1 && profile.gdn_state_bytes > 0, "a hybrid prices its recurrence state");
+        assert!(profile.capture_retained_bytes < 1 << 20, "a small job's fold is small: {}", profile.capture_retained_bytes);
+        assert_eq!(backend.runtime_profile_v1().map(|p| p.name()), Some("Q36-KV-i32"));
+        assert_eq!(
+            backend.attempt_working_set_bytes(job.declared_prefill_tokens as usize),
+            Some(profile.working_set_bytes()),
+            "the gate's figure is the profile's"
+        );
+
+        // A class outside the regime keeps its tiles, priced as such.
+        let dense_backend = Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-test".to_vec(), v5, (3, 4)).expect("servable");
+        let (job2, prompt2) = dense_backend.job_for_anchor(Hash64::from_u64_word(0x0151_DE45)).expect("a job");
+        let outcome = dense_backend.execute(&job2, &prompt2).expect("executes");
+        assert!(matches!(crate::produce::base0_material_decode_any_v1(&outcome.material), Ok(crate::produce::Base0RetentionV1::Dense(_))));
+        let dense_profile = dense_backend.resource_profile_v1(Some(&job2), PalwResourceRoleV1::Producer).expect("derives");
+        assert!(matches!(dense_profile.capture, PalwCaptureRetentionV1::DenseTiles { .. }), "{:?}", dense_profile.capture);
+        assert!(dense_profile.capture_retained_bytes >= dense_profile.leaves * (64 + 56));
     }
 }

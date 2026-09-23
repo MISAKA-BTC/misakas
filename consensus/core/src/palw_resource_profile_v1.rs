@@ -131,16 +131,23 @@ pub enum PalwRuntimeProfileV1 {
     /// `A16-KV-i16`: one `i16` per code — the code's own width. Lossless (see the module doc), and
     /// half of `A16-KV-i32`'s resident bytes.
     A16KvI16,
+    /// `Q36-KV-i32`: the hybrid tier's caches as its engine holds them today — `i32` rows for the
+    /// attention layers' K/V, an `i32` `k × v` state per head and a `kernel`-row convolution
+    /// window per recurrence layer. Named so the hybrid's figures say which representation they
+    /// price; an `i16` twin of it would be the same lossless repack the dense tier made.
+    Q36KvI32,
 }
 
 impl PalwRuntimeProfileV1 {
-    pub const ALL: [PalwRuntimeProfileV1; 2] = [PalwRuntimeProfileV1::A16KvI32, PalwRuntimeProfileV1::A16KvI16];
+    pub const ALL: [PalwRuntimeProfileV1; 3] =
+        [PalwRuntimeProfileV1::A16KvI32, PalwRuntimeProfileV1::A16KvI16, PalwRuntimeProfileV1::Q36KvI32];
 
     /// The name a log, a telemetry field or an operator's flag spells.
     pub const fn name(self) -> &'static str {
         match self {
             PalwRuntimeProfileV1::A16KvI32 => "A16-KV-i32",
             PalwRuntimeProfileV1::A16KvI16 => "A16-KV-i16",
+            PalwRuntimeProfileV1::Q36KvI32 => "Q36-KV-i32",
         }
     }
 
@@ -151,7 +158,7 @@ impl PalwRuntimeProfileV1 {
     /// Bytes one cached code occupies under this representation.
     pub const fn kv_bytes_per_element(self) -> u64 {
         match self {
-            PalwRuntimeProfileV1::A16KvI32 => 4,
+            PalwRuntimeProfileV1::A16KvI32 | PalwRuntimeProfileV1::Q36KvI32 => 4,
             PalwRuntimeProfileV1::A16KvI16 => 2,
         }
     }
@@ -239,6 +246,9 @@ pub struct PalwResourceProfileV1 {
     pub checkpoint_leg_bytes: u64,
     /// Step leaves the role hashes (its capture's, or the window it replays).
     pub leaves: u64,
+    /// The recurrence state of a hybrid graph, whole (`palw_gdn_state_bytes_v1`); zero for a dense one.
+    pub recurrence_layers: u64,
+    pub gdn_state_bytes: u64,
 }
 
 /// **How many copies of a prefill run's rows are live at once** — measured, not chosen. The
@@ -264,6 +274,7 @@ impl PalwResourceProfileV1 {
             .saturating_add(self.trace_scratch_bytes)
             .saturating_add(self.capture_retained_bytes)
             .saturating_add(self.checkpoint_leg_bytes)
+            .saturating_add(self.gdn_state_bytes)
     }
 
     /// The same role started at the prompt instead of at its checkpoint: no opening to hold, every
@@ -283,6 +294,28 @@ pub fn palw_kv_series_bytes_v1(attention_layers: u64, kv_dim: u64, rows: u64, by
 /// The layers of `profile` that hold a K/V history.
 pub fn palw_attention_layers_v1(profile: &PalwShapeProfileV3) -> u64 {
     (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::Attention).count() as u64
+}
+
+/// The layers of `profile` that hold a recurrence (gated delta-net) state.
+pub fn palw_recurrence_layers_v1(profile: &PalwShapeProfileV3) -> u64 {
+    (0..profile.layer_count).filter(|&l| profile.layer_kind(l) == PalwLayerKindV1::GatedDeltaNet).count() as u64
+}
+
+/// **Bytes of the recurrence state a hybrid holds, for the whole job** — flat in the context: one
+/// `k × v` state per head per recurrence layer and the convolution's `kernel` most recent rows
+/// over the concatenated q/k/v channels, `i32` each. The channel width is priced at `3 × heads ×
+/// k` (the q and k projections at the v-head count, an over-statement where the k heads are fewer
+/// — the safe direction, and a few hundred KB a layer either way). Zero for a dense graph.
+pub fn palw_gdn_state_bytes_v1(profile: &PalwShapeProfileV3) -> u64 {
+    let layers = palw_recurrence_layers_v1(profile);
+    if layers == 0 {
+        return 0;
+    }
+    let heads = u64::from(profile.gdn_heads);
+    let (k, v) = (u64::from(profile.gdn_head_k_dim), u64::from(profile.gdn_head_v_dim));
+    let state = heads.saturating_mul(k).saturating_mul(v);
+    let conv = u64::from(profile.gdn_conv_kernel).saturating_mul(3).saturating_mul(heads).saturating_mul(k);
+    layers.saturating_mul(state.saturating_add(conv)).saturating_mul(4)
 }
 
 /// **Bytes of one position's committed trace under `profile`**, counted the way the dense
@@ -473,6 +506,8 @@ pub fn palw_resource_profile_v1(
         capture_retained_bytes,
         checkpoint_leg_bytes,
         leaves,
+        recurrence_layers: palw_recurrence_layers_v1(profile),
+        gdn_state_bytes: palw_gdn_state_bytes_v1(profile),
     })
 }
 
@@ -747,12 +782,65 @@ mod tests {
         assert!(p.kv_resident_bytes < 1 << 20);
     }
 
+    /// **The held hybrid row, priced** — the dense tier's twin, found on ibm 2026-09-23 08:07Z:
+    /// `Qwen3.6-35B-A3B/graph-v7@512` (e108e736…) at its canonical 63 + 2 grew from 5.87 to 14.63 GiB
+    /// of anon and was killed at 15.67 GB, on a 7 GiB share whose residency had already taken 6.65
+    /// GiB. Its dense capture is the term: ~297 k leaves a position over 65 positions, 64 B of
+    /// leaf vector and a tile each. Folded, the attempt is well under a GiB beside the residency;
+    /// the recurrence state itself is 60-odd MB, flat in the context.
+    #[test]
+    fn the_held_hybrid_row_folds_under_a_gib_and_dense_is_the_kill() {
+        use crate::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v7};
+        let profile = qwen36_profile_v7(QWEN36_35B_A3B).expect("the held hybrid row projects");
+        assert!(palw_attempt_capture_folds_v1(&profile), "a held hybrid row's attempt folds");
+        assert_eq!(palw_recurrence_layers_v1(&profile), 30);
+        assert_eq!(palw_attention_layers_v1(&profile), 10);
+        let job = job(&profile, 63, 2);
+        let leaves = crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1)
+            .expect("the job's step space");
+        let folded = palw_resource_profile_v1(
+            &profile,
+            &job,
+            leaves,
+            PalwRuntimeProfileV1::Q36KvI32,
+            PalwResourceRoleV1::Producer,
+            PalwRuntimeLimitsV1 { threads: 8, prefill_run_positions: 1 },
+            PalwCaptureRetentionV1::Fold { retain_level: HELD_RETAIN_LEVEL },
+        )
+        .expect("derives");
+        let dense = palw_resource_profile_v1(
+            &profile,
+            &job,
+            leaves,
+            PalwRuntimeProfileV1::Q36KvI32,
+            PalwResourceRoleV1::Producer,
+            PalwRuntimeLimitsV1 { threads: 8, prefill_run_positions: 1 },
+            PalwCaptureRetentionV1::DenseTiles { tile_len: palw_profile_max_tile_len_v1(&profile) },
+        )
+        .expect("derives");
+        eprintln!(
+            "held hybrid 63+2: {leaves} leaves; gdn state {:.3} GiB; kv {:.3} GiB; fold {:.3} GiB → working set {:.2} GiB; dense capture {:.2} GiB → {:.2} GiB",
+            folded.gdn_state_bytes as f64 / GIB,
+            folded.kv_resident_bytes as f64 / GIB,
+            folded.capture_retained_bytes as f64 / GIB,
+            folded.working_set_bytes() as f64 / GIB,
+            dense.capture_retained_bytes as f64 / GIB,
+            dense.working_set_bytes() as f64 / GIB
+        );
+        assert!((0.05..0.08).contains(&(folded.gdn_state_bytes as f64 / GIB)), "30 layers × 32 heads × 128 × 128 × 4 B and the conv windows");
+        assert!(folded.kv_resident_bytes < 8 << 20, "10 attention layers at 64 rows are megabytes");
+        assert!(folded.working_set_bytes() < 1 << 30, "the folded attempt is under a GiB: {}", folded.working_set_bytes());
+        assert!(dense.capture_retained_bytes > 9 * (1u64 << 30), "the dense capture is what grew 9 GiB and was killed: {}", dense.capture_retained_bytes);
+        assert!(leaves > 15_000_000, "{leaves}");
+    }
+
     #[test]
     fn a_runtime_profile_is_named_and_parses_back() {
         for p in PalwRuntimeProfileV1::ALL {
             assert_eq!(PalwRuntimeProfileV1::parse(p.name()), Some(p));
-            assert!(p.name().starts_with("A16-KV-"));
+            assert!(p.name().ends_with("-KV-i32") || p.name().ends_with("-KV-i16"), "{}", p.name());
         }
+        assert_eq!(PalwRuntimeProfileV1::Q36KvI32.kv_bytes_per_element(), 4);
         assert_eq!(PalwRuntimeProfileV1::parse("A16-KV-i8"), None, "refused by name, with the measurement in the module doc as the reason");
         assert_eq!(PalwRuntimeProfileV1::A16KvI32.kv_bytes_per_element(), PALW_KV_COMMITTED_BYTES_PER_ELEMENT_V1);
         assert_eq!(PalwRuntimeProfileV1::A16KvI16.kv_bytes_per_element() * 2, PALW_KV_COMMITTED_BYTES_PER_ELEMENT_V1);

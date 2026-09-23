@@ -2843,7 +2843,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     /// The producer's figure for a `prefill_tokens` attempt — through the resource profile, so
     /// this legacy verb and `resource_profile_v1` cannot disagree.
     fn attempt_working_set_bytes(&self, prefill_tokens: usize) -> Option<u64> {
-        let job = self.resource_job_v1(u32::try_from(prefill_tokens).ok()?, 1);
+        // The attempt is the canonical job: its decode count is the class's, so the gate's figure
+        // is the attempt's and not a one-call floor's.
+        let job = self.resource_job_v1(u32::try_from(prefill_tokens).ok()?, self.canonical_job.1.max(1));
         self.resource_profile_v1(Some(&job), kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer)
             .map(|p| p.working_set_bytes())
     }
