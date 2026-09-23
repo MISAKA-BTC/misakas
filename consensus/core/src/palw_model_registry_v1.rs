@@ -425,6 +425,16 @@ pub fn palw_admission_audit_period_spans_v1(epoch_length: u64, span_daa: u64) ->
     (epoch_length / span_daa.max(1)).max(1)
 }
 
+/// [`palw_admission_audit_period_spans_v1`] with the network's explicit period
+/// (`Params::palw_admission_audit_period_daa`, the 2026-09-23 standard of 100 DAA) where it sets
+/// one: that many DAA in spans, at least one span. `None` is the one-epoch period, byte for byte.
+pub fn palw_admission_audit_period_spans_v2(epoch_length: u64, span_daa: u64, period_daa: Option<u64>) -> u64 {
+    match period_daa {
+        Some(period) => (period / span_daa.max(1)).max(1),
+        None => palw_admission_audit_period_spans_v1(epoch_length, span_daa),
+    }
+}
+
 /// Whether the span a boundary opens is an audit span ([`palw_admission_audit_period_spans_v1`]).
 /// Span zero never is: the jury's seed is the anchor of the span before, and there is none.
 pub fn palw_admission_audit_due_v1(span_now: u64, period_spans: u64) -> bool {
@@ -718,6 +728,9 @@ pub struct PalwModelRegistryFoldV1 {
     /// (the fence plus one readiness age) the rows open and proofs are taken but no row is stepped
     /// and the draw keeps judging by declaration; from it the registry governs. `0` = no grace.
     pub grace_until_daa: u64,
+    /// **The admission-audit period in DAA** (`Params::palw_admission_audit_period_daa`). `None`
+    /// is ADR-0147's one-epoch period ([`palw_admission_audit_period_spans_v1`]), byte for byte.
+    pub admission_audit_period_daa: Option<u64>,
 }
 
 impl PalwModelRegistryFoldV1 {

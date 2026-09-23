@@ -561,6 +561,8 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
+    /// `Params::palw_admission_audit_period_daa` — how often a `Candidate` meets its ADR-0147 jury.
+    pub(super) palw_admission_audit_period_daa: Option<u64>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1023,6 +1025,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
+            palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -8978,6 +8981,7 @@ impl VirtualStateProcessor {
                 lane.schedule_span_daa,
                 &globals,
             ),
+            admission_audit_period_daa: self.palw_admission_audit_period_daa,
         })
     }
 

@@ -2314,6 +2314,14 @@ pub struct Params {
     /// `PalwTransitionExtrasV1::settled_anchor_depth`; only meaningful past
     /// [`Self::palw_audit_2026_09_23`], which carries the state field it counts against.
     pub palw_settled_anchor_depth: Option<u64>,
+    /// **How often a `Candidate` class meets its ADR-0147 admission jury, in DAA** (the user's
+    /// decision, 2026-09-23: 100 DAA is the standard). `None` is ADR-0147's own period — one epoch
+    /// (`palw_admission_audit_period_spans_v1`), byte for byte. A permissionlessly registered model
+    /// used to wait a whole epoch (1,000 DAA on testnet-12, a day and more at the heartbeat clock)
+    /// for its first jury; the jury still needs a majority of network-drawn operators proving
+    /// possession, so a shorter period gives a registrant more draws, never an easier one. Hashed
+    /// Some-only; a zero collapses to `None`.
+    pub palw_admission_audit_period_daa: Option<u64>,
 
     /// **ADR-0083 Decision 1 — the difficulty window counts only rows priced by `bits`.**
     ///
@@ -4726,6 +4734,10 @@ impl Params {
         if self.palw_settled_anchor_depth == Some(0) {
             self.palw_settled_anchor_depth = None;
         }
+        // The same collapse for the admission audit period: zero is "ADR-0147's own period".
+        if self.palw_admission_audit_period_daa == Some(0) {
+            self.palw_admission_audit_period_daa = None;
+        }
         // ADR-0083 Decision 1, the same shape: a bare fence, `never()` is absence.
         if self.palw_difficulty_priced_rows == Some(ForkActivation::never()) {
             self.palw_difficulty_priced_rows = None;
@@ -5827,6 +5839,8 @@ impl Params {
             // A number beside the fences, not a fence: the visitor rewrites HEIGHTS, and a
             // settled-anchor depth is neither a height nor normalisable to one.
             palw_settled_anchor_depth: _,
+            // A period in DAA beside the fences, not a height — the visitor has nothing to rewrite.
+            palw_admission_audit_period_daa: _,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -6209,6 +6223,10 @@ impl Params {
             h.write(b"palw_settled_anchor_depth");
             h.write(depth.to_le_bytes());
         }
+        if let Some(period) = self.palw_admission_audit_period_daa {
+            h.write(b"palw_admission_audit_period_daa");
+            h.write(period.to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -6442,6 +6460,8 @@ impl Params {
             // A number beside the fences, not a fence: the visitor rewrites HEIGHTS, and a
             // settled-anchor depth is neither a height nor normalisable to one.
             palw_settled_anchor_depth: _,
+            // A period in DAA beside the fences, not a height — the visitor has nothing to rewrite.
+            palw_admission_audit_period_daa: _,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -7314,6 +7334,7 @@ impl Params {
             palw_audit_2026_09_11_deep,
             palw_audit_2026_09_23,
             palw_settled_anchor_depth,
+            palw_admission_audit_period_daa,
             palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced,
             palw_attempt_header_pins,
@@ -7842,6 +7863,10 @@ impl Params {
             h.write(b"palw_settled_anchor_depth");
             h.write(depth.to_le_bytes());
         }
+        if let Some(period) = palw_admission_audit_period_daa {
+            h.write(b"palw_admission_audit_period_daa");
+            h.write(period.to_le_bytes());
+        }
         // ADR-0083 Decision 1, Some-only for the same reason: arming it changes the `bits` every
         // header past the fence must carry, so it belongs in the fingerprint — and every shipped
         // preset leaves it `None` and fingerprints byte-identically to a build without the field.
@@ -8322,6 +8347,7 @@ impl Params {
             palw_audit_2026_09_11_deep: self.palw_audit_2026_09_11_deep,
             palw_audit_2026_09_23: self.palw_audit_2026_09_23,
             palw_settled_anchor_depth: self.palw_settled_anchor_depth,
+            palw_admission_audit_period_daa: self.palw_admission_audit_period_daa,
             palw_difficulty_priced_rows: self.palw_difficulty_priced_rows,
             palw_receipt_rows_unpriced: self.palw_receipt_rows_unpriced,
             palw_attempt_header_pins: self.palw_attempt_header_pins,
@@ -9289,6 +9315,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_audit_2026_09_11_deep: None,
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
+    palw_admission_audit_period_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -9502,6 +9529,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_audit_2026_09_11_deep: None,
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
+    palw_admission_audit_period_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -9697,6 +9725,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_audit_2026_09_11_deep: None,
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
+    palw_admission_audit_period_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,
@@ -14120,6 +14149,10 @@ pub const PALW_RC_AUDIT_DEEP_FENCE_DAA: u64 = 7_100;
 /// drill's measured anchor cadence, never from a calendar.
 pub const PALW_T12_SETTLED_ANCHOR_DEPTH: u64 = 30;
 
+/// **The standard ADR-0147 admission-audit period, in DAA** (user decision, 2026-09-23): a
+/// `Candidate` class meets its jury every 100 DAA rather than once per epoch.
+pub const PALW_ADMISSION_AUDIT_PERIOD_DAA_STANDARD: u64 = 100;
+
 /// **testnet-11's third flag day: the refutation ladder** (ADR-0084 U-08, the 2026-09-06 audit's
 /// H-4, ADR-0092 §9 step 2).
 ///
@@ -15251,6 +15284,9 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // network elapses only after its DAA window AND this many further settled anchors. The value is
     // the drill's starting point, not a derivation — see the constant's own note.
     params.palw_settled_anchor_depth = Some(PALW_T12_SETTLED_ANCHOR_DEPTH);
+    // **ADR-0147's admission jury every 100 DAA** (`Params::palw_admission_audit_period_daa`), the
+    // standard the user set on 2026-09-23, instead of once per 1,000-DAA epoch.
+    params.palw_admission_audit_period_daa = Some(PALW_ADMISSION_AUDIT_PERIOD_DAA_STANDARD);
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -15836,6 +15872,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_audit_2026_09_11_deep: None,
     palw_audit_2026_09_23: None,
     palw_settled_anchor_depth: None,
+    palw_admission_audit_period_daa: None,
     palw_difficulty_priced_rows: None,
     palw_receipt_rows_unpriced: None,
     palw_attempt_header_pins: None,

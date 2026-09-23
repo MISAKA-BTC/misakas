@@ -10674,10 +10674,10 @@ impl<'a> TransitionBuilder<'a> {
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
     ) -> bool {
         use crate::palw_model_registry_v1::{
-            palw_admission_audit_due_v1, palw_admission_audit_period_spans_v1, palw_admission_jury_quorum_v1,
+            palw_admission_audit_due_v1, palw_admission_audit_period_spans_v2, palw_admission_jury_quorum_v1,
             palw_admission_jury_seed_v1,
         };
-        let period = palw_admission_audit_period_spans_v1(self.params.epoch_length, fold.span_daa);
+        let period = palw_admission_audit_period_spans_v2(self.params.epoch_length, fold.span_daa, fold.admission_audit_period_daa);
         if !palw_admission_audit_due_v1(span_now, period) {
             return false;
         }
@@ -22045,7 +22045,7 @@ pub(crate) mod tests {
                 PalwModelWorkV1 { verification_ccu: 1_000, economic_ccu_per_claim: 500, ops_supported: true, ..Default::default() },
             );
             genesis_works.insert(kimi_id(), kimi_work);
-            PalwModelRegistryFoldV1 { globals: PALW_REGISTRY_GLOBALS_V1, span_daa: SPAN, genesis_works, grace_until_daa: 0 }
+            PalwModelRegistryFoldV1 { globals: PALW_REGISTRY_GLOBALS_V1, span_daa: SPAN, genesis_works, grace_until_daa: 0, admission_audit_period_daa: None }
         }
 
         /// A Kimi-class work the floor's globals derive a small profile from: window 2, 7 ready seats.
