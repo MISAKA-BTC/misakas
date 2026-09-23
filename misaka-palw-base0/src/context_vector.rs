@@ -1287,7 +1287,9 @@ mod tests {
         check_pinned(
             "0110-dense-v7-512",
             // Re-pinned 2026-09-23: the document carries `ruleset.consensus_params_id` for `devnet-held`, and
-            // that id moved when ADR-0151's `palw_economic_safety` fence joined every preset's digest on this
+            // that id moved as the fences added on this branch since the last re-pin joined every preset's
+            // digest — `palw_work_target`, `palw_single_lottery`, `palw_short_challenge_window`,
+            // `palw_anchor_clock`, `palw_clock_cursor`, … and ADR-0151's `palw_economic_safety` on this
             // branch (a Some-only fence adds its sentinel to the fingerprint — the same move that re-pinned
             // t11's schedule id). No root, count, size or verdict changed: `vector.*`, `consensus.commit.*`
             // and `consensus.court.*` are the values the previous pin was taken over.
