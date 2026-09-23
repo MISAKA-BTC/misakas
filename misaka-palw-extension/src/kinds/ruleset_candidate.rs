@@ -106,6 +106,29 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_verification_s2" => params.palw_verification_s2 = Some(at),
         "palw_readiness_v2" => params.palw_readiness_v2 = Some(at),
         "palw_anchor_clock" => params.palw_anchor_clock = Some(at),
+        "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
+        "palw_clock_floor" => params.palw_clock_floor = Some(at),
+        "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
+        "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
+        "palw_objective_offence" => params.palw_objective_offence = Some(at),
+        "palw_seat_gate_possession" => params.palw_seat_gate_possession = Some(at),
+        // The V2 bundle carries this height (and the lane's span) beside the fence;
+        // `validate_palw_v2` refuses the two apart, so they are set together.
+        "palw_class_receipt_window" => params.set_palw_class_receipt_window(Some(at)),
+        "palw_execution_quanta" => params.palw_execution_quanta = Some(at),
+        "palw_public_model_source_required" => {
+            params.palw_public_model_source_required =
+                Some(kaspa_consensus_core::config::params::PalwPublicModelSourceRuleV1 { activation: at })
+        }
+        "palw_canonical_work" => params.palw_canonical_work = Some(at),
+        "palw_admission_independence" => params.palw_admission_independence = Some(at),
+        "palw_fp_derived_work" => params.palw_fp_derived_work = Some(at),
+        // Option A (ADR-0151): the V2 bundle mirrors this height as `escrow_backed_exposure_from_daa`,
+        // and `validate_palw_v2` refuses the two apart — set together.
+        "palw_audit_2026_09_23" => {
+            params.palw_audit_2026_09_23 = Some(at);
+            params.sync_palw_escrow_backed_exposure();
+        }
         "palw_panel_economy" => params.palw_panel_economy = Some(at),
         "palw_work_priced_reward" => params.palw_work_priced_reward = Some(at),
         "palw_overlay_carve" => {
@@ -131,6 +154,18 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             if !params.palw_execution_lane.is_some_and(|lane| lane.widenings[index].is_used()) {
                 return Err(format!(
                     "`{name}` carries a companion value (the widened width) this preset does not set — the candidate needs a build before it needs a height"
+                ));
+            }
+        }
+        "palw_execution_lane_span_short" => {
+            companion(&mut params.palw_execution_lane, name, "the shortened span", at, |f, at| {
+                if f.short_span.is_used() {
+                    f.short_span.activation = at
+                }
+            })?;
+            if !params.palw_execution_lane.is_some_and(|lane| lane.short_span.is_used()) {
+                return Err(format!(
+                    "`{name}` carries a companion value (the shortened span) this preset does not set — the candidate needs a build before it needs a height"
                 ));
             }
         }
