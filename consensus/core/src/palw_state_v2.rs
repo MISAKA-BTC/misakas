@@ -5262,6 +5262,11 @@ pub enum PalwStateV2Error {
         "bond {bond:?} backs {backed} and this claim would reserve {claim}, above its exposure ceiling {ceiling} (admission item 8, free-prompt lane)"
     )]
     FreePromptExposureCeiling { bond: PalwBondKeyV2, backed: u128, claim: u128, ceiling: u128 },
+    #[error(
+        "bond {bond:?} backs {backed} and this attempt's claim would reserve {claim}, above its exposure ceiling \
+         {ceiling} on the state this block's own objects left (2026-09-23 audit, finding 17)"
+    )]
+    AttemptExposureCeiling { bond: PalwBondKeyV2, backed: u128, claim: u128, ceiling: u128 },
     #[error("free-prompt pwu {pwu} does not divide into {quanta} uniform non-zero quanta")]
     NonUniformQuanta { pwu: u64, quanta: u32 },
     #[error("class {frozen} cannot be frozen on evidence about class {evidenced}")]
@@ -11854,16 +11859,24 @@ impl<'a> TransitionBuilder<'a> {
         self.void_claim(id, claim, voided_daa, reason)?;
         // **Option A: a PROVEN fraud forfeits the whole fraud gain it reached for — weight and
         // escrow.** The escrow was never paid (it is released at Final, and a void is pre-Final), so
-        // this is not a claw-back: it is what makes a lie cost what it would have earned. Only for
-        // `CourtFraud` — the court re-executed the step and the executor's answer was wrong. A
-        // liveness fault (`ProducerWithholding`, a timeout) keeps the weight-only slash: ADR-0151 puts
-        // collateral against fraud, not against availability, and ADR-0065 D4's caution stands —
-        // a larger slash on a liveness verdict multiplies false convictions before it deters any.
-        let escrow = if matches!(reason, PalwVoidReasonV2::CourtFraud) {
-            self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward)
-        } else {
-            0
+        // this is not a claw-back: it is what makes a lie cost what it would have earned.
+        //
+        // **And past the 2026-09-23 audit fence, so does withholding** (the audit's #10, the
+        // operator's decision): a producer whose default the data-availability court confirmed
+        // (`ProducerWithholding`), or whose claim two independently drawn panels could not conclude
+        // (the second `ReceiptTimeout`, charged at its call site in `sweep_deadlines`). Before it,
+        // binding a claim and serving nothing cost the producer nothing while it held other bonds'
+        // seat duty for two windows — a capital-time amplification the audit measured at 3.3
+        // million to one. The price is the whole escrow-inclusive reservation, the same figure
+        // CourtFraud takes, so withholding is never the cheaper way to fail. The cost falls on a
+        // producer whose node is simply down as well; that is the trade the decision accepts.
+        let escrow_forfeit = match reason {
+            PalwVoidReasonV2::CourtFraud => true,
+            PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
+            PalwVoidReasonV2::BindTimeout | PalwVoidReasonV2::NoCapablePanel => false,
         };
+        let escrow =
+            if escrow_forfeit { self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward) } else { 0 };
         self.slash_bond(claim.bond, claim.reserved.saturating_add(escrow))
     }
 
@@ -12826,6 +12839,12 @@ pub fn apply_palw_transition_v7(
     ensure_epoch_budgets(&mut builder, ctx);
 
     // 4. The block's own work — an attempt, a certified-quantum spend, or none.
+    //
+    //    Past the 2026-09-23 audit fence an own attempt that the live ceiling refuses (finding 17,
+    //    `AttemptExposureCeiling` in `apply_attempt`) is SKIPPED, exactly as step 4b skips merged
+    //    work: the block stays valid and carries no claim. Any other refusal still fails the block,
+    //    as before — the processor already admitted this attempt, so only the ceiling can differ.
+    let mut merged_skips: Vec<(BlockHash, String)> = Vec::new();
     match block_work {
         PalwBlockWorkV3::None => {}
         PalwBlockWorkV3::Attempt(envelope) => {
@@ -12834,7 +12853,7 @@ pub fn apply_palw_transition_v7(
             let escrow_carve = builder.extras.escrow_carve;
             // ADR-0132 Upgrade C: this block's own `bits`, the lottery its own forward faced.
             let carrying_bits = builder.extras.economic_payout.map(|fold| fold.block_bits).unwrap_or(0);
-            apply_attempt(
+            match apply_attempt(
                 &mut builder,
                 ctx,
                 envelope,
@@ -12847,11 +12866,23 @@ pub fn apply_palw_transition_v7(
                     execution_key: own_execution_key,
                     carrying_bits,
                 },
-            )?;
-            // ADR-0130: the attempt was admitted, so this chain block is the open span's seed anchor
-            // — after step 1d's rotation, so a block that opens a span anchors the next target.
-            if let Some(lane) = extras.round_lane {
-                builder.record_round_seed_anchor(ctx, lane.schedule_span_daa, own_execution_key);
+            ) {
+                Ok(()) => {
+                    // ADR-0130: the attempt was admitted, so this chain block is the open span's seed
+                    // anchor — after step 1d's rotation, so a block that opens a span anchors the next
+                    // target.
+                    if let Some(lane) = extras.round_lane {
+                        builder.record_round_seed_anchor(ctx, lane.schedule_span_daa, own_execution_key);
+                    }
+                }
+                // No checkpoint to restore, and none taken: the ceiling is `apply_attempt`'s check
+                // before its first write, so this refusal leaves the builder as it found it — and a
+                // whole-state clone on every block's own attempt would be the price of pretending
+                // otherwise.
+                Err(refused @ PalwStateV2Error::AttemptExposureCeiling { .. }) => {
+                    merged_skips.push((ctx.block, refused.to_string()));
+                }
+                Err(other) => return Err(other),
             }
         }
         PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
@@ -12866,7 +12897,6 @@ pub fn apply_palw_transition_v7(
     //     the last slot. A refusal SKIPS (checkpoint, try, restore): the accepting block did not
     //     author its anticone, so nothing about a merged blue may disqualify it. The skip list is
     //     returned, never folded — logs are not state.
-    let mut merged_skips: Vec<(BlockHash, String)> = Vec::new();
     for merged in merged_work {
         let refusal: Option<String> = match merged.work {
             PalwBlockWorkV3::None => None,
@@ -15064,7 +15094,20 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                     builder.arm_deadline(deadline, claim_id);
                 } else {
                     builder.slash_silent_seats(&claim_id, &claim, &[])?;
-                    builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ReceiptTimeout)?;
+                    // **Past the 2026-09-23 audit fence the second timeout charges the producer**
+                    // (the audit's #10): two independent panels failing to conclude is the one
+                    // observable a withholding producer cannot avoid, and before the fence it left the
+                    // producer's whole reservation to come back untouched. `void_and_slash` takes the
+                    // escrow-inclusive reservation on this reason past the fence. The panel's silent
+                    // seats are charged above either way. A BindTimeout is not charged: the chain
+                    // binds a panel itself the moment the anchor is reached, so a bind that never
+                    // happened is the network's capacity failing, never a producer's choice — and
+                    // charging it would charge the victims of a claim that occupied the seats.
+                    if builder.extras.audit_2026_09_23_active {
+                        builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ReceiptTimeout)?;
+                    } else {
+                        builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ReceiptTimeout)?;
+                    }
                 }
             }
             PalwClaimPhaseV2::ReceiptLicensed { .. } => {
@@ -19220,6 +19263,39 @@ fn apply_attempt(
         },
         phase: PalwClaimPhaseV2::Provisional,
     };
+    // **2026-09-23 audit, finding 17: the ceiling holds on the state the claim actually joins.**
+    //
+    // The processor admits a block's own attempt against the PARENT state, and this block's own
+    // objects (step 3: seat duty, free-prompt reservations, registrations) land on the same bond
+    // before the attempt does — so one sompi could back two claims (measured 231,240 reserved against
+    // a 200,000 ceiling). Merged work is re-admitted in step 4b, but that re-check priced the claim
+    // without option A's escrow term. Enforcing the ceiling here, at the one funnel both reach and
+    // on the exact reservation the ledger is about to record (`claim.reserved` plus its escrow),
+    // closes both. The expression is admission item 8's — claim reservations plus registration
+    // reservations against `collateral × ratio` — so a claim the processor admits on a quiet block
+    // is never refused here, and a refusal SKIPS the work rather than disqualifying the block.
+    //
+    // **It stays ahead of every write in this function**: step 4 skips an own attempt on this error
+    // without restoring anything, which is only sound while nothing above has touched the builder.
+    if builder.extras.audit_2026_09_23_active {
+        let bond_record = builder.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
+        let backed = builder
+            .state
+            .reserved_exposure(&claim.bond)
+            .checked_add(builder.state.registration_exposure(&claim.bond))
+            .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+        let adding = claim
+            .reserved
+            .checked_add(builder.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
+            .ok_or(PalwStateV2Error::Overflow("claim reservation"))?;
+        let ceiling = (bond_record.collateral as u128)
+            .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
+            .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
+            / 1000;
+        if backed.checked_add(adding).ok_or(PalwStateV2Error::Overflow("reserved exposure"))? > ceiling {
+            return Err(PalwStateV2Error::AttemptExposureCeiling { bond: claim.bond, backed, claim: adding, ceiling });
+        }
+    }
     builder.reserve_for_claim(&claim)?;
     builder.write_claim(claim_id, Some(claim));
     // ADR-0132 Upgrade C: the claim snapshots its economics at acceptance (proposal B) — the
@@ -23150,6 +23226,88 @@ pub(crate) mod tests {
             }
         }
 
+        /// **2026-09-23 audit #10: past the audit fence, withholding forfeits the escrow term too.**
+        /// Reason by reason, fence off and on, through the builder's own `void_and_slash`: a proven
+        /// fraud takes weight + escrow on both sides of the fence; a DA-confirmed default and the
+        /// second silent panel take the weight below it and weight + escrow past it; a bind timeout
+        /// never takes the escrow — the chain binds panels itself, so a bind that never happened is
+        /// not a producer's choice.
+        #[test]
+        fn past_the_audit_fence_withholding_forfeits_the_escrow_term_too() {
+            let p = params()
+                .with_worker_carve_permille(620)
+                .expect("a legal carve")
+                .with_escrow_backed_exposure_from_daa(Some(0));
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let priced = priced_extras(Some(payout_fold(10_000, 0)));
+            let env = kimi_attempt(2, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (mut s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &priced);
+            let claim = s8.claim(&claim_id).expect("accepted").clone();
+            let bond = bond_key(1);
+            s8.bonds.get_mut(&bond).expect("the executor's bond").collateral = 10_000_000;
+            let armed = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..priced_extras(Some(payout_fold(10_000, 0))) };
+            let weight = claim.reserved;
+            let whole = claim.reserved + 620_000;
+            for (reason, below, past) in [
+                (PalwVoidReasonV2::CourtFraud, whole, whole),
+                (PalwVoidReasonV2::ProducerWithholding, weight, whole),
+                (PalwVoidReasonV2::ReceiptTimeout, weight, whole),
+                (PalwVoidReasonV2::BindTimeout, weight, weight),
+                (PalwVoidReasonV2::NoCapablePanel, weight, weight),
+            ] {
+                for (extras, want) in [(&priced, below), (&armed, past)] {
+                    let mut b = TransitionBuilder::new(&s8, &p, false, false, false, false, extras);
+                    b.void_and_slash(claim_id, &claim, 140, reason).expect("the claim voids");
+                    let after = b.state.bonds.get(&bond).expect("the bond survives a slash").collateral as u128;
+                    assert_eq!(
+                        10_000_000 - after,
+                        want,
+                        "{reason:?}, audit fence {}: what the bond loses",
+                        extras.audit_2026_09_23_active
+                    );
+                }
+            }
+        }
+
+        /// **2026-09-23 audit, finding 17: the attempt ceiling holds on the live fold state.** Past the
+        /// audit fence an own attempt whose claim — weight plus option A's escrow — would take its bond
+        /// past `collateral × ratio` is SKIPPED: the block applies, carries no claim and reserves
+        /// nothing. Below the fence the same block records the claim, as it always did (the ceiling was
+        /// the processor's alone, checked against the parent state). With collateral to back it, the
+        /// same attempt is recorded past the fence too.
+        #[test]
+        fn finding_17_an_own_attempt_past_the_live_ceiling_is_skipped_not_recorded() {
+            let p = params()
+                .with_worker_carve_permille(620)
+                .expect("a legal carve")
+                .with_escrow_backed_exposure_from_daa(Some(0));
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let env = kimi_attempt(2, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let bond = bond_key(1);
+            assert!(s7.bond(&bond).expect("the executor's bond").collateral < 2 * 620_000, "the premise: the escrow alone breaks the ceiling");
+
+            let below = priced_extras(Some(payout_fold(10_000, 0)));
+            let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &below);
+            assert!(s8.claim(&claim_id).is_some(), "below the fence the fold records what the processor admitted");
+
+            let armed = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..priced_extras(Some(payout_fold(10_000, 0))) };
+            let (s8a, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &armed);
+            assert!(s8a.claim(&claim_id).is_none(), "past the fence a claim the bond cannot back is skipped — and the block still applies");
+            assert_eq!(s8a.reserved_exposure(&bond), s7.reserved_exposure(&bond), "a skipped attempt reserves nothing");
+
+            let mut rich = s7.clone();
+            rich.bonds.get_mut(&bond).expect("the executor's bond").collateral = 10_000_000;
+            let (s8b, _) = step_with(&rich, &p, &funded(8, 131, 8), &[], Some(&env), &armed);
+            let claim = s8b.claim(&claim_id).expect("a bond that can back the claim records it");
+            assert_eq!(
+                s8b.reserved_exposure(&bond),
+                rich.reserved_exposure(&bond) + claim.reserved + 620_000,
+                "and reserves its weight and its escrow"
+            );
+        }
+
         /// Kimi ACTIVE under the registry with seven ready seats and the payout in force at `rate`:
         /// the chain every Upgrade C test starts from, at DAA 130 (the first block of span 13). That
         /// boundary opens Kimi's row (ACTIVE: it has a `Final`) and seats it at 900 ‰, so it leaves
@@ -25806,6 +25964,50 @@ pub(crate) mod tests {
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. } => {}
             ref other => panic!("expected the second panel's receipt timeout to void, got {other:?}"),
         }
+    }
+
+    /// **2026-09-23 audit #10, at the call site: past the audit fence the second silent panel
+    /// charges the producer.** The chain of `the_second_silent_panel_voids_the_claim`, folded with
+    /// the fence off and on. Both void at `ReceiptTimeout` and charge the silent seats alike; past the
+    /// fence the producer's bond also pays its reservation (its escrow is zero in this fixture, which
+    /// arms no escrow — the escrow half is the builder-level test's).
+    #[test]
+    fn past_the_audit_fence_the_second_silent_panel_charges_the_producer() {
+        let p = params();
+        let fold_chain = |audit: bool| {
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_23_active: audit, ..Default::default() };
+            let step = |parent: &PalwChainStateV2,
+                        c: PalwBlockContextV2,
+                        objects: &[PalwConsensusObjectV2],
+                        att: Option<&PalwAttemptEnvelopeV2>| {
+                let out = apply_palw_transition_v2_with_extras(parent, &p, &c, objects, att, false, false, false, false, &extras)
+                    .expect("transition applies");
+                out.0.assert_internal_consistency(&p).expect("internal consistency after apply");
+                out.0
+            };
+            let genesis = PalwChainStateV2::genesis();
+            let s1 = step(&genesis, ctx(1, 100, 1), &register_class_and_bond(), None);
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let s2 = step(&s1, ctx(2, 101, 2), &[], Some(&env));
+            let seats = || vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let bind = |anchor| PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: seats() };
+            let s3 = step(&s2, ctx(3, 105, 3), &[bind(h64(77))], None);
+            let s4 = step(&s3, ctx(4, 116, 4), &[], None);
+            let s5 = step(&s4, ctx(5, 120, 5), &[bind(h64(78))], None);
+            let reserved = s5.claim(&claim_id).expect("bound").reserved;
+            let s6 = step(&s5, ctx(6, 131, 6), &[], None);
+            assert!(
+                matches!(s6.claim(&claim_id).expect("kept").phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. }),
+                "the second silent panel voids the claim, fence {audit}"
+            );
+            let bond = PalwBondKeyV2(env.attempt.executor_bond);
+            (s6.bond(&bond).expect("the producer's bond").collateral as u128, reserved)
+        };
+        let (before_fence, reserved) = fold_chain(false);
+        let (past_fence, _) = fold_chain(true);
+        assert!(reserved > 0, "the premise: the claim reserved something to charge");
+        assert_eq!(before_fence - past_fence, reserved, "past the fence the producer pays its reservation on top of the seats' charge");
     }
 
     /// **ADR-0065 D4 — an `Unavailable` quorum stops taking the producer's stake.**
