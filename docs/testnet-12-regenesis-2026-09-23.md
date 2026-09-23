@@ -11,7 +11,7 @@
 >
 > 現在のフリート: 5.104.81.23 の 4 seat は**停止**（unit は残置、script は宣言予算に置換済）、.113 と ibm の public node は旧 fingerprint `c746f07c` で稼働中（heartbeat のみ）、seeder 4 本稼働。**再起動は項目 6（1 seat → 2 → 4 の acceptance と PSS 線形性）完了後、drill → 4 ホスト配備 → seeder 切替の順。** 以下は初回配備時点の記録。
 
-Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12-regenesis`.
+Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12-regenesis` — **初回配備時のビルド。設計修正後の tip は上の状態欄の commit 群を参照。**
 
 ## The network
 
@@ -22,7 +22,7 @@ Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12
 | fence schedule | **`1000`** — one height, ADR-0065 D1's bond-maturity window (t11's was `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`) |
 | rule manifest | `… palw_work_target=1 palw_independence=1` (digest `9def81a1…`) |
 | premine | 33 outputs, exactly 10B MSK: 8 collateral + 8 fee floats + **16 community (758M)** + main wallet |
-| bond collateral | 60,088.18407600 MSK a seat (8 seats = 0.0048 % of the cap) |
+| bond collateral | 60,088.18407600 MSK a seat (8 seats = 0.0048 % of the cap) — **初回配備時。現在は 516,429.79663480 MSK a seat（8 seats = 0.0413 %）**、runtime が予約する単位で積み直したもの（`2bd134ec`） |
 | classes | BASE-0 floor + held Qwen3.6 `e108e736…`@512 + held Qwen2.5 `74c67e63…`@2,097,152, **each at the minimum grantable share** |
 | P2P port | 26311 — unchanged from t11, by the operator's decision |
 
