@@ -169,8 +169,35 @@ impl PalwBackendRegistry {
         job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
         role: PalwResourceRoleV1,
     ) -> PalwRoleMemoryNeedV1 {
-        PalwRoleMemoryNeedV1 { role, holding_bytes, runtime: backend.runtime_profile_v1(), profile: backend.resource_profile_v1(job, role) }
+        PalwRoleMemoryNeedV1 {
+            role,
+            holding_bytes,
+            derived_bytes: backend.artifact_derived_resident_bytes_v1(),
+            runtime: backend.runtime_profile_v1(),
+            profile: backend.resource_profile_v1(job, role),
+        }
     }
+}
+
+/// **Write the ledger into the node's runtime state** (ADR-0151 follow-up, item 6) — the host
+/// pool's snapshot, as `getPalwNodeStatus` reports it. Called by the panel's per-tick publish and by
+/// the producer at its gate, so the figures a hold names are the figures a program can read.
+pub fn publish_memory_ledger_v1(runtime: &mut kaspa_p2p_flows::flow_context::PalwNodeRuntimeV1) {
+    let snapshot = crate::palw_memory_ledger::host_ledger_v1().snapshot();
+    runtime.memory_share_bytes = snapshot.share_bytes.unwrap_or(0);
+    runtime.memory_headroom_bytes = snapshot.live_bytes.unwrap_or(0);
+    runtime.memory_reserved_bytes = snapshot.reserved_bytes;
+    runtime.memory_available_bytes = snapshot.available_bytes.unwrap_or(0);
+    runtime.memory_bounded = snapshot.available_bytes.is_some();
+    runtime.memory_holders = snapshot
+        .rows
+        .iter()
+        .map(|row| format!("{} of class {} job {} ({:.2} GiB)", row.key.role, row.key.class_id, row.key.job, gib(row.bytes)))
+        .collect::<Vec<_>>()
+        .join("; ");
+}
+
+impl PalwBackendRegistry {
 
     /// **Resolve through the tables, then — armed — through the chain's own registration**
     /// (ADR-0067 Decisions 1–2). `fetch` is the caller's session read
@@ -539,6 +566,9 @@ fn class_manifest_verification_armed_v1() -> bool {
 pub struct PalwRoleMemoryNeedV1 {
     pub role: PalwResourceRoleV1,
     pub holding_bytes: u64,
+    /// Tables the backend derived at load and holds for the artifact's life (the dense tier's
+    /// rotary table: 1.07 GiB at 2M). Resident already, so reported and not reserved.
+    pub derived_bytes: u64,
     pub runtime: Option<kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1>,
     pub profile: Option<kaspa_consensus_core::palw_resource_profile_v1::PalwResourceProfileV1>,
 }
@@ -548,6 +578,11 @@ impl PalwRoleMemoryNeedV1 {
     pub fn total_bytes(&self) -> u64 {
         let working_set = self.profile.map(|p| p.working_set_bytes()).unwrap_or(PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1);
         self.holding_bytes.saturating_add(working_set)
+    }
+
+    /// The artifact's resident bytes: its file (or its pinned residency) plus the derived tables.
+    pub fn artifact_resident_bytes(&self) -> u64 {
+        self.holding_bytes.saturating_add(self.derived_bytes)
     }
 
     /// The decomposition, for a hold line or a telemetry field.

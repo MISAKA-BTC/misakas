@@ -5998,11 +5998,23 @@ pub struct RpcPalwLocalPanelClass {
     pub chain_state: String,
     pub assignments: u32,
     pub hold: Option<RpcPalwPanelHoldReason>,
+    /// **The resource profile by role** (ADR-0151 follow-up, item 6; version 2 of this message):
+    /// the representation this node holds the class's cache in, the artifact's resident bytes
+    /// (file plus derived tables), each role's need on this node, and whether the reservation
+    /// ledger could cover it now. Node-local capacity, never a chain fact.
+    pub runtime_profile: String,
+    pub artifact_resident_bytes: u64,
+    pub producer_working_set_bytes: u64,
+    pub full_seat_working_set_bytes: u64,
+    pub partial_seat_working_set_bytes: u64,
+    pub producer_capable: bool,
+    pub full_seat_capable: bool,
+    pub partial_seat_capable: bool,
 }
 
 impl Serializer for RpcPalwLocalPanelClass {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.class_id, writer)?;
         store!(String, &self.model_name, writer)?;
         store!(String, &self.seat_id, writer)?;
@@ -6018,14 +6030,23 @@ impl Serializer for RpcPalwLocalPanelClass {
         store!(String, &self.chain_state, writer)?;
         store!(u32, &self.assignments, writer)?;
         serialize!(Option<RpcPalwPanelHoldReason>, &self.hold, writer)?;
+        // Version 2: the resource profile by role.
+        store!(String, &self.runtime_profile, writer)?;
+        store!(u64, &self.artifact_resident_bytes, writer)?;
+        store!(u64, &self.producer_working_set_bytes, writer)?;
+        store!(u64, &self.full_seat_working_set_bytes, writer)?;
+        store!(u64, &self.partial_seat_working_set_bytes, writer)?;
+        store!(bool, &self.producer_capable, writer)?;
+        store!(bool, &self.full_seat_capable, writer)?;
+        store!(bool, &self.partial_seat_capable, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwLocalPanelClass {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {
+        let version = load!(u16, reader)?;
+        let mut out = Self {
             class_id: load!(String, reader)?,
             model_name: load!(String, reader)?,
             seat_id: load!(String, reader)?,
@@ -6041,7 +6062,21 @@ impl Deserializer for RpcPalwLocalPanelClass {
             chain_state: load!(String, reader)?,
             assignments: load!(u32, reader)?,
             hold: deserialize!(Option<RpcPalwPanelHoldReason>, reader)?,
-        })
+            ..Default::default()
+        };
+        // A version-1 sender (a node before the resource profile) stops here; its rows read with
+        // the profile fields at their defaults rather than as a truncated message.
+        if version >= 2 {
+            out.runtime_profile = load!(String, reader)?;
+            out.artifact_resident_bytes = load!(u64, reader)?;
+            out.producer_working_set_bytes = load!(u64, reader)?;
+            out.full_seat_working_set_bytes = load!(u64, reader)?;
+            out.partial_seat_working_set_bytes = load!(u64, reader)?;
+            out.producer_capable = load!(bool, reader)?;
+            out.full_seat_capable = load!(bool, reader)?;
+            out.partial_seat_capable = load!(bool, reader)?;
+        }
+        Ok(out)
     }
 }
 
@@ -6943,11 +6978,21 @@ pub struct GetPalwNodeStatusResponse {
     /// The panel can carry receipts and answers (a fee outpoint resolves).
     pub panel_submitter: bool,
     pub retention_dir: String,
+    /// **The memory reservation ledger** (ADR-0151 follow-up, items 3 and 6; version 2 of this
+    /// message): the declared per-node share (0 = none), the host's live headroom (0 = unknown),
+    /// what this process's duties hold, what one more may take, whether any bound is known, and
+    /// who holds what — the figures a hold names, readable without the log.
+    pub memory_share_bytes: u64,
+    pub memory_headroom_bytes: u64,
+    pub memory_reserved_bytes: u64,
+    pub memory_available_bytes: u64,
+    pub memory_bounded: bool,
+    pub memory_holders: String,
 }
 
 impl Serializer for GetPalwNodeStatusResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.consensus_params_id, writer)?;
         store!(Vec<u64>, &self.fence_schedule, writer)?;
         store!(String, &self.consensus_schedule_id, writer)?;
@@ -6966,14 +7011,21 @@ impl Serializer for GetPalwNodeStatusResponse {
         store!(bool, &self.panel_running, writer)?;
         store!(bool, &self.panel_submitter, writer)?;
         store!(String, &self.retention_dir, writer)?;
+        // Version 2: the memory ledger.
+        store!(u64, &self.memory_share_bytes, writer)?;
+        store!(u64, &self.memory_headroom_bytes, writer)?;
+        store!(u64, &self.memory_reserved_bytes, writer)?;
+        store!(u64, &self.memory_available_bytes, writer)?;
+        store!(bool, &self.memory_bounded, writer)?;
+        store!(String, &self.memory_holders, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwNodeStatusResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {
+        let version = load!(u16, reader)?;
+        let mut out = Self {
             consensus_params_id: load!(String, reader)?,
             fence_schedule: load!(Vec<u64>, reader)?,
             consensus_schedule_id: load!(String, reader)?,
@@ -6992,7 +7044,18 @@ impl Deserializer for GetPalwNodeStatusResponse {
             panel_running: load!(bool, reader)?,
             panel_submitter: load!(bool, reader)?,
             retention_dir: load!(String, reader)?,
-        })
+            ..Default::default()
+        };
+        // A version-1 sender stops here; the ledger fields stay at their defaults.
+        if version >= 2 {
+            out.memory_share_bytes = load!(u64, reader)?;
+            out.memory_headroom_bytes = load!(u64, reader)?;
+            out.memory_reserved_bytes = load!(u64, reader)?;
+            out.memory_available_bytes = load!(u64, reader)?;
+            out.memory_bounded = load!(bool, reader)?;
+            out.memory_holders = load!(String, reader)?;
+        }
+        Ok(out)
     }
 }
 

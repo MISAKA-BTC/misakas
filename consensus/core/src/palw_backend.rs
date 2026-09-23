@@ -567,6 +567,15 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **Bytes this backend holds resident beyond the artifact's file** — tables derived at load
+    /// that no file-size proxy sees. The dense tier generates its rotary table when the artifact is
+    /// decoded (`RopeTableV1::generate`): 2 × `max_position` × `d_head / 2` × 4 bytes, which at the
+    /// 2M context is 1.07 GiB of the producer's steady-state anonymous memory. Already resident
+    /// once the class is loaded, so it is reported beside a role's need and not added to it.
+    fn artifact_derived_resident_bytes_v1(&self) -> u64 {
+        0
+    }
+
     /// **What `role` needs to execute `job` on this backend, term by term** (ADR-0151 follow-up,
     /// item 1) — the ONE derivation the producer's gate, the panel's pre-check and the court's
     /// replay read, so the three roles cannot be priced by three estimates again. `None` for

@@ -2095,6 +2095,14 @@ mod mockery {
                 chain_state: "READY".to_string(),
                 assignments: mock(),
                 hold: mock(),
+                runtime_profile: "A16-KV-i16".to_string(),
+                artifact_resident_bytes: mock(),
+                producer_working_set_bytes: mock(),
+                full_seat_working_set_bytes: mock(),
+                partial_seat_working_set_bytes: mock(),
+                producer_capable: mock(),
+                full_seat_capable: mock(),
+                partial_seat_capable: mock(),
             }
         }
     }

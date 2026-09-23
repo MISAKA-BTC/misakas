@@ -931,23 +931,21 @@ impl PalwProducerService {
             Some(&job),
             kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer,
         );
-        let _reserved = crate::palw_memory_ledger::host_ledger_v1()
-            .reserve(
-                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
-                    role: "producer",
-                    class_id: facts.class_id,
-                    job: job.context_hash(),
-                },
-                need.total_bytes(),
+        let reserved = crate::palw_memory_ledger::host_ledger_v1().reserve(
+            crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "producer", class_id: facts.class_id, job: job.context_hash() },
+            need.total_bytes(),
+        );
+        // The ledger as it stands after this decision, where `getPalwNodeStatus` reads it — on the
+        // refusal as much as on the grant, since the refusal is the state an operator asks about.
+        self.flow_context.update_palw_runtime(crate::palw_backends::publish_memory_ledger_v1);
+        let _reserved = reserved.map_err(|refusal| {
+            format!(
+                "this attempt needs {} for a {}-token prefill and {refusal} — holding rather than being OOM-killed; a \
+                 narrower class, a host with the memory, or the running duty finishing, produces",
+                need.describe(),
+                prompt.len()
             )
-            .map_err(|refusal| {
-                format!(
-                    "this attempt needs {} for a {}-token prefill and {refusal} — holding rather than being OOM-killed; a \
-                     narrower class, a host with the memory, or the running duty finishing, produces",
-                    need.describe(),
-                    prompt.len()
-                )
-            })?;
+        })?;
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
         // ADR-0112 Decision 8: what one draw reads from storage, printed beside the draw. The

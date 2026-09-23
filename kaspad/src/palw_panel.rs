@@ -751,15 +751,28 @@ impl PalwPanelService {
         let ibd = self.flow_context.is_ibd_running() || !synced;
         let mut rows = Vec::new();
         for class in read.classes.iter().filter(|c| !c.is_base_class) {
+            use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
             let mut hold = None;
             let mut artifact_loaded = false;
             let mut artifact_root = String::new();
             let mut working_set_bytes = 0u64;
+            let mut by_role: Option<(crate::palw_backends::PalwRoleMemoryNeedV1, crate::palw_backends::PalwRoleMemoryNeedV1)> = None;
             match backends.resolve(class.class_id, class.artifact_root) {
                 Ok(_) => {
                     artifact_loaded = true;
                     artifact_root = class.artifact_root.to_string();
-                    working_set_bytes = backends.holding_bytes_for_v1(class.class_id, class.artifact_root).unwrap_or(0);
+                    // **The figures by role, from the one derivation** (ADR-0151 follow-up, items 1
+                    // and 6): the full seat's is what the pre-check compares and the ledger reserves
+                    // for a replay; the producer's is what the attempt gate reserves. Both memoized
+                    // per (holdings, class, root, role), so this per-tick publish resolves nothing.
+                    let full = backends.role_memory_need_v1(class.class_id, class.artifact_root, PalwResourceRoleV1::FullSeat);
+                    let producer = backends.role_memory_need_v1(class.class_id, class.artifact_root, PalwResourceRoleV1::Producer);
+                    working_set_bytes = full.as_ref().map(|n| n.total_bytes()).unwrap_or_else(|| {
+                        backends.holding_bytes_for_v1(class.class_id, class.artifact_root).unwrap_or(0)
+                    });
+                    if let (Some(full), Some(producer)) = (full, producer) {
+                        by_role = Some((producer, full));
+                    }
                     if self.replay_memory_budget_v1(Some((class.class_id, class.artifact_root))).is_err() {
                         hold = Some(PalwPanelHoldReasonV1::ReplayBudgetInsufficient);
                     }
@@ -777,6 +790,18 @@ impl PalwPanelService {
                 hold = Some(PalwPanelHoldReasonV1::NodeIbd);
             }
             let replay_capable = artifact_loaded && hold.is_none() && !ibd;
+            let admits = |need: &crate::palw_backends::PalwRoleMemoryNeedV1| crate::palw_backends::ledger_admits_v1(need.total_bytes()).is_ok();
+            let (runtime_profile, artifact_resident_bytes, producer_ws, full_ws, producer_capable, full_capable) = match &by_role {
+                Some((producer, full)) => (
+                    full.runtime.map(|r| r.name().to_string()).unwrap_or_default(),
+                    full.artifact_resident_bytes(),
+                    producer.total_bytes(),
+                    full.total_bytes(),
+                    artifact_loaded && !ibd && admits(producer),
+                    artifact_loaded && !ibd && admits(full),
+                ),
+                None => (String::new(), working_set_bytes, 0, working_set_bytes, false, replay_capable),
+            };
             rows.push(kaspa_p2p_flows::flow_context::PalwLocalPanelClassV1 {
                 class_id: class.class_id.to_string(),
                 model_name: palw_class_model_name_v1(class.class_id),
@@ -787,9 +812,22 @@ impl PalwPanelService {
                 replay_capable,
                 hold_code: hold.map(|h| h.code().to_string()).unwrap_or_default(),
                 hold_message: hold.map(|h| h.message().to_string()).unwrap_or_default(),
+                runtime_profile,
+                artifact_resident_bytes,
+                producer_working_set_bytes: producer_ws,
+                full_seat_working_set_bytes: full_ws,
+                // The widest segment ends where the job ends: a full seat's rows, until a server
+                // can hand a seat the checkpoint at its segment's start.
+                partial_seat_working_set_bytes: full_ws,
+                producer_capable,
+                full_seat_capable: full_capable,
+                partial_seat_capable: full_capable,
             });
         }
-        self.flow_context.update_palw_runtime(|r| r.panel_classes = rows);
+        self.flow_context.update_palw_runtime(|r| {
+            r.panel_classes = rows;
+            crate::palw_backends::publish_memory_ledger_v1(r);
+        });
     }
 
     /// **ADR-0135 Decision 4, the seat's side: the possession proofs due now.** Every thirty
@@ -1092,6 +1130,7 @@ impl PalwPanelService {
             .unwrap_or_else(|| crate::palw_backends::PalwRoleMemoryNeedV1 {
                 role: PalwResourceRoleV1::FullSeat,
                 holding_bytes: self.class_holdings.iter().filter_map(crate::palw_backends::holding_replay_bytes_v1).max().unwrap_or(0),
+                derived_bytes: 0,
                 runtime: None,
                 profile: None,
             })

@@ -2779,6 +2779,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         Some(self.runtime_profile)
     }
 
+    /// The rotary table, generated at decode and resident for the artifact's life: `cos_q` and
+    /// `sin_q`, `max_position × d_head / 2` lanes of `i32` each.
+    fn artifact_derived_resident_bytes_v1(&self) -> u64 {
+        (self.artifact.rope.cos_q.len() as u64).saturating_add(self.artifact.rope.sin_q.len() as u64).saturating_mul(4)
+    }
+
     fn resource_profile_v1(
         &self,
         job: Option<&PalwJobContextV2>,

@@ -805,6 +805,12 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwNodeStatusResponse>, protowire::Ge
         panel_running: item.panel_running,
         panel_submitter: item.panel_submitter,
         retention_dir: item.retention_dir.clone(),
+        memory_share_bytes: item.memory_share_bytes,
+        memory_headroom_bytes: item.memory_headroom_bytes,
+        memory_reserved_bytes: item.memory_reserved_bytes,
+        memory_available_bytes: item.memory_available_bytes,
+        memory_bounded: item.memory_bounded,
+        memory_holders: item.memory_holders.clone(),
         error: None,
     }
 });
@@ -1132,6 +1138,14 @@ from!(item: &kaspa_rpc_core::RpcPalwLocalPanelClass, protowire::RpcPalwLocalPane
         chain_state: item.chain_state.clone(),
         assignments: item.assignments,
         hold: item.hold.as_ref().map(protowire::RpcPalwPanelHoldReason::from),
+        runtime_profile: item.runtime_profile.clone(),
+        artifact_resident_bytes: item.artifact_resident_bytes,
+        producer_working_set_bytes: item.producer_working_set_bytes,
+        full_seat_working_set_bytes: item.full_seat_working_set_bytes,
+        partial_seat_working_set_bytes: item.partial_seat_working_set_bytes,
+        producer_capable: item.producer_capable,
+        full_seat_capable: item.full_seat_capable,
+        partial_seat_capable: item.partial_seat_capable,
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClassPanelStatusRequest, protowire::GetPalwClassPanelStatusRequestMessage, {
@@ -2556,6 +2570,12 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         panel_running: item.panel_running,
         panel_submitter: item.panel_submitter,
         retention_dir: item.retention_dir.clone(),
+        memory_share_bytes: item.memory_share_bytes,
+        memory_headroom_bytes: item.memory_headroom_bytes,
+        memory_reserved_bytes: item.memory_reserved_bytes,
+        memory_available_bytes: item.memory_available_bytes,
+        memory_bounded: item.memory_bounded,
+        memory_holders: item.memory_holders.clone(),
     }
 });
 try_from!(&protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest);
@@ -2889,6 +2909,14 @@ try_from!(item: &protowire::RpcPalwLocalPanelClass, kaspa_rpc_core::RpcPalwLocal
         chain_state: item.chain_state.clone(),
         assignments: item.assignments,
         hold: item.hold.as_ref().map(kaspa_rpc_core::RpcPalwPanelHoldReason::try_from).transpose()?,
+        runtime_profile: item.runtime_profile.clone(),
+        artifact_resident_bytes: item.artifact_resident_bytes,
+        producer_working_set_bytes: item.producer_working_set_bytes,
+        full_seat_working_set_bytes: item.full_seat_working_set_bytes,
+        partial_seat_working_set_bytes: item.partial_seat_working_set_bytes,
+        producer_capable: item.producer_capable,
+        full_seat_capable: item.full_seat_capable,
+        partial_seat_capable: item.partial_seat_capable,
     }
 });
 try_from!(item: &protowire::GetPalwClassPanelStatusRequestMessage, kaspa_rpc_core::GetPalwClassPanelStatusRequest, {
