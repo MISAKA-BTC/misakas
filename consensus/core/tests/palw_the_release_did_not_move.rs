@@ -22,8 +22,19 @@ use kaspa_consensus_core::config::params::{
 /// and ADR-0144 §9 at 8,500. A scheduled future fence writes Some-only into the params id and the
 /// schedule id; the identity does not move (the fence normalises out until it fires), which is why
 /// only two of the three constants below change with this pair.
-const T11_CONSENSUS_PARAMS_ID: &str = "79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640";
-const T11_CONSENSUS_IDENTITY_ID: &str = "12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2";
+///
+/// **Re-pinned 2026-09-23 for the FIFTH certified family** (`PALW-QWEN36-V6`, `7681c203`), and this is
+/// the one change on the branch that moves testnet-11's IDENTITY as well as its ruleset: the root of
+/// the certified family set (`court_e2e_root`) sits inside every RC bundle, so both ids below move
+/// while the schedule id does not (no height was added). Deliberate, not dormant — testnet-11 is
+/// superseded by testnet-12 and its chain past DAA 7,219 is unsyncable by a correct validator
+/// (`docs/testnet-12-regenesis-2026-09-23.md`), so no node on this build is meant to rejoin it. The
+/// params-id pin in `config::params` (`shipped_presets_have_pinned_fingerprints`) moved in the same
+/// commit; this file was missed then and caught by the KV track's full run.
+/// Previous: params `79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640`,
+/// identity `12e975effe2ef067e039c07b1af4199b7c4122068da7ccc2dda989cf3f4ec4d2`.
+const T11_CONSENSUS_PARAMS_ID: &str = "33bdff0bf072c57fd27853899ae28a79b4bb8b43980a634c070257d9802bd634";
+const T11_CONSENSUS_IDENTITY_ID: &str = "ca11f05d1849a8cc28a6f6b27c7f3530947e6b26b80746c36ab057d8aa4dcfe1";
 /// **Re-pinned 2026-09-23 for ADR-0151's `palw_economic_safety`, and only this one of the three.**
 ///
 /// `consensus_schedule_id` writes every score `for_each_fence` visits, and a `None` Some-only fence
