@@ -1734,9 +1734,22 @@ Do you confirm? (y/n)";
                         prompt_ids_form: config_for_palw_panel.params.palw_prompt_ids_form_v1(),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
-                        class_residency: crate::palw_backends::palw_class_residency_within_share_v1(
+                        // **The same carve the producer site makes.** The holding is process-wide
+                        // (`held_artifacts`): whichever duty maps the file first sets its residency,
+                        // so a panel in a producing process budgets the weights around this
+                        // process's attempt exactly as the producer would — one derivation, whichever
+                        // constructor wins the race. A panel-only node reserves nothing.
+                        class_residency: crate::palw_backends::palw_class_residency_beside_the_attempt_v1(
                             args.palw_class_resident_bytes,
                             crate::args::palw_host_share_bytes_v1(args),
+                            if args.palw_produce {
+                                crate::palw_backends::palw_producer_attempt_reserve_v1(
+                                    &panel_court.expect("v2 is true exactly when this is Some"),
+                                    palw_configured_producer_class(args, &config_for_palw_panel),
+                                )
+                            } else {
+                                0
+                            },
                         ),
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
                         canonical_claims: args.palw_canonical_claims,
