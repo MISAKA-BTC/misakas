@@ -220,7 +220,7 @@ predicate is not a wedge search, and this ADR does not claim it is.
 Two of this ADR's numbers were posted in units no runtime path reads, and the acceptance ladder that
 followed found three memory paths that would have killed a 2M seat before it produced a claim. All
 are fixed on `feat/testnet-12-regenesis`; the genesis block is unchanged and only the params
-fingerprint moved (`fb8f378d…` → `c746f07c…` → `30848c6b…`).
+fingerprint moved (`fb8f378d…` → `c746f07c…` → `30848c6b…` → `bcfbf2a3…`, the last for `palw_unavailable_abstains`, a t11-genesis fence the t12 preset had left dormant; `t12_arms_every_fence_t11_armed` now holds every t11-armed fence to genesis on t12).
 
 ### The two defects of the first deployment
 

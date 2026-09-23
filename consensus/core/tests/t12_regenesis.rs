@@ -307,3 +307,54 @@ fn t12_genesis_reads_its_root_from_the_committed_manifest() {
         "testnet-12 registers the measured root for the measured class"
     );
 }
+
+
+/// **Every fence testnet-11 armed, testnet-12 arms from genesis** — the operator's question of
+/// 2026-09-23, as a ledger that fails on the first regression.
+///
+/// The first run of this ledger found one: `palw_unavailable_abstains`, armed at 0 on t11 since
+/// Relaunch 5 and dormant on t12, because it was `None` in the base preset and pass 2's zeroing has
+/// nothing to visit inside a `None`. A rule the live network has run from genesis, silently dormant
+/// on its successor, is exactly what a fresh genesis must not do — so the check is a test, not a
+/// one-off probe. The one scheduled height (`PALW_T12_BOND_MATURITY_WINDOW_DAA`) is the single
+/// allowed exception, for the reason on `palw_t12_arm_every_rule_from_genesis`.
+#[test]
+fn t12_arms_every_fence_t11_armed() {
+    use kaspa_consensus_core::config::params::PALW_T12_BOND_MATURITY_WINDOW_DAA;
+    let t11 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+    let t12 = Params::from(t12());
+    let on_t12: std::collections::BTreeMap<&str, Option<u64>> =
+        t12.palw_fences_v1().into_iter().map(|(n, f)| (n, f.map(|a| a.daa_score()))).collect();
+    let mut armed_on_t11 = 0;
+    let mut regressions = Vec::new();
+    for (name, fence) in t11.palw_fences_v1() {
+        let Some(h11) = fence.map(|a| a.daa_score()) else { continue };
+        armed_on_t11 += 1;
+        match on_t12.get(name).copied().flatten() {
+            Some(0) => {}
+            Some(h) if h == PALW_T12_BOND_MATURITY_WINDOW_DAA => {}
+            // **Not a fence on t12 — the rule it schedules is the lane's opening state.** t11's lane
+            // opens at a 5-DAA span and narrows at 7,300; t12's opens AT the narrowed span with no
+            // second height (`PalwExecSpanShortV1::NONE`). The exception is admitted only if that is
+            // true in substance, asserted below rather than taken from the name.
+            None if name == "palw_execution_lane_span_short" => {
+                let (l11, l12) = (
+                    t11.palw_execution_lane.as_ref().expect("t11 has an execution lane"),
+                    t12.palw_execution_lane.as_ref().expect("t12 has an execution lane"),
+                );
+                assert_eq!(
+                    l12.schedule_span_daa,
+                    l11.short_span.schedule_span_daa.max(1),
+                    "t12's lane must open at the span t11 narrows to at {h11}, not at t11's opening span {}",
+                    l11.schedule_span_daa
+                );
+                assert_eq!(l12.short_span, PalwExecSpanShortV1::NONE, "and schedule no second height");
+                assert_ne!(l11.schedule_span_daa, l12.schedule_span_daa, "the fixture is vacuous if t11 never narrowed");
+            }
+            Some(h) => regressions.push(format!("{name}: t11 {h11} -> t12 scheduled at {h}, not genesis")),
+            None => regressions.push(format!("{name}: t11 {h11} -> t12 DORMANT")),
+        }
+    }
+    assert!(armed_on_t11 >= 36, "the t11 ledger has {armed_on_t11} armed fences; the table this was written against had 36");
+    assert!(regressions.is_empty(), "fences testnet-11 armed that testnet-12 does not arm from genesis:\n  {}", regressions.join("\n  "));
+}

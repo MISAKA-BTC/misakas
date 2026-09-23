@@ -14556,6 +14556,13 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // ---- pass 1: the fences testnet-11 leaves dormant ------------------------------------------
     // ADR-0064: a bond is usable in the block that accepts its registration.
     params.palw_bootstrap_activation = Some(at);
+    // **The one testnet-11 genesis fence this preset had missed** (found 2026-09-23 by the ledger
+    // `t12_arms_every_fence_t11_armed`, which now exists so it cannot be missed again). Armed at 0 on
+    // testnet-11 since Relaunch 5 — an Unavailable seat abstains from fork choice — but `None` in
+    // `palw_rc_base_params`, and pass 2's `for_each_fence` zeroing has no `u64` to visit inside a
+    // `None`. A rule the live network has run from genesis, silently dormant on its successor, is
+    // precisely the regression the operator asked to be checked for.
+    params.palw_unavailable_abstains = Some(at);
     // **ADR-0065 D1 — the ONE rule this preset cannot arm at DAA 0, and the reason is the rule
     // itself.** A bond may judge only if it was registered `window_daa` before the anchor, and at
     // genesis every bond was registered at DAA 0: `validate_palw_v2` refuses the pair in those words
