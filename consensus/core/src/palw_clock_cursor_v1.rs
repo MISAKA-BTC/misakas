@@ -121,6 +121,30 @@ pub fn palw_clock_reference_v1(parent_daa_score: u64, window: impl IntoIterator<
     window.into_iter().filter(|b| b.daa_score == parent_daa_score).min_by_key(|b| (b.blue_score, b.hash)).map(|b| b.timestamp_ms)
 }
 
+/// **The reference past `palw_clock_floor`: the lowest blue score, then the EARLIEST timestamp,
+/// then the hash** (the 2026-09-24 heartbeat audit, H5).
+///
+/// [`palw_clock_reference_v1`] broke a blue-score tie by hash. The tie is structural — two blocks with
+/// the same parents have the same blue score — and the tied blocks are exactly the sibling STEPS that
+/// merged one granted beat. So the hash chose which step's timestamp opened the next slot, and a step
+/// stamped up to the 132 s drift tolerance in the future won half the time: the next slot moved back by
+/// up to 132 s (measured +31 s at DAA 8 and +18 s at DAA 24). The earliest tied step is the honest
+/// answer to "when did the score last move".
+///
+/// §6a's reason for NOT taking a timestamp minimum still holds across blue scores — an old but
+/// admissible timestamp on a later block must not pull the reference back — and it is not reopened:
+/// the minimum is taken only INSIDE the lowest blue score. Inside it the floor's own step rule holds
+/// (a block that steps on a grant is stamped at or past the cursor it consumed), so no tied step
+/// predates its slot and the earliest of them cannot open the next slot early. The hash remains the
+/// last key, so the order stays total.
+pub fn palw_clock_reference_v2(parent_daa_score: u64, window: impl IntoIterator<Item = ClockWindowBlockV1>) -> Option<u64> {
+    window
+        .into_iter()
+        .filter(|b| b.daa_score == parent_daa_score)
+        .min_by_key(|b| (b.blue_score, b.timestamp_ms, b.hash))
+        .map(|b| b.timestamp_ms)
+}
+
 /// The cursor that reference stands for: the next slot opens one interval after it.
 #[inline]
 pub fn palw_clock_cursor_from_reference_v1(reference_ms: u64, interval_ms: u64) -> PalwClockCursorV1 {
@@ -160,6 +184,30 @@ impl PalwClockStepV1 {
     #[inline]
     pub fn next_slot_ms(&self) -> Option<u64> {
         if self.governs { self.cursor.map(|cursor| cursor.next_slot_ms) } else { None }
+    }
+
+    /// **H5: may a block stamped `timestamp` step the clock on these parents?** A block that is
+    /// `granted` becomes the next slot's reference, so past the floor it is stamped at or past the
+    /// cursor it consumed — or the next slot would open early, and nothing would floor the spacing
+    /// between two ticks. `Ok` wherever the floor does not govern, nothing is granted, or no
+    /// reference is known.
+    #[inline]
+    pub fn step_stamp_admits(&self, timestamp: u64) -> Result<(), ClockSlotTooEarly> {
+        match self.cursor {
+            Some(cursor) if self.floor && self.granted => palw_clock_slot_admits_v1(&cursor, timestamp),
+            _ => Ok(()),
+        }
+    }
+
+    /// The timestamp a TEMPLATE for these parents must carry at least (H5's construction half):
+    /// `proposed` raised to the cursor's slot where the block will step on a grant past the floor,
+    /// `proposed` itself everywhere else.
+    #[inline]
+    pub fn floor_stamp(&self, proposed: u64) -> u64 {
+        match self.cursor {
+            Some(cursor) if self.floor && self.granted => proposed.max(cursor.next_slot_ms),
+            _ => proposed,
+        }
     }
 
     /// **H3: may a heartbeat header stamped `timestamp` stand on these parents?** Past the floor,
@@ -333,6 +381,50 @@ mod tests {
         assert!(PalwClockStepV1 { cursor: None, ..floored }.heartbeat_stamp_admits(0).is_ok(), "no reference, no slot taken");
         assert_eq!(floored.next_slot_ms(), Some(10_000));
         assert_eq!(PalwClockStepV1 { governs: false, ..floored }.next_slot_ms(), None);
+    }
+
+    /// **H5: a future-stamped sibling step cannot delay the slot.** Two steps merging one beat tie on
+    /// blue score by construction; under v1 the hash picked the reference, so a step stamped 132 s in
+    /// the future won whenever its hash was the lower one. Under v2 the earlier step is the reference
+    /// whatever the hashes, in every order.
+    #[test]
+    fn a_future_stamped_sibling_step_cannot_delay_the_slot() {
+        let honest = win_at(10, 5, 1_000_000, 0xFF);
+        let ahead = win_at(10, 5, 1_000_000 + 132_000, 0x01);
+        // The attack v1 admitted: the future-stamped sibling has the lower hash and wins.
+        assert_eq!(palw_clock_reference_v1(10, [honest, ahead]), Some(1_132_000), "v1: the hash picks the delay");
+        for order in [[honest, ahead], [ahead, honest]] {
+            assert_eq!(palw_clock_reference_v2(10, order), Some(1_000_000), "v2: the earliest tied step, in either order");
+        }
+        // Blue score still leads: a later block with an OLD timestamp cannot pull the reference back.
+        let later_old = win_at(10, 9, 1, 0x00);
+        assert_eq!(palw_clock_reference_v2(10, [honest, ahead, later_old]), Some(1_000_000), "§6a's objection still holds");
+        // And a full tie falls to the hash, so the order stays total.
+        let twin = win_at(10, 5, 1_000_000, 0x02);
+        for order in [[honest, twin], [twin, honest]] {
+            assert_eq!(palw_clock_reference_v2(10, order), Some(1_000_000));
+        }
+        assert_eq!(palw_clock_reference_v2(11, [honest]), None, "a score the window does not reach is no slot taken");
+    }
+
+    /// **H5: a block that steps the clock is stamped at or past the slot it consumed, and a template
+    /// for one is stamped there.**
+    #[test]
+    fn a_step_is_stamped_at_or_past_the_slot_it_consumed() {
+        let cursor = Some(PalwClockCursorV1 { next_slot_ms: 10_000, slots_consumed: 0 });
+        let step = PalwClockStepV1 { governs: true, cursor, granted: true, floor: true };
+        assert!(step.step_stamp_admits(10_000).is_ok());
+        assert_eq!(step.step_stamp_admits(9_999).expect_err("a step one ms early").next_slot_ms, 10_000);
+        assert_eq!(step.floor_stamp(1), 10_000, "a template is raised to the slot");
+        assert_eq!(step.floor_stamp(12_345), 12_345, "and a later clock kept");
+        for relaxed in [
+            PalwClockStepV1 { granted: false, ..step },
+            PalwClockStepV1 { floor: false, ..step },
+            PalwClockStepV1 { cursor: None, ..step },
+        ] {
+            assert!(relaxed.step_stamp_admits(0).is_ok(), "{relaxed:?}");
+            assert_eq!(relaxed.floor_stamp(1), 1, "{relaxed:?}");
+        }
     }
 
     /// The type is rooted state, so its encoding is a consensus fact: pin the byte layout.

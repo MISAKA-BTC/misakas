@@ -194,3 +194,95 @@ async fn t12_a_slow_clock_still_beats_and_the_chain_keeps_ticking_under_skew() {
         last_reference = next_step.header.timestamp;
     }
 }
+
+/// **H5, acceleration: a step stamped before the slot it consumed is refused — and without the floor
+/// it was admitted and opened the next slot two seconds after the last.**
+///
+/// The drift tolerance (132 s) is longer than the interval (120 s), so a beat stamped for the slot is
+/// admissible the moment the reference exists; the block that merges it, stamped "now", became the
+/// next reference. Nothing floored the spacing between two ticks.
+#[tokio::test]
+async fn t12_a_step_cannot_open_the_next_slot_early_and_could_without_the_floor() {
+    kaspa_core::log::try_init_logger("info");
+    for floor in [true, false] {
+        let (mut ctx, _config) = t12_clock(floor);
+        let (step, slot) = to_a_taken_slot(&mut ctx).await;
+        let reference = step.header.timestamp;
+        // A beat stamped for the slot a second after the reference — a clock two minutes ahead.
+        let (built, _) = beat(&ctx, 700, reference + 1_000);
+        assert_eq!(built.header.timestamp, slot, "the adapter stamps it for its slot");
+        let holder = accepted(&mut ctx, built, "a beat stamped for the slot").await;
+        // The step over it, stamped "now": two seconds after the reference.
+        let (built, earliest) = beat(&ctx, 701, reference + 2_000);
+        assert_eq!(earliest, slot, "the adapter stamps a step for the slot it consumes");
+        let early = restamped(built, reference + 2_000);
+        let hash = early.header.hash;
+        match (floor, submit(&mut ctx, early).await) {
+            // A heartbeat step is a beat as well as a step, over one cursor, so H3 answers first; a
+            // step from any other lane meets H5's own refusal (`h5_a_step_from_another_lane_...`).
+            (
+                true,
+                Err(RuleError::HeartbeatBeforeItsSlot(h, stamped, opens) | RuleError::ClockStepBeforeItsSlot(h, stamped, opens)),
+            ) => {
+                assert_eq!((h, stamped, opens), (hash, reference + 2_000, slot));
+                let (built, _) = beat(&ctx, 702, reference + 2_000);
+                let honest = accepted(&mut ctx, built, "the step, stamped for its slot").await;
+                assert_eq!(honest.header.timestamp, slot, "an honest step is stamped at the slot");
+                assert_eq!(daa_of(&ctx, honest.header.hash), daa_of(&ctx, holder.header.hash) + 1, "and ticks");
+                assert_eq!(
+                    taken_until(&ctx, honest.header.timestamp + 1),
+                    Some(reference + 2 * I),
+                    "the next slot is two intervals after the last reference: the spacing is floored"
+                );
+            }
+            (false, Ok(block)) => {
+                assert_eq!(daa_of(&ctx, block.header.hash), daa_of(&ctx, holder.header.hash) + 1, "the early step ticked");
+                assert_eq!(
+                    taken_until(&ctx, block.header.timestamp + 1),
+                    Some(reference + 2_000 + I),
+                    "and the next slot opened two seconds after the last one did — the clock ran fast"
+                );
+            }
+            (floor, other) => panic!("floor={floor}: a step two seconds after the reference answered {other:?}"),
+        }
+    }
+}
+
+/// **H5, delay: a future-stamped sibling step cannot push the next slot back — and without the
+/// floor it did, whenever its hash was the lower one.**
+///
+/// Two steps over the same beat have the same parents, so the same blue score; v1 broke that tie by
+/// hash. Measured on testnet-12: +31 s at DAA 8 and +18 s at DAA 24.
+#[tokio::test]
+async fn t12_a_future_stamped_sibling_step_cannot_delay_the_slot_and_could_without_the_floor() {
+    kaspa_core::log::try_init_logger("info");
+    for floor in [true, false] {
+        let (mut ctx, _config) = t12_clock(floor);
+        let (_step, slot) = to_a_taken_slot(&mut ctx).await;
+        let (built, _) = beat(&ctx, 800, slot);
+        accepted(&mut ctx, built, "the beat that holds the slot").await;
+        // Both steps are built on the same virtual — the same parents.
+        let (honest, _) = beat(&ctx, 801, slot + 1_000);
+        let (sibling, _) = beat(&ctx, 802, slot + 1_000);
+        assert_eq!(honest.header.direct_parents(), sibling.header.direct_parents(), "siblings");
+        let ahead = (802..5_000u64)
+            .map(|nonce| {
+                let mut b = sibling.clone();
+                b.header.nonce = nonce;
+                restamped(b, slot + 100_000)
+            })
+            .find(|b| b.header.hash < honest.header.hash)
+            .expect("a nonce whose hash sorts below the honest step's — the case the hash tie-break got wrong");
+        let honest_ts = honest.header.timestamp;
+        let ahead_ts = ahead.header.timestamp;
+        // Two tips; at most one of them is the sink, so neither is asserted UTXO-valid.
+        submit(&mut ctx, honest).await.expect("the honest step is valid");
+        submit(&mut ctx, ahead).await.expect("the step stamped 100 s ahead is valid: it is within the drift tolerance");
+        let next = taken_until(&ctx, ahead_ts + 1).expect("the slot is taken until the next one");
+        if floor {
+            assert_eq!(next, honest_ts + I, "the earliest tied step is the reference: no delay");
+        } else {
+            assert_eq!(next, ahead_ts + I, "v1: the lower hash chose the reference, and the slot moved back 99 s");
+        }
+    }
+}

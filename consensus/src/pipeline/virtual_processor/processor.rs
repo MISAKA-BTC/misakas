@@ -12750,13 +12750,28 @@ impl VirtualStateProcessor {
         let utxo_commitment = virtual_state.multiset.clone().finalize();
         // Past median time is the exclusive lower bound for valid block time, so we increase by 1 to get the valid min
         let min_block_time = virtual_state.past_median_time + 1;
+        // **H5 (the clock floor): a template that steps the clock on a beat's grant is stamped at or
+        // past the slot it consumes** — the header stage refuses it otherwise (`ClockStepBeforeItsSlot`).
+        // Raised here rather than left to the miner because every lane's template can be the step: on
+        // testnet-12 the first block of any lane built after a granted beat carries the tick. The
+        // raise is at most the granted beat's own lead over this node's clock, which peers accepted
+        // for the beat and accept for this block likewise. Decided on the virtual's own clock
+        // decision — the one this block's DAA score was computed from.
+        let timestamp = {
+            let proposed = u64::max(min_block_time, unix_now());
+            if self.palw_clock_floor.is_some() {
+                self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock.floor_stamp(proposed)
+            } else {
+                proposed
+            }
+        };
         let header = Header::new_finalized(
             version,
             parents_by_level,
             hash_merkle_root,
             accepted_id_merkle_root,
             utxo_commitment,
-            u64::max(min_block_time, unix_now()),
+            timestamp,
             virtual_state.bits,
             0,
             // kaspa-pq ADR-0007: the template declares the network-correct Layer-1 algo for this

@@ -55,10 +55,14 @@ impl HeaderProcessor {
         // The slot rule existed to bound the lane's width. Past the cursor the clock is bounded
         // instead, and by something the economic lane cannot move: the heartbeat exemption is
         // granted at most once per interval of wall clock, so the DAA cannot run fast however many
-        // beats are minted. What is left for the slot rule to do is only harm — it is measured
-        // against the selected parent, the economic lane refreshes that parent, and a chain
-        // producing faster than the interval starved the lane completely. The width that remains is
-        // bounded where it always was: a fixed hash price, and at most four beats a mergeset.
+        // beats are minted. (**Only past `palw_clock_floor`, it turned out** — the 2026-09-24
+        // heartbeat audit, H5: that sentence leaned on the carried cursor's whole-slot advance, which
+        // ADR-0142 §6a deleted, and nothing constrained the timestamp of the block that STEPS the
+        // clock. The step rule below is what makes it true; see ADR-0142 §9.) What is left for the
+        // slot rule to do is only harm — it is measured against the selected parent, the economic
+        // lane refreshes that parent, and a chain producing faster than the interval starved the
+        // lane completely. The width that remains is bounded where it always was: a fixed hash
+        // price, and at most four beats a mergeset.
         //
         // So past this fence a beat may be minted whenever its producer can pay for it, and earns
         // the chain a DAA only when the cursor says a slot is open.
@@ -80,6 +84,16 @@ impl HeaderProcessor {
             && let Err(early) = clock.heartbeat_stamp_admits(header.timestamp)
         {
             return Err(RuleError::HeartbeatBeforeItsSlot(header.hash, header.timestamp, early.next_slot_ms));
+        }
+        // **H5: the block that STEPS the clock is stamped at or past the slot it consumed.** It
+        // becomes the next slot's reference, and the drift tolerance (132 s) is longer than the
+        // interval (120 s): a beat stamped `ref + 120 s` was granted the moment the reference existed,
+        // and a step stamped "now" became the next reference — nothing floored the spacing between two
+        // ticks. With this, every reference is at least one interval after one at the score before, so
+        // a producer's drift buys at most one slot of lead, once, and never a rate. The builder stamps
+        // a step at `max(now, median + 1, slot)`, so an honest one never meets this refusal.
+        if let Err(early) = clock.step_stamp_admits(header.timestamp) {
+            return Err(RuleError::ClockStepBeforeItsSlot(header.hash, header.timestamp, early.next_slot_ms));
         }
         let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(header.daa_score));
         if !clock_cursor_governs

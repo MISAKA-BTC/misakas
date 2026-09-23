@@ -470,8 +470,7 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         // window already in hand holds it. Every node that can process this block has this window,
         // so a pruned node and one that joined by pruning proof answer exactly as an archival one —
         // which a stored cursor could not, and which is why there is no store here.
-        let parent_cursor = kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_reference_v1(
-            parent_daa,
+        let window_blocks = || {
             window.iter().filter_map(|item| {
                 self.headers_store.get_compact_header_data(item.0.hash).ok().map(|h| {
                     kaspa_consensus_core::palw_clock_cursor_v1::ClockWindowBlockV1 {
@@ -482,9 +481,18 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
                         hash: item.0.hash,
                     }
                 })
-            }),
-        )
-        .map(|reference| {
+            })
+        };
+        // **H5: past `palw_clock_floor` a blue-score tie is broken by the EARLIEST timestamp**
+        // (`palw_clock_reference_v2`) — the tied blocks are sibling steps over one beat, and the hash
+        // let a future-stamped one push the next slot back by up to the drift tolerance.
+        let floor = self.clock_floor.is_some_and(|fence| fence.is_active(parent_daa));
+        let reference = if floor {
+            kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_reference_v2(parent_daa, window_blocks())
+        } else {
+            kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_reference_v1(parent_daa, window_blocks())
+        };
+        let parent_cursor = reference.map(|reference| {
             kaspa_consensus_core::palw_clock_cursor_v1::palw_clock_cursor_from_reference_v1(
                 reference,
                 kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS,
@@ -505,7 +513,6 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         // this block's own window — and whether it granted. That is not a carried value: it is
         // recomputed with the score on every call, and it has readers (the heartbeat adapter and
         // the miner's hint read it for the virtual; `DaaWindow::clock` is where they find it).
-        let floor = self.clock_floor.is_some_and(|fence| fence.is_active(parent_daa));
         let clock = PalwClockStepV1 { governs: true, cursor: parent_cursor, granted, floor };
         (if granted { exempt.saturating_sub(1) } else { exempt }, clock)
     }

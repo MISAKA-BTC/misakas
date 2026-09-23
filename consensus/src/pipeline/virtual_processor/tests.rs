@@ -736,7 +736,7 @@ fn clock_cursor_config(floor: bool) -> kaspa_consensus_core::config::Config {
             });
             p.palw_anchor_clock = Some(ForkActivation::always());
             p.palw_clock_cursor = Some(ForkActivation::always());
-            let _ = floor;
+            p.palw_clock_floor = floor.then(ForkActivation::always);
         })
         .build();
     config.params.validate_palw_v2().expect("the clock and its cursor are a runnable ruleset");
@@ -809,6 +809,176 @@ async fn h1_past_the_cursor_the_adapter_waits_for_the_slot_and_the_hint_names_it
     // …and now the slot IS taken, until one interval after the step: the step is the reference.
     let next = beat2.header.timestamp + I;
     assert_eq!(vp.heartbeat_yield_hint_at(beat2.header.timestamp + 1), HeartbeatYieldHintV1::SlotTaken(next));
+}
+
+/// The cursor fixture with the attempt-work constant (so an attempt block outweighs any heartbeat
+/// line) and, when `floor` is set, the clock floor.
+fn clock_floor_config(floor: bool) -> kaspa_consensus_core::config::Config {
+    let mut config = clock_cursor_config(floor);
+    let mut params = config.params.clone();
+    params.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
+        activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+        work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+        ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
+    });
+    config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
+    config
+}
+
+/// A heartbeat on explicit parents: the harness block, re-declared into the lane (algo 8, no
+/// carriage, a zero-subsidy coinbase — Decision 1.4) and stamped `timestamp`.
+fn heartbeat_on(ctx: &TestContext, parents: Vec<BlockHash>, nonce: u64, timestamp: u64) -> MutableBlock {
+    let mut b = ctx.build_block_with_parents(parents, nonce, timestamp);
+    b.header.pow_algo_id = kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
+    b.header.palw_commitment = Vec::new();
+    b.transactions[0].payload[8..16].copy_from_slice(&0u64.to_le_bytes());
+    b.transactions[0].finalize();
+    b.header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(b.transactions.iter());
+    b.header.finalize();
+    b
+}
+
+/// **H3: past the floor F5's chain exemption is paced — a burst chain is refused, the outage chain
+/// F5 exists for still merges.**
+///
+/// The burst: eight attempt blocks a second apart (each outweighs any heartbeat line, and here each
+/// advances the score), and a heartbeat hung off each, merging the beat before it. Every beat is
+/// stamped at its own slot, so each is valid alone; together they are ONE chain of beats a second
+/// apart that no slot paid for, and every one lands in the next beat's mergeset. Without the floor
+/// the whole chain is admitted; with it, the first block whose mergeset holds more beats than their
+/// timestamps pay for is refused.
+#[tokio::test]
+async fn h3_past_the_floor_a_burst_heartbeat_chain_is_refused_and_an_outage_chain_merges() {
+    use kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS as I;
+    kaspa_core::log::try_init_logger("info");
+    for floor in [true, false] {
+        let config = clock_floor_config(floor);
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        ctx.simulated_time += 120_000;
+        let base = ctx.build_block_template(1, ctx.simulated_time);
+        ctx.validate_and_insert_block(base.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+        let t = ctx.simulated_time;
+        let mut line = vec![base.block.header.hash];
+        for i in 1..=8u64 {
+            let y = ctx.build_block_with_parents(vec![line[i as usize - 1]], 100 + i, t + i * 1_000);
+            line.push(y.header.hash);
+            ctx.consensus.validate_and_insert_block(y.to_immutable()).virtual_state_task.await.expect("an attempt on the line");
+        }
+        let mut previous: Option<BlockHash> = None;
+        let mut refused = None;
+        for i in 1..=8u64 {
+            let mut parents = vec![line[i as usize - 1]];
+            parents.extend(previous);
+            let stamp = t + (i - 1) * 1_000 + I;
+            if floor {
+                let slot = ctx.consensus.virtual_processor().palw_clock_step_for_parents(&parents).unwrap().next_slot_ms();
+                assert_eq!(slot, Some(stamp), "beat {i} is stamped exactly at its own slot");
+            }
+            let beat = heartbeat_on(&ctx, parents, 200 + i, stamp);
+            let hash = beat.header.hash;
+            match ctx.consensus.validate_and_insert_block(beat.to_immutable()).virtual_state_task.await {
+                Ok(_) => previous = Some(hash),
+                Err(e) => {
+                    refused = Some((i, e));
+                    break;
+                }
+            }
+        }
+        use kaspa_consensus_core::errors::block::RuleError::MergeSetHeartbeatChainUnpaced as Unpaced;
+        match (floor, refused) {
+            (true, Some((i, Unpaced(count, span, capacity)))) => {
+                assert_eq!(i, 8, "the first beat whose mergeset holds more beats than they paid for");
+                assert_eq!((count, span, capacity), (7, 6_000, 6), "seven beats over six seconds: the flat bound and one slot's two");
+            }
+            (false, None) => {}
+            (floor, other) => panic!("floor={floor}: the burst answered {other:?}"),
+        }
+    }
+
+    // **F5's own shape still merges past the floor.** Six outage beats in one chain, minted by the
+    // lane's adapter a slot at a time, stranded behind a heavier bonded fork and merged whole.
+    let config = clock_floor_config(true);
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    ctx.simulated_time += 120_000;
+    let base = ctx.build_block_template(1, ctx.simulated_time);
+    let base_hash = base.block.header.hash;
+    ctx.validate_and_insert_block(base.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let mut chain = Vec::new();
+    for nonce in 0..6u64 {
+        ctx.simulated_time += I;
+        let template = ctx.build_block_template(2 + nonce, ctx.simulated_time);
+        let (hb_template, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+        ctx.simulated_time = ctx.simulated_time.max(hb_template.block.header.timestamp);
+        chain.push(hb_template.block.header.hash);
+        ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await;
+    }
+    let fork = ctx.build_block_with_parents(vec![base_hash], 77, ctx.simulated_time + 1_000);
+    let fork_hash = fork.header.hash;
+    ctx.consensus.validate_and_insert_block(fork.to_immutable()).virtual_state_task.await.expect("the bonded fork is valid");
+    let fork_ext = ctx.build_block_with_parents(vec![fork_hash], 78, ctx.simulated_time + 1_500);
+    let fork_ext_hash = fork_ext.header.hash;
+    ctx.consensus.validate_and_insert_block(fork_ext.to_immutable()).virtual_state_task.await.expect("the extension is valid");
+    let merger = ctx.build_block_with_parents(vec![fork_ext_hash, chain[5]], 79, ctx.simulated_time + 2_000);
+    {
+        let gd = ctx.consensus.services.ghostdag_manager.ghostdag(merger.header.direct_parents());
+        assert_eq!(gd.selected_parent, fork_ext_hash);
+        let merged = gd.mergeset_blues.iter().chain(gd.mergeset_reds.iter()).filter(|h| chain.contains(h)).count() as u64;
+        assert_eq!(merged, 6, "all six outage beats in one mergeset");
+        assert!(merged > kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
+    }
+    ctx.consensus
+        .validate_and_insert_block(merger.to_immutable())
+        .virtual_state_task
+        .await
+        .expect("a chain paced a slot at a time is what F5's exemption is for, and the floor admits it");
+}
+
+/// **H5: a block of ANY lane that steps the clock on a beat's grant is stamped at or past the slot it
+/// consumed — and without the floor one stamped two seconds after the reference stepped anyway.**
+///
+/// The block that steps becomes the next slot's reference. A heartbeat step already meets H3 (it is
+/// a beat, over the same cursor); this is the step from another lane — here an attempt block whose
+/// mergeset holds nothing priced but the beat that holds the slot, so the beat's grant is its tick.
+#[tokio::test]
+async fn h5_a_step_from_another_lane_is_stamped_at_or_past_its_slot() {
+    use kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS as I;
+    kaspa_core::log::try_init_logger("info");
+    for floor in [true, false] {
+        let config = clock_cursor_config(floor);
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        for _ in 0..2 {
+            ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        }
+        let first = ctx.simulated_time + I;
+        let (beat0, _) = insert_beat_at(&mut ctx, 41, first).await;
+        let reference = beat0.header.timestamp;
+        let slot = reference + I;
+        let (holder, _) = insert_beat_at(&mut ctx, 42, slot).await;
+        let holder_daa = ctx.consensus.virtual_processor().headers_store.get_daa_score(holder.header.hash).unwrap();
+        // The next template steps the clock on the holder's grant; stamped "now" — two seconds after
+        // the reference, long before the slot it consumes.
+        let early = ctx.build_block_template(43, reference + 2_000);
+        assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(early.block.header.pow_algo_id), "another lane");
+        assert_eq!(early.block.header.daa_score, holder_daa + 1, "it steps the clock");
+        let hash = early.block.header.hash;
+        match (floor, ctx.consensus.validate_and_insert_block(early.block.to_immutable()).virtual_state_task.await) {
+            (true, Err(kaspa_consensus_core::errors::block::RuleError::ClockStepBeforeItsSlot(h, stamped, opens))) => {
+                assert_eq!((h, stamped, opens), (hash, reference + 2_000, slot), "refused with the slot it consumed");
+            }
+            (false, Ok(_)) => {
+                let parents: Vec<BlockHash> = ctx.consensus.get_virtual_parents().into_iter().collect();
+                assert_eq!(
+                    ctx.consensus.virtual_processor().palw_clock_step_for_parents(&parents).unwrap().next_slot_ms(),
+                    Some(reference + 2_000 + I),
+                    "without the floor it ticked, and the next slot opened two seconds after the last"
+                );
+            }
+            (floor, other) => panic!("floor={floor}: a step two seconds after the reference answered {other:?}"),
+        }
+    }
 }
 
 #[tokio::test]
