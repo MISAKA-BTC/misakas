@@ -26,7 +26,20 @@ use std::collections::BTreeMap;
 pub struct PalwClaimFraudFactsV1 {
     pub reserved: u128,
     pub escrowed_reward: u64,
-    pub pwu: u64,
+    /// **The claim's work IN THE UNIT ITS RESERVATION WAS WRITTEN IN** — not `claim.pwu`.
+    ///
+    /// `slash_value_per_pwu` is a price per *collateral* exposure_pwu: every production site that spends
+    /// it multiplies it by a normalised quantity (`palw_exposure_pwu_v3` on the attempt lane,
+    /// `mul_div(pwu, base_declared, base_canonical)` on the compute-priced free-prompt lane,
+    /// the leaves themselves on the leaves-era one). This field carries that same quantity, so
+    /// the weight term and the reservation cannot be denominated differently.
+    ///
+    /// It used to be `claim.pwu` — the RAW derived MAC-eq — against that collateral-unit price.
+    /// The reservation side of exactly this mistake was closed on 2026-09-19 (see the comment at
+    /// `palw_state_v2.rs`'s `reserved` write: "2,809× on the floor, 12,533× on the dense row");
+    /// the weight side was left reading the retired unit, which put the 2M row's seat lock at
+    /// 119.19× the collateral any genesis bond posts and made that class unadjudicable.
+    pub exposure_pwu: u64,
     pub slash_value_per_pwu: u64,
     /// Permits, extra eligibility, or any other sompi-denominated right the claim mints.
     /// `0` when the claim carries none beyond payout and weight.
@@ -38,7 +51,21 @@ impl PalwClaimFraudFactsV1 {
         Self {
             reserved: claim.reserved,
             escrowed_reward: claim.escrowed_reward,
-            pwu: claim.pwu,
+            exposure_pwu: palw_claim_exposure_pwu_v1(claim, slash_value_per_pwu),
+            slash_value_per_pwu,
+            extra_economic_rights_sompi: palw_claim_extra_economic_rights_v1(claim),
+        }
+    }
+
+    /// **The rule below `Params::palw_audit_2026_09_23`, byte for byte**: the weight term carried
+    /// the claim's RAW `pwu` — the derived MAC-eq statistical work — against the collateral-unit
+    /// price. Kept so a chain point below the fence prices exactly what every lock already written
+    /// under it was priced at; a fold that re-derives those locks must reproduce them.
+    pub fn from_claim_pre_2026_09_23(claim: &PalwClaimStateV2, slash_value_per_pwu: u64) -> Self {
+        Self {
+            reserved: claim.reserved,
+            escrowed_reward: claim.escrowed_reward,
+            exposure_pwu: claim.pwu,
             slash_value_per_pwu,
             extra_economic_rights_sompi: palw_claim_extra_economic_rights_v1(claim),
         }
@@ -55,9 +82,36 @@ pub fn palw_claim_extra_economic_rights_v1(_claim: &PalwClaimStateV2) -> u128 {
     0
 }
 
+/// **The claim's work in the unit its own reservation was written in.**
+///
+/// Recovered from the reservation rather than recomputed: `reserved` is `exposure × price` at
+/// every production site that writes it, so dividing it back by the price returns exactly the
+/// quantity that site normalised — with no basis to re-derive and no DAA at which to re-derive it.
+/// Re-deriving would reintroduce the failure this closes, because the basis a claim was reserved
+/// under is a fact about its accepting block, not about the block asking the question later.
+///
+/// `slash_value_per_pwu == 0` is the caller's "no class" sentinel; the weight term is zero under
+/// either reading then, so the raw pwu is returned unchanged and nothing downstream moves.
+///
+/// **Known gap, deliberately not papered over**: the compute-priced free-prompt lane reserves at
+/// the BASE class's price (`palw_fp_compute_reserved_v1`) while this function is called with the
+/// CLAIM's class price. They agree on testnet-12 (every class ships `slash_value_per_pwu = 5`)
+/// and disagree on any network that prices classes apart — where this must take the price from
+/// the same place the reservation did.
+pub fn palw_claim_exposure_pwu_v1(claim: &PalwClaimStateV2, slash_value_per_pwu: u64) -> u64 {
+    if slash_value_per_pwu == 0 {
+        return claim.pwu;
+    }
+    (claim.reserved / slash_value_per_pwu as u128).min(u64::MAX as u128) as u64
+}
+
 /// Fork-choice weight of the claim, priced in the same sompi unit the producer slash uses.
-pub fn palw_fork_weight_sompi_v1(pwu: u64, slash_value_per_pwu: u64) -> u128 {
-    (pwu as u128).saturating_mul(slash_value_per_pwu as u128)
+///
+/// **`exposure_pwu` must be a COLLATERAL-unit quantity** — [`PalwClaimFraudFactsV1::exposure_pwu`],
+/// not `claim.pwu`. Passing the raw derived work here prices it at a rate calibrated for another
+/// unit, which is the 2,810× this argument's name now refuses to accept silently.
+pub fn palw_fork_weight_sompi_v1(exposure_pwu: u64, slash_value_per_pwu: u64) -> u128 {
+    (exposure_pwu as u128).saturating_mul(slash_value_per_pwu as u128)
 }
 
 /// **Maximum economic gain a Valid quorum authorizes for one claim**, from consensus facts.
@@ -70,7 +124,7 @@ pub fn palw_fork_weight_sompi_v1(pwu: u64, slash_value_per_pwu: u64) -> u128 {
 /// (permits, eligibility) are added last; today they are `0`.
 pub fn palw_max_fraud_gain_v1(facts: &PalwClaimFraudFactsV1) -> u128 {
     let cash = facts.escrowed_reward as u128;
-    let weight = palw_fork_weight_sompi_v1(facts.pwu, facts.slash_value_per_pwu);
+    let weight = palw_fork_weight_sompi_v1(facts.exposure_pwu, facts.slash_value_per_pwu);
     cash.saturating_add(weight).saturating_add(facts.extra_economic_rights_sompi)
 }
 
@@ -121,11 +175,31 @@ pub struct PalwSlashableLockV1 {
     pub claim: Hash64,
     pub amount: u128,
     pub expiry_daa: u64,
+    /// **The chain's settled-anchor count when this liability began** (2026-09-23 audit, the two
+    /// clocks). `PalwChainStateV2::settled_attempt_finals` at the block that wrote the lock's
+    /// expiry — the `Final` that made the seat liable. Past `Params::palw_settled_anchor_depth`
+    /// the lock stays live until BOTH the DAA clock has run its window AND that many further
+    /// anchors have settled; below it the field is carried and never read.
+    pub settled_at_final: u64,
 }
 
 impl PalwSlashableLockV1 {
+    /// The DAA clock alone — the rule every network below `palw_audit_2026_09_23` runs.
     pub fn is_live(&self, now_daa: u64) -> bool {
         now_daa < self.expiry_daa
+    }
+
+    /// **Both clocks** (the 2026-09-23 audit's heartbeat finding). A heartbeat block advances the
+    /// DAA at 2^24 hashes and no bond, so a seat that signed a false `Final` could sit out
+    /// `window_court` of heartbeat-only history and walk away with its liability expired. Past
+    /// the fence the liability also needs `depth` anchors — `Final` attempt claims, each a won
+    /// draw plus a licensed panel — to have settled since the seat became liable. `None` is the
+    /// DAA-only rule, byte for byte.
+    pub fn is_live_v2(&self, now_daa: u64, settled_now: u64, depth: Option<u64>) -> bool {
+        match depth {
+            None => self.is_live(now_daa),
+            Some(depth) => self.is_live(now_daa) || settled_now.saturating_sub(self.settled_at_final) < depth,
+        }
     }
 }
 
@@ -146,6 +220,8 @@ pub struct PalwPanelLiabilityRecordV1 {
     pub valid_signers: Vec<(TransactionOutpoint, Hash64)>,
     pub locked_sompi: u128,
     pub expiry_daa: u64,
+    /// The settled-anchor count when the liability began — see [`PalwSlashableLockV1::settled_at_final`].
+    pub settled_at_final: u64,
 }
 
 /// Evidence window after Final: locks (and PanelFalseValid bind) last until this DAA.
@@ -155,6 +231,14 @@ pub fn palw_panel_liability_expiry_v1(final_daa: u64, evidence_window_daa: u64) 
 
 pub fn palw_liability_still_locks_v1(record: &PalwPanelLiabilityRecordV1, now_daa: u64) -> bool {
     now_daa < record.expiry_daa
+}
+
+/// [`palw_liability_still_locks_v1`] on both clocks — see [`PalwSlashableLockV1::is_live_v2`].
+pub fn palw_liability_still_locks_v2(record: &PalwPanelLiabilityRecordV1, now_daa: u64, settled_now: u64, depth: Option<u64>) -> bool {
+    match depth {
+        None => palw_liability_still_locks_v1(record, now_daa),
+        Some(depth) => palw_liability_still_locks_v1(record, now_daa) || settled_now.saturating_sub(record.settled_at_final) < depth,
+    }
 }
 
 /// Producer-withholding / court-fraud bind after the claim row retires.
@@ -192,7 +276,7 @@ impl PalwSlashableExposureLedgerV1 {
         if self.available(&bond, now_daa) < required {
             return false;
         }
-        self.locks.insert((bond, claim), PalwSlashableLockV1 { claim, amount: required, expiry_daa });
+        self.locks.insert((bond, claim), PalwSlashableLockV1 { claim, amount: required, expiry_daa, settled_at_final: 0 });
         true
     }
 
@@ -282,7 +366,7 @@ mod tests {
     }
 
     fn facts(reserved: u128, escrow: u64, pwu: u64, slash: u64) -> PalwClaimFraudFactsV1 {
-        PalwClaimFraudFactsV1 { reserved, escrowed_reward: escrow, pwu, slash_value_per_pwu: slash, extra_economic_rights_sompi: 0 }
+        PalwClaimFraudFactsV1 { reserved, escrowed_reward: escrow, exposure_pwu: pwu, slash_value_per_pwu: slash, extra_economic_rights_sompi: 0 }
     }
 
     #[test]
@@ -410,6 +494,7 @@ mod tests {
             valid_signers: vec![(bond(2).0, Hash64::from_u64_word(0xAA))],
             locked_sompi: 4,
             expiry_daa: expiry,
+            settled_at_final: 0,
         };
         assert!(palw_liability_still_locks_v1(&record, 124), "Final is not immunity");
         assert!(palw_liability_still_locks_v1(&record, 143));
@@ -462,7 +547,7 @@ mod tests {
         assert_eq!(palw_claim_extra_economic_rights_v1(&sample_claim()), 0);
         let derived = PalwClaimFraudFactsV1::from_claim(&sample_claim(), 5);
         assert_eq!(derived.extra_economic_rights_sompi, 0);
-        assert_eq!(palw_max_fraud_gain_v1(&derived), derived.escrowed_reward as u128 + palw_fork_weight_sompi_v1(derived.pwu, 5));
+        assert_eq!(palw_max_fraud_gain_v1(&derived), derived.escrowed_reward as u128 + palw_fork_weight_sompi_v1(derived.exposure_pwu, 5));
     }
 
     fn sample_claim() -> crate::palw_state_v2::PalwClaimStateV2 {

@@ -241,7 +241,8 @@ pub fn palw_producer_facts_v2(
     bond: Option<&PalwBondKeyV2>,
     work_target_floor: Option<u128>,
 ) -> Option<PalwProducerFactsV2> {
-    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None, None)
+    // v2's callers predate the 2026-09-23 fence: the pre-fence headroom, byte for byte.
+    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None, None, false)
 }
 
 /// [`palw_producer_facts_v2`] with **ADR-0149's derived pwu**: `canonical_work_daa` is
@@ -268,6 +269,9 @@ pub fn palw_producer_facts_v3(
     work_target_floor: Option<u128>,
     canonical_work_daa: Option<u64>,
     base_known_draw: Option<u128>,
+    // 2026-09-23 audit H-1: `Params::palw_audit_2026_09_23` at the block — past it the headroom
+    // prediction reserves `attempts x` one draw, exactly as admission and the ledger do.
+    audit_2026_09_23_active: bool,
 ) -> Option<PalwProducerFactsV2> {
     let class = state.class(&class_id)?;
     // ADR-0137: past the work target a model class draws against `MAX · min(1, CCU / W₀)` from
@@ -323,7 +327,13 @@ pub fn palw_producer_facts_v3(
             // disagrees with the rule that refuses it.
             // ADR-0149: the admission's own expression (`palw_exposure_pwu_v3`), which below the
             // fence is `palw_exposure_pwu_v1` of the claimed pwu byte for byte.
-            claim_exposure: (exposure_pwu as u128).saturating_mul(class.slash_value_per_pwu as u128),
+            claim_exposure: (exposure_pwu as u128).saturating_mul(class.slash_value_per_pwu as u128).saturating_mul(
+                if audit_2026_09_23_active {
+                    crate::palw_pwu::palw_claim_attempts_v1(pwu, derived_draw.map(|work| work.min(u64::MAX as u128) as u64)) as u128
+                } else {
+                    1
+                },
+            ),
         })
     });
     Some(PalwProducerFactsV2 {
@@ -1175,7 +1185,7 @@ pub fn palw_bond_summary_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> O
         pubkey: b.pubkey.clone(),
         retiring_since_daa: match b.status {
             crate::palw_state_v2::PalwBondStatusV2::Active => None,
-            crate::palw_state_v2::PalwBondStatusV2::Retiring { since_daa } => Some(since_daa),
+            crate::palw_state_v2::PalwBondStatusV2::Retiring { since_daa, .. } => Some(since_daa),
         },
         collateral: b.collateral,
         slashed: b.slashed,

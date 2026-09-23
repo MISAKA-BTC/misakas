@@ -474,6 +474,45 @@ pub fn palw_seat_maturity_floor_v1(anchor_daa: u64, bond_maturity_daa: Option<u6
     bond_maturity_daa.map(|window| anchor_daa.saturating_sub(window))
 }
 
+/// **The second clock's maturity floor** (2026-09-23 heartbeat audit): the DAA at which the
+/// `depth`-th most recent settled anchor before `anchor_daa` was accepted — a `Final` attempt
+/// claim, each a won class draw and a licensed panel. A bond registered AFTER that DAA has fewer
+/// than `depth` anchors between its registration and this draw, and ADR-0065 D1's window alone
+/// would let it judge after `window_daa` of bondless heartbeats. `None` when fewer than `depth`
+/// such anchors exist before the anchor at all: the bootstrap waiver, because the first anchors
+/// of a chain are produced by panels drawn before any anchor could have settled, and a floor that
+/// forbade them would forbid the chain its first `Final`. Retired claims have left the state, so
+/// the count is a lower bound over a horizon longer than `claim_retirement_daa`; a maturity window
+/// (1,000 DAA on testnet-12) is well inside it.
+pub fn palw_settled_anchor_floor_daa_v1(state: &PalwChainStateV2, anchor_daa: u64, depth: u64) -> Option<u64> {
+    if depth == 0 {
+        return None;
+    }
+    let mut finals: Vec<u64> = state
+        .claims_iter()
+        .filter(|(_, c)| matches!(c.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt))
+        .filter(|(_, c)| matches!(c.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }))
+        .map(|(_, c)| c.accepted_daa)
+        .filter(|&d| d < anchor_daa)
+        .collect();
+    if (finals.len() as u64) < depth {
+        return None;
+    }
+    finals.sort_unstable();
+    finals.get(finals.len() - depth as usize).copied()
+}
+
+/// **ADR-0065 D1's window on both clocks** — the window the draw and the validator are handed,
+/// widened so that `anchor_daa - window` is no later than the second clock's floor. With the floor
+/// `None` (below the fence, no second clock, or the bootstrap waiver) this is `window` itself, so
+/// every existing caller is byte-identical.
+pub fn palw_bond_maturity_window_v2(anchor_daa: u64, window: u64, settled_floor_daa: Option<u64>) -> u64 {
+    match settled_floor_daa {
+        None => window,
+        Some(floor) => window.max(anchor_daa.saturating_sub(floor)),
+    }
+}
+
 /// The deterministic sortition. Reads ONLY the candidate-scoped bond registry; returns seats in
 /// ticket order (the canonical panel order — validation compares exactly).
 pub fn derive_panel_v2(
@@ -2791,7 +2830,7 @@ mod tests {
         let thin = PalwBondStateV2 { collateral: 999, slashed: 1, ..live.clone() };
         assert!(!palw_bond_may_take_work_v2(&thin, 1_000), "a bond that could not register today does not seat today");
 
-        let retiring = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: 5 }, ..live };
+        let retiring = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: 5, settled_at_since: 0 }, ..live };
         assert!(!palw_bond_may_take_work_v2(&retiring, 0), "and retirement still excludes, collateral or not");
     }
 

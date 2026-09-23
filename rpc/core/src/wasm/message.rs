@@ -1856,3 +1856,104 @@ try_from!(args: GetUtxoReturnAddressResponse, IGetUtxoReturnAddressResponse, {
 });
 
 // ---
+
+// ---
+
+declare! {
+    IGetPalwSettlementRequest,
+    r#"
+    /**
+     * Ask how many PALW anchors have settled past a DAA score — the economic finality depth of a
+     * payment accepted at that score. Unlike a DAA or blue-score delta this does NOT advance on
+     * heartbeat blocks, which carry no bond and no PALW compute.
+     *
+     * @category Node RPC
+     */
+    export interface IGetPalwSettlementRequest {
+        daaScore: bigint;
+    }
+    "#,
+}
+
+try_from! ( args: IGetPalwSettlementRequest, GetPalwSettlementRequest, {
+    Ok(from_value(args.into())?)
+});
+
+declare! {
+    IGetPalwSettlementResponse,
+    r#"
+    /**
+     * `settled` and `depth` are the numbers to read for payment finality. `available` is false
+     * where the network runs no PALW settlement (every other field is then a default).
+     * `depthIsLowerBound` says the walk was cut by retention and the true depth is at least `depth`.
+     *
+     * @category Node RPC
+     */
+    export interface IGetPalwSettlementResponse {
+        available: boolean;
+        sinkDaa: bigint;
+        daaScore: bigint;
+        settled: boolean;
+        depth: bigint;
+        pendingAnchors: bigint;
+        depthIsLowerBound: boolean;
+        safeFrontierBlueScore: bigint;
+        safeFrontierDaa: bigint;
+    }
+    "#,
+}
+
+try_from! ( args: GetPalwSettlementResponse, IGetPalwSettlementResponse, {
+    Ok(to_value(&args)?.into())
+});
+
+declare! {
+    IGetDnsConfirmationRequest,
+    r#"
+    /**
+     * Ask the DNS overlay's confirmation record for a block: work depth, stake depth and DNS
+     * finality against their thresholds. `blockHash` may be empty for the sink.
+     *
+     * @category Node RPC
+     */
+    export interface IGetDnsConfirmationRequest {
+        blockHash?: HexString;
+    }
+    "#,
+}
+
+try_from! ( args: IGetDnsConfirmationRequest, GetDnsConfirmationRequest, {
+    Ok(from_value(args.into())?)
+});
+
+declare! {
+    IGetDnsConfirmationResponse,
+    r#"
+    /**
+     * `available` is false where the DNS overlay is not configured (every other field is then a
+     * default). Depths and bounds are decimal strings.
+     *
+     * @category Node RPC
+     */
+    export interface IGetDnsConfirmationResponse {
+        available: boolean;
+        blockHash: HexString;
+        workDepth: string;
+        requiredWorkDepth: string;
+        stakeDepth: string;
+        requiredStakeDepth: string;
+        powConfirmed: boolean;
+        dnsConfirmed: boolean;
+        rolloutStage: number;
+        expectedDnsConfirmationSeconds: bigint;
+        workReorgRiskUpperBound: string;
+        stakeReorgRiskUpperBound: string;
+        dnsReorgRiskConservativeBound: string;
+        note: string;
+    }
+    "#,
+}
+
+try_from! ( args: GetDnsConfirmationResponse, IGetDnsConfirmationResponse, {
+    Ok(to_value(&args)?.into())
+});

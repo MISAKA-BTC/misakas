@@ -161,6 +161,28 @@ pub fn palw_pwu_v1(class_target: u128, pwu_per_inference: u64) -> u64 {
     product.min(u64::MAX as u128) as u64
 }
 
+/// **The expected attempts a claim's pwu carries, recovered from the claim itself** (2026-09-23
+/// audit H-1). Past `palw_canonical_work` a claim's pwu is `expected_attempts(target) x derived`
+/// ([`crate::palw_admission_v2::palw_attempt_derived_pwu_v1`]), so the attempts factor is the
+/// quotient — exact, because the product was built from these two numbers and neither moves for
+/// the claim's life. `1` where there is no derived draw to divide by (below the unit fence, the
+/// free-prompt lane, a class the floor cannot describe) and never below one: a claim is at least
+/// the one inference it commits to.
+///
+/// This is what the reservation is multiplied by past `palw_audit_2026_09_23`: `claim.pwu` (the
+/// fork weight a `Final` inserts) and `claim.reserved` (what a court takes for it) were of
+/// different orders in the registrant's canonical job — one draw's work reserved against
+/// `attempts` draws of weight — so splitting the job moved the weight bought per sompi at risk
+/// 230x across splits that all clear admission. With the work target armed the attempts are
+/// pinned at about `W0 / CCU`, so the product is bounded by `W0` for every class and the
+/// reservation cannot outrun a genesis bond the way the pre-ADR-0137 retarget once let it.
+pub fn palw_claim_attempts_v1(pwu: u64, derived_per_draw: Option<u64>) -> u64 {
+    match derived_per_draw {
+        Some(derived) if derived > 0 => (pwu / derived).max(1),
+        _ => 1,
+    }
+}
+
 /// The admission rule: a commitment's `pwu_claim` must EQUAL the derivation. There is no
 /// tolerance band and no "at most" — both factors are facts the miner does not choose, so any
 /// other value is either a mistake or a weight-inflation attempt, and both are rejections.

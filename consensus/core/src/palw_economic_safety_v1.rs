@@ -234,7 +234,7 @@ mod tests {
         PalwClaimFraudFactsV1 {
             reserved: 0,
             escrowed_reward: ESCROW,
-            pwu: crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, PWU_PER_INFERENCE),
+            exposure_pwu: crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, PWU_PER_INFERENCE),
             slash_value_per_pwu: SLASH,
             extra_economic_rights_sompi: extra,
         }

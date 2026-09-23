@@ -136,7 +136,7 @@ fn max_fraud_gain_is_payout_plus_weight_on_the_shipped_dense_row() {
     let facts = PalwClaimFraudFactsV1 {
         reserved,
         escrowed_reward: payout.min(u128::from(u64::MAX)) as u64,
-        pwu: declared_leaves,
+        exposure_pwu: declared_leaves,
         slash_value_per_pwu: SLASH_VALUE_PER_PWU,
         extra_economic_rights_sompi: 0,
     };

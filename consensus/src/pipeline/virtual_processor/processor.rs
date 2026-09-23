@@ -555,6 +555,12 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_audit_2026_09_11_deep_at`]; the fold's extras read it there. A later flag day
     /// than the shallow fence above.
     pub(super) palw_audit_2026_09_11_deep: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-23 economic audit's fence, resolved once in [`Self::palw_audit_2026_09_23_at`];
+    /// the fold's extras and the registration gate read it there.
+    pub(super) palw_audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
+    /// above through [`Self::palw_settled_anchor_depth_at`].
+    pub(super) palw_settled_anchor_depth: Option<u64>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -1015,6 +1021,8 @@ impl VirtualStateProcessor {
             palw_held_context: params.palw_held_context_fence(),
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
+            palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
+            palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -4385,6 +4393,7 @@ impl VirtualStateProcessor {
             // draw it prices the floor on before the registry has written its row.
             budget_fences.canonical_work_daa,
             budget_fences.base_known_draw,
+            budget_fences.audit_2026_09_23_active,
         )?;
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
@@ -4556,10 +4565,13 @@ impl VirtualStateProcessor {
         state
             .bonds_iter()
             .filter(|(_, record)| {
-                kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v2(
+                kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v3(
                     record,
                     now_daa,
                     self.palw_bond_withdrawal_delay_at(now_daa),
+                    // The second clock: a retiring bond's collateral also waits for settled anchors.
+                    state.settled_attempt_finals(),
+                    self.palw_settled_anchor_depth_at(now_daa),
                 )
             })
             .map(|(key, _)| key.0)
@@ -4937,10 +4949,13 @@ impl VirtualStateProcessor {
         state
             .bonds_iter()
             .filter(|(_, record)| {
-                !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v2(
+                !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v3(
                     record,
                     now_daa,
                     self.palw_bond_withdrawal_delay_at(now_daa),
+                    // The second clock: a retiring bond's collateral also waits for settled anchors.
+                    state.settled_attempt_finals(),
+                    self.palw_settled_anchor_depth_at(now_daa),
                 )
             })
             .map(|(key, record)| (key.0, kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record)))
@@ -6114,7 +6129,7 @@ impl VirtualStateProcessor {
                         &anchor_fact,
                         *anchor,
                         seats,
-                        self.palw_bond_maturity_at(anchor_fact.anchor_daa),
+                        self.palw_bond_maturity_window_at(state, anchor_fact.anchor_daa),
                         // ADR-0071 SA-3, at the ANCHOR for the D1 reason one line up: the panel is
                         // a pure function of the claim, so the rule that narrows it must be one
                         // too — and the assembler below resolves it at the same point.
@@ -6914,6 +6929,9 @@ impl VirtualStateProcessor {
                             panel_da: self.palw_panel_da_at(point.daa_score),
                         },
                         self.palw_kimi_k3_at(point.daa_score),
+                        // 2026-09-23 audit C-4: past its fence a non-fused class's priced geometry
+                        // must fit the query row its graph reads.
+                        self.palw_audit_2026_09_23_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -8346,6 +8364,8 @@ impl VirtualStateProcessor {
             attn_anchored_root_active: self.palw_attn_anchored_root_at(daa_score),
             audit_2026_09_11_active: self.palw_audit_2026_09_11_at(daa_score),
             audit_2026_09_11_deep_active: self.palw_audit_2026_09_11_deep_at(daa_score),
+            audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
+            settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
@@ -8454,6 +8474,8 @@ impl VirtualStateProcessor {
             // first blocks past a fence armed at the registry's own height can price the floor. Only
             // resolved where the fence is scheduled at all: a network without it never reads it.
             base_known_draw: self.palw_canonical_work_daa.and_then(|_| self.palw_base_known_draw_v1()),
+            // 2026-09-23 audit H-1: the ceiling reserves `attempts x` one draw past the fence.
+            audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
         }
     }
 
@@ -8577,6 +8599,29 @@ impl VirtualStateProcessor {
 
     fn palw_audit_2026_09_11_deep_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_11_deep.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    fn palw_audit_2026_09_23_at(&self, daa_score: u64) -> bool {
+        self.palw_audit_2026_09_23.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.
+    fn palw_settled_anchor_depth_at(&self, daa_score: u64) -> Option<u64> {
+        if self.palw_audit_2026_09_23_at(daa_score) { self.palw_settled_anchor_depth } else { None }
+    }
+
+    /// **ADR-0065 D1's window on both clocks** — `Params::palw_bond_maturity` widened so that the
+    /// maturity floor is no later than the second clock's (`palw_settled_anchor_floor_daa_v1`): a
+    /// bond may judge only once its window has elapsed AND the chain has settled `depth` anchors
+    /// since it registered. ONE place, read by the validator, the assembler and the registry
+    /// warning alike, so the three recompute one identical panel. Below the fence, or with fewer
+    /// than `depth` anchors before the anchor (the bootstrap waiver), it is the window itself.
+    fn palw_bond_maturity_window_at(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, anchor_daa: u64) -> Option<u64> {
+        let window = self.palw_bond_maturity_at(anchor_daa)?;
+        let floor = self
+            .palw_settled_anchor_depth_at(anchor_daa)
+            .and_then(|depth| kaspa_consensus_core::palw_panel_v2::palw_settled_anchor_floor_daa_v1(state, anchor_daa, depth));
+        Some(kaspa_consensus_core::palw_panel_v2::palw_bond_maturity_window_v2(anchor_daa, window, floor))
     }
 
     /// **Whether a claim's panel is drawn per shard, and into how many** — the ONE decision the
@@ -9005,7 +9050,7 @@ impl VirtualStateProcessor {
         // header — this runs once per chain block added to the virtual chain, so a store re-read
         // here would be one avoidable lookup per block, and re-reading could in principle disagree
         // with the score the rest of the fold used.
-        let Some(window) = self.palw_bond_maturity_at(daa) else { return };
+        let Some(window) = self.palw_bond_maturity_window_at(state, daa) else { return };
 
         let floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(daa, Some(window));
         // ADR-0124 Decision 4: past the panel economy the seat floor is the panel's, not the
@@ -9483,7 +9528,7 @@ impl VirtualStateProcessor {
             // uses, through the same one-place subtraction.
             let maturity_floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
                 anchor.anchor_daa,
-                self.palw_bond_maturity_at(anchor.anchor_daa),
+                self.palw_bond_maturity_window_at(state, anchor.anchor_daa),
             );
             // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
             let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
@@ -10860,7 +10905,26 @@ impl VirtualStateProcessor {
             .get()
             .ok()
             .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score));
-        Some(DnsCoinbaseSettlement { long_maturity_daa, confirmed_anchor_daa })
+        // The second clock (2026-09-23 heartbeat audit): past the fence, the long fallback also
+        // needs `depth` PALW anchors settled since the coinbase's block. The anchors are the
+        // `Final` attempt claims the PALW state holds at the tip — a lower bound past retirement,
+        // which a 600-DAA maturity never reaches. Policy layer, like the rest of this record.
+        let now_daa = self.lkg_virtual_state.load().daa_score;
+        let depth = self.palw_settled_anchor_depth_at(now_daa);
+        // The second clock's reading: the DAA of the `depth`-th most recent settled anchor, over
+        // the whole chain (`u64::MAX` bounds nothing). The same one-place walk the panel floor
+        // uses, so the two rules cannot come to disagree about what "settled" counts.
+        let settled_anchor_floor_daa = depth.and_then(|depth| {
+            let params = self.palw_state_params_v2.as_ref()?;
+            let (_, state) = self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten()?;
+            kaspa_consensus_core::palw_panel_v2::palw_settled_anchor_floor_daa_v1(&state, u64::MAX, depth)
+        });
+        Some(DnsCoinbaseSettlement {
+            long_maturity_daa,
+            confirmed_anchor_daa,
+            settled_anchor_armed: depth.is_some(),
+            settled_anchor_floor_daa,
+        })
     }
 
     /// Both stake walks run under the CANONICAL bond set: a bond created on the candidate branch

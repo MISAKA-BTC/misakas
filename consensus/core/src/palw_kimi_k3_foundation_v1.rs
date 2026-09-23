@@ -193,6 +193,8 @@ mod tests {
             false,
             PalwHeldAdmissionV1::default(),
             kimi_family,
+            // The Kimi foundation drill predates the 2026-09-23 fence: the pre-fence gate.
+            false,
         )
     }
 
@@ -356,7 +358,7 @@ mod tests {
         let facts = PalwClaimFraudFactsV1 {
             reserved: u128::from(pwu),
             escrowed_reward: pwu.saturating_div(10),
-            pwu,
+            exposure_pwu: pwu,
             slash_value_per_pwu: 1,
             extra_economic_rights_sompi: 0,
         };

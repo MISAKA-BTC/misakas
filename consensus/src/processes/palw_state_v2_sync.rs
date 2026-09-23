@@ -110,6 +110,13 @@ pub struct PalwStateSyncV2 {
     /// The 2026-09-11 audit DEEP fence (B-1/C-01/B-4/court cluster), carried for the same reason —
     /// past it the deep fold sites take their fixed path. A later height than the shallow fence.
     audit_2026_09_11_deep: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-23 economic audit's fence, carried for the same reason as its siblings: past
+    /// it the fold's unit, replay and PanelBound sites take their fixed path.
+    audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The second clock's depth (`Params::palw_settled_anchor_depth`), carried for its siblings'
+    /// reason: past the fence the fold's economic deadlines read it, so a replay without it writes
+    /// a different state root for the block.
+    settled_anchor_depth: Option<u64>,
     /// ADR-0123's budget release, carried for its siblings' reason and one of its own: the fold
     /// re-runs admission on every merged attempt, so a replay that left it to `..Default` would
     /// refuse attempts the live fold released and write a different state root for the block.
@@ -161,6 +168,8 @@ impl PalwStateSyncV2 {
         share_growth_final: Option<kaspa_consensus_core::config::params::ForkActivation>,
         audit_2026_09_11: Option<kaspa_consensus_core::config::params::ForkActivation>,
         audit_2026_09_11_deep: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        settled_anchor_depth: Option<u64>,
         epoch_budget_release: Option<kaspa_consensus_core::config::params::ForkActivation>,
         panel_economy: Option<kaspa_consensus_core::config::params::ForkActivation>,
         work_priced_reward: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -179,6 +188,8 @@ impl PalwStateSyncV2 {
             share_growth_final,
             audit_2026_09_11,
             audit_2026_09_11_deep,
+            audit_2026_09_23,
+            settled_anchor_depth,
             epoch_budget_release,
             panel_economy,
             work_priced_reward,
@@ -271,6 +282,12 @@ impl PalwStateSyncV2 {
                     attn_anchored_root_active: self.attn_anchored_root.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                     audit_2026_09_11_active: self.audit_2026_09_11.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                     audit_2026_09_11_deep_active: self.audit_2026_09_11_deep.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
+                    audit_2026_09_23_active: self.audit_2026_09_23.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
+                    settled_anchor_depth: self
+                        .audit_2026_09_23
+                        .is_some_and(|fence| fence.is_active(step.ctx.daa_score))
+                        .then_some(self.settled_anchor_depth)
+                        .flatten(),
                     share_growth_final_active: self.share_growth_final.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                     epoch_budget_release_active: self.epoch_budget_release.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
                     panel_economy_active: self.panel_economy.is_some_and(|fence| fence.is_active(step.ctx.daa_score)),
@@ -477,7 +494,7 @@ mod tests {
 
         // The subject: sync + store + batches.
         let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         assert!(sync.tip().is_none(), "a fresh database has no tip");
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
@@ -490,7 +507,7 @@ mod tests {
 
         // A restart resumes at the same tip, root-verified.
         let resumed =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let (r_block, r_state) = resumed.tip().unwrap();
         assert_eq!((r_block, r_state), (tip_block, tip_state));
 
@@ -521,7 +538,7 @@ mod tests {
         store.reindex_if_stale().unwrap();
 
         let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         db.write(batch).unwrap();
@@ -548,7 +565,7 @@ mod tests {
         // what answers (the carriage store's crash-window lesson, applied to a refusal).
         let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
         let resumed =
-            PalwStateSyncV2::load(&fresh, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&fresh, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         assert_eq!(*resumed.tip().unwrap().0, genesis_block(), "and neither did the durable one");
         assert!(!fresh.has_delta(bad_steps[0].ctx.block).unwrap(), "no row of the refused walk was committed");
     }
@@ -563,7 +580,7 @@ mod tests {
 
         let steps = steps();
         let mut sync =
-            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
+            PalwStateSyncV2::load(&store, params(), None, None, None, None, None, None, None, None, None, None, None, None, None, None, None).unwrap();
         let mut batch = WriteBatch::default();
         sync.install_genesis(&mut store, &mut batch, genesis_block()).unwrap();
         sync.advance(&mut store, &mut batch, &steps).unwrap();

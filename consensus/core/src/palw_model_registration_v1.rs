@@ -266,6 +266,8 @@ pub fn palw_model_preflight_v1(
         params.palw_canonical_work_at(daa_score),
         shape.held,
         shape.kimi_family,
+        // 2026-09-23 audit C-4: the geometry a non-fused class is priced from must fit its query row.
+        params.palw_audit_2026_09_23_active_at(daa_score),
     );
 
     let mut reject_code = String::new();

@@ -1195,6 +1195,27 @@ pub enum PalwClassAdmissionError {
     /// ways it failed, in the same words the dispute-time resolution uses.
     #[error("the class's fused attention site has no openable query row: {0}")]
     FusedQueryRowUnservable(&'static str),
+    /// **2026-09-23 audit C-4: the attention geometry a non-fused class is PRICED from must fit the
+    /// query row its graph reads.** The economic cost of an over-cache matmul is
+    /// `attn_heads x attn_head_dim x kv_len` — two profile scalars the registrant writes and the
+    /// step table never reads. Two of them (4 -> 65,535 heads, 64 -> 41,854 head width) priced a
+    /// BASE-0 floor job at 36,475x its arithmetic while every `out_len`, the leaf count and the
+    /// kernel ids stayed byte-identical, and the class was admitted, folded and priced. A dot
+    /// product cannot read more elements than the row it reads from holds, so the geometry is
+    /// bounded by the row — an inequality against the QUERY ROW, which is architectural, and
+    /// deliberately not `attn_heads x attn_head_dim == hidden_dim`, which is not
+    /// (`PalwShapeProfileV3::validate_shape` says why).
+    #[error("the attention geometry the class is priced from is wider than the row it reads: {heads} x {head_dim} = {priced} elements against a row of {row} ({what})")]
+    AttentionGeometryWiderThanQueryRow { heads: u64, head_dim: u64, priced: u64, row: u64, what: &'static str },
+    /// **2026-09-23 audit, the recurrence twin of the above.** A `GatedDeltaNet` node is priced
+    /// at `gdn_heads x gdn_head_k_dim x gdn_head_v_dim` state elements per position — three profile
+    /// scalars the node's own row widths never constrain. The CI guard's search, with the attention
+    /// geometry bounded, moved straight to them: `gdn_heads := 65,535` on an honest 32-head table
+    /// priced fork weight and execution credit at 820x the legitimate band. A delta-net step emits
+    /// one v-row per head and reads one k-row per head, so the heads it is priced over are bounded
+    /// by the rows its graph names: `heads x v_dim <= out_len` and `heads x k_dim <= its widest input`.
+    #[error("the recurrence geometry the class is priced from is wider than its rows: {heads} heads x ({k_dim} k + {v_dim} v) against out {out} / widest input {input} ({what})")]
+    RecurrenceGeometryWiderThanItsRows { heads: u64, k_dim: u64, v_dim: u64, out: u64, input: u64, what: &'static str },
     /// **The price a class is admitted at has to be the price its challengers pay.**
     ///
     /// The cost shape is assembled by `palw_class_ladder_rules_for_court_v1` from the caller's
@@ -1279,6 +1300,8 @@ impl PalwClassAdmissionError {
             Self::FusedAttentionNeedsTheKaryCourt => "FUSED_ATTENTION_NEEDS_THE_KARY_COURT",
             Self::FusedQuerySliceStraddlesTiles { .. } => "FUSED_QUERY_SLICE_STRADDLES_TILES",
             Self::FusedQueryRowUnservable(_) => "FUSED_QUERY_ROW_UNSERVABLE",
+            Self::AttentionGeometryWiderThanQueryRow { .. } => "ATTENTION_GEOMETRY_WIDER_THAN_QUERY_ROW",
+            Self::RecurrenceGeometryWiderThanItsRows { .. } => "RECURRENCE_GEOMETRY_WIDER_THAN_ITS_ROWS",
             Self::PricedForADifferentCourt { .. } => "PRICED_FOR_A_DIFFERENT_COURT",
             Self::CourtWindowTooShort { .. } => "COURT_WINDOW_TOO_SHORT",
             Self::TokenLiftNeedsItsFence => "FAMILY_FENCE_CLOSED",
@@ -1468,6 +1491,132 @@ pub fn palw_profile_has_fused_attention_v1(profile: &PalwShapeProfileV3) -> bool
         .into_iter()
         .flatten()
         .any(|node| node.op_kind == crate::palw_step::PalwStepOpKindV1::AttnFused)
+}
+
+/// **2026-09-23 audit C-4: does the geometry a non-fused class is priced from fit the row its
+/// over-cache matmuls read?** (`Params::palw_audit_2026_09_23`.)
+///
+/// `palw_economic_compute_v1::node_cost` prices every weight matmul that reads the K or V cache at
+/// `attn_heads x attn_head_dim` MAC per cached position — the profile's scalars, not the node's
+/// width. The scores matmul reads the query row against K, so `heads x head_dim` cannot exceed
+/// that row's width; the values matmul reads the (context-shaped) scores against V into a row of
+/// `heads x head_dim` outputs, so the same product cannot exceed ITS output width. Either bound
+/// violated means the price counts arithmetic no kernel performs. The fused site has the same
+/// check in [`palw_fused_query_slice_is_openable_v1`]; this is its non-fused twin, and like it an
+/// inequality against a row the graph names rather than an identity with `hidden_dim`.
+pub fn palw_attention_geometry_fits_its_query_row_v1(profile: &PalwShapeProfileV3) -> Result<(), PalwClassAdmissionError> {
+    use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN, PALW_STEP_INPUT_SENTINEL_MIN};
+    use crate::palw_step::{PalwStepOpKindV1, PalwStepOutLenV1};
+    let heads = u64::from(profile.attn_heads);
+    let head_dim = u64::from(profile.attn_head_dim);
+    let priced = heads.saturating_mul(head_dim);
+    let refuse = |row: u64, what: &'static str| PalwClassAdmissionError::AttentionGeometryWiderThanQueryRow { heads, head_dim, priced, row, what };
+    let table = &profile.attn_nodes;
+    for node in table.iter().filter(|n| matches!(n.op_kind, PalwStepOpKindV1::MatMulQuant | PalwStepOpKindV1::MatMulF16)) {
+        let reads_k = node.input_refs.contains(&PALW_STEP_INPUT_KV_K);
+        let reads_v = node.input_refs.contains(&PALW_STEP_INPUT_KV_V);
+        if !reads_k && !reads_v {
+            continue;
+        }
+        // The values side: its outputs are the priced row.
+        if reads_v {
+            match node.out_len {
+                PalwStepOutLenV1::Fixed { elements } if u64::from(elements) >= priced => {}
+                PalwStepOutLenV1::Fixed { elements } => return Err(refuse(u64::from(elements), "the values matmul's output row")),
+                PalwStepOutLenV1::KvScaled { .. } => return Err(refuse(0, "the values matmul's output is context-shaped")),
+            }
+            continue;
+        }
+        // The scores side: the non-cache input is the query row it dots against K.
+        let Some(&q) = node.input_refs.iter().find(|&&r| r != PALW_STEP_INPUT_KV_K && r != PALW_STEP_INPUT_KV_V) else {
+            return Err(refuse(0, "the scores matmul reads no query row"));
+        };
+        let row = if q < PALW_STEP_INPUT_SENTINEL_MIN {
+            match table.get(usize::from(q)).map(|n| n.out_len) {
+                Some(PalwStepOutLenV1::Fixed { elements }) => u64::from(elements),
+                Some(PalwStepOutLenV1::KvScaled { .. }) => return Err(refuse(0, "the scores matmul's query row is context-shaped")),
+                None => return Err(refuse(0, "the scores matmul's query row names no node")),
+            }
+        } else if q == PALW_STEP_INPUT_LAYER_IN {
+            u64::from(profile.hidden_dim)
+        } else {
+            return Err(refuse(0, "the scores matmul's query row is a sentinel this gate does not price"));
+        };
+        if priced > row {
+            return Err(refuse(row, "the scores matmul's query row"));
+        }
+    }
+    Ok(())
+}
+
+/// **The most conv taps a recurrence class may be priced for** (`palw_gdn_geometry_fits_its_rows_v1`).
+/// A ceiling, not a derivation — see the refusal's comment for why this one scalar cannot be
+/// bounded by a row the graph names.
+pub const PALW_ADMISSION_MAX_GDN_CONV_KERNEL_V1: u16 = 64;
+
+/// **2026-09-23 audit: does the recurrence geometry a class is priced from fit the rows its
+/// `GatedDeltaNet` nodes read and write?** (`Params::palw_audit_2026_09_23`.)
+///
+/// `node_cost` prices a `GatedDeltaNet` node at `gdn_heads x gdn_head_k_dim x gdn_head_v_dim`
+/// state elements per position, from the profile's scalars alone. The node itself commits one
+/// v-row per head (`out_len = heads x v_dim` on every shipped table) and reads one k-row per head,
+/// so `heads x v_dim` cannot exceed its output row and `heads x k_dim` cannot exceed the widest
+/// row it reads. Both are inequalities against rows the graph names, like the attention twin.
+/// A profile with no `GatedDeltaNet` node prices no recurrence and passes trivially.
+pub fn palw_gdn_geometry_fits_its_rows_v1(profile: &PalwShapeProfileV3) -> Result<(), PalwClassAdmissionError> {
+    use crate::palw_step::{PALW_STEP_INPUT_LAYER_IN, PALW_STEP_INPUT_SENTINEL_MIN};
+    use crate::palw_step::{PalwStepOpKindV1, PalwStepOutLenV1};
+    let heads = u64::from(profile.gdn_heads);
+    let k_dim = u64::from(profile.gdn_head_k_dim);
+    let v_dim = u64::from(profile.gdn_head_v_dim);
+    let table = &profile.gdn_nodes;
+    // **The conv kernel is the one recurrence scalar no row witnesses**, so it gets a ceiling rather
+    // than an inequality: `SsmConv` prices `gdn_conv_kernel` taps per output element and the tap
+    // count lives in a weight tensor consensus never measures. With the three geometry scalars
+    // bounded above, the CI guard's search went straight here (`gdn_conv_kernel := 65,535`, 7x the
+    // band on fork weight and 14x on permits). Every shipped SSM/delta-net conv is 4 taps; 64 is
+    // sixteen times that and keeps the lever inside the guard's 2x tolerance.
+    if table.iter().any(|n| n.op_kind == PalwStepOpKindV1::SsmConv) && profile.gdn_conv_kernel > PALW_ADMISSION_MAX_GDN_CONV_KERNEL_V1 {
+        return Err(PalwClassAdmissionError::RecurrenceGeometryWiderThanItsRows {
+            heads,
+            k_dim,
+            v_dim,
+            out: u64::from(profile.gdn_conv_kernel),
+            input: u64::from(PALW_ADMISSION_MAX_GDN_CONV_KERNEL_V1),
+            what: "the conv kernel (out) exceeds the admission ceiling (input) — a tap count no row witnesses",
+        });
+    }
+    for node in table.iter().filter(|n| n.op_kind == PalwStepOpKindV1::GatedDeltaNet) {
+        let out = match node.out_len {
+            PalwStepOutLenV1::Fixed { elements } => u64::from(elements),
+            PalwStepOutLenV1::KvScaled { .. } => 0,
+        };
+        let input = node
+            .input_refs
+            .iter()
+            .map(|&r| {
+                if r < PALW_STEP_INPUT_SENTINEL_MIN {
+                    match table.get(usize::from(r)).map(|n| n.out_len) {
+                        Some(PalwStepOutLenV1::Fixed { elements }) => u64::from(elements),
+                        _ => 0,
+                    }
+                } else if r == PALW_STEP_INPUT_LAYER_IN {
+                    u64::from(profile.hidden_dim)
+                } else {
+                    0
+                }
+            })
+            .max()
+            .unwrap_or(0);
+        let refuse = |what: &'static str| PalwClassAdmissionError::RecurrenceGeometryWiderThanItsRows { heads, k_dim, v_dim, out, input, what };
+        if heads.saturating_mul(v_dim) > out {
+            return Err(refuse("one v-row per head does not fit the node's output row"));
+        }
+        if heads.saturating_mul(k_dim) > input {
+            return Err(refuse("one k-row per head does not fit the widest row the node reads"));
+        }
+    }
+    Ok(())
 }
 
 /// **Can a dissection bottom open ONE head's query slice with ONE opening?** (ADR-0082 Decision 2;
@@ -1820,6 +1969,8 @@ pub fn verify_class_admission_v8(
         deepest_job_bound,
         held,
         false,
+        // v8's callers predate the 2026-09-23 fence: the pre-fence gate, byte for byte.
+        false,
     )
 }
 
@@ -1845,6 +1996,7 @@ pub fn verify_class_admission_v9(
     deepest_job_bound: bool,
     held: PalwHeldAdmissionV1,
     kimi_family: bool,
+    attention_geometry_bound: bool,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
@@ -2001,6 +2153,15 @@ pub fn verify_class_admission_v9(
     // (fixer FA's note 6). See [`palw_fused_query_slice_is_openable_v1`].
     if fused {
         palw_fused_query_slice_is_openable_v1(profile)?;
+    }
+    // **2026-09-23 audit C-4, past its fence: the non-fused twin.** The geometry the price reads
+    // has to fit the row the graph reads; below the fence a class is admitted as it always was.
+    if !fused && attention_geometry_bound {
+        palw_attention_geometry_fits_its_query_row_v1(profile)?;
+    }
+    // And the recurrence's, on every table that has one — the CI guard's next maximiser.
+    if attention_geometry_bound {
+        palw_gdn_geometry_fits_its_rows_v1(profile)?;
     }
     // **ADR-0093 Decision 6: and the output half, past its fence.** A fused tile that is not one
     // head's is a leaf no dissection can try; before the fence such a class is admitted as it

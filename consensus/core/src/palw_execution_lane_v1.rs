@@ -503,17 +503,32 @@ pub fn palw_execution_schedule_assign_quanta_matured_v1(
     maturity_rounds: u64,
     forfeited_roots: &std::collections::BTreeSet<crate::Hash64>,
 ) {
+    palw_execution_schedule_assign_quanta_bounded_v1(schedule, quantum, open_round, maturity_rounds, forfeited_roots, usize::MAX)
+}
+
+/// [`palw_execution_schedule_assign_quanta_matured_v1`] with the 2026-09-23 ticket ceiling
+/// ([`crate::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1`] past its fence,
+/// `usize::MAX` below it, where it is the function above ticket for ticket).
+pub fn palw_execution_schedule_assign_quanta_bounded_v1(
+    schedule: &mut PalwExecScheduleV1,
+    quantum: u64,
+    open_round: u64,
+    maturity_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<crate::Hash64>,
+    max_quanta: usize,
+) {
     if quantum == 0 {
         schedule.quanta.clear();
         return;
     }
-    schedule.quanta = crate::palw_execution_quanta_v1::palw_execution_mint_quanta_matured_v1(
+    schedule.quanta = crate::palw_execution_quanta_v1::palw_execution_mint_quanta_bounded_v1(
         &schedule.finals,
         schedule.seed,
         u128::from(quantum),
         open_round,
         maturity_rounds,
         forfeited_roots,
+        max_quanta,
     );
 }
 

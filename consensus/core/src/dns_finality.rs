@@ -4081,6 +4081,17 @@ pub struct DnsCoinbaseSettlement {
     /// while nothing is confirmed (bootstrap, overlay off, or a dead overlay whose anchor
     /// never existed). `None` grants no acceleration — everyone waits the long fallback.
     pub confirmed_anchor_daa: Option<u64>,
+    /// **Is the second clock in force?** (2026-09-23 heartbeat audit.) `false` is the DAA-only
+    /// fallback, byte for byte — every network below `Params::palw_audit_2026_09_23`.
+    pub settled_anchor_armed: bool,
+    /// **The second clock's reading**: the DAA score of the `depth`-th most recent settled PALW
+    /// anchor (a `Final` attempt claim), or `None` where the chain holds fewer than `depth` of
+    /// them. Read only when `settled_anchor_armed`: `long_maturity_daa` alone no longer matures a
+    /// coinbase, because heartbeat blocks advance the DAA at 2^24 hashes and no bond while
+    /// settling no anchor at all. A coinbase matures on the fallback when this floor is at or past
+    /// the coinbase's own block — i.e. `depth` anchors have settled since it. Policy layer only,
+    /// like the record it sits in: the consensus call site passes no settlement and is unmoved.
+    pub settled_anchor_floor_daa: Option<u64>,
 }
 
 /// DNS-accelerated coinbase settlement: `settle_at = block_daa + min(long_maturity,
@@ -4127,7 +4138,17 @@ pub fn coinbase_spend_settled(
         return true; // feature off (or consensus layer awaiting its sequential anchor view)
     };
     if age >= s.long_maturity_daa {
-        return true; // the long fallback: nobody is ever frozen forever
+        // The long fallback: nobody is ever frozen forever — by the DAA clock alone below the
+        // second clock, and past it only once enough anchors have settled since the coinbase's
+        // block. Heartbeats advance the DAA at 2^24 hashes and no bond; they never settle an anchor.
+        return match (s.settled_anchor_armed, s.settled_anchor_floor_daa) {
+            (false, _) => true,
+            (true, Some(floor)) => floor >= utxo_block_daa_score,
+            // Armed, and the chain has never settled `depth` anchors: nothing economic concludes
+            // on history nothing secured. A mempool matter only — a block carrying the spend is
+            // still valid, because the consensus call site passes no settlement record at all.
+            (true, None) => false,
+        };
     }
     // Acceleration: the confirmed anchor has passed this coinbase's block.
     s.confirmed_anchor_daa.is_some_and(|anchor| anchor >= utxo_block_daa_score)
@@ -6905,7 +6926,7 @@ mod tests {
     /// releases exactly at its bound, and acceleration requires the anchor AT or PAST the block.
     #[test]
     fn coinbase_settlement_accelerates_and_never_undercuts() {
-        let s = |anchor: Option<u64>| DnsCoinbaseSettlement { long_maturity_daa: 30_000, confirmed_anchor_daa: anchor };
+        let s = |anchor: Option<u64>| DnsCoinbaseSettlement { long_maturity_daa: 30_000, confirmed_anchor_daa: anchor, settled_anchor_armed: false, settled_anchor_floor_daa: None };
 
         // Base floor unconditional — even with a passed anchor.
         assert!(!coinbase_spend_settled(1_000, 1_099, 100, Some(&s(Some(2_000)))));

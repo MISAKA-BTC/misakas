@@ -80,6 +80,12 @@ pub struct PalwEpochBudgetFencesV1 {
     /// floor is `max(W₀, W)` where `W` is the chain's stepped work target — the controller that holds
     /// the cadence once the network draw is gone.
     pub single_lottery: bool,
+    /// `Params::palw_audit_2026_09_23` at the block (2026-09-23 audit H-1): past it the exposure
+    /// ceiling reserves `attempts x` one draw's work — the same order as the weight the claim
+    /// inserts — and below it one draw's work alone, byte for byte. Resolved at the block for the
+    /// reason `canonical_work_daa` is a height: the ceiling must price a claim exactly as the fold
+    /// will write `claim.reserved` in this same block.
+    pub audit_2026_09_23_active: bool,
     /// **ADR-0145: `Params::palw_canonical_work_daa()` — the HEIGHT, not this block's answer.**
     ///
     /// The exposure ceiling below must price a claim the way the fold will price it when it writes
@@ -596,8 +602,19 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         budget_fences.canonical_work_daa,
         budget_fences.base_known_draw,
     );
+    // **2026-09-23 audit H-1: times the attempts the claim's weight carries, past the fence.** The
+    // paragraph above priced one inference because the pre-ADR-0137 retarget could push the
+    // attempts anywhere; with the work target armed they are pinned near `W0 / CCU`, so this is
+    // bounded by `W0` per claim, and what it buys is that the reservation and `claim.pwu` are of
+    // one order — the registrant's canonical job can no longer sell weight at a 230x discount.
+    let attempts = if budget_fences.audit_2026_09_23_active {
+        crate::palw_pwu::palw_claim_attempts_v1(attempt.pwu, canonical_draw)
+    } else {
+        1
+    };
     let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v3(class, attempt.pwu, canonical_draw, exposure_basis) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
+        .and_then(|sompi| sompi.checked_mul(attempts as u128))
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
     let ceiling = (bond.collateral as u128)
         .checked_mul(admission.max_exposure_ratio_permille as u128)

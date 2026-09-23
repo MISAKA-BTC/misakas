@@ -72,7 +72,7 @@ fn the_colluding_quorum_outvalues_the_lie_for_every_class() {
         let facts = PalwClaimFraudFactsV1 {
             reserved: 0,
             escrowed_reward: escrow,
-            pwu: claim_pwu,
+            exposure_pwu: claim_pwu,
             slash_value_per_pwu: slash,
             extra_economic_rights_sompi: residual,
         };
