@@ -770,7 +770,7 @@ pub fn palw_class_census_v1(state: &PalwChainStateV2, params: &PalwStateParamsV2
             }
             row.eligible_seats += 1;
             let held = seat_exposure.get(key).copied().unwrap_or(0).saturating_add(producer_reserved.get(key).copied().unwrap_or(0));
-            let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+            let free = crate::palw_state_v2::palw_bond_free_collateral_v1(bond, held, params.bond_collateral_is_net_v1());
             row.free_collateral_sompi = row.free_collateral_sompi.saturating_add(free);
         }
     }

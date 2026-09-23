@@ -5076,6 +5076,37 @@ impl VirtualStateProcessor {
         self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block, None).0
     }
 
+    /// The fold the pipeline runs over a candidate's accepted objects — no attempt, no merged work —
+    /// at this processor's own fences and extras, reachable from the sibling test module. The walk's
+    /// contract is "what it returns, the transition applies", and past `palw_audit_2026_09_23` the
+    /// transition holds a cap (`ClassRegistrationsPerBlockExceeded`) the per-object rehearsal cannot
+    /// see, so only a test that folds the walk's output can hold the two together (review of #12).
+    #[cfg(test)]
+    pub(super) fn palw_v2_fold_accepted_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
+            state,
+            state_params,
+            self.palw_admission_params_v2.as_ref(),
+            point,
+            objects,
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+            &[],
+            kaspa_hashes::Hash64::default(),
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )
+        .map(|(next, _, _)| next)
+    }
+
     /// Objects a test hands the filter directly, carried by nobody: `PALW_RENT_UNPRICED` so the
     /// ADR-0075 rent rules read as absent rather than as "every carrier paid zero", which is what
     /// every pre-SA test means and what an unarmed network does.
@@ -5283,6 +5314,10 @@ impl VirtualStateProcessor {
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
+        // Review of #12: the registrant bonds whose charged registration the gate then refused in
+        // this block. Each takes no further slot this block (see the charging site).
+        let mut class_registrants_refused: std::collections::BTreeSet<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> =
+            std::collections::BTreeSet::new();
         // **ADR-0042 Decision 10 / ADR-0087 Decision 3 (mainnet audit 2026-09-06, M-10): the payout
         // rows this block's CARRIER-borne market moves have already promised.**
         //
@@ -5653,20 +5688,81 @@ impl VirtualStateProcessor {
             // **2026-09-24 DoS audit #12 (b): at most `PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`
             // bought registrations a block** (past `palw_audit_2026_09_23`; genesis rows are never
             // here). Counted in transaction order like the two caps above and the extra one DROPPED
-            // with the block standing, for the reason they give. The slot is charged to a
-            // registration its registrant bond SIGNED, asked here before the graph gate runs: a
-            // stranger's carrier is dropped at the signature for no slot, and the gate — the one
-            // expensive thing a registration asks of every node — runs at most the cap's times per
-            // block. Charged even when the gate or the fold then refuses the object, because that
-            // is exactly the CPU the cap bounds; only the registrant itself can spend its slots
-            // that way, and only for its own fees. The fold holds the same number as its second
-            // lock (`ClassRegistrationsPerBlockExceeded`) and never sees more than this admits.
-            if self.palw_audit_2026_09_23_at(point.daa_score)
-                && kaspa_consensus_core::palw_state_v2::palw_class_registration_buyer_v1(&object).is_some()
-            {
+            // with the block standing, for the reason they give. The slot bounds the graph gate —
+            // the one expensive thing a registration asks of every node — so it is charged BEFORE
+            // the gate runs, and it stays charged when the gate refuses. The fold holds the same
+            // number as its second lock (`ClassRegistrationsPerBlockExceeded`) and never sees more
+            // than this admits: this counter is the ONLY thing between a fifth registration and a
+            // disqualified block, because the rehearsal below folds each object on a fresh builder
+            // whose own counter is always zero.
+            //
+            // **What a slot costs, and who can spend one** (review of #12). The first cut charged a
+            // slot to any registration its registrant SIGNED, and everything after the signature
+            // was free to fail with the slot kept. Two cheap ways to fill all four with objects
+            // certain to be refused followed: a bond at the 0.04 MSK registration floor signing
+            // registrations the fold refuses as `ClassRegistrationBurnUnaffordable` (so nothing is
+            // ever burned), and a stranger with no bond at all relaying copies of registrations
+            // already on chain — the signature binds no nonce and still verifies — which the fold
+            // refuses as `DuplicateClass`. Either one censored every honest registration for four
+            // carrier fees a block. So a slot is now charged only to a registration that
+            //   * its registrant signed (`palw_v2_class_registration_is_signed`),
+            //   * starts at the chain's target (`palw_v2_class_registration_starts_at_the_chains_target`,
+            //     the gate's own O(1) first refusal, so a copy made stale by a retarget is free),
+            //   * the fold's own `ClassRegistered` arm APPLIES on the state this block has reached —
+            //     the burn affordable, the class not already live, the share grantable — asked by
+            //     folding it (`palw_v2_apply_one_object_v1`), so the answer cannot drift from the
+            //     fold's; the result is kept and reused below, so an accepted registration is folded
+            //     once, as before; and
+            //   * comes from a registrant none of whose registrations the gate has refused in this
+            //     block.
+            // What is left is a registrant that can afford the burn, signs a registration the fold
+            // would take, and makes it fail the graph gate on purpose: one slot per block per such
+            // bond, each bond holding 1 MSK plus the reservation it does not lose. That is a
+            // capital price, not a burn — a refused object never reaches the fold, so no rule here
+            // can charge it — and it is stated rather than hidden.
+            let mut rehearsed_registration: Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2> = None;
+            let bought_registration = if self.palw_audit_2026_09_23_at(point.daa_score) {
+                kaspa_consensus_core::palw_state_v2::palw_class_registration_buyer_v1(&object)
+            } else {
+                None
+            };
+            if let Some(registrant) = bought_registration {
                 if let Err(why) = self.palw_v2_class_registration_is_signed(&folded, &object) {
                     info!("Block {block}: a class registration was dropped, and the block stands: {why}");
                     continue;
+                }
+                if let Err(why) = self.palw_v2_class_registration_starts_at_the_chains_target(&folded, &object) {
+                    info!("Block {block}: a class registration was dropped, and the block stands: {why}");
+                    continue;
+                }
+                if class_registrants_refused.contains(&registrant) {
+                    info!(
+                        "Block {block}: a class registration was dropped, and the block stands: its registrant's registration was \
+                         already refused by the admission gate in this block"
+                    );
+                    continue;
+                }
+                if audit_active {
+                    match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+                        &folded,
+                        state_params,
+                        point,
+                        &object,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_capability_bound_at(point.daa_score),
+                        self.palw_uncertified_weightless_at(point.daa_score),
+                        self.palw_da_court_at(point.daa_score),
+                        &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                            own_attempt_class,
+                            ..self.palw_transition_extras_for(point)
+                        },
+                    ) {
+                        Ok(next) => rehearsed_registration = Some(next),
+                        Err(why) => {
+                            info!("Block {block}: a class registration was dropped, and the block stands: {why}");
+                            continue;
+                        }
+                    }
                 }
                 if class_registrations_charged >= kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1 {
                     info!(
@@ -5695,7 +5791,11 @@ impl VirtualStateProcessor {
                     if !audit_active && spends_the_court_slot {
                         court_closes_completed += 1;
                     }
-                    let applied = if audit_active {
+                    // A bought registration was already folded before its slot was charged (above);
+                    // that result is this one, computed once.
+                    let applied = if let Some(next) = rehearsed_registration.take() {
+                        Ok(next)
+                    } else if audit_active {
                         kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
                             &folded,
                             state_params,
@@ -5798,6 +5898,11 @@ impl VirtualStateProcessor {
                     }
                 }
                 Err(why) => {
+                    // Review of #12: a charged registration the gate refused bars its registrant
+                    // from another slot in this block (see the charging site).
+                    if let Some(registrant) = bought_registration {
+                        class_registrants_refused.insert(registrant);
+                    }
                     info!("Block {block}: a PALW lifecycle object was dropped, and the block stands: {why}");
                 }
             }
@@ -6273,6 +6378,39 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
         ) {
             return Err(format!("class {class_id}'s registration is not signed by the bond it names"));
+        }
+        Ok(())
+    }
+
+    /// **Does this `ClassRegistered` start at the chain's own target?** (audit M2-12; factored out
+    /// in the review of the 2026-09-24 DoS audit #12.)
+    ///
+    /// `initial_target` seeds the class's own retarget, so a registrant naming a huge one mines its
+    /// class for free until the first retarget catches up — and naming a tiny one makes the class
+    /// unminable, which is a way to park a share nobody can use. The base class's live target is
+    /// what a registration is offered (`palw_v2_registration_terms`), and it is what must arrive.
+    /// Asked by the `ClassRegistered` arm of [`Self::palw_v2_validate_objects`], and — past
+    /// `palw_audit_2026_09_23` — by the acceptance walk before a registration is charged a slot:
+    /// it is one map read, and a replayed registration from before a retarget fails it, so such a
+    /// copy is dropped without spending a slot the gate would then waste. `Ok` for any other object
+    /// and on a network with no V2 bundle (the arm refuses those on its own terms).
+    fn palw_v2_class_registration_starts_at_the_chains_target(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Result<(), String> {
+        let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, initial_target, .. } = object
+        else {
+            return Ok(());
+        };
+        let Some(bundle) = self.palw_v2_bundle.as_ref() else { return Ok(()) };
+        if let Some(base_target) = state.class_target(&bundle.base_class_id)
+            && *initial_target != base_target.target
+        {
+            return Err(format!(
+                "class {class_id} registers at target {initial_target}; a post-genesis entrant starts at the                              chain's own ({}) — difficulty is not a registrant's to choose",
+                base_target.target
+            ));
         }
         Ok(())
     }
@@ -6869,7 +7007,8 @@ impl VirtualStateProcessor {
                     class_id,
                     share_permille,
                     admission,
-                    initial_target,
+                    // Checked by `palw_v2_class_registration_starts_at_the_chains_target`, below.
+                    initial_target: _,
                     // Signed over by `palw_v2_class_registration_is_signed`, below.
                     activation_daa: _,
                     artifact_root: _,
@@ -6909,14 +7048,7 @@ impl VirtualStateProcessor {
                     // up — and naming a tiny one makes the class unminable, which is a way to park
                     // a share nobody can use. The base class's live target is what a registration
                     // is offered (`palw_v2_registration_terms`), and it is what must arrive.
-                    if let Some(base_target) = state.class_target(&bundle.base_class_id)
-                        && *initial_target != base_target.target
-                    {
-                        return Err(format!(
-                            "class {class_id} registers at target {initial_target}; a post-genesis entrant starts at the                              chain's own ({}) — difficulty is not a registrant's to choose",
-                            base_target.target
-                        ));
-                    }
+                    self.palw_v2_class_registration_starts_at_the_chains_target(state, object)?;
                     // **An entrant joins at the minimum grantable share — or at NOTHING, when no
                     // certified family can prosecute it** (ADR-0069 Decisions 5 and 6).
                     //

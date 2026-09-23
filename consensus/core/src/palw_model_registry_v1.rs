@@ -1220,7 +1220,8 @@ pub fn palw_seat_not_ready_reason_v1(
         return Some("stale");
     }
     let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
-    let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+    // The fold's arithmetic, fence and all (`palw_bond_free_collateral_v1`, review of #12).
+    let free = crate::palw_state_v2::palw_bond_free_collateral_v1(bond, held, params.bond_collateral_is_net_v1());
     if free < needed {
         return Some("collateral short");
     }
@@ -1252,7 +1253,7 @@ pub fn palw_model_registry_ready_seats_v1(
             continue;
         }
         let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
-        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+        let free = crate::palw_state_v2::palw_bond_free_collateral_v1(bond, held, params.bond_collateral_is_net_v1());
         if free < needed {
             continue;
         }
@@ -1453,7 +1454,11 @@ pub fn palw_model_registry_read_v2(
                         bond: *key,
                         active: matches!(bond.status, crate::palw_state_v2::PalwBondStatusV2::Active),
                         above_floor: crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor),
-                        free_collateral_sompi: (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held),
+                        free_collateral_sompi: crate::palw_state_v2::palw_bond_free_collateral_v1(
+                            bond,
+                            held,
+                            params.bond_collateral_is_net_v1(),
+                        ),
                         needed_collateral_sompi: needed,
                     }
                 })

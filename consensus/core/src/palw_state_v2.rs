@@ -1622,6 +1622,15 @@ impl PalwStateParamsV2 {
         self
     }
 
+    /// **Does a view read a bond's `collateral` as already net of its `slashed`?**
+    /// ([`palw_bond_free_collateral_v1`], review of the 2026-09-24 DoS audit #12.) The views hold no
+    /// transition extras, so they read the bundle's copy of `palw_audit_2026_09_23` — the one value
+    /// `Params::validate_palw_v2` makes equal to the fence — and, because that fence may only be
+    /// armed at genesis (DAA 0, refused otherwise at startup), "armed" is "active at every DAA".
+    pub fn bond_collateral_is_net_v1(&self) -> bool {
+        self.escrow_backed_exposure_from_daa.is_some()
+    }
+
     /// **The escrow term a claim accepted at `accepted_daa` holds on its producer's bond** — its
     /// `escrowed_reward` past the height, nothing before it. The ONE reading the ledger's reserve and
     /// release, its re-derivation at load, the admission ceiling and the producer's headroom share,
@@ -2103,6 +2112,29 @@ pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, w
 /// `0` for a bond that never lost anything, which is a spend with no obligation at all.
 pub fn palw_bond_burn_obligation_v2(bond: &PalwBondStateV2) -> u64 {
     bond.slashed
+}
+
+/// **A bond's free collateral: what it still holds, less what it stands behind** (review of the
+/// 2026-09-24 DoS audit #12; past `palw_audit_2026_09_23` only).
+///
+/// `collateral` is already NET of every debit: [`TransitionBuilder::slash_bond`] lowers it and
+/// raises `slashed` by the same amount in one write, and #12 (b)'s registration burn goes through
+/// that same write. The readiness predicate and its RPC twins nevertheless computed
+/// `collateral − slashed − held`, so each sompi a bond ever lost was subtracted a SECOND time, for
+/// ever (`slashed` never falls). For convictions that was a pre-existing understatement; with the
+/// 1 MSK registration burn it became a rule: a bond at 20,000,000 sompi that had bought one class
+/// was "collateral short" of a 1,200,000 readiness bar it cleared by 18.7 M, while the identical
+/// bond that never registered was ready — so paying the registration price dropped a seat out of
+/// the ready count and ADR-0147's admission jury. Past the fence free collateral is
+/// `collateral − held`; below it the old arithmetic, byte for byte, because the ready count feeds
+/// the registry rows the root commits to.
+///
+/// `collateral_is_net` is `extras.audit_2026_09_23_active` in the fold and
+/// [`PalwStateParamsV2::bond_collateral_is_net_v1`] in the views, which read the bundle's copy of
+/// the same fence.
+pub fn palw_bond_free_collateral_v1(bond: &PalwBondStateV2, held: u128, collateral_is_net: bool) -> u128 {
+    let posted = bond.collateral as u128;
+    if collateral_is_net { posted.saturating_sub(held) } else { posted.saturating_sub(bond.slashed as u128).saturating_sub(held) }
 }
 
 /// **The collateral a `BondRegistered` must post** (2026-09-24 DoS audit #12 (c); the user's
@@ -11196,7 +11228,10 @@ impl<'a> TransitionBuilder<'a> {
             return false;
         }
         let held = self.state.reserved_exposure(bond_key).saturating_add(self.state.registration_exposure(bond_key));
-        let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+        // Past the fence `collateral` is read as the net figure it is — the registration burn and
+        // every slash already left it — rather than subtracting `slashed` a second time
+        // (`palw_bond_free_collateral_v1`, review of #12). Below it, the old arithmetic.
+        let free = palw_bond_free_collateral_v1(bond, held, self.extras.audit_2026_09_23_active);
         free >= needed
     }
 
@@ -12665,9 +12700,11 @@ impl<'a> TransitionBuilder<'a> {
     /// caller checks affordability first, and this refuses again rather than burning less.
     ///
     /// `slashed` therefore also counts registration burns past the fence. Nothing reads it as
-    /// "convicted": the burn obligation reads it as what the release must destroy, and the
-    /// free-collateral views that subtract it (`palw_model_registry_v1`, `palw_panel_view_v1`)
-    /// understate a registrant's headroom by the burns — the conservative direction.
+    /// "convicted": the burn obligation reads it as what the release must destroy. The
+    /// free-collateral readers that used to subtract it from the already-net `collateral` — the
+    /// fold's own readiness predicate among them, which made paying this price a way to drop out of
+    /// the ready count — read [`palw_bond_free_collateral_v1`] instead, which past the fence does
+    /// not (review of #12).
     fn burn_registration_fee(&mut self, bond: PalwBondKeyV2, amount: u64) -> Result<(), PalwStateV2Error> {
         let collateral = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.collateral;
         if collateral < amount {
@@ -16997,6 +17034,26 @@ fn apply_object(
                                 bond: carriage_bond,
                                 burn: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
                                 already,
+                                collateral,
+                            });
+                        }
+                        // **And it must leave every LIVE slashable lock covered** (review of #12).
+                        // A seat's Valid lock is admitted against `collateral − live locks`
+                        // (`slashable_available`), not against the reservations summed above, so
+                        // the two budgets overlap by design and the check above never saw the
+                        // locks: a bond holding 10 MSK under a 9.9996 MSK live lock paid the burn,
+                        // fell to 9 MSK, and a later `PanelFalseValid` on that lock took only what
+                        // was left (`slash_bond` clamps to the collateral). A seat expecting
+                        // conviction could spend the money behind its lock on registrations. The
+                        // lock is read on both clocks at the escaped depth, as `lock_valid_seat`
+                        // reads it; bought registrations exist only past the fence.
+                        let locked = builder.slashable_live_locked(&carriage_bond, ctx.daa_score);
+                        if locked.saturating_add(burn) > collateral as u128 {
+                            return Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable {
+                                class: *class_id,
+                                bond: carriage_bond,
+                                burn: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+                                already: locked,
                                 collateral,
                             });
                         }
@@ -45092,5 +45149,77 @@ mod adr_0123_budget_release_tests {
         assert_eq!(released, (500u64 * 633).div_ceil(1_000), "a counter from epoch 0 fills no slot of epoch 1");
         assert_eq!(palw_epoch_budget_release_v1(&state, 1_000, 2_000, &fast, 367), 0, "position 0 releases nothing");
         assert_eq!(palw_epoch_budget_release_v1(&state, 0, 5, &fast, 367), 0, "a zero-length epoch releases nothing");
+    }
+}
+
+/// **Review of the 2026-09-24 DoS audit #12: the fold's readiness predicate reads `collateral` as
+/// the net figure it is.** `slash_bond` — and through it the 1 MSK registration burn — lowers
+/// `collateral` and raises `slashed` in one write, so `collateral − slashed − held` subtracted every
+/// lost sompi twice and a bond that paid for one class fell out of the ready count and ADR-0147's
+/// jury with 18.7 M sompi of real headroom. Past `palw_audit_2026_09_23` the predicate reads
+/// `collateral − held` ([`palw_bond_free_collateral_v1`]); below it, the old arithmetic.
+#[cfg(test)]
+mod review_fix12_readiness_reads_net_collateral {
+    use super::*;
+    use crate::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, PalwModelRegistryFoldV1, PalwSeatReadinessRowV1};
+
+    /// Fails without the fix: past the fence the bond that paid a burn is refused readiness it
+    /// holds, exactly as it is below the fence.
+    #[test]
+    fn a_paid_registration_burn_is_not_subtracted_from_readiness_twice() {
+        let p = PalwStateParamsV2::new(100, 10, 40, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
+        let fold = PalwModelRegistryFoldV1 {
+            globals: PALW_REGISTRY_GLOBALS_V1,
+            span_daa: 10,
+            genesis_works: BTreeMap::new(),
+            grace_until_daa: 0,
+        };
+        let class = Hash64::from_u64_word(0xC1A5);
+        let key = PalwBondKeyV2(crate::tx::TransactionOutpoint {
+            transaction_id: crate::tx::TransactionId::from_u64_word(0xB0B0),
+            index: 0,
+        });
+        let needed = (p.min_collateral_sompi() as u128) * (fold.globals.readiness_collateral_multiple as u128);
+        assert!(needed > 0 && needed <= u64::MAX as u128);
+        // Holds exactly the readiness bar NET, after one registration burn it paid earlier.
+        let paid = PalwBondStateV2 {
+            pubkey: vec![0xB0; 4],
+            operator_id: Hash64::from_u64_word(0x0B),
+            collateral: needed as u64,
+            slashed: PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+            status: PalwBondStatusV2::Active,
+            registered_daa: 0,
+            payout_payload: Hash64::from_u64_word(0x0B),
+            capable_classes: Default::default(),
+        };
+        let never_paid = PalwBondStateV2 { slashed: 0, ..paid.clone() };
+        let one_short = PalwBondStateV2 { collateral: needed as u64 - 1, slashed: 0, ..paid.clone() };
+        let now = 5u64;
+        let ready = |bond: &PalwBondStateV2, armed: bool| {
+            let mut state = PalwChainStateV2::genesis();
+            state.bonds.insert(key, bond.clone());
+            state.seat_readiness.insert(
+                (key, class),
+                PalwSeatReadinessRowV1 { proved_daa: now, proved_span: 0, leaf_index: 0, proof_version: 2, chunks: 8 },
+            );
+            let extras = PalwTransitionExtrasV1 { audit_2026_09_23_active: armed, ..Default::default() };
+            TransitionBuilder::new(&state, &p, false, false, false, false, &extras)
+                .model_registry_seat_is_ready(&key, bond, &class, now, &fold)
+        };
+        // Past the fence: what it holds is what counts, whatever it paid to get here.
+        assert!(ready(&never_paid, true), "control: a bond at the bar is ready");
+        assert!(ready(&paid, true), "the same net collateral is ready after a paid burn");
+        assert!(!ready(&one_short, true), "and a sompi under the bar is still short");
+        // Below the fence: byte-identical — the old double count, asserted so it stays a fence.
+        assert!(ready(&never_paid, false));
+        assert!(!ready(&paid, false), "below the fence the old arithmetic still subtracts `slashed`");
+        assert!(!ready(&one_short, false));
+        // The helper, on both sides, and the held exposure still subtracted once.
+        assert_eq!(palw_bond_free_collateral_v1(&paid, 0, true), needed);
+        assert_eq!(palw_bond_free_collateral_v1(&paid, 7, true), needed - 7);
+        assert_eq!(
+            palw_bond_free_collateral_v1(&paid, 0, false),
+            needed.saturating_sub(PALW_CLASS_REGISTRATION_BURN_SOMPI_V1 as u128)
+        );
     }
 }

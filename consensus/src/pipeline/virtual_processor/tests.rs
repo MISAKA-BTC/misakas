@@ -15196,3 +15196,338 @@ async fn adr0126_a_palw_chain_crosses_the_overlay_carve() {
     assert_eq!(straddles, 2, "the block on the height merged the pair from below, and only it straddles");
     assert!(merged_below >= 1 && merged_past >= 1, "a merged escrow on each side ({merged_below} below, {merged_past} past)");
 }
+
+/// The walk's registration fixture (review of the 2026-09-24 DoS audit #12): a TestConsensus with
+/// `palw_audit_2026_09_11` (A-1) and — when `armed` — `palw_audit_2026_09_23` on, its genesis state
+/// with the harness bond (the registrant, 0xB0) funded for many burns, a second genesis bond whose
+/// key the fixture holds (`other`, funded per test by [`Fix12WalkFixture::with_other_at`]), and a
+/// builder of signed floor-variant registrations the admission gate admits.
+struct Fix12WalkFixture {
+    ctx: TestContext,
+    state: kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    params: kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+    point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    network_domain: kaspa_hashes::Hash64,
+    registrant: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    other: (kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, u64),
+    floor: u64,
+}
+
+async fn fix12_walk_fixture(armed: bool) -> Fix12WalkFixture {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwStateCarriageV2};
+    let catalog = palw_v2_test_catalog();
+    let mut bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    // Past the fence a `BondRegistered` posts the panel floor (#12 (c)); genesis rows too.
+    let floor = kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(bundle.bond.min_collateral_sompi(), true);
+    for object in bundle.genesis_objects.iter_mut() {
+        if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
+            *collateral = (*collateral).max(floor);
+        }
+    }
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(move |p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_audit_2026_09_11 = Some(ForkActivation::always());
+            if armed {
+                p.palw_audit_2026_09_23 = Some(ForkActivation::always());
+                p.sync_palw_escrow_backed_exposure();
+            }
+        })
+        .build();
+    // No block is mined: the walk is asked directly, on the genesis state the processor stored at
+    // construction, so nothing but the objects handed to it decides what it accepts.
+    let ctx = TestContext::new(TestConsensus::new(&config));
+    let vp = ctx.consensus.virtual_processor();
+    let params = match &config.params.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(b) => b.state.clone(),
+        _ => unreachable!(),
+    };
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&params).unwrap().expect("the tip loads");
+    let registrant = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+        kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+        0,
+    ));
+    let harness = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+    assert_eq!(state.bond(&registrant).expect("the harness bond").pubkey, harness, "the premise: 0xB0 is the harness key");
+    // A second registrant: a genesis row whose key the fixture holds (`palw_v2_registry_keypair`).
+    let (other_key, other_row) = state
+        .bonds_iter()
+        .find_map(|(key, bond)| {
+            (1..16u64)
+                .find(|i| bond.pubkey == crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(*i))
+                .map(|i| (*key, i))
+        })
+        .expect("a registry row with a fixture key");
+    let mut carriage = PalwStateCarriageV2::from_state(&state);
+    carriage.bonds.get_mut(&registrant).unwrap().collateral = 1_000 * 100_000_000;
+    let state = carriage.into_state(&params, None).expect("consistent");
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 5,
+        subsidy: 0,
+    };
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
+    Fix12WalkFixture { ctx, state, params, point, network_domain, registrant, other: (other_key, other_row), floor }
+}
+
+impl Fix12WalkFixture {
+    /// Floor variant `n` (a distinct class id) asking `share` permille, registered by `bond` and
+    /// signed with `key` (`None` leaves it unsigned — a stranger's carrier). The gate admits it at
+    /// the minimum grantable share; at zero it refuses it (a certified family covers the floor's
+    /// kernels, so the entrant is not weightless) while the fold takes it — the one knob the tests
+    /// use for "passes everything but the gate".
+    fn registration(
+        &self,
+        n: u32,
+        share: u16,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: Option<&libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 {
+        let base = self.params.base_class_id();
+        let target = self.state.class_target(&base).expect("the base target").target;
+        self.registration_at(n, share, bond, key, target)
+    }
+
+    /// [`Self::registration`] signed at `target` rather than the chain's.
+    fn registration_at(
+        &self,
+        n: u32,
+        share: u16,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        key: Option<&libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>,
+        target: u128,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 {
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT, PalwClassAdmissionCarriageV2, PalwConsensusObjectV2, PalwPwuRuleV2,
+            palw_class_registration_message_v2,
+        };
+        let floor = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+        )
+        .expect("the floor's profile projects");
+        let mut profile = floor.clone();
+        profile.n_threads = n;
+        let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+            &profile,
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.0,
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1,
+        );
+        let base = self.params.base_class_id();
+        let slash = self.state.class(&base).expect("the base class").slash_value_per_pwu;
+        let leaves = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &canonical, u64::MAX).unwrap_or(1);
+        let class_id = profile.shape_profile_id();
+        let artifact_root = kaspa_hashes::Hash64::from_u64_word(0xF12_0000 + n as u64);
+        let rule = PalwPwuRuleV2::DerivedV1 { pwu_per_inference: leaves };
+        let signature = key
+            .map(|kp| {
+                let message = palw_class_registration_message_v2(
+                    self.network_domain,
+                    class_id,
+                    share,
+                    0,
+                    &bond,
+                    artifact_root,
+                    slash,
+                    target,
+                    &rule,
+                    &canonical,
+                );
+                libcrux_ml_dsa::ml_dsa_87::sign(
+                    &kp.signing_key,
+                    message.as_byte_slice(),
+                    PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+                    [9u8; 32],
+                )
+                .expect("sign")
+                .as_ref()
+                .to_vec()
+            })
+            .unwrap_or_default();
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu: slash,
+            pwu_rule: rule,
+            initial_target: target,
+            share_permille: share,
+            activation_daa: 0,
+            admission: Some(Box::new(PalwClassAdmissionCarriageV2 { profile, canonical, registrant_bond: bond, signature })),
+        }
+    }
+
+    fn signed(&self, n: u32) -> kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 {
+        self.registration(
+            n,
+            self.params.min_grantable_share_permille(),
+            self.registrant,
+            Some(crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair()),
+        )
+    }
+
+    /// A registration by the second bond, signed with its own key.
+    fn by_other(&self, n: u32, share: u16) -> kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 {
+        self.registration(
+            n,
+            share,
+            self.other.0,
+            Some(crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(self.other.1)),
+        )
+    }
+
+    /// The fixture's state with the second bond's collateral set to `collateral`.
+    fn with_other_at(&self, collateral: u64) -> kaspa_consensus_core::palw_state_v2::PalwChainStateV2 {
+        let mut carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&self.state);
+        carriage.bonds.get_mut(&self.other.0).unwrap().collateral = collateral;
+        carriage.into_state(&self.params, None).expect("consistent")
+    }
+
+    fn accepted(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.ctx.consensus.virtual_processor().palw_v2_accepted_objects_for_tests(
+            state,
+            &self.params,
+            &self.point,
+            objects,
+            self.point.block,
+        )
+    }
+}
+
+/// **Review of #12: the walk's counter is the only guard between a fifth bought registration and a
+/// disqualified block, and it counts exactly four.**
+///
+/// The per-object rehearsal folds each object on a fresh `TransitionBuilder`, whose
+/// `class_registrations` is always zero, so it never sees the fold's
+/// `ClassRegistrationsPerBlockExceeded`; five signed registrations each rehearse clean. Past the
+/// fence the walk must accept exactly the first four in order, a stranger's unsigned copy must not
+/// take a slot, and what it accepts must fold — while the same four plus the fifth does not.
+/// Below the fence every registration the gate admits is accepted, as before.
+#[tokio::test]
+async fn fix12_review_the_walk_accepts_four_bought_registrations_and_the_fold_takes_them() {
+    use kaspa_consensus_core::palw_state_v2::{PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1, PalwStateV2Error};
+    let f = fix12_walk_fixture(true).await;
+    let vp = f.ctx.consensus.virtual_processor();
+    let signed: Vec<_> = (0..5u32).map(|i| f.signed(2_000 + i)).collect();
+    // A stranger's carrier naming the registrant, with no signature: first in line.
+    let unsigned = f.registration(2_100, f.params.min_grantable_share_permille(), f.registrant, None);
+    let mut objects = vec![unsigned];
+    objects.extend(signed.iter().cloned());
+    let accepted = f.accepted(&f.state, objects);
+    assert_eq!(PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1, 4);
+    assert_eq!(accepted, signed[..4].to_vec(), "exactly the first four signed registrations, in order");
+    vp.palw_v2_fold_accepted_for_tests(&f.state, &f.params, &f.point, &accepted).expect("what the walk accepts, the fold applies");
+    let refused = vp.palw_v2_fold_accepted_for_tests(&f.state, &f.params, &f.point, &signed);
+    assert!(
+        matches!(refused, Err(PalwStateV2Error::ClassRegistrationsPerBlockExceeded { max: 4, .. })),
+        "the fifth would disqualify the block — which is why the walk must drop it: {refused:?}"
+    );
+
+    // Below the fence: no cap, all five accepted (the unsigned one is refused by the gate as ever).
+    let dormant = fix12_walk_fixture(false).await;
+    let signed: Vec<_> = (0..5u32).map(|i| dormant.signed(2_000 + i)).collect();
+    let mut objects = vec![dormant.registration(2_100, dormant.params.min_grantable_share_permille(), dormant.registrant, None)];
+    objects.extend(signed.iter().cloned());
+    assert_eq!(dormant.accepted(&dormant.state, objects), signed, "below the fence the walk is what it was");
+}
+
+/// **Review of #12: an object certain to be refused takes no registration slot.**
+///
+/// Before this review a slot was charged to any SIGNED registration and kept whatever happened
+/// next, so four objects per block that the fold or the gate were certain to refuse censored every
+/// honest registration behind them: a floor bond's registrations it cannot pay the 1 MSK burn for
+/// (`ClassRegistrationBurnUnaffordable`, nothing ever burned), replays of registrations already on
+/// chain (`DuplicateClass`; the signature binds no nonce, so a stranger relays them), and copies
+/// signed at a stale target (the gate's first refusal). All of them now fail before the slot, and
+/// the four honest registrations behind twelve such objects are all carried.
+///
+/// Fails without the fix: the floor bond's four registrations take the four slots and nothing
+/// honest is carried.
+#[tokio::test]
+async fn fix12_review_registrations_certain_to_be_refused_take_no_slot() {
+    let f = fix12_walk_fixture(true).await;
+    // The second bond at the registration floor: it can sign, it cannot pay the burn.
+    let state = f.with_other_at(f.floor);
+    let unaffordable: Vec<_> = (0..4u32).map(|i| f.by_other(3_000 + i, f.params.min_grantable_share_permille())).collect();
+    for object in &unaffordable {
+        assert!(
+            f.ctx
+                .consensus
+                .virtual_processor()
+                .palw_v2_validate_objects(&state, &f.params, &f.point, std::slice::from_ref(object))
+                .is_ok(),
+            "the premise: signed, and the gate admits it — only the burn refuses it"
+        );
+    }
+    // A registration already on chain, replayed four times.
+    let landed = f.signed(3_100);
+    let on_chain = f
+        .ctx
+        .consensus
+        .virtual_processor()
+        .palw_v2_fold_accepted_for_tests(&state, &f.params, &f.point, std::slice::from_ref(&landed))
+        .expect("the original lands");
+    // Signed by the registrant at a target the chain does not offer (a copy from before a retarget).
+    let chain_target = f.state.class_target(&f.params.base_class_id()).unwrap().target;
+    let stale: Vec<_> = (0..4u32)
+        .map(|i| {
+            f.registration_at(
+                3_200 + i,
+                f.params.min_grantable_share_permille(),
+                f.registrant,
+                Some(crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair()),
+                chain_target - 1,
+            )
+        })
+        .collect();
+    let honest: Vec<_> = (0..4u32).map(|i| f.signed(3_300 + i)).collect();
+    let mut objects = unaffordable.clone();
+    objects.extend(std::iter::repeat_n(landed.clone(), 4));
+    objects.extend(stale);
+    objects.extend(honest.iter().cloned());
+    // The next block, on the state the original landed in.
+    let next = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: kaspa_hashes::Hash64::from_u64_word(0xF12_B10C),
+        daa_score: f.point.daa_score + 1,
+        blue_score: f.point.blue_score + 1,
+        subsidy: 0,
+    };
+    let accepted =
+        f.ctx.consensus.virtual_processor().palw_v2_accepted_objects_for_tests(&on_chain, &f.params, &next, objects, next.block);
+    assert_eq!(accepted, honest, "the four honest registrations behind twelve certain refusals are all carried");
+}
+
+/// **Review of #12: a registrant whose registration the gate refused takes no further slot in the
+/// block.** What the pre-slot checks cannot see is the graph gate itself — that is the CPU the slot
+/// exists to bound — so a registrant that can afford the burn can still sign a registration the
+/// fold would take and make it fail the gate. It spends one slot per block for that, not four.
+#[tokio::test]
+async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
+    let f = fix12_walk_fixture(true).await;
+    let state = f.with_other_at(1_000 * 100_000_000);
+    // Share 0 on a class a certified family covers: the fold takes it, the gate refuses it.
+    let refused_by_gate: Vec<_> = (0..4u32).map(|i| f.by_other(4_000 + i, 0)).collect();
+    assert!(
+        f.ctx
+            .consensus
+            .virtual_processor()
+            .palw_v2_validate_objects(&state, &f.params, &f.point, std::slice::from_ref(&refused_by_gate[0]))
+            .is_err(),
+        "the premise: the gate refuses it"
+    );
+    let honest: Vec<_> = (0..4u32).map(|i| f.signed(4_100 + i)).collect();
+    let mut objects = refused_by_gate;
+    objects.extend(honest.iter().cloned());
+    let accepted = f.accepted(&state, objects);
+    assert_eq!(accepted, honest[..3].to_vec(), "the refused registrant spent one slot; the honest registrant keeps three");
+}

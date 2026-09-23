@@ -959,3 +959,102 @@ fn dos_l2_fix12_a_bought_registration_burns_one_msk() {
     let d1 = fold_one(&b, &d0, 2, &bought(&b, &d0, 60_300, 1), &dormant).expect("folds below the fence");
     assert_eq!(d1.bond(&bond_key(ATTACKER)).unwrap().collateral, 51_642_979_663_480, "below the fence nothing is burned");
 }
+
+/// **Review of #12: the registration burn must leave every LIVE slashable lock covered.**
+///
+/// A seat's Valid lock is admitted against `collateral − live locks`, not against the exposure
+/// reservations the burn's first check sums, so a bond holding 10 MSK under a live 9.9996 MSK lock
+/// used to pay the burn, fall to 9 MSK, and leave a later `PanelFalseValid` on that lock only what
+/// was left to take (`slash_bond` clamps). Past the fence it is refused
+/// (`ClassRegistrationBurnUnaffordable`, `already` = the live locked sum); a lock that leaves room
+/// for exactly the burn folds; a lock dead on both clocks does not count; below the fence nothing is
+/// burned and nothing is asked.
+///
+/// Fails without the fix: the first registration folds and the bond ends below its live lock.
+#[test]
+fn dos_l2_fix12_review_the_burn_leaves_live_locks_covered() {
+    use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let p = t12();
+    let b = bundle_of(&p);
+    let extras = t12_extras(&p, &b);
+    assert!(extras.audit_2026_09_23_active);
+    let collateral: u64 = 10 * 100_000_000;
+    let burn = PALW_CLASS_REGISTRATION_BURN_SOMPI_V1 as u128;
+    let with_lock = |extras: &PalwTransitionExtrasV1, amount: u128, expiry_daa: u64| {
+        let s0 = genesis_state_under(&b, collateral, extras);
+        let mut carriage = PalwStateCarriageV2::from_state(&s0);
+        carriage.slashable_locks.insert(
+            (bond_key(ATTACKER), h(0x10C4)),
+            PalwSlashableLockV1 { claim: h(0x10C4), amount, expiry_daa, settled_at_final: 0 },
+        );
+        carriage.into_state(&b.state, None).expect("consistent")
+    };
+    // A live lock on all but the reservation: the burn would eat into it — refused, whole.
+    let price = b.state.registration_exposure_sompi() as u128;
+    let s0 = with_lock(&extras, collateral as u128 - price, 1_000_000);
+    let refused = fold_one(&b, &s0, 2, &bought(&b, &s0, 90_000, 1), &extras);
+    match &refused {
+        Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable { already, collateral: c, .. }) => {
+            assert_eq!(*already, collateral as u128 - price, "`already` names the live locked sum");
+            assert_eq!(*c, collateral);
+        }
+        other => panic!("the burn must not eat a live lock: {other:?}"),
+    }
+    // Exactly the burn's room beside the lock: folds, and the lock is still fully backed.
+    let s0 = with_lock(&extras, collateral as u128 - burn, 1_000_000);
+    let s1 = fold_one(&b, &s0, 2, &bought(&b, &s0, 90_100, 1), &extras).expect("the burn fits beside the lock");
+    assert_eq!(s1.bond(&bond_key(ATTACKER)).unwrap().collateral as u128, collateral as u128 - burn);
+    // A lock dead on both clocks and past its horizon stands behind nothing.
+    let dead = with_lock(&extras, collateral as u128 - price, 1);
+    let far = 1 + 2 * b.state.window_court() + 10;
+    let ok = apply_palw_transition_v7(
+        &dead,
+        &b.state,
+        None,
+        &ctx(2, far, 2),
+        &bought(&b, &dead, 90_200, 1),
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        &extras,
+    );
+    assert!(ok.is_ok(), "an expired lock does not hold the burn back: {:?}", ok.err());
+    // Below the fence: no burn, so nothing to refuse.
+    let dormant = PalwTransitionExtrasV1 { audit_2026_09_23_active: false, settled_anchor_depth: None, ..extras.clone() };
+    let d0 = with_lock(&dormant, collateral as u128 - price, 1_000_000);
+    let d1 = fold_one(&b, &d0, 2, &bought(&b, &d0, 90_300, 1), &dormant).expect("below the fence it folds as before");
+    assert_eq!(d1.bond(&bond_key(ATTACKER)).unwrap().collateral, collateral, "and nothing is burned");
+}
+
+/// **Review of #12: the registry's RPC twin of readiness reads net collateral too.**
+/// `palw_seat_not_ready_reason_v1` / `palw_model_registry_ready_seats_v1` say they answer "as the
+/// fold counts them"; past the fence (the t12 bundle carries its copy) a bond that paid a
+/// registration burn and holds the bar net is ready there as it is in the fold.
+///
+/// Fails without the fix: the registrant reads "collateral short" while the control, holding the
+/// identical collateral, is ready.
+#[test]
+fn dos_l2_fix12_review_the_readiness_view_does_not_count_the_burn_twice() {
+    use kaspa_consensus_core::palw_model_registry_v1::{PalwSeatReadinessRowV1, palw_seat_not_ready_reason_v1};
+    let p = t12();
+    let b = bundle_of(&p);
+    assert!(b.state.bond_collateral_is_net_v1(), "the t12 bundle carries the audit fence's copy");
+    let extras = t12_extras(&p, &b);
+    // 1.2 MSK: after the burn it holds 0.2 MSK, far above the readiness bar.
+    let s0 = genesis_state(&p, &b, 120_000_000);
+    let s1 = fold_one(&b, &s0, 2, &bought(&b, &s0, 91_000, 1), &extras).expect("the registration folds");
+    let r = s1.bond(&bond_key(ATTACKER)).unwrap();
+    assert_eq!(r.slashed, PALW_CLASS_REGISTRATION_BURN_SOMPI_V1);
+    let fold_v = registry_fold(&p, &b);
+    let needed = u128::from(b.state.min_collateral_sompi()) * u128::from(fold_v.globals.readiness_collateral_multiple);
+    let free = u128::from(r.collateral) - s1.registration_exposure(&bond_key(ATTACKER));
+    assert!(free >= needed, "the premise: the registrant holds the bar ({free} >= {needed})");
+    let now = 3u64;
+    let row = PalwSeatReadinessRowV1 { proved_daa: now, proved_span: 0, leaf_index: 0, proof_version: 2, chunks: 8 };
+    assert_eq!(palw_seat_not_ready_reason_v1(&s1, &b.state, &bond_key(ATTACKER), &row, now, &fold_v), None);
+}

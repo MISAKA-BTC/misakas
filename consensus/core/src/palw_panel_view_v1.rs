@@ -397,7 +397,7 @@ pub fn palw_panel_network_view_v1(
                 None => (false, Some(PalwPanelHoldReasonV1::ReadinessProofMissing), 0, 0, 0),
             };
             let held = state.reserved_exposure(bond_key).saturating_add(state.registration_exposure(bond_key));
-            let free = (bond.collateral as u128).saturating_sub(bond.slashed as u128).saturating_sub(held);
+            let free = crate::palw_state_v2::palw_bond_free_collateral_v1(bond, held, params.bond_collateral_is_net_v1());
             let eligible = ready
                 && matches!(bond.status, PalwBondStatusV2::Active)
                 && palw_bond_may_take_work_v2(bond, floor);
