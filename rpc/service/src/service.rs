@@ -544,7 +544,20 @@ impl RpcCoreService {
         Ok((report, class_row))
     }
 
-    async fn fill_registration_from_tx(&self, registration: &mut RpcPalwModelRegistration, txid: &str) -> RpcResult<()> {
+    /// The carrier's MEMPOOL half of a registration's status — and only that half.
+    ///
+    /// **A carrier leaves the mempool when it is mined as well as when it is dropped**, so "not in
+    /// my mempool" says nothing about a block. `included` / `folded` are the chain's record, which
+    /// the caller has already read (the row the registration names, or the row its carrier wrote);
+    /// `inclusion_known` says that read was complete. Only then is a carrier that is neither in the
+    /// mempool nor behind a row `REGISTRATION_NOT_INCLUDED` — an incomplete read (acceptance data
+    /// past the retention root, or no class to look under) reports no verdict rather than a guess.
+    async fn fill_registration_from_tx(
+        &self,
+        registration: &mut RpcPalwModelRegistration,
+        txid: &str,
+        inclusion_known: bool,
+    ) -> RpcResult<()> {
         let txid = parse_hash64(txid, "transaction id")?;
         registration.transaction_id = txid.to_string();
         registration.submitted = true;
@@ -552,7 +565,7 @@ impl RpcCoreService {
         if in_mempool {
             registration.accepted = true;
             registration.mempool_accepted = true;
-        } else if !registration.included && !registration.folded {
+        } else if inclusion_known && !registration.included && !registration.folded {
             registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
                 .code()
                 .to_string();
@@ -561,6 +574,42 @@ impl RpcCoreService {
             }
         }
         Ok(())
+    }
+
+    /// **The class row a registration carrier wrote, read off the chain's own record** — see
+    /// `palw_registration_row_written_by_v1`. Every row a post-genesis carrier could have written
+    /// is stamped with the DAA of the chain block that folded it; that block's acceptance data is
+    /// asked for exactly this transaction, and the carrier is decoded the way the fold decodes it.
+    ///
+    /// Returns the row, if any, and whether the read was complete: `false` when some row's
+    /// accepting block could not be read (acceptance data pruned past the retention root), in which
+    /// case an absence is not established and the caller must not report one.
+    async fn palw_registration_row_for_carrier(
+        &self,
+        session: &ConsensusSessionOwned,
+        rows: &[kaspa_consensus_core::palw_state_v2::PalwClassRowV2],
+        carrier: kaspa_hashes::Hash64,
+    ) -> (Option<kaspa_consensus_core::palw_state_v2::PalwClassRowV2>, bool) {
+        // Genesis rows (DAA 0) were written by no carrier.
+        let mut daas: Vec<u64> = rows.iter().map(|row| row.registered_daa).filter(|daa| *daa > 0).collect();
+        daas.sort_unstable();
+        daas.dedup();
+        let mut complete = true;
+        for daa in daas {
+            match session.async_get_transactions_by_accepting_daa_score(daa, Some(vec![carrier]), TransactionType::Transaction).await {
+                Ok(TransactionQueryResult::Transaction(txs)) => {
+                    for tx in txs.iter().filter(|tx| tx.id() == carrier) {
+                        if let Some(row) =
+                            kaspa_consensus_core::palw_model_registration_v1::palw_registration_row_written_by_v1(tx, daa, rows)
+                        {
+                            return (Some(row.clone()), true);
+                        }
+                    }
+                }
+                Ok(TransactionQueryResult::SignableTransaction(_)) | Err(_) => complete = false,
+            }
+        }
+        (None, complete)
     }
 
     pub const IDENT: &'static str = "rpc-core-service";
@@ -2355,7 +2404,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             }
         }
         if !request.transaction_id.trim().is_empty() {
-            self.fill_registration_from_tx(&mut registration, &request.transaction_id).await?;
+            // The object names the class, so its row (or its absence) is the chain's whole answer;
+            // with no object there is no class to look under, and no absence to report.
+            self.fill_registration_from_tx(&mut registration, &request.transaction_id, object.is_some()).await?;
         }
         finalize_registration_state(&mut registration);
         Ok(SubmitPalwModelRegistrationResponse { available: true, tip_daa, registration, checks })
@@ -2369,6 +2420,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwModelRegistrationStatusResponse::default());
         }
+        // Everything the caller sent is parsed before a byte of chain state is read (M-5).
+        let requested_class =
+            if request.class_id.trim().is_empty() { None } else { Some(parse_class_id_or_alias(&request.class_id)?) };
+        let carrier = if request.transaction_id.trim().is_empty() {
+            None
+        } else {
+            Some(parse_hash64(&request.transaction_id, "transaction id")?)
+        };
         let session = self.consensus_manager.consensus().unguarded_session();
         let tip_daa = session.get_virtual_daa_score();
         let mut registration = RpcPalwModelRegistration {
@@ -2378,13 +2437,29 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             constructed: !request.object_id.trim().is_empty(),
             ..Default::default()
         };
-        if !request.class_id.trim().is_empty() {
-            let class_id = parse_class_id_or_alias(&request.class_id)?;
+        if let Some(class_id) = requested_class {
             registration.class_id = class_id.to_string();
-            let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
-            if let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) {
-                fill_registration_from_class(&mut registration, &row);
-            }
+        }
+        // **Inclusion is the chain's record, reached by either door.** A class id names its row. A
+        // carrier id names the row it WROTE — found through the DAA that row records and the
+        // acceptance data of the chain block at it — because a carrier id is not a class id, and
+        // `misaka model registration <txid>` sends it in the class slot. Only the class door
+        // existed, so an included carrier found no row, fell through to the mempool, and read
+        // REGISTRATION_NOT_INCLUDED once it had been mined (testnet-12, 2026-09-23).
+        let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
+        let mut row = requested_class.and_then(|id| rows.iter().find(|r| r.class_id == id).cloned());
+        let mut inclusion_known = requested_class.is_some();
+        if row.is_none()
+            && let Some(txid) = carrier
+        {
+            let (written, complete) = self.palw_registration_row_for_carrier(&session, &rows, txid).await;
+            row = written;
+            inclusion_known = complete;
+        }
+        if let Some(row) = &row {
+            fill_registration_from_class(&mut registration, row);
+        }
+        if let Some(class_id) = row.as_ref().map(|r| r.class_id).or(requested_class) {
             if let Some(read) = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await {
                 if let Some(class) = read.classes.iter().find(|c| c.class_id == class_id) {
                     registration.registry_state = class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
@@ -2398,8 +2473,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 }
             }
         }
-        if !request.transaction_id.trim().is_empty() {
-            self.fill_registration_from_tx(&mut registration, &request.transaction_id).await?;
+        if carrier.is_some() {
+            self.fill_registration_from_tx(&mut registration, &request.transaction_id, inclusion_known).await?;
         }
         finalize_registration_state(&mut registration);
         let found = registration.folded || registration.included || registration.accepted || registration.submitted || registration.constructed;
