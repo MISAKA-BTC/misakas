@@ -421,6 +421,21 @@ fn genesis_state(p: &Params, b: &PalwConsensusParamsV2, collateral: u64) -> Palw
     genesis_state_under(b, collateral, &t12_extras(p, b))
 }
 
+/// The attacker's bond registered at the registration floor (the producer floor on t12,
+/// `palw_bond_registration_floor_v1`), then carried at `net` sompi as if slashed down to it: the
+/// shape a bond below the floor can only have on t12 after it registered.
+fn genesis_state_worn_to(p: &Params, b: &PalwConsensusParamsV2, net: u64) -> PalwChainStateV2 {
+    use kaspa_consensus_core::palw_state_v2::{PalwStateCarriageV2, palw_bond_registration_floor_v1};
+    let floor = palw_bond_registration_floor_v1(b.state.min_collateral_sompi(), true);
+    assert!(net <= floor, "worn DOWN to {net} from the floor {floor}");
+    let s0 = genesis_state(p, b, floor);
+    let mut carriage = PalwStateCarriageV2::from_state(&s0);
+    let row = carriage.bonds.get_mut(&bond_key(ATTACKER)).expect("the attacker's bond");
+    row.slashed += floor - net;
+    row.collateral = net;
+    carriage.into_state(&b.state, None).expect("consistent")
+}
+
 /// [`genesis_state`] folded under `extras` (the fence off, for the below-the-fence halves).
 fn genesis_state_under(b: &PalwConsensusParamsV2, collateral: u64, extras: &PalwTransitionExtrasV1) -> PalwChainStateV2 {
     let mut objects = b.genesis_objects.clone();
@@ -948,11 +963,17 @@ fn dos_l2_fix12_a_bought_registration_burns_one_msk() {
         "the reservation is taken beside the burn, not instead of it"
     );
     // A registrant that can post the reservation but not the burn on top of it is refused, whole.
+    // Past the t12 merge a bond REGISTERS at the producer floor (13,000 MSK, far above
+    // 1 MSK + the price), so the poor/exact bond is one registered at the floor and later worn down
+    // (slashed) to the tested net collateral — the arithmetic the check reads is the same.
     let price = b.state.registration_exposure_sompi();
-    let poor = genesis_state(&p, &b, 100_000_000 + price - 1);
+    let poor = genesis_state_worn_to(&p, &b, 100_000_000 + price - 1);
     let refused = fold_one(&b, &poor, 2, &bought(&b, &poor, 60_100, 1), &extras);
-    assert!(matches!(refused, Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable { burn: 100_000_000, .. })), "{refused:?}");
-    let exact = genesis_state(&p, &b, 100_000_000 + price);
+    assert!(
+        matches!(refused, Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable { burn: 100_000_000, already: 0, .. })),
+        "{refused:?}"
+    );
+    let exact = genesis_state_worn_to(&p, &b, 100_000_000 + price);
     let s = fold_one(&b, &exact, 2, &bought(&b, &exact, 60_200, 1), &extras).expect("exactly the burn plus the reservation");
     assert_eq!(s.bond(&bond_key(ATTACKER)).unwrap().collateral, price, "what is left backs the reservation");
     // Below the fence: no burn.
@@ -981,7 +1002,10 @@ fn dos_l2_fix12_review_the_burn_leaves_live_locks_covered() {
     let b = bundle_of(&p);
     let extras = t12_extras(&p, &b);
     assert!(extras.audit_2026_09_23_active);
-    let collateral: u64 = 10 * 100_000_000;
+    // 10 MSK, or the registration floor where that is higher (the producer floor, 13,000 MSK on
+    // testnet-12's regenesis params): every amount below is relative to it.
+    let collateral: u64 = (10 * 100_000_000u64)
+        .max(kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(b.state.min_collateral_sompi(), true));
     let burn = PALW_CLASS_REGISTRATION_BURN_SOMPI_V1 as u128;
     let with_lock = |extras: &PalwTransitionExtrasV1, amount: u128, expiry_daa: u64| {
         let s0 = genesis_state_under(&b, collateral, extras);
@@ -1047,13 +1071,20 @@ fn dos_l2_fix12_review_the_readiness_view_does_not_count_the_burn_twice() {
     let b = bundle_of(&p);
     assert!(b.state.bond_collateral_is_net_v1(), "the t12 bundle carries the audit fence's copy");
     let extras = t12_extras(&p, &b);
-    // 1.2 MSK: after the burn it holds 0.2 MSK, far above the readiness bar.
-    let s0 = genesis_state(&p, &b, 120_000_000);
+    // 1.2 MSK (after the burn 0.2 MSK, far above the old readiness bar) — or, where the
+    // registration floor and the readiness bar are higher (the producer floor, 13,000 MSK on
+    // testnet-12's regenesis params), exactly the bar plus the reservation plus the burn, so the
+    // registrant holds the bar net only if the burn is counted once.
+    let fold_v = registry_fold(&p, &b);
+    let needed = u128::from(b.state.min_collateral_sompi()) * u128::from(fold_v.globals.readiness_collateral_multiple);
+    let reg_floor = kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(b.state.min_collateral_sompi(), true);
+    let registrant = 120_000_000u64.max(
+        u64::try_from(needed).unwrap().max(reg_floor) + b.state.registration_exposure_sompi() + PALW_CLASS_REGISTRATION_BURN_SOMPI_V1,
+    );
+    let s0 = genesis_state(&p, &b, registrant);
     let s1 = fold_one(&b, &s0, 2, &bought(&b, &s0, 91_000, 1), &extras).expect("the registration folds");
     let r = s1.bond(&bond_key(ATTACKER)).unwrap();
     assert_eq!(r.slashed, PALW_CLASS_REGISTRATION_BURN_SOMPI_V1);
-    let fold_v = registry_fold(&p, &b);
-    let needed = u128::from(b.state.min_collateral_sompi()) * u128::from(fold_v.globals.readiness_collateral_multiple);
     let free = u128::from(r.collateral) - s1.registration_exposure(&bond_key(ATTACKER));
     assert!(free >= needed, "the premise: the registrant holds the bar ({free} >= {needed})");
     let now = 3u64;

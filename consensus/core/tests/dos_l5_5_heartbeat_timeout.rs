@@ -140,7 +140,7 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
 
     // A retiring bond: seat #5 has locks, so retire the one bond that holds none — a newcomer.
     let retiree = bond_key(77);
-    c.beat(c.daa + 1, &[bond_obj(77, 1_000_000_000_000)]);
+    c.beat(c.daa + 1, &[bond_obj(77, at_least_the_floor(&c.p, 1_000_000_000_000))]);
     c.beat(c.daa + 1, &[PalwConsensusObjectV2::BondRetireRequested { bond: retiree, signature: vec![1] }]);
 
     println!("=== phase 1: the honest era ===");
@@ -155,7 +155,7 @@ fn dos_l5_5_heartbeat_only_history_with_the_two_clock_fix_armed() {
 
     // ---- phase 2: the chain goes heartbeat-only; a sybil bond registers on a heartbeat -------
     let sybil_reg_daa = c.daa + 1;
-    c.beat(sybil_reg_daa, &[bond_obj(66, 1_000_000_000_000)]);
+    c.beat(sybil_reg_daa, &[bond_obj(66, at_least_the_floor(&c.p, 1_000_000_000_000))]);
     // The last licence: the liveness escape is measured from it.
     let last_licence = *c.s.recent_anchor_daas().last().expect("past the fence every licence joins the ring");
     let escape_at = last_licence + 2 * window_court;

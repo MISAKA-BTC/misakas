@@ -285,7 +285,7 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
     let (floor, leaves, target, _slash) = genesis_classes(&p)[0];
     let pwu = palw_pwu_v1(target, leaves);
     let per = admitted_per_attempt(&p, floor, pwu, T12_BLOCK_SUBSIDY_SOMPI);
-    let attacker_collateral = per.collateral;
+    let attacker_collateral = at_least_the_floor(&p, per.collateral);
     let bonds = genesis_bonds(&p);
     let seats_a: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
     let seats_b: Vec<(PalwBondKeyV2, Hash64)> = [bonds[6], bonds[7], bonds[1], bonds[2], bonds[3]].iter().map(|(k, o, _)| (*k, *o)).collect();
@@ -342,7 +342,17 @@ fn dos_repro_3c_bound_claim_forfeits_weight_and_escrow_at_the_second_timeout() {
         "the withheld claim voids at ReceiptTimeout, got {final_phase:?}");
     assert_eq!(charge, per.reservation, "#10: the producer forfeits weight + escrow");
     assert!(charge >= other_after_bind, "and pays at least what it pinned on others");
-    assert_eq!(attacker_after / per.collateral, 0, "the same collateral no longer re-funds the next attempt");
+    // The premise, restated in attempts re-funded: the producer can no longer post exactly one
+    // #9 attempt's collateral (the registration floor — 13,000 MSK on t12 — is above it), so the
+    // bond is the floor and funds several. `waves(c)` = the withheld attempts a bond of `c` can
+    // still post if each costs one reservation; the forfeiture takes exactly one off it (at the
+    // old one-attempt sizing: 1 -> 0, "the same collateral no longer re-funds the next attempt").
+    let waves = |c: u64| -> u64 {
+        if c < per.collateral { 0 } else { 1 + (c - per.collateral) / u64::try_from(per.reservation).unwrap().max(1) }
+    };
+    println!("withheld attempts the bond funds: {} -> {}", waves(attacker_collateral), waves(attacker_after));
+    assert!(waves(attacker_collateral) >= 1, "the bond funds the attempt it made");
+    assert_eq!(waves(attacker_after), waves(attacker_collateral) - 1, "each withheld attempt costs the bond one attempt's re-funding");
     assert_eq!(seats_collateral, seats_posted, "no seat is charged for the withheld claim");
 }
 
@@ -378,7 +388,7 @@ fn dos_repro_3d_one_junk_2m_claim_forfeits_less_than_it_pins() {
     let per = admitted_per_attempt_on(&p, &g, id2m, pwu2m, T12_BLOCK_SUBSIDY_SOMPI);
     let honest = genesis_bonds(&p);
     let seat_2m = palw_panel_seat_exposure_v1(per.reserved, per.escrow as u64, seat_count, economy.reward_multiple_permille);
-    let attacker_collateral = per.collateral;
+    let attacker_collateral = at_least_the_floor(&p, per.collateral);
     let mut s = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
     // An honest producer: the first genesis bond, with its own keys.
     let exec = b

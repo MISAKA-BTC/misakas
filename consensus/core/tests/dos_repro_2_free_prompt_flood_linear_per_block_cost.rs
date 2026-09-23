@@ -51,7 +51,11 @@ use std::time::Instant;
 const N_STEP: usize = 500;
 const N_MAX: usize = 3_000;
 const ATTACKER: u64 = 1;
-const ATTACKER_COLLATERAL: u64 = 100_000_000_000; // 1,000 MSK
+/// 1,000 MSK, or the registration floor where that is higher (the producer floor, 13,000 MSK on
+/// testnet-12's regenesis params — `palw_bond_registration_floor_v1`).
+fn attacker_collateral(p: &Params) -> u64 {
+    at_least_the_floor(p, 100_000_000_000)
+}
 
 fn floor_profile() -> Box<kaspa_consensus_core::palw_step::PalwShapeProfileV3> {
     Box::new(
@@ -137,12 +141,12 @@ fn attacker_pubkey() -> Vec<u8> {
 
 /// The attacker's bond, carrying the real-length ML-DSA key the fold matches every commitment
 /// against (`BondKeyMismatch`). Signature is checked at acceptance (node side), not in the fold.
-fn attacker_bond() -> PalwConsensusObjectV2 {
+fn attacker_bond(p: &Params) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::BondRegistered {
         bond: bond_key(ATTACKER),
         pubkey: attacker_pubkey(),
         operator_pubkey: operator_pubkey_of(ATTACKER),
-        collateral: ATTACKER_COLLATERAL,
+        collateral: attacker_collateral(p),
         payout_payload: h(0x9A00 + ATTACKER),
         capable_classes: Default::default(),
         signature: Vec::new(),
@@ -176,7 +180,7 @@ fn setup(p: &Params) -> (PalwChainStateV2, Hash64, u64) {
     let (floor, _leaves, _t, _s) = genesis_classes(p)[0];
     let g = genesis_state(p);
     // Attacker registers its own bond (a transaction; consensus checks its signature at acceptance).
-    let s = fold_t12(p, &g, &ctx(1, 1_000, 1, 0), &[attacker_bond()]).expect("bond registers");
+    let s = fold_t12(p, &g, &ctx(1, 1_000, 1, 0), &[attacker_bond(p)]).expect("bond registers");
     let s = seed_prereqs(p, &s);
     // The floor's FP profile is published by the REAL ClassLaneCertified fold (permissionless).
     let publish =
@@ -207,7 +211,7 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     let priced = fold_t12(&p, &base, &ctx(3, 1_002, 3, 0), &[one]).expect("first commit folds");
     let (first_reserved, first_pwu) = priced.claims_iter().next().map(|(_, c)| (c.reserved, c.pwu)).unwrap();
     let sp = bundle(&p).state;
-    let ceiling = ATTACKER_COLLATERAL as u128 * sp.fp_max_exposure_ratio_permille() as u128 / 1000;
+    let ceiling = attacker_collateral(&p) as u128 * sp.fp_max_exposure_ratio_permille() as u128 / 1000;
 
     println!("=== FREE-PROMPT FLOOD on the REAL testnet-12 fold (compute path; fp_derived_work + canonical_work armed at DAA 0) ===");
     println!("object wire bytes                 = {obj_bytes} (incl. the 2,592 B ML-DSA executor key + a 1-token prompt)");

@@ -220,7 +220,7 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_seco
     let seats_b: Vec<(PalwBondKeyV2, Hash64)> = [bonds[6], bonds[7], bonds[1], bonds[2], bonds[3]].iter().map(|(k, o, _)| (*k, *o)).collect();
     // The least a producer can post and still get ONE floor attempt past #9 (runtime, not a guess).
     let per = admitted_per_attempt(&p, floor, pwu, T12_BLOCK_SUBSIDY_SOMPI);
-    let attacker_collateral = per.collateral;
+    let attacker_collateral = at_least_the_floor(&p, per.collateral);
 
     let g = genesis_state(&p);
     let mut s: PalwChainStateV2 = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;

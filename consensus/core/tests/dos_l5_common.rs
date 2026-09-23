@@ -233,6 +233,24 @@ pub fn operator_pubkey_of(n: u64) -> Vec<u8> {
 }
 
 /// An attacker / newcomer bond registration (`BondRegistered`), signature checked by acceptance.
+/// The collateral a bond must post to register at DAA `daa` on `p` —
+/// `palw_bond_registration_floor_v1` over the bundle's `min_collateral_sompi` (the PRODUCER floor
+/// since the t12 merge: 13,000 MSK on testnet-12's regenesis params).
+pub fn registration_floor(p: &Params, daa: u64) -> u64 {
+    kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(
+        bundle(p).state.min_collateral_sompi(),
+        p.palw_audit_2026_09_23_active_at(daa),
+    )
+}
+
+/// `collateral`, or the registration floor where that is higher. For a fixture whose attacker or
+/// registrant posted a round amount the pre-merge floors (400,000 / 4,000,000 sompi) admitted; the
+/// quantity under test (a reservation, a charge, a forfeiture) is measured on the bond, not
+/// derived from its size.
+pub fn at_least_the_floor(p: &Params, collateral: u64) -> u64 {
+    collateral.max(registration_floor(p, 0))
+}
+
 pub fn bond_obj(n: u64, collateral: u64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::BondRegistered {
         bond: bond_key(n),

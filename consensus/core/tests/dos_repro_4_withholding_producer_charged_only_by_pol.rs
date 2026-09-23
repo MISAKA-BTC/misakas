@@ -233,7 +233,7 @@ struct Withheld {
 fn withheld_through_two_panels(go: FoldFn) -> Withheld {
     let p = t12();
     let (floor, pwu, per) = floor_terms(&p);
-    let collateral = per.collateral;
+    let collateral = at_least_the_floor(&p, per.collateral);
     let (sp, mut s) = setup(&p, collateral);
     let b = bundle(&p);
     let genesis = genesis_bonds(&p);
@@ -421,7 +421,7 @@ struct Accused {
 fn da_accused(go: FoldFn) -> Accused {
     let p = t12();
     let (floor, pwu, per) = floor_terms(&p);
-    let collateral = per.collateral;
+    let collateral = at_least_the_floor(&p, per.collateral);
     let (sp, mut s) = setup(&p, collateral);
     let keys: Vec<PalwBondKeyV2> = genesis_bonds(&p).iter().map(|g| g.0).collect();
     let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 0x4D01, 0x4D01_0000);

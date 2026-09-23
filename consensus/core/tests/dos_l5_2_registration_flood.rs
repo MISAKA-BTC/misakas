@@ -41,7 +41,11 @@ use std::time::Instant;
 
 const N_REG: u64 = 200;
 const REGISTRANT: u64 = 9;
-const REGISTRANT_COLLATERAL: u64 = 100_000_000_000; // 1,000 MSK
+/// 1,000 MSK, or the registration floor where that is higher (the producer floor, 13,000 MSK on
+/// testnet-12's regenesis params — `palw_bond_registration_floor_v1`).
+fn registrant_collateral(p: &kaspa_consensus_core::config::params::Params) -> u64 {
+    at_least_the_floor(p, 100_000_000_000)
+}
 
 #[test]
 fn dos_l5_2_registration_flood() {
@@ -113,7 +117,7 @@ fn dos_l5_2_registration_flood() {
     // ---- fold them, one per chain block ---------------------------------------------------------
     let g = genesis_state(&p);
     let mut s: PalwChainStateV2 =
-        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(REGISTRANT, REGISTRANT_COLLATERAL)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+        fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(REGISTRANT, registrant_collateral(&p))], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
     let base_bytes = carriage_bytes(&s);
     let bond_before = s.bond(&bond_key(REGISTRANT)).unwrap().clone();
     let t0 = Instant::now();
@@ -142,7 +146,7 @@ fn dos_l5_2_registration_flood() {
     // #12 (b)'s cap: five of them in ONE block is refused whole, the fold's second lock.
     let five_refused = {
         let extra: Vec<PalwConsensusObjectV2> = regs.iter().take(5).cloned().collect();
-        let fresh = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(REGISTRANT, REGISTRANT_COLLATERAL)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+        let fresh = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(REGISTRANT, registrant_collateral(&p))], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
         fold(&p, &sp, &fresh, &ctx(0x2FFF, 1_001, 2, 0), &extra, PalwBlockWorkV3::None, Hash64::default()).is_err()
     };
     let peak_bytes = carriage_bytes(&s);
@@ -191,7 +195,7 @@ fn dos_l5_2_registration_flood() {
     println!("object bytes (borsh, lower bound on mass)          = {avg_mass:.0} B  -> relay fee >= {fee} sompi ({:.6} MSK)", msk(fee as u128));
     println!("registration exposure (enforced)                   = {} sompi per live class, against COLLATERAL (not the 50% ceiling)", sp.registration_exposure_sompi());
     println!("registry-derived registration bond (NOT enforced)  = {lifecycle_bond} sompi ({:.2} MSK)", msk(lifecycle_bond as u128));
-    println!("classes one {:.0} MSK bond may register            = {}", msk(REGISTRANT_COLLATERAL as u128), REGISTRANT_COLLATERAL / sp.registration_exposure_sompi().max(1));
+    println!("classes one {:.0} MSK bond may register            = {}", msk(registrant_collateral(&p) as u128), registrant_collateral(&p) / sp.registration_exposure_sompi().max(1));
     println!("folded {folded}/{} ({} fold errors{}) in {fold_total:.2} s", regs.len(), fold_errors.len(), fold_errors.first().map(|e| format!(", first: {e}")).unwrap_or_default());
     println!("rooted bytes: {base_bytes} -> {peak_bytes}  = {per_class:.0} B per class; lifecycle rows {lifecycles_peak}; registrant reserved {reserved}");
     println!("state_root(): {:.3} ms -> {:.3} ms", base_root * 1e3, peak_root * 1e3);

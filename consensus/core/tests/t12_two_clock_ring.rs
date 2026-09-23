@@ -446,7 +446,9 @@ fn the_carriage_round_trips_a_non_empty_ring() {
 /// hashed bytes — dormant or armed — gained it (the version-21 inhabited golden moved for the same
 /// reason). The ring still contributes nothing here: an empty ring is not hashed, and the two
 /// assertions above it (`recent_anchor_daas` empty, no ring delta) are what pin that. The
-/// pre-merge root was `1fba7da1…`.
+/// pre-merge root was `1fba7da1…`. Checked against the other side, not taken from the merge: this
+/// exact scenario folded on a `git archive` of 50565f55 (which has no ring) also gives `57ef2f17…`,
+/// so the merge added no byte to the dormant path.
 const DORMANT_GOLDEN_ROOT: &str =
     "57ef2f1762083bc481742907c3e9c1f269a80013fca57a7016af012c67b53fa648bfcff6d006c63204252243535e2ca6c46296e4a40c0eeff143d3e1d4844859";
 
