@@ -6297,6 +6297,16 @@ impl PalwChainStateV2 {
         }
     }
 
+    /// **ADR-0095 §4.5: the height this holder's tenure clock last started — `None` where the chain
+    /// keeps no clock for it.** A holding bought before the membership fence, or on a network that
+    /// never armed it, has none, and [`Self::model_position_tenure`] reads it as 0. A reader states
+    /// this beside the tenure so "held since H" is the chain's number rather than `tip − tenure`
+    /// rebuilt by a caller who cannot tell "started this block" from "never started" (the
+    /// 2026-09-23 Position route matrix, P-B2). A read; no rule calls it.
+    pub fn model_position_since(&self, line_id: &Hash64, holder: &Hash64) -> Option<u64> {
+        self.model_position_since.get(&(*line_id, *holder)).copied()
+    }
+
     /// **ADR-0095 §4.3 — the tier, and the one place the whole network computes it.**
     ///
     /// A gateway, a wallet and the explorer must agree, so this takes the height it is asked about
@@ -41892,6 +41902,77 @@ pub(crate) mod tests {
             assert_eq!(s2.model_position_across(&class, &[b, a, b, a], 252).0, held_a + held_b, "two ids, each once");
             assert_eq!(tier_of(&[a, b]), Some(1), "two ids a person proved do add up");
             assert_eq!(tier_of(&[b, a, b, a]), Some(1), "and the repeats change nothing");
+        }
+
+        /// **The read a provider serves on carries the chain's tenure and tier, per holder, at one
+        /// height** (the 2026-09-23 Position route matrix, P-B2). `getPalwModelPositions` answered
+        /// units and nothing else, so a gateway that wanted §4.3's tier had to rebuild it from a
+        /// line read taken at another tip — and §4.5's clock was not on the wire at all. The answer
+        /// is the chain's own `model_benefit_tier`, driven here through the fold's buy and sell
+        /// arms, and N11 holds through the reader: a sale of ONE unit restarts the clock and costs
+        /// the tenure rung.
+        #[test]
+        fn a_holders_positions_read_carries_the_chains_tenure_and_tier() {
+            use crate::api::PalwModelPositionsReadV1;
+            const MSK: u64 = 100_000_000;
+            let (p, s, class) = chain();
+            let who = h64(0xB0_0001);
+            // Any holding gets SUPPORT at once; the same holding gets PRIORITY_INFERENCE after 50
+            // DAA without a sale.
+            let rungs = vec![tier(1, grant::SUPPORT, 0, 0), tier(2, grant::SUPPORT | grant::PRIORITY_INFERENCE, 0, 50)];
+            let s1 = apply_b(&s, &p, &ctx(3, 251, 3), &[declare(class, rungs.clone(), 0, 0)]);
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: class,
+                seeder: h64(0xB0_0009),
+                msk_seed: crate::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            let s2 = apply_b(&s1, &p, &ctx(4, 252, 4), &[seed]);
+            let buy =
+                PalwConsensusObjectV2::ModelBuy { line_id: class, holder: who, msk_in: 1_000 * MSK, min_units_out: 0, sink_index: 1 };
+            let s3 = apply_b(&s2, &p, &ctx(5, 260, 5), &[buy]);
+            let held = s3.model_position(&class, &who);
+            assert!(held >= 2, "the buy bought both rungs' worth");
+
+            // The buy's own block: the clock starts, the first rung holds, the second waits.
+            let read = PalwModelPositionsReadV1::at_tip(&s3, &who);
+            assert_eq!(read.tip_daa, 260, "one height for every number in the answer");
+            assert_eq!(read.tip_hash, s3.last_point().map(|p| p.block), "and the block that names it, not only its score");
+            assert!(read.tip_hash.is_some());
+            assert_eq!(read.rows.len(), 1);
+            let row = &read.rows[0];
+            assert_eq!((row.line_id, row.units), (class, held));
+            assert_eq!((row.holding_since_daa, row.tenure_daa), (Some(260), 0));
+            assert_eq!(row.tier, Some((0, rungs[0].clone())), "the tenure-free rung at once");
+            assert_eq!(row.tier, s3.model_benefit_tier(&class, &who, 260), "the chain's tier, not a re-derivation");
+
+            // Sixty DAA later with nothing sold: the tenure rung.
+            let s4 = apply_b(&s3, &p, &ctx(6, 320, 6), &[]);
+            let read = PalwModelPositionsReadV1::at_tip(&s4, &who);
+            assert_eq!(read.tip_daa, 320);
+            assert_eq!((read.rows[0].holding_since_daa, read.rows[0].tenure_daa), (Some(260), 60));
+            assert_eq!(read.rows[0].tier, Some((1, rungs[1].clone())));
+
+            // N11 through the reader: one unit sold restarts the clock at the sale's height.
+            let sell = PalwConsensusObjectV2::ModelSell {
+                line_id: class,
+                holder: who,
+                units_in: 1,
+                min_msk_out: 0,
+                held_units: held,
+                not_after_daa: u64::MAX,
+                pubkey: vec![1],
+                signature: vec![1],
+            };
+            let s5 = apply_b(&s4, &p, &ctx(7, 330, 7), &[sell]);
+            let read = PalwModelPositionsReadV1::at_tip(&s5, &who);
+            let row = &read.rows[0];
+            assert_eq!((row.units, row.holding_since_daa, row.tenure_daa), (held - 1, Some(330), 0));
+            assert_eq!(row.tier, Some((0, rungs[0].clone())), "a sale costs the tenure rung");
+
+            // A stranger holds nothing, and is told so at the same height.
+            let stranger = PalwModelPositionsReadV1::at_tip(&s5, &h64(0xB0_0002));
+            assert_eq!((stranger.tip_daa, stranger.rows.len()), (330, 0));
         }
     }
 

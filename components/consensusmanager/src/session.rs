@@ -437,6 +437,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_model_line_v1(line_id)
     }
 
+    /// ADR-0087 Decision 8's read with ADR-0095's tenure and tier per row, at one tip (the
+    /// 2026-09-23 Position route matrix, P-B2).
+    pub fn palw_model_positions_read_v1(
+        &self,
+        holder: kaspa_consensus_core::Hash64,
+    ) -> kaspa_consensus_core::api::PalwModelPositionsReadV1 {
+        self.consensus.palw_model_positions_read_v1(holder)
+    }
+
     /// ADR-0135: the model registry as the tip state holds it — rows, ready seats, proofs.
     pub fn palw_model_registry_v1(&self) -> Option<kaspa_consensus_core::palw_model_registry_v1::PalwModelRegistryReadV1> {
         self.consensus.palw_model_registry_v1()

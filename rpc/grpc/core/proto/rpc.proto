@@ -1581,9 +1581,19 @@ message GetPalwModelMarketResponseMessage {
 message RpcPalwModelPosition {
   string lineId = 1;
   uint64 units = 2;
+  // ADR-0095 §4.5/§4.3 for this id at the response's tipDaa (the 2026-09-23 Position route
+  // matrix, P-B2). Absent from an older node, which a gateway reads as "grants nothing".
+  optional uint64 holdingSinceDaa = 3;
+  uint64 tenureDaa = 4;
+  optional uint32 tierIndex = 5;
+  RpcPalwModelBenefitTier tier = 6;
 }
 
-// ADR-0087 Decision 8: every position a holder (its payout payload) has, by line.
+// ADR-0087 Decision 8: every position a holder id has, by line. The holder id is NOT a payout
+// payload (the 2026-09-23 Position route matrix, P-B4): on the carrier lane it is
+// palw_model_holder_of_pubkey_v1(pubkey), the UNKEYED BLAKE2b-512 of the ML-DSA-87 public key
+// (mldsa87_key_id) — the keyed address payload holds nothing; on the EVM lane it is
+// evm_holder_v1(chain_id, address).
 message GetPalwModelPositionsRequestMessage {
   string holder = 1;
 }
@@ -1591,6 +1601,11 @@ message GetPalwModelPositionsRequestMessage {
 message GetPalwModelPositionsResponseMessage {
   string holder = 1;
   repeated RpcPalwModelPosition positions = 2;
+  // The tip every row's tenure and tier was read at (ADR-0095 §4.8); 0 from an older node.
+  uint64 tipDaa = 3;
+  // The 128-hex hash of that tip block: a DAA score alone does not name a state across a reorg.
+  // Empty from an older node.
+  string tipHash = 4;
   RPCError error = 1000;
 }
 

@@ -1403,12 +1403,27 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwModelPositionsResponse> {
         let holder = parse_hash64(&request.holder, "holder")?;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let positions = session
-            .palw_model_positions_v1(holder)
-            .into_iter()
-            .map(|(line_id, units)| RpcPalwModelPosition { line_id: line_id.to_string(), units })
+        // The 2026-09-23 Position route matrix, P-B2: the chain's tenure and tier per row, read at
+        // one tip and stated with it — the membership a provider serves on, not only the units.
+        let read = session.palw_model_positions_read_v1(holder);
+        let positions = read
+            .rows
+            .iter()
+            .map(|r| RpcPalwModelPosition {
+                line_id: r.line_id.to_string(),
+                units: r.units,
+                holding_since_daa: r.holding_since_daa,
+                tenure_daa: r.tenure_daa,
+                tier_index: r.tier.as_ref().map(|(index, _)| *index as u32),
+                tier: r.tier.as_ref().map(|(_, tier)| rpc_palw_model_benefit_tier(tier)),
+            })
             .collect();
-        Ok(GetPalwModelPositionsResponse { holder: holder.to_string(), positions })
+        Ok(GetPalwModelPositionsResponse {
+            holder: holder.to_string(),
+            positions,
+            tip_daa: read.tip_daa,
+            tip_hash: read.tip_hash.map(|hash| hash.to_string()).unwrap_or_default(),
+        })
     }
 
     // ------------------------------------------------------------------------------------------
@@ -4327,29 +4342,39 @@ fn local_hold_or_chain(
     seat.and_then(|s| s.hold).map(rpc_hold)
 }
 
+/// ADR-0095 §4.1: one tier for the wire — the line's card and a holder's own row
+/// (`getPalwModelPositions`, the 2026-09-23 Position route matrix, P-B2) spell it the same way.
+fn rpc_palw_model_benefit_tier(
+    t: &kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1,
+) -> kaspa_rpc_core::RpcPalwModelBenefitTier {
+    kaspa_rpc_core::RpcPalwModelBenefitTier {
+        min_units: t.min_units,
+        grants: t.grants,
+        grant_names: kaspa_consensus_core::palw_model_benefits_v1::grant::names_of(t.grants).into_iter().map(String::from).collect(),
+        lead_daa: t.lead_daa,
+        min_hold_daa: t.min_hold_daa,
+        note: String::from_utf8_lossy(&t.note).to_string(),
+    }
+}
+
 /// ADR-0088 Decision 12: one line's row for the wire.
 /// ADR-0095: the membership as a card — the tiers governing now, the weakening waiting out its
 /// notice, and why the promise is silent when it is.
 fn rpc_palw_model_benefits(read: &kaspa_consensus_core::api::PalwModelBenefitsReadV1) -> kaspa_rpc_core::RpcPalwModelBenefits {
-    use kaspa_consensus_core::palw_model_benefits_v1::{PalwModelBenefitLapseV1, grant};
-    fn tier(t: &kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1) -> kaspa_rpc_core::RpcPalwModelBenefitTier {
-        kaspa_rpc_core::RpcPalwModelBenefitTier {
-            min_units: t.min_units,
-            grants: t.grants,
-            grant_names: grant::names_of(t.grants).into_iter().map(String::from).collect(),
-            lead_daa: t.lead_daa,
-            min_hold_daa: t.min_hold_daa,
-            note: String::from_utf8_lossy(&t.note).to_string(),
-        }
-    }
+    use kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitLapseV1;
     let (lapsed, lapse_daa) = match read.lapse {
         Some(PalwModelBenefitLapseV1::Expired { at_daa }) => (Some("expired".to_string()), Some(at_daa)),
         Some(PalwModelBenefitLapseV1::CadenceMissed { due_daa }) => (Some("cadenceMissed".to_string()), Some(due_daa)),
         None => (None, None),
     };
     kaspa_rpc_core::RpcPalwModelBenefits {
-        tiers: read.in_effect.iter().map(tier).collect(),
-        pending_tiers: read.row.pending.as_ref().map(|p| p.tiers.iter().map(tier).collect()).unwrap_or_default(),
+        tiers: read.in_effect.iter().map(rpc_palw_model_benefit_tier).collect(),
+        pending_tiers: read
+            .row
+            .pending
+            .as_ref()
+            .map(|p| p.tiers.iter().map(rpc_palw_model_benefit_tier).collect())
+            .unwrap_or_default(),
         pending_effective_daa: read.row.pending.as_ref().map(|p| p.effective_daa),
         cadence_daa: read.row.cadence_daa,
         expires_daa: read.row.expires_daa,
