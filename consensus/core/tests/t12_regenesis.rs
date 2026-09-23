@@ -10,13 +10,20 @@ fn t12() -> NetworkId {
     NetworkId::with_suffix(NetworkType::Testnet, 12)
 }
 
-/// The community table is 16 entries summing to 758M MSK, every address distinct, and it CONTAINS
+/// The community table is 17 entries summing to 858M MSK, every address distinct, and it CONTAINS
 /// testnet-11's thirteen — a regenesis carries the allocations across, it does not restart them.
 #[test]
-fn t12_community_table_is_t11_plus_three() {
+fn t12_community_table_is_t11_plus_four() {
     let total: u64 = TESTNET12_COMMUNITY_ALLOCATIONS.iter().map(|(_, msk)| *msk).sum();
-    assert_eq!(TESTNET12_COMMUNITY_ALLOCATIONS.len(), 16, "13 carried over + maruko + nyanmi-1828 + tetsu31's LLM address");
-    assert_eq!(total, 758_000_000, "758M MSK");
+    assert_eq!(
+        TESTNET12_COMMUNITY_ALLOCATIONS.len(),
+        17,
+        "13 carried over + maruko + nyanmi-1828 + tetsu31's LLM address + the operator's 2026-09-24 100M"
+    );
+    assert_eq!(total, 858_000_000, "858M MSK");
+    const OPERATOR_0924: &str =
+        "misakatest:qffaadrfjpt9gy3705xhr2n6085767w290lgf0xd55nrj8px2lk8cj8w34scu4y7l5avauhul3lu9apzc6vugkeu3jhkltgrvfk4m6emz4hjtsfy";
+    assert_eq!(TESTNET12_COMMUNITY_ALLOCATIONS.last(), Some(&(OPERATOR_0924, 100_000_000)), "appended last, never inserted");
     assert_eq!(TESTNET12_COMMUNITY_SOMPI, total * kaspa_consensus_core::constants::SOMPI_PER_KASPA);
     // Every t11 entry is still allocated, at the same amount, EXCEPT the one address the operator
     // replaced — tetsu31's 2026-08-28 one, superseded by their 2026-09-06 address.
@@ -37,12 +44,12 @@ fn t12_community_table_is_t11_plus_three() {
     assert_eq!(seen.len(), before, "no address is allocated twice");
 }
 
-/// The genesis mints exactly the 10B cap, and the carve-outs are 8 collateral + 8 floats + 16
-/// community + 1 main = 33 outputs.
+/// The genesis mints exactly the 10B cap, and the carve-outs are 8 collateral + 8 floats + 17
+/// community + 1 main = 34 outputs.
 #[test]
 fn t12_genesis_mints_exactly_the_cap() {
     let utxos = genesis_premine_utxos_for(t12());
-    assert_eq!(utxos.len(), 33, "8 collateral + 8 floats + 16 community + 1 main");
+    assert_eq!(utxos.len(), 34, "8 collateral + 8 floats + 17 community + 1 main");
     let total: u64 = utxos.values().map(|e| e.amount).sum();
     assert_eq!(total, MISAKA_PREMINE_CAP_SOMPI, "testnet-12 mints exactly the 10B cap");
 }
@@ -564,7 +571,7 @@ fn t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains() {
     let p = Params::from(t12());
     let hex = |h: kaspa_consensus_core::Hash64| h.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
     let genesis = hex(p.genesis.hash);
-    for superseded in ["f6cc957686f7047d", "a8cabac47b96fe30"] {
+    for superseded in ["f6cc957686f7047d", "a8cabac47b96fe30", "d73dbf44dbae3522"] {
         assert!(!genesis.starts_with(superseded), "the public genesis is not {superseded}…");
     }
     assert_eq!(p.genesis.timestamp, 1_788_220_800_000, "2026-09-01T00:00:00Z, testnet-12's own");

@@ -15120,7 +15120,7 @@ pub fn palw_rc_base_params() -> Params {
 ///
 /// What is NOT inherited from t11:
 /// * the genesis block ([`crate::config::genesis::PALW_T12_GENESIS`]) and with it the premine —
-///   the 758M t12 community table on its own sentinel txid;
+///   the 858M t12 community table on its own sentinel txid;
 /// * every scheduled height. t11's flag days (1,150 / 1,900 / 2,150 / 2,400 / 3,500 / 4,000 / 6,900
 ///   / 7,100 / 7,101 / 7,200 / 7,300 / 7,301 / 7,780 / 7,800 / 8,100 / 8,160 / 8,500 / 8,600 /
 ///   8,700) are gone, not moved: there is no height at which this chain changes its mind.

@@ -1,7 +1,7 @@
 # testnet-12 regenesis — deployment record, 2026-09-23
 
-> **状態（2026-09-24 更新）: 新しい genesis `d73dbf44…` で起動し直す準備中（`f6cc9576…` は
-> replay 分離で置き換えた。下の「replay 分離」）。consensus params fingerprint と出荷 binary の
+> **状態（2026-09-24 更新）: 新しい genesis `a27f8f44…` で起動し直す準備中（`f6cc9576…` は
+> replay 分離で置き換え、`d73dbf44…` は運用者の 100M 追加で置き換えた。下の「replay 分離」）。consensus params fingerprint と出荷 binary の
 > sha256 は未確定（TBD）。** 別 session が実装中の DoS 監査修正
 > （#1〜#4、#5 の forfeiture 側、#6〜#8、#11〜#14）が merge されると consensus 側が動き、
 > fingerprint も変わる。merge 後の release build で下表の TBD を埋めてから配備する。
@@ -21,16 +21,16 @@
 
 | | |
 |---|---|
-| genesis hash | `d73dbf44dbae3522c05de7aada567f9448221bc5c832393c9eb2996698e91aba2e638f0eea1f89bccbf72268750bb62deb1e958440136ca748727747f230fe18`（`f6cc9576…` を置き換え） |
+| genesis hash | `a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23`（`f6cc9576…`、`d73dbf44…` を置き換え。`d73dbf44…` との違いは community 表の 17 行目だけ） |
 | genesis timestamp | `1788220800000`（2026-09-01T00:00:00Z）。t11 などが共有していた参照 timestamp `1748390400000` ではない |
 | hash_merkle_root | `5ef04d1b9a6cb09e728a970d2e0b75a0142ecacc4a373c9b719e47d6a0d2058cb048fa240e13f1bbb094dd4e195919ea041db2ee338f21de34364f885317f805`（初回配備と同じ。coinbase marker `misaka-palw-t12` も同じ） |
-| utxo commitment | `12df48ae4c1b4a181e8746b2d888d55a12cd7d651f582f51e95d41c8c51b56a88fb027d40c3e94a433a7253d61c9cb202f2c5c89bbde112ca1c4f90ceae5478b` |
+| utxo commitment | `6ee51571a65164fb60dad8428e4a0f42584e8453bf6d029038459efe9279b265ad470ee5c42f2d90450ce37824418590b30fe36193cc37d2038fcf75ecb84eed` |
 | premine txid | `5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669`（`premine_txid_for(testnet-12)`。index は従来どおり: collateral 0〜7、main wallet 40、fee float 41〜48） |
-| community txid | `e3d638e58827755bdc78b362b499495c9607275b50a3ec2e1941f4ea75d38eda1c010f7796c637bd0b343d811a729291869c4658f36d6ca8d959baf8ed85064b`（`testnet12_community_txid()`、index 0〜15） |
+| community txid | `e3d638e58827755bdc78b362b499495c9607275b50a3ec2e1941f4ea75d38eda1c010f7796c637bd0b343d811a729291869c4658f36d6ca8d959baf8ed85064b`（`testnet12_community_txid()`、index 0〜16） |
 | consensus params fingerprint | **TBD**（DoS 修正の merge 後に確定。起動ログの `Consensus params fingerprint: … (network testnet-12)` 行と照合） |
 | release binary | **TBD**（`kaspad` / `misaka` / seeder の sha256。merge 後の release build） |
 | fence schedule | `1000`。ADR-0065 D1 の bond maturity window で、他の rule はすべて DAA 0 で武装している（`palw_t12_arm_every_rule_from_genesis`）。起動ログの `Consensus fence schedule:` 行でも確かめる |
-| premine | 33 outputs、合計はちょうど 10B MSK。内訳は collateral 8 + fee float 8 + **community 16（758M）** + main wallet |
+| premine | 34 outputs、合計はちょうど 10B MSK。内訳は collateral 8 + fee float 8 + **community 17（858M）** + main wallet。17 行目（index 16）は運用者の指示で追加した `misakatest:qffaadrf…tsfy` への 100M（2026-09-24）。community の総額は main wallet から切り出すので、cap は動かない |
 | bond collateral | **939,063.21001040 MSK / seat**。8 seats で 7,512,505.68 MSK（cap の 0.0751 %） |
 | genesis bond cards | card 0〜6 は `PALW_RC_GENESIS_BONDS` 0〜6 のまま（鍵は変わらない）。**card 7 は testnet-12 専用に鍵を替えた**（下記） |
 | classes | BASE-0 floor + dense Qwen2.5-1.5B graph-v7 @8,192 + @2,097,152。**hybrid 行は無い**（下記） |
@@ -238,7 +238,7 @@ Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12
 
 | | |
 |---|---|
-| genesis hash | `a8cabac47b96fe30d9675ce08a355f62e6d57aac84865b0d6295c024c6d8ff61fb2d93943952e8da4c36ff87ea7f17f6c8de643fa7b02ecf7512892d590777dd` — **superseded by `f6cc9576…`, itself superseded by `d73dbf44…` (replay separation, 2026-09-24)** |
+| genesis hash | `a8cabac47b96fe30d9675ce08a355f62e6d57aac84865b0d6295c024c6d8ff61fb2d93943952e8da4c36ff87ea7f17f6c8de643fa7b02ecf7512892d590777dd` — **superseded by `f6cc9576…`, then by `d73dbf44…` (replay separation, 2026-09-24), then by `a27f8f44…` (the operator's 100M community row, 2026-09-24)** |
 | params fingerprint | `fb8f378df6373455e0c14d08c835184b86717ae3fc983039f9ded633be7fa38d` at first deploy; the live public nodes later ran `c746f07c…` |
 | fence schedule | **`1000`** — one height, ADR-0065 D1's bond-maturity window (t11's was `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`) |
 | rule manifest | `… palw_work_target=1 palw_independence=1` (digest `9def81a1…`) |
