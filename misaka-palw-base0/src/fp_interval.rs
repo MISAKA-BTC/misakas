@@ -4051,6 +4051,43 @@ pub fn base0_fp_interval_tiles_from_fold_capped_v1<K: Base0FpIntervalKernelsV1>(
         .map_err(Base0FpIntervalError::Replay)
 }
 
+/// The operator's per-node memory budget, as the whole-capture cap reads it — armed once by the
+/// daemon (`--palw-host-memory-budget / --palw-host-node-count`), beside the reservation ledger's
+/// share. Unarmed (a test, a worker binary, a node whose operator declared nothing) it is `None`
+/// and the cap is the historical `2^26`.
+static WHOLE_CAPTURE_BUDGET_BYTES_V1: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// **Arm the whole-capture cap with the operator's declared per-node budget**, once, before any
+/// backend answers a capture. `None` leaves the default. Arming twice keeps the first: a service
+/// cannot re-budget the process, the rule `arm_host_share_v1` keeps for the ledger.
+pub fn arm_whole_capture_budget_v1(budget_bytes: Option<u64>) {
+    if let Some(bytes) = budget_bytes {
+        let _ = WHOLE_CAPTURE_BUDGET_BYTES_V1.set(bytes);
+    }
+}
+
+/// The budget [`arm_whole_capture_budget_v1`] armed, if any.
+pub fn base0_whole_capture_budget_v1() -> Option<u64> {
+    WHOLE_CAPTURE_BUDGET_BYTES_V1.get().copied()
+}
+
+/// **The materialization cap of a backend built at `network_ladder` for `profile`** (DoS audit
+/// 2026-09-24, #4) — what every family's `materialize_cap()` answers, so the three cannot drift.
+///
+/// It was `network_ladder` itself (ADR-0121 Decision 1), which on testnet-12 is the held regime's
+/// `2^40`: the refusal below then never fired inside a class's ladder and a seat sampling one held
+/// free-prompt claim re-executed the whole job dense. It is now the host's number —
+/// `palw_whole_capture_leaf_cap_v1`: at most `2^26`, and at most what the declared budget holds as
+/// a dense capture at this class's widest tile. A backend with no profile (the legacy composite,
+/// which captures nothing) is priced at the narrowest tile.
+pub fn base0_materialize_cap_v1(network_ladder: u64, profile: Option<&kaspa_consensus_core::palw_step::PalwShapeProfileV3>) -> u64 {
+    kaspa_consensus_core::palw_resource_profile_v1::palw_whole_capture_leaf_cap_v1(
+        network_ladder,
+        profile.map(kaspa_consensus_core::palw_resource_profile_v1::palw_profile_max_tile_len_v1).unwrap_or(0),
+        base0_whole_capture_budget_v1(),
+    )
+}
+
 /// **ADR-0121 Decision 1's refusal, spelled once for the three families' whole-capture provers.**
 /// `None` when a capture of `step_leaf_count` leaves may be re-executed or laid out whole here; else
 /// why not — past the materialization cap but inside the class's ladder is a held capture the

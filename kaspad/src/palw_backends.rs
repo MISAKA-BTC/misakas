@@ -163,6 +163,48 @@ impl PalwBackendRegistry {
         Self::compose_need_v1(backend, holding_bytes, job, role)
     }
 
+    /// **What laying `capture` out WHOLE costs this node** (DoS audit 2026-09-24, #4) — the need a
+    /// panel seat reserves before its capture sampler opens a single leaf.
+    ///
+    /// The sampler's prover re-executes a folded capture into dense tiles (`dense_capture_from_
+    /// fold_v1`, `DenseTiles`) and holds them while it draws. The full-seat figure every other
+    /// replay reserves prices the class's own sink, which for a held class is the FOLD — a few MiB
+    /// where the sampler builds 62 GiB. So the figure here is the full-seat need of the capture's
+    /// OWN job (its binding's context, never the class's canonical job: a free-prompt job is the
+    /// user's) with the capture term replaced by the dense capture of the capture's own leaf count
+    /// ([`palw_whole_capture_need_v1`]).
+    ///
+    /// `Err` is a refusal by name, BEFORE anything is priced: a capture that does not decode, or
+    /// one past this node's materialization cap (`base0_materialize_cap_v1` at the ladder the
+    /// node's backends are built at, the same function every family's `materialize_cap()` reads) —
+    /// which goes to the streamed routes and is never reserved for, let alone laid out.
+    pub fn whole_capture_memory_need_v1(
+        &self,
+        backend: &dyn PalwExecutionBackendV1,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        capture: &[u8],
+        class_ladder: u64,
+    ) -> Result<PalwRoleMemoryNeedV1, String> {
+        let retention = misaka_palw_base0::produce::base0_material_decode_any_v1(capture)
+            .map_err(|_| "the capture does not decode".to_string())?;
+        let binding = retention.binding();
+        palw_whole_capture_admits_v1(
+            self.sdk.court().max_step_leaf_count(),
+            class_ladder,
+            &binding.shape_profile,
+            binding.step_leaf_count,
+        )?;
+        let need = self.role_memory_need_for_backend_v1(
+            backend,
+            class_id,
+            artifact_root,
+            Some(&binding.job_context),
+            PalwResourceRoleV1::FullSeat,
+        );
+        Ok(palw_whole_capture_need_v1(need, &binding.shape_profile, binding.step_leaf_count))
+    }
+
     fn compose_need_v1(
         backend: &dyn PalwExecutionBackendV1,
         holding_bytes: u64,
@@ -623,6 +665,71 @@ impl PalwRoleMemoryNeedV1 {
             ),
         }
     }
+}
+
+/// **The whole-capture refusal, asked before a reservation is priced** (DoS audit 2026-09-24, #4):
+/// `base0_whole_capture_refusal_v1` at the cap `base0_materialize_cap_v1` derives from the
+/// network's ladder and the capture's own profile — the one number every family's
+/// `materialize_cap()` answers — so a held capture past it is refused by name here and never
+/// reaches the ledger as a 62 GiB request that reads like a busy host.
+pub fn palw_whole_capture_admits_v1(
+    network_ladder: u64,
+    class_ladder: u64,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    step_leaf_count: u64,
+) -> Result<(), String> {
+    let cap = misaka_palw_base0::fp_interval::base0_materialize_cap_v1(network_ladder, Some(profile));
+    match misaka_palw_base0::fp_interval::base0_whole_capture_refusal_v1(step_leaf_count, cap, class_ladder) {
+        None => Ok(()),
+        Some(why) => Err(why),
+    }
+}
+
+/// **A full-seat need, re-priced for a capture laid out whole** (DoS audit 2026-09-24, #4): the
+/// capture term becomes `DenseTiles` at `profile`'s widest tile over `leaves` — the vector and the
+/// tiles the whole-capture prover holds — and every other term (the K/V history, the scratch, the
+/// holding) is the full seat's, because the re-execution that builds the tiles IS a full-seat run.
+///
+/// A family that derives no resource profile is priced fail-closed: the dense capture plus the
+/// scratch estimate the node used before profiles existed, rather than the estimate alone — the
+/// estimate is half a GiB and the capture is not.
+pub fn palw_whole_capture_need_v1(
+    mut need: PalwRoleMemoryNeedV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    leaves: u64,
+) -> PalwRoleMemoryNeedV1 {
+    use kaspa_consensus_core::palw_resource_profile_v1::{
+        PalwCaptureRetentionV1, PalwResourceProfileV1, PalwRuntimeProfileV1, palw_dense_capture_bytes_v1, palw_profile_max_tile_len_v1,
+    };
+    let tile_len = palw_profile_max_tile_len_v1(profile);
+    let capture = PalwCaptureRetentionV1::DenseTiles { tile_len };
+    let capture_retained_bytes = palw_dense_capture_bytes_v1(leaves, tile_len);
+    need.role = PalwResourceRoleV1::FullSeat;
+    need.profile = Some(match need.profile {
+        Some(p) => PalwResourceProfileV1 { capture, capture_retained_bytes, leaves, ..p },
+        None => PalwResourceProfileV1 {
+            runtime: need.runtime.unwrap_or(PalwRuntimeProfileV1::A16KvI32),
+            role: PalwResourceRoleV1::FullSeat,
+            attention_layers: 0,
+            kv_dim: 0,
+            heads: 0,
+            resume_rows: 0,
+            end_rows: 0,
+            kv_resident_bytes: 0,
+            checkpoint_bytes: 0,
+            opening_bytes: 0,
+            retained_checkpoint_bytes: 0,
+            attention_scratch_bytes: 0,
+            trace_scratch_bytes: PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1,
+            capture,
+            capture_retained_bytes,
+            checkpoint_leg_bytes: 0,
+            leaves,
+            recurrence_layers: 0,
+            gdn_state_bytes: 0,
+        },
+    });
+    need
 }
 
 /// The per-(holdings, class, root, role) need figures — see `role_memory_need_v1`.
@@ -2063,5 +2170,125 @@ mod tests {
                  from block processing, and one hostile profile could stall every validator (ADR-0067 SA-2)"
             );
         }
+    }
+
+    /// The t12 genesis's held rows, as the shipped card registers them: `(profile, canonical job)`.
+    fn t12_held_rows() -> Vec<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
+        use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("t12 is a ConsensusV2 network") };
+        bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                PalwConsensusObjectV2::ClassRegistered { admission: Some(c), .. }
+                    if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&c.profile) =>
+                {
+                    Some((c.profile.clone(), c.canonical.clone()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// **DoS audit 2026-09-24, #4: a held capture past the materialization cap is refused BY NAME
+    /// before it is priced.** At testnet-12's own `2^40` network ladder — the ladder its backends
+    /// are built at — every held genesis row's canonical capture (105.5M and 27.0G leaves) is past
+    /// the host's `2^26`, and the pre-check the capture arm runs says so in the words the family's
+    /// prover uses; a capture at the cap is admitted and goes on to be priced. Before the fix the
+    /// cap was the network's ladder and this answered `Ok` for every count the class walks.
+    #[test]
+    fn a_held_capture_past_the_hosts_cap_is_refused_before_it_is_priced() {
+        use kaspa_consensus_core::palw_resource_profile_v1::PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1;
+        use kaspa_consensus_core::palw_state_chunk_map::{PALW_HELD_STEP_LADDER_V1, palw_class_step_ladder_v1};
+        let rows = t12_held_rows();
+        assert!(!rows.is_empty(), "the t12 card registers held rows");
+        for (profile, job) in rows {
+            let ladder = palw_class_step_ladder_v1(PALW_HELD_STEP_LADDER_V1, &profile);
+            let leaves =
+                kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &job, ladder).expect("the canonical job");
+            assert!(leaves > PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1, "{leaves}");
+            let why = palw_whole_capture_admits_v1(PALW_HELD_STEP_LADDER_V1, ladder, &profile, leaves).expect_err("past the cap");
+            assert!(why.contains("materialization cap") && why.contains("streamed routes"), "{why}");
+            assert_eq!(
+                palw_whole_capture_admits_v1(PALW_HELD_STEP_LADDER_V1, ladder, &profile, PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1),
+                Ok(())
+            );
+        }
+    }
+
+    /// **DoS audit 2026-09-24, #4: the capture sampler's reservation is priced by the DENSE
+    /// capture, and the ledger refuses it where the full seat's fold figure would have fitted.**
+    ///
+    /// On a held t12 row the full seat's own sink is the fold — a few MiB — so a sampler that took
+    /// the ordinary full-seat reservation would still have laid out tens of GiB unaccounted. The
+    /// re-priced need carries the dense capture of the capture's own leaf count (and keeps every
+    /// other term the full seat's); against a 24 GiB share (this Mac) a capture at the cap
+    /// (`2^26` leaves, 39.5 GiB at tile 128) is refused, naming the role and the need, while the
+    /// fold figure for the same job is granted; a small capture is granted and its bytes return on
+    /// drop. A family that derives no profile is priced fail-closed: the dense capture is still in
+    /// the figure.
+    #[test]
+    fn a_whole_capture_reservation_is_priced_dense_and_refused_where_it_does_not_fit() {
+        use crate::palw_memory_ledger::{PalwMemoryLedgerV1, PalwMemoryPoolV1, PalwMemoryReservationKeyV1};
+        use kaspa_consensus_core::palw_resource_profile_v1::{
+            PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1, PalwCaptureRetentionV1, PalwRuntimeLimitsV1, PalwRuntimeProfileV1,
+            palw_dense_capture_bytes_v1, palw_profile_max_tile_len_v1, palw_resource_profile_v1,
+        };
+        const GIB: u64 = 1 << 30;
+        let (profile, job) = t12_held_rows().into_iter().next().expect("a held row");
+        let tile_len = palw_profile_max_tile_len_v1(&profile);
+        let limits = PalwRuntimeLimitsV1 { threads: 8, prefill_run_positions: 64 };
+        let fold = |leaves: u64| PalwRoleMemoryNeedV1 {
+            role: PalwResourceRoleV1::FullSeat,
+            holding_bytes: 0,
+            derived_bytes: 0,
+            runtime: Some(PalwRuntimeProfileV1::A16KvI32),
+            profile: palw_resource_profile_v1(
+                &profile,
+                &job,
+                leaves,
+                PalwRuntimeProfileV1::A16KvI32,
+                PalwResourceRoleV1::FullSeat,
+                limits,
+                PalwCaptureRetentionV1::Fold { retain_level: 12 },
+            ),
+        };
+        let at_cap = PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1;
+        let folded = fold(at_cap);
+        let dense = palw_whole_capture_need_v1(folded.clone(), &profile, at_cap);
+        let p = dense.profile.expect("priced");
+        assert_eq!(p.capture, PalwCaptureRetentionV1::DenseTiles { tile_len });
+        assert_eq!(p.capture_retained_bytes, palw_dense_capture_bytes_v1(at_cap, tile_len));
+        assert_eq!(
+            dense.total_bytes() - folded.total_bytes(),
+            p.capture_retained_bytes - folded.profile.expect("fold").capture_retained_bytes,
+            "only the capture term moved"
+        );
+
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(24 * GIB), || None);
+        let key = PalwMemoryReservationKeyV1 { role: "full-seat capture", class_id: profile.shape_profile_id(), job: job.job_id };
+        assert!(ledger.can_reserve(folded.total_bytes()).is_ok(), "the fold figure fits: {}", folded.describe());
+        let refusal = ledger.reserve(key.clone(), dense.total_bytes()).expect_err("the dense capture does not");
+        assert_eq!(refusal.need_bytes, dense.total_bytes());
+        assert_eq!(refusal.key.as_ref().map(|k| k.role), Some("full-seat capture"), "the refusal names the role: {refusal}");
+        assert_eq!(ledger.reserved_bytes(), 0, "a refusal reserves nothing");
+
+        let small = palw_whole_capture_need_v1(fold(1 << 20), &profile, 1 << 20);
+        let granted = ledger.reserve(key, small.total_bytes()).expect("a small capture fits");
+        assert_eq!(ledger.reserved_bytes(), small.total_bytes());
+        drop(granted);
+        assert_eq!(ledger.reserved_bytes(), 0, "the samples' bytes return with the guard");
+
+        let unprofiled = PalwRoleMemoryNeedV1 {
+            role: PalwResourceRoleV1::FullSeat,
+            holding_bytes: 0,
+            derived_bytes: 0,
+            runtime: None,
+            profile: None,
+        };
+        let priced = palw_whole_capture_need_v1(unprofiled, &profile, at_cap);
+        assert_eq!(priced.total_bytes(), palw_dense_capture_bytes_v1(at_cap, tile_len) + PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1);
     }
 }

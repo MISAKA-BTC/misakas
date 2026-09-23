@@ -193,6 +193,26 @@ pub struct PalwCaptureShapeV1 {
     pub layer_count: u16,
 }
 
+/// **A capture prepared once and opened at many leaves** — what
+/// [`PalwExecutionBackendV1::free_prompt_leaf_prover_v1`] returns (DoS audit 2026-09-24, #4).
+pub trait PalwCaptureLeafProverV1 {
+    /// The refutation for leaf `index`: the same object `refutation_for_free_prompt_index` builds.
+    fn refutation_for_index(&self, index: u64) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String>;
+}
+
+/// The default prover: the per-index verb, called per index. Holds nothing.
+struct PalwPerIndexLeafProverV1<'a, B: PalwExecutionBackendV1 + ?Sized> {
+    backend: &'a B,
+    material: &'a [u8],
+    prompt_token_ids: &'a [u32],
+}
+
+impl<B: PalwExecutionBackendV1 + ?Sized> PalwCaptureLeafProverV1 for PalwPerIndexLeafProverV1<'_, B> {
+    fn refutation_for_index(&self, index: u64) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        self.backend.refutation_for_free_prompt_index(self.material, index, self.prompt_token_ids)
+    }
+}
+
 pub trait PalwExecutionBackendV1: Send + Sync {
     /// A human-readable identity for logs — the model id for a converted class, the floor's name
     /// for the derived one. Never used for dispatch: the chain's `class_id` is.
@@ -494,6 +514,29 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _prompt_token_ids: &[u32],
     ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         Err("this backend cannot open a free-prompt refutation at that index".to_string())
+    }
+
+    /// **One free-prompt capture, prepared ONCE, opened at as many leaves as the caller draws**
+    /// (DoS audit 2026-09-24, #4 — the CPU half).
+    ///
+    /// A panel seat samples a served capture at up to `DRAWS_MAX = 32` leaves, and on a class whose
+    /// retention is a fold every [`Self::refutation_for_free_prompt_index`] re-executes the whole
+    /// job into dense tiles to answer ONE leaf — no cache, so one sampled claim cost up to 32 full
+    /// re-executions of a job the producer chose the size of. The prover this returns holds the
+    /// decoded capture and its dense tiles for its own life and answers each index from them: one
+    /// re-execution per sampled claim, whatever the draw count. Dropping it frees the tiles, so a
+    /// caller holds its memory reservation exactly as long as it holds the prover.
+    ///
+    /// Every refusal the per-index prover makes before its first leaf (a capture that does not
+    /// decode, one past the materialization cap, a prompt that is not the binding's) is made here,
+    /// once, by name. Default: the per-index verb, unprepared — correct for a family whose capture
+    /// is already dense and cheap to reopen, and exactly as costly as before for one that is not.
+    fn free_prompt_leaf_prover_v1<'a>(
+        &'a self,
+        material: &'a [u8],
+        prompt_token_ids: &'a [u32],
+    ) -> Result<Box<dyn PalwCaptureLeafProverV1 + 'a>, String> {
+        Ok(Box::new(PalwPerIndexLeafProverV1 { backend: self, material, prompt_token_ids }))
     }
 
     fn job_anchor_v1(

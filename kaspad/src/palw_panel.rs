@@ -2228,6 +2228,17 @@ impl PalwPanelService {
         if step_leaf_count == 0 {
             return CaptureSamplesV1::NotCleared { refusal: None };
         }
+        // **Prepared once, drawn many times** (DoS audit 2026-09-24, #4 — the CPU half). Each draw
+        // below used to call `refutation_for_free_prompt_index`, which on a fold class decodes the
+        // capture and re-executes the whole job into dense tiles for ONE leaf, with no cache: up to
+        // `DRAWS_MAX` full re-executions of a job whose size the producer chose, per sampled claim.
+        // The prover does the decode, the materialization refusal, the prompt check and the one
+        // re-execution here, and every draw reads its tiles. Its life is the caller's reservation:
+        // it is dropped when this returns, before the reservation is.
+        let prover = match backend.free_prompt_leaf_prover_v1(capture, prompt_token_ids) {
+            Ok(prover) => prover,
+            Err(e) => return CaptureSamplesV1::NotCleared { refusal: Some(format!("the capture does not prepare: {e}")) },
+        };
         let wanted = SAMPLES.min(step_leaf_count);
         let mut rng = rand::thread_rng();
         let mut cleared = 0u64;
@@ -2237,7 +2248,7 @@ impl PalwPanelService {
                 break;
             }
             let index = if draw == 0 { 0 } else { rng.gen_range(0..step_leaf_count) };
-            let refutation = match backend.refutation_for_free_prompt_index(capture, index, prompt_token_ids) {
+            let refutation = match prover.refutation_for_index(index) {
                 Ok(refutation) => refutation,
                 Err(e) => {
                     refusal.get_or_insert_with(|| format!("leaf {index} does not open: {e}"));
@@ -2283,9 +2294,8 @@ impl PalwPanelService {
                 }
                 // **A limit is not a verdict, and it is not a redraw either.** A capture priced
                 // above the ladder this node was handed is one this node cannot check at ANY leaf,
-                // so redrawing it costs a full job re-execution per draw (this class's retention is
-                // a fold: `refutation_for_free_prompt_index` re-runs the job with no cache) and
-                // buys thirty-two identical refusals. Said once, and the seat falls through to the
+                // so redrawing it buys thirty-two identical refusals (and, before the prover, a
+                // full job re-execution per draw). Said once, and the seat falls through to the
                 // caller's tail.
                 Err(PalwStepRefuteError::Leg(kaspa_consensus_core::palw_step_leg::PalwStepLegError::LeafCountOutOfRange {
                     got,
@@ -4802,7 +4812,45 @@ impl PalwPanelService {
                                 let (leaves, artifact_root, ladder) =
                                     (shape.step_leaf_count, duty.artifact_root, self.class_step_ladder(duty.class_id));
                                 let prompt_ids_form = self.class_prompt_ids_form(duty.class_id);
+                                // **The capture's bytes are RESERVED before a leaf is opened** (DoS
+                                // audit 2026-09-24, #4). The sampler lays the capture out whole — a
+                                // fold is re-executed into dense tiles — and it took no reservation:
+                                // one held free-prompt claim made a full seat allocate 62 GiB beside
+                                // whatever the producer and the court in this process held. Now the
+                                // capture is first refused by name past the materialization cap (it
+                                // is the streamed routes' to judge), then priced as a full seat whose
+                                // capture is the DENSE one, then reserved; a refusal defers the duty
+                                // and files nothing, as the full-seat replay's and the court's do.
+                                let need = match self.backends().whole_capture_memory_need_v1(
+                                    backend.as_ref(),
+                                    duty.class_id,
+                                    duty.artifact_root,
+                                    &payload.capture,
+                                    ladder,
+                                ) {
+                                    Ok(need) => need,
+                                    Err(why) => {
+                                        if self.first_sample_refusal_v1(duty.claim_id) {
+                                            warn!(
+                                                "[{PALW_PANEL}] claim {}: the served capture is not laid out whole on this seat ({why}) — \
+                                                 nothing filed from this arm",
+                                                duty.claim_id
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                };
+                                let reserved = match self.reserve_replay_v1("full-seat capture", &need, duty.class_id, duty.claim_id) {
+                                    Ok(reserved) => reserved,
+                                    Err(why) => {
+                                        crate::palw_backends::note_throttled_v1("panel-capture-ledger", || {
+                                            format!("[{PALW_PANEL}] capture sample of claim {} deferred: {why}", duty.claim_id)
+                                        });
+                                        break 'verdict None;
+                                    }
+                                };
                                 let Ok((_backend, samples)) = offload(backend, move |b| {
+                                    let _held_for_the_samples = reserved;
                                     Self::fp_capture_samples_clear(
                                         b,
                                         &capture_owned,
@@ -7179,6 +7227,35 @@ impl PalwPanelService {
             "[{PALW_PANEL}] claim {}: interval seat — drew {:?} of {} interval(s), {held} opening(s) held",
             duty.claim_id, draw.intervals, draw.interval_count
         );
+        // **The interval route's replays are RESERVED for their life** (DoS audit 2026-09-24, #4).
+        // Every opening this seat holds is judged by a forward pass — the prefix recompute to the
+        // interval's checkpoint (or the served state it resumes from), the interval's own replay,
+        // and the naming replays behind a fault — and none of them took a reservation, so they
+        // started beside a producer's attempt and a court's resume in this process whatever the
+        // host held. Priced as the full seat of this context (its sink, the fold, is what these
+        // routes keep; the prefix is at most the whole job's), taken only when an opening is held
+        // (with none there is only a request to send), and a refusal defers the claim: nothing is
+        // filed, and the caller's next arm takes its own reservation or none.
+        let _held_for_the_intervals = if held > 0 {
+            let need = self.backends().role_memory_need_for_backend_v1(
+                backend.as_ref(),
+                duty.class_id,
+                duty.artifact_root,
+                Some(ctx),
+                kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
+            );
+            match self.reserve_replay_v1("interval-seat", &need, duty.class_id, duty.claim_id) {
+                Ok(reserved) => Some(reserved),
+                Err(why) => {
+                    crate::palw_backends::note_throttled_v1("panel-interval-ledger", || {
+                        format!("[{PALW_PANEL}] interval seat of claim {} deferred: {why}", duty.claim_id)
+                    });
+                    return None;
+                }
+            }
+        } else {
+            None
+        };
 
         for index in &draw.intervals {
             let candidates = openings.get(&(duty.claim_id, *index)).cloned().unwrap_or_default();
@@ -8674,6 +8751,44 @@ mod court_responder_coverage_pin {
             "and grades the carriage it built"
         );
         assert!(source.contains("prompt_ids_opening: prompt_opening,"), "the accusation carries the tile the sampler opened");
+    }
+
+    /// **DoS audit 2026-09-24, #4, pinned where it lives: the capture sampler and the interval
+    /// route take the ledger's reservation, and the sampler re-executes a capture once.**
+    ///
+    /// Before the fix the capture arm offloaded `fp_capture_samples_clear` with no reservation
+    /// (`reserve_replay_v1` was called by the court, the full-seat replay and the partial seat
+    /// only), the interval route replayed with none, and each of the sampler's up to 32 draws
+    /// called `refutation_for_free_prompt_index` — a whole re-execution of a fold per draw. Each of
+    /// the assertions below reads a line that did not exist then.
+    #[test]
+    fn the_capture_sampler_and_the_interval_route_reserve_and_the_sampler_prepares_once() {
+        const MARKER: &str = "mod court_responder_coverage_pin";
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
+        // The capture arm: refused by name, priced dense, reserved, THEN offloaded, and the guard
+        // moves into the blocking task so it outlives the samples.
+        let call = source.find("Self::fp_capture_samples_clear(\n").expect("the sampler's one call site");
+        let arm_start = source[..call].rfind("palw_fp_capture_decode_v1(").expect("the capture arm");
+        let arm = &source[arm_start..call];
+        let need = arm.find(".whole_capture_memory_need_v1(").expect("the capture is priced as a whole capture");
+        let reserve = arm.find("self.reserve_replay_v1(\"full-seat capture\", &need,").expect("and reserved");
+        let offloaded = arm.rfind("offload(backend, move |b| {").expect("then offloaded");
+        assert!(need < reserve && reserve < offloaded, "priced, reserved, offloaded — in that order");
+        assert!(arm[reserve..].contains("break 'verdict None;"), "a refusal defers the duty and files nothing");
+        assert!(arm[offloaded..].contains("let _held_for_the_samples = reserved;"), "the guard lives as long as the samples");
+        // The sampler prepares once and draws from the prover.
+        let sampler = &source[source.find("fn fp_capture_samples_clear(").expect("the sampler")..];
+        let sampler = &sampler[..sampler.find("\n    }\n").expect("its end")];
+        assert!(sampler.contains("backend.free_prompt_leaf_prover_v1(capture, prompt_token_ids)"), "one preparation");
+        assert!(sampler.contains("prover.refutation_for_index(index)"), "every draw reads the prepared capture");
+        assert!(!sampler.contains("refutation_for_free_prompt_index("), "no draw re-executes the job");
+        // The interval route: reserved before its first replay.
+        let route = &source[source.find("async fn interval_seat_outcome_v1(").expect("the interval route")..];
+        let reserved = route.find("self.reserve_replay_v1(\"interval-seat\", &need,").expect("the route reserves");
+        let first_replay = route.find("offload(backend, move |b|").expect("its first replay");
+        assert!(reserved < first_replay, "the reservation precedes every replay of the route");
+        assert!(route[..first_replay].contains("let _held_for_the_intervals = if held > 0 {"), "held for the route's life");
     }
 
     /// **ADR-0133 S1 (4), pinned where it lives: a court close of an accused leaf resumes the V2

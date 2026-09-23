@@ -918,12 +918,20 @@ impl Qwen25A16Backend {
         kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(self.network_ladder, &self.profile)
     }
 
-    /// **The materialization cap** (ADR-0121 Decision 1): the network's ladder — the most leaves a
-    /// whole-capture path (a dense re-execution, a leaf vector, a dense material's check, the
-    /// attempt lane's dense capture) builds a vector of. Below it the two ladders agree; above it
-    /// only the streamed routes answer, and the whole-capture ones refuse by name.
+    /// **The materialization cap** (ADR-0121 Decision 1, re-derived by the DoS audit of
+    /// 2026-09-24, #4): the most leaves a whole-capture path (a dense re-execution of a fold, the
+    /// whole-capture prover, the bisection's prefix, the fused site's honest re-execution) builds a
+    /// vector of. Above it only the streamed routes answer, and the whole-capture ones refuse by
+    /// name.
+    ///
+    /// It was the network's ladder, which testnet-12 mints at the held regime's `2^40`: the cap
+    /// then equalled the held class's own ladder, the refusal never fired, and one held
+    /// free-prompt claim made a sampling seat lay out 62 GiB (and, at 2M, 15,894 GiB) of tiles. It
+    /// is now the HOST's number, [`crate::fp_interval::base0_materialize_cap_v1`]: never past the
+    /// network's ladder, never past the historical `2^26`, never past what the operator's declared
+    /// budget holds dense at this class's tile. Node policy — no root, price or verdict reads it.
     pub fn materialize_cap(&self) -> u64 {
-        self.network_ladder
+        crate::fp_interval::base0_materialize_cap_v1(self.network_ladder, Some(&self.profile))
     }
 
     /// DRILL ONLY: the `(job context, leaf)` this instance's drill run lied at, if it ran one.
@@ -1223,6 +1231,19 @@ impl Qwen25A16Backend {
         &self,
         material: &crate::produce::Base0FpMaterialV2,
     ) -> Result<crate::produce::Base0ExecutionV1, String> {
+        // **Refused by name past the materialization cap, before a tile is produced** (DoS audit
+        // 2026-09-24, #4). The binding's count is the relayed blob's claim; the re-execution below is
+        // capped at the same number, so a blob that understates its count while its context names a
+        // larger job is refused by the engine's own count too, not laid out.
+        if let Some(why) = crate::fp_interval::base0_whole_capture_refusal_v1(
+            material.binding.step_leaf_count,
+            self.materialize_cap(),
+            self.step_ladder_cap(),
+        ) {
+            return Err(why);
+        }
+        #[cfg(test)]
+        FOLD_REEXECUTIONS_V1.with(|n| n.set(n.get() + 1));
         let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
         // An HONEST dense re-execution, in this instance's own cache representation: a fold is judged
         // by re-deriving it, and a re-derivation that reproduced a lie would be evidence of nothing.
@@ -1232,7 +1253,7 @@ impl Qwen25A16Backend {
             self.plan.as_ref(),
             &material.binding.job_context,
             &prompt,
-            self.network_ladder,
+            self.materialize_cap(),
             crate::legs::Base0CaptureKindV1::DenseTiles,
             &mut |_| {},
             None,
@@ -1338,13 +1359,15 @@ impl Qwen25A16Backend {
         prompt_ids: &[u32],
     ) -> Result<crate::produce::Base0ExecutionV1, String> {
         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        // A DENSE re-execution: bounded by the materialization cap, not the network's ladder (DoS
+        // audit 2026-09-24, #4) — the dense sink ignores the ladder but for this bound.
         a16_execute_for_attempt_streaming_capped_v1(
             &self.artifact,
             &binding.shape_profile,
             self.plan.as_ref(),
             &binding.job_context,
             &prompt,
-            self.network_ladder,
+            self.materialize_cap(),
             &mut |_| {},
         )
     }
@@ -1391,29 +1414,39 @@ impl Qwen25A16Backend {
         index: u64,
         carried: Option<&[u32]>,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let prepared = self.prepare_whole_capture_v1(material, carried, Some(index))?;
+        self.refutation_from_prepared_v1(&prepared, index)
+    }
+
+    /// **Everything the whole-capture prover reads that does not depend on the leaf**, built once:
+    /// the decode, the materialization refusal, the carried (or derived) prompt, the dense tiles —
+    /// a re-execution for a fold — and the decode-token pin. [`Self::refutation_with_prompt`] is
+    /// this plus one [`Self::refutation_from_prepared_v1`]; the free-prompt leaf prover is this plus
+    /// as many as the seat draws (DoS audit 2026-09-24, #4: one re-execution per sampled claim, where
+    /// it was one per draw).
+    ///
+    /// `probe`, when given, is checked for a main-step coordinate BEFORE the tiles are built, so a
+    /// single-leaf question about an aux leaf is refused without a re-execution, as it always was.
+    /// The prompt is checked before the tiles for the same reason: a list that is not the binding's
+    /// is refused for free rather than after a whole job's forward pass.
+    fn prepare_whole_capture_v1(
+        &self,
+        material: &[u8],
+        carried: Option<&[u32]>,
+        probe: Option<u64>,
+    ) -> Result<A16PreparedCaptureV1, String> {
         let retention =
             crate::produce::base0_material_decode_any_v1(material).map_err(|_| "the capture does not decode".to_string())?;
         let binding = retention.binding().clone();
-        let logits_rows = retention.logits_rows().to_vec();
-        let generated = retention.generated_token_ids().to_vec();
-        let checkpoint_chunks = retention.checkpoint_chunks().to_vec();
         if let Some(why) =
-            crate::fp_interval::base0_whole_capture_refusal_v1(binding.step_leaf_count, self.network_ladder, self.step_ladder_cap())
+            crate::fp_interval::base0_whole_capture_refusal_v1(binding.step_leaf_count, self.materialize_cap(), self.step_ladder_cap())
         {
             return Err(why);
         }
-        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
-            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
-        let step_tiles = self.tiles_from_material_v1(&retention)?;
-
-        // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
-        // rows-tree root — carrying the rows themselves is exactly what the tiled scheme exists to
-        // avoid at this vocabulary.
-        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
-            .ok_or_else(|| "the retained rows build no tree".to_string())?;
-        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
-            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
-        );
+        if let Some(index) = probe {
+            kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+                .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+        }
 
         // **The prompt: re-derived for an attempt, carried for a free prompt** (ADR-0073 Decision
         // 1c). An attempt's `job_id` IS its anchor and its prompt is a pure function of it, so it
@@ -1452,6 +1485,34 @@ impl Qwen25A16Backend {
             }
         };
 
+        let step_tiles = self.tiles_from_material_v1(&retention)?;
+
+        // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
+        // rows-tree root — carrying the rows themselves is exactly what the tiled scheme exists to
+        // avoid at this vocabulary.
+        let rows_root =
+            kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, retention.logits_rows())
+                .ok_or_else(|| "the retained rows build no tree".to_string())?;
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 {
+                rows_root,
+                generated_token_ids: retention.generated_token_ids().to_vec(),
+            },
+        );
+        let checkpoint_chunks = retention.checkpoint_chunks().to_vec();
+        Ok(A16PreparedCaptureV1 { binding, step_tiles, pin, prompt_token_ids, checkpoint_chunks })
+    }
+
+    /// One leaf's refutation out of a prepared capture — the per-leaf half of the prover.
+    fn refutation_from_prepared_v1(
+        &self,
+        prepared: &A16PreparedCaptureV1,
+        index: u64,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let binding = &prepared.binding;
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+
         // **The anchor its committed leg gives this call, when the node reads the cache.** A
         // carried anchor for a node with no KV refs is refused by the court rather than ignored,
         // so attachment follows the node's own declaration.
@@ -1470,7 +1531,7 @@ impl Qwen25A16Backend {
                 &binding.job_context,
                 &binding.shape_profile,
                 &binding.checkpoint_profile,
-                &checkpoint_chunks,
+                &prepared.checkpoint_chunks,
             )
             .ok()
             .and_then(|checkpoints| crate::legs::base0_kv_anchor_for_call_v1(&checkpoints, coord.call_index))
@@ -1479,17 +1540,49 @@ impl Qwen25A16Backend {
         };
 
         crate::legs::base0_refutation_from_capture_capped_v1(
-            &binding.shape_profile.clone(),
-            &binding.job_context.clone(),
-            &step_tiles,
-            binding,
+            &binding.shape_profile,
+            &binding.job_context,
+            &prepared.step_tiles,
+            binding.clone(),
             coord,
-            prompt_token_ids,
-            Some(pin),
+            prepared.prompt_token_ids.clone(),
+            Some(prepared.pin.clone()),
             kv_checkpoint,
             self.network_ladder,
         )
         .map_err(|e| format!("{e:?}"))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Dense re-executions of a fold on this thread — the unit the DoS audit's #4 CPU half counts.
+    static FOLD_REEXECUTIONS_V1: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// **A whole capture, decoded and laid out once** — what the dense tier's prover reads at every
+/// leaf ([`Qwen25A16Backend::prepare_whole_capture_v1`]). Holds the dense tiles: its life is the
+/// memory a seat reserved for the capture.
+struct A16PreparedCaptureV1 {
+    binding: kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    step_tiles: crate::legs::Base0StepTilesV1,
+    pin: kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1,
+    prompt_token_ids: Vec<u32>,
+    checkpoint_chunks: Vec<Vec<Vec<u8>>>,
+}
+
+/// The dense tier's free-prompt leaf prover: one prepared capture, many leaves.
+struct A16CaptureLeafProverV1<'a> {
+    backend: &'a Qwen25A16Backend,
+    prepared: A16PreparedCaptureV1,
+}
+
+impl kaspa_consensus_core::palw_backend::PalwCaptureLeafProverV1 for A16CaptureLeafProverV1<'_> {
+    fn refutation_for_index(
+        &self,
+        index: u64,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        self.backend.refutation_from_prepared_v1(&self.prepared, index)
     }
 }
 
@@ -2088,8 +2181,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let retention = crate::produce::base0_material_decode_any_v1(material).ok()?;
         let binding = retention.binding().clone();
         // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
-        // the lesson the seat check already wrote down.
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.network_ladder {
+        // the lesson the seat check already wrote down. At the materialization cap: the prefix is a
+        // whole leaf vector (DoS audit 2026-09-24, #4).
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.materialize_cap() {
             return None;
         }
         // A rung is a commitment to the execution PREFIX, so it is a fact about every leaf below
@@ -2114,6 +2208,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_token_ids: &[u32],
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         self.refutation_with_prompt(material, index, Some(prompt_token_ids))
+    }
+
+    /// Prepared once, opened per draw (DoS audit 2026-09-24, #4): a fold is re-executed ONCE for a
+    /// sampled claim, not once per leaf the seat draws.
+    fn free_prompt_leaf_prover_v1<'a>(
+        &'a self,
+        material: &'a [u8],
+        prompt_token_ids: &'a [u32],
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwCaptureLeafProverV1 + 'a>, String> {
+        let prepared = self.prepare_whole_capture_v1(material, Some(prompt_token_ids), None)?;
+        Ok(Box::new(A16CaptureLeafProverV1 { backend: self, prepared }))
     }
 
     // ---- ADR-0077 Decision 8: the interval seam -------------------------------------------
@@ -4187,6 +4292,72 @@ mod free_prompt_tests {
             .with_step_ladder_cap(needed - 1);
         let message = shallow.execute_free_prompt(&fp, &prompt).err().expect("a shallower ruleset must refuse it");
         assert!(message.contains("TooManyLeaves"), "the refusal must name the ladder: {message}");
+    }
+
+    /// **DoS audit 2026-09-24, #4: the materialization cap is the host's, not the held ladder.**
+    /// Testnet-12 mints its network ladder at the held regime's `2^40`, and every backend there is
+    /// built at it. The held row walks at `2^40` as before; it no longer MATERIALIZES there — the cap
+    /// is the historical `2^26` — so a capture between the two is refused by the whole-capture
+    /// prover by name and goes to the streamed routes. Before the fix `materialize_cap()` was the
+    /// network's ladder, `2^40`, and the refusal below was `None` for every count the class admits.
+    #[test]
+    fn at_t12s_ladder_a_held_class_materializes_at_the_hosts_cap() {
+        use crate::fp_interval::base0_whole_capture_refusal_v1 as refusal;
+        use kaspa_consensus_core::palw_resource_profile_v1::PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1;
+        use kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
+        let geometry = v5_geometry();
+        let artifact = v5_artifact(geometry);
+        let held = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(geometry).expect("v7");
+        let backend = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), held, (20, 4))
+            .expect("servable")
+            .with_step_ladder_cap(PALW_HELD_STEP_LADDER_V1);
+        assert_eq!(backend.step_ladder_cap(), PALW_HELD_STEP_LADDER_V1, "the class still walks at the regime's ladder");
+        assert_eq!(backend.materialize_cap(), PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1, "and materializes at 2^26, not 2^40");
+        // The t12 held canonical jobs (`dos_repro_0`): 105,518,224 and 27,002,967,184 leaves.
+        for leaves in [PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1 + 1, 105_518_224, 27_002_967_184, PALW_HELD_STEP_LADDER_V1] {
+            let why = refusal(leaves, backend.materialize_cap(), backend.step_ladder_cap()).expect("refused by name");
+            assert!(why.contains("materialization cap") && why.contains("streamed routes"), "{why}");
+        }
+        assert_eq!(refusal(PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1, backend.materialize_cap(), backend.step_ladder_cap()), None);
+    }
+
+    /// **DoS audit 2026-09-24, #4, the CPU half: a sampled capture is re-executed ONCE, not once per
+    /// draw.** On the held fixture's folded attempt, the free-prompt leaf prover answers every leaf
+    /// the per-index verb answers, byte for byte, after exactly one dense re-execution of the fold;
+    /// the per-index verb pays one per leaf. Without the family's override the trait default IS the
+    /// per-index verb, and the count below reads `indices.len()`, not 1.
+    #[test]
+    fn a_sampled_fold_is_re_executed_once_whatever_the_draw_count() {
+        use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7;
+        let (artifact, _) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let held = qwen25_a16_profile_v7(v5_geometry()).expect("the held row projects");
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), held, (6, 3)).expect("servable");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x0924_0004)).expect("a job");
+        let folded = backend.execute(&job, &prompt).expect("the held attempt folds");
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let leaves = crate::produce::base0_material_decode_any_v1(&folded.material).expect("decodes").binding().step_leaf_count;
+        let indices = [0u64, 1, leaves / 3, leaves / 2 + 1, leaves - 1];
+
+        FOLD_REEXECUTIONS_V1.with(|n| n.set(0));
+        let per_index: Vec<_> = indices
+            .iter()
+            .map(|i| backend.refutation_for_free_prompt_index(&folded.material, *i, &ids).map_err(|e| e.to_string()))
+            .collect();
+        assert_eq!(FOLD_REEXECUTIONS_V1.with(|n| n.get()), indices.len() as u64, "the per-index verb re-executes per leaf");
+
+        FOLD_REEXECUTIONS_V1.with(|n| n.set(0));
+        let prover = backend.free_prompt_leaf_prover_v1(&folded.material, &ids).expect("prepares");
+        let prepared: Vec<_> = indices.iter().map(|i| prover.refutation_for_index(*i)).collect();
+        drop(prover);
+        assert_eq!(FOLD_REEXECUTIONS_V1.with(|n| n.get()), 1, "the prover re-executes the fold once for every leaf it opens");
+        assert!(per_index.iter().any(|r| r.is_ok()), "the fixture opens some leaf");
+        assert_eq!(prepared, per_index, "the same answer at every leaf, refusals included");
+
+        // A prompt that is not the binding's is refused before the re-execution, not after it.
+        FOLD_REEXECUTIONS_V1.with(|n| n.set(0));
+        let foreign: Vec<u32> = ids.iter().map(|t| (t + 1) % 64).collect();
+        assert!(backend.free_prompt_leaf_prover_v1(&folded.material, &foreign).is_err());
+        assert_eq!(FOLD_REEXECUTIONS_V1.with(|n| n.get()), 0, "a foreign prompt costs no forward pass");
     }
 
     /// The geometry the ADR-0082 dense rows are built from here, at a size a unit test can hold.

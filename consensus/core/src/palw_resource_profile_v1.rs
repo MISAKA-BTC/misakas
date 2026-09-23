@@ -113,6 +113,52 @@ pub fn palw_replay_hashes_bytes_v1(leaves: u64) -> u64 {
     leaves.saturating_mul(72)
 }
 
+/// **The whole-capture cap a node applies when its operator stated no budget: the RC court's
+/// `2^26`** (`PALW_RC_COURT_MAX_STEP_LEAF_COUNT`) — the number every shipped preset froze as its
+/// `max_step_leaf_count`, and therefore the number ADR-0121 Decision 1's "materialization cap" was
+/// on every network it was written for (its own test, `a_held_class_walks_at_its_ladder_and_
+/// materializes_at_the_networks`, builds at `2^26` and materializes a held row there).
+///
+/// # Why this is not the network's ladder any more (DoS audit 2026-09-24, #4)
+///
+/// ADR-0121 kept ONE number, the network's `max_step_leaf_count`, as the most leaves a node lays
+/// out whole, on the reasoning that the network's ladder is the small one and the held regime's
+/// `2^40` the big one. Testnet-12 broke the premise: its genesis mints the held regime itself
+/// (`palw_held_context_mint_v1(params, 2^40)`, commit `7d5b3954`), so its network ladder IS `2^40`,
+/// the materialization cap became `2^40`, and `base0_whole_capture_refusal_v1(leaves, cap,
+/// class_ladder)` could never fire inside a class's ladder. One free-prompt claim on a held class
+/// then made a sampling seat re-execute the whole job into dense tiles — 62 GiB for the t12
+/// Qwen3.6 canonical job, 15,894 GiB for the 2M one (`dos_repro_0`). A ladder is a statement about
+/// what the COURT walks; how much this HOST can hold is a different number, and the two were one.
+///
+/// So the cap is a node's, not the chain's: it never moves a root, a price or a verdict — a
+/// capture past it is judged on the streamed routes (interval openings, the fold's leaf evidence)
+/// and the whole-capture arms refuse it by name.
+pub const PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1: u64 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_STEP_LEAF_COUNT;
+
+/// **How many step leaves this node may lay out whole** — a dense re-execution of a fold, a leaf
+/// vector, a bisection's prefix — for a class whose widest tile is `tile_len`.
+///
+/// `min(network ladder, 2^26, budget / dense bytes a leaf)`: never past the network's ladder (a
+/// capture the ruleset cannot walk is refused as before), never past the historical `2^26`
+/// ([`PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1`]), and — when the operator declared a per-node
+/// budget (`--palw-host-memory-budget / --palw-host-node-count`) — never more leaves than that
+/// budget holds as a dense capture ([`palw_dense_capture_bytes_v1`], the formula `dos_repro_0`
+/// checked against a real allocation). A budget that holds no leaf at all answers `0`, and every
+/// whole capture is refused: fail closed. Saturating throughout: `tile_len` comes from a profile a
+/// relayed binding carries.
+///
+/// The cap bounds the CAPTURE only. The rest of the role's working set (its K/V history, its
+/// scratch) is what the reservation ledger prices when the node takes the capture's reservation;
+/// a capture the cap admits is still refused there when the host cannot hold the whole role.
+pub fn palw_whole_capture_leaf_cap_v1(network_ladder: u64, tile_len: u32, budget_bytes: Option<u64>) -> u64 {
+    let cap = network_ladder.min(PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1);
+    match budget_bytes {
+        Some(budget) => cap.min(budget / palw_dense_capture_bytes_v1(1, tile_len).max(1)),
+        None => cap,
+    }
+}
+
 /// **Bytes per element of the COMMITTED cache** — the map's `i32` little-endian row
 /// (`palw_state_chunk_map`: `row = attn_kv_heads × attn_head_dim × 4`). A checkpoint, an opening
 /// and a retained chunk are this wide whatever the runtime holds the cache in; a runtime profile
@@ -579,6 +625,35 @@ mod tests {
     fn leaf_count(profile: &PalwShapeProfileV3, job: &PalwJobContextV2) -> u64 {
         crate::palw_step::step_leaf_count_capped_v1(profile, job, crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1)
             .expect("the job's step space")
+    }
+
+    /// **DoS audit 2026-09-24 #4: the whole-capture cap is a node's number, not the network's
+    /// ladder.** At t12's `2^40` network ladder the cap is the historical `2^26`, not `2^40`; below
+    /// `2^26` it is the network's, unchanged (every non-t12 preset); a declared budget tightens it to
+    /// the leaves that budget holds dense, and nothing it admits is past that budget; a budget that
+    /// holds no leaf admits none.
+    #[test]
+    fn the_whole_capture_cap_is_the_hosts_and_not_the_held_ladder() {
+        use crate::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1;
+        assert_eq!(PALW_WHOLE_CAPTURE_DEFAULT_LEAF_CAP_V1, 1 << 26);
+        assert_eq!(palw_whole_capture_leaf_cap_v1(PALW_HELD_STEP_LADDER_V1, 128, None), 1 << 26, "t12's ladder is not a RAM figure");
+        for network in [1u64 << 12, 1 << 22, 1 << 26] {
+            assert_eq!(palw_whole_capture_leaf_cap_v1(network, 128, None), network, "at or below 2^26 nothing changes");
+        }
+        let budget = 24u64 << 30;
+        for tile_len in [64u32, 128, 512, 4096] {
+            let cap = palw_whole_capture_leaf_cap_v1(PALW_HELD_STEP_LADDER_V1, tile_len, Some(budget));
+            assert!(cap <= 1 << 26);
+            assert!(palw_dense_capture_bytes_v1(cap, tile_len) <= budget, "tile {tile_len}: the cap's own capture fits");
+            if cap < 1 << 26 {
+                assert!(palw_dense_capture_bytes_v1(cap + 1, tile_len) > budget, "tile {tile_len}: one more leaf does not");
+            }
+        }
+        // The t12 held rows' tile (128): 632 B a leaf, so a 24 GiB host holds 40.8M leaves whole —
+        // under the smaller held canonical job's 105.5M (`dos_repro_0`), which that host streams.
+        assert_eq!(palw_whole_capture_leaf_cap_v1(PALW_HELD_STEP_LADDER_V1, 128, Some(budget)), budget / 632);
+        assert_eq!(palw_whole_capture_leaf_cap_v1(PALW_HELD_STEP_LADDER_V1, 128, Some(0)), 0, "no budget holds no leaf");
+        assert_eq!(palw_whole_capture_leaf_cap_v1(u64::MAX, u32::MAX, Some(u64::MAX)), 1 << 26, "saturating, and still capped");
     }
 
     /// **The 2M attempt, by role and by runtime profile — the numbers the acceptance run did not

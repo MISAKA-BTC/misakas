@@ -451,6 +451,10 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
     // three duties in this process cannot each take the whole host because each fitted alone.
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));
+    // The same share bounds how many leaves this process lays out WHOLE (DoS audit 2026-09-24, #4):
+    // every family's `materialize_cap()` is `min(network ladder, 2^26, share / dense bytes a leaf)`,
+    // so a declared budget is also the ceiling on a sampled capture, not only on the ledger's sum.
+    misaka_palw_base0::fp_interval::arm_whole_capture_budget_v1(crate::args::palw_host_share_bytes_v1(args));
     // The engine's memory brackets land in this log (ADR-0151 follow-up): the attempt's cache,
     // capture and checkpoint leg beside the process's own bytes, at every phase — so the next
     // growth is a printed term and not a dmesg line.

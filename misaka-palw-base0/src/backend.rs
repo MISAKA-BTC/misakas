@@ -101,10 +101,12 @@ impl Base0Backend {
         kaspa_consensus_core::palw_state_chunk_map::palw_class_step_ladder_v1(self.network_ladder, &self.profile)
     }
 
-    /// **The materialization cap** (ADR-0121 Decision 1): the network's ladder — the most leaves a
-    /// capture this family reads or writes may hold, since every one it keeps is dense.
+    /// **The materialization cap** (ADR-0121 Decision 1; DoS audit 2026-09-24, #4): the most
+    /// leaves a whole-capture path of this family lays out — the HOST's number
+    /// ([`crate::fp_interval::base0_materialize_cap_v1`]), no longer the network's ladder, which
+    /// testnet-12 mints at `2^40`. See the dense tier's `materialize_cap`.
     pub fn materialize_cap(&self) -> u64 {
-        self.network_ladder
+        crate::fp_interval::base0_materialize_cap_v1(self.network_ladder, Some(&self.profile))
     }
 
     /// The graph, for the callers that still need it directly (the retention writer names the
@@ -128,9 +130,10 @@ impl Base0Backend {
         let (binding, tiles, logits_rows, generated, _) =
             base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
         // **Bound the count BEFORE `leaves_by_position` allocates from it** — see
-        // `network_ladder`. The cap is the ruleset's ladder top, not a module literal.
+        // `network_ladder`. The cap is the materialization cap: the ruleset's ladder top where that
+        // is the smaller, the host's number where it is not (DoS audit 2026-09-24, #4).
         if let Some(why) =
-            crate::fp_interval::base0_whole_capture_refusal_v1(binding.step_leaf_count, self.network_ladder, self.step_ladder_cap())
+            crate::fp_interval::base0_whole_capture_refusal_v1(binding.step_leaf_count, self.materialize_cap(), self.step_ladder_cap())
         {
             return Err(why);
         }
@@ -638,8 +641,9 @@ impl PalwExecutionBackendV1 for Base0Backend {
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         // **Bound the count BEFORE `leaves_by_position` allocates from it** — see
-        // `network_ladder`. Without this the relayed blob decides the allocation.
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.network_ladder {
+        // `network_ladder`. Without this the relayed blob decides the allocation. At the
+        // materialization cap: the prefix is a whole leaf vector (DoS audit 2026-09-24, #4).
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.materialize_cap() {
             return None;
         }
         let leaves = leaves_by_position(&binding, &tiles);
