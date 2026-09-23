@@ -243,7 +243,9 @@ fn main_address_for(net: NetworkId) -> &'static str {
     main_address(net.network_type)
 }
 
-/// The outpoint of premine output `index` on the premine sentinel txid.
+/// The outpoint of premine output `index` on the premine SENTINEL txid — the premine txid of every
+/// network but testnet-12 (see [`premine_outpoint_for`], which is what a network-aware caller
+/// takes).
 ///
 /// Every genesis output on the premine txid sits at a distinct index (bond collateral at
 /// `0..cards`, the main wallet at [`MAIN_PREMINE_INDEX`], fee floats after it), so an outpoint
@@ -252,6 +254,52 @@ fn main_address_for(net: NetworkId) -> &'static str {
 /// re-derive the txid and get it subtly wrong.
 pub fn premine_outpoint(index: u32) -> TransactionOutpoint {
     TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index }
+}
+
+/// **The genesis salt that makes testnet-12's premine a name no other chain uses** (user decision,
+/// 2026-09-24: replay separation). Private chains were minted from the same binary lineage with the
+/// same bond keys 0–7 on the same sentinel txid, and the ML-DSA sighash commits to the spent
+/// OUTPOINT but to neither the network nor the genesis — so a float or collateral spend signed on
+/// a private chain was a valid spend on public testnet-12. Bump the version to re-separate a future
+/// regenesis.
+pub const PALW_T12_PREMINE_SALT: &[u8] = b"misaka-palw-t12/premine/v2/2026-09-24";
+
+/// The keyed-hash domain the network-separated premine txids are derived under.
+const PREMINE_TXID_DOMAIN: &[u8] = b"misaka-premine-txid/v1";
+
+/// A sentinel txid made this network's own: `BLAKE2b-512(key = PREMINE_TXID_DOMAIN,
+/// sentinel ‖ network id ‖ PALW_T12_PREMINE_SALT)`.
+fn network_separated_txid(sentinel: &[u8; 64], net: NetworkId) -> Hash64 {
+    let mut preimage = Vec::with_capacity(64 + 16 + PALW_T12_PREMINE_SALT.len());
+    preimage.extend_from_slice(sentinel);
+    preimage.extend_from_slice(net.to_string().as_bytes());
+    preimage.extend_from_slice(PALW_T12_PREMINE_SALT);
+    kaspa_hashes::blake2b_512_keyed(PREMINE_TXID_DOMAIN, &preimage)
+}
+
+/// Whether `net`'s genesis outputs sit on network-separated txids (testnet-12 only).
+fn premine_is_network_separated(net: NetworkId) -> bool {
+    net.network_type == NetworkType::Testnet && net.suffix == Some(12)
+}
+
+/// **The premine txid of `net`** (user decision, 2026-09-24): the sentinel
+/// ([`MISAKA_PREMINE_TXID`]) byte for byte on every network — testnet-11, testnet-10, devnet,
+/// simnet and mainnet keep their genesis and fingerprint — except testnet-12, whose premine sits on
+/// [`network_separated_txid`] so that no spend signed on a chain that shared the sentinel (the
+/// private testnet-12 instances with the same card keys) is a spend on it.
+pub fn premine_txid_for(net: NetworkId) -> Hash64 {
+    if premine_is_network_separated(net) {
+        network_separated_txid(&MISAKA_PREMINE_TXID, net)
+    } else {
+        Hash64::from_bytes(MISAKA_PREMINE_TXID)
+    }
+}
+
+/// **The outpoint of premine output `index` on `net`'s premine txid** ([`premine_txid_for`]): what a
+/// genesis bond's identity (`PalwBondKeyV2`), a fee float and the main wallet are named by on that
+/// network. Equal to [`premine_outpoint`] everywhere but testnet-12.
+pub fn premine_outpoint_for(net: NetworkId, index: u32) -> TransactionOutpoint {
+    TransactionOutpoint { transaction_id: premine_txid_for(net), index }
 }
 
 fn premine_entry(amount: u64, script_public_key: ScriptPublicKey) -> UtxoEntry {
@@ -266,19 +314,22 @@ pub fn misaka_premine_utxos(network_type: NetworkType) -> UtxoCollection {
     // point takes only the type — so the suffix-less answer is expressed directly rather than
     // by constructing an id that cannot exist. Callers who have a suffix use
     // `misaka_premine_utxos_for`, which is the only way to reach the public PALW nets' wallet.
-    misaka_premine_utxos_inner(main_address(network_type))
+    misaka_premine_utxos_inner(main_address(network_type), Hash64::from_bytes(MISAKA_PREMINE_TXID))
 }
 
 /// The same set, chosen by NETWORK ID so the public PALW nets can hold their main wallet at
 /// their own address (see [`main_address_for`]). [`misaka_premine_utxos`] is this with a
 /// suffix-less id, which is what every non-suffixed caller means.
 pub fn misaka_premine_utxos_for(net: NetworkId) -> UtxoCollection {
-    misaka_premine_utxos_inner(main_address_for(net))
+    misaka_premine_utxos_inner(main_address_for(net), premine_txid_for(net))
 }
 
-fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
+fn misaka_premine_utxos_inner(main: &str, txid: Hash64) -> UtxoCollection {
     let script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(main));
-    UtxoCollection::from_iter([(premine_outpoint(MAIN_PREMINE_INDEX), premine_entry(MISAKA_PREMINE_CAP_SOMPI, script_public_key))])
+    UtxoCollection::from_iter([(
+        TransactionOutpoint { transaction_id: txid, index: MAIN_PREMINE_INDEX },
+        premine_entry(MISAKA_PREMINE_CAP_SOMPI, script_public_key),
+    )])
 }
 
 /// The PALW public-testnet (testnet-11) COMMUNITY allocation — the operator-collected
@@ -443,9 +494,18 @@ const TESTNET12_COMMUNITY_TXID: [u8; 64] = [
 ];
 
 /// The t12 community UTXO set: one single-key ML-DSA-87 P2PKH UTXO per entry, spendable from
-/// block 0, indices `0..TESTNET12_COMMUNITY_ALLOCATIONS.len()` on the t12 community sentinel txid.
+/// block 0, indices `0..TESTNET12_COMMUNITY_ALLOCATIONS.len()` on the t12 community txid
+/// ([`testnet12_community_txid`]).
 pub fn testnet12_community_utxos() -> UtxoCollection {
-    community_utxos_v1(TESTNET12_COMMUNITY_TXID, TESTNET12_COMMUNITY_ALLOCATIONS)
+    community_utxos_v1(testnet12_community_txid().as_bytes(), TESTNET12_COMMUNITY_ALLOCATIONS)
+}
+
+/// **The t12 community txid, separated like the premine's** (user decision, 2026-09-24): the
+/// `misaka-t12-community` sentinel was shared with every private testnet-12 instance built from the
+/// same table, so a member's spend there replayed here. Derived from the sentinel, the network id
+/// and [`PALW_T12_PREMINE_SALT`] exactly as [`premine_txid_for`] derives the premine's.
+pub fn testnet12_community_txid() -> Hash64 {
+    network_separated_txid(&TESTNET12_COMMUNITY_TXID, NetworkId::with_suffix(NetworkType::Testnet, 12))
 }
 
 /// The one construction path both community tables take: `(address, whole MSK)` rows become one
@@ -588,13 +648,13 @@ pub(crate) fn bonded_genesis_utxos(
     let mut carved: u64 = 0;
 
     // Genesis-bond collateral, at each card's DECLARED index (the outpoint IS the bond's
-    // identity — `PalwBondKeyV2(premine_outpoint(card.premine_index))` — so the collateral goes
+    // identity — `PalwBondKeyV2(premine_outpoint_for(net, card.premine_index))` — so the collateral goes
     // where the bond points, not where the card happens to sit in the list), owned by the main
     // wallet's key: "the main wallet bonds", there is no custody block.
     let collateral = genesis_bond_collateral_for(net);
     for (premine_index, _) in cards {
         assert!(*premine_index < MAIN_PREMINE_INDEX, "a genesis bond may not stake the main wallet itself or a float index");
-        utxos.push((premine_outpoint(*premine_index), premine_entry(collateral, main_spk.clone())));
+        utxos.push((premine_outpoint_for(net, *premine_index), premine_entry(collateral, main_spk.clone())));
         carved = carved.checked_add(collateral).expect("collateral cannot overflow");
     }
 
@@ -602,7 +662,7 @@ pub(crate) fn bonded_genesis_utxos(
     for (i, (_, payout_payload)) in cards.iter().enumerate() {
         let script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(payout_payload);
         utxos.push((
-            premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32),
+            premine_outpoint_for(net, MAIN_PREMINE_INDEX + 1 + i as u32),
             premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key),
         ));
         carved = carved.checked_add(PALW_RC_BOND_FEE_FLOAT_SOMPI).expect("floats cannot overflow");
@@ -619,7 +679,7 @@ pub(crate) fn bonded_genesis_utxos(
     let main_amount = MISAKA_PREMINE_CAP_SOMPI
         .checked_sub(carved)
         .expect("the 10B premine cap is a hard invariant: collateral + floats + community exceed it — shrink the carve-outs, never raise the cap");
-    utxos.push((premine_outpoint(MAIN_PREMINE_INDEX), premine_entry(main_amount, main_spk)));
+    utxos.push((premine_outpoint_for(net, MAIN_PREMINE_INDEX), premine_entry(main_amount, main_spk)));
 
     UtxoCollection::from_iter(utxos)
 }

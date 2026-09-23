@@ -14564,16 +14564,19 @@ pub fn palw_t12_shipped_params() -> Params {
     if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
         return palw_t12_base_params();
     }
+    let base = palw_t12_base_params();
+    // **Each card's bond is named on testnet-12's OWN premine txid** (`premine_outpoint_for`; user
+    // decision 2026-09-24, replay separation): the same indices as testnet-11's cards, on a txid
+    // no private chain that shared the sentinel ever minted.
     let bonds: Vec<_> = PALW_T12_GENESIS_BONDS
         .iter()
         .map(|c| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
-            bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(c.premine_index)),
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint_for(base.net, c.premine_index)),
             pubkey: c.bond_pubkey.to_vec(),
             operator_pubkey: c.operator_pubkey.to_vec(),
             payout_payload: crate::Hash64::from_bytes(c.payout_payload),
         })
         .collect();
-    let base = palw_t12_base_params();
     let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(base.net);
     let params = palw_v2_params_with_class_rows_v1(
         base,

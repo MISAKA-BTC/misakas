@@ -95,7 +95,7 @@ fn card_payout_spk(i: usize) -> ScriptPublicKey {
 fn t12_with_harness_cards()
 -> (Config, PalwConsensusParamsV2, Vec<(TransactionOutpoint, UtxoEntry)>, Vec<(TransactionOutpoint, UtxoEntry)>) {
     use kaspa_consensus_core::config::params::PALW_T12_GENESIS_BONDS;
-    use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint};
+    use kaspa_consensus_core::config::premine::{PALW_RC_BOND_FEE_FLOAT_SOMPI, genesis_premine_utxos_for, premine_outpoint_for};
     let shipped = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let mut params = shipped.clone();
     assert_eq!(PALW_T12_GENESIS_BONDS.len(), T12_GENESIS_CARDS);
@@ -108,7 +108,7 @@ fn t12_with_harness_cards()
             if let Obj::BondRegistered { bond, pubkey, payout_payload, .. } = object {
                 assert_eq!(
                     bond.0,
-                    premine_outpoint(PALW_T12_GENESIS_BONDS[row].premine_index),
+                    premine_outpoint_for(shipped.net, PALW_T12_GENESIS_BONDS[row].premine_index),
                     "card {row} keeps its collateral outpoint"
                 );
                 *pubkey = card_pubkey(row);

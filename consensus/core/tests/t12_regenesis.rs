@@ -81,7 +81,7 @@ fn t12_bond_collateral_matches_the_card() {
     // And the premine really holds it.
     let utxos = genesis_premine_utxos_for(t12());
     for card in PALW_T12_GENESIS_BONDS {
-        let held = utxos.get(&premine_outpoint(card.premine_index)).map(|e| e.amount);
+        let held = utxos.get(&premine_outpoint_for(t12(), card.premine_index)).map(|e| e.amount);
         assert_eq!(held, Some(PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI), "bond {} holds its declared collateral", card.premine_index);
     }
 }
@@ -260,25 +260,28 @@ fn t12_keeps_t11_peer_port() {
     assert_eq!(NetworkId::with_suffix(NetworkType::Testnet, 11).default_p2p_port(), 26311);
 }
 
-/// **The fleet's own command lines keep working across the regenesis.**
+/// **The fleet's premine INDICES are unchanged across the regenesis — on testnet-12's own txid.**
 ///
 /// Every live node names three premine outpoints on its command line — its bond's collateral index,
-/// its fee float index, and (through `--palw-producer-class`) the class it produces for. If any of
-/// them moved, the switch would look like a working deployment and every submission would fail: a
-/// `--palw-fee-outpoint` that names nothing funds no lifecycle transaction, and a producer whose
-/// escrow never releases is the closed loop the fee floats exist to open.
-///
-/// Measured off the hosts on 2026-09-22: bond-1 pairs with fee outpoint 42 … bond-6 with 47.
+/// its fee float index, and (through `--palw-producer-class`) the class it produces for. The indices
+/// keep their meaning (bond-1 pairs with fee outpoint 42 … bond-6 with 47, measured off the hosts
+/// on 2026-09-22), but since the 2026-09-24 replay separation they sit on
+/// `premine_txid_for(testnet-12)`, not on the sentinel every other network (and every private
+/// testnet-12 instance) used: a command line naming `<sentinel>:<index>` names nothing here, and must
+/// be rewritten to the new txid. Nothing on this chain sits on the sentinel at all.
 #[test]
-fn the_fleets_premine_outpoints_are_unchanged() {
+fn the_fleets_premine_indices_are_unchanged_on_t12s_own_txid() {
     let utxos = genesis_premine_utxos_for(t12());
+    let sentinel = premine_outpoint(0).transaction_id;
+    assert_ne!(premine_txid_for(t12()), sentinel, "testnet-12's premine is its own name");
+    assert!(utxos.keys().all(|o| o.transaction_id != sentinel), "no testnet-12 genesis output sits on the shared sentinel");
     // The floats sit after the main wallet, one per card, in card order.
     for (position, card) in PALW_T12_GENESIS_BONDS.iter().enumerate() {
         let float_index = MAIN_PREMINE_INDEX + 1 + position as u32;
-        let float = utxos.get(&premine_outpoint(float_index)).map(|e| e.amount);
+        let float = utxos.get(&premine_outpoint_for(t12(), float_index)).map(|e| e.amount);
         assert_eq!(float, Some(PALW_RC_BOND_FEE_FLOAT_SOMPI), "bond {} float at outpoint {float_index}", card.premine_index);
         // And the collateral sits at the card's own declared index, which is its bond identity.
-        let collateral = utxos.get(&premine_outpoint(card.premine_index)).map(|e| e.amount);
+        let collateral = utxos.get(&premine_outpoint_for(t12(), card.premine_index)).map(|e| e.amount);
         assert_eq!(collateral, Some(PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI), "bond {} collateral", card.premine_index);
     }
     // The eight the fleet runs after the regenesis (bond 0 on ibm beside bond 1, the re-keyed bond 7
@@ -526,4 +529,45 @@ fn t12_genesis_roots_are_all_read_from_committed_manifests() {
         checked += 1;
     }
     assert_eq!(checked, 3, "the floor and the two held dense rows are what this card registers");
+}
+
+/// **Replay separation (user decision, 2026-09-24): the public testnet-12 shares no premine outpoint
+/// and no genesis hash with any chain that used the sentinel.** The private testnet-12 instances ran
+/// the same card keys 0–7 on the sentinel txid, and the ML-DSA sighash commits to the spent outpoint
+/// but to neither the network nor the genesis — so a float spend signed there was valid here. Now
+/// no testnet-12 genesis output (premine or community) sits on a txid another network's genesis
+/// uses, the bond identities differ from testnet-11's, and the genesis hash is not the one the
+/// previous card (`f6cc9576…`) or any earlier testnet-12 minted.
+#[test]
+fn t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains() {
+    let t11 = NetworkId::with_suffix(NetworkType::Testnet, 11);
+    let t12_set = genesis_premine_utxos_for(t12());
+    for other in [
+        t11,
+        NetworkId::with_suffix(NetworkType::Testnet, 10),
+        NetworkId::new(NetworkType::Devnet),
+        NetworkId::new(NetworkType::Simnet),
+        NetworkId::new(NetworkType::Mainnet),
+    ] {
+        assert_eq!(premine_txid_for(other), premine_outpoint(0).transaction_id, "{other}: keeps the sentinel byte for byte");
+        let set = genesis_premine_utxos_for(other);
+        assert!(set.keys().all(|o| !t12_set.contains_key(o)), "{other}: no outpoint shared with testnet-12");
+    }
+    // The community table too: its own txid, not the `misaka-t12-community` sentinel.
+    let community = testnet12_community_utxos();
+    assert!(community.keys().all(|o| o.transaction_id == testnet12_community_txid()));
+    assert!(!testnet12_community_txid().as_bytes().starts_with(b"misaka-t12-community"), "derived, not the sentinel");
+    // Bond identities are outpoints, so testnet-12's are not testnet-11's (same indices, other txid).
+    for card in PALW_T12_GENESIS_BONDS {
+        assert_ne!(premine_outpoint_for(t12(), card.premine_index), premine_outpoint_for(t11, card.premine_index));
+    }
+    let p = Params::from(t12());
+    let hex = |h: kaspa_consensus_core::Hash64| h.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let genesis = hex(p.genesis.hash);
+    for superseded in ["f6cc957686f7047d", "a8cabac47b96fe30"] {
+        assert!(!genesis.starts_with(superseded), "the public genesis is not {superseded}…");
+    }
+    assert_eq!(p.genesis.timestamp, 1_788_220_800_000, "2026-09-01T00:00:00Z, testnet-12's own");
+    assert_ne!(p.genesis.timestamp, Params::from(t11).genesis.timestamp, "not the shared reference timestamp");
+    assert_ne!(p.genesis.hash, Params::from(t11).genesis.hash);
 }

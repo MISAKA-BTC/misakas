@@ -1,7 +1,8 @@
 # testnet-12 regenesis — deployment record, 2026-09-23
 
-> **状態（2026-09-23 夜更新）: 新しい genesis `f6cc9576…` で起動し直す準備中。consensus params
-> fingerprint と出荷 binary の sha256 は未確定（TBD）。** 別 session が実装中の DoS 監査修正
+> **状態（2026-09-24 更新）: 新しい genesis `d73dbf44…` で起動し直す準備中（`f6cc9576…` は
+> replay 分離で置き換えた。下の「replay 分離」）。consensus params fingerprint と出荷 binary の
+> sha256 は未確定（TBD）。** 別 session が実装中の DoS 監査修正
 > （#1〜#4、#5 の forfeiture 側、#6〜#8、#11〜#14）が merge されると consensus 側が動き、
 > fingerprint も変わる。merge 後の release build で下表の TBD を埋めてから配備する。
 >
@@ -16,13 +17,16 @@
 > それでも起動は「heartbeat が刻んだ」ことで成功と判定されていた。この経緯から、新 genesis の
 > 起動判定には lane の内訳（下の「起動判定」）を使う。
 
-## 新 genesis（`b791b460` 以降）
+## 新 genesis（2026-09-24 の replay 分離以降）
 
 | | |
 |---|---|
-| genesis hash | `f6cc957686f7047dc9fe6c9619d8f487237574b0596573af9d337c8f1f1980151b26256967a9a81f7ae31a5a352e249dd5426c0ce9144f75eb26a3ca3a963a30` |
+| genesis hash | `d73dbf44dbae3522c05de7aada567f9448221bc5c832393c9eb2996698e91aba2e638f0eea1f89bccbf72268750bb62deb1e958440136ca748727747f230fe18`（`f6cc9576…` を置き換え） |
+| genesis timestamp | `1788220800000`（2026-09-01T00:00:00Z）。t11 などが共有していた参照 timestamp `1748390400000` ではない |
 | hash_merkle_root | `5ef04d1b9a6cb09e728a970d2e0b75a0142ecacc4a373c9b719e47d6a0d2058cb048fa240e13f1bbb094dd4e195919ea041db2ee338f21de34364f885317f805`（初回配備と同じ。coinbase marker `misaka-palw-t12` も同じ） |
-| utxo commitment | `11669bc6403cd67f6c743b00cf6a5059e5639326d12e42d1dec47345f0359cba4ed701572a85d4d5794e17639ac60ebacf46be224e8042dba778f2ccf4c0c67d` |
+| utxo commitment | `12df48ae4c1b4a181e8746b2d888d55a12cd7d651f582f51e95d41c8c51b56a88fb027d40c3e94a433a7253d61c9cb202f2c5c89bbde112ca1c4f90ceae5478b` |
+| premine txid | `5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669`（`premine_txid_for(testnet-12)`。index は従来どおり: collateral 0〜7、main wallet 40、fee float 41〜48） |
+| community txid | `e3d638e58827755bdc78b362b499495c9607275b50a3ec2e1941f4ea75d38eda1c010f7796c637bd0b343d811a729291869c4658f36d6ca8d959baf8ed85064b`（`testnet12_community_txid()`、index 0〜15） |
 | consensus params fingerprint | **TBD**（DoS 修正の merge 後に確定。起動ログの `Consensus params fingerprint: … (network testnet-12)` 行と照合） |
 | release binary | **TBD**（`kaspad` / `misaka` / seeder の sha256。merge 後の release build） |
 | fence schedule | `1000`。ADR-0065 D1 の bond maturity window で、他の rule はすべて DAA 0 で武装している（`palw_t12_arm_every_rule_from_genesis`）。起動ログの `Consensus fence schedule:` 行でも確かめる |
@@ -31,6 +35,32 @@
 | genesis bond cards | card 0〜6 は `PALW_RC_GENESIS_BONDS` 0〜6 のまま（鍵は変わらない）。**card 7 は testnet-12 専用に鍵を替えた**（下記） |
 | classes | BASE-0 floor + dense Qwen2.5-1.5B graph-v7 @8,192 + @2,097,152。**hybrid 行は無い**（下記） |
 | P2P port | 26311（t11 と同じ。運用者の決定） |
+
+### replay 分離（2026-09-24、ユーザー決定）
+
+旧 card（`f6cc9576…`）の premine は、すべての network と同じ sentinel txid（ASCII
+`misaka-premine`）の上にあった。私設 testnet-12 も同じ binary 系列から同じ bond 鍵 0〜7 で作られて
+いる。ML-DSA の sighash は使う outpoint には署名するが、network にも genesis にも署名しない。
+そのため私設 chain で署名した float や collateral の spend が、そのまま公開 testnet-12 でも有効だった。
+
+* **premine txid を network ごとに分けた。** `premine_txid_for(testnet-12)` は
+  `BLAKE2b-512(key = "misaka-premine-txid/v1", sentinel ‖ "testnet-12" ‖ PALW_T12_PREMINE_SALT)`。
+  他の network（testnet-11、testnet-10、devnet、simnet、mainnet）は sentinel のままで、genesis と
+  fingerprint は動かない（`palw_the_release_did_not_move`、`every_genesis_commits_to_the_premine_this_build_mints`、
+  `test_genesis_hashes` がそれを確かめる）。
+* **community txid も同じ方法で分けた**（`testnet12_community_txid()`）。`misaka-t12-community`
+  sentinel は私設 chain と共有していたため。
+* **genesis timestamp も変えた**（2026-09-01T00:00:00Z）。commitment とは別に、block hash が参照
+  timestamp を共有する chain と一致しないようにするため。過去の日付なのは、wall clock より未来の
+  genesis だと最初の block が「too far into the future」で拒否されるため。
+* **運用上の影響: index は同じだが txid が変わる。** bond の identity（`PalwBondKeyV2`）は
+  outpoint なので、testnet-12 の bond は `5e0d5f1b…:<index>` になる。host の起動コマンドに
+  `--palw-producer-bond=<sentinel>:<i>` や `--palw-fee-outpoint=<sentinel>:<41+i>` と書いてある場合は、
+  新しい txid に書き換える必要がある。
+* 私設 chain の tx を公開 chain に流しても、名前の違う outpoint を使うので無効になる。
+  `t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains` と
+  `the_fleets_premine_indices_are_unchanged_on_t12s_own_txid`（consensus/core/tests/t12_regenesis.rs）
+  がこれを固定している。
 
 ### genesis の行
 
@@ -188,7 +218,7 @@ Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12
 
 | | |
 |---|---|
-| genesis hash | `a8cabac47b96fe30d9675ce08a355f62e6d57aac84865b0d6295c024c6d8ff61fb2d93943952e8da4c36ff87ea7f17f6c8de643fa7b02ecf7512892d590777dd` — **superseded by `f6cc9576…`** |
+| genesis hash | `a8cabac47b96fe30d9675ce08a355f62e6d57aac84865b0d6295c024c6d8ff61fb2d93943952e8da4c36ff87ea7f17f6c8de643fa7b02ecf7512892d590777dd` — **superseded by `f6cc9576…`, itself superseded by `d73dbf44…` (replay separation, 2026-09-24)** |
 | params fingerprint | `fb8f378df6373455e0c14d08c835184b86717ae3fc983039f9ded633be7fa38d` at first deploy; the live public nodes later ran `c746f07c…` |
 | fence schedule | **`1000`** — one height, ADR-0065 D1's bond-maturity window (t11's was `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`) |
 | rule manifest | `… palw_work_target=1 palw_independence=1` (digest `9def81a1…`) |
