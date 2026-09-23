@@ -15,7 +15,7 @@
 2. **対応している系統は 2 つ**（それぞれ変換ツールが違う）:
    | 系統 | catalog の行の例 | 入力 | 変換ツール |
    |---|---|---|---|
-   | dense A16（`base0-dense-v1`） | `Qwen/Qwen2.5-1.5B/graph-v7@2097152`, `…/graph-v5@512`, `Qwen/Qwen2.5-Coder-1.5B-Instruct` | HF の `config.json` + `tokenizer.json` + `model.safetensors` | `qwen25-convert` |
+   | dense A16（`base0-dense-v1`） | `Qwen/Qwen2.5-1.5B/graph-v7@2097152`, `…/graph-v7@8192`, `…/graph-v7@2048`, `…/graph-v5@512`, `Qwen/Qwen2.5-Coder-1.5B-Instruct` | HF の `config.json` + `tokenizer.json` + `model.safetensors` | `qwen25-convert` |
    | hybrid mmap（`qwen36-mmap-v1`） | `Qwen3.6-35B-A3B/graph-v7@512`, `…/graph-v7@2097152`, `Qwen/Qwen3.5-2B/graph-v3`, `Qwen/Qwen3.8-27B/graph-v3`, `huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3` | `Q4_K_M` の GGUF | `qwen36-convert` |
 
    **catalog に無いアーキテクチャは、ファイルを置いただけでは class にならない。** 幾何の定数と
@@ -37,6 +37,15 @@
    この build が drill できる family は 5 つ: `base0`, `qwen36`, `a16`, `a16-v5`, `qwen36-v6`。
    held hybrid 行（`Qwen3.6-35B-A3B/graph-v7@…`）を被覆するのは **`qwen36-v6` だけ**
    （2026-09-23 追加。それ以前は weightless 以外に登録できなかった）。
+   **ただし held hybrid 行は、登録・認証が通っても現在の build では attempt が完走しない**
+   （2026-09-23 実測）。graph-v7 の held map は GDN の畳み込み窓を `(2·k_dim + v_dim)·heads`
+   （12,288）で集めるが、engine の窓はそれと一致するのが key/value の head 数が等しいときだけで、
+   Qwen3.6-35B-A3B は k 16 / v 32（engine の窓は 8,192）。最初の recurrence checkpoint（prefill の
+   position 15）で `the prefill checkpoint at position 15: layer 0 holds a convolution window this
+   geometry does not describe`（`ConvIsNotTheGeometrys`）になる。map 名は consensus の一部なので、
+   直すには新しい map 版と class の再登録が要る。それまで held hybrid 行は block を作らない。
+   testnet-12 の genesis から hybrid 行を外したのはこのため（genesis は floor + dense
+   `graph-v7@8192` + dense `graph-v7@2097152`）。
 6. **登録者は自分の class を自分では活かせない**（ADR-0145 §7）: 登録直後の状態 `Registered` は
    「登録者**以外**の operator の seat が ready になる」まで `Prefetching` にも進まない。着席
    （§6）を他人に頼めることが前提。
@@ -106,9 +115,13 @@ palw-class preflight --network testnet-12 qwen36-35b-a3b-2m.palwart --model-id "
 ```
 
 * `inspect` は行ごとに `PAIRS … root …` か `no … — <理由>` を出す。**同じファイルが複数の行と
-  pair する**（例: Qwen3.6 の GGUF から作った 512 幅の artifact は `Qwen3.6-35B-A3B`（v1）,
-  `…/graph-v3`, `…/graph-v7@512` に pair する）。登録したい行を `--model-id` で名指しする。
-  幅が合わない行（512 幅のファイルに `@2097152`）は RoPE 表が足りず pair しない。
+  pair することがある**。登録したい行を `--model-id` で名指しする。
+  * dense は幅まで一致した行だけと pair する（実測: `--n-ctx 8192` の artifact の sidecar は
+    `graph-v7@8192` の 1 行だけ、2M の artifact は `graph-v7@2097152` の 1 行だけ）。
+  * **hybrid の pair 判定は context 幅を比べない（既知の穴）。** Qwen3.6 の 512 幅の artifact の
+    sidecar には `Qwen3.6-35B-A3B`（v1）, `…/graph-v3`, `…/graph-v7@512` に加えて
+    `…/graph-v7@2097152` の行も出る。RoPE 表は 512 位置分しか無いので、その組み合わせで
+    登録しても attempt は動かない。**hybrid は登録する行の幅で変換し直し、その幅の行を名指しする。**
 * `preflight` は admission gate そのもの（`verify_class_admission_v2`）を genesis の bundle に
   対して走らせ、拒否理由をチェーンと同じコードで返す。**ここで REFUSED ならチェーンでも
   REFUSED**（fee を払う前に分かる）。ただし genesis view なので、live chain が既に別 class を
@@ -247,13 +260,20 @@ Registered ──(登録者以外の operator の seat が ready)──> Prefetc
 
 | 行 | verification CCU | window | 表示 bond | required seats | seat 1 席の K/V（i16） |
 |---|---|---|---|---|---|
-| `Qwen3.6-35B-A3B/graph-v7@512`（genesis） | 1.6×10¹¹ | 2 spans | 2,000 MSK | 7 | 小 |
+| `Qwen/Qwen2.5-1.5B/graph-v7@8192`（genesis） | 1.39×10¹² | 3 spans | 3,000 MSK | 7 | ≈ 0.22 GiB（28 層 × 2 kv head × 128 × K/V 2 本 × 2 B × 8,192） |
 | `Qwen/Qwen2.5-1.5B/graph-v7@2097152`（genesis） | 3.36×10¹⁵ | 2,799 | 2,799,000 MSK | 7 | ≈ 7–11 GiB |
+| `Qwen3.6-35B-A3B/graph-v7@512`（登録候補、held map 修正待ち） | 1.6×10¹¹ | 2 spans | 2,000 MSK | 7 | 小 |
 | `Qwen3.6-35B-A3B/graph-v7@2097152`（登録候補） | 3.50×10¹⁵ | 2,918 | 2,918,000 MSK | 7 | **≥ 43 GB**（10 attn 層 × 2 kv head × 256 × K/V 2 本 × 2 B（i16 換算）× 2M。i32 なら 2 倍。GDN の状態は別） |
 
 つまり **2M の hybrid 行は 23 GiB のホスト 7 台では ready seat が 1 つも立たず、chain は
 `Prefetching`（ready 0 < 7）と名指しして Held 相当のまま止める**。これは path の故障ではなく
-registry の正しい答え。context を狭めた行（例 `@8192`、window 3 spans）なら同じ手順で立つ。
+registry の正しい答え。context を狭めた行（例 `@8192`、window 3 spans）なら同じ手順で立つ
+（testnet-12 はその 8k 行を genesis に持つ）。
+
+**seat の担保（testnet-12、option A）**: runtime は claim ごとに「escrow + weight」を bond に予約
+する（escrow は block 1 の subsidy 444,562,014,000 sompi × worker carve 720‰ = 3,200.85 MSK）。
+bond が同時に持てる claim 数は `担保 × 50 % ÷ (escrow + weight)` で決まり、担保に比例する。
+genesis の seat は floor 64 本 + 各 model 行 4 本で 939,063.21 MSK。
 
 market（任意、ADR-0087〜0090）: `misaka model market open <model> [--seed <MSK>]` で class の
 founding line を seed する（最小 seed 100,000 MSK、分割払い可）。position の売買は
@@ -282,6 +302,7 @@ catalog row  Qwen3.6-35B-A3B/graph-v7@2097152   class id b4b891afe49a59f5…
 | ready seats が増えない | 各 seat の `misaka model readiness`。予算不足（「a replay needs X GiB」）なら `--palw-host-memory-share`、operator が登録者と同じなら数えられない、proof が古い（`PALW_READINESS_LANDING_SPANS_V1` = 8 span） |
 | OOM で seat/producer が落ちる | 1 host の node 数と share を宣言する（`--palw-host-memory-budget`/`--palw-host-node-count`）。2M 行は attempt 1 回で ≈ 11.6 GiB（dense）〜 43 GB（hybrid K/V）を要求する |
 | `HeldMapNeedsItsFence` 等 | そのネットで fence が武装されていない。testnet-12 は全 fence が genesis から有効 |
+| hybrid の attempt が prefill の position 15 で `ConvIsNotTheGeometrys` | held map の欠陥（§0 の 5）。登録や artifact の問題ではない。新しい map 版が出るまで held hybrid 行は動かない |
 
 ## 10. 参照
 
