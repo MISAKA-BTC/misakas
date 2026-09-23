@@ -295,7 +295,8 @@ async fn wallet_facts(node: &NodeRead, address: &str) -> Result<WalletFacts, Str
     let after = node.nv.coinbase_spendable_after();
     let mut w = WalletFacts { address: address.to_string(), ..Default::default() };
     for u in &all {
-        if u.bonded {
+        // Held back from spenders either way: a bond's collateral, or this node's panel's funding.
+        if u.bonded || u.reserved {
             w.bonded_sompi += u.amount;
         } else if u.mature {
             w.spendable_sompi += u.amount;

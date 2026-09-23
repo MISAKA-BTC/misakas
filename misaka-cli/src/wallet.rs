@@ -46,7 +46,32 @@ pub(crate) struct Funding {
     /// bonded with, did not (audit M1-3): the bond is typically the largest UTXO at that address, and
     /// selection is largest-first. The overlay keeps running and consensus keeps locking its bonds
     /// (ADR-0126, ADR-0128), so the exclusion stays.
+    ///
+    /// **Only a registered bond outpoint is bonded.** The PALW half of the node's must-not-spend
+    /// list is a union (see [`LockedOutpoints`]), and the registry decides which member is a bond;
+    /// the rest is [`Funding::reserved`].
     pub(crate) bonded: bool,
+    /// **Held back by this node's own PALW panel, and NOT a bond** (audit3 H12): the outpoint the
+    /// panel funds its lifecycle carriers from — its `--palw-fee-outpoint` or a rolling successor,
+    /// i.e. output 0 of the panel's last carrier. The node lists it beside consensus-locked
+    /// collateral, and reading the whole list as `bonded` labelled bond 7's 99.96 MSK fee change
+    /// "locked bond collateral — NOT spendable" through the node hosting bond 7's panel, while bonds
+    /// 2 and 5's identical change read "mature", and `model add` under bond 7's key found nothing to
+    /// fund its carrier (testnet-12, 2026-09-23).
+    ///
+    /// A generic spender still leaves it alone ([`Funding::selectable`]): `wallet send` moving it
+    /// to another address is what left a panel unable to pay for a court move. A carrier filed
+    /// through `palw_fp::submit_objects` (`model add`) may take it last
+    /// (`palw_fp::lifecycle_candidates_v1`), because its change comes back here.
+    pub(crate) reserved: bool,
+}
+
+impl Funding {
+    /// May a spender that moves value away — `wallet send`, consolidate, a stake, a deposit —
+    /// select this output? Mature, not a bond's collateral, and not this node's panel's funding.
+    pub(crate) fn selectable(&self) -> bool {
+        self.mature && !self.bonded && !self.reserved
+    }
 }
 
 /// One connect + getServerInfo, shared by all wallet commands.
@@ -136,8 +161,8 @@ impl NodeView {
 ///
 /// So the predicate below is `locks`, read back: skip a bond that is releasable at the node's
 /// current DAA, exclude every other one.
-async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<TransactionOutpoint>, CliError> {
-    let mut out = std::collections::HashSet::new();
+async fn locked_bond_outpoints(nv: &NodeView) -> Result<LockedOutpoints, CliError> {
+    let mut out = LockedOutpoints::default();
     let mut cursor: Option<String> = None;
     loop {
         let resp = nv
@@ -179,7 +204,7 @@ async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSe
             if bond_is_releasable(&b, nv.virtual_daa) {
                 continue;
             }
-            out.insert(outpoint);
+            out.stake_bonds.insert(outpoint);
         }
         match resp.next_cursor {
             Some(next) if !next.is_empty() => cursor = Some(next),
@@ -223,9 +248,52 @@ async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSe
                 ),
             )
         })?;
-        out.insert(parsed);
+        out.palw.insert(parsed);
     }
     Ok(out)
+}
+
+/// **The node's must-not-spend set, kept by where each outpoint came from** — because only one of
+/// the sources is a bond.
+#[derive(Default)]
+pub(crate) struct LockedOutpoints {
+    /// DNS StakeBonds whose collateral consensus still locks (`getStakeBonds`): bonds by construction.
+    stake_bonds: std::collections::HashSet<TransactionOutpoint>,
+    /// `getPalwProducerFacts.locked_bond_outpoints`, which is deliberately ONE list of two things
+    /// (`rpc/core` documents it): PALW collateral consensus locks, and the outpoints this node's
+    /// panel reserved to fund its carriers. The wire cannot say which is which; the registry can.
+    palw: std::collections::HashSet<TransactionOutpoint>,
+}
+
+/// **`(bonded, reserved)` for one outpoint: only a registered bond outpoint is bonded.**
+///
+/// `registered` is the PALW registry's answer for an outpoint in the PALW half — `Some(true)` a
+/// bond is registered there, `Some(false)` the registry answered and holds none (so the node listed
+/// it as its panel's reservation), `None` it could not be asked. Unanswered fails closed: a member
+/// of the must-not-spend list the wallet cannot classify stays bonded.
+///
+/// What it replaces read every member of the union as bonded, and the union's reserved members are
+/// exactly one node's panel's fee change: output 0 of a lifecycle carrier, at the key that panel
+/// signs with. So the same output read "[bonded]" or "mature" depending on which node was asked.
+pub(crate) fn classify_locked(outpoint: &TransactionOutpoint, locks: &LockedOutpoints, registered: Option<bool>) -> (bool, bool) {
+    if locks.stake_bonds.contains(outpoint) {
+        return (true, false);
+    }
+    if !locks.palw.contains(outpoint) {
+        return (false, false);
+    }
+    match registered {
+        Some(false) => (false, true),
+        Some(true) | None => (true, false),
+    }
+}
+
+/// Does the PALW registry hold a bond at `outpoint`? `None` when the node could not say — no PALW
+/// state, or the call failed.
+async fn palw_bond_registered(nv: &NodeView, outpoint: &TransactionOutpoint) -> Option<bool> {
+    let bond = format!("{}:{}", outpoint.transaction_id, outpoint.index);
+    let read = nv.client.get_palw_claims(bond, "seat".to_string(), false, 1).await.ok()?;
+    read.available.then_some(read.bond_known)
 }
 
 /// `PalwSpendLocks::locks` read back: the collateral is free exactly when the bond is effectively
@@ -249,7 +317,7 @@ fn parse_outpoint_str(s: &str) -> Option<TransactionOutpoint> {
 }
 
 pub(crate) async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
-    let bonds = locked_bond_outpoints(nv).await?;
+    let locks = locked_bond_outpoints(nv).await?;
     let mut out = Vec::new();
     let mut cursor = String::new();
     loop {
@@ -273,8 +341,15 @@ pub(crate) async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Fun
                 None,
             );
             let outpoint: TransactionOutpoint = e.outpoint.into();
-            let bonded = bonds.contains(&outpoint);
-            out.push(Funding { outpoint, entry: e.utxo_entry.into(), mature, amount, bonded });
+            // The PALW half is a union; the registry is asked about the members at THIS address
+            // only — usually none, at most a bond and its panel's fee change.
+            let registered = if locks.palw.contains(&outpoint) && !locks.stake_bonds.contains(&outpoint) {
+                palw_bond_registered(nv, &outpoint).await
+            } else {
+                None
+            };
+            let (bonded, reserved) = classify_locked(&outpoint, &locks, registered);
+            out.push(Funding { outpoint, entry: e.utxo_entry.into(), mature, amount, bonded, reserved });
         }
         if resp.next_cursor.is_empty() {
             break;
@@ -349,11 +424,18 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
     // and no line anywhere saying the gap is a bond.
     let mut bonded_n = 0usize;
     let mut bonded_sum = 0u64;
+    // And this node's panel's funding is reported as what it is: an ordinary output the panel will
+    // spend, not collateral (testnet-12, 2026-09-23 — see `Funding::reserved`).
+    let mut reserved_n = 0usize;
+    let mut reserved_sum = 0u64;
     let mut imm_cb_daa: Option<(u64, u64)> = None; // (min, max) block daa of immature coinbase
     for u in &utxos {
         if u.bonded {
             bonded_n += 1;
             bonded_sum += u.amount;
+        } else if u.reserved {
+            reserved_n += 1;
+            reserved_sum += u.amount;
         } else if u.mature {
             mature_n += 1;
             mature_sum += u.amount;
@@ -373,6 +455,7 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
                     "mature": { "count": mature_n, "sompi": mature_sum },
                     "immature": { "count": imm_n, "sompi": imm_sum },
                     "bonded": { "count": bonded_n, "sompi": bonded_sum },
+                    "reserved": { "count": reserved_n, "sompi": reserved_sum },
                     "settlementAvailable": depths.is_some(),
                     "recent": newest.iter().map(|u| recent_output_json(u, depths.as_ref())).collect::<Vec<_>>() })
         ),
@@ -399,6 +482,12 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
                 println!(
                     "  bonded     : {bonded_n}  ({} MSK)  [locked bond collateral — NOT spendable; `wallet send` will not select it]",
                     sompi_to_msk(bonded_sum)
+                );
+            }
+            if reserved_n > 0 {
+                println!(
+                    "  reserved   : {reserved_n}  ({} MSK)  [this node's PALW panel funds its carriers from it — not a bond; `wallet send` leaves it to the panel, `model add` may fund a carrier from it last]",
+                    sompi_to_msk(reserved_sum)
                 );
             }
             if !newest.is_empty() {
@@ -445,7 +534,8 @@ fn newest_outputs(utxos: &[Funding], n: usize) -> Vec<&Funding> {
     newest
 }
 
-/// What an output is besides its amount: coinbase, not yet spendable, locked collateral.
+/// What an output is besides its amount: coinbase, not yet spendable, locked collateral, or held by
+/// this node's panel.
 fn output_marks(u: &Funding) -> Vec<&'static str> {
     let mut marks = Vec::new();
     if u.entry.is_coinbase {
@@ -453,6 +543,8 @@ fn output_marks(u: &Funding) -> Vec<&'static str> {
     }
     if u.bonded {
         marks.push("bonded");
+    } else if u.reserved {
+        marks.push("reserved");
     } else if !u.mature {
         marks.push("immature");
     }
@@ -487,6 +579,7 @@ fn recent_output_json(
         "coinbase": u.entry.is_coinbase,
         "mature": u.mature,
         "bonded": u.bonded,
+        "reserved": u.reserved,
     });
     if let Some(answer) = depths.and_then(|d| d.get(&u.entry.block_daa_score)) {
         row["settlement"] = json!({
@@ -523,8 +616,9 @@ pub async fn consolidate(
     let addr = key.funding_address(nv.params.prefix());
     let max_inputs = max_inputs.clamp(2, MAX_INPUTS_PER_TX);
 
-    // `!bonded`: never consolidate a validator's locked collateral into a change output (M1-3).
-    let mut mature: Vec<Funding> = page_all(&nv, &addr).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
+    // `selectable`: never consolidate a validator's locked collateral into a change output (M1-3),
+    // nor the panel's funding out from under it (H12).
+    let mut mature: Vec<Funding> = page_all(&nv, &addr).await?.into_iter().filter(|u| u.selectable()).collect();
     if mature.len() < 2 {
         return Err(CliError::new(exit::GENERIC, format!("nothing to consolidate: {} mature UTXO(s) at {addr}", mature.len())));
     }
@@ -646,11 +740,8 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     // Largest-first greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
     // `!bonded`: the bond is usually the LARGEST output at a validator's address, and selection
     // below is largest-first, so without this the default `wallet send` reaches for it first (M1-3).
-    let mut mature: Vec<Funding> = page_all(&nv, &from_addr)
-        .await?
-        .into_iter()
-        .filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase))
-        .collect();
+    let mut mature: Vec<Funding> =
+        page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.selectable() && (!coinbase_only || u.entry.is_coinbase)).collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
     let mut selected: Vec<&Funding> = Vec::new();
     let mut sum = 0u64;
@@ -796,6 +887,7 @@ mod recent_output_tests {
             mature,
             amount: 1_000 + daa,
             bonded,
+            reserved: false,
         }
     }
 
@@ -832,5 +924,55 @@ mod recent_output_tests {
         assert_eq!(json["blockDaaScore"], 300);
         assert_eq!(json["settlement"]["depth"], 2);
         assert!(recent_output_json(newest[0], None).get("settlement").is_none());
+    }
+}
+
+#[cfg(test)]
+mod locked_outpoint_tests {
+    //! **Only a registered bond outpoint is bonded** (testnet-12, 2026-09-23). The node's PALW
+    //! must-not-spend list unions consensus-locked collateral with the outpoints its own panel
+    //! reserved; reading the union as bonds marked bond 7's 99.96 MSK panel fee change
+    //! (`ec222814…:0`, DAA 11) "[bonded] locked bond collateral" on the node hosting that panel,
+    //! while bonds 2 and 5's identical change read "mature", and `model add` under bond 7's key
+    //! found nothing to fund its carrier.
+    use super::*;
+
+    fn op(word: u64, index: u32) -> TransactionOutpoint {
+        TransactionOutpoint::new(kaspa_consensus_core::Hash64::from_u64_word(word), index)
+    }
+
+    /// The t12 shape: a genesis bond's collateral (premine index 7) and the panel's fee change
+    /// (output 0 of its last carrier) are both on the node's list; the registry holds a bond at one.
+    #[test]
+    fn a_panel_reservation_is_reserved_not_bonded() {
+        let collateral = op(0x6d69, 7);
+        let fee_change = op(0xec22, 0);
+        let stake_bond = op(0x5a, 0);
+        let locks =
+            LockedOutpoints { stake_bonds: [stake_bond].into_iter().collect(), palw: [collateral, fee_change].into_iter().collect() };
+        assert_eq!(classify_locked(&collateral, &locks, Some(true)), (true, false), "the registered bond is bonded");
+        assert_eq!(classify_locked(&fee_change, &locks, Some(false)), (false, true), "the panel's fee change is reserved, not a bond");
+        assert_eq!(classify_locked(&op(0xec23, 0), &locks, None), (false, false), "an output 0 nothing lists is ordinary");
+        assert_eq!(classify_locked(&stake_bond, &locks, None), (true, false), "a DNS StakeBond needs no registry read");
+        assert_eq!(classify_locked(&fee_change, &locks, None), (true, false), "a member the registry cannot classify fails closed");
+    }
+
+    /// A reservation is marked as one and held back from a spender that moves value away.
+    #[test]
+    fn a_reservation_reads_reserved_and_is_not_selectable() {
+        let reserved = Funding {
+            outpoint: op(0xec22, 0),
+            entry: UtxoEntry::new(9_996_000_000, Default::default(), 11, false),
+            mature: true,
+            amount: 9_996_000_000,
+            bonded: false,
+            reserved: true,
+        };
+        assert!(!reserved.selectable());
+        assert_eq!(output_marks(&reserved), vec!["reserved"]);
+        let row = recent_output_json(&reserved, None);
+        assert_eq!((row["bonded"].clone(), row["reserved"].clone()), (json!(false), json!(true)));
+        let ordinary = Funding { reserved: false, ..reserved };
+        assert!(ordinary.selectable() && output_marks(&ordinary).is_empty());
     }
 }

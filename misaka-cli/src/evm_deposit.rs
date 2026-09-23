@@ -113,7 +113,7 @@ pub async fn deposit_lock(
         nv.params.mass_per_sig_op,
         nv.params.storage_mass_parameter,
     );
-    let mut mature: Vec<Funding> = page_all(&nv, &from).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
+    let mut mature: Vec<Funding> = page_all(&nv, &from).await?.into_iter().filter(|u| u.selectable()).collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
     let mut selected: Vec<&Funding> = Vec::new();
     let mut sum = 0u64;

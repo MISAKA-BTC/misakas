@@ -241,8 +241,10 @@ pub async fn status(ctx: &Ctx, ks: Option<&KeySource>, class_id: Option<&str>, b
     // Every UTXO at this address, with the node's own view of which are consensus-locked. The
     // intersection is this key's bonds; the rest is spendable.
     let all = page_all(&nv, &addr).await?;
-    let locked: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.bonded).collect();
-    let spendable: u64 = all.iter().filter(|u| !u.bonded && u.mature).map(|u| u.amount).sum();
+    // `locked` stays the node's whole set (bonds AND this node's panel reservation), which is what
+    // the text below says it is; `spendable` is what a spender may take.
+    let locked: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.bonded || u.reserved).collect();
+    let spendable: u64 = all.iter().filter(|u| u.selectable()).map(|u| u.amount).sum();
 
     match ctx.output {
         OutputFormat::Human => {
@@ -491,7 +493,7 @@ pub(crate) fn capability_carrier(
     classes: &std::collections::BTreeSet<kaspa_consensus_core::Hash64>,
 ) -> Result<(kaspa_consensus_core::tx::Transaction, u64, TransactionOutpoint), CliError> {
     let addr = key.funding_address(nv.params.prefix());
-    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
+    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.selectable()).collect();
     spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
     let fee = estimate_fee(key, &nv.params, 1, false);
     let funding = spendable.first().ok_or_else(|| {
@@ -713,7 +715,7 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id:
     // Fund the carrier from a MATURE, UNBONDED UTXO at this address. `page_all` already marks the
     // bonded ones, and spending collateral to pay for its own release is the one input choice that
     // could not possibly be meant.
-    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
+    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.selectable()).collect();
     spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
     let fee = estimate_fee(&key, &nv.params, 1, false);
     let funding = spendable.first().ok_or_else(|| {
