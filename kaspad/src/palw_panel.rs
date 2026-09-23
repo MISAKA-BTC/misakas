@@ -1136,10 +1136,6 @@ impl PalwPanelService {
             })
     }
 
-    fn replay_memory_need_bytes_v1(&self, class: Option<(Hash64, Hash64)>) -> u64 {
-        self.replay_memory_need_v1(class).total_bytes()
-    }
-
     /// **Could a full-seat replay of this class be reserved now?** The ledger's dry run
     /// (`ledger_admits_v1`, ADR-0151 follow-up, item 3) rather than a read of `MemAvailable`: a
     /// figure the ledger has already promised to the producer or another seat in this process is

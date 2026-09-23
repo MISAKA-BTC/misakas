@@ -376,7 +376,6 @@ impl A16DrillFaultSiteV1 {
 /// **The one capture loop this family has**, over either sink. A second loop would be a second
 /// enumeration, and two enumerations of one step space is two commitments.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 fn a16_execute_streaming_v1(
     artifact: &Base0ArtifactV1,
     profile: &PalwShapeProfileV3,

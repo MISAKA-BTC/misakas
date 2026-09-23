@@ -2760,7 +2760,8 @@ mod kv_storage_tests {
     }
 
     /// Everything a commitment can see of a cache: its decoded contents and its committed chunks.
-    fn observed(cache: &A16Cache, layers: usize, kv_dim: usize) -> ((Vec<Vec<i32>>, Vec<Vec<i32>>), Vec<Vec<u8>>) {
+    type Observed = ((Vec<Vec<i32>>, Vec<Vec<i32>>), Vec<Vec<u8>>);
+    fn observed(cache: &A16Cache, layers: usize, kv_dim: usize) -> Observed {
         (cache.contents_as_i32(), whole_state_chunks(cache, layers, kv_dim, cache.rows()))
     }
 
