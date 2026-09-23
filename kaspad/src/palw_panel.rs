@@ -1081,18 +1081,48 @@ impl PalwPanelService {
     /// figure is now the holding that serves the class asked about; with no class named (or none
     /// that resolves) it falls back to the old conservative maximum, because a need this node
     /// cannot place is not one it may under-state.
-    fn replay_memory_need_bytes_v1(&self, class: Option<(Hash64, Hash64)>) -> u64 {
-        let per_class =
-            class.and_then(|(class_id, artifact_root)| self.backends().incremental_replay_bytes_for_v1(class_id, artifact_root));
-        let artifact = per_class.unwrap_or_else(|| {
-            self.class_holdings.iter().filter_map(crate::palw_backends::holding_replay_bytes_v1).max().unwrap_or(0)
-        });
-        artifact.saturating_add(crate::palw_backends::PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1)
+    /// **What a full-seat replay of `class` needs on this node** — the role's resource profile
+    /// beside the holding's bytes, through the ONE composition the producer's gate reads too
+    /// (`role_memory_need_v1`; ADR-0151 follow-up, items 1–2). With no class named, the widest
+    /// holding plus the scratch estimate: the conservative figure a node with nothing resolved has.
+    fn replay_memory_need_v1(&self, class: Option<(Hash64, Hash64)>) -> crate::palw_backends::PalwRoleMemoryNeedV1 {
+        use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
+        class
+            .and_then(|(class_id, artifact_root)| self.backends().role_memory_need_v1(class_id, artifact_root, PalwResourceRoleV1::FullSeat))
+            .unwrap_or_else(|| crate::palw_backends::PalwRoleMemoryNeedV1 {
+                role: PalwResourceRoleV1::FullSeat,
+                holding_bytes: self.class_holdings.iter().filter_map(crate::palw_backends::holding_replay_bytes_v1).max().unwrap_or(0),
+                runtime: None,
+                profile: None,
+            })
     }
 
-    /// [`crate::palw_backends::replay_memory_budget_v1`] for the class this node is about to serve.
+    fn replay_memory_need_bytes_v1(&self, class: Option<(Hash64, Hash64)>) -> u64 {
+        self.replay_memory_need_v1(class).total_bytes()
+    }
+
+    /// **Could a full-seat replay of this class be reserved now?** The ledger's dry run
+    /// (`ledger_admits_v1`, ADR-0151 follow-up, item 3) rather than a read of `MemAvailable`: a
+    /// figure the ledger has already promised to the producer or another seat in this process is
+    /// not available, whatever the kernel says. The pre-check reserves nothing; the replay itself
+    /// takes the reservation when it starts.
     fn replay_memory_budget_v1(&self, class: Option<(Hash64, Hash64)>) -> Result<(), String> {
-        crate::palw_backends::replay_memory_budget_v1(self.replay_memory_need_bytes_v1(class))
+        let need = self.replay_memory_need_v1(class);
+        crate::palw_backends::ledger_admits_v1(need.total_bytes()).map_err(|why| format!("a replay needs {} and {why}", need.describe()))
+    }
+
+    /// **Take the ledger's reservation for a replay of `role`** — held for the replay's life, so a
+    /// duty that panics or errors returns its bytes. `Err` is the hold's sentence.
+    fn reserve_replay_v1(
+        &self,
+        role: &'static str,
+        need: &crate::palw_backends::PalwRoleMemoryNeedV1,
+        class_id: Hash64,
+        job: Hash64,
+    ) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+        crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
+            .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -4124,7 +4154,30 @@ impl PalwPanelService {
                         let roots_for_close = roots;
                         let resume_accused = self.consensus_config.params.palw_verification_v2_at(current_daa);
                         let accused_seats = duty.panel_seat_count;
+                        // **The close's replay bytes are RESERVED** (ADR-0151 follow-up, item 3): a
+                        // close that resumes a segment or opens a leaf re-executes the class, priced
+                        // here as a full seat — an upper bound over what the resume and the leaf's
+                        // replay walk — and a court that cannot reserve waits for the next tick
+                        // instead of dying mid-case with a session open against it.
+                        let court_need = self.backends().role_memory_need_for_backend_v1(
+                            backend.as_ref(),
+                            duty.class_id,
+                            duty.artifact_root,
+                            None,
+                            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
+                        );
+                        let court_reserved = match self.reserve_replay_v1("court", &court_need, duty.class_id, duty.claim_id) {
+                            Ok(reserved) => reserved,
+                            Err(why) => {
+                                *court_stalls.entry("the memory ledger cannot cover the close's replay").or_default() += 1;
+                                crate::palw_backends::note_throttled_v1("panel-court-ledger", || {
+                                    format!("[{PALW_PANEL}] session {}: the close waits — {why}", duty.session_id)
+                                });
+                                continue;
+                            }
+                        };
                         let Ok((_backend, assembled)) = offload(backend, move |b| {
+                            let _held_for_the_close = court_reserved;
                             // ADR-0133 S1 (4): a close of an accused leaf resumes the V2 segment
                             // that contains it from the published checkpoint, then still files the
                             // per-leaf refutation the chain's close check reads.
@@ -5092,7 +5145,33 @@ impl PalwPanelService {
                                 duty.claim_id,
                                 current_daa.saturating_sub(duty.bound_daa)
                             );
-                            match offload(resolved, move |b| b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)).await {
+                            // **The replay's bytes are RESERVED for its life** (ADR-0151 follow-up,
+                            // item 3): the full-seat need of THIS job, taken from the ledger before
+                            // the blocking task starts and released when it returns, so a producer's
+                            // attempt in this process cannot start beside it. A refusal defers the
+                            // duty to a later tick, as the pre-check's did.
+                            let need = self.backends().role_memory_need_for_backend_v1(
+                                resolved.as_ref(),
+                                duty.class_id,
+                                duty.artifact_root,
+                                Some(&ctx),
+                                kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
+                            );
+                            let reserved = match self.reserve_replay_v1("full-seat", &need, duty.class_id, duty.claim_id) {
+                                Ok(reserved) => reserved,
+                                Err(why) => {
+                                    crate::palw_backends::note_throttled_v1("panel-replay-ledger", || {
+                                        format!("[{PALW_PANEL}] replay of claim {} deferred: {why}", duty.claim_id)
+                                    });
+                                    break 'verdict None;
+                                }
+                            };
+                            match offload(resolved, move |b| {
+                                let _held_for_the_replay = reserved;
+                                b.execute_for_verdict(&ctx_for_blocking, &prompt_for_blocking)
+                            })
+                            .await
+                            {
                                 Ok((backend, Ok(roots))) => {
                                     if replay_licenses_v1(&roots, duty.execution_root, duty.trace_root, duty.work_leaves) {
                                         self.config.telemetry.panel_replay(
@@ -7825,6 +7904,26 @@ impl PalwPanelService {
             let Some(opening) = opening else {
                 missing.push(req);
                 continue;
+            };
+            // **Reserved for the segment's replay** (ADR-0151 follow-up, item 3): this segment's
+            // partial-seat need — the prefix to its end, plus the opening it decodes from — taken
+            // from the ledger for the replay's life and returned when the segment is done. A
+            // refusal waits for a later tick; the deadline runs, as it does for every other hold.
+            let need = self.backends().role_memory_need_for_backend_v1(
+                backend,
+                duty.class_id,
+                duty.artifact_root,
+                Some(job),
+                kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: index },
+            );
+            let _held_for_the_segment = match self.reserve_replay_v1("partial-seat", &need, duty.class_id, duty.claim_id) {
+                Ok(reserved) => reserved,
+                Err(why) => {
+                    crate::palw_backends::note_throttled_v1("panel-segment-ledger", || {
+                        format!("[{PALW_PANEL}] claim {} segment {index}: the resume waits — {why}", duty.claim_id)
+                    });
+                    return PalwV2SeatPathV1::Waiting;
+                }
             };
             match backend.replay_segment_from_checkpoint_v1(job, prompt, &opening) {
                 Ok(replay) if replay.matches => {}

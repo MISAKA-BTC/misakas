@@ -914,22 +914,40 @@ impl PalwProducerService {
         // Trivial at genesis difficulty and not trivial at all once the retarget pulls the search
         // out to the 120 s cadence, at which point that thread is busy essentially all the time and
         // every other service on the runtime is short one worker.
-        // **Fail closed on the attempt's own working set** (ADR-0151 follow-up, item 6). The K/V
-        // cache of a held-context attempt is sized by the prefill, not by the artifact: the 2M row's
-        // canonical job prefills 262,143 positions and its cache is ~15 GiB of `i32` rows. The run
-        // that found this had a 5.25 GiB share, no gate, and a dmesg line. A refusal here names the
-        // need and the budget, and holds — the same shape as every other producer hold.
-        if let Some(need) = backend.attempt_working_set_bytes(prompt.len()) {
-            let need = need.saturating_add(crate::palw_backends::PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1);
-            if let Err(why) = crate::palw_backends::replay_memory_budget_v1(need) {
-                return Err(format!(
-                    "this attempt would allocate {:.2} GiB for a {}-token prefill (its K/V cache plus scratch) and {why} — \
-                     holding rather than being OOM-killed; a narrower class, or a host with the memory, produces",
-                    need as f64 / (1u64 << 30) as f64,
+        // **Fail closed on the attempt's own working set, and RESERVE it** (ADR-0151 follow-up,
+        // items 1–3). The K/V cache of a held-context attempt is sized by the prefill, not by the
+        // artifact: the 2M row's canonical job prefills 262,143 positions and its cache is 14 GiB of
+        // `i32` rows (7 GiB of `i16`). The run that found this had a 5.25 GiB share, no gate, and a
+        // dmesg line. The need is the producer role's resource profile — the same derivation the
+        // panel's pre-check and the court read — and it is taken from the process-wide ledger
+        // before a byte is allocated, so a seat's replay in this process cannot start beside it on
+        // the strength of a `MemAvailable` that has not yet seen it. A refusal names the need, the
+        // bounds and every reservation already held, and holds — the same shape as every other
+        // producer hold. The reservation lives until this function returns, on every path.
+        let need = self.backends().role_memory_need_for_backend_v1(
+            backend.as_ref(),
+            facts.class_id,
+            facts.artifact_root,
+            Some(&job),
+            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer,
+        );
+        let _reserved = crate::palw_memory_ledger::host_ledger_v1()
+            .reserve(
+                crate::palw_memory_ledger::PalwMemoryReservationKeyV1 {
+                    role: "producer",
+                    class_id: facts.class_id,
+                    job: job.context_hash(),
+                },
+                need.total_bytes(),
+            )
+            .map_err(|refusal| {
+                format!(
+                    "this attempt needs {} for a {}-token prefill and {refusal} — holding rather than being OOM-killed; a \
+                     narrower class, a host with the memory, or the running duty finishing, produces",
+                    need.describe(),
                     prompt.len()
-                ));
-            }
-        }
+                )
+            })?;
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
         // ADR-0112 Decision 8: what one draw reads from storage, printed beside the draw. The

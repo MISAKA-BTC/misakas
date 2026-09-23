@@ -26,21 +26,26 @@ use kaspa_consensus_core::palw_base0_a16::{
 };
 use rayon::prelude::*;
 
-/// Op W9 through whichever implementation this engine was built with.
+/// Op W9 through whichever implementation this engine was built with — the key series at the width
+/// the cache holds it. **The decode point**: the fast kernels are generic over the width and widen
+/// each code at its multiply; the catalog op reads `i32` lanes and is handed a widening copy.
 #[inline]
 fn a16_attn_scores(
     fast: bool,
     q: &[i32],
-    k: &[i32],
+    k: KvSeriesRef<'_>,
     heads: usize,
     kv_heads: usize,
     d_head: usize,
     p: &[A16QuantParams],
 ) -> Result<Vec<i32>, PalwA16OpError> {
     if fast {
-        crate::kernels::a16_attn_scores_fast(q, k, heads, kv_heads, d_head, p)
+        match k {
+            KvSeriesRef::I32(k) => crate::kernels::a16_attn_scores_fast(q, k, heads, kv_heads, d_head, p),
+            KvSeriesRef::I16(k) => crate::kernels::a16_attn_scores_fast(q, k, heads, kv_heads, d_head, p),
+        }
     } else {
-        catalog_attn_scores(q, k, heads, kv_heads, d_head, p)
+        catalog_attn_scores(q, &k.as_i32(), heads, kv_heads, d_head, p)
     }
 }
 
@@ -52,16 +57,48 @@ fn a16_attn_values(
     fast: bool,
     history: usize,
     probs: &[i32],
-    v: &[i32],
+    v: KvSeriesRef<'_>,
     heads: usize,
     kv_heads: usize,
     d_head: usize,
     p: &[A16QuantParams],
 ) -> Result<Vec<i32>, PalwA16OpError> {
     if fast {
-        crate::kernels::a16_attn_values_fast_within(probs, v, heads, kv_heads, d_head, p, history)
+        match v {
+            KvSeriesRef::I32(v) => crate::kernels::a16_attn_values_fast_within(probs, v, heads, kv_heads, d_head, p, history),
+            KvSeriesRef::I16(v) => crate::kernels::a16_attn_values_fast_within(probs, v, heads, kv_heads, d_head, p, history),
+        }
     } else {
-        kaspa_consensus_core::palw_base0_a16::a16_attn_values_within(probs, v, heads, kv_heads, d_head, p, history)
+        kaspa_consensus_core::palw_base0_a16::a16_attn_values_within(probs, &v.as_i32(), heads, kv_heads, d_head, p, history)
+    }
+}
+
+/// The fused site's kernel (ADR-0082) over the two series at the width the cache holds them. One
+/// cache holds one width, so a mixed pair cannot come from a cache; it is refused rather than
+/// decoded twice.
+#[inline]
+#[allow(clippy::too_many_arguments)]
+fn a16_attn_fused_fast(
+    q: &[i32],
+    k: KvSeriesRef<'_>,
+    v: KvSeriesRef<'_>,
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    logits: A16QuantParams,
+    up_bits: u8,
+    probs: A16QuantParams,
+    values: A16QuantParams,
+    history: usize,
+) -> Result<Vec<i32>, PalwA16OpError> {
+    match (k, v) {
+        (KvSeriesRef::I32(k), KvSeriesRef::I32(v)) => {
+            crate::kernels::a16_attn_fused_uniform_fast_within(q, k, v, heads, kv_heads, d_head, logits, up_bits, probs, values, history)
+        }
+        (KvSeriesRef::I16(k), KvSeriesRef::I16(v)) => {
+            crate::kernels::a16_attn_fused_uniform_fast_within(q, k, v, heads, kv_heads, d_head, logits, up_bits, probs, values, history)
+        }
+        _ => Err(PalwA16OpError::Empty),
     }
 }
 use kaspa_consensus_core::palw_base0_ops::silu;
@@ -153,52 +190,287 @@ pub struct A16Engine<'a> {
     layers: Vec<LayerParams>,
 }
 
-/// **What one attempt's K/V cache costs, in bytes, for a prefill of `prefill_tokens`** — the number
-/// that was missing when the item 6 acceptance run's 2M producer went from 2.3 to 20.8 GiB of
-/// anonymous memory in one minute and was OOM-killed.
+/// **The representation this engine holds its attention cache in** — consensus core's
+/// [`PalwRuntimeProfileV1`](kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1),
+/// under the name the engine uses for it. A node-local choice with a name: the resource profile
+/// prices it, the telemetry reports it, and no committed byte depends on it.
+pub use kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1 as KvStorageProfileV1;
+
+/// **What a backend built without saying holds: `A16-KV-i16`.**
 ///
-/// [`A16Cache`] is `Vec<Vec<Vec<i32>>>` twice: per layer, per position, one `Vec<i32>` of `kv_dim`
-/// for K and one for V (`walk_table` pushes `rope_heads(..)` and `v[i].clone()` per position). So a
-/// position costs `layers × 2 × kv_dim × 4` bytes of payload plus two heap vectors per layer — the
-/// allocator's header and the `Vec`'s own 24 bytes, taken here as 40 a vector, which is glibc's
-/// rounding for a 1 KiB request plus the header.
+/// Half the resident bytes of the `i32` cache and the same committed bytes, the same roots and the
+/// same verdicts — held by `kv_storage_tests` on every graph version, both engines, the stepped and
+/// the one-pass walks, across a checkpoint restart, and at the backend by
+/// `the_backend_commits_the_same_roots_under_every_runtime_profile`. `A16-KV-i32` stays selectable
+/// (`Qwen25A16Backend::with_runtime_profile`) as the oracle those tests compare against.
+pub const KV_STORAGE_SHIPPED_V1: KvStorageProfileV1 = KvStorageProfileV1::A16KvI16;
+
+/// **One side of one layer's history — K or V — flat and position-major**: row `p` is elements
+/// `p × kv_dim .. (p + 1) × kv_dim`, so the series the attention arms read is a SLICE of the
+/// storage rather than a copy of it.
 ///
-/// For the shipped 2M held row (28 layers, `kv_dim` 256, canonical prefill 262,143) that is
-/// 14.7 GiB of payload and ~0.5 GiB of headers: the 15–16 GiB the run measured. A panel's replay
-/// estimate was the artifact's FILE SIZE plus 512 MiB (3.17 GiB) — five times too small, because a
-/// file-size proxy says nothing about a context that is two hundred thousand positions wide.
+/// This replaces `Vec<Vec<i32>>` per layer, which cost the 2M attempt two things beyond its
+/// payload: 14.7 million one-kilobyte heap vectors (the allocator slack the item 6 run measured as
+/// 16.05 GiB against 14.55 GiB of payload), and a fresh concatenation of the whole history for
+/// every attention read — `walk_table` built `k_series`/`v_series` per position, `walk_layer_batched`
+/// once per run of positions: 2 × 268 MB per layer at 262,143 rows, copied for every one of 4,096
+/// runs of the prefill. A slice costs neither.
 ///
-/// This is a payload figure for a DENSE `i32` cache. The committed representation is already `i8`
-/// (`state_chunk_bytes_v1` narrows on the way out), so the same context could be held in a quarter
-/// of this with flat per-layer buffers; that is an engine change and a decision, not a gate.
-pub fn a16_attempt_working_set_bytes_v1(n_layers: usize, kv_dim: usize, prefill_tokens: usize) -> u64 {
-    const VEC_OVERHEAD_BYTES: u64 = 40;
-    /// **Measured, not chosen.** The payload-plus-headers figure for the 2M canonical attempt is
-    /// 14.55 GiB; the run's anonymous memory rose 16.05 GiB in the minute that attempt started. The
-    /// difference is what 14.7 million one-kilobyte vectors cost an allocator beyond their headers.
-    /// A gate that under-states by a tenth is a gate that lets the kill through, so the figure carries
-    /// the slack by name rather than by a rounder number somewhere else.
-    const ALLOCATOR_SLACK_PERMILLE: u64 = 150;
-    let per_position_payload = (n_layers as u64) * 2 * (kv_dim as u64) * 4;
-    let per_position_headers = (n_layers as u64) * 2 * VEC_OVERHEAD_BYTES;
-    let exact = (prefill_tokens as u64).saturating_mul(per_position_payload + per_position_headers);
-    exact.saturating_add(exact / 1000 * ALLOCATOR_SLACK_PERMILLE)
+/// The two widths are the two runtime profiles. Every element either holds is an A16 code
+/// (`±32,767`): `a16_rope` and `a16_matmul_requant` — the two producers of cached rows — both end
+/// in `clamp16`, and every consumer refuses a wider value. So the `i16` form is a lossless repack
+/// and `push_row` REFUSES a value it could not hold rather than narrowing it, for the reason
+/// `state_chunk_bytes_v1` refuses: a cache that silently held a different value would commit
+/// checkpoints the producer never computed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum KvSideV1 {
+    I32(Vec<i32>),
+    I16(Vec<i16>),
 }
 
+impl KvSideV1 {
+    fn empty(profile: KvStorageProfileV1) -> Self {
+        match profile {
+            KvStorageProfileV1::A16KvI32 => KvSideV1::I32(Vec::new()),
+            KvStorageProfileV1::A16KvI16 => KvSideV1::I16(Vec::new()),
+        }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            KvSideV1::I32(v) => v.len(),
+            KvSideV1::I16(v) => v.len(),
+        }
+    }
+
+    fn reserve_exact(&mut self, elements: usize) {
+        match self {
+            KvSideV1::I32(v) => v.reserve_exact(elements.saturating_sub(v.len())),
+            KvSideV1::I16(v) => v.reserve_exact(elements.saturating_sub(v.len())),
+        }
+    }
+
+    /// Append one row. Under the `i16` profile a value outside the code range is a refusal — an
+    /// element no A16 op could have produced and no attention read would accept.
+    fn push_row(&mut self, row: &[i32]) -> Result<(), A16EngineError> {
+        match self {
+            KvSideV1::I32(v) => v.extend_from_slice(row),
+            KvSideV1::I16(v) => {
+                v.reserve(row.len());
+                for value in row {
+                    if value.unsigned_abs() > A16_CODE_MAX_U32 {
+                        return Err(A16EngineError::OpRefused("a cache write outside the A16 code range under the i16 profile"));
+                    }
+                    v.push(*value as i16);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn series(&self, elements: usize) -> KvSeriesRef<'_> {
+        match self {
+            KvSideV1::I32(v) => KvSeriesRef::I32(&v[..elements]),
+            KvSideV1::I16(v) => KvSeriesRef::I16(&v[..elements]),
+        }
+    }
+
+    fn as_i32(&self, start: usize, end: usize) -> Vec<i32> {
+        match self {
+            KvSideV1::I32(v) => v[start..end].to_vec(),
+            KvSideV1::I16(v) => v[start..end].iter().map(|c| i32::from(*c)).collect(),
+        }
+    }
+
+    /// Bytes the allocator was asked for: the capacity, at the element width.
+    fn resident_bytes(&self) -> u64 {
+        match self {
+            KvSideV1::I32(v) => v.capacity() as u64 * 4,
+            KvSideV1::I16(v) => v.capacity() as u64 * 2,
+        }
+    }
+}
+
+const A16_CODE_MAX_U32: u32 = kaspa_consensus_core::palw_base0_a16::A16_CODE_MAX as u32;
+
+/// **A borrowed prefix of a series, at the width the cache holds it** — the one type the attention
+/// arms take, so "decode at the arithmetic point" is a single `match`: the fast kernels are generic
+/// over the width and widen each code at its multiply (exact for every A16 code); the catalog ops
+/// read `i32` lanes and are handed [`Self::as_i32`], a widening copy for `i16` and a borrow for
+/// `i32`. There is no third place a code changes width.
+#[derive(Clone, Copy, Debug)]
+pub enum KvSeriesRef<'a> {
+    I32(&'a [i32]),
+    I16(&'a [i16]),
+}
+
+impl<'a> KvSeriesRef<'a> {
+    pub fn len(&self) -> usize {
+        match self {
+            KvSeriesRef::I32(s) => s.len(),
+            KvSeriesRef::I16(s) => s.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The first `elements` of this series.
+    pub fn prefix(&self, elements: usize) -> KvSeriesRef<'a> {
+        match self {
+            KvSeriesRef::I32(s) => KvSeriesRef::I32(&s[..elements]),
+            KvSeriesRef::I16(s) => KvSeriesRef::I16(&s[..elements]),
+        }
+    }
+
+    /// The series in the lane the catalog ops read. `i16 → i32` is a widening cast: exact.
+    pub fn as_i32(&self) -> std::borrow::Cow<'a, [i32]> {
+        match self {
+            KvSeriesRef::I32(s) => std::borrow::Cow::Borrowed(s),
+            KvSeriesRef::I16(s) => std::borrow::Cow::Owned(s.iter().map(|c| i32::from(*c)).collect()),
+        }
+    }
+}
+
+/// The dense tier's attention cache: per layer, the K and V histories, held flat under a
+/// [`KvStorageProfileV1`].
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct A16Cache {
-    keys: Vec<Vec<Vec<i32>>>,
-    values: Vec<Vec<Vec<i32>>>,
+    profile: KvStorageProfileV1,
+    /// Codes per row, learned at the first push (zero until then); every later row must match.
+    kv_dim: usize,
+    keys: Vec<KvSideV1>,
+    values: Vec<KvSideV1>,
 }
 
 impl A16Cache {
+    /// A cache in the reference representation (`A16-KV-i32`). Every test instrument and every
+    /// caller that never chose keeps the oracle; the production paths say which profile they hold
+    /// ([`Self::with_storage`]).
     pub fn new(layers: usize) -> Self {
-        Self { keys: vec![Vec::new(); layers], values: vec![Vec::new(); layers] }
+        Self::with_storage(layers, KvStorageProfileV1::A16KvI32)
+    }
+
+    pub fn with_storage(layers: usize, profile: KvStorageProfileV1) -> Self {
+        Self {
+            profile,
+            kv_dim: 0,
+            keys: (0..layers).map(|_| KvSideV1::empty(profile)).collect(),
+            values: (0..layers).map(|_| KvSideV1::empty(profile)).collect(),
+        }
+    }
+
+    pub fn storage(&self) -> KvStorageProfileV1 {
+        self.profile
+    }
+
+    /// **Reserve the whole job's rows up front**, so the buffers never double and never copy while
+    /// the walk runs: a job's length is known before its first position, and a `Vec` that grows by
+    /// doubling holds up to twice its payload and, at each step, the old buffer beside the new. The
+    /// reservation is virtual until touched, so an over-estimate costs address space and not pages.
+    pub fn reserve_positions(&mut self, positions: usize, kv_dim: usize) {
+        if kv_dim == 0 {
+            return;
+        }
+        if self.kv_dim == 0 {
+            self.kv_dim = kv_dim;
+        }
+        let elements = positions.saturating_mul(kv_dim);
+        for side in self.keys.iter_mut().chain(self.values.iter_mut()) {
+            side.reserve_exact(elements);
+        }
     }
 
     /// The rows the cache holds — the positions a walk has run. One forward appends one row to
     /// every layer, so the first layer's count is every layer's.
     pub fn rows(&self) -> usize {
-        self.keys.first().map_or(0, Vec::len)
+        self.rows_in(0)
+    }
+
+    /// The key rows layer `li` holds — which differ between layers only inside a layer-major walk.
+    pub fn rows_in(&self, li: usize) -> usize {
+        if self.kv_dim == 0 { 0 } else { self.keys.get(li).map_or(0, |k| k.len() / self.kv_dim) }
+    }
+
+    /// The value rows layer `li` holds — equal to the key rows except between a layer's K write and
+    /// its V write.
+    pub fn value_rows_in(&self, li: usize) -> usize {
+        if self.kv_dim == 0 { 0 } else { self.values.get(li).map_or(0, |v| v.len() / self.kv_dim) }
+    }
+
+    fn learn_width(&mut self, row: &[i32]) -> Result<(), A16EngineError> {
+        if row.is_empty() {
+            return Err(A16EngineError::OpRefused("an empty cache row"));
+        }
+        if self.kv_dim == 0 {
+            self.kv_dim = row.len();
+        } else if self.kv_dim != row.len() {
+            return Err(A16EngineError::OpRefused("a cache row of a different width from the rows before it"));
+        }
+        Ok(())
+    }
+
+    /// Append one position's rotated key row to layer `li`.
+    pub fn push_key(&mut self, li: usize, row: &[i32]) -> Result<(), A16EngineError> {
+        self.learn_width(row)?;
+        self.keys.get_mut(li).ok_or(A16EngineError::OpRefused("a cache write to a layer this cache lacks"))?.push_row(row)
+    }
+
+    /// Append one position's value row to layer `li`.
+    pub fn push_value(&mut self, li: usize, row: &[i32]) -> Result<(), A16EngineError> {
+        self.learn_width(row)?;
+        self.values.get_mut(li).ok_or(A16EngineError::OpRefused("a cache write to a layer this cache lacks"))?.push_row(row)
+    }
+
+    /// Layer `li`'s key series, every row, position-major — the court's canonical concatenation,
+    /// as a slice.
+    pub fn keys(&self, li: usize) -> KvSeriesRef<'_> {
+        self.keys[li].series(self.keys[li].len())
+    }
+
+    pub fn values(&self, li: usize) -> KvSeriesRef<'_> {
+        self.values[li].series(self.values[li].len())
+    }
+
+    /// The first `rows` rows of layer `li`'s key series — what a position in a batch sees.
+    pub fn keys_visible(&self, li: usize, rows: usize) -> Result<KvSeriesRef<'_>, A16EngineError> {
+        let elements = rows.saturating_mul(self.kv_dim);
+        if elements > self.keys[li].len() {
+            return Err(A16EngineError::MalformedParams("a cache read before its write"));
+        }
+        Ok(self.keys[li].series(elements))
+    }
+
+    pub fn values_visible(&self, li: usize, rows: usize) -> Result<KvSeriesRef<'_>, A16EngineError> {
+        let elements = rows.saturating_mul(self.kv_dim);
+        if elements > self.values[li].len() {
+            return Err(A16EngineError::MalformedParams("a cache read before its write"));
+        }
+        Ok(self.values[li].series(elements))
+    }
+
+    /// Layer `li`'s whole key series decoded to `i32` — the representation-free view a test
+    /// compares two caches through.
+    pub fn keys_as_i32(&self, li: usize) -> Vec<i32> {
+        self.keys[li].as_i32(0, self.keys[li].len())
+    }
+
+    pub fn values_as_i32(&self, li: usize) -> Vec<i32> {
+        self.values[li].as_i32(0, self.values[li].len())
+    }
+
+    /// Every layer's K and V series decoded to `i32`: `(keys, values)`, per layer. Two caches with
+    /// equal contents compute the same attention whatever their profiles.
+    pub fn contents_as_i32(&self) -> (Vec<Vec<i32>>, Vec<Vec<i32>>) {
+        ((0..self.keys.len()).map(|li| self.keys_as_i32(li)).collect(), (0..self.values.len()).map(|li| self.values_as_i32(li)).collect())
+    }
+
+    /// Bytes the cache's buffers were allocated at — the measured twin of the resource profile's
+    /// `kv_resident_bytes`, which `the_resident_bytes_are_the_resource_profiles_kv_term` holds equal
+    /// after an exact reservation.
+    pub fn resident_bytes_v1(&self) -> u64 {
+        self.keys.iter().chain(self.values.iter()).map(KvSideV1::resident_bytes).sum()
     }
     /// **This cache's bytes for one state chunk, encoded the way the MAP says — or nothing.**
     ///
@@ -227,20 +499,32 @@ impl A16Cache {
             PalwStateChunkKindV1::Value => &self.values,
         };
         let layer = side.get(entry.attn_layer as usize)?;
-        let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
-        for p in entry.position_start..entry.position_start + entry.position_count {
-            let row = layer.get(p as usize)?;
-            let declared = entry.row_bytes as usize;
-            if declared == row.len() {
-                for value in row {
-                    out.push(i8::try_from(*value).ok()? as u8);
-                }
-            } else if declared == row.len().checked_mul(4)? {
-                for value in row {
-                    out.extend_from_slice(&value.to_le_bytes());
-                }
+        let width = self.kv_dim;
+        if width == 0 {
+            return None;
+        }
+        let declared = entry.row_bytes as usize;
+        let per_element = if declared == width {
+            1
+        } else if declared == width.checked_mul(4)? {
+            4
+        } else {
+            return None;
+        };
+        let start = (entry.position_start as usize).checked_mul(width)?;
+        let end = start.checked_add((entry.position_count as usize).checked_mul(width)?)?;
+        if end > layer.len() {
+            return None;
+        }
+        // Decoded once for the range — a widening for the `i16` profile, a copy for `i32` — and
+        // encoded exactly as the `i32` cache encoded: the same bytes under either representation,
+        // which `a_compact_cache_computes_the_reference_bits` compares chunk for chunk.
+        let mut out = Vec::with_capacity((entry.position_count as usize) * declared);
+        for value in layer.as_i32(start, end) {
+            if per_element == 1 {
+                out.push(i8::try_from(value).ok()? as u8);
             } else {
-                return None;
+                out.extend_from_slice(&value.to_le_bytes());
             }
         }
         Some(out)
@@ -262,7 +546,19 @@ impl A16Cache {
     /// `KvCache::from_state_chunks` states: a cache assembled from material that does not cover
     /// the state replays against zeros, and zeros are indistinguishable from computed rows once
     /// they are in a commitment.
+    ///
+    /// **The profile is the CALLER's** — a seat resuming under `A16-KV-i16` decodes a producer's
+    /// `i32` chunks into `i16` rows, which is exact for every code and a named refusal for a byte
+    /// that is not one: the reference cache would hold such a value and refuse it at the first
+    /// attention read, this cache refuses it here; either way the replay fails rather than
+    /// computing over a row the class's arithmetic could never have written.
+    ///
+    /// **Coverage is a bitmap, not a length**: a flat buffer that a chunk never wrote reads as
+    /// zeros, and zeros are indistinguishable from computed rows once they are in a commitment —
+    /// so every `(kind, layer, position)` the map names is ticked as it is written and the whole
+    /// map is checked at the end, which is exactly the guard the row-per-`Vec` layout got for free.
     pub fn from_state_chunks_v1(
+        storage: KvStorageProfileV1,
         layers: usize,
         row_elements: usize,
         geometry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1,
@@ -275,11 +571,17 @@ impl A16Cache {
             return Err(A16EngineError::OpRefused("the served chunks are not the map's own count"));
         }
         let positions = geometry.positions as usize;
-        let mut cache = Self::new(layers);
-        for side in [&mut cache.keys, &mut cache.values] {
-            for layer in side.iter_mut() {
-                layer.resize(positions, Vec::new());
+        let mut cache = Self::with_storage(layers, storage);
+        cache.kv_dim = row_elements;
+        let elements = positions.checked_mul(row_elements).ok_or(A16EngineError::OpRefused("the map's state overflows"))?;
+        let mut written: Vec<Vec<bool>> = vec![vec![false; positions]; 2 * layers];
+        for layer in geometry.attn_layers.iter() {
+            let li = *layer as usize;
+            if li >= layers {
+                return Err(A16EngineError::OpRefused("the map names a layer this cache lacks"));
             }
+            cache.keys[li] = KvSideV1::zeroed(storage, elements);
+            cache.values[li] = KvSideV1::zeroed(storage, elements);
         }
         for (index, bytes) in chunks.iter().enumerate() {
             let entry = integer_kv_state_chunk_entry_v1(geometry, index as u64)
@@ -292,6 +594,12 @@ impl A16Cache {
             } else {
                 return Err(A16EngineError::OpRefused("the map describes a row this cache does not hold"));
             };
+            let li = entry.attn_layer as usize;
+            let (side, ticks) = match entry.kind {
+                PalwStateChunkKindV1::Key => (&mut cache.keys, &mut written[li]),
+                PalwStateChunkKindV1::Value => (&mut cache.values, &mut written[layers + li]),
+            };
+            let layer = side.get_mut(li).ok_or(A16EngineError::OpRefused("the map names a layer this cache lacks"))?;
             for p in entry.position_start..entry.position_start + entry.position_count {
                 let row =
                     integer_kv_state_row_v1(&entry, bytes, p).ok_or(A16EngineError::OpRefused("a chunk is not its own length"))?;
@@ -300,24 +608,20 @@ impl A16Cache {
                 } else {
                     row.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
                 };
-                let side = match entry.kind {
-                    PalwStateChunkKindV1::Key => &mut cache.keys,
-                    PalwStateChunkKindV1::Value => &mut cache.values,
-                };
-                let layer = side
-                    .get_mut(entry.attn_layer as usize)
-                    .ok_or(A16EngineError::OpRefused("the map names a layer this cache lacks"))?;
-                layer[p as usize] = values;
+                let p = p as usize;
+                if p >= positions {
+                    return Err(A16EngineError::OpRefused("the map names a position past the state it declares"));
+                }
+                layer.write_row_at(p * row_elements, &values)?;
+                ticks[p] = true;
             }
         }
-        // Every attention layer the map named must now be full at the declared width. A layer it
-        // never named keeps its empty rows, and replaying over those is the zero-state failure.
-        for side in [&cache.keys, &cache.values] {
-            for layer in geometry.attn_layers.iter() {
-                let rows = side.get(*layer as usize).ok_or(A16EngineError::OpRefused("the map names a layer this cache lacks"))?;
-                if rows.len() != positions || rows.iter().any(|r| r.len() != row_elements) {
-                    return Err(A16EngineError::OpRefused("the served chunks do not cover the state they declare"));
-                }
+        // Every attention layer the map named must now be covered, both kinds, every position. A
+        // layer it never named stays empty, and replaying over that is the zero-state failure.
+        for layer in geometry.attn_layers.iter() {
+            let li = *layer as usize;
+            if written[li].iter().any(|w| !w) || written[layers + li].iter().any(|w| !w) {
+                return Err(A16EngineError::OpRefused("the served chunks do not cover the state they declare"));
             }
         }
         Ok(cache)
@@ -328,14 +632,47 @@ impl A16Cache {
     /// caller, and what it measures decides whether a checkpoint map is sound for this family.
     #[cfg(test)]
     pub(crate) fn key_rows_for_test(&self) -> Vec<Vec<i32>> {
-        self.keys.iter().flatten().cloned().collect()
+        if self.kv_dim == 0 {
+            return Vec::new();
+        }
+        (0..self.keys.len()).flat_map(|li| self.keys_as_i32(li).chunks(self.kv_dim).map(<[i32]>::to_vec).collect::<Vec<_>>()).collect()
     }
 
     pub fn len(&self) -> usize {
-        self.keys.first().map_or(0, |k| k.len())
+        self.rows()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+impl KvSideV1 {
+    fn zeroed(profile: KvStorageProfileV1, elements: usize) -> Self {
+        match profile {
+            KvStorageProfileV1::A16KvI32 => KvSideV1::I32(vec![0; elements]),
+            KvStorageProfileV1::A16KvI16 => KvSideV1::I16(vec![0; elements]),
+        }
+    }
+
+    /// Overwrite one row at `offset` (elements) — the restore's write, refusing a value the
+    /// profile cannot hold rather than narrowing it.
+    fn write_row_at(&mut self, offset: usize, row: &[i32]) -> Result<(), A16EngineError> {
+        match self {
+            KvSideV1::I32(v) => {
+                let slot = v.get_mut(offset..offset + row.len()).ok_or(A16EngineError::OpRefused("a chunk row past the state"))?;
+                slot.copy_from_slice(row);
+            }
+            KvSideV1::I16(v) => {
+                let slot = v.get_mut(offset..offset + row.len()).ok_or(A16EngineError::OpRefused("a chunk row past the state"))?;
+                for (s, value) in slot.iter_mut().zip(row) {
+                    if value.unsigned_abs() > A16_CODE_MAX_U32 {
+                        return Err(A16EngineError::OpRefused("a served chunk holds a value outside the A16 code range under the i16 profile"));
+                    }
+                    *s = *value as i16;
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -508,7 +845,7 @@ impl<'a> A16Engine<'a> {
             let k = a16_matmul_requant_batch(&lw.wk, &normed, &lp.k).map_err(refuse("k"))?;
             let v = a16_matmul_requant_batch(&lw.wv, &normed, &lp.v).map_err(refuse("v"))?;
 
-            let history_before = cache.keys[li].len();
+            let history_before = cache.rows_in(li);
             let mut q_rot = Vec::with_capacity(batch);
             for (i, (cos_row, sin_row)) in rope_rows.iter().enumerate() {
                 let rope_heads = |row: &[i32], heads: usize, what: &'static str| -> Result<Vec<i32>, A16EngineError> {
@@ -520,18 +857,15 @@ impl<'a> A16Engine<'a> {
                     Ok(out)
                 };
                 q_rot.push(rope_heads(&q[i], shape.n_heads, "rope_q")?);
-                cache.keys[li].push(rope_heads(&k[i], shape.n_kv_heads, "rope_k")?);
-                cache.values[li].push(v[i].clone());
+                cache.push_key(li, &rope_heads(&k[i], shape.n_kv_heads, "rope_k")?)?;
+                cache.push_value(li, &v[i])?;
             }
 
-            // The whole series once; row `i` reads the prefix that ends at its own position.
+            // The whole series is the storage itself; row `i` reads the prefix that ends at its
+            // own position.
             let history = history_before + batch;
-            let mut k_series = Vec::with_capacity(history * kv_dim);
-            let mut v_series = Vec::with_capacity(history * kv_dim);
-            for j in 0..history {
-                k_series.extend_from_slice(&cache.keys[li][j]);
-                v_series.extend_from_slice(&cache.values[li][j]);
-            }
+            let k_series = cache.keys_visible(li, history)?;
+            let v_series = cache.values_visible(li, history)?;
 
             let mut attn_rows = Vec::with_capacity(batch);
             for (i, q_row) in q_rot.iter().enumerate() {
@@ -539,7 +873,7 @@ impl<'a> A16Engine<'a> {
                 let logits_row = a16_attn_scores(
                     self.fast,
                     q_row,
-                    &k_series[..visible * kv_dim],
+                    k_series.prefix(visible * kv_dim),
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -553,7 +887,7 @@ impl<'a> A16Engine<'a> {
                         self.fast,
                         kaspa_consensus_core::palw_base0_a16::A16_MAX_ATTN_HISTORY_V1,
                         &p15,
-                        &v_series[..visible * kv_dim],
+                        v_series.prefix(visible * kv_dim),
                         shape.n_heads,
                         shape.n_kv_heads,
                         shape.d_head,
@@ -688,25 +1022,22 @@ impl<'a> A16Engine<'a> {
             };
             let q_rot = push(&mut nodes, rope_heads(&q, shape.n_heads, "rope_q")?);
             let k_rot = push(&mut nodes, rope_heads(&k, shape.n_kv_heads, "rope_k")?);
-            cache.keys[li].push(k_rot);
-            cache.values[li].push(v.clone());
-            let history = cache.keys[li].len();
+            cache.push_key(li, &k_rot)?;
+            cache.push_value(li, &v)?;
+            let history = cache.rows_in(li);
 
             // The cache series, EXACTLY as the court's canonical input set concatenates them:
-            // full kv_dim rows, position-major.
-            let mut k_series = Vec::with_capacity(history * kv_dim);
-            let mut v_series = Vec::with_capacity(history * kv_dim);
-            for j in 0..history {
-                k_series.extend_from_slice(&cache.keys[li][j]);
-                v_series.extend_from_slice(&cache.values[li][j]);
-            }
+            // full kv_dim rows, position-major — the storage itself, borrowed.
+            let k_series = cache.keys_visible(li, history)?;
+            let v_series = cache.values_visible(li, history)?;
+            debug_assert_eq!(k_series.len(), history * kv_dim);
 
             let logits_row = push(
                 &mut nodes,
                 a16_attn_scores(
                     self.fast,
                     &q_rot,
-                    &k_series,
+                    k_series,
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -722,7 +1053,7 @@ impl<'a> A16Engine<'a> {
                     self.fast,
                     kaspa_consensus_core::palw_base0_a16::A16_MAX_ATTN_HISTORY_V1,
                     &p15,
-                    &v_series,
+                    v_series,
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -860,23 +1191,6 @@ pub fn derived_a16_store(shape: &Base0ShapeV1) -> Vec<(String, Vec<u8>)> {
 
 #[cfg(test)]
 mod tests {
-    /// The 2M held row's canonical attempt, as the item 6 run measured it: 28 layers, kv_dim 256,
-    /// prefill 262,143 → about 15 GiB. If this number moves, the gate in the producer moves with it.
-    #[test]
-    fn the_2m_attempt_costs_what_the_acceptance_run_measured() {
-        let bytes = super::a16_attempt_working_set_bytes_v1(28, 256, 262_143);
-        let gib = bytes as f64 / (1u64 << 30) as f64;
-        // Exact payload + headers: 59,584 B a position x 262,143 = 14.55 GiB; with the 15 % allocator
-        // slack the gate reads 16.73 GiB, above the 16.05 GiB the run measured — the gate must not
-        // under-state, or it lets the kill through.
-        assert!((gib - 16.73).abs() < 0.05, "expected 16.73 GiB for the 2M canonical attempt, got {gib:.2}");
-        assert!(gib > 16.05, "the gate's figure must exceed the 16.05 GiB the acceptance run measured");
-        // And the 512-context row the fleet ran for weeks is small — which is why nobody hit this before 2M.
-        let small = super::a16_attempt_working_set_bytes_v1(28, 256, 512) as f64 / (1u64 << 20) as f64;
-        assert!((small - 33.4).abs() < 0.5, "a 512 prefill is 512 x 59,584 B x 1.15 = 33.4 MiB, got {small:.1}");
-        assert!(small < 2.67 * 1024.0 / 50.0, "and under a fiftieth of the 2.67 GiB artifact, which is why nobody hit this before 2M");
-    }
-
     use super::*;
     use crate::artifact::LN_THETA_10000_GEN_Q;
 
@@ -958,8 +1272,8 @@ mod tests {
                     assert_eq!(got, expected, "logits: layers={layers} batch={batch} start={start}");
                     assert_eq!(batched.len(), sequential.len(), "cache depth: batch={batch} start={start}");
                     for li in 0..layers {
-                        assert_eq!(batched.keys[li], sequential.keys[li], "keys layer {li}: batch={batch} start={start}");
-                        assert_eq!(batched.values[li], sequential.values[li], "values layer {li}: batch={batch} start={start}");
+                        assert_eq!(batched.keys_as_i32(li), sequential.keys_as_i32(li), "keys layer {li}: batch={batch} start={start}");
+                        assert_eq!(batched.values_as_i32(li), sequential.values_as_i32(li), "values layer {li}: batch={batch} start={start}");
                     }
                 }
             }
@@ -1009,22 +1323,24 @@ mod tests {
     /// What the cache holds, counted: `(min, max, elements, inside ±127, inside ±32767, 64-code
     /// blocks whose absmax is ≤ 127, blocks)`. The block figure is what a lossless block-packed
     /// `i8` representation could store at one byte a code; every other block would stay at two.
-    pub(crate) fn kv_code_range_v1(cache: &A16Cache) -> (i32, i32, u64, u64, u64, u64, u64) {
+    pub(crate) fn kv_code_range_v1(cache: &A16Cache, only_layer: Option<usize>) -> (i32, i32, u64, u64, u64, u64, u64) {
         let (mut min, mut max, mut n, mut in_i8, mut in_i16, mut blocks_fit, mut blocks) = (i32::MAX, i32::MIN, 0u64, 0u64, 0u64, 0u64, 0u64);
-        for side in [&cache.keys, &cache.values] {
-            for layer in side {
-                for row in layer {
-                    for value in row {
-                        min = min.min(*value);
-                        max = max.max(*value);
-                        n += 1;
-                        in_i8 += u64::from(value.unsigned_abs() <= 127);
-                        in_i16 += u64::from(value.unsigned_abs() <= A16_CODE_MAX_I32 as u32);
-                    }
-                    for block in row.chunks(64) {
-                        blocks += 1;
-                        blocks_fit += u64::from(block.iter().all(|v| v.unsigned_abs() <= 127));
-                    }
+        let (keys, values) = cache.contents_as_i32();
+        for (li, layer) in keys.iter().chain(values.iter()).enumerate() {
+            if only_layer.is_some_and(|only| li % keys.len() != only) {
+                continue;
+            }
+            for row in layer.chunks(cache.kv_dim.max(1)) {
+                for value in row {
+                    min = min.min(*value);
+                    max = max.max(*value);
+                    n += 1;
+                    in_i8 += u64::from(value.unsigned_abs() <= 127);
+                    in_i16 += u64::from(value.unsigned_abs() <= A16_CODE_MAX_I32 as u32);
+                }
+                for block in row.chunks(64) {
+                    blocks += 1;
+                    blocks_fit += u64::from(block.iter().all(|v| v.unsigned_abs() <= 127));
                 }
             }
         }
@@ -1081,7 +1397,7 @@ mod tests {
         for position in 0..31usize {
             engine.forward_token_planned(&plan, &mut cache, (position * 7 + 3) % 64, position).expect("walks");
         }
-        let (min, max, n, in_i8, in_i16, blocks_fit, blocks) = kv_code_range_v1(&cache);
+        let (min, max, n, in_i8, in_i16, blocks_fit, blocks) = kv_code_range_v1(&cache, None);
         eprintln!(
             "court fixture K/V range: min {min} max {max} over {n} elements; inside ±127: {in_i8} ({:.1} %); inside ±32767: \
              {in_i16}; 64-code blocks fitting i8: {blocks_fit}/{blocks}",
@@ -1134,10 +1450,9 @@ mod tests {
         }
         eprintln!("kv range: {prefill} positions of the real row in {:.1} s", started.elapsed().as_secs_f64());
         for li in 0..artifact.shape.n_layers {
-            let one = A16Cache { keys: vec![cache.keys[li].clone()], values: vec![cache.values[li].clone()] };
-            let (min, max, n, in_i8, _, blocks_fit, blocks) = kv_code_range_v1(&one);
-            let k_absmax = cache.keys[li].iter().flatten().map(|v| v.unsigned_abs()).max().unwrap_or(0);
-            let v_absmax = cache.values[li].iter().flatten().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+            let (min, max, n, in_i8, _, blocks_fit, blocks) = kv_code_range_v1(&cache, Some(li));
+            let k_absmax = cache.keys_as_i32(li).iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
+            let v_absmax = cache.values_as_i32(li).iter().map(|v| v.unsigned_abs()).max().unwrap_or(0);
             eprintln!(
                 "  layer {li:2}: K absmax {k_absmax:5}  V absmax {v_absmax:5}  min {min:6} max {max:5}  inside ±127 {:5.1} %  \
                  blocks fitting i8 {:5.1} %",
@@ -1145,7 +1460,7 @@ mod tests {
                 blocks_fit as f64 * 100.0 / blocks as f64
             );
         }
-        let (min, max, n, in_i8, in_i16, blocks_fit, blocks) = kv_code_range_v1(&cache);
+        let (min, max, n, in_i8, in_i16, blocks_fit, blocks) = kv_code_range_v1(&cache, None);
         eprintln!(
             "real row K/V range: min {min} max {max} over {n} elements; inside ±127: {in_i8} ({:.1} %); inside ±32767: {in_i16} \
              ({:.1} %); 64-code blocks fitting i8: {blocks_fit}/{blocks} ({:.1} %)",
@@ -1637,32 +1952,27 @@ impl<'a> A16Engine<'a> {
         cache: &mut A16Cache,
     ) -> Result<Vec<Vec<Vec<i32>>>, A16EngineError> {
         use kaspa_consensus_core::palw_step::PalwStepNodeRoleV1 as Role;
-        let kv_dim = self.artifact.shape.kv_dim();
         let n = tokens.len();
         let refuse =
             |what: &'static str| move |_e: kaspa_consensus_core::palw_base0_a16::PalwA16OpError| A16EngineError::OpRefused(what);
         // The rows the cache held before this run: position `i` sees them and the run's first `i + 1`.
-        let (keys_before, values_before) = (cache.keys[li].len(), cache.values[li].len());
+        let (keys_before, values_before) = (cache.rows_in(li), cache.value_rows_in(li));
         let mut rows: Vec<Vec<Vec<i32>>> = vec![Vec::with_capacity(plan.layer.len()); n];
         for node in &plan.layer {
             let resolve = |i: usize, input: &PlanInput, rows: &[Vec<Vec<i32>>]| -> Result<Vec<i32>, A16EngineError> {
                 match input {
                     PlanInput::Row(k) => rows[i].get(*k).cloned().ok_or(A16EngineError::MalformedParams("a forward input ref")),
                     PlanInput::LayerIn => Ok(layer_in[i].clone()),
-                    PlanInput::CachedK | PlanInput::CachedV => {
-                        let (series, before) = match input {
-                            PlanInput::CachedK => (&cache.keys[li], keys_before),
-                            _ => (&cache.values[li], values_before),
-                        };
-                        let visible = before + i + 1;
-                        let rows = series.get(..visible).ok_or(A16EngineError::MalformedParams("a cache read before its write"))?;
-                        let mut out = Vec::with_capacity(visible * kv_dim);
-                        for row in rows {
-                            out.extend_from_slice(row);
-                        }
-                        Ok(out)
-                    }
+                    // The series are never rows: they are borrowed from the storage (`kv_for`), and
+                    // the plan admits them only where the attention arms declare them.
+                    PlanInput::CachedK | PlanInput::CachedV => Err(A16EngineError::MalformedParams("a cache series is not a row input")),
                 }
+            };
+            // Position `i`'s view of the two series: the prefix that ends at its own write — a slice
+            // of the storage, whatever width it holds, never a copy (the copy was 2 × 268 MB a layer
+            // per run of 64 positions at the 2M context).
+            let kv_for = |i: usize| -> Result<(KvSeriesRef<'_>, KvSeriesRef<'_>), A16EngineError> {
+                Ok((cache.keys_visible(li, keys_before + i + 1)?, cache.values_visible(li, values_before + i + 1)?))
             };
             let outs: Vec<Vec<i32>> = match node.op {
                 PlanOp::MatMulRequant(slot) | PlanOp::MatMulRescale(slot) if self.fast => {
@@ -1702,25 +2012,13 @@ impl<'a> A16Engine<'a> {
                         && matches!(node.inputs.get(1), Some(PlanInput::CachedK))
                         && matches!(node.inputs.get(2), Some(PlanInput::CachedV)) =>
                 {
-                    let flat = |series: &[Vec<i32>]| -> Vec<i32> {
-                        let mut out = Vec::with_capacity(series.len() * kv_dim);
-                        for row in series {
-                            out.extend_from_slice(row);
-                        }
-                        out
-                    };
-                    let (k_full, v_full) = (flat(&cache.keys[li]), flat(&cache.values[li]));
                     let p = &self.layers[li];
                     (0..n)
                         .into_par_iter()
                         .map(|i| {
                             let q = resolve(i, &node.inputs[0], &rows)?;
-                            let (k_end, v_end) = ((keys_before + i + 1) * kv_dim, (values_before + i + 1) * kv_dim);
-                            let (k, v) = (
-                                k_full.get(..k_end).ok_or(A16EngineError::MalformedParams("a cache read before its write"))?,
-                                v_full.get(..v_end).ok_or(A16EngineError::MalformedParams("a cache read before its write"))?,
-                            );
-                            crate::kernels::a16_attn_fused_uniform_fast_within(
+                            let (k, v) = kv_for(i)?;
+                            a16_attn_fused_fast(
                                 &q,
                                 k,
                                 v,
@@ -1738,13 +2036,18 @@ impl<'a> A16Engine<'a> {
                         .collect::<Result<_, _>>()?
                 }
                 // Every other node, each position on its own — independent of one another, so on
-                // the pool.
+                // the pool. The series are resolved only for a node that DECLARES a cache input: a
+                // node before the layer's K/V writes has no rows of this run to see yet, and asking
+                // for them would be the read-before-write refusal the plan check exists to prevent.
                 _ => (0..n)
                     .into_par_iter()
                     .map(|i| {
+                        let reads_cache = node.inputs.iter().any(|input| matches!(input, PlanInput::CachedK | PlanInput::CachedV));
+                        let kv = if reads_cache { Some(kv_for(i)?) } else { None };
                         self.eval_node(
                             node,
                             &|k| resolve(i, &node.inputs[k], &rows),
+                            kv,
                             tokens[i],
                             first_position + i == 0,
                             rope[i].0,
@@ -1756,8 +2059,16 @@ impl<'a> A16Engine<'a> {
                     .collect::<Result<_, _>>()?,
             };
             match node.role {
-                Role::KCacheWrite => cache.keys[li].extend(outs.iter().cloned()),
-                Role::VCacheWrite => cache.values[li].extend(outs.iter().cloned()),
+                Role::KCacheWrite => {
+                    for out in &outs {
+                        cache.push_key(li, out)?;
+                    }
+                }
+                Role::VCacheWrite => {
+                    for out in &outs {
+                        cache.push_value(li, out)?;
+                    }
+                }
                 Role::Plain => {}
             }
             for (i, out) in outs.into_iter().enumerate() {
@@ -1781,7 +2092,6 @@ impl<'a> A16Engine<'a> {
         mut layer: Option<(usize, &mut A16Cache)>,
         attn_history: usize,
     ) -> Result<Vec<Vec<i32>>, A16EngineError> {
-        let kv_dim = self.artifact.shape.kv_dim();
         let mut rows: Vec<Vec<i32>> = Vec::with_capacity(table.len());
         for node in table {
             // Resolve the declared inputs against what this walk holds.
@@ -1789,28 +2099,17 @@ impl<'a> A16Engine<'a> {
                 match input {
                     PlanInput::Row(i) => rows.get(*i).cloned().ok_or(A16EngineError::MalformedParams("a forward input ref")),
                     PlanInput::LayerIn => layer_in.cloned().ok_or(A16EngineError::MalformedParams("layer input outside a layer")),
-                    // The series are built at USE, so a read after this position's cache write
-                    // sees the same history the compiled engine hands the kernels.
-                    PlanInput::CachedK | PlanInput::CachedV => {
-                        let Some((li, cache)) = layer.as_ref() else {
-                            return Err(A16EngineError::MalformedParams("a cache read outside a layer"));
-                        };
-                        let series = match input {
-                            PlanInput::CachedK => &cache.keys[*li],
-                            _ => &cache.values[*li],
-                        };
-                        let mut out = Vec::with_capacity(series.len() * kv_dim);
-                        for row in series {
-                            out.extend_from_slice(row);
-                        }
-                        Ok(out)
-                    }
+                    // The series are borrowed from the storage below, never resolved as rows.
+                    PlanInput::CachedK | PlanInput::CachedV => Err(A16EngineError::MalformedParams("a cache series is not a row input")),
                 }
             };
 
+            // The series are read at USE, so a read after this position's cache write sees the
+            // same history the compiled engine hands the kernels — as a slice of the storage.
             let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+            let kv = layer.as_ref().map(|(li, cache)| (cache.keys(*li), cache.values(*li)));
             let out =
-                self.eval_node(node, &|k| resolve(&node.inputs[k], &rows), token_id, sink, cos_row, sin_row, li, attn_history)?;
+                self.eval_node(node, &|k| resolve(&node.inputs[k], &rows), kv, token_id, sink, cos_row, sin_row, li, attn_history)?;
 
             // The declared cache write, honored where declared — the ROTATED key and the raw V
             // are conventions of the DECLARATION (the IR carries the role on those nodes), so a
@@ -1819,11 +2118,11 @@ impl<'a> A16Engine<'a> {
             match node.role {
                 kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite => {
                     let (li, cache) = layer.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
-                    cache.keys[*li].push(out.clone());
+                    cache.push_key(*li, &out)?;
                 }
                 kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::VCacheWrite => {
                     let (li, cache) = layer.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
-                    cache.values[*li].push(out.clone());
+                    cache.push_value(*li, &out)?;
                 }
                 kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::Plain => {}
             }
@@ -1863,12 +2162,14 @@ impl<'a> A16Engine<'a> {
     /// (a position at a time) and [`Self::forward_prefill_planned`] (a prompt a layer at a time)
     /// share, so a node the two walks evaluate is one computation and the one-pass prefill cannot
     /// commit a row the stepped one would not. `input(k)` is the node's `k`-th declared input,
-    /// resolved by the walk that holds it; `li` is the layer the node runs in (0 outside one).
+    /// resolved by the walk that holds it; `kv` is the two cache series the walk lets this node
+    /// see (`None` outside a layer); `li` is the layer the node runs in (0 outside one).
     #[allow(clippy::too_many_arguments)]
     fn eval_node(
         &self,
         node: &PlanNode,
         input: &dyn Fn(usize) -> Result<Vec<i32>, A16EngineError>,
+        kv: Option<(KvSeriesRef<'_>, KvSeriesRef<'_>)>,
         token_id: usize,
         sink: bool,
         cos_row: &[i32],
@@ -1939,12 +2240,12 @@ impl<'a> A16Engine<'a> {
             }
             PlanOp::AttnScores => {
                 let q = input(0)?;
-                let k_series = input(1)?;
+                let (k_series, _) = kv.ok_or(A16EngineError::MalformedParams("a cache read outside a layer"))?;
                 let history = k_series.len() / kv_dim.max(1);
                 a16_attn_scores(
                     self.fast,
                     &q,
-                    &k_series,
+                    k_series,
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -1959,12 +2260,12 @@ impl<'a> A16Engine<'a> {
             }
             PlanOp::AttnValues => {
                 let p = input(0)?;
-                let v_series = input(1)?;
+                let (_, v_series) = kv.ok_or(A16EngineError::MalformedParams("a cache read outside a layer"))?;
                 a16_attn_values(
                     self.fast,
                     attn_history,
                     &p,
-                    &v_series,
+                    v_series,
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -1992,13 +2293,12 @@ impl<'a> A16Engine<'a> {
             // materialises four history-long rows, which is quadratic allocation over a job.
             PlanOp::AttnFused if self.fast => {
                 let q = input(0)?;
-                let k_series = input(1)?;
-                let v_series = input(2)?;
+                let (k_series, v_series) = kv.ok_or(A16EngineError::MalformedParams("a cache read outside a layer"))?;
                 let p = lp(li);
-                crate::kernels::a16_attn_fused_uniform_fast_within(
+                a16_attn_fused_fast(
                     &q,
-                    &k_series,
-                    &v_series,
+                    k_series,
+                    v_series,
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -2012,13 +2312,12 @@ impl<'a> A16Engine<'a> {
             }
             PlanOp::AttnFused => {
                 let q = input(0)?;
-                let k_series = input(1)?;
-                let v_series = input(2)?;
+                let (k_series, v_series) = kv.ok_or(A16EngineError::MalformedParams("a cache read outside a layer"))?;
                 let history = k_series.len() / kv_dim.max(1);
                 let scores = a16_attn_scores(
                     self.fast,
                     &q,
-                    &k_series,
+                    k_series,
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -2031,7 +2330,7 @@ impl<'a> A16Engine<'a> {
                     self.fast,
                     attn_history,
                     &codes,
-                    &v_series,
+                    v_series,
                     shape.n_heads,
                     shape.n_kv_heads,
                     shape.d_head,
@@ -2381,6 +2680,303 @@ fn strip_layer(name: &str) -> Option<&str> {
     name.strip_prefix("blk.{layer}.")
 }
 
+/// **The claim `A16-KV-i16` ships on: the compact cache computes the reference cache's bits.**
+///
+/// Not "the same logits": every committed row of every table, the cache left behind decoded to
+/// `i32`, and every chunk the checkpoint serializer emits — on the v2, v5 and v7 graphs, on the fast
+/// engine and the catalog one, through the stepped walk, the one-pass prefill and the hand-written
+/// v2 program, and across a checkpoint restart in both directions. The oracle is `A16-KV-i32`;
+/// what is proven is that the representation is invisible to every byte a commitment can see.
+#[cfg(test)]
+mod kv_storage_tests {
+    use super::*;
+    use crate::artifact::LN_THETA_10000_GEN_Q;
+    use kaspa_consensus_core::palw_qwen25_profile::{
+        PalwQwen25GeometryV1, qwen25_a16_profile_v2, qwen25_a16_profile_v5, qwen25_a16_profile_v7,
+    };
+    use kaspa_consensus_core::palw_state_chunk_map::{PalwStateChunkEntryV1, PalwStateChunkGeometryV1, PalwStateChunkKindV1};
+
+    fn artifact(n_layers: usize, d_head: usize, d_ff: usize) -> Base0ArtifactV1 {
+        let shape = Base0ShapeV1 {
+            n_layers,
+            n_heads: 4,
+            n_kv_heads: 2,
+            d_head,
+            d_ff,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique")
+    }
+
+    fn geometry(a: &Base0ArtifactV1) -> PalwQwen25GeometryV1 {
+        PalwQwen25GeometryV1 {
+            layer_count: a.shape.n_layers as u16,
+            hidden_dim: a.shape.d_model() as u32,
+            ffn_dim: a.shape.d_ff as u32,
+            attn_heads: a.shape.n_heads as u16,
+            attn_kv_heads: a.shape.n_kv_heads as u16,
+            attn_head_dim: a.shape.d_head as u32,
+            vocab_size: a.shape.vocab as u32,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: a.shape.eps_q,
+            tile_len: 4,
+        }
+    }
+
+    /// The whole state at `rows`, one chunk per `(kind, layer)` at the committed four-byte width, in
+    /// the map's own order (kind-major, layer ascending) — the bytes a checkpoint commits.
+    fn whole_state_chunks(cache: &A16Cache, layers: usize, kv_dim: usize, rows: usize) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        for kind in PalwStateChunkKindV1::ALL {
+            for li in 0..layers {
+                let entry = PalwStateChunkEntryV1 {
+                    kind,
+                    attn_layer: li as u16,
+                    position_start: 0,
+                    position_count: rows as u32,
+                    row_bytes: (kv_dim * 4) as u32,
+                };
+                out.push(cache.state_chunk_bytes_v1(&entry).expect("a whole-history chunk encodes"));
+            }
+        }
+        out
+    }
+
+    fn whole_state_geometry(layers: usize, kv_dim: usize, rows: usize) -> PalwStateChunkGeometryV1 {
+        PalwStateChunkGeometryV1 {
+            row_bytes: (kv_dim * 4) as u32,
+            positions_per_chunk: rows as u32,
+            attn_layers: (0..layers as u16).collect(),
+            positions: rows as u32,
+            chunks_per_slice: 1,
+        }
+    }
+
+    /// Everything a commitment can see of a cache: its decoded contents and its committed chunks.
+    fn observed(cache: &A16Cache, layers: usize, kv_dim: usize) -> ((Vec<Vec<i32>>, Vec<Vec<i32>>), Vec<Vec<u8>>) {
+        (cache.contents_as_i32(), whole_state_chunks(cache, layers, kv_dim, cache.rows()))
+    }
+
+    #[test]
+    fn a_compact_cache_computes_the_reference_bits() {
+        let mut checked = 0usize;
+        for (layers, d_head, d_ff) in [(1usize, 4usize, 12usize), (2, 8, 16)] {
+            let artifact = artifact(layers, d_head, d_ff);
+            let kv_dim = artifact.shape.kv_dim();
+            let g = geometry(&artifact);
+            let profiles = [
+                ("v2", qwen25_a16_profile_v2(g).expect("v2")),
+                ("v5", qwen25_a16_profile_v5(g).expect("v5")),
+                ("v7", qwen25_a16_profile_v7(g).expect("v7")),
+            ];
+            let tokens: Vec<usize> = (0..9).map(|i| (i * 11 + 5) % artifact.shape.vocab).collect();
+            for (engine_name, engine) in
+                [("fast", A16Engine::new(&artifact).expect("fast")), ("reference", A16Engine::new_reference(&artifact).expect("reference"))]
+            {
+                for (name, profile) in &profiles {
+                    let plan = engine.plan_from_profile(profile).expect("servable");
+                    let at = format!("{name} on the {engine_name} engine, layers={layers}");
+
+                    // The stepped walk, position by position, on both representations.
+                    let mut oracle = A16Cache::new(layers);
+                    let mut compact = A16Cache::with_storage(layers, KvStorageProfileV1::A16KvI16);
+                    for (i, token) in tokens.iter().enumerate() {
+                        let (la, ta) = engine.forward_token_planned(&plan, &mut oracle, *token, i).expect("the oracle steps");
+                        let (lb, tb) = engine.forward_token_planned(&plan, &mut compact, *token, i).expect("the compact cache steps");
+                        assert_eq!(la, lb, "{at}: logits at {i}");
+                        assert_eq!(ta, tb, "{at}: every committed row at {i}");
+                    }
+                    assert_eq!(observed(&oracle, layers, kv_dim), observed(&compact, layers, kv_dim), "{at}: the stepped cache");
+                    assert_eq!(compact.storage(), KvStorageProfileV1::A16KvI16);
+
+                    // The one-pass prefill from a stepped prefix, in runs of three, on both.
+                    if plan.one_pass_prefill_supported() {
+                        let mut oracle = A16Cache::new(layers);
+                        let mut compact = A16Cache::with_storage(layers, KvStorageProfileV1::A16KvI16);
+                        for p in 0..2usize {
+                            engine.forward_token_planned(&plan, &mut oracle, (p * 3 + 1) % 64, p).expect("prefix");
+                            engine.forward_token_planned(&plan, &mut compact, (p * 3 + 1) % 64, p).expect("prefix");
+                        }
+                        for (chunk_index, chunk) in tokens.chunks(3).enumerate() {
+                            let first = 2 + chunk_index * 3;
+                            let last = first + chunk.len() == 2 + tokens.len();
+                            let (la, ta) = engine.forward_prefill_planned(&plan, &mut oracle, chunk, first, last).expect("oracle run");
+                            let (lb, tb) = engine.forward_prefill_planned(&plan, &mut compact, chunk, first, last).expect("compact run");
+                            assert_eq!(la, lb, "{at}: one-pass logits at run {chunk_index}");
+                            assert_eq!(ta, tb, "{at}: one-pass rows at run {chunk_index}");
+                        }
+                        assert_eq!(observed(&oracle, layers, kv_dim), observed(&compact, layers, kv_dim), "{at}: the one-pass cache");
+                    }
+                    checked += 1;
+                }
+
+                // The hand-written v2 program and its batched prefill, on both.
+                let mut oracle = A16Cache::new(layers);
+                let mut compact = A16Cache::with_storage(layers, KvStorageProfileV1::A16KvI16);
+                for (i, token) in tokens.iter().enumerate().take(5) {
+                    let (la, ta) = engine.forward_token_traced(&mut oracle, *token, i).expect("traced");
+                    let (lb, tb) = engine.forward_token_traced(&mut compact, *token, i).expect("traced");
+                    assert_eq!((la, ta), (lb, tb), "{engine_name} traced at {i}");
+                }
+                let la = engine.forward_prefill(&mut oracle, &tokens[5..], 5, 2).expect("batched");
+                let lb = engine.forward_prefill(&mut compact, &tokens[5..], 5, 2).expect("batched");
+                assert_eq!(la, lb, "{engine_name}: the batched prefill's logits");
+                assert_eq!(observed(&oracle, layers, kv_dim), observed(&compact, layers, kv_dim), "{engine_name}: the v2 program's cache");
+            }
+        }
+        assert_eq!(checked, 2 * 2 * 3, "every fixture, engine and graph");
+    }
+
+    /// **A restart is invisible too**: the state serialized at position six from either
+    /// representation, restored into either, continued to position ten — the same rows, the same
+    /// chunks and the same cache as the walk that never stopped. In every direction, including
+    /// `i16 → chunks → i32`, which is what an `i32` court reads from an `i16` producer's checkpoint.
+    #[test]
+    fn a_restart_from_a_checkpoint_continues_the_reference_bits_in_every_direction() {
+        let (layers, d_head, d_ff) = (2usize, 8usize, 16usize);
+        let artifact = artifact(layers, d_head, d_ff);
+        let kv_dim = artifact.shape.kv_dim();
+        let engine = A16Engine::new(&artifact).expect("fast");
+        let g = geometry(&artifact);
+        let tokens: Vec<usize> = (0..10).map(|i| (i * 7 + 3) % 64).collect();
+        let (stop, end) = (6usize, 10usize);
+        for (name, profile) in [("v2", qwen25_a16_profile_v2(g).expect("v2")), ("v7", qwen25_a16_profile_v7(g).expect("v7"))] {
+            let plan = engine.plan_from_profile(&profile).expect("servable");
+            // The walk that never stops, and what it committed at every step past the stop.
+            let mut whole = A16Cache::new(layers);
+            let mut after: Vec<(Vec<i32>, A16TraceV1)> = Vec::new();
+            for (i, token) in tokens.iter().enumerate() {
+                let step = engine.forward_token_planned(&plan, &mut whole, *token, i).expect("whole");
+                if i >= stop {
+                    after.push(step);
+                }
+            }
+            let whole_observed = observed(&whole, layers, kv_dim);
+
+            for from in KvStorageProfileV1::ALL {
+                // The producer's cache at the stop, in `from`, serialized.
+                let mut origin = A16Cache::with_storage(layers, from);
+                for (i, token) in tokens.iter().enumerate().take(stop) {
+                    engine.forward_token_planned(&plan, &mut origin, *token, i).expect("origin");
+                }
+                let chunks = whole_state_chunks(&origin, layers, kv_dim, stop);
+                let geometry = whole_state_geometry(layers, kv_dim, stop);
+                for into in KvStorageProfileV1::ALL {
+                    let at = format!("{name}: {} → chunks → {}", from.name(), into.name());
+                    let mut restored = A16Cache::from_state_chunks_v1(into, layers, kv_dim, &geometry, &chunks).expect("restores");
+                    assert_eq!(restored.storage(), into);
+                    assert_eq!(restored.rows(), stop, "{at}: the restored rows");
+                    assert_eq!(restored.contents_as_i32(), origin.contents_as_i32(), "{at}: the restored state");
+                    for (k, i) in (stop..end).enumerate() {
+                        let step = engine.forward_token_planned(&plan, &mut restored, tokens[i], i).expect("continues");
+                        assert_eq!(step, after[k], "{at}: the continued step at {i}");
+                    }
+                    assert_eq!(observed(&restored, layers, kv_dim), whole_observed, "{at}: the cache at the end");
+                }
+            }
+        }
+    }
+
+    /// **The compact cache refuses exactly the state the reference refuses — one step earlier.** A
+    /// served chunk carrying a value outside the code range is held by the `i32` cache and refused
+    /// at its first attention read; the `i16` cache refuses it at the restore. Both are refusals of
+    /// the same replay. The rails themselves (`±32,767`) are accepted by both, a write outside the
+    /// range under `i16` is refused rather than narrowed, and a map that does not cover its state
+    /// is refused by both.
+    #[test]
+    fn the_compact_cache_refuses_what_the_reference_refuses() {
+        let (layers, d_head, d_ff) = (1usize, 4usize, 12usize);
+        let artifact = artifact(layers, d_head, d_ff);
+        let kv_dim = artifact.shape.kv_dim();
+        let engine = A16Engine::new(&artifact).expect("fast");
+        let plan = engine.plan_from_profile(&qwen25_a16_profile_v5(geometry(&artifact)).expect("v5")).expect("servable");
+        let rows = 3usize;
+        let mut origin = A16Cache::new(layers);
+        for i in 0..rows {
+            engine.forward_token_planned(&plan, &mut origin, (i * 5 + 1) % 64, i).expect("origin");
+        }
+        let good = whole_state_chunks(&origin, layers, kv_dim, rows);
+        let geometry = whole_state_geometry(layers, kv_dim, rows);
+
+        for (what, value) in [("32,768", 32_768i32), ("-32,768", -32_768), ("40,000", 40_000), ("i32::MIN", i32::MIN)] {
+            let mut bad = good.clone();
+            bad[0][4..8].copy_from_slice(&value.to_le_bytes());
+            assert!(
+                A16Cache::from_state_chunks_v1(KvStorageProfileV1::A16KvI16, layers, kv_dim, &geometry, &bad).is_err(),
+                "{what}: the i16 cache refuses at the restore"
+            );
+            let mut wide = A16Cache::from_state_chunks_v1(KvStorageProfileV1::A16KvI32, layers, kv_dim, &geometry, &bad)
+                .expect("the i32 cache holds the value");
+            assert!(
+                engine.forward_token_planned(&plan, &mut wide, 9, rows).is_err(),
+                "{what}: and the reference refuses it at the first attention read"
+            );
+        }
+        for value in [32_767i32, -32_767] {
+            let mut rail = good.clone();
+            rail[0][4..8].copy_from_slice(&value.to_le_bytes());
+            for storage in KvStorageProfileV1::ALL {
+                let mut cache = A16Cache::from_state_chunks_v1(storage, layers, kv_dim, &geometry, &rail).expect("a rail is a code");
+                engine.forward_token_planned(&plan, &mut cache, 9, rows).expect("and attention reads it");
+            }
+        }
+        // A write outside the range is refused under i16, held under i32.
+        let mut compact = A16Cache::with_storage(layers, KvStorageProfileV1::A16KvI16);
+        assert!(compact.push_key(0, &[40_000, 0, 0, 0, 0, 0, 0, 0]).is_err());
+        assert_eq!(compact.rows(), 0, "nothing was written");
+        let mut oracle = A16Cache::new(layers);
+        oracle.push_key(0, &[40_000, 0, 0, 0, 0, 0, 0, 0]).expect("the i32 cache holds it");
+        assert_eq!(oracle.keys_as_i32(0)[0], 40_000);
+        // Coverage: one chunk short is refused by both; a chunk of the wrong length likewise.
+        for storage in KvStorageProfileV1::ALL {
+            assert!(A16Cache::from_state_chunks_v1(storage, layers, kv_dim, &geometry, &good[..good.len() - 1]).is_err());
+            let mut short = good.clone();
+            short[1].pop();
+            assert!(A16Cache::from_state_chunks_v1(storage, layers, kv_dim, &geometry, &short).is_err());
+        }
+    }
+
+    /// **The bytes the cache allocates are the resource profile's `kv_resident_bytes`** after an
+    /// exact reservation, under either representation — the figure the gate reserves is the
+    /// figure the walk spends. Without the reservation the buffers double and hold at most twice.
+    #[test]
+    fn the_resident_bytes_are_the_resource_profiles_kv_term() {
+        use kaspa_consensus_core::palw_resource_profile_v1::palw_kv_series_bytes_v1;
+        let (layers, d_head, d_ff) = (2usize, 8usize, 16usize);
+        let artifact = artifact(layers, d_head, d_ff);
+        let kv_dim = artifact.shape.kv_dim();
+        let engine = A16Engine::new(&artifact).expect("fast");
+        let plan = engine.plan_from_profile(&qwen25_a16_profile_v7(geometry(&artifact)).expect("v7")).expect("servable");
+        let rows = 9usize;
+        for storage in KvStorageProfileV1::ALL {
+            let expected = palw_kv_series_bytes_v1(layers as u64, kv_dim as u64, rows as u64, storage.kv_bytes_per_element());
+            let mut reserved = A16Cache::with_storage(layers, storage);
+            reserved.reserve_positions(rows, kv_dim);
+            let mut grown = A16Cache::with_storage(layers, storage);
+            for i in 0..rows {
+                engine.forward_token_planned(&plan, &mut reserved, (i * 7 + 3) % 64, i).expect("reserved");
+                engine.forward_token_planned(&plan, &mut grown, (i * 7 + 3) % 64, i).expect("grown");
+            }
+            assert_eq!(reserved.resident_bytes_v1(), expected, "{}: an exact reservation is the profile's term", storage.name());
+            assert!(grown.resident_bytes_v1() >= expected && grown.resident_bytes_v1() <= 2 * expected, "{}: doubling holds at most twice", storage.name());
+            assert_eq!(reserved.contents_as_i32(), grown.contents_as_i32());
+        }
+        assert_eq!(
+            A16Cache::with_storage(1, KvStorageProfileV1::A16KvI16).resident_bytes_v1(),
+            0,
+            "an empty cache reserved nothing"
+        );
+        assert_eq!(KV_STORAGE_SHIPPED_V1, KvStorageProfileV1::A16KvI16, "the shipped representation is the compact one");
+    }
+}
+
 #[cfg(test)]
 mod profile_plan_tests {
     use super::*;
@@ -2482,9 +3078,8 @@ mod profile_plan_tests {
                     let params =
                         A16AttnFusedParamsV1 { scores: lp.logits, probs: lp.probs, values: lp.values, up_bits: lp.softmax_up };
                     let q = &v5_rows[v5.attn_nodes[fused_at].input_refs[0] as usize];
-                    let flat = |series: &Vec<Vec<i32>>| -> Vec<i32> { series.iter().flatten().copied().collect() };
-                    let k = flat(&cache_v5.keys[li]);
-                    let v = flat(&cache_v5.values[li]);
+                    let k = cache_v5.keys_as_i32(li);
+                    let v = cache_v5.values_as_i32(li);
                     let (h, kvh, dh) = (artifact.shape.n_heads, artifact.shape.n_kv_heads, artifact.shape.d_head);
                     let reference = a16_attn_fused_reference_v1(q, &k, &v, h, kvh, dh, params).expect("the composition runs");
                     assert_eq!(v5_rows[fused_at], reference, "layer {li} position {position}: the engine parted from the reference");
@@ -2494,8 +3089,7 @@ mod profile_plan_tests {
                     }
                 }
             }
-            assert_eq!(cache_v2.keys, cache_v5.keys, "the two graphs must leave the same cache");
-            assert_eq!(cache_v2.values, cache_v5.values);
+            assert_eq!(cache_v2.contents_as_i32(), cache_v5.contents_as_i32(), "the two graphs must leave the same cache");
         }
     }
 
@@ -2566,8 +3160,7 @@ mod profile_plan_tests {
                                     assert!(g.post.is_empty(), "{at}: no post rows before the last position");
                                 }
                             }
-                            assert_eq!(passed.keys, stepped.keys, "{at}: keys");
-                            assert_eq!(passed.values, stepped.values, "{at}: values");
+                            assert_eq!(passed.contents_as_i32(), stepped.contents_as_i32(), "{at}: the cache left behind");
                             checked += 1;
                         }
                     }
@@ -2648,8 +3241,7 @@ mod profile_plan_tests {
 
         assert_eq!(passed_rows.finish(), stepped_rows.finish(), "every committed row");
         assert_eq!(passed_logits, stepped_logits, "the last position's logits");
-        assert_eq!(passed.keys, stepped.keys, "the keys the prefill leaves");
-        assert_eq!(passed.values, stepped.values, "the values the prefill leaves");
+        assert_eq!(passed.contents_as_i32(), stepped.contents_as_i32(), "the cache the prefill leaves");
         eprintln!(
             "one-pass on the real dense row: {prefill} positions — stepped {:.3} s ({:.1} ms/position), runs of {run} {:.3} s \
              ({:.1} ms/position), {:.2}x",
@@ -2685,8 +3277,7 @@ mod profile_plan_tests {
                 assert_eq!(ta.attn, tb.attn, "layer rows at position {position}");
                 assert_eq!(ta.post, tb.post, "post rows at position {position}");
             }
-            assert_eq!(compiled_cache.keys, planned_cache.keys, "the caches must be the same state");
-            assert_eq!(compiled_cache.values, planned_cache.values);
+            assert_eq!(compiled_cache.contents_as_i32(), planned_cache.contents_as_i32(), "the caches must be the same state");
         }
     }
 

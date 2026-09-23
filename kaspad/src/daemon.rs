@@ -448,6 +448,9 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // them (see `arm_class_manifest_verification_v1`).
     crate::palw_backends::arm_class_manifest_verification_v1(args.palw_verify_class_manifest);
     crate::palw_backends::arm_ram_scale_v1(args.ram_scale);
+    // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
+    // three duties in this process cannot each take the whole host because each fitted alone.
+    crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));
     // The first phase, before anything is opened — the baseline every later reading is a delta from.
     crate::palw_backends::log_memory_phase_v1("palw-host", "startup, before the consensus stores open", args.ram_scale);
     // Item 4's guarantee: an impossible division is refused here, not settled by the OOM killer.

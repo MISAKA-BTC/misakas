@@ -377,7 +377,7 @@ impl<'a> A16RecomputeKernelsV1<'a> {
         artifact: &'a crate::artifact::Base0ArtifactV1,
         plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
     ) -> Result<Self, Base0FpRecomputeError> {
-        Self::with_cache(artifact, plan, crate::engine_a16::A16Cache::new(artifact.shape.n_layers))
+        Self::with_cache(artifact, plan, crate::engine_a16::A16Cache::with_storage(artifact.shape.n_layers, crate::engine_a16::KV_STORAGE_SHIPPED_V1))
     }
 
     /// Kernels that continue a walk: `cache` is what an earlier walk of the SAME job left, and the
