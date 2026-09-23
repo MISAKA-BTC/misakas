@@ -469,10 +469,12 @@ fn class_manifest_verification_armed_v1() -> bool {
 
 pub fn verify_class_manifests_v1(sdk: &PalwClassSdk, holdings: &[PalwLoadedArtifactV1]) -> Result<usize, String> {
     let mut checked = 0usize;
+    // Artifacts with no sidecar. Collected rather than skipped: see the refusal at the end.
+    let mut without: Vec<String> = Vec::new();
     for holding in holdings {
         let name = holding.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| holding.lineage_id.to_string());
         match misaka_palw_sdk::class_manifest::manifest_beside(holding) {
-            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Absent => {}
+            misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Absent => without.push(name.clone()),
             misaka_palw_sdk::class_manifest::PalwManifestLookupV1::Disagrees(why) => {
                 return Err(format!("{name}: {why}"));
             }
@@ -481,6 +483,28 @@ pub fn verify_class_manifests_v1(sdk: &PalwClassSdk, holdings: &[PalwLoadedArtif
                 checked += m.rows.len();
             }
         }
+    }
+    // **A verification that verified nothing is a refusal, not a pass.**
+    //
+    // This returned `Ok(0)` for a node whose artifacts have no sidecar, and the caller logged
+    // "0 registered root(s) re-derived … all agreeing" — measured on the acceptance run, where the
+    // host simply had no `.palwmanifest` on it. An operator who ASKS to be told whether their roots
+    // agree and is told "0, all agreeing" has learned nothing and been reassured, which is the
+    // failure this whole flag exists to end, wearing a different costume.
+    if !without.is_empty() {
+        return Err(format!(
+            "--palw-verify-class-manifest was given and {} of {} class artifact(s) have no `.palwmanifest` beside them, so \
+             there was nothing to verify: {}. Write one with `palw-class manifest <artifact>`, or drop the flag and accept \
+             that every root is derived at resolve time",
+            without.len(),
+            holdings.len(),
+            without.join(", ")
+        ));
+    }
+    if checked == 0 {
+        return Err("--palw-verify-class-manifest was given and this node holds no class artifacts, so there was nothing to \
+                    verify. Drop the flag, or give the node the artifacts whose roots you meant to check"
+            .to_string());
     }
     Ok(checked)
 }

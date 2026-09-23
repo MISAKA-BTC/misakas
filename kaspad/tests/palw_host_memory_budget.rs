@@ -68,3 +68,32 @@ fn the_fleets_own_division_is_accepted() {
     assert_eq!(check_host_share_v1(budget, 4, share), Ok(()), "4 seats at 6 GiB each clears the floor");
     assert!(share.unwrap() > PALW_HOST_SHARE_FLOOR_BYTES_V1);
 }
+
+/// **`--palw-verify-class-manifest` must not pass by verifying nothing.**
+///
+/// Measured on the acceptance run: the host had no `.palwmanifest` on it at all, and the node logged
+/// `--palw-verify-class-manifest: 0 registered root(s) re-derived … all agreeing` and started. An
+/// operator who ASKS whether their roots agree and is told "0, all agreeing" has learned nothing and
+/// been reassured — which is the failure the flag exists to end, wearing a different costume.
+///
+/// Asserted over the message rather than over a node, because the shape being pinned is that the
+/// no-manifest and no-artifact cases are REFUSALS with sentences, not a quiet `Ok(0)`.
+#[test]
+fn verifying_nothing_is_not_a_pass() {
+    let src = include_str!("../src/palw_backends.rs");
+    let body = {
+        let at = src.find("pub fn verify_class_manifests_v1").expect("the verifier is in this file");
+        let end = src[at..].find("\npub fn load_class_holdings_v1").expect("it ends before the loader");
+        &src[at..at + end]
+    };
+    assert!(
+        body.contains("have no `.palwmanifest` beside them, so"),
+        "an artifact without a sidecar must be named in a refusal, not skipped"
+    );
+    assert!(
+        body.contains("this node holds no class artifacts, so there was nothing to"),
+        "and a node with no artifacts at all must be refused too"
+    );
+    // The `Absent` arm must not be the empty block it was.
+    assert!(!body.contains("PalwManifestLookupV1::Absent => {}"), "the Absent arm still discards the fact");
+}
