@@ -170,6 +170,12 @@ impl PalwMemoryReservationV1 {
     }
 }
 
+impl std::fmt::Debug for PalwMemoryReservationV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PalwMemoryReservationV1").field("pool", &self.ledger.pool).field("id", &self.id).field("bytes", &self.bytes).finish()
+    }
+}
+
 impl Drop for PalwMemoryReservationV1 {
     fn drop(&mut self) {
         self.ledger.release(self.id);
@@ -382,24 +388,30 @@ mod tests {
         for _round in 0..20 {
             let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(16 * GIB), || None);
             let barrier = Arc::new(std::sync::Barrier::new(8));
+            // Each thread hands its GUARD back rather than a number: a guard dropped inside the
+            // thread would release the bytes at once and let the next thread win too — which is
+            // exactly the double-start the ledger exists to stop, and the first draft of this test
+            // did it to itself.
             let handles: Vec<_> = (0..8u64)
                 .map(|i| {
                     let (ledger, barrier) = (Arc::clone(&ledger), Arc::clone(&barrier));
                     std::thread::spawn(move || {
                         barrier.wait();
-                        ledger.reserve(key("full-seat", i), 12 * GIB).map(|g| g.bytes())
+                        ledger.reserve(key("full-seat", i), 12 * GIB)
                     })
                 })
                 .collect();
             let outcomes: Vec<_> = handles.into_iter().map(|h| h.join().expect("no panic")).collect();
             let won = outcomes.iter().filter(|o| o.is_ok()).count();
             assert_eq!(won, 1, "exactly one of eight takes the share");
+            assert_eq!(ledger.reserved_bytes(), 12 * GIB, "and holds it while its guard lives");
             for refusal in outcomes.iter().filter_map(|o| o.as_ref().err()) {
                 assert_eq!(refusal.held.len(), 1, "every loser is told who holds it");
                 assert_eq!(refusal.reserved_bytes, 12 * GIB);
                 assert_eq!(refusal.available_bytes, 4 * GIB);
             }
-            // The winners' guards were returned by the threads and dropped with `outcomes`.
+            drop(outcomes);
+            assert_eq!(ledger.reserved_bytes(), 0, "the winner's guard released with the outcomes");
         }
     }
 
