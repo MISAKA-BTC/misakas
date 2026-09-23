@@ -24,8 +24,14 @@
 //! * `share` is the operator's declared per-node budget (`--palw-host-memory-budget` divided by
 //!   `--palw-host-node-count`, `palw_host_share_bytes_v1`) — the number that is right for N nodes
 //!   on one host, where the live probe is right for one;
-//! * `live` is the host's headroom now, `70 % × (MemAvailable − 1 GiB)`, the same policy the gate
-//!   applied before the ledger existed (`replay_memory_budget_v1`'s constants);
+//! * `live` is the host's headroom now. WITHOUT a declared share it is `70 % × (MemAvailable −
+//!   1 GiB)`, the policy the gate applied before the ledger existed (`replay_memory_budget_v1`'s
+//!   constants) — the haircut stands in for the other processes an undeclared host may run. WITH a
+//!   declared share it is `MemAvailable − 1 GiB`: the operator has already divided the host by
+//!   role, the share is the budget, and the live figure only guards the shares not summing to what
+//!   the host has. The first acceptance run of the fold (2026-09-23 07:41) held a 12.42 GiB
+//!   attempt under a 21 GiB share because the haircut bound it at 11.53 GiB of 17.5 available —
+//!   a duty that fitted, held by a factor meant for a host nobody had budgeted;
 //! * `reserved` is every outstanding reservation in this pool.
 //!
 //! Subtracting `reserved` from the LIVE bound double-counts the part of an outstanding reservation
@@ -146,12 +152,21 @@ struct LedgerState {
     rows: Vec<PalwMemoryReservationRowV1>,
 }
 
+/// The host's headroom, in the two readings the bound chooses between.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwHostHeadroomV1 {
+    /// `MemAvailable − reserve`: what a node whose operator budgeted the host may take.
+    pub past_reserve: u64,
+    /// `70 % × (MemAvailable − reserve)`: what a node on an unbudgeted host may take.
+    pub haircut: u64,
+}
+
 /// One pool's ledger. `live` is the host-headroom probe, injected so a test can hold it fixed and
 /// production can read `MemAvailable`.
 pub struct PalwMemoryLedgerV1 {
     pool: PalwMemoryPoolV1,
     share: Option<u64>,
-    live: Box<dyn Fn() -> Option<u64> + Send + Sync>,
+    live: Box<dyn Fn() -> Option<PalwHostHeadroomV1> + Send + Sync>,
     state: Mutex<LedgerState>,
 }
 
@@ -183,7 +198,11 @@ impl Drop for PalwMemoryReservationV1 {
 }
 
 impl PalwMemoryLedgerV1 {
-    pub fn new(pool: PalwMemoryPoolV1, share: Option<u64>, live: impl Fn() -> Option<u64> + Send + Sync + 'static) -> Arc<Self> {
+    pub fn new(
+        pool: PalwMemoryPoolV1,
+        share: Option<u64>,
+        live: impl Fn() -> Option<PalwHostHeadroomV1> + Send + Sync + 'static,
+    ) -> Arc<Self> {
         Arc::new(Self { pool, share, live: Box::new(live), state: Mutex::new(LedgerState { next_id: 1, rows: Vec::new() }) })
     }
 
@@ -198,7 +217,10 @@ impl PalwMemoryLedgerV1 {
     /// The bounds and the outstanding total, read under the lock so a decision is one atomic read.
     fn bounds(&self, state: &LedgerState) -> (Option<u64>, Option<u64>, u64, Option<u64>) {
         let reserved: u64 = state.rows.iter().fold(0u64, |acc, r| acc.saturating_add(r.bytes));
-        let live = (self.live)();
+        let headroom = (self.live)();
+        // The live reading the bound uses: past the reserve when the operator budgeted the host,
+        // the haircut when nobody did (the module doc has the run that decided this).
+        let live = headroom.map(|h| if self.share.is_some() { h.past_reserve } else { h.haircut });
         let bound = match (self.share, live) {
             (Some(share), Some(live)) => Some(share.min(live)),
             (Some(share), None) => Some(share),
@@ -299,7 +321,7 @@ static POOLS: OnceLock<Mutex<Pools>> = OnceLock::new();
 fn pools() -> &'static Mutex<Pools> {
     POOLS.get_or_init(|| {
         Mutex::new(Pools {
-            host: PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, crate::palw_backends::host_headroom_bytes_v1),
+            host: PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, crate::palw_backends::host_headroom_v1),
             devices: HashMap::new(),
         })
     })
@@ -311,7 +333,7 @@ fn pools() -> &'static Mutex<Pools> {
 pub fn arm_host_share_v1(share: Option<u64>) {
     let mut pools = pools().lock().unwrap_or_else(|p| p.into_inner());
     if pools.host.reserved_bytes() == 0 && pools.host.share.is_none() && share.is_some() {
-        pools.host = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, share, crate::palw_backends::host_headroom_bytes_v1);
+        pools.host = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, share, crate::palw_backends::host_headroom_v1);
     }
 }
 
@@ -438,12 +460,14 @@ mod tests {
         assert_eq!(ledger.reserved_bytes(), 12 * GIB, "only the live guard remains");
     }
 
-    /// The live bound is subtracted like the share: a host with 8 GiB of headroom and a 16 GiB
+    /// The live bound is subtracted like the share: a host with 8 GiB past its reserve and a 16 GiB
     /// share grants 8 GiB, and once 6 are reserved grants 2 — the outstanding reservation is
-    /// charged against the live figure too, in the safe direction.
+    /// charged against the live figure too, in the safe direction. And the reading is the share's:
+    /// a declared share reads the headroom past the reserve; an undeclared one reads the haircut.
     #[test]
     fn the_tighter_of_share_and_live_headroom_binds_and_reserved_bytes_are_charged_against_both() {
-        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(16 * GIB), || Some(8 * GIB));
+        let probe = || Some(PalwHostHeadroomV1 { past_reserve: 8 * GIB, haircut: 5 * GIB });
+        let ledger = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(16 * GIB), probe);
         let snap = ledger.snapshot();
         assert_eq!((snap.share_bytes, snap.live_bytes, snap.available_bytes), (Some(16 * GIB), Some(8 * GIB), Some(8 * GIB)));
         let _a = ledger.reserve(key("producer", 1), 6 * GIB).expect("fits");
@@ -451,6 +475,16 @@ mod tests {
         assert!(ledger.reserve(key("full-seat", 2), 3 * GIB).is_err());
         let _b = ledger.reserve(key("full-seat", 3), 2 * GIB).expect("the last two fit");
         assert_eq!(ledger.snapshot().available_bytes, Some(0));
+        // **The 2026-09-23 07:41 hold, replayed**: 17.5 GiB available, a 21 GiB share, a 12.42 GiB
+        // attempt. The haircut (11.53) held a duty that fitted; the reading past the reserve (16.5)
+        // admits it, and an undeclared host still reads the haircut.
+        let fleet = || Some(PalwHostHeadroomV1 { past_reserve: 16_500 << 20, haircut: 11_530 << 20 });
+        let stated = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, Some(21 * GIB), fleet);
+        assert!(stated.can_reserve(12_420 << 20).is_ok(), "a budgeted host admits the attempt that fits past its reserve");
+        assert_eq!(stated.snapshot().live_bytes, Some(16_500 << 20));
+        let unstated = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, fleet);
+        assert!(unstated.can_reserve(12_420 << 20).is_err(), "an unbudgeted host keeps the haircut");
+        assert_eq!(unstated.snapshot().live_bytes, Some(11_530 << 20));
         // No bound at all: everything is granted and the snapshot says so.
         let open = PalwMemoryLedgerV1::new(PalwMemoryPoolV1::Host, None, || None);
         assert_eq!(open.snapshot().available_bytes, None);

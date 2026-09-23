@@ -168,6 +168,10 @@ const EXEMPT: &[(&str, &str)] = &[
     // this guard exists to refuse, so they are named here with the reason rather than left out.
     ("src/bin/palw-model-gate.rs", "model gate: drives the scanned dense backend and reports; commits nothing"),
     ("src/bin/palw-qwen36-model-gate.rs", "model gate: drives the scanned qwen36 backend and reports; commits nothing"),
+    // ADR-0151 follow-up: the attempt's memory brackets. The engine hands it byte counts and
+    // milliseconds; it formats GiB and a rate for a person and executes no arithmetic. The 2M
+    // producer's growth was silent because nothing on the path said what it held; this is what says.
+    ("src/memory_phase.rs", "measurement: formats the engine's memory brackets for a person; executes no class arithmetic"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
     ("examples/gguf-probe.rs", "offline checkpoint inspector"),
     ("examples/class-weight-report.rs", "measurement tool: it reports what a class would be worth, in floats, and executes nothing"),

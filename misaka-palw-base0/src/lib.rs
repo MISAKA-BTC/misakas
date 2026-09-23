@@ -63,6 +63,7 @@ pub mod fuzz_qwen36;
 pub mod gguf;
 pub mod inventory;
 pub mod legs;
+pub mod memory_phase;
 pub mod mmap;
 pub mod operands;
 pub mod plan;

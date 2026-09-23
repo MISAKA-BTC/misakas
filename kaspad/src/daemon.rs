@@ -451,6 +451,10 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // The reservation ledger's declared bound (ADR-0151 follow-up, item 3): the per-node share, so
     // three duties in this process cannot each take the whole host because each fitted alone.
     crate::palw_memory_ledger::arm_host_share_v1(crate::args::palw_host_share_bytes_v1(args));
+    // The engine's memory brackets land in this log (ADR-0151 follow-up): the attempt's cache,
+    // capture and checkpoint leg beside the process's own bytes, at every phase — so the next
+    // growth is a printed term and not a dmesg line.
+    misaka_palw_base0::memory_phase::arm_execution_phase_sink_v1(Box::new(|line| kaspa_core::info!("[palw-attempt] {line}")));
     // The first phase, before anything is opened — the baseline every later reading is a delta from.
     crate::palw_backends::log_memory_phase_v1("palw-host", "startup, before the consensus stores open", args.ram_scale);
     // Item 4's guarantee: an impossible division is refused here, not settled by the OOM killer.

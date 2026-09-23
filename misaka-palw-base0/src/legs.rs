@@ -165,6 +165,9 @@ pub struct Base0StepCaptureV1 {
     leaves: Vec<Hash64>,
     tiles: Vec<(u64, PalwStepTileLeafV1)>,
     filled: u64,
+    /// Bytes the tiles hold — the running total the memory brackets print, kept rather than summed
+    /// over billions of tiles at every bracket.
+    tile_bytes: u64,
 }
 
 impl Base0StepCaptureV1 {
@@ -172,7 +175,16 @@ impl Base0StepCaptureV1 {
         if leaf_count == 0 {
             return Err(LegError::EmptySpace);
         }
-        Ok(Self { leaves: vec![Hash64::default(); leaf_count as usize], tiles: Vec::new(), filled: 0 })
+        Ok(Self { leaves: vec![Hash64::default(); leaf_count as usize], tiles: Vec::new(), filled: 0, tile_bytes: 0 })
+    }
+
+    /// **What this capture holds**: `(leaf-vector bytes, of which touched, tile bytes)`. The leaf
+    /// vector is allocated whole at construction — 64 B a leaf, 1.70 TB of address space on the 2M
+    /// attempt (`dmesg`, 2026-09-23) — and becomes resident a page at a time as leaves are written,
+    /// so the touched figure is the filled leaves' bytes; the tiles are every committed tile of every
+    /// position, ~10 MB a position on the dense row.
+    pub fn retained_bytes_v1(&self) -> (u64, u64, u64) {
+        (self.leaves.capacity() as u64 * 64, self.filled * 64, self.tile_bytes)
     }
 
     /// Place one call's rows at the coordinates the PROFILE says they belong to.
@@ -226,6 +238,8 @@ impl Base0StepCaptureV1 {
                     self.filled += 1;
                 }
                 self.leaves[index as usize] = step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &leaf);
+                // The tile object (8 + 2 + 16 + 4 + 24, padded) and its values' own allocation.
+                self.tile_bytes = self.tile_bytes.saturating_add(56 + leaf.values_le.capacity() as u64);
                 self.tiles.push((index, leaf));
             }
         }
@@ -351,6 +365,28 @@ impl Base0CaptureSinkV1 {
         match self {
             Self::Dense(capture) => capture.progress(),
             Self::Sparse(capture) => capture.progress(),
+        }
+    }
+
+    /// **Bytes this sink holds right now** — the number a memory bracket prints beside the process's
+    /// own, so "what the capture thinks it holds" is a figure and not a guess. The dense arm reports
+    /// its touched leaves and its tiles (its leaf vector's full address space is
+    /// `Base0StepCaptureV1::retained_bytes_v1`'s first field); the fold its retained and in-flight
+    /// hashes.
+    pub fn retained_bytes_v1(&self) -> u64 {
+        match self {
+            Self::Dense(capture) => {
+                let (_, touched, tiles) = capture.retained_bytes_v1();
+                touched.saturating_add(tiles)
+            }
+            Self::Sparse(capture) => capture.retained_bytes_v1(),
+        }
+    }
+
+    pub fn kind(&self) -> Base0CaptureKindV1 {
+        match self {
+            Self::Dense(_) => Base0CaptureKindV1::DenseTiles,
+            Self::Sparse(_) => Base0CaptureKindV1::Fold,
         }
     }
 
@@ -849,6 +885,18 @@ impl Base0CheckpointCaptureV1 {
     /// counts payload handed to the leaf hash, not the tree's own 128-byte nodes.
     pub fn bytes_serialised_v1(&self) -> u64 {
         self.bytes_serialised
+    }
+
+    /// **Bytes this capture RETAINS** (as against what it has serialised): its leaves and their
+    /// hashes, the chunk bytes a per-call class keeps, the previous push's chunk hashes, and the held
+    /// map's frontiers — what a memory bracket prints beside the cache's and the sink's own figures.
+    pub fn retained_bytes_v1(&self) -> u64 {
+        let leaves = self.leaves.len() as u64 * std::mem::size_of::<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>() as u64;
+        let hashes = self.leaf_hashes.len() as u64 * 64;
+        let chunks: u64 = self.chunks.iter().flatten().map(|c| c.capacity() as u64 + 24).sum();
+        let prev = self.prev_chunk_hashes.capacity() as u64 * 64;
+        let held = self.held.as_ref().map_or(0, |h| h.slices.iter().map(|s| s.retained_nodes() as u64 * 72 + 48).sum());
+        leaves + hashes + chunks + prev + held
     }
 
     /// What this capture holds after each push — derived from the class's cadence at construction.

@@ -51,10 +51,67 @@
 
 use crate::palw_context_ladder::{PalwCheckpointCadenceV1, palw_absolute_position_v1, palw_checkpoint_cadence_v1};
 use crate::palw_segment_resume_v1::palw_segment_resume_window_v1;
-use crate::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1;
-use crate::palw_step::{PalwLayerKindV1, PalwShapeProfileV3, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_coordinates};
+use crate::palw_state_chunk_map::{PALW_ATTN_HISTORY_TILE_V4, PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1, palw_profile_is_held_v4};
+use crate::palw_step::{
+    PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
+    canonical_step_coordinates, canonical_step_leaf_index,
+};
 use crate::palw_v2::PalwJobContextV2;
 use crate::palw_verification_v2::palw_segment_count_v2;
+
+/// **What a role's capture RETAINS while it runs** — the term that killed the 2M producer twice
+/// (2026-09-23, host 5.104.81.23, `dmesg`: `total-vm:1702360980kB` on a 23 GiB host) and that no
+/// figure named. The attempt lane's dense sink keeps every tile of every position and a leaf-hash
+/// vector of the whole step space: `64 B × 2^34.6` leaves is 1.70 TB of address space, touched a
+/// position at a time as the prefill writes it, beside ~10 MB of tiles a position — 9 GB a minute
+/// at 16 positions a second, whatever width the K/V cache was held at. The fold keeps one hash per
+/// `2^retain_level` leaves and a block of `2^retain_level` in flight. A replaying seat keeps no
+/// capture, but the S1 replay keeps `(index, hash)` for every leaf of the window it walks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwCaptureRetentionV1 {
+    /// Every tile and every leaf hash — the attempt lane's sink for a class outside the held regime.
+    DenseTiles { tile_len: u32 },
+    /// One hash per `2^retain_level` leaves (ADR-0082 Decision 7) — the free-prompt lane's sink,
+    /// the verdict replay's, and a held class's attempt lane's.
+    Fold { retain_level: u32 },
+    /// No capture: an S1 segment replay hashes its window and keeps the hashes.
+    ReplayHashes,
+}
+
+/// **Which sink a class's ATTEMPT lane captures with**: the fold for a class under the held regime
+/// — whose step space at any real job is terabytes of tiles by construction and whose court is the
+/// streamed one (ADR-0103, ADR-0121) — and the dense tiles for every other. A class fact, read off
+/// the profile, so the producer, the seat that prices it and the court cannot disagree about what
+/// an attempt retains.
+pub fn palw_attempt_capture_folds_v1(profile: &PalwShapeProfileV3) -> bool {
+    palw_profile_is_held_v4(profile)
+}
+
+/// The widest tile the graph declares — the dense sink's per-tile payload is `4 × tile_len`.
+pub fn palw_profile_max_tile_len_v1(profile: &PalwShapeProfileV3) -> u32 {
+    profile.pre_nodes.iter().chain(&profile.attn_nodes).chain(&profile.post_nodes).map(|n| n.tile_len).max().unwrap_or(0)
+}
+
+/// Bytes the dense sink holds for `leaf_count` leaves at `tile_len`: the leaf-hash vector (64 B a
+/// leaf, allocated whole) and one tile a leaf — `4 × tile_len` of values plus the tile object (its
+/// coordinate, its count, its version and the vector's own header: 56 B).
+pub fn palw_dense_capture_bytes_v1(leaf_count: u64, tile_len: u32) -> u64 {
+    const TILE_OBJECT_BYTES: u64 = 56;
+    leaf_count.saturating_mul(64u64.saturating_add(4u64.saturating_mul(u64::from(tile_len))).saturating_add(TILE_OBJECT_BYTES))
+}
+
+/// Bytes the fold holds: the retained vector (one hash per `2^level` leaves, at up to twice its
+/// length because it grows by doubling past its `2^20` initial capacity) and the block in flight.
+pub fn palw_fold_capture_bytes_v1(leaf_count: u64, retain_level: u32) -> u64 {
+    let block = 1u64 << retain_level.min(40);
+    let retained = leaf_count.div_ceil(block.max(1));
+    retained.saturating_mul(64).saturating_mul(2).saturating_add(block.saturating_mul(64))
+}
+
+/// Bytes an S1 replay keeps for the `leaves` it walks: `(u64, Hash64)` a leaf.
+pub fn palw_replay_hashes_bytes_v1(leaves: u64) -> u64 {
+    leaves.saturating_mul(72)
+}
 
 /// **Bytes per element of the COMMITTED cache** — the map's `i32` little-endian row
 /// (`palw_state_chunk_map`: `row = attn_kv_heads × attn_head_dim × 4`). A checkpoint, an opening
@@ -170,9 +227,27 @@ pub struct PalwResourceProfileV1 {
     /// committed trace rows and priced in `trace_scratch_bytes`.
     pub attention_scratch_bytes: u64,
     /// The committed traces of one prefill run, held until captured: `prefill_run_positions × one
-    /// position's committed trace at the widest history`.
+    /// position's committed trace at the widest history × [`PALW_PREFILL_RUN_COPIES_V1`]`.
     pub trace_scratch_bytes: u64,
+    /// What the role's capture sink retains ([`PalwCaptureRetentionV1`]): the whole dense capture,
+    /// the fold's hashes, or a replay's leaf hashes. The term the 2M producer died of.
+    pub capture: PalwCaptureRetentionV1,
+    pub capture_retained_bytes: u64,
+    /// The checkpoint LEG's own retention beside the chunks: one leaf and one hash per checkpoint,
+    /// and — under the per-position cadence — one hash per chunk of the previous push and the held
+    /// map's frontiers.
+    pub checkpoint_leg_bytes: u64,
+    /// Step leaves the role hashes (its capture's, or the window it replays).
+    pub leaves: u64,
 }
+
+/// **How many copies of a prefill run's rows are live at once** — measured, not chosen. The
+/// one-pass walk holds the run's rows per node (`rows`), moves them into the traces, and the
+/// capture then converts each trace into captured rows (`a16_captured_rows_v1`, a copy) and tiles
+/// them (a copy per tile in flight): three whole copies of the run's committed rows plus the tile
+/// in flight. Pinned to what the 2026-09-23 acceptance run's brackets show over `anon − (cache +
+/// capture + checkpoint leg + baseline)`, in `the_2m_attempt_by_role_and_runtime_profile`.
+pub const PALW_PREFILL_RUN_COPIES_V1: u64 = 3;
 
 impl PalwResourceProfileV1 {
     /// Rows this role re-executes.
@@ -187,6 +262,8 @@ impl PalwResourceProfileV1 {
             .saturating_add(self.retained_checkpoint_bytes)
             .saturating_add(self.attention_scratch_bytes)
             .saturating_add(self.trace_scratch_bytes)
+            .saturating_add(self.capture_retained_bytes)
+            .saturating_add(self.checkpoint_leg_bytes)
     }
 
     /// The same role started at the prompt instead of at its checkpoint: no opening to hold, every
@@ -285,9 +362,39 @@ pub fn palw_role_rows_v1(
     }
 }
 
+/// **The step leaves a role hashes**: the whole job's for a producer or a full seat; for a partial
+/// seat, the leaves from its resume point (the first leaf of the position after the checkpoint's
+/// rows, or leaf 0 at the prompt) to its segment's last leaf — what `replay_segment_opening_v1`
+/// keeps an `(index, hash)` for.
+pub fn palw_role_leaves_v1(profile: &PalwShapeProfileV3, job: &PalwJobContextV2, leaf_count: u64, role: PalwResourceRoleV1) -> Option<u64> {
+    match role {
+        PalwResourceRoleV1::Producer | PalwResourceRoleV1::FullSeat => Some(leaf_count),
+        PalwResourceRoleV1::PartialSeat { seat_count, segment_index } => {
+            let k = palw_segment_count_v2(seat_count);
+            let window = palw_segment_resume_window_v1(profile, job, leaf_count, k, segment_index)?;
+            if window.is_empty() {
+                return Some(0);
+            }
+            let (resume_rows, _) = palw_role_rows_v1(profile, job, leaf_count, role)?;
+            let first = if resume_rows == 0 {
+                0
+            } else {
+                let prefill = u64::from(job.declared_prefill_tokens);
+                let (call_index, position) = if resume_rows < prefill {
+                    (0u32, u32::try_from(resume_rows).ok()?)
+                } else {
+                    (u32::try_from(resume_rows - prefill + 1).ok()?, 0u32)
+                };
+                canonical_step_leaf_index(profile, job, &PalwStepCoordinateV1 { call_index, node_slot: 0, position, tile_index: 0 })?
+            };
+            Some(window.leaf_end.saturating_sub(first))
+        }
+    }
+}
+
 /// **The resource profile of `role` on `job` under `runtime`** — the derivation, whole.
-/// `leaf_count` is the job's step-leaf count (a partial seat's segment is cut over it; the other
-/// roles do not read it).
+/// `leaf_count` is the job's step-leaf count: the dense sink's vector is sized by it, the fold's
+/// retained set derives from it, and a partial seat's segment is cut over it.
 pub fn palw_resource_profile_v1(
     profile: &PalwShapeProfileV3,
     job: &PalwJobContextV2,
@@ -295,12 +402,37 @@ pub fn palw_resource_profile_v1(
     runtime: PalwRuntimeProfileV1,
     role: PalwResourceRoleV1,
     limits: PalwRuntimeLimitsV1,
+    capture: PalwCaptureRetentionV1,
 ) -> Option<PalwResourceProfileV1> {
     let attention_layers = palw_attention_layers_v1(profile);
     let kv_dim = u64::from(profile.attn_kv_heads).saturating_mul(u64::from(profile.attn_head_dim));
     let heads = u64::from(profile.attn_heads);
     let (resume_rows, end_rows) = palw_role_rows_v1(profile, job, leaf_count, role)?;
+    let leaves = palw_role_leaves_v1(profile, job, leaf_count, role)?;
+    let capture_retained_bytes = match capture {
+        PalwCaptureRetentionV1::DenseTiles { tile_len } => palw_dense_capture_bytes_v1(leaves, tile_len),
+        PalwCaptureRetentionV1::Fold { retain_level } => palw_fold_capture_bytes_v1(leaves, retain_level),
+        PalwCaptureRetentionV1::ReplayHashes => palw_replay_hashes_bytes_v1(leaves),
+    };
     let committed = PALW_KV_COMMITTED_BYTES_PER_ELEMENT_V1;
+    // The leg's own retention: a leaf (its borsh object, ~144 B) and a hash per checkpoint, and
+    // under the per-position cadence a hash per chunk of the previous push plus the held frontiers
+    // (one open node and one closed peak per level per slice — bounded by the tree's depth).
+    let checkpoint_leg_bytes = match (role, palw_checkpoint_cadence_v1(profile)) {
+        (PalwResourceRoleV1::PartialSeat { .. }, _) => 0,
+        (_, PalwCheckpointCadenceV1::PerPosition) => {
+            let slices = attention_layers.saturating_mul(2);
+            let chunks_per_slice = end_rows.div_ceil(u64::from(PALW_ATTN_HISTORY_TILE_V4).max(1));
+            end_rows
+                .saturating_mul(144 + 64)
+                .saturating_add(slices.saturating_mul(chunks_per_slice).saturating_mul(64))
+                .saturating_add(slices.saturating_mul(64 * 72))
+        }
+        (_, PalwCheckpointCadenceV1::PerDecodeCall) => {
+            let interval = u64::from(PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1.max(1));
+            (u64::from(job.exact_decode_tokens.saturating_sub(1)) / interval).saturating_mul(144 + 64)
+        }
+    };
     let retained_checkpoint_bytes = match (role, palw_checkpoint_cadence_v1(profile)) {
         (PalwResourceRoleV1::PartialSeat { .. }, _) | (_, PalwCheckpointCadenceV1::PerPosition) => 0,
         (_, PalwCheckpointCadenceV1::PerDecodeCall) => {
@@ -320,7 +452,9 @@ pub fn palw_resource_profile_v1(
     } else {
         0
     };
-    let trace_scratch_bytes = u64::from(limits.prefill_run_positions.max(1)).saturating_mul(palw_committed_trace_bytes_v1(profile, end_rows));
+    let trace_scratch_bytes = u64::from(limits.prefill_run_positions.max(1))
+        .saturating_mul(palw_committed_trace_bytes_v1(profile, end_rows))
+        .saturating_mul(PALW_PREFILL_RUN_COPIES_V1);
     Some(PalwResourceProfileV1 {
         runtime,
         role,
@@ -335,6 +469,10 @@ pub fn palw_resource_profile_v1(
         retained_checkpoint_bytes,
         attention_scratch_bytes,
         trace_scratch_bytes,
+        capture,
+        capture_retained_bytes,
+        checkpoint_leg_bytes,
+        leaves,
     })
 }
 
@@ -347,6 +485,30 @@ mod tests {
 
     const GIB: f64 = (1u64 << 30) as f64;
     const LIMITS: PalwRuntimeLimitsV1 = PalwRuntimeLimitsV1 { threads: 12, prefill_run_positions: 64 };
+    /// The held class's fold level (`misaka-palw-base0::fp_capture::PALW_BASE0_SPARSE_RETAIN_LEVEL_V1`), spelled
+    /// here because consensus core cannot import the engine crate; the backend passes the real one.
+    const HELD_RETAIN_LEVEL: u32 = 12;
+
+    /// The capture a role runs with on `profile`, as the dense backend chooses it.
+    fn capture_for(profile: &PalwShapeProfileV3, role: PalwResourceRoleV1) -> PalwCaptureRetentionV1 {
+        match role {
+            PalwResourceRoleV1::Producer if !palw_attempt_capture_folds_v1(profile) => {
+                PalwCaptureRetentionV1::DenseTiles { tile_len: palw_profile_max_tile_len_v1(profile) }
+            }
+            PalwResourceRoleV1::Producer | PalwResourceRoleV1::FullSeat => PalwCaptureRetentionV1::Fold { retain_level: HELD_RETAIN_LEVEL },
+            PalwResourceRoleV1::PartialSeat { .. } => PalwCaptureRetentionV1::ReplayHashes,
+        }
+    }
+
+    fn derive(
+        profile: &PalwShapeProfileV3,
+        job: &PalwJobContextV2,
+        leaves: u64,
+        runtime: PalwRuntimeProfileV1,
+        role: PalwResourceRoleV1,
+    ) -> Option<PalwResourceProfileV1> {
+        palw_resource_profile_v1(profile, job, leaves, runtime, role, LIMITS, capture_for(profile, role))
+    }
 
     fn job(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> PalwJobContextV2 {
         PalwJobContextV2 {
@@ -394,7 +556,7 @@ mod tests {
         let per_row_i32 = 28u64 * 2 * 256 * 4;
         let rows = 262_143u64;
         let i32_producer =
-            palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer, LIMITS)
+            derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer)
                 .expect("derives");
         assert_eq!(i32_producer.attention_layers, 28);
         assert_eq!(i32_producer.kv_dim, 256);
@@ -406,32 +568,74 @@ mod tests {
         assert_eq!(i32_producer.retained_checkpoint_bytes, 0, "a held row's per-position cadence retains no chunk");
         assert!(palw_profile_has_fused_site_v1(&profile), "the 2M row is a fused graph");
         assert_eq!(i32_producer.attention_scratch_bytes, 12 * 2 * 12 * rows * 4, "twelve threads of two history-long rows");
-        assert_eq!(i32_producer.trace_scratch_bytes, 64 * palw_committed_trace_bytes_v1(&profile, rows));
+        assert_eq!(i32_producer.trace_scratch_bytes, 64 * 3 * palw_committed_trace_bytes_v1(&profile, rows));
+
 
         let i16_producer =
-            palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::Producer, LIMITS)
+            derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::Producer)
                 .expect("derives");
         assert_eq!(i16_producer.kv_resident_bytes * 2, i32_producer.kv_resident_bytes, "i16 halves the resident term");
         assert_eq!(i16_producer.checkpoint_bytes, i32_producer.checkpoint_bytes, "and moves no committed byte");
         assert_eq!(i16_producer.attention_scratch_bytes, i32_producer.attention_scratch_bytes);
 
+        // **The term that killed the producer, named and pinned to the kill line.** The 2M attempt's step
+        // space is 26.6 billion leaves; the dense sink's leaf-hash vector alone is 64 B each — the
+        // `total-vm:1702360980kB` `dmesg` printed on 2026-09-23 (1.70 TB; the vector is the whole of it
+        // to within the process's other mappings) — and its tiles are 4.4 TB more. The held class's attempt
+        // therefore folds, and the fold retains 0.8 GiB at its `2^12` level. Whatever the K/V width.
+        assert!(palw_attempt_capture_folds_v1(&profile), "the 2M row is under the held regime, so its attempt folds");
+        assert_eq!(leaves, 27_002_845_160, "the 2M attempt is 2^34.65 leaves");
+        let leaf_vector_bytes = leaves * 64;
+        assert_eq!(leaf_vector_bytes, 1_728_182_090_240, "64 B a leaf: 1.73 TB");
+        // `dmesg`, 2026-09-23 06:50:21 on 5.104.81.23: `Killed process 3368025 (kaspad) total-vm:1702360980kB`.
+        // The leaf vector is 99.1 % of that address space; the 14 GiB left is the artifact mapping, the
+        // node's caches and arenas. The vector is the term, to within a rounding of everything else.
+        let dmesg_total_vm_bytes = 1_702_360_980u64 * 1024;
+        assert!(leaf_vector_bytes < dmesg_total_vm_bytes);
+        assert!((dmesg_total_vm_bytes - leaf_vector_bytes) < 16 * (1u64 << 30), "everything else in the address space was under 16 GiB");
+        assert!(leaf_vector_bytes as f64 / dmesg_total_vm_bytes as f64 > 0.99);
+        let dense = palw_dense_capture_bytes_v1(leaves, palw_profile_max_tile_len_v1(&profile));
+        assert_eq!(palw_profile_max_tile_len_v1(&profile), 128);
+        assert!(dense as f64 > 15.0e12, "the dense capture of a 2M attempt is over 15 TB: {dense}");
+        assert_eq!(i16_producer.capture, PalwCaptureRetentionV1::Fold { retain_level: HELD_RETAIN_LEVEL });
+        assert_eq!(i16_producer.capture_retained_bytes, palw_fold_capture_bytes_v1(leaves, HELD_RETAIN_LEVEL));
+        assert!((0.7..0.9).contains(&(i16_producer.capture_retained_bytes as f64 / GIB)), "the fold retains under a GiB");
+        assert!(i16_producer.checkpoint_leg_bytes as f64 / GIB < 0.2, "the leg's own retention is small: {}", i16_producer.checkpoint_leg_bytes);
+        assert_eq!(i16_producer.leaves, leaves);
+
         // The full seat replays the same job, so it holds the same rows.
-        let full = palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat, LIMITS)
+        let full = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat)
             .expect("derives");
         assert_eq!((full.resume_rows, full.end_rows, full.working_set_bytes()), (0, rows, i16_producer.working_set_bytes()));
 
         for p in [&i32_producer, &i16_producer] {
             eprintln!(
-                "2M attempt under {}: kv {:.2} GiB + attention scratch {:.2} GiB + trace scratch {:.2} GiB = working set {:.2} GiB \
-                 (checkpoint {:.2} GiB)",
+                "2M attempt under {}: kv {:.2} GiB + attention scratch {:.2} GiB + trace scratch {:.2} GiB + capture {:.2} GiB ({:?}) + \
+                 checkpoint leg {:.2} GiB = working set {:.2} GiB (checkpoint {:.2} GiB)",
                 p.runtime.name(),
                 p.kv_resident_bytes as f64 / GIB,
                 p.attention_scratch_bytes as f64 / GIB,
                 p.trace_scratch_bytes as f64 / GIB,
+                p.capture_retained_bytes as f64 / GIB,
+                p.capture,
+                p.checkpoint_leg_bytes as f64 / GIB,
                 p.working_set_bytes() as f64 / GIB,
                 p.checkpoint_bytes as f64 / GIB
             );
         }
+        // A 21 GiB share admits the folded i16 attempt; a dense one would never be admitted anywhere.
+        assert!(i16_producer.working_set_bytes() < 14 * (1u64 << 30), "the folded i16 attempt fits a stated share: {}", i16_producer.working_set_bytes());
+        let dense_attempt = palw_resource_profile_v1(
+            &profile,
+            &job,
+            leaves,
+            PalwRuntimeProfileV1::A16KvI16,
+            PalwResourceRoleV1::Producer,
+            LIMITS,
+            PalwCaptureRetentionV1::DenseTiles { tile_len: 128 },
+        )
+        .expect("derives");
+        assert!(dense_attempt.working_set_bytes() > 15 * (1u64 << 40), "priced dense, the same attempt needs over 15 TiB");
         // The old proxy, for the record: the 2.67 GiB artifact plus 512 MiB was 3.17 GiB, which the
         // i32 working set exceeds more than four times over.
         let old_proxy = (2.67 * GIB) as u64 + (512u64 << 20);
@@ -449,12 +653,12 @@ mod tests {
     fn a_partial_seat_of_the_2m_attempt_holds_the_prefix_to_its_segments_end() {
         let (profile, job) = two_m();
         let leaves = leaf_count(&profile, &job);
-        let full = palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat, LIMITS)
+        let full = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, PalwResourceRoleV1::FullSeat)
             .expect("derives");
         let mut ends = Vec::new();
         for segment in 0..3u16 {
             let role = PalwResourceRoleV1::PartialSeat { seat_count: 4, segment_index: segment };
-            let p = palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, role, LIMITS).expect("derives");
+            let p = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI16, role).expect("derives");
             eprintln!(
                 "segment {segment}/3: resume {} end {} rows; kv {:.2} GiB opening {:.2} GiB working set {:.2} GiB (genesis {:.2} GiB)",
                 p.resume_rows,
@@ -467,6 +671,14 @@ mod tests {
             assert!(p.end_rows <= full.end_rows);
             assert!(p.resume_rows <= p.end_rows);
             assert_eq!(p.retained_checkpoint_bytes, 0, "a replaying seat captures no leg");
+            assert_eq!(p.checkpoint_leg_bytes, 0);
+            // **The S1 replay keeps a hash per leaf it walks, and at this width that is the term**:
+            // segment 0 walks 8.7 billion leaves from the prompt — 580 GiB of `(index, hash)` — which
+            // is why the figure is printed rather than hidden: no seat on this design replays a 2M
+            // segment until the replay streams its hashes.
+            assert_eq!(p.capture, PalwCaptureRetentionV1::ReplayHashes);
+            assert_eq!(p.capture_retained_bytes, p.leaves * 72);
+            assert!(p.leaves > 0);
             // The prefix is the state: nothing smaller serves dense attention.
             assert_eq!(p.kv_resident_bytes, palw_kv_series_bytes_v1(28, 256, p.end_rows, 2));
             assert_eq!(p.from_genesis().opening_bytes, 0);
@@ -478,13 +690,20 @@ mod tests {
         // A checkpoint after every position (the held map): the segment resumes exactly at its first leaf.
         assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerPosition);
         assert!(ends[1].end_rows < full.end_rows, "and holds fewer rows than a full seat…");
+        // With the replay's hash vector priced, every segment of the 2M attempt is far past any host — the
+        // rows and the opening are the smaller terms. Compared without it (the K/V and opening terms alone):
+        let without_hashes = |p: &PalwResourceProfileV1| p.working_set_bytes() - p.capture_retained_bytes;
         assert!(
-            ends[1].working_set_bytes() > full.working_set_bytes(),
+            without_hashes(&ends[1]) > without_hashes(&full) - full.capture_retained_bytes,
             "…but its i32 opening outweighs the i16 rows it saves: {} > {}",
-            ends[1].working_set_bytes(),
-            full.working_set_bytes()
+            without_hashes(&ends[1]),
+            without_hashes(&full) - full.capture_retained_bytes
         );
-        assert!(ends[1].from_genesis().working_set_bytes() < full.working_set_bytes(), "started at the prompt, it is smaller than a full seat");
+        assert!(
+            without_hashes(&ends[1].from_genesis()) < without_hashes(&full) - full.capture_retained_bytes,
+            "started at the prompt, it is smaller than a full seat"
+        );
+        assert!(ends[0].working_set_bytes() as f64 / GIB > 500.0, "segment 0's replay hashes alone are hundreds of GiB");
     }
 
     /// **The per-decode-call cadence retains every checkpoint's bytes, and the derivation says
@@ -498,7 +717,7 @@ mod tests {
         assert_eq!(palw_checkpoint_cadence_v1(&profile), PalwCheckpointCadenceV1::PerDecodeCall);
         let job = job(&profile, 14, 3);
         let leaves = crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_step::PALW_STEP_MAX_LEAVES).expect("leaves");
-        let p = palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer, LIMITS)
+        let p = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer)
             .expect("derives");
         assert_eq!(p.end_rows, 16, "14 prefill rows and one per decode call after the first");
         // Checkpoints after calls 1 and 2 (interval 1): 15 and 16 rows of i32.
@@ -508,7 +727,7 @@ mod tests {
         // Every segment of this job that starts at a decode call resumes from a call boundary or the prompt.
         for segment in 0..palw_segment_count_v2(4) {
             let role = PalwResourceRoleV1::PartialSeat { seat_count: 4, segment_index: segment };
-            let s = palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, role, LIMITS).expect("derives");
+            let s = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, role).expect("derives");
             assert!(s.resume_rows == 0 || s.resume_rows >= 15, "a per-call resume never lands inside the prefill: {}", s.resume_rows);
             assert_eq!(s.retained_checkpoint_bytes, 0);
         }
@@ -521,7 +740,7 @@ mod tests {
         let profile = qwen25_a16_graph_v5_profile_v1().expect("the shipped 512 row");
         let job = job(&profile, 14, 2);
         let leaves = crate::palw_step::step_leaf_count_capped_v1(&profile, &job, crate::palw_step::PALW_STEP_MAX_LEAVES).expect("leaves");
-        let p = palw_resource_profile_v1(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer, LIMITS)
+        let p = derive(&profile, &job, leaves, PalwRuntimeProfileV1::A16KvI32, PalwResourceRoleV1::Producer)
             .expect("derives");
         assert_eq!(p.end_rows, 15);
         assert_eq!(p.kv_resident_bytes, 15 * 28 * 2 * 256 * 4);
