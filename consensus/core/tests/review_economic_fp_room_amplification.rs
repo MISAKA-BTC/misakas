@@ -251,6 +251,8 @@ fn review_economic_a_one_quantum_free_prompt_takes_an_eighth_of_a_held_class_slo
         span_daa: span,
         genesis_works: [(floor.0, work), (held_id, work)].into_iter().collect(),
         grace_until_daa: 0,
+        admission_audit_period_daa: p.palw_admission_audit_period_daa,
+        readiness_v2_active: p.palw_readiness_v2_at(0),
     };
     let with_registry = |audit: bool| PalwTransitionExtrasV1 {
         audit_2026_09_23_active: audit,

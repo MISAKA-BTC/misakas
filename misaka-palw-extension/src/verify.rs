@@ -389,10 +389,13 @@ pub fn class_registration_inputs_v1(
 }
 
 /// This build's materialised `Params` for the network — the same `From<NetworkId>` the node and
-/// the fingerprint pin read, guarded against the suffixes that constructor panics on.
+/// the fingerprint pin read, guarded against the suffixes that constructor panics on. The list is
+/// that constructor's (`Params::from`): testnet-12 was missing here after it became a network
+/// again, so `misaka model add --manifest` and `palw extension verify` refused the public testnet
+/// outright (the 2026-09-23 route-matrix audit's #4).
 pub fn params_for(network_id: NetworkId) -> Result<Params, PalwExtensionError> {
-    if network_id.network_type == NetworkType::Testnet && !matches!(network_id.suffix, Some(10) | Some(11)) {
-        return Err(PalwExtensionError::field("network", format!("{network_id}: this build knows testnet-10 and testnet-11")));
+    if network_id.network_type == NetworkType::Testnet && !matches!(network_id.suffix, Some(10) | Some(11) | Some(12)) {
+        return Err(PalwExtensionError::field("network", format!("{network_id}: this build knows testnet-10, testnet-11 and testnet-12")));
     }
     Ok(Params::from(network_id))
 }

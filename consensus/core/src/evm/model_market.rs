@@ -317,6 +317,12 @@ pub struct PalwEvmMarketFencesV1 {
     /// writer takes any non-zero seed either way (ADR-0094: the fold collects it), so this changes no
     /// handler and no address either.
     pub seed_v2_active: bool,
+    /// `Params::palw_audit_2026_09_23` (testnet-12 only). The AMM's `market(line)` `exists` word
+    /// means "this line is a market" (`PalwModelMarketV1::is_open`) past it, where below it the word
+    /// is "a row exists" — which a pledge alone writes (the 2026-09-23 Position route matrix, P10,
+    /// on the EVM lane; the RPC's `opened` had the same defect). Changes no handler and no address,
+    /// so it is not part of [`Self::any_active`]; below it every word is byte-identical.
+    pub audit_2026_09_23_active: bool,
 }
 
 impl PalwEvmMarketFencesV1 {
@@ -426,6 +432,14 @@ pub struct PalwEvmViewV1 {
     pub evaluations: BTreeMap<(Hash64, u32), Vec<PalwEvmEvaluationRowV1>>,
     pub markets: BTreeMap<Hash64, crate::palw_model_market_v1::PalwModelMarketV1>,
     pub positions: BTreeMap<(Hash64, Hash64), u64>,
+    /// **The classes whose seed and buy the fold's market gate refuses** (the 2026-09-23 Position
+    /// route matrix, P-B3): `palw_model_market_admits_v1` at the EVM block, asked of every class.
+    /// Filled by consensus only past `Params::palw_audit_2026_09_23`, and EMPTY below it — so on
+    /// testnet-11 no precompile answer and no revert moves. The writer reverts a seed or a buy of a
+    /// line whose class is here (`ClassNotEligible()`) before it takes the escrow, and the AMM's
+    /// `market()` reads such a line as closed to buys: the EVM lane's pre-checks ask the question the
+    /// fold asks, instead of escrowing a move the fold refunds one block later. A sell never asks.
+    pub market_refused_classes: std::collections::BTreeSet<Hash64>,
 }
 
 impl PalwEvmViewV1 {
@@ -444,6 +458,12 @@ impl PalwEvmViewV1 {
     }
     pub fn position(&self, line_id: &Hash64, holder: &Hash64) -> u64 {
         self.positions.get(&(*line_id, *holder)).copied().unwrap_or(0)
+    }
+    /// Does the fold's market gate refuse a seed or a buy of `line_id` (P-B3)? Always `false` below
+    /// the audit fence, where [`Self::market_refused_classes`] is empty.
+    pub fn market_refuses(&self, line_id: &Hash64) -> bool {
+        !self.market_refused_classes.is_empty()
+            && self.line(line_id).is_some_and(|line| self.market_refused_classes.contains(&line.class_id))
     }
 }
 

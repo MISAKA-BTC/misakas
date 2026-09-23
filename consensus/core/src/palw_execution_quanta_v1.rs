@@ -224,6 +224,105 @@ pub fn palw_execution_mint_quanta_bounded_v1(
     issued
 }
 
+/// **Rounds between the block that opens a span and the first round its tickets may occupy**, past
+/// ADR-0151's bundle. A round block's round is its own timestamp's second, so a ticket on the
+/// opening block's own round is one no producer could have known of in time.
+///
+/// **Three rounds is not when a producer can read the schedule** (the 2026-09-23 route-matrix
+/// re-audit's #1, correcting this constant's first doc). A round block anchors at the sink's
+/// SELECTED PARENT, so span `n`'s schedule is what a producer builds against only once the next chain
+/// block on top of the opening block has arrived — on testnet-12 often a whole 120 s heartbeat later,
+/// and the opening block's own timestamp may be an attempt template's, taken before its forward.
+/// The loss this caused was at the HEAD of the window, not its tail. Consensus accepts a backdated
+/// round (a round block's timestamp need only be its round's and past the median time), so the
+/// shipped round producer signs every ticket of its bond the schedule shows on a round not yet past
+/// the median time, oldest first (`kaspad`'s `palw_round_producer`); what remains lost is a ticket
+/// whose round is still ahead when the view moves on to the next span.
+pub const PALW_EXEC_TICKET_LEAD_ROUNDS_V1: u64 = 3;
+
+/// **The rounds a span's schedule can grant, past ADR-0151's bundle: the span's length at the
+/// network's cadence** (`span_daa × rounds_per_daa`, at least one).
+///
+/// A round block is judged against the schedule of its ANCHOR's span — the chain tip it was built
+/// on, since a round block is never a selected parent — so a span's tickets are spendable while the
+/// chain's tip lies in that span, which is `span_daa` PALW blocks of `target_time_per_block` each.
+pub fn palw_execution_span_rounds_v1(span_daa: u64, target_time_per_block_ms: u64) -> u64 {
+    span_daa.max(1).saturating_mul(crate::palw_economic_safety_v1::palw_rounds_per_daa_v1(target_time_per_block_ms))
+}
+
+/// **The mint past ADR-0151's bundle: every ticket on a round its schedule is judged at**
+/// (the 2026-09-23 route-matrix audit's #2).
+///
+/// [`palw_execution_mint_quanta_bounded_v1`] spreads a span's tickets over a 2^16-round (~18 hour)
+/// horizon, while the schedule listing them can grant a round only while the chain's tip lies in
+/// that span — `window_rounds`, about 120 on testnet-12. So nearly every ticket fell on a round
+/// judged by a later span's schedule, which does not list it: the right existed and could not be
+/// spent. Here the tickets occupy `[open_round + lead, open_round + lead + n)`, consecutively, in
+/// an order drawn from the seed, and `n` is at most `window_rounds` — a round spends one ticket, so
+/// tickets past the window are rounds the span does not have. Which tickets take the window is the
+/// seed's draw over all of them, `H(seed ‖ quantum_id)`, so a span with more rights than rounds
+/// fills its rounds in proportion to the tickets each Final earned rather than in execution-root
+/// order.
+///
+/// The Finals are collapsed by `execution_root` and a forfeited execution mints nothing, exactly
+/// as in the bounded mint. One Final never contributes more than `window_rounds` candidates (no
+/// more could be drawn), so the work is `O(finals × window)` whatever a Final's credit is.
+pub fn palw_execution_mint_quanta_windowed_v1(
+    finals: &[PalwExecFinalV1],
+    seed: Hash64,
+    quantum: u128,
+    open_round: u64,
+    window_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<Hash64>,
+) -> Vec<PalwExecQuantumV1> {
+    let window = usize::try_from(window_rounds).unwrap_or(usize::MAX).min(PALW_EXEC_MAX_QUANTA_PER_SPAN_V1);
+    if window == 0 {
+        return Vec::new();
+    }
+    let mut by_work: Vec<&PalwExecFinalV1> = finals
+        .iter()
+        .filter(|f| f.credit > 0)
+        .filter(|f| !crate::palw_economic_safety_v1::palw_exec_rights_are_forfeit_v1(forfeited_roots, &f.execution_root))
+        .collect();
+    by_work.sort_by(|a, b| a.execution_root.cmp(&b.execution_root).then(a.claim_id.cmp(&b.claim_id)));
+    by_work.dedup_by(|a, b| a.execution_root == b.execution_root);
+
+    let mut drawn: Vec<(Hash64, PalwExecQuantumV1)> = Vec::new();
+    for f in by_work {
+        let work_id = palw_execution_canonical_work_id_v1(f.execution_root);
+        let n = palw_execution_quantum_count_v1(u128::from(f.credit), quantum, seed, f.claim_id).min(window as u32);
+        for index in 0..n {
+            if drawn.len() >= PALW_EXEC_MAX_QUANTA_PER_SPAN_V1 {
+                break;
+            }
+            let quantum_id = palw_execution_quantum_id_v1(work_id, f.claim_id, index);
+            let mut order = keyed(PALW_EXEC_QUANTUM_ROUND_DOMAIN);
+            order.update(seed.as_byte_slice());
+            order.update(quantum_id.as_byte_slice());
+            drawn.push((
+                finish(order),
+                PalwExecQuantumV1 {
+                    quantum_id,
+                    final_id: f.claim_id,
+                    index,
+                    bond: f.bond,
+                    operator_id: f.operator_id,
+                    domain: f.domain,
+                    scheduled_round: 0,
+                },
+            ));
+        }
+    }
+    drawn.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.quantum_id.cmp(&b.1.quantum_id)));
+    drawn.truncate(window);
+    let first = open_round.saturating_add(PALW_EXEC_TICKET_LEAD_ROUNDS_V1);
+    drawn
+        .into_iter()
+        .enumerate()
+        .map(|(position, (_, q))| PalwExecQuantumV1 { scheduled_round: first.saturating_add(position as u64), ..q })
+        .collect()
+}
+
 fn assign_round(seed: Hash64, quantum_id: Hash64, open_round: u64, taken: &mut BTreeSet<u64>) -> u64 {
     let mut state = keyed(PALW_EXEC_QUANTUM_ROUND_DOMAIN);
     state.update(seed.as_byte_slice());
@@ -438,5 +537,44 @@ mod tests {
         assert!(palw_execution_mint_quanta_v1(&[final_of(1, 1, 0, 1)], h(1), 1_000, 0).is_empty());
         assert!(palw_execution_mint_quanta_v1(&[final_of(1, 1, 9, 1)], h(1), 0, 0).is_empty());
         assert_eq!(palw_execution_quantum_count_v1(0, 1_000, h(1), h(1)), 0);
+    }
+
+    /// **The windowed mint (route-matrix audit #2): consecutive rounds right after the lead, at most
+    /// a window of them, drawn across Finals by the seed — not by execution-root order.**
+    #[test]
+    fn the_windowed_mint_fills_the_spans_own_rounds_and_no_more() {
+        let none = BTreeSet::new();
+        let seed = h(0x5EED);
+        let open = 10_000u64;
+        let first = open + PALW_EXEC_TICKET_LEAD_ROUNDS_V1;
+        // Under the window: every ticket, on consecutive rounds from the lead.
+        let small = palw_execution_mint_quanta_windowed_v1(&[final_of(1, 0xA, 3_000, 1)], seed, 1_000, open, 120, &none);
+        assert_eq!(small.iter().map(|q| q.scheduled_round).collect::<Vec<_>>(), vec![first, first + 1, first + 2]);
+        assert_eq!(small, palw_execution_mint_quanta_windowed_v1(&[final_of(1, 0xA, 3_000, 1)], seed, 1_000, open, 120, &none));
+
+        // Over the window: exactly a window of tickets, one per round, and both Finals are drawn —
+        // the low execution root does not take the whole window.
+        let low = final_of(1, 0x1, 500_000, 1);
+        let high = final_of(2, 0xF, 500_000, 2);
+        let full = palw_execution_mint_quanta_windowed_v1(&[low, high], seed, 1_000, open, 120, &none);
+        assert_eq!(full.len(), 120, "a span of 120 rounds spends at most 120 tickets");
+        assert_eq!(full.iter().map(|q| q.scheduled_round).collect::<Vec<_>>(), (first..first + 120).collect::<Vec<_>>());
+        let from_low = full.iter().filter(|q| q.final_id == low.claim_id).count();
+        assert!(from_low > 20 && from_low < 100, "equal credits share the window by the seed's draw: {from_low} of 120 from one");
+
+        // A forfeited execution mints nothing here either, and a copy of one execution is one job.
+        let forfeited: BTreeSet<Hash64> = [low.execution_root].into_iter().collect();
+        let after = palw_execution_mint_quanta_windowed_v1(&[low, high], seed, 1_000, open, 120, &forfeited);
+        assert!(after.iter().all(|q| q.final_id == high.claim_id) && after.len() == 120);
+        let copy = final_of(3, 0x1, 500_000, 3);
+        let dedup = palw_execution_mint_quanta_windowed_v1(&[low, copy], seed, 1_000, open, 120, &none);
+        assert!(dedup.iter().all(|q| q.final_id == low.claim_id.min(copy.claim_id)), "one execution, one set of rights");
+
+        // A saturating credit costs a window, not u32::MAX iterations; a zero window mints nothing.
+        let huge = final_of(9, 0x9, u64::MAX, 9);
+        assert_eq!(palw_execution_mint_quanta_windowed_v1(&[huge], seed, 1, open, 120, &none).len(), 120);
+        assert!(palw_execution_mint_quanta_windowed_v1(&[huge], seed, 1, open, 0, &none).is_empty());
+        assert_eq!(palw_execution_span_rounds_v1(1, 120_000), 120, "testnet-12: one DAA of 120 s");
+        assert_eq!(palw_execution_span_rounds_v1(0, 0), 1, "never an empty span");
     }
 }

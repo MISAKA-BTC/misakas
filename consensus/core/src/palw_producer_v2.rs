@@ -143,6 +143,12 @@ pub struct PalwProducerFactsV2 {
     /// zero is a chain ordering on immature PALW work exactly as designed, whereas both at zero
     /// is a chain whose lifecycle never started.
     pub live_total: u128,
+    /// **Why the chain would refuse a new claim of this class now, if it would** — the fold's own
+    /// class gate (`palw_class_admits_claim_v1`: the registry row's lifecycle, then its panel room
+    /// or inflight cap), filled by the caller that holds the block's fences. `None` is "admits".
+    /// Without it a class the registry held at `Prefetching` reported no reason not to produce,
+    /// and its producer mined claims its own chain refused (the 2026-09-23 route-matrix audit's #7).
+    pub class_admission_refusal: Option<String>,
 }
 
 impl PalwProducerFactsV2 {
@@ -184,6 +190,9 @@ impl PalwProducerFactsV2 {
     pub fn ready_to_produce(&self, local_pubkey: &[u8]) -> Result<(), &'static str> {
         self.ready_to_spend_receipts(local_pubkey)?;
         let bond = self.bond.as_ref().ok_or(PALW_NOT_READY_BOND_UNKNOWN_V2)?;
+        if self.class_admission_refusal.is_some() {
+            return Err(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2);
+        }
         if !self.has_epoch_room() {
             return Err(PALW_NOT_READY_EPOCH_BUDGET_V2);
         }
@@ -204,14 +213,23 @@ impl PalwProducerFactsV2 {
 pub const PALW_NOT_READY_BOND_UNKNOWN_V2: &str = "the named bond is not registered on this chain";
 /// `ready_to_produce` / `ready_to_spend_receipts`: the bond exists and registered another key.
 pub const PALW_NOT_READY_KEY_MISMATCH_V2: &str = "the local signing key is not the one this bond registered";
+/// `ready_to_produce`: the model registry admits no new claim of this class now — its lifecycle
+/// state (a `Candidate` or `Prefetching` row), or its panel room or inflight cap. The detail is
+/// `PalwProducerFactsV2::class_admission_refusal`.
+pub const PALW_NOT_READY_CLASS_NOT_ADMITTING_V2: &str = "the model registry admits no new claim of this class now";
 /// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
 pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
 /// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
 pub const PALW_NOT_READY_EXPOSURE_FULL_V2: &str = "the bond's exposure ceiling leaves no room for another claim";
 
 /// Every sentence `ready_to_produce` can return, in the order it checks them.
-pub const PALW_NOT_READY_REASONS_V2: [&str; 4] =
-    [PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_KEY_MISMATCH_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2];
+pub const PALW_NOT_READY_REASONS_V2: [&str; 5] = [
+    PALW_NOT_READY_BOND_UNKNOWN_V2,
+    PALW_NOT_READY_KEY_MISMATCH_V2,
+    PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
+    PALW_NOT_READY_EPOCH_BUDGET_V2,
+    PALW_NOT_READY_EXPOSURE_FULL_V2,
+];
 
 /// Read the facts for `class_id` (and optionally a bond) out of a state snapshot.
 ///
@@ -344,6 +362,8 @@ pub fn palw_producer_facts_v3(
         })
     });
     Some(PalwProducerFactsV2 {
+        // The caller that holds the block's fences asks the fold's class gate (route-matrix #7).
+        class_admission_refusal: None,
         is_base_class: class_id == state_params.base_class_id(),
         fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
             || state.fp_lane_certification(&class_id).is_some(),
@@ -677,6 +697,13 @@ mod tests {
         facts.epoch_budget_blocks = 0;
         assert_eq!(facts.ready_to_produce(&[7; 4]), Err("this class's epoch budget is already spent"));
         assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Ok(()), "a receipt draws on no attempt budget");
+        // Route-matrix #7: a class the registry holds is the reason, ahead of the budget and the
+        // ceiling — nothing else about the bond can make its claim land — and a receipt still spends.
+        facts.class_admission_refusal = Some("class … is Prefetching under the model registry".to_string());
+        assert_eq!(facts.ready_to_produce(&[7; 4]), Err(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2));
+        assert_eq!(facts.ready_to_spend_receipts(&[7; 4]), Ok(()), "the class gate holds attempts, not receipts");
+        assert_eq!(facts.ready_to_produce(&[9; 4]), Err(PALW_NOT_READY_KEY_MISMATCH_V2), "the key is still asked first");
+        facts.class_admission_refusal = None;
         // ADR-0137: past the work target the chain reads no budget, so neither does the producer —
         // the same spent budget is not a hold (the 2026-09-18 drill's stall).
         facts.epoch_budget_read = false;
@@ -1071,6 +1098,72 @@ pub struct PalwClaimRowV1 {
     pub payout_pending: Option<u64>,
     pub work_leaves: u64,
     pub open_courts: usize,
+    /// **Where this claim's Final stands in the execution lane**, if it earned a credit there (the
+    /// 2026-09-23 route-matrix audit's #7: a Final's CanonicalWork credit, its tickets and its wait
+    /// had no observable at all).
+    pub exec_lane: Option<PalwClaimExecLaneV1>,
+}
+
+/// **One claim's Final as the execution lane holds it** ([`palw_claim_exec_lane_v1`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwClaimExecLaneV1 {
+    /// `credited` (gathered in the open span), `maturing` (in a snapshot waiting for its span) or
+    /// `scheduled` (in a kept schedule, its tickets on that span's rounds).
+    pub stage: &'static str,
+    /// The CanonicalWork credit the Final earned its domain (`record_round_final`).
+    pub credit: u64,
+    /// The span it was gathered in, the span it waits for, or the span that scheduled it.
+    pub span: u64,
+    /// Its tickets in that schedule (0 before it is scheduled), how many were spent, and the rounds
+    /// they occupy.
+    pub tickets: u32,
+    pub tickets_spent: u32,
+    pub first_round: Option<u64>,
+    pub last_round: Option<u64>,
+}
+
+/// **Where `claim_id`'s Final stands in the execution lane**, read from the state's three stages;
+/// `None` for a claim that earned no credit there, or whose stage the state no longer keeps. A
+/// Final collapsed onto another claim of the same execution (the mint keeps one per root) shows its
+/// credit and no tickets of its own.
+pub fn palw_claim_exec_lane_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Option<PalwClaimExecLaneV1> {
+    let (open_span, finals) = state.round_finals();
+    if let Some(f) = finals.get(claim_id) {
+        return Some(PalwClaimExecLaneV1 {
+            stage: "credited",
+            credit: f.credit,
+            span: open_span,
+            tickets: 0,
+            tickets_spent: 0,
+            first_round: None,
+            last_round: None,
+        });
+    }
+    for (span, schedule) in state.round_schedules() {
+        if let Some(f) = schedule.finals.iter().find(|f| f.claim_id == *claim_id) {
+            let rounds: Vec<u64> = schedule.quanta.iter().filter(|q| q.final_id == *claim_id).map(|q| q.scheduled_round).collect();
+            return Some(PalwClaimExecLaneV1 {
+                stage: "scheduled",
+                credit: f.credit,
+                span: *span,
+                tickets: rounds.len() as u32,
+                tickets_spent: rounds.iter().filter(|round| state.round_permit_used(*span, **round, 0)).count() as u32,
+                first_round: rounds.iter().min().copied(),
+                last_round: rounds.iter().max().copied(),
+            });
+        }
+    }
+    state.round_pending_snapshots().iter().find_map(|(target, snapshot)| {
+        snapshot.finals.iter().find(|f| f.claim_id == *claim_id).map(|f| PalwClaimExecLaneV1 {
+            stage: "maturing",
+            credit: f.credit,
+            span: *target,
+            tickets: 0,
+            tickets_spent: 0,
+            first_round: None,
+            last_round: None,
+        })
+    })
 }
 
 /// **When a claim's phase ends by itself**, from the network's windows — the dates the sweep acts
@@ -1156,6 +1249,7 @@ pub fn palw_claim_rows_v1(
                 payout_pending: payouts.get(id).copied(),
                 work_leaves: claim.work_leaves,
                 open_courts: court.map(|c| c.0).unwrap_or(0),
+                exec_lane: palw_claim_exec_lane_v1(state, id),
             })
         })
         .collect();

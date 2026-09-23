@@ -440,8 +440,15 @@ fn the_carriage_round_trips_a_non_empty_ring() {
 /// computed on `faf80a4e` (the parent of both `6bb8c844` and the other side of the merge,
 /// `b38356fe`) by folding this very scenario with `palw_state_v2.rs` and `palw_panel_v2.rs` checked
 /// out at that commit, and identical on this branch — a network with the fence `None` did not move.
+///
+/// Re-pinned at the merge of `feat/testnet-12-regenesis` (50565f55): that side gave
+/// `PalwClaimStateV2` the `rights_reserved` field (the audit's #5, escrow half), so every claim's
+/// hashed bytes — dormant or armed — gained it (the version-21 inhabited golden moved for the same
+/// reason). The ring still contributes nothing here: an empty ring is not hashed, and the two
+/// assertions above it (`recent_anchor_daas` empty, no ring delta) are what pin that. The
+/// pre-merge root was `1fba7da1…`.
 const DORMANT_GOLDEN_ROOT: &str =
-    "1fba7da1177653f96258afdd12517021c128e499d15c0c98c49a8769ca3025c6b69fc39cc83e214c507b362a142f2b1baa316919aca1c454b53daaabce93a108";
+    "57ef2f1762083bc481742907c3e9c1f269a80013fca57a7016af012c67b53fa648bfcff6d006c63204252243535e2ca6c46296e4a40c0eeff143d3e1d4844859";
 
 /// **A network that never armed the fence: the counter still ticks at `Final`, the ring stays empty,
 /// no ring delta is ever written, and the root is the one it had before the ring existed.**

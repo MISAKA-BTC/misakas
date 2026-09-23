@@ -1,5 +1,12 @@
 //! **AUDIT LANE A4 (part 4) — the permit a Final mints is scheduled onto a round whose schedule
-//! has already been pruned.**
+//! has already been pruned.** FIXED (the 2026-09-23 route-matrix audit's #2): past ADR-0151's
+//! bundle `rotate_round_lane` delays the SNAPSHOT by the maturity and mints with
+//! `palw_execution_mint_quanta_windowed_v1`, which puts every ticket on the span's own rounds. This
+//! file keeps the measurement of what the old mint did and asserts what the fold's mint does now;
+//! the fold itself is pinned by
+//! `past_the_economic_safety_bundle_a_finals_tickets_land_where_their_schedule_is_judged`.
+//!
+//! What it measured:
 //!
 //! `rotate_round_lane` (palw_state_v2.rs:10824) mints with
 //! `maturity_rounds = palw_exec_quantum_maturity_daa_v1(window_challenge, window_court)
@@ -15,13 +22,16 @@ use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
 use kaspa_consensus_core::palw_economic_safety_v1::{palw_exec_quantum_maturity_daa_v1, palw_rounds_per_daa_v1};
 use kaspa_consensus_core::palw_execution_lane_v1::{PALW_EXEC_ROUND_MS, PalwExecFinalV1};
-use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_matured_v1};
+use kaspa_consensus_core::palw_execution_quanta_v1::{
+    PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_matured_v1, palw_execution_mint_quanta_windowed_v1,
+    palw_execution_span_rounds_v1,
+};
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
 #[test]
-fn every_matured_quantum_lands_outside_the_two_spans_its_schedule_survives() {
+fn the_folds_mint_puts_every_ticket_inside_the_span_its_schedule_is_judged_at() {
     let params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("ConsensusV2") };
     let lane = params.palw_execution_lane.expect("t12 opens the lane");
@@ -82,9 +92,33 @@ fn every_matured_quantum_lands_outside_the_two_spans_its_schedule_survives() {
 
     assert!(
         earliest > open_round + schedule_life_rounds,
-        "every ticket matures after its schedule has been pruned: earliest {earliest} vs last readable {}",
+        "the OLD mint put every ticket after its schedule was pruned: earliest {earliest} vs last readable {}",
         open_round + schedule_life_rounds
     );
-    println!("\n  => on t12 NO execution quantum is ever convertible into an algo-10 permit.");
-    println!("     The mint is pure cost: fold time + rooted state, zero realizable right.");
+    println!("\n  => with the old mint NO execution quantum was convertible into an algo-10 permit.");
+
+    // **The mint the fold runs now.** The maturity was served before the snapshot was taken (the
+    // snapshot targets `span + 1 + maturity spans`), so the schedule's tickets start at its own
+    // opening round, and a span's rounds are how many the window holds.
+    let span_rounds = palw_execution_span_rounds_v1(span_daa, ttpb);
+    let windowed = palw_execution_mint_quanta_windowed_v1(
+        &[f],
+        Hash64::from_u64_word(7),
+        u128::from(PALW_EXECUTION_QUANTUM_V1),
+        open_round,
+        span_rounds,
+        &std::collections::BTreeSet::new(),
+    );
+    let first = windowed.iter().map(|q| q.scheduled_round).min().expect("tickets");
+    let last = windowed.iter().map(|q| q.scheduled_round).max().expect("tickets");
+    println!("\n=== the fold's mint now (windowed, span of {span_rounds} rounds) ===");
+    println!("  tickets                {}", windowed.len());
+    println!("  scheduled              +{} .. +{} rounds", first - open_round, last - open_round);
+    assert_eq!(windowed.len(), issued.len(), "the window takes every ticket of a Final this size");
+    assert!(
+        first > open_round && last < open_round + span_rounds,
+        "every ticket is on a round of the span whose schedule lists it: +{}..+{} of {span_rounds}",
+        first - open_round,
+        last - open_round
+    );
 }

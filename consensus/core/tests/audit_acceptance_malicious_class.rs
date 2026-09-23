@@ -168,6 +168,8 @@ fn registry_fold(p: &Params, b: &PalwConsensusParamsV2) -> PalwModelRegistryFold
         span_daa: lane.schedule_span_daa,
         genesis_works: works.clone(),
         grace_until_daa: PalwModelRegistryFoldV1::grace_until_v1(activation, lane.schedule_span_daa, &globals),
+        admission_audit_period_daa: p.palw_admission_audit_period_daa,
+        readiness_v2_active: p.palw_readiness_v2_at(0),
     }
 }
 

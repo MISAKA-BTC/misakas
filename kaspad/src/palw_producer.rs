@@ -49,7 +49,7 @@ use kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
-use kaspa_core::{info, trace, warn};
+use kaspa_core::{error, info, trace, warn};
 use kaspa_hashes::Hash64;
 use kaspa_mining::manager::MiningManagerProxy;
 use kaspa_p2p_flows::flow_context::FlowContext;
@@ -157,6 +157,12 @@ pub struct PalwProducerService {
     key_seed: Option<[u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]>,
     bond: Option<TransactionOutpoint>,
     miner_data: Option<MinerData>,
+    /// **Why the ATTEMPT lane can never produce for `--palw-producer-class` on this node**, where
+    /// `producer_class_unproducible_v1` could say so for certain at startup (the route-matrix
+    /// audit's #1). A soft refusal, like every other one this constructor makes: the node, its seat,
+    /// its RPC and this producer's receipt lane (which is per bond and needs no artifact) keep running,
+    /// and the attempt lane holds with this sentence as its `disabled` status.
+    class_refusal: Option<String>,
 }
 
 /// `<txid>:<index>`, the same spelling `--stake-bond` uses.
@@ -260,6 +266,27 @@ fn free_prompt_retention_is_owed(
         && matches!(phase, P::Provisional | P::PanelBound { .. } | P::ReceiptLicensed { .. } | P::DefaultDisputed { .. })
 }
 
+/// **A hold that outlives this is not a hold; it is a producer that does not work** (the 2026-09-23
+/// route-matrix audit's #1). Half an hour: longer than any honest wait this loop knows (an epoch
+/// boundary, a registry span, a sync), far shorter than the deployment the first testnet-12 fleet spent
+/// holding at INFO.
+const PALW_PRODUCER_STARVED_AFTER: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Log a hold at its own level while it is young, and at ERROR — saying how long nothing has been
+/// produced — once it has outlived [`PALW_PRODUCER_STARVED_AFTER`] since the producer last made progress.
+fn log_producer_hold_v1(detail: &str, loud: bool, since_progress: std::time::Duration) {
+    if since_progress >= PALW_PRODUCER_STARVED_AFTER {
+        error!(
+            "[{PALW_PRODUCER}] NOT PRODUCING for {} min — holding: {detail}",
+            since_progress.as_secs() / 60
+        );
+    } else if loud {
+        warn!("[{PALW_PRODUCER}] holding: {detail}");
+    } else {
+        info!("[{PALW_PRODUCER}] holding: {detail}");
+    }
+}
+
 impl PalwProducerService {
     pub fn new(
         config: PalwProducerConfig,
@@ -336,6 +363,38 @@ impl PalwProducerService {
             config.class_cache_bytes,
             config.class_residency,
         );
+        // **A producer class this node can never produce for is refused at startup** (the 2026-09-23
+        // route-matrix audit's #1). The first testnet-12 fleet launched with a producer class whose
+        // registered root no artifact on it could match, and every producer said "holding" at INFO for
+        // a whole deployment while the chain ran on heartbeats — the launch was judged on the clock
+        // ticking. A configuration that cannot work is a startup refusal, said where the operator is
+        // looking (stdout as well as the log), not a hold.
+        //
+        // **And a SOFT one, like every other refusal above** (the route-matrix re-audit's #11). This
+        // called `process::exit(1)` during daemon construction, which took the whole kaspad down with
+        // it — the panel seat, the RPC, the relay, on a public host the public entry node — for a
+        // producer misconfiguration, and under systemd's `Restart=` turned it into a crash loop that
+        // re-mapped the class artifacts on every lap: the failure shape of the staged-script incident
+        // that killed a public node. Now the attempt lane is disabled with the sentence as its status,
+        // the ERROR line ends in `— production disabled` (the phrase `misaka-cli`'s nodelog parses),
+        // and the node, its seat and this producer's receipt lane keep running.
+        let class_refusal = if refusal.is_none()
+            && let Some(why) = crate::palw_backends::producer_class_unproducible_v1(&config.class_id, &class_holdings, &consensus_config.params)
+        {
+            let remedy = "Give it the artifact that class registered (convert it and check it with `palw-class manifest \
+                          --check`), name a class one of its artifacts pairs with (`palw-class inspect <artifact>`), or drop \
+                          --palw-producer-class to produce for the floor";
+            println!(
+                "--palw-producer-class: {why}\n\nThis node will not produce attempts for that class (the node, its panel seat \
+                 and the receipt lane keep running). {remedy}."
+            );
+            error!("[{PALW_PRODUCER}] --palw-producer-class: {why} — production disabled");
+            error!("[{PALW_PRODUCER}] {remedy}.");
+            flow_context.update_palw_runtime(|r| r.set_producer("disabled", &why));
+            Some(why)
+        } else {
+            None
+        };
         Self {
             config,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),
@@ -349,6 +408,7 @@ impl PalwProducerService {
             miner_data,
             class_holdings,
             network_draw_lost: std::sync::atomic::AtomicU64::new(0),
+            class_refusal,
         }
     }
 
@@ -459,6 +519,9 @@ impl PalwProducerService {
         // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
         let mut last_hold: Option<String> = None;
         let mut last_hold_at: Option<std::time::Instant> = None;
+        // When this producer last made progress — started, or produced a block. A hold measured from
+        // here past `PALW_PRODUCER_STARVED_AFTER` is logged as the failure it is (`log_producer_hold_v1`).
+        let mut last_progress_at = std::time::Instant::now();
         // Lost draws are the ordinary state and log nothing each; the count is what says whether
         // the lottery this node is drawing can be won at all (testnet-11 5f: 8 h at 40 % CPU and
         // not one line, against a chance per draw of 1e-7).
@@ -508,7 +571,7 @@ impl PalwProducerService {
                     self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                     let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                     if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                        info!("[{PALW_PRODUCER}] holding: {detail}");
+                        log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
                         last_hold = Some(detail);
                         last_hold_at = Some(std::time::Instant::now());
                     }
@@ -528,7 +591,7 @@ impl PalwProducerService {
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    info!("[{PALW_PRODUCER}] holding: {detail}");
+                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
                     last_hold = Some(detail);
                     last_hold_at = Some(std::time::Instant::now());
                 }
@@ -557,7 +620,7 @@ impl PalwProducerService {
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    info!("[{PALW_PRODUCER}] holding: {detail}");
+                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
                     last_hold = Some(detail);
                     last_hold_at = Some(std::time::Instant::now());
                 }
@@ -570,6 +633,7 @@ impl PalwProducerService {
                 match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
                     Ok(Some(hash)) => {
                         produced += 1;
+                        last_progress_at = std::time::Instant::now();
                         info!("[{PALW_PRODUCER}] produced RECEIPT block #{produced} {hash} (a certified free-prompt claim, mined)");
                         self.flow_context.update_palw_runtime(|r| {
                             r.receipt_blocks += 1;
@@ -590,6 +654,15 @@ impl PalwProducerService {
                     }
                 }
             }
+            // Route-matrix #11: a class this node can never produce for disables the attempt lane
+            // alone — the receipt lane above keeps spending this bond's quanta.
+            if let Some(why) = &self.class_refusal {
+                self.flow_context.update_palw_runtime(|r| r.set_producer("disabled", why));
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
+                continue;
+            }
             if let Err(why) = facts.ready_to_produce(&self.verification_key()) {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
@@ -598,7 +671,7 @@ impl PalwProducerService {
                 // budget table. Telling them apart took reading consensus source; the numbers that
                 // separate them are right here, so carry them.
                 let detail = format!(
-                    "{why} [class={} epoch={} produced={} budget={}{}]",
+                    "{why} [class={} epoch={} produced={} budget={}{}{}]",
                     facts.class_id,
                     facts.epoch_index,
                     facts.epoch_produced_blocks,
@@ -607,14 +680,16 @@ impl PalwProducerService {
                         Some(bond) =>
                             format!(" exposure={}/{} per_claim={}", bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure),
                         None => String::new(),
-                    }
+                    },
+                    // Route-matrix #7: the gate's own words when it is the registry that holds.
+                    facts.class_admission_refusal.as_deref().map(|why| format!(" registry=\"{why}\"")).unwrap_or_default()
                 );
                 // Once per change, then no more than once every 5 minutes while it persists: a
                 // hold that never changes is still worth seeing in a log an operator scrolls.
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
                 if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    warn!("[{PALW_PRODUCER}] holding: {detail}");
+                    log_producer_hold_v1(&detail, true, last_progress_at.elapsed());
                     last_hold = Some(detail);
                     last_hold_at = Some(std::time::Instant::now());
                 }
@@ -639,6 +714,7 @@ impl PalwProducerService {
                 Ok(Some((hash, claim))) => {
                     draws += 1;
                     produced += 1;
+                    last_progress_at = std::time::Instant::now();
                     info!(
                         "[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket under target; Layer-0 as the fence reads it)"
                     );
@@ -936,12 +1012,15 @@ impl PalwProducerService {
         // the strength of a `MemAvailable` that has not yet seen it. A refusal names the need, the
         // bounds and every reservation already held, and holds — the same shape as every other
         // producer hold. The reservation lives until this function returns, on every path.
-        let need = self.backends().role_memory_need_for_backend_v1(
+        // The holding is found through the door the backend came through (the route-matrix
+        // re-audit's #5): a chain-registered class's artifact was priced at zero bytes off the tables.
+        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
             backend.as_ref(),
             facts.class_id,
             facts.artifact_root,
             Some(&job),
             kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::Producer,
+            |id| if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None },
         );
         let reserved = crate::palw_memory_ledger::host_ledger_v1().reserve(
             crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role: "producer", class_id: facts.class_id, job: job.context_hash() },
@@ -1250,6 +1329,25 @@ mod retention_tests {
 #[cfg(test)]
 mod tests {
     use super::palw_da_court_in_force_v1;
+
+    /// **A producer misconfiguration never takes the node down** (the route-matrix re-audit's #11).
+    /// The unproducible-class refusal called `process::exit(1)` from the constructor, which under
+    /// systemd's `Restart=` is a crash loop of the whole kaspad — seat, RPC and public entry node with
+    /// it. Every startup refusal here is soft now; the class one says `— production disabled`, the
+    /// phrase `misaka-cli`'s nodelog reads a disabled producer by, and the worker holds on it after
+    /// the receipt lane rather than returning.
+    #[test]
+    fn a_producer_class_refusal_disables_the_attempt_lane_and_never_exits_the_process() {
+        let whole = include_str!("palw_producer.rs");
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        assert!(!production.contains("std::process::exit("), "a producer refusal must not exit the node");
+        assert!(production.contains("--palw-producer-class: {why} — production disabled"), "the nodelog phrase");
+        let worker = &production[production.find("pub async fn worker(").expect("the worker")..];
+        let receipt = worker.find("self.produce_receipt(").expect("the receipt lane");
+        let hold = worker.find("if let Some(why) = &self.class_refusal").expect("the attempt lane's hold");
+        let attempt = worker.find("facts.ready_to_produce(").expect("the attempt lane");
+        assert!(receipt < hold && hold < attempt, "the refusal holds the attempt lane after the receipt lane has run");
+    }
     use kaspa_consensus_core::config::Config;
     use kaspa_consensus_core::config::params::{devnet_shipped_params, palw_rc_shipped_params};
 

@@ -24,8 +24,9 @@ use kaspa_consensus_core::palw_model_market_v1::{
 use kaspa_rpc_core::api::rpc::RpcApi;
 use serde_json::json;
 
-/// A context for `profile`'s network: every market read is a read of one chain, and the CLI's
-/// global default (testnet-10) is not the one a miner's profile names.
+/// A context for `profile`'s network: every market read is a read of one chain, and the one a
+/// miner's profile names (the flag, mining.toml or the running node) wins over the CLI's global
+/// default.
 fn ctx_for(ctx: &crate::node::Ctx, profile: &Profile) -> crate::node::Ctx {
     crate::node::Ctx {
         output: ctx.output,
@@ -598,6 +599,17 @@ pub(crate) async fn market_open(
             }
             SeedPlan::Pay { amount, opens } => (amount, opens),
         };
+        // **The 2026-09-23 Position route matrix, P-B3: the registry's gate, before anything is
+        // paid.** The fold takes no seed on a class the registry has not admitted, and a refused seed
+        // still lands its carrier.
+        if let Some(why) = crate::palw_model::market_refusal(&m) {
+            return Err(Halt::Blocked(
+                Finding::error("E-MARKET-NOT-ELIGIBLE", exit::MODEL, "The registry has not admitted this model")
+                    .current(why)
+                    .reason("a seed into a model the chain does not serve is refused, and on this lane the MSK is burned")
+                    .fix(format!("misaka model status {selector}")),
+            ));
+        }
         flow.row(
             Severity::Info,
             "market",
@@ -816,6 +828,10 @@ pub(crate) async fn position_quote(
     match (msk_in, positions) {
         (Some(text), None) => {
             let amount = crate::palw_model::parse_msk_amount(text)?;
+            // P-B3 (the 2026-09-23 Position route matrix): the reason, not "the curve releases nothing".
+            if let Some(why) = crate::palw_model::market_refusal(&m) {
+                return Err(CliError::new(exit::GENERIC, why));
+            }
             let q = palw_model_buy_quote_with(&market, amount, served_schedule(&m)).ok_or_else(|| {
                 CliError::new(exit::GENERIC, "the curve releases nothing for that amount (closed to buys, not open, or too small)")
             })?;
@@ -876,6 +892,10 @@ pub(crate) async fn position_buy(
         .await
         .map_err(|e| CliError::new(exit::CONNECTION, format!("getPalwModelMarket: {e}")))?;
     let amount = crate::palw_model::parse_msk_amount(msk_text)?;
+    // P-B3 (the 2026-09-23 Position route matrix): the registry's gate, named before the quote.
+    if let Some(why) = crate::palw_model::market_refusal(&m) {
+        return Err(CliError::new(exit::GENERIC, why));
+    }
     let q = palw_model_buy_quote_with(&market_from_response(&m), amount, served_schedule(&m)).ok_or_else(|| {
         CliError::new(exit::GENERIC, "the curve releases nothing for that amount (closed to buys, not open, or too small)")
     })?;
@@ -887,10 +907,11 @@ pub(crate) async fn position_buy(
             crate::operator::status::group(min_positions)
         );
     }
-    crate::palw_model::buy(&ctx, &key_source(&profile)?, line, msk_text, min_positions, yes).await
+    let floor = crate::palw_model::BuyFloor::Positions(min_positions);
+    crate::palw_model::buy(&ctx, &key_source(&profile)?, line, msk_text, floor, yes).await
 }
 
-/// `misaka position sell <line> --positions N [--slippage 1%] [--yes]`.
+/// `misaka position sell <line> --positions N [--slippage 1%] [--yes] [--accept-burned-proceeds]`.
 pub(crate) async fn position_sell(
     ctx: &crate::node::Ctx,
     profile: Profile,
@@ -898,6 +919,7 @@ pub(crate) async fn position_sell(
     positions: u64,
     slippage: &str,
     yes: bool,
+    accept_burned_proceeds: bool,
 ) -> CliResult {
     let slip = parse_slippage(slippage)?;
     let ctx = ctx_for(ctx, &profile);
@@ -918,7 +940,8 @@ pub(crate) async fn position_sell(
     if ctx.output != OutputFormat::Json {
         println!("slippage {} → at least {}, or the chain refuses the move", pct(slip), msk(min_msk));
     }
-    crate::palw_model::sell(&ctx, &key_source(&profile)?, line, positions, Some(format!("{min_msk}sompi")), yes).await
+    let floor = Some(format!("{min_msk}sompi"));
+    crate::palw_model::sell(&ctx, &key_source(&profile)?, line, positions, floor, yes, accept_burned_proceeds).await
 }
 
 #[cfg(test)]

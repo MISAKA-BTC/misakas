@@ -1348,6 +1348,15 @@ impl ConsensusApi for Consensus {
         }
     }
 
+    /// The 2026-09-23 Position route matrix, P-B3: the processor holds the fences, so it resolves the
+    /// extras the gate is asked under — the same way the producer's class gate is (route-matrix #7).
+    fn palw_model_market_gate_v1(
+        &self,
+        line_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::api::PalwModelMarketGateReadV1> {
+        self.virtual_processor.palw_model_market_gate_v1_impl(line_id)
+    }
+
     fn palw_model_positions_v1(&self, holder: kaspa_hashes::Hash64) -> Vec<(kaspa_hashes::Hash64, u64)> {
         let Some(state) = self.palw_state_v2_tip() else {
             return Vec::new();
@@ -1381,6 +1390,15 @@ impl ConsensusApi for Consensus {
         Some(kaspa_consensus_core::api::PalwModelLineReadV1 { row, current_root, roots_in_force, tip_daa, benefits, service_facts })
     }
 
+    /// The holder's rows with ADR-0095's tenure and tier, all from the one cached tip snapshot (the
+    /// 2026-09-23 Position route matrix, P-B2). A read: nothing here reaches a rule or the root.
+    fn palw_model_positions_read_v1(&self, holder: kaspa_hashes::Hash64) -> kaspa_consensus_core::api::PalwModelPositionsReadV1 {
+        let Some(state) = self.palw_state_v2_tip() else {
+            return Default::default();
+        };
+        kaspa_consensus_core::api::PalwModelPositionsReadV1::at_tip(&state, &holder)
+    }
+
     fn palw_model_version_v1(
         &self,
         line_id: kaspa_hashes::Hash64,
@@ -1399,8 +1417,8 @@ impl ConsensusApi for Consensus {
         Arc<kaspa_consensus_core::evm::model_market::PalwEvmViewV1>,
         kaspa_consensus_core::evm::model_market::PalwEvmMarketFencesV1,
     )> {
-        let base_class_id = match &self.config.params.palw_consensus_mode {
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.state.base_class_id(),
+        let state_params = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => &bundle.state,
             _ => return None,
         };
         let state = self.palw_state_v2_tip()?;
@@ -1428,7 +1446,12 @@ impl ConsensusApi for Consensus {
         if !fences.any_active() {
             return None;
         }
-        Some((Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, base_class_id)), fences))
+        // P-B3 (the 2026-09-23 Position route matrix): the same builder consensus uses, so an
+        // `eth_call` / `eth_estimateGas` of a seed or a buy the fold's market gate refuses reverts
+        // `ClassNotEligible()` here as it will in the block. The tip is the next block's selected
+        // parent, and its score stands in for that block's, as the fences above do.
+        let tip = state.last_point().map(|p| p.block).unwrap_or_default();
+        Some((Arc::new(self.virtual_processor.palw_evm_view_with_market_gate_v1(&state, state_params, tip, tip_daa)), fences))
     }
 
     fn palw_model_lines_v1(&self, class_id: kaspa_hashes::Hash64) -> Option<Vec<kaspa_consensus_core::api::PalwModelLineRowReadV1>> {

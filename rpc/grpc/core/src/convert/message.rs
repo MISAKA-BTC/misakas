@@ -550,6 +550,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelMarketResponse>, protowire::G
         burn_permille: item.burn_permille,
         leg_permille: item.leg_permille,
         leg_v2_activation_daa: item.leg_v2_activation_daa,
+        class_lifecycle: item.class_lifecycle.clone(),
+        market_refusal: item.market_refusal.clone(),
         error: None,
     }
 });
@@ -562,8 +564,17 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelPositionsResponse>, protowire
         positions: item
             .positions
             .iter()
-            .map(|p| protowire::RpcPalwModelPosition { line_id: p.line_id.clone(), units: p.units })
+            .map(|p| protowire::RpcPalwModelPosition {
+                line_id: p.line_id.clone(),
+                units: p.units,
+                holding_since_daa: p.holding_since_daa,
+                tenure_daa: p.tenure_daa,
+                tier_index: p.tier_index,
+                tier: p.tier.as_ref().map(protowire::RpcPalwModelBenefitTier::from),
+            })
             .collect(),
+        tip_daa: item.tip_daa,
+        tip_hash: item.tip_hash.clone(),
         error: None,
     }
 });
@@ -738,6 +749,13 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         quanta_spent: item.quanta_spent,
         work_leaves: item.work_leaves,
         open_courts: item.open_courts,
+        exec_stage: item.exec_stage.clone(),
+        exec_credit: item.exec_credit,
+        exec_span: item.exec_span,
+        exec_tickets: item.exec_tickets,
+        exec_tickets_spent: item.exec_tickets_spent,
+        exec_first_round: item.exec_first_round,
+        exec_last_round: item.exec_last_round,
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -811,6 +829,12 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwNodeStatusResponse>, protowire::Ge
         memory_available_bytes: item.memory_available_bytes,
         memory_bounded: item.memory_bounded,
         memory_holders: item.memory_holders.clone(),
+        lane_window_blocks: item.lane_window_blocks,
+        lane_work_blocks: item.lane_work_blocks,
+        lane_heartbeat_blocks: item.lane_heartbeat_blocks,
+        lane_last_work_daa: item.lane_last_work_daa,
+        lane_mix: item.lane_mix.clone(),
+        lane_alarm: item.lane_alarm.clone(),
         error: None,
     }
 });
@@ -2303,6 +2327,9 @@ try_from!(item: &protowire::GetPalwModelMarketResponseMessage, RpcResult<kaspa_r
         burn_permille: if item.burn_permille == 0 && item.leg_permille == 0 { 50 } else { item.burn_permille },
         leg_permille: if item.burn_permille == 0 && item.leg_permille == 0 { 10 } else { item.leg_permille },
         leg_v2_activation_daa: item.leg_v2_activation_daa,
+        // P-B3: a gRPC peer from before the gate sends empty strings — no lifecycle, no refusal.
+        class_lifecycle: item.class_lifecycle.clone(),
+        market_refusal: item.market_refusal.clone(),
     }
 });
 try_from!(item: &protowire::GetPalwModelPositionsRequestMessage, kaspa_rpc_core::GetPalwModelPositionsRequest, {
@@ -2314,8 +2341,19 @@ try_from!(item: &protowire::GetPalwModelPositionsResponseMessage, RpcResult<kasp
         positions: item
             .positions
             .iter()
-            .map(|p| kaspa_rpc_core::RpcPalwModelPosition { line_id: p.line_id.clone(), units: p.units })
-            .collect(),
+            .map(|p| -> RpcResult<kaspa_rpc_core::RpcPalwModelPosition> {
+                Ok(kaspa_rpc_core::RpcPalwModelPosition {
+                    line_id: p.line_id.clone(),
+                    units: p.units,
+                    holding_since_daa: p.holding_since_daa,
+                    tenure_daa: p.tenure_daa,
+                    tier_index: p.tier_index,
+                    tier: p.tier.as_ref().map(kaspa_rpc_core::RpcPalwModelBenefitTier::try_from).transpose()?,
+                })
+            })
+            .collect::<RpcResult<Vec<_>>>()?,
+        tip_daa: item.tip_daa,
+        tip_hash: item.tip_hash.clone(),
     }
 });
 // ---- ADR-0088 Decision 12: the model registry ----
@@ -2502,6 +2540,13 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         quanta_spent: item.quanta_spent,
         work_leaves: item.work_leaves,
         open_courts: item.open_courts,
+        exec_stage: item.exec_stage.clone(),
+        exec_credit: item.exec_credit,
+        exec_span: item.exec_span,
+        exec_tickets: item.exec_tickets,
+        exec_tickets_spent: item.exec_tickets_spent,
+        exec_first_round: item.exec_first_round,
+        exec_last_round: item.exec_last_round,
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {
@@ -2576,6 +2621,12 @@ try_from!(item: &protowire::GetPalwNodeStatusResponseMessage, RpcResult<kaspa_rp
         memory_available_bytes: item.memory_available_bytes,
         memory_bounded: item.memory_bounded,
         memory_holders: item.memory_holders.clone(),
+        lane_window_blocks: item.lane_window_blocks,
+        lane_work_blocks: item.lane_work_blocks,
+        lane_heartbeat_blocks: item.lane_heartbeat_blocks,
+        lane_last_work_daa: item.lane_last_work_daa,
+        lane_mix: item.lane_mix.clone(),
+        lane_alarm: item.lane_alarm.clone(),
     }
 });
 try_from!(&protowire::GetPalwRoundLaneRequestMessage, kaspa_rpc_core::GetPalwRoundLaneRequest);
@@ -3686,6 +3737,64 @@ mod palw_producer_facts_tests {
             back.palw_retention_dir, response.palw_retention_dir,
             "a submitter that loses the retention directory stages a claim's material where the node never looks (ADR-0084)"
         );
+    }
+}
+
+#[cfg(test)]
+mod palw_model_positions_tests {
+    use kaspa_rpc_core::{GetPalwModelPositionsResponse, RpcPalwModelBenefitTier, RpcPalwModelPosition, RpcResult};
+
+    /// **`getPalwModelPositions` v2 survives the grpc wire, both ways** (the 2026-09-23 Position
+    /// route matrix, P-B2 — the review's missing test). The five membership fields cross
+    /// `from!`/`try_from!` by hand, and a dropped one arrives as a type-correct default: no clock,
+    /// tenure 0, no tier — a membership silently served on units alone. Distinct non-default values
+    /// throughout, a second row whose `None`s must stay `None`, and the tip pinned by hash as well
+    /// as by score.
+    #[test]
+    fn every_membership_field_survives_the_grpc_round_trip() {
+        let tier = RpcPalwModelBenefitTier {
+            min_units: 2,
+            grants: 0b1000_0100,
+            grant_names: vec!["PRIORITY_INFERENCE".to_string(), "SUPPORT".to_string()],
+            lead_daa: 3,
+            min_hold_daa: 50,
+            note: "two jobs ahead".to_string(),
+        };
+        let response = GetPalwModelPositionsResponse {
+            holder: "b0".repeat(64),
+            positions: vec![
+                RpcPalwModelPosition {
+                    line_id: "c1".repeat(64),
+                    units: 4_656,
+                    holding_since_daa: Some(260),
+                    tenure_daa: 60,
+                    tier_index: Some(1),
+                    tier: Some(tier.clone()),
+                },
+                RpcPalwModelPosition { line_id: "c2".repeat(64), units: 7, ..Default::default() },
+            ],
+            tip_daa: 320,
+            tip_hash: "a7".repeat(64),
+        };
+        let wire: crate::protowire::GetPalwModelPositionsResponseMessage = RpcResult::Ok(&response).into();
+        let back = GetPalwModelPositionsResponse::try_from(&wire).unwrap();
+        assert_eq!(back.holder, response.holder);
+        assert_eq!(back.positions, response.positions, "every row, the clock and the tier included, and the Nones kept");
+        assert_eq!(back.positions[0].tier.as_ref(), Some(&tier));
+        assert_eq!((back.positions[1].holding_since_daa, back.positions[1].tier_index), (None, None), "no clock stays no clock");
+        assert_eq!(back.tip_daa, 320, "the height a challenge names");
+        assert_eq!(back.tip_hash, response.tip_hash, "and the block it was read at");
+
+        // An older node's message carries none of the new fields: read fail-closed.
+        let older = crate::protowire::GetPalwModelPositionsResponseMessage {
+            positions: vec![crate::protowire::RpcPalwModelPosition { line_id: "c1".repeat(64), units: 4_656, ..Default::default() }],
+            tip_daa: 0,
+            tip_hash: String::new(),
+            ..wire
+        };
+        let old = GetPalwModelPositionsResponse::try_from(&older).unwrap();
+        assert_eq!((old.positions[0].holding_since_daa, old.positions[0].tier_index), (None, None));
+        assert!(old.positions[0].tier.is_none() && old.tip_hash.is_empty() && old.tip_daa == 0, "no tier, never tier 0");
     }
 }
 

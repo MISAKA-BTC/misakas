@@ -561,6 +561,8 @@ pub struct VirtualStateProcessor {
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
+    /// `Params::palw_admission_audit_period_daa` — how often a `Candidate` meets its ADR-0147 jury.
+    pub(super) palw_admission_audit_period_daa: Option<u64>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -588,6 +590,9 @@ pub struct VirtualStateProcessor {
     /// ADR-0142: `Params::palw_clock_cursor`. Past it the heartbeat lane's admissibility is the
     /// rooted cursor, and only a heartbeat writes it.
     pub(super) palw_clock_cursor: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// The 2026-09-24 heartbeat audit's H3/H5 (`Params::palw_clock_floor`): templates keep a
+    /// heartbeat chain paced and stamp a step at or past its slot, as the header stage demands.
+    pub(super) palw_clock_floor: Option<kaspa_consensus_core::config::params::ForkActivation>,
     pub(super) palw_receipt_rows_unpriced: kaspa_consensus_core::config::params::ForkActivation,
     /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
     /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
@@ -755,6 +760,25 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     pub(super) carrier_fee: u64,
+    /// **The 2026-09-23 Position route matrix, P-B1: what this object's carrier is owed if acceptance
+    /// refuses it.** `Some` only for a carrier-borne `ModelBuy`/`ModelSeed` past
+    /// `palw_audit_2026_09_23`, resolved in `palw_v2_objects_of_block` where the carrier is in hand;
+    /// `None` for everything else and everywhere below the fence, where a refused move's payment
+    /// stays in its sink exactly as before.
+    pub(super) refund: Option<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    /// P-B1: a carrier-borne `ModelBuy`/`ModelSeed` past the fence whose carrier pays no
+    /// P2PKH-ML-DSA-87 output — nobody the chain could refund. `Some(carrier)` so a refusal of it is
+    /// LOGGED as the burn it still is (the review: "nothing is logged"); `None` for everything else.
+    pub(super) unrefundable: Option<TransactionId>,
+}
+
+/// P-B1: the object the acceptance filter is judging, as far as a refund is concerned — how many
+/// objects were accepted before it (it is refused iff that count has not grown when the next is
+/// judged), and what its carrier is owed or why nobody can be paid.
+pub(super) struct PalwPendingCarrierRefundV1 {
+    accepted_before: usize,
+    refund: Option<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    unrefundable: Option<TransactionId>,
 }
 
 /// ADR-0058: one mergeset blue's admitted PALW work, held by value between assembly (against
@@ -855,6 +879,7 @@ impl VirtualStateProcessor {
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
             palw_anchor_clock: params.palw_anchor_clock,
             palw_clock_cursor: params.palw_clock_cursor,
+            palw_clock_floor: params.palw_clock_floor,
             palw_receipt_rows_unpriced: params
                 .palw_receipt_rows_unpriced
                 .unwrap_or_else(kaspa_consensus_core::config::params::ForkActivation::never),
@@ -1023,6 +1048,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
+            palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_frontier_provenance: params.palw_frontier_provenance,
             palw_validator_payout_bounds: params.palw_validator_payout_bounds_fence(),
             finality_depth: params.blockrate.finality_depth,
@@ -1149,6 +1175,67 @@ impl VirtualStateProcessor {
         }
         data.system_ops = system_ops;
         data
+    }
+
+    /// **The 2026-09-23 Position route matrix, P-B3, at the mempool and at the template: the fold's
+    /// market gate on a carrier before it relays and before it is mined.**
+    /// `palw_model_market_carrier_refusal_v1` against the registry tip under the extras the virtual's
+    /// next block folds with — built only for a seed or a buy. Asked by
+    /// `validate_mempool_transaction_impl` when a carrier enters the pool AND by
+    /// `validate_block_template_transaction` every time a template is built, so a carrier admitted
+    /// while its class served and whose class has since regressed (Probation → Held, say) is
+    /// evicted as `InvalidInBlockTemplate` instead of mined into a refusal. Node-local: no block rule
+    /// reads it. `None` below `palw_audit_2026_09_23` (testnet-11), where the fold refuses nothing
+    /// on this ground, and off ConsensusV2.
+    ///
+    /// It reads the TIP's lifecycle, and the fold of the block the carrier lands in steps the
+    /// registry before it applies objects (fold step 1d), so the answer can be one lifecycle step
+    /// behind the fold's, in either direction. A carrier that slips through that step is refused by
+    /// the fold like any other; past the audit fence that refusal is refunded (P-B1).
+    fn palw_mempool_market_refusal(&self, tx: &Transaction, virtual_daa_score: u64) -> Option<String> {
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            || !self.palw_audit_2026_09_23_at(virtual_daa_score)
+        {
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        if let Some(refusal) =
+            kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(&state, state_params, tx, || {
+                self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: chain_point,
+                    daa_score: virtual_daa_score,
+                    blue_score: 0,
+                    subsidy: 0,
+                })
+            })
+        {
+            return Some(refusal.to_string());
+        }
+        // **P-B1 (refunds count against the cap): a carrier whose move or refund the payout queue
+        // could not take is refused too**, so it is neither relayed nor mined while the queue is
+        // full — the fold would refuse it and have no row to pay it back from, and its MSK would stay
+        // in the sink. A fresh budget: this one carrier against the room the next block leaves. The
+        // template carries one budget across its carriers as well (`palw_template_market_budget`).
+        kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state).admit(tx).err().map(|full| {
+            format!("{full}: its move or its refund would overflow the payout queue (P-B1: refunds count against the cap)")
+        })
+    }
+
+    /// **P-B1 at the template: one payout-queue budget across every market carrier the template
+    /// selects**, so two carriers that each fit the room alone but not together are not both mined —
+    /// the second stays in the pool for a later template. `None` below `palw_audit_2026_09_23`
+    /// (testnet-11) and off ConsensusV2, where no budget is kept. Node-local.
+    fn palw_template_market_budget(
+        &self,
+        virtual_daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1> {
+        if !self.palw_audit_2026_09_23_at(virtual_daa_score) {
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state))
     }
 
     /// ADR-0109 Decision 3: the PALW bonds the registry holds locked at the virtual tip — the set the
@@ -1879,8 +1966,19 @@ impl VirtualStateProcessor {
                                             .map(|envelope| envelope.attempt.class_id)
                                     })
                                     .flatten();
-                                let (objects, folded) =
-                                    self.palw_v2_accepted_objects(state, state_params, &point, objects, current, own_attempt_class);
+                                //
+                                // **Except that a dropped market move's carrier stays accepted with
+                                // its MSK in the sink** (the 2026-09-23 Position route matrix,
+                                // P-B1), so past `palw_audit_2026_09_23` the filter also names what
+                                // each such carrier is owed and the transition pays it back.
+                                let (objects, folded, carrier_refunds) = self.palw_v2_accepted_objects_and_refunds(
+                                    state,
+                                    state_params,
+                                    &point,
+                                    objects,
+                                    current,
+                                    own_attempt_class,
+                                );
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -2036,6 +2134,9 @@ impl VirtualStateProcessor {
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
                                         }
+                                        // P-B1: what the filter above refused and owes back. Empty
+                                        // below `palw_audit_2026_09_23`, and the fold checks again.
+                                        extras.carrier_market_refunds = carrier_refunds;
                                         // ADR-0125: the permits this block accepted, as decided above.
                                         if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                                             extras.round_permit_uses = verdicts.uses.clone();
@@ -2199,7 +2300,7 @@ impl VirtualStateProcessor {
         crate::processes::evm::validate_evm_market_settlements(&own_payload, &expected_settlements)?;
         let market_view = match (market_fences.evm_active, palw_state, self.palw_state_params_v2.as_ref()) {
             (true, Some(state), Some(params)) => {
-                Some(std::sync::Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id())))
+                Some(std::sync::Arc::new(self.palw_evm_view_with_market_gate_v1(state, params, selected_parent, header.daa_score)))
             }
             _ => None,
         };
@@ -2735,9 +2836,12 @@ impl VirtualStateProcessor {
         let expected_settlements: Vec<kaspa_consensus_core::evm::model_market::PalwEvmSettlementV1> =
             template_palw_state.as_ref().map(|s| s.evm_settlements()).unwrap_or_default();
         let market_view = match (&template_palw_state, self.palw_state_params_v2.as_ref()) {
-            (Some(state), Some(params)) => {
-                Some(std::sync::Arc::new(state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id())))
-            }
+            (Some(state), Some(params)) => Some(std::sync::Arc::new(self.palw_evm_view_with_market_gate_v1(
+                state,
+                params,
+                template_selected_parent,
+                header.daa_score,
+            ))),
             _ => None,
         };
         let market = kaspa_evm::EvmMarketInput {
@@ -4357,6 +4461,9 @@ impl VirtualStateProcessor {
                 .map(|fence| fence.daa_score()),
             canonical_work_daa: self.palw_canonical_work_daa,
             daa_score,
+            // The audit's #5: the rights the fold will reserve beside the weight, priced from the same
+            // carve and `W₀` the fold reads at this DAA — so the answer is the ledger's reservation.
+            receipt_rights: self.palw_fp_receipt_rights_inputs_at(daa_score),
         };
         // The claim id only names a refusal; no claim exists until the rail signs one.
         let price = kaspa_consensus_core::palw_state_v2::palw_fp_commitment_price_v1(
@@ -4444,7 +4551,82 @@ impl VirtualStateProcessor {
         // the fence at the SAME candidate score admission will judge the block at, so a producer
         // holds exactly when the chain would refuse and draws exactly when it would accept.
         facts.epoch_budget_release_armed = budget_fences.budget_release_active;
+        // **The route-matrix audit's #7: the fold's own class gate, asked before an inference is
+        // spent** — at the candidate's DAA under the fences the fold will read there (the block is
+        // not built yet, so its header facts are the tip's; the gate reads none of them).
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: candidate_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        facts.class_admission_refusal =
+            kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
+                .err()
+                .map(|refusal| refusal.to_string());
         Some(facts)
+    }
+
+    /// **ADR-0089 Decision 2's window, with the fold's market gate in it** (the 2026-09-23 Position
+    /// route matrix, P-B3). `evm_view_v1` of `state` — the EVM block's selected parent — and, past
+    /// `palw_audit_2026_09_23` at `daa_score` (the EVM block's own), the classes whose seed and buy
+    /// `palw_model_market_admits_v1` refuses under the extras that block folds with, so the writer
+    /// reverts those moves before it takes an escrow the fold would refund. The ONE builder the
+    /// block validator, the template and the RPC's simulator all call, with the selected parent as
+    /// the extras' point on both consensus sides (the gate reads only DAA-resolved fences and the
+    /// state's lifecycles, so the two sides fill the same set). Below the fence the set is empty
+    /// and the window is exactly `evm_view_v1`'s: testnet-11's EVM execution does not move.
+    pub fn palw_evm_view_with_market_gate_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        selected_parent: BlockHash,
+        daa_score: u64,
+    ) -> kaspa_consensus_core::evm::model_market::PalwEvmViewV1 {
+        let mut view = state.evm_view_v1(kaspa_consensus_core::evm::EVM_CHAIN_ID, params.base_class_id());
+        if self.palw_audit_2026_09_23_at(daa_score) {
+            let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: selected_parent,
+                daa_score,
+                blue_score: 0,
+                subsidy: 0,
+            });
+            view.market_refused_classes =
+                kaspa_consensus_core::palw_state_v2::palw_evm_market_refused_classes_v1(state, params, &extras);
+        }
+        view
+    }
+
+    /// **The 2026-09-23 Position route matrix, P-B3: the fold's market gate, asked before anyone
+    /// pays.** The tip's state under the extras the virtual's next block folds with — resolved as the
+    /// producer's class gate above resolves them — through `palw_model_market_admits_v1`, the
+    /// function `model_seed_v1` and `model_buy_v1` themselves call, so the preview and the fold ask
+    /// one predicate. Its input is the tip's lifecycle, and the fold of the next block steps the
+    /// registry before it applies objects, so the answer can be one lifecycle step stale in either
+    /// direction. On the carrier lane a refused seed or buy still lands its carrier (refunded past
+    /// the audit fence, P-B1): a payer who asks here first is the one who does not wait for that.
+    pub fn palw_model_market_gate_v1_impl(
+        &self,
+        line_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::api::PalwModelMarketGateReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let class_id = state.model_line_or_founding(&line_id)?.class_id;
+        let virtual_read = self.virtual_stores.read();
+        let candidate_daa = virtual_read.state.get().ok()?.daa_score;
+        drop(virtual_read);
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: candidate_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        Some(kaspa_consensus_core::api::PalwModelMarketGateReadV1 {
+            lifecycle: state.model_lifecycle(&class_id).map(|row| format!("{:?}", row.state)).unwrap_or_default(),
+            refusal: kaspa_consensus_core::palw_state_v2::palw_model_market_admits_v1(&state, state_params, &extras, &class_id)
+                .err()
+                .map(|refusal| refusal.to_string()),
+        })
     }
 
     /// **The certified free-prompt quanta `bond` may spend into receipt blocks (FP-R5).**
@@ -4657,15 +4839,62 @@ impl VirtualStateProcessor {
     /// Nothing here needs to change for that to be safe. It needs to be WRITTEN DOWN, because the
     /// sentence above ("the number withheld is the number that will be paid — by construction")
     /// reads as a claim about the whole queue and is one about half of it.
+    ///
+    /// **Past `palw_audit_2026_09_23`, an own attempt the fold SKIPPED still has its carve withheld**
+    /// (the 2026-09-23 re-audit of finding 17). Past that fence step 4 of the transition skips a chain
+    /// block's own attempt that the live exposure ceiling refuses (`AttemptExposureCeiling`): the
+    /// block stays valid and records no claim. Read from claims alone, this then withheld nothing and
+    /// the child's coinbase paid the selected parent's whole worker share — a payment with no claim,
+    /// no reservation, no panel and no court behind it, the defect S-04/M2-3 closed for merged blues.
+    /// And the skip is steerable: step 3 lands this block's own accepted objects (its free-prompt
+    /// commitments, whose receipt rights reserve ~500× their weight) on the bond first, so a producer
+    /// could fill its own ceiling to the sompi and be paid for an attempt nobody will ever examine. So
+    /// when the header carries an attempt whose claim the state does not hold as accepted here, the
+    /// carve it WOULD have escrowed — `worker_carve_at` of the block's own subsidy at the carve
+    /// resolved at its own DAA, the expression `apply_attempt` stores — is withheld anyway and never
+    /// released: burned, as a skipped merged blue's is. An admitted attempt's claim is found and
+    /// withheld from its record exactly as before, so the figure moves only for a skipped one.
     pub(super) fn palw_v2_escrow_withheld_at(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
     ) -> u64 {
-        state
+        let recorded = state
             .claims_iter()
             .filter(|(_, claim)| claim.accepted_block == block)
-            .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward))
+            .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward));
+        recorded.saturating_add(self.palw_v2_skipped_own_attempt_carve(state, block))
+    }
+
+    /// The carve of `block`'s own attempt where the fold skipped it — see
+    /// [`Self::palw_v2_escrow_withheld_at`]. Zero below `palw_audit_2026_09_23` (at the block's own
+    /// DAA, the height its fold resolved the fence at), for a block that carries no attempt, and for
+    /// one whose attempt the state holds as a claim accepted in it.
+    fn palw_v2_skipped_own_attempt_carve(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, block: BlockHash) -> u64 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return 0;
+        };
+        let Ok(header) = self.headers_store.get_header(block) else {
+            return 0;
+        };
+        if !self.palw_audit_2026_09_23_at(header.daa_score)
+            || !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+        {
+            return 0;
+        }
+        // The block is on the selected chain, so its attempt decoded and was admitted at the header
+        // and the chain walk; an envelope that does not decode here cannot have made a claim either.
+        let Ok(envelope) = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) else {
+            return 0;
+        };
+        let own = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
+        if state.claim(&own).is_some_and(|claim| claim.accepted_block == block) {
+            return 0;
+        }
+        state_params.worker_carve_at(
+            self.coinbase_manager.calc_block_subsidy(header.daa_score),
+            self.palw_escrow_carve_at(header.daa_score, header.daa_score),
+        )
     }
 
     /// **B-1 (mainnet audit 2026-09-11, deep fence): the worker carve withheld from each MERGED
@@ -5114,7 +5343,10 @@ impl VirtualStateProcessor {
     pub(super) fn unpriced_for_tests(
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
     ) -> Vec<PalwCarriedObjectV1> {
-        objects.into_iter().map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED }).collect()
+        objects
+            .into_iter()
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund: None, unrefundable: None })
+            .collect()
     }
 
     /// The same filter, with the state it folded to — ADR-0064's half. The bootstrap lookup reads
@@ -5145,8 +5377,37 @@ impl VirtualStateProcessor {
         objects: Vec<(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, u64)>,
         block: BlockHash,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
-        let objects = objects.into_iter().map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee }).collect();
+        let objects = objects
+            .into_iter()
+            .map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee, refund: None, unrefundable: None })
+            .collect();
         self.palw_v2_accepted_objects(state, state_params, point, objects, block, None)
+    }
+
+    /// [`Self::palw_v2_accepted_objects_and_refunds`] with each object's refund spelled out — the
+    /// 2026-09-23 Position route matrix, P-B1 — so the sibling test module can check the filter
+    /// pays back exactly the carriers it refused.
+    #[cfg(test)]
+    pub(super) fn palw_v2_accepted_refundable_objects_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<(
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+            Option<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+        )>,
+        block: BlockHash,
+    ) -> (
+        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    ) {
+        let objects = objects
+            .into_iter()
+            .map(|(object, refund)| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund, unrefundable: None })
+            .collect();
+        self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, None)
     }
 
     /// **The REAL one-shot block fold, over the whole accepted list, using the same fences the
@@ -5177,6 +5438,34 @@ impl VirtualStateProcessor {
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
             &self.palw_transition_extras_for(point),
+        )
+        .map(|(state, _delta)| state)
+    }
+
+    /// [`Self::palw_v2_block_fold_for_tests`] carrying the refunds the filter returned, the way the
+    /// chain walk hands them to the transition (the 2026-09-23 Position route matrix, P-B1).
+    #[cfg(test)]
+    pub(super) fn palw_v2_block_fold_with_refunds_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+        refunds: Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+        let mut extras = self.palw_transition_extras_for(point);
+        extras.carrier_market_refunds = refunds;
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
+            state,
+            state_params,
+            point,
+            objects,
+            None,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &extras,
         )
         .map(|(state, _delta)| state)
     }
@@ -5227,6 +5516,9 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// [`Self::palw_v2_accepted_objects_and_refunds`] without the refunds — every caller but the
+    /// chain walk, which is the only one that hands refunds to the transition.
+    #[cfg(test)]
     fn palw_v2_accepted_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -5239,6 +5531,29 @@ impl VirtualStateProcessor {
         // rehearsal must refuse the commitments the fold will.
         own_attempt_class: Option<kaspa_hashes::Hash64>,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
+        let (accepted, folded, _refunds) =
+            self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block, own_attempt_class);
+        (accepted, folded)
+    }
+
+    /// The acceptance filter, and — the 2026-09-23 Position route matrix, P-B1 — the refunds owed to
+    /// the carrier-borne market moves it refused, in acceptance order.
+    fn palw_v2_accepted_objects_and_refunds(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+        // The class of the block's own attempt (from its header), `None` for a block with none: past
+        // `palw_audit_2026_09_23` the fold's step 3 holds room for it on the class gate, and the
+        // rehearsal must refuse the commitments the fold will (2026-09-24 DoS audit review of #11).
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+    ) -> (
+        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    ) {
         // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
         //
         // Validating every object against the parent state alone is wrong in exactly the way the
@@ -5302,13 +5617,34 @@ impl VirtualStateProcessor {
                     info!(
                         "Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}"
                     );
-                    return (Vec::new(), state.clone());
+                    return (Vec::new(), state.clone(), Vec::new());
                 }
             }
         } else {
             state.clone()
         };
         let mut accepted = Vec::with_capacity(objects.len());
+        // **The 2026-09-23 Position route matrix, P-B1: a refused carrier buy or seed is owed its
+        // MSK back.** Its carrier is already accepted and its sink already holds the payment, so a
+        // drop here used to be a burn. Every drop path below ends the iteration without reaching
+        // `accepted.push`, so "refused" is read the one way that cannot miss a path: an object that
+        // carried a refund is owed it iff `accepted` is no longer after it than it was before it.
+        // Only objects past `palw_audit_2026_09_23` carry one (`palw_v2_objects_of_block`).
+        let mut refunds: Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1> = Vec::new();
+        let mut refund_owed: Option<PalwPendingCarrierRefundV1> = None;
+        // **Refunds COUNT against `PALW_V2_MAX_PENDING_PAYOUTS`** (user decision on the P-B1
+        // review). Each refund this filter owes takes one queue row at step 3′, after every object,
+        // so its row is RESERVED here the moment it is owed: a later move is measured against the
+        // queue plus the reserved rows, and cannot take the row a refund was promised. A refund the
+        // queue has no room for is not owed (its MSK stays in the sink, logged); the node's mempool
+        // and template refuse such a carrier, so an honest node never mines one.
+        let mut refund_rows_reserved = 0usize;
+        // Past the 2026-09-23 fence (on a chain past the 2026-09-11 audit, whose rehearsal folds
+        // the real step 3 so `folded` counts every row an accepted move wrote) the queue is counted
+        // EXACTLY: accepted moves' rows are in `folded`, owed refunds are reserved, and a refused
+        // move promises nothing — the review's starvation, where a cheap refused buy took two
+        // phantom rows from the valid moves after it, is gone. Below it, the old promise counter.
+        let exact_queue = audit_active && self.palw_audit_2026_09_23_at(point.daa_score);
         let mut certifications_graded = 0usize;
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
@@ -5341,7 +5677,20 @@ impl VirtualStateProcessor {
         // the grader to walk, refused or accepted. Dormant it is never read and never written.
         let mut vectors_graded = 0usize;
         for carried in objects {
-            let PalwCarriedObjectV1 { object, carrier_fee } = carried;
+            Self::palw_v2_settle_carrier_refund(
+                &mut refund_owed,
+                accepted.len(),
+                folded.pending_payouts_iter().count().saturating_add(model_payout_rows_promised),
+                &mut refund_rows_reserved,
+                &mut refunds,
+                block,
+            );
+            let PalwCarriedObjectV1 { object, carrier_fee, refund, unrefundable } = carried;
+            refund_owed = (refund.is_some() || unrefundable.is_some()).then_some(PalwPendingCarrierRefundV1 {
+                accepted_before: accepted.len(),
+                refund,
+                unrefundable,
+            });
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
             //
             // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` rows in the state root for up to
@@ -5674,15 +6023,18 @@ impl VirtualStateProcessor {
                 if rows > 0 {
                     let held = folded.pending_payouts_iter().count();
                     let cap = kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS;
-                    if held.saturating_add(model_payout_rows_promised).saturating_add(rows) > cap {
+                    let promised = model_payout_rows_promised.saturating_add(refund_rows_reserved);
+                    if held.saturating_add(promised).saturating_add(rows) > cap {
                         info!(
                             "Block {block}: a model-market move was dropped, and the block stands: the payout queue holds {held} \
-                             rows and this block has already promised {model_payout_rows_promised} more, against a cap of {cap} \
+                             rows and this block has already promised {promised} more, against a cap of {cap} \
                              (PALW_V2_MAX_PENDING_PAYOUTS)"
                         );
                         continue;
                     }
-                    model_payout_rows_promised += rows;
+                    if !exact_queue {
+                        model_payout_rows_promised += rows;
+                    }
                 }
             }
             // **2026-09-24 DoS audit #12 (b): at most `PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`
@@ -5907,6 +6259,14 @@ impl VirtualStateProcessor {
                 }
             }
         }
+        Self::palw_v2_settle_carrier_refund(
+            &mut refund_owed,
+            accepted.len(),
+            folded.pending_payouts_iter().count().saturating_add(model_payout_rows_promised),
+            &mut refund_rows_reserved,
+            &mut refunds,
+            block,
+        );
         // **What this block actually carried.** A dropped object says so; an ACCEPTED one said
         // nothing at all, so "the chain is not carrying courts" and "the chain is carrying courts
         // and something later discards them" looked identical from every log on every node. On the
@@ -5930,7 +6290,55 @@ impl VirtualStateProcessor {
         // defect ADR-0064 exists to remove. Only bond records are read out of it: every field of
         // one is a function of the objects and `daa_score`, never of the synthetic blue score the
         // rehearsal advances.
-        (accepted, folded)
+        (accepted, folded, refunds)
+    }
+
+    /// P-B1's bookkeeping for [`Self::palw_v2_accepted_objects_and_refunds`]: the previous object's
+    /// refund is owed iff `accepted` did not grow while that object was being judged — AND the
+    /// queue has a row for it (refunds count against the cap): `queue_held` is the rows the queue
+    /// will hold before step 3′ as counted so far (the folded state plus any older promise), and
+    /// `reserved` the refund rows already owed. An owed refund reserves its row. A refusal that
+    /// cannot be paid back — no room, or a carrier with no P2PKH-ML-DSA-87 output — is logged as the
+    /// burn it is.
+    fn palw_v2_settle_carrier_refund(
+        refund_owed: &mut Option<PalwPendingCarrierRefundV1>,
+        accepted_now: usize,
+        queue_held: usize,
+        reserved: &mut usize,
+        refunds: &mut Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+        block: BlockHash,
+    ) {
+        let Some(pending) = refund_owed.take() else { return };
+        if accepted_now != pending.accepted_before {
+            return;
+        }
+        let cap = kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS;
+        match (pending.refund, pending.unrefundable) {
+            (Some(refund), _) => {
+                let held = queue_held.saturating_add(*reserved);
+                if held < cap {
+                    info!(
+                        "Block {block}: the refused market move of carrier {} on line {} is paid back — {} sompi to {} (P-B1)",
+                        refund.carrier, refund.line_id, refund.amount, refund.payee
+                    );
+                    *reserved += 1;
+                    refunds.push(refund);
+                } else {
+                    warn!(
+                        "Block {block}: the refused market move of carrier {} on line {} CANNOT be paid back: the payout queue \
+                         holds {held} of {cap} rows with this block's refunds (PALW_V2_MAX_PENDING_PAYOUTS; refunds count \
+                         against it), so its {} sompi stay in the sink. A node refuses such a carrier at its mempool and \
+                         template; this one was mined anyway (P-B1)",
+                        refund.carrier, refund.line_id, refund.amount
+                    );
+                }
+            }
+            (None, Some(carrier)) => warn!(
+                "Block {block}: the refused market move of carrier {carrier} CANNOT be paid back: the carrier pays no \
+                 P2PKH-ML-DSA-87 output to refund to, so its MSK stays in the sink (P-B1)"
+            ),
+            (None, None) => {}
+        }
     }
 
     /// **Assemble the largest lifecycle object this node's receipt pool supports** (launch
@@ -6459,7 +6867,18 @@ impl VirtualStateProcessor {
                         // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy,
                         // resolved at the ANCHOR for the same purity reason — the assembler resolves
                         // it at the same point, so build and validate recompute one identical panel.
-                        self.palw_panel_draw_policy_at(anchor_fact.anchor_daa),
+                        // The Valid-lock question (route-matrix #3) is the BINDING block's, as the
+                        // assembler asks it.
+                        kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
+                            valid_lock: Self::palw_panel_valid_lock_of_v1(
+                                state,
+                                state_params,
+                                &self.palw_transition_extras_for(point),
+                                claim_record,
+                                point.daa_score,
+                            ),
+                            ..self.palw_panel_draw_policy_at(anchor_fact.anchor_daa)
+                        },
                         // ADR-0100 Decision 4: the same one-place decision the binding made.
                         self.palw_stratified_shard_count(state, &claim_record.class_id, anchor_fact.anchor_daa),
                     )
@@ -6636,7 +7055,9 @@ impl VirtualStateProcessor {
                 }
                 // ADR-0087 Decision 6: the market's two moves exist only past the fence, refused by
                 // name before it (the drop-not-invalidate shape). A sell is signed by the key whose
-                // payload is the holder (M8), checked here where the verifier lives.
+                // id is the holder (M8), checked here where the verifier lives. The id is not the
+                // payee: past the 2026-09-23 fence the fold pays the key's own address payload
+                // (the 2026-09-23 Position route matrix, P-B4).
                 Obj::ModelBuy { line_id, .. } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
                         return Err(format!("a model buy of line {line_id} on a chain where the model market is not in force"));
@@ -7971,7 +8392,7 @@ impl VirtualStateProcessor {
                 // span's width, both signatures under the bond's REGISTERED key (not a key the
                 // evidence carries), and the permit not burned already.
                 Obj::RoundPermitEquivocated { evidence } => {
-                    use kaspa_consensus_core::palw_execution_lane_v1::{palw_execution_permit_of_v1, palw_execution_span_v1};
+                    use kaspa_consensus_core::palw_execution_lane_v1::{palw_execution_permit_of_v2, palw_execution_span_v1};
                     let lane = self
                         .palw_execution_lane_at(point.daa_score)
                         .ok_or_else(|| "round equivocation evidence where the execution lane is not open (ADR-0125)".to_string())?;
@@ -7986,12 +8407,13 @@ impl VirtualStateProcessor {
                     let schedule = state
                         .round_schedule(evidence.span)
                         .ok_or_else(|| format!("round equivocation names span {}, which has no schedule", evidence.span))?;
-                    palw_execution_permit_of_v1(
+                    palw_execution_permit_of_v2(
                         schedule,
                         evidence.round,
                         lane.width_of_span_len(evidence.span, span_daa),
                         evidence.permit_index,
                         &evidence.bond,
+                        self.palw_round_permits_are_tickets_at(point.daa_score),
                     )
                     .ok_or_else(|| {
                         format!(
@@ -8446,9 +8868,11 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> Option<super::utxo_validation::PalwRoundVerdictsV1> {
         use kaspa_consensus_core::palw_execution_lane_v1::{
-            PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v1, palw_execution_span_v1,
+            PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
         };
         let lane = self.palw_execution_lane_at(daa_score)?;
+        // Route-matrix #2: past ADR-0151's bundle with the quanta armed, a permit is a ticket.
+        let tickets_only = self.palw_round_permits_are_tickets_at(daa_score);
         let span_daa = lane.schedule_span_daa_at(daa_score);
         let span_now = palw_execution_span_v1(daa_score, span_daa);
         let mut verdicts = super::utxo_validation::PalwRoundVerdictsV1 {
@@ -8472,12 +8896,13 @@ impl VirtualStateProcessor {
                 }
                 let schedule = state.round_schedule(span)?;
                 // §7.2: the width of the anchor's span — the width the schedule was drawn at.
-                palw_execution_permit_of_v1(
+                palw_execution_permit_of_v2(
                     schedule,
                     envelope.round,
                     lane.width_of_span_len(span, span_daa),
                     envelope.permit_index,
                     &envelope.bond,
+                    tickets_only,
                 )?;
                 let bond = state.bond(&envelope.bond)?;
                 if !matches!(bond.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active)
@@ -8504,6 +8929,40 @@ impl VirtualStateProcessor {
         }
         verdicts.uses.sort();
         Some(verdicts)
+    }
+
+    /// **The bind's Valid-lock question, for the draw** (the 2026-09-23 route-matrix audit's #3):
+    /// what one `Valid` signature on `claim` must lock and the clocks a bond's free collateral is
+    /// read at, from the BINDING block's fold inputs (`extras`, `now_daa`) — the ones the fold's
+    /// `require_panel_lock_eligible` reads, so the draw never seats a bond the bind would refuse.
+    /// `None` below `palw_audit_2026_09_23` or where the lock ledger is not armed: testnet-11 arms
+    /// the ledger without the fence, and its derived panels must stay the ones it always drew.
+    pub(super) fn palw_panel_valid_lock_of_v1(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+        now_daa: u64,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwPanelValidLockV1> {
+        if !(extras.audit_2026_09_23_active && extras.objective_offence_at(now_daa)) {
+            return None;
+        }
+        Some(kaspa_consensus_core::palw_panel_v2::PalwPanelValidLockV1 {
+            // The quorum-door price: what the bind's `require_panel_lock_eligible` demands of every
+            // seat after the 2026-09-23 audit #6's door pricing (S2 and shard doors price their
+            // load-bearing signers at the licence, not at the bind).
+            required: kaspa_consensus_core::palw_state_v2::palw_panel_valid_lock_required_v1(state, state_params, extras, claim),
+            now_daa,
+            // The ESCAPED depth (2026-09-24 DoS audit), the one the fold's lock check reads, so the
+            // draw and the bind agree after a stall.
+            settled_anchor_depth: kaspa_consensus_core::palw_state_v2::palw_second_clock_depth_of_v1(
+                state,
+                state_params,
+                extras,
+                now_daa,
+            ),
+            window_court: state_params.window_court(),
+        })
     }
 
     /// **ADR-0124's draw policy at a claim's anchor** — the deep fence's weighting and the panel
@@ -8538,6 +8997,8 @@ impl VirtualStateProcessor {
                 }),
                 _ => None,
             },
+            // Per claim, at the binding block: `palw_panel_valid_lock_of_v1` fills it where armed.
+            valid_lock: None,
         }
     }
 
@@ -8555,6 +9016,7 @@ impl VirtualStateProcessor {
             evm_active: self.palw_model_evm_active_at(daa_score),
             leg_v2_active: self.palw_model_leg_v2_active_at(daa_score),
             seed_v2_active: self.palw_model_seed_v2_active_at(daa_score),
+            audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
         }
     }
 
@@ -8666,6 +9128,9 @@ impl VirtualStateProcessor {
             verification_s2_active: self.palw_verification_s2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
             evm_actions: Vec::new(),
+            // P-B1: the chain walk is the only caller holding the filter's verdicts, and adds them
+            // itself, exactly as it adds the EVM's actions above.
+            carrier_market_refunds: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
             // responder's whole defense by omission.
@@ -8737,6 +9202,15 @@ impl VirtualStateProcessor {
 
     fn palw_economic_safety_at(&self, daa_score: u64) -> bool {
         self.palw_economic_safety.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **Whether a round's permits are its schedule's tickets alone at `daa_score`** (the 2026-09-23
+    /// route-matrix audit's #2): ADR-0151's bundle and the quanta both armed. Every reader of a
+    /// schedule's permits — the verdict, the equivocation check and the producer's view — asks this
+    /// one question, so an armed mint that issued nothing grants nothing at all of them, and a network
+    /// that arms the quanta alone (testnet-11 at 7,800) keeps its lottery fallback byte for byte.
+    pub(super) fn palw_round_permits_are_tickets_at(&self, daa_score: u64) -> bool {
+        self.palw_economic_safety_at(daa_score) && self.palw_execution_quanta_at(daa_score)
     }
 
     fn palw_objective_offence_daa(&self) -> Option<u64> {
@@ -9106,6 +9580,29 @@ impl VirtualStateProcessor {
 
     /// ADR-0137: `W₀` for a block of `daa_score` paying `subsidy`, where the work target is in
     /// force — the block's escrow at the payout's rate; `None` below the fence.
+    /// **The audit's #5: what a free-prompt claim accepted at `daa_score` prices its receipt rights
+    /// from** — the fold's `fp_receipt_rights_inputs_v1` from the node's side: the block's worker carve
+    /// and `W₀`, past `palw_audit_2026_09_23` and while the work target is in force.
+    pub(super) fn palw_fp_receipt_rights_inputs_at(
+        &self,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpRightsInputsV1> {
+        if !self.palw_audit_2026_09_23_at(daa_score) {
+            return None;
+        }
+        let subsidy = self.coinbase_manager.calc_block_subsidy(daa_score);
+        let work_floor = self.palw_work_target_floor_for(daa_score, subsidy)?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwFpRightsInputsV1 {
+            worker_carve: kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                subsidy,
+                self.palw_escrow_carve_at(daa_score, daa_score),
+            ),
+            work_floor,
+        })
+    }
+
     pub(super) fn palw_work_target_floor_for(&self, daa_score: u64, subsidy: u64) -> Option<u128> {
         if !self.palw_work_target_at(daa_score) {
             return None;
@@ -9224,6 +9721,10 @@ impl VirtualStateProcessor {
                 lane.schedule_span_daa,
                 &globals,
             ),
+            admission_audit_period_daa: self.palw_admission_audit_period_daa,
+            // Which freshness rule a readiness row is judged by at this DAA — the same resolution
+            // the fold's extras carry (`readiness_v2_active`), for the readers holding only the fold.
+            readiness_v2_active: self.palw_readiness_v2_at(daa_score),
         })
     }
 
@@ -9274,11 +9775,17 @@ impl VirtualStateProcessor {
             return None;
         }
         let state = self.palw_state_params_v2.as_ref()?;
-        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1 {
-            now_daa: anchor_daa,
-            max_age_daa: (fold.globals.readiness_probe_max_age_spans as u64).saturating_mul(fold.span_daa.max(1)),
-            base_class_id: state.base_class_id(),
-        })
+        // **The readiness-age sweep (2026-09-24): the draw judges a row by the registry's rule** —
+        // readiness V2's eight spans and no V1 row — but only past the 2026-09-23 audit fence, since
+        // the draw is consensus (the panel a claim is bound to). Below it (testnet-11) the old rule
+        // stands byte for byte: any row, the V1 age.
+        let readiness_v2 = self.palw_audit_2026_09_23_at(anchor_daa) && self.palw_readiness_v2_at(anchor_daa);
+        Some(kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1::at(
+            &fold,
+            anchor_daa,
+            state.base_class_id(),
+            readiness_v2,
+        ))
     }
 
     /// **ADR-0075 SA-1/SA-2, resolved in exactly one place.** `false` on every shipped preset.
@@ -9854,6 +10361,14 @@ impl VirtualStateProcessor {
         // Log only, and before the loop so it is reported even on a block that binds no panel —
         // "no claims advanced" is exactly what a stalled chain looks like from here.
         self.palw_warn_if_maturity_outruns_the_registry(state, block_daa, min_collateral, panel_params);
+        // The binding block's fold inputs, for the bind's Valid-lock question (route-matrix #3). The
+        // lock reads none of the context's blue score or subsidy.
+        let binding_extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block,
+            daa_score: block_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
             if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
@@ -9879,7 +10394,10 @@ impl VirtualStateProcessor {
             // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
             // same anchor as the acceptance layer's sibling call — so this assembler builds the
             // exact panel that layer recomputes.
-            let policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
+            let mut policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
+            if let Some(state_params) = self.palw_state_params_v2.as_ref() {
+                policy.valid_lock = Self::palw_panel_valid_lock_of_v1(state, state_params, &binding_extras, claim, block_daa);
+            }
             // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
             // panel of a sharded class would ask shard seats to judge a whole model.
             let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
@@ -10025,22 +10543,47 @@ impl VirtualStateProcessor {
         let fee_of = |carrier: TransactionId| {
             if priced { carrier_fees.get(&carrier).copied().unwrap_or(0) } else { PALW_RENT_UNPRICED }
         };
+        // **The 2026-09-23 Position route matrix, P-B1: a carrier-borne buy or seed names, here, who
+        // it is paid back to if acceptance refuses it** — the one place the carrier transaction is
+        // still in hand. Past `palw_audit_2026_09_23` only; below it no object carries a refund and
+        // the whole P-B1 path is absent.
+        let refunds_armed = self.palw_audit_2026_09_23_at(block_daa);
+        // The object's kind first, so the carrier is looked up only for a paid market move (the
+        // review: the lookup ran for every lifecycle object). `(refund, unrefundable)`: a buy or seed
+        // whose carrier pays no P2PKH-ML-DSA-87 output is named, so its refusal is logged.
+        let refund_of = |carried: &kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleCarrierV2| {
+            use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as MObj;
+            let paid = match &carried.object {
+                MObj::ModelBuy { msk_in, .. } => *msk_in,
+                MObj::ModelSeed { msk_seed, .. } => *msk_seed,
+                _ => 0,
+            };
+            if !refunds_armed || paid == 0 {
+                return (None, None);
+            }
+            match txs
+                .iter()
+                .find(|tx| tx.id() == carried.carrier)
+                .and_then(|tx| kaspa_consensus_core::palw_lifecycle_objects_v2::palw_model_carrier_refund_v1(tx, &carried.object))
+            {
+                Some(refund) => (Some(refund), None),
+                None => (None, Some(carried.carrier)),
+            }
+        };
         self.palw_v2_derived_panel_bindings(state, block, block_daa)
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED })
-            .chain(
-                extraction
-                    .objects
-                    .into_iter()
-                    .map(|carried| PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), object: carried.object }),
-            )
-            .chain(
-                lifecycle
-                    .objects
-                    .into_iter()
-                    .map(|carried| PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), object: carried.object }),
-            )
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund: None, unrefundable: None })
+            .chain(extraction.objects.into_iter().map(|carried| PalwCarriedObjectV1 {
+                carrier_fee: fee_of(carried.carrier),
+                object: carried.object,
+                refund: None,
+                unrefundable: None,
+            }))
+            .chain(lifecycle.objects.into_iter().map(|carried| {
+                let (refund, unrefundable) = refund_of(&carried);
+                PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), refund, unrefundable, object: carried.object }
+            }))
             .collect()
     }
 
@@ -11249,36 +11792,11 @@ impl VirtualStateProcessor {
             .get()
             .ok()
             .and_then(|s| (s.last_dns_confirmed_anchor != BlockHash::default()).then_some(s.last_dns_confirmed_anchor_daa_score));
-        // The second clock (2026-09-23 heartbeat audit): past the fence, the long fallback also
-        // needs `depth` PALW anchors settled since the coinbase's block. The anchors are the
-        // `Final` attempt claims the PALW state holds at the tip — a lower bound past retirement,
-        // which a 600-DAA maturity never reaches. Policy layer, like the rest of this record.
-        let now_daa = self.lkg_virtual_state.load().daa_score;
-        // The tip state the second clock is read against — loaded only where the clock is armed.
-        let armed_depth = self.palw_settled_anchor_depth_at(now_daa);
-        let tip_state = armed_depth.and_then(|_| {
-            let params = self.palw_state_params_v2.as_ref()?;
-            self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten().map(|(_, state)| state)
-        });
-        // Both clocks after the liveness escape (2026-09-24 DoS audit): no anchor for
-        // `2 × window_court` and the DAA clock alone decides again, as it does for every lock. A
-        // tip that cannot be read keeps the clock armed with no floor, which refuses (below).
-        let depth = match &tip_state {
-            Some(state) => self.palw_second_clock_depth_at(state, now_daa),
-            None => armed_depth,
-        };
-        // The second clock's reading: the DAA of the `depth`-th most recent settled anchor, over
-        // the whole chain (`u64::MAX` bounds nothing). The same one-place read the panel floor
-        // uses, so the two rules cannot come to disagree about what "settled" counts.
-        let settled_anchor_floor_daa = depth.and_then(|depth| {
-            kaspa_consensus_core::palw_panel_v2::palw_settled_anchor_floor_daa_v1(tip_state.as_ref()?, u64::MAX, depth)
-        });
-        Some(DnsCoinbaseSettlement {
-            long_maturity_daa,
-            confirmed_anchor_daa,
-            settled_anchor_armed: depth.is_some(),
-            settled_anchor_floor_daa,
-        })
+        // **DAA-based maturity only** (the user's Mainnet Decision A, 2026-09-24): no second clock
+        // on a coinbase. The long fallback matures it by the DAA alone, or a DNS-final anchor
+        // releases it early; the attempt lane's settled anchors are not asked (they still gate
+        // locks, liabilities, retiring bonds and the D1 maturity floor).
+        Some(DnsCoinbaseSettlement { long_maturity_daa, confirmed_anchor_daa })
     }
 
     /// Both stake walks run under the CANONICAL bond set: a bond created on the candidate branch
@@ -11613,12 +12131,18 @@ impl VirtualStateProcessor {
         // or the F5 chain exemption — mirroring `check_mergeset_heartbeat_width` exactly, so a
         // template never builds what consensus refuses and never refuses what consensus admits.
         let track_heartbeats = self.palw_heartbeat_width_fence.is_some();
-        let mut heartbeat_set: Vec<(u64, BlockHash)> = Vec::new();
+        let mut heartbeat_set: Vec<(u64, BlockHash, u64)> = Vec::new();
+        // H3: whether the chain exemption must also be paced. Judged at the selected parent's score
+        // PLUS ONE — the highest score the block this template becomes can carry — so a template at
+        // the fence applies the rule wherever the header stage might, and never builds a block it
+        // refuses.
+        let mut paced = false;
         if track_heartbeats {
             let sp = self.headers_store.get_header(selected_parent).unwrap();
             if sp.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeat_set.push((sp.blue_score, selected_parent));
+                heartbeat_set.push((sp.blue_score, selected_parent, sp.timestamp));
             }
+            paced = self.palw_clock_floor.is_some_and(|fence| fence.is_active(sp.daa_score.saturating_add(1)));
         }
 
         // ADR-0125: one parent slot is kept for the round lane while it has a tip to offer, so a DAG
@@ -11634,7 +12158,7 @@ impl VirtualStateProcessor {
                     if !heartbeat_members.is_empty() {
                         let mut combined = heartbeat_set.clone();
                         combined.extend_from_slice(&heartbeat_members);
-                        if !self.heartbeat_set_admissible(&mut combined) {
+                        if !self.heartbeat_set_admissible(&mut combined, paced) {
                             // Over the flat bound and not one chain: this candidate widens the
                             // heartbeat lane past what consensus admits. Nothing to substitute —
                             // skip it; a later template absorbs it against a fresh mergeset.
@@ -11784,14 +12308,14 @@ impl VirtualStateProcessor {
 
         // `false` = the lane is not armed on this network, so no header can be a heartbeat and
         // the set is vacuously empty — skip the per-member header reads entirely.
-        let mut heartbeat_members: Vec<(u64, BlockHash)> = Vec::new();
+        let mut heartbeat_members: Vec<(u64, BlockHash, u64)> = Vec::new();
         let mut note_heartbeat = |hash: BlockHash| {
             if !track_heartbeats {
                 return;
             }
             let header = self.headers_store.get_header(hash).unwrap();
             if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
-                heartbeat_members.push((header.blue_score, hash));
+                heartbeat_members.push((header.blue_score, hash, header.timestamp));
             }
         };
         note_heartbeat(candidate);
@@ -11825,16 +12349,25 @@ impl VirtualStateProcessor {
     /// exemption) — the same predicate `check_mergeset_heartbeat_width` enforces: at most
     /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeats, or any number of them provided they form
     /// ONE chain (sorted by blue score, each adjacent pair ancestor-related; a blue-score tie
-    /// is never ancestor-related and fails). Sorts the given buffer in place.
-    fn heartbeat_set_admissible(&self, set: &mut [(u64, BlockHash)]) -> bool {
-        if set.len() as u64 <= kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET {
+    /// is never ancestor-related and fails) — and, where `paced` (H3, past `palw_clock_floor`),
+    /// no more than the chain's own timestamps pay for (`heartbeat_chain_capacity_v1`). Elements
+    /// are `(blue_score, hash, timestamp)`. Sorts the given buffer in place.
+    fn heartbeat_set_admissible(&self, set: &mut [(u64, BlockHash, u64)], paced: bool) -> bool {
+        let bound = kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET;
+        if set.len() as u64 <= bound {
             return true;
         }
-        set.sort_unstable_by_key(|(blue_score, _)| *blue_score);
-        set.windows(2).all(|pair| {
-            let ((_, older), (_, newer)) = (pair[0], pair[1]);
+        set.sort_unstable_by_key(|(blue_score, _, _)| *blue_score);
+        let one_chain = set.windows(2).all(|pair| {
+            let ((_, older, _), (_, newer, _)) = (pair[0], pair[1]);
             self.reachability_service.is_dag_ancestor_of(older, newer)
-        })
+        });
+        if !one_chain || !paced {
+            return one_chain;
+        }
+        let (oldest, newest) =
+            set.iter().fold((u64::MAX, 0u64), |(lo, hi), (_, _, timestamp)| (lo.min(*timestamp), hi.max(*timestamp)));
+        set.len() as u64 <= kaspa_consensus_core::palw_heartbeat_v1::heartbeat_chain_capacity_v1(newest.saturating_sub(oldest), bound)
     }
 
     fn remove_bounded_merge_breaking_parents(
@@ -11897,6 +12430,12 @@ impl VirtualStateProcessor {
             && let Some(outpoint) = first_locked_input(&mutable_tx.tx, &locked)
         {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::SpendsNonReleasableBond(outpoint));
+        }
+        // **The 2026-09-23 Position route matrix, P-B3:** a seed or a buy the fold would refuse on its
+        // class's registry lifecycle is refused here, before it relays; the template asks again
+        // (`validate_block_template_transaction`), because the lifecycle can move after admission.
+        if let Some(refusal) = self.palw_mempool_market_refusal(&mutable_tx.tx, virtual_daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
         }
         self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
         Ok(())
@@ -11991,6 +12530,15 @@ impl VirtualStateProcessor {
             virtual_state.daa_score,
             virtual_state.past_median_time,
         )?;
+        // **The 2026-09-23 Position route matrix, P-B3, at the template** (the review's MEDIUM
+        // point): the mempool asked the lifecycle gate when the carrier entered, and the class can
+        // regress between that and this template (Held tracks load and panel drawability). Asked
+        // again here, a refused carrier is `InvalidInBlockTemplate` — the mining manager evicts it —
+        // rather than mined into a fold that drops it. Node-local like the mempool check: a block
+        // another node mines is judged by the fold alone. `None` below the audit fence (testnet-11).
+        if let Some(refusal) = self.palw_mempool_market_refusal(tx, virtual_state.daa_score) {
+            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
+        }
         let ValidatedTransaction { calculated_fee, .. } =
             // `None`: mempool/template single-tx context, not mergeset acceptance (bond spend-gate inert here).
             self.validate_transaction_in_utxo_context(tx, utxo_view, virtual_state.daa_score, TxValidationFlags::Full, None)?;
@@ -12075,11 +12623,16 @@ impl VirtualStateProcessor {
         // by the node that built it: past the anchor clock validation grants the recovery cadence
         // where the parent paces no clock, while the old call still stamped the nominal hour, which
         // the future-drift rule then rejects outright.
-        // **ADR-0142: past `palw_clock_cursor` there is no slot to wait for.** The rule retires
-        // with the validator's — a beat may be minted whenever its producer can pay for it, and it
-        // earns the chain a DAA only where the cursor says a slot is open. Stamping a future
-        // timestamp here would be the template refusing itself, which is the drift ADR-0066
-        // Decision 2 named and ADR-0138 §3c reintroduced.
+        // **ADR-0142: past `palw_clock_cursor` the slot RULE retires — and the slot does not.**
+        //
+        // The selected-parent rule is gone, but a beat still earns the chain a DAA only at or past
+        // the cursor, and this used to answer `earliest = now` regardless. The miner took that at
+        // its word and ground a beat the moment one slot was taken: measured on the live and
+        // private t12, 74% of blocks were heartbeats and 11% of beats got a tick, each of the other
+        // 89% adding a blue score and a relay for nothing. So `earliest` is the cursor's next
+        // slot, read from the SAME decision the DAA score is computed from (`DaaWindow::clock`,
+        // i.e. `palw_clock_step_v1`) for THIS template's own parents — not the virtual's, which may
+        // have moved since the template was built.
         let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
@@ -12090,9 +12643,11 @@ impl VirtualStateProcessor {
             self.palw_receipt_rows_unpriced,
         );
         let earliest = if clock_cursor_governs {
-            // Past the cursor there is nothing to wait for: the template stands as built, and the
-            // beat earns a DAA only where the cursor says a slot is open.
-            template.block.header.timestamp
+            // Past the cursor: the template's own timestamp, or the next slot if that is later — the
+            // shape the slot rule's answer always had (`Ok` → the template's time, `Err` → the
+            // boundary), so a caller that waits for `earliest` waits for exactly the slot.
+            let slot = self.palw_clock_step_for_parents(template.block.header.direct_parents())?.next_slot_ms();
+            template.block.header.timestamp.max(slot.unwrap_or(0))
         } else {
             match hb::check_heartbeat_slot_v2(
                 parent.timestamp,
@@ -12124,6 +12679,22 @@ impl VirtualStateProcessor {
         template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
         template.block.header.finalize();
         Ok((template, earliest))
+    }
+
+    /// **ADR-0142: the clock's decision for a block built on `parents`** — the cursor its window
+    /// derives at its selected parent's score and whether its mergeset carries a granted beat.
+    ///
+    /// Computed exactly as the header stage computes it for the block those parents make (GHOSTDAG,
+    /// then `block_daa_window`, whose `clock` is the half of `palw_clock_step_v1` the DAA score does
+    /// not read), so a template, the adapter and the validator cannot answer differently. Headers and
+    /// GHOSTDAG data are immutable once written, so the answer for a template's parents is the same
+    /// whenever it is asked — a template that has gone stale is still judged against its own slot.
+    pub(crate) fn palw_clock_step_for_parents(
+        &self,
+        parents: &[BlockHash],
+    ) -> Result<kaspa_consensus_core::palw_clock_cursor_v1::PalwClockStepV1, RuleError> {
+        let ghostdag = self.ghostdag_manager.ghostdag(parents);
+        Ok(self.window_manager.block_daa_window(&ghostdag)?.clock)
     }
 
     /// **ADR-0125: the permits of one round, as the selected-parent snapshot grants them to a round
@@ -12158,9 +12729,14 @@ impl VirtualStateProcessor {
         );
         let (_at, state) = self.palw_v2_state_at(sink)?;
         let width = lane.width_of_span_len(span, span_daa);
+        // The verdict's own rule (route-matrix #2), read at virtual's score — the score the next chain
+        // block, which merges a round block built now, is judged at.
+        let tickets_only = self.palw_round_permits_are_tickets_at(virtual_state.daa_score);
         let permits = state
             .round_schedule(span)
-            .map(|schedule| kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(schedule, round, width))
+            .map(|schedule| {
+                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v2(schedule, round, width, tickets_only)
+            })
             .unwrap_or_default();
         let used = (0..width).filter(|index| state.round_permit_used(span, round, *index)).collect();
         let (finals_span, finals) = state.round_finals();
@@ -12177,6 +12753,7 @@ impl VirtualStateProcessor {
             accepted_in_span: state.round_permits_accepted(span),
             finals_span,
             finals: finals.len() as u64,
+            tickets_only,
         })
     }
 
@@ -12372,7 +12949,18 @@ impl VirtualStateProcessor {
     ///
     /// **Every failure answers `NothingToYieldTo`**, i.e. "mine as before": a missing header here is
     /// a node-local fact, and the one thing this hint must never do is hold the clock on one.
+    ///
+    /// **Past `palw_clock_cursor` it answers `SlotTaken(next)` while the next slot is still in the
+    /// future** (the 2026-09-24 heartbeat audit, H1): the clock has already advanced into the slot a
+    /// beat minted now would claim, so the beat could earn nothing. The miner waits for `next`
+    /// instead of grinding a block that weighs ε, adds a blue score and ticks no DAA.
     pub fn heartbeat_yield_hint(&self) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
+        self.heartbeat_yield_hint_at(unix_now())
+    }
+
+    /// [`Self::heartbeat_yield_hint`] at an explicit wall clock — the node passes `unix_now()`, a
+    /// test passes its simulated time.
+    pub fn heartbeat_yield_hint_at(&self, now_ms: u64) -> kaspa_consensus_core::palw_heartbeat_v1::HeartbeatYieldHintV1 {
         use kaspa_consensus_core::palw_heartbeat_v1 as hb;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
@@ -12404,13 +12992,21 @@ impl VirtualStateProcessor {
             self.palw_single_lottery,
             self.palw_receipt_rows_unpriced,
         );
-        hb::heartbeat_yield_hint_v2(
+        let yield_hint = hb::heartbeat_yield_hint_v2(
             selected_parent.pow_algo_id,
             anchor_clock_active,
             parent_advances_daa,
             attempt_advances_daa,
             merged,
-        )
+        );
+        // H1: the virtual's own clock decision — the one the next block's DAA score will be
+        // computed from. A failure to read it is a node-local fact and answers as before.
+        let clock = if self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
+            self.window_manager.block_daa_window(ghostdag).ok().map(|window| window.clock)
+        } else {
+            None
+        };
+        hb::heartbeat_slot_hint_v1(yield_hint, clock.as_ref(), now_ms)
     }
 
     fn build_block_template_with_selector_provider<F>(
@@ -12514,6 +13110,20 @@ impl VirtualStateProcessor {
         // dropped-but-valid shard is a refill, not a template failure.
         let mut dropped_shard_ids: std::collections::HashSet<kaspa_consensus_core::tx::TransactionId> =
             std::collections::HashSet::new();
+        // **P-B1: one payout-queue budget across the template's market carriers.** A carrier that
+        // does not fit alone was refused by `validate_block_template_transaction` (and is evicted);
+        // one that fits alone but not after the carriers already kept is only deferred: its slot is
+        // freed for the refill and it stays in the pool for a later template. `None` below the fence.
+        let mut market_budget = self.palw_template_market_budget(virtual_state.daa_score);
+        let mut market_deferred = 0usize;
+        let mut market_deferred_ids: std::collections::HashSet<kaspa_consensus_core::tx::TransactionId> =
+            std::collections::HashSet::new();
+        let mut market_room_for = |tx: &Transaction| -> bool {
+            match market_budget.as_mut() {
+                Some(budget) => budget.admit(tx).is_ok(),
+                None => true,
+            }
+        };
         let results = self.validate_block_template_transactions_in_parallel(&txs, &virtual_state, &virtual_utxo_view);
         for (tx, res) in txs.iter().zip(results) {
             match res {
@@ -12522,7 +13132,11 @@ impl VirtualStateProcessor {
                     tx_selector.reject_selection(tx.id());
                 }
                 Ok(fee) => {
-                    if classify_keep(
+                    if !market_room_for(tx) {
+                        market_deferred += 1;
+                        market_deferred_ids.insert(tx.id());
+                        tx_selector.reject_selection_for_refill(tx.id());
+                    } else if classify_keep(
                         self,
                         tx,
                         &mut shards_seen,
@@ -12545,9 +13159,13 @@ impl VirtualStateProcessor {
             }
         }
 
-        let mut has_rejections = !invalid_transactions.is_empty() || !dropped_shard_ids.is_empty();
+        let mut has_rejections = !invalid_transactions.is_empty() || !dropped_shard_ids.is_empty() || !market_deferred_ids.is_empty();
         if has_rejections {
-            txs.retain(|tx| !invalid_transactions.contains_key(&tx.id()) && !dropped_shard_ids.contains(&tx.id()));
+            txs.retain(|tx| {
+                !invalid_transactions.contains_key(&tx.id())
+                    && !dropped_shard_ids.contains(&tx.id())
+                    && !market_deferred_ids.contains(&tx.id())
+            });
         }
 
         while has_rejections {
@@ -12563,7 +13181,12 @@ impl VirtualStateProcessor {
                         has_rejections = true;
                     }
                     Ok(fee) => {
-                        if classify_keep(
+                        if !market_room_for(&tx) {
+                            // P-B1: deferred to a later template, not refused (see above).
+                            market_deferred += 1;
+                            tx_selector.reject_selection_for_refill(tx.id());
+                            has_rejections = true;
+                        } else if classify_keep(
                             self,
                             &tx,
                             &mut shards_seen,
@@ -12587,6 +13210,12 @@ impl VirtualStateProcessor {
             }
         }
 
+        if market_deferred > 0 {
+            debug!(
+                "[palw-market] {market_deferred} market carrier(s) deferred from this template: the payout queue has no room left \
+                 for their moves or refunds after the ones it already carries (P-B1)"
+            );
+        }
         // kaspa-pq DNS-finality (§6.5): emit the attestation-template diagnostics once
         // per build when any shard was seen (kept or dropped). Inert (no log) on a chain
         // with no attestation traffic / overlay dormant.
@@ -12877,13 +13506,28 @@ impl VirtualStateProcessor {
         let utxo_commitment = virtual_state.multiset.clone().finalize();
         // Past median time is the exclusive lower bound for valid block time, so we increase by 1 to get the valid min
         let min_block_time = virtual_state.past_median_time + 1;
+        // **H5 (the clock floor): a template that steps the clock on a beat's grant is stamped at or
+        // past the slot it consumes** — the header stage refuses it otherwise (`ClockStepBeforeItsSlot`).
+        // Raised here rather than left to the miner because every lane's template can be the step: on
+        // testnet-12 the first block of any lane built after a granted beat carries the tick. The
+        // raise is at most the granted beat's own lead over this node's clock, which peers accepted
+        // for the beat and accept for this block likewise. Decided on the virtual's own clock
+        // decision — the one this block's DAA score was computed from.
+        let timestamp = {
+            let proposed = u64::max(min_block_time, unix_now());
+            if self.palw_clock_floor.is_some() {
+                self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock.floor_stamp(proposed)
+            } else {
+                proposed
+            }
+        };
         let header = Header::new_finalized(
             version,
             parents_by_level,
             hash_merkle_root,
             accepted_id_merkle_root,
             utxo_commitment,
-            u64::max(min_block_time, unix_now()),
+            timestamp,
             virtual_state.bits,
             0,
             // kaspa-pq ADR-0007: the template declares the network-correct Layer-1 algo for this
@@ -13780,12 +14424,12 @@ enum MergesetIncreaseResult {
     Accepted {
         increase_size: u64,
         /// ADR-0068 Phase 1 (F3a/F5): the increase's heartbeat members as
-        /// `(blue_score, hash)`, empty when the lane is not armed. The CALLER decides
+        /// `(blue_score, hash, timestamp)`, empty when the lane is not armed. The CALLER decides
         /// admissibility over the whole accumulated set (`heartbeat_set_admissible`) —
         /// width with the chain exemption is a property of the final mergeset, not of one
         /// candidate's increase, and a rejected candidate is simply skipped (the excess IS
         /// a heartbeat or reaches one; there is nothing to substitute).
-        heartbeat_members: Vec<(u64, BlockHash)>,
+        heartbeat_members: Vec<(u64, BlockHash, u64)>,
     },
     Rejected {
         new_candidate: BlockHash,

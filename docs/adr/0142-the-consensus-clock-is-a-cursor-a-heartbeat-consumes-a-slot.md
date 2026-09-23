@@ -3,6 +3,9 @@
 **Status:** PROPOSED 2026-09-18 on `feat/palw-exec-lane-and-validator-retirement`. **Consensus
 change, built and drilled, NOT ARMED on any preset.** The four checks of §6a all pass; arming is the
 operator's call and wants a reorg drill and a target-cadence drill first (§8).
+**Amended 2026-09-24 (§9): the clock floor.** §6a check 4 and §6 property 6 did not hold once the
+carried cursor was deleted — the step's timestamp was unconstrained, so the clock could run fast and a
+future-stamped sibling could delay it. `Params::palw_clock_floor` (testnet-12 only) makes them true.
 It replaces the heartbeat lane's admissibility rule. It held the 7,101 rollout.
 
 **Builds on:** ADR-0060 (the liveness doctrine), ADR-0064 (silence is not checkable), ADR-0066
@@ -209,7 +212,10 @@ slot that advance opened. Where a beat's own score came from a priced block it m
 the reference, so a block merging only it does not tick again. Before the cursor it did,
 unconditionally, which is the clock running free.
 
-**4. Can a producer send the clock into the future?** Only by a bounded, quantised amount. The cursor
+**4. Can a producer send the clock into the future?** *(Superseded by §9.2: without the carried
+cursor this answer did not hold — a step's timestamp was unconstrained, so the clock could be run
+FAST, and a sibling step stamped ahead could DELAY it by up to the drift tolerance. §9.3 rules 3 and 4
+restore it past `palw_clock_floor`.)* Only by a bounded, quantised amount. The cursor
 lands on a slot BOUNDARY, never at `beat + interval`, so a timestamp buys whole slots and nothing
 finer — 132 s of drift and 1 ms of drift cost the chain the same two slots. The beat's own timestamp
 is bounded by `check_block_timestamp_in_isolation` at `now + TIMESTAMP_DEVIATION_TOLERANCE`, so with
@@ -238,3 +244,106 @@ drill whose lane composition and cadence are the target network's.
 Until it lands, `palw_single_lottery` and `palw_anchor_clock` stay dormant, which is how they ship in
 the 7,101 bundle. They arm together (`Params::set_palw_single_lottery`), and arming either without
 this rule is the liveness failure in §1.
+
+## 9. Amendment (2026-09-24): the clock floor — H1, H2, H3, H5 of the heartbeat audit
+
+**Status:** H3 and H5 are consensus, behind their own fence `Params::palw_clock_floor` — `Some(0)` on
+testnet-12, `None` on every other preset (testnet-11, devnet and mainnet fingerprint byte-identically
+to the build before the field: `consensus/core/tests/palw_clock_floor_is_t12_only.rs`). H1 and H2 are
+node policy and move no fingerprint. Built on `hb/t12-heartbeat`, for the testnet-12 regenesis.
+
+### 9.1 What was measured
+
+The 2026-09-24 audit of testnet-12 (live and a private replica) measured the tick as
+
+```
+tick = 120 s + a + b + c        observed 163–261 s per DAA
+a = cursor opens → the miner has a fresh template (it never waited for the slot)
+b = the 2^24 grind on one thread
+c = the grant → the block that merges the beat and steps the clock
+```
+
+with heartbeats 74% of all blocks, **11% of beats granted a tick**, and blue score running 3–6× the
+design rate. Two of this ADR's own claims were found false on the way.
+
+### 9.2 Two claims this ADR made that did not hold
+
+**§6a check 4 / §6 property 6 ("a producer cannot lock the clock with a future timestamp") and
+`pre_pow_validation`'s "the DAA cannot run fast however many beats are minted".** Both relied on the
+carried cursor's whole-slot advance, which §6a deleted. What runs is "the reference is the block that
+advanced the score", and nothing constrained THAT block's timestamp:
+
+* **Acceleration.** The future-drift tolerance (132 s) exceeds the interval (120 s). A beat stamped
+  `ref + 120 s` is admissible the moment the reference exists, so it is granted at once, and the block
+  that merges it — stamped "now", `ref + ε` — becomes the next reference. Nothing floored the spacing
+  between two references; the clock could tick every few seconds for as long as someone paid 2^24 a
+  beat.
+* **Delay.** The reference was `min(blue_score, hash)` over the blocks at the parent's score. Two steps
+  merging the same beat have the same parents, hence the same blue score, and the HASH chose between
+  them — so a sibling step stamped up to 132 s in the future won half the time and pushed the next slot
+  back by up to 132 s. Measured: +31 s at DAA 8, +18 s at DAA 24. The doc's "a future timestamp can
+  never open a slot early" was true; "delays only its own lane" was not.
+
+And §5's "a beat may be minted whenever its producer can pay for it, and earns a DAA only where a slot
+is open" was the lane's whole waste: every beat minted between two slots was a valid block that could
+never be granted.
+
+### 9.3 The rules (past `palw_clock_floor`)
+
+All read the ONE decision the DAA score is computed from — `palw_clock_step_v1`, now returned whole as
+`PalwClockStepV1 { governs, cursor, granted, floor }` and carried in `DaaWindow::clock` — for the
+header's own parents, so construction and validation cannot disagree (§5).
+
+1. **H3 — a heartbeat is stamped at or after its slot.** `header.timestamp ≥ cursor.next_slot_ms`,
+   where the cursor is the one the header's own window derives at its selected parent's score, else
+   `HeartbeatBeforeItsSlot`. No margin below the slot: a beat below it can never be granted, and no
+   honest node builds one — the adapter stamps `max(own clock, slot)` and the slot is a function of the
+   beat's parents, so clock skew costs a miner a wait (or a stamp up to its skew in its own future,
+   inside the 132 s tolerance), never a refusal.
+2. **H3 — F5's chain exemption is paced.** A mergeset holding more than
+   `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeats must still form one chain, AND hold at most
+   `bound + 2·⌈span / interval⌉` of them (`heartbeat_chain_capacity_v1`), `span` being the spread of their
+   timestamps, else `MergeSetHeartbeatChainUnpaced`. An honest chain holds two beats a slot (the one
+   into the open slot, the step over it) with slots an interval apart, so it always fits while two
+   miners' clocks disagree by under two intervals; a burst hung off heavier blocks at one score — each
+   beat stamped for the same slot and valid alone — gets the flat bound. Templates apply the same
+   predicate (`heartbeat_set_admissible`), judged at the selected parent's score plus one.
+3. **H5 — a step is stamped at or after the slot it consumed.** A block whose mergeset is granted a
+   beat's tick (`granted`) becomes the next slot's reference, so `header.timestamp ≥
+   cursor.next_slot_ms`, else `ClockStepBeforeItsSlot`. The template builder stamps a step at
+   `max(now, median + 1, slot)`. With this, every reference at score `d + 1` is at least one interval
+   after some reference at `d`, so the minimum reference over any set of branches advances by at least
+   one interval a tick: the 132 s drift buys a producer at most one slot of lead, once, and never a
+   rate.
+4. **H5 — the reference is the EARLIEST of the tied steps.** Among the blocks at the parent's score,
+   the one with the lowest blue score is still the block that advanced it (§6a), but a tie on blue score
+   is now broken by the lower TIMESTAMP, and only then by hash (`palw_clock_reference_v2`). §6a's
+   objection to a timestamp minimum — an old but admissible timestamp pulling the reference back — no
+   longer applies inside the tie: every tied step obeys rule 3, so none of them predates the slot it
+   consumed. A future-stamped sibling can no longer delay the next slot.
+
+### 9.4 Node policy (no fork)
+
+* **H1 — the miner waits for its slot.** The adapter returns `earliest = max(template time, the
+  cursor's next slot)` for the template's own parents; the yield hint answers `SlotTaken(next)` while
+  the next slot is in the future and no beat in the virtual holds it (a granted beat waiting in the
+  virtual is NOT "taken": the next block steps the clock and on a heartbeat-only chain only this lane
+  builds it). The grind checks every 2^18 nonces for shutdown and for a moved virtual; the log says
+  granted / holding / not granted instead of "the clock ticked".
+* **H2 — the relay announces one beat per slot.** The first heartbeat validated per `(DAA score,
+  selected parent's DAA score)` is announced, any other is kept and not announced; each peer has a
+  heartbeat allowance (a burst of 12, one per 10 s). Orphan roots are exempt.
+
+### 9.5 Expected effect
+
+A slot now takes two beats, and the tick is the step's timestamp minus the previous step's:
+`120 s + (the first finished grind among the miners) + propagation`. With one miner that is
+`120 s + b + δ`; with `n` miners racing, `120 s + b/n + δ`. For `b` = 5–15 s on the fleet's cores, **≈ 126–134
+s a tick and 2 beats a slot** (plus stragglers within a propagation delay, which H2 does not
+re-announce), against 163–261 s and ~9 beats a slot measured. Blue score then runs at ~2 per tick,
+the structural minimum for a heartbeat-only chain.
+
+**Left for a decision.** (i) A beat is its own slot's step only if the DAA rule counts a beat into its
+OWN score; that would make a tick one beat, not two, and is a larger consensus change than this
+amendment. (ii) The miner could grind ahead of the slot and stamp the slot itself, taking `b` out of
+the tick; it is not done because it means stamping into this node's own future by design.

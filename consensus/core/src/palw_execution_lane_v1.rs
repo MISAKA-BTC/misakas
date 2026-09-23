@@ -66,6 +66,12 @@ pub const PALW_EXEC_MAX_DOMAINS_V1: usize = 32;
 /// bond key. Bounds the schedule's bytes in the state root and a draw's work.
 pub const PALW_EXEC_MAX_BONDS_PER_DOMAIN_V1: usize = 64;
 
+/// **How many spans past its target a matured snapshot may wait for a span that can seed it**, past
+/// ADR-0151's bundle (`rotate_round_lane`). A due snapshot is seeded at the first span whose
+/// predecessor recorded a seed anchor, one per span; this bounds how long the unseeded ones sit in
+/// `round_pending` — about two hours at testnet-12's one-DAA span.
+pub const PALW_EXEC_PENDING_GRACE_SPANS_V1: u64 = 64;
+
 /// **What the fold needs of the lane where it is open**: the span a schedule covers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct PalwExecLaneFoldV1 {
@@ -328,7 +334,9 @@ pub struct PalwExecScheduleV1 {
     /// The Finals that earned this schedule, in claim-id order. The seed mints execution quanta
     /// from these rather than from the aggregated domain credits.
     pub finals: Vec<PalwExecFinalV1>,
-    /// Issued execution quanta. Empty means the ADR-0125 lottery still draws this span.
+    /// Issued execution quanta. Empty means the ADR-0125 lottery still draws this span — except
+    /// where ADR-0151's bundle and the quanta are both armed, where an empty list is an armed mint
+    /// that issued nothing and grants no permit ([`palw_execution_permits_v2`]).
     pub quanta: Vec<crate::palw_execution_quanta_v1::PalwExecQuantumV1>,
 }
 
@@ -582,6 +590,30 @@ pub fn palw_execution_snapshot_forfeit_v1(snapshot: &PalwExecSnapshotV1, forfeit
     Some(palw_execution_schedule_snapshot_v1(snapshot.target_span, &finals))
 }
 
+/// **The schedule's tickets past ADR-0151's bundle**: minted onto the span's own rounds by
+/// [`crate::palw_execution_quanta_v1::palw_execution_mint_quanta_windowed_v1`], at most
+/// `window_rounds` of them. `quantum == 0` leaves the lottery in force, as above.
+pub fn palw_execution_schedule_assign_quanta_windowed_v1(
+    schedule: &mut PalwExecScheduleV1,
+    quantum: u64,
+    open_round: u64,
+    window_rounds: u64,
+    forfeited_roots: &std::collections::BTreeSet<crate::Hash64>,
+) {
+    if quantum == 0 {
+        schedule.quanta.clear();
+        return;
+    }
+    schedule.quanta = crate::palw_execution_quanta_v1::palw_execution_mint_quanta_windowed_v1(
+        &schedule.finals,
+        schedule.seed,
+        u128::from(quantum),
+        open_round,
+        window_rounds,
+        forfeited_roots,
+    );
+}
+
 /// The most permits one domain may hold in a round of `width`: a third, rounded up.
 pub fn palw_execution_domain_cap_v1(width: u16) -> u16 {
     width.div_ceil(3).max(1)
@@ -627,11 +659,7 @@ pub struct PalwExecPermitV1 {
 /// the last round under one span and the next round under the other.
 pub fn palw_execution_permits_v1(schedule: &PalwExecScheduleV1, round: u64, width: u16) -> Vec<PalwExecPermitV1> {
     if !schedule.quanta.is_empty() {
-        return crate::palw_execution_quanta_v1::palw_execution_quantum_for_round_v1(&schedule.quanta, round)
-            .into_iter()
-            .take(width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1) as usize)
-            .map(|q| PalwExecPermitV1 { index: 0, domain: q.domain, bond: q.bond, operator_id: q.operator_id, quantum_id: q.quantum_id })
-            .collect();
+        return palw_execution_ticket_permits_v1(schedule, round, width);
     }
     let width = width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1);
     let parity = (round % 2) as u8;
@@ -702,6 +730,54 @@ pub fn palw_execution_permit_of_v1(
     palw_execution_permits_v1(schedule, round, width).into_iter().find(|p| p.index == permit_index && p.bond == *bond)
 }
 
+/// The ticket path of [`palw_execution_permits_v1`]: the (at most one) quantum scheduled on `round`,
+/// as permit index 0.
+fn palw_execution_ticket_permits_v1(schedule: &PalwExecScheduleV1, round: u64, width: u16) -> Vec<PalwExecPermitV1> {
+    crate::palw_execution_quanta_v1::palw_execution_quantum_for_round_v1(&schedule.quanta, round)
+        .into_iter()
+        .take(width.min(PALW_EXEC_MAX_PERMITS_PER_ROUND_V1) as usize)
+        .map(|q| PalwExecPermitV1 { index: 0, domain: q.domain, bond: q.bond, operator_id: q.operator_id, quantum_id: q.quantum_id })
+        .collect()
+}
+
+/// **A round's permits where a Final's rights ARE its tickets** (the 2026-09-23 route-matrix audit's
+/// #2, and the testnet-12 end-to-end finding `t12_a_final_that_mints_no_ticket_holds_no_round_permit`).
+///
+/// [`palw_execution_permits_v1`] reads an EMPTY `quanta` as "the ADR-0125 lottery still draws this
+/// span" — the marker of an unarmed mint (`quantum == 0`). Past `palw_execution_quanta` an armed mint
+/// can also issue nothing: a Final whose credit is below the quantum draws its one ticket with
+/// probability `credit / quantum` (7,708 / 100,000 for a testnet-12 floor Final, so ~92% of them
+/// mint none), and a Final convicted during its maturity is dropped from the mint while the
+/// snapshot's domains still list its bond. Either way the whole domain lottery used to be handed to
+/// the listed bonds — a permit on every round of the domain's parity, ~60 of a testnet-12 span's
+/// 120, each with `quantum_id` zero, so ADR-0151 could neither price it (it counts tickets) nor
+/// revoke it (a conviction reaches tickets). A Final that earned no ticket held sixty times the
+/// permits of one that earned one, and a convicted one re-opened the hole the maturity closes.
+///
+/// `tickets_only` is the caller's reading of the fence: the permit set is then exactly the tickets,
+/// and empty when there are none. `false` is [`palw_execution_permits_v1`], permit for permit —
+/// testnet-11 arms `palw_execution_quanta` without ADR-0151's bundle, and its permits must stay the
+/// ones it always drew. The schedule's encoding does not move: whether a span is ticket-only is a
+/// fact of the params at the judging block, not a field of the state.
+pub fn palw_execution_permits_v2(schedule: &PalwExecScheduleV1, round: u64, width: u16, tickets_only: bool) -> Vec<PalwExecPermitV1> {
+    if tickets_only {
+        return palw_execution_ticket_permits_v1(schedule, round, width);
+    }
+    palw_execution_permits_v1(schedule, round, width)
+}
+
+/// [`palw_execution_permit_of_v1`] under [`palw_execution_permits_v2`]'s rule.
+pub fn palw_execution_permit_of_v2(
+    schedule: &PalwExecScheduleV1,
+    round: u64,
+    width: u16,
+    permit_index: u16,
+    bond: &PalwBondKeyV2,
+    tickets_only: bool,
+) -> Option<PalwExecPermitV1> {
+    palw_execution_permits_v2(schedule, round, width, tickets_only).into_iter().find(|p| p.index == permit_index && p.bond == *bond)
+}
+
 /// **What a node's round producer reads before it builds anything** — the permits of one round as
 /// the node's sink state grants them, and which of them its chain has already accepted.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -733,6 +809,11 @@ pub struct PalwExecLaneStatusV1 {
     /// seed anchor is recorded in between (ADR-0130).
     pub finals_span: u64,
     pub finals: u64,
+    /// Whether the view's permits are the schedule's tickets alone ([`palw_execution_permits_v2`]):
+    /// ADR-0151's bundle and the quanta both armed where the view was read. A reader deriving
+    /// permits for another round from `schedule` passes this, or it reads the lottery the chain no
+    /// longer grants.
+    pub tickets_only: bool,
 }
 
 /// Why an execution envelope was refused.
@@ -1720,6 +1801,51 @@ mod tests {
         assert!(palw_execution_permits_v1(&schedule, lottery_round, 1).is_empty(), "a round with no quantum is missed, not redrawn");
         palw_execution_schedule_assign_quanta_v1(&mut schedule, 0, 1_000);
         assert!(schedule.quanta.is_empty(), "quantum 0 restores the lottery");
+    }
+
+    /// **Route-matrix #2: where a Final's rights are its tickets, an armed mint that issued none grants
+    /// no permit** — neither for a sub-quantum credit whose remainder drew nothing nor for a Final the
+    /// forfeiture dropped, while the snapshot's domains still list the bond. Below the rule (the
+    /// `tickets_only = false` every network but testnet-12 passes) the empty list is the lottery, as
+    /// before, permit for permit.
+    #[test]
+    fn past_the_bundle_an_armed_mint_that_issued_nothing_grants_no_permit() {
+        use crate::palw_execution_quanta_v1::PALW_EXEC_TICKET_LEAD_ROUNDS_V1;
+        let convicted = h(0xC0);
+        let finals = vec![
+            // A floor-sized credit against testnet-12's quantum: a ticket only if the seed draws one.
+            PalwExecFinalV1 { execution_root: h(0xF0), ..final_credited(1, 10, 100, 1, 7_708) },
+            // A Final whose execution was convicted during its maturity.
+            PalwExecFinalV1 { execution_root: convicted, ..final_credited(1, 10, 100, 2, 500_000) },
+        ];
+        let forfeited: BTreeSet<Hash64> = [convicted].into_iter().collect();
+        let (seed_span, schedule) = (1u64..10_000)
+            .find_map(|span| {
+                let mut s = schedule_of(span, &finals);
+                palw_execution_schedule_assign_quanta_windowed_v1(&mut s, 100_000, 1_000, 120, &forfeited);
+                s.quanta.is_empty().then_some((span, s))
+            })
+            .expect("a seed under which the floor-sized Final draws no ticket (~92% of them)");
+        assert!(!schedule.domains.is_empty(), "span {seed_span}: the snapshot still lists both bonds");
+        let window = 1_000 + PALW_EXEC_TICKET_LEAD_ROUNDS_V1..1_000 + PALW_EXEC_TICKET_LEAD_ROUNDS_V1 + 120;
+        let lottery: usize = window.clone().map(|r| palw_execution_permits_v2(&schedule, r, 1, false).len()).sum();
+        assert!(lottery > 0, "below the rule an empty mint is the lottery — the fallback the finding measured");
+        assert_eq!(
+            lottery,
+            window.clone().map(|r| palw_execution_permits_v1(&schedule, r, 1).len()).sum::<usize>(),
+            "and `false` is v1, permit for permit"
+        );
+        for round in window {
+            assert!(palw_execution_permits_v2(&schedule, round, 1, true).is_empty(), "no ticket, no permit (round {round})");
+            assert_eq!(palw_execution_permit_of_v2(&schedule, round, 1, 0, &bond(10), true), None, "the listed bond holds nothing");
+        }
+        // And a ticket that was minted is still exactly one permit under the rule.
+        let mut minted = schedule_of(3, &[PalwExecFinalV1 { execution_root: h(0xE0), ..final_credited(1, 10, 100, 1, 500_000) }]);
+        palw_execution_schedule_assign_quanta_windowed_v1(&mut minted, 100_000, 1_000, 120, &BTreeSet::new());
+        assert_eq!(minted.quanta.len(), 5);
+        for q in &minted.quanta {
+            assert_eq!(palw_execution_permits_v2(&minted, q.scheduled_round, 1, true), palw_execution_permits_v1(&minted, q.scheduled_round, 1));
+        }
     }
 
     #[test]

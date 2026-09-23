@@ -364,7 +364,9 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
     let nv = connect(ctx).await?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
-    let candidates = spendable_candidates_v1(&nv, &addr).await?;
+    // Every carrier here pays only its fee and returns its change to `addr`, so a panel's reserved
+    // fee outpoint at this key may fund it — last (see `lifecycle_candidates_v1`).
+    let candidates = lifecycle_candidates_v1(&nv, &addr).await?;
     let (first_outpoint, first_entry) = candidates
         .first()
         .cloned()
@@ -468,6 +470,32 @@ pub(crate) async fn spendable_candidates_v1(
     nv: &crate::wallet::NodeView,
     addr: &kaspa_addresses::Address,
 ) -> Result<Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>, CliError> {
+    candidates_v1(nv, addr, false).await
+}
+
+/// **[`spendable_candidates_v1`] with this node's panel reservation admitted LAST** — for a
+/// lifecycle carrier, whose only outflow is its own fee.
+///
+/// The reservation (`Funding::reserved`) is the output this node's panel funds its own carriers
+/// from, and it sits at the panel key's address. A carrier built here spends it into a change
+/// output at the SAME address, which the panel's funding scan picks up once the carrier is mined
+/// (while it is pending, the panel's mempool check skips the spent outpoint), so the panel keeps
+/// its money. What the reservation protects against is a spender that moves value AWAY (`wallet
+/// send`), and those still never see it. Without this, a key whose only spendable output was its
+/// panel's fee float — a genesis card's key, whose address the premine funds with the float alone —
+/// could not file `model add` through the node hosting that panel (testnet-12, bond 7, 2026-09-23).
+pub(crate) async fn lifecycle_candidates_v1(
+    nv: &crate::wallet::NodeView,
+    addr: &kaspa_addresses::Address,
+) -> Result<Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>, CliError> {
+    candidates_v1(nv, addr, true).await
+}
+
+async fn candidates_v1(
+    nv: &crate::wallet::NodeView,
+    addr: &kaspa_addresses::Address,
+    admit_reserved: bool,
+) -> Result<Vec<(kaspa_consensus_core::tx::TransactionOutpoint, kaspa_consensus_core::tx::UtxoEntry)>, CliError> {
     use kaspa_consensus_core::tx::UtxoEntry;
     let all = crate::wallet::page_all(nv, addr).await?;
     let mut pending_spent: std::collections::HashSet<kaspa_consensus_core::tx::TransactionOutpoint> = Default::default();
@@ -520,13 +548,16 @@ pub(crate) async fn spendable_candidates_v1(
             }
         }
     }
+    let reserved: std::collections::HashSet<kaspa_consensus_core::tx::TransactionOutpoint> =
+        all.iter().filter(|u| u.reserved).map(|u| u.outpoint).collect();
     let mut candidates: Vec<(kaspa_consensus_core::tx::TransactionOutpoint, UtxoEntry)> = all
         .iter()
-        .filter(|u| u.mature && !u.bonded && !pending_spent.contains(&u.outpoint))
+        .filter(|u| u.mature && !u.bonded && (admit_reserved || !u.reserved) && !pending_spent.contains(&u.outpoint))
         .map(|u| (u.outpoint, u.entry.clone()))
         .collect();
     candidates.extend(pending_change.into_iter().filter(|(outpoint, _)| !pending_spent.contains(outpoint)));
-    candidates.sort_by(|a, b| b.1.amount.cmp(&a.1.amount));
+    // Largest first — and a reservation, where admitted, only after everything else.
+    candidates.sort_by(|a, b| reserved.contains(&a.0).cmp(&reserved.contains(&b.0)).then_with(|| b.1.amount.cmp(&a.1.amount)));
     Ok(candidates)
 }
 

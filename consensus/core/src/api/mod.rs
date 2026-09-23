@@ -61,6 +61,61 @@ pub struct PalwModelBenefitsReadV1 {
     pub enforced_lead_daa: u64,
 }
 
+/// **`getPalwModelPositions`' answer: one holder id's positions, each with the tenure and the tier
+/// that id holds, all read at one tip** (ADR-0095 §4.3/§4.5; the 2026-09-23 Position route
+/// matrix, P-B2).
+///
+/// The read used to be `(line, units)` and nothing else. A provider serving a line's holders
+/// (ADR-0101) then had to fetch the line's tiers in a second call, taken at whatever tip that call
+/// saw, and rebuild §4.3 itself — and §4.5's clock was on no wire at all. Here every number comes
+/// from the chain's own readers at `tip_daa`, the height a membership challenge names (§4.8, A8).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwModelPositionsReadV1 {
+    /// The DAA score of the tip the rows were read at; 0 off ConsensusV2 or before the first state.
+    pub tip_daa: u64,
+    /// The tip block itself: a DAA score does not name a state across a reorg, the block does.
+    /// `None` off ConsensusV2 or before the first state.
+    pub tip_hash: Option<crate::BlockHash>,
+    pub rows: Vec<PalwModelPositionReadV1>,
+}
+
+/// One `(line, holder)` row of [`PalwModelPositionsReadV1`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwModelPositionReadV1 {
+    pub line_id: kaspa_hashes::Hash64,
+    pub units: u64,
+    /// §4.5: when this id's tenure clock last started — `None` where the chain keeps no clock (a
+    /// holding from before the membership fence, or a network that never armed it).
+    pub holding_since_daa: Option<u64>,
+    /// §4.5: how long this id has held without selling, at `tip_daa`.
+    pub tenure_daa: u64,
+    /// §4.3: the tier THIS id alone buys at `tip_daa` — the index into the line's tiers in effect,
+    /// and the tier. `None` below the first rung or where nothing is in effect. A person who holds
+    /// under several ids is one holding (N3); summing them is the caller's, over ids it proved.
+    pub tier: Option<(usize, crate::palw_model_benefits_v1::PalwModelBenefitTierV1)>,
+}
+
+impl PalwModelPositionsReadV1 {
+    /// The read over a folded state, so a test puts the node's question to a state without a store
+    /// — and the node, the test and any later reader take the same one.
+    pub fn at_tip(state: &crate::palw_state_v2::PalwChainStateV2, holder: &kaspa_hashes::Hash64) -> Self {
+        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let tip_hash = state.last_point().map(|p| p.block);
+        let rows = state
+            .model_positions_of(holder)
+            .into_iter()
+            .map(|(line_id, units)| PalwModelPositionReadV1 {
+                line_id,
+                units,
+                holding_since_daa: state.model_position_since(&line_id, holder),
+                tenure_daa: state.model_position_tenure(&line_id, holder, tip_daa),
+                tier: state.model_benefit_tier(&line_id, holder, tip_daa),
+            })
+            .collect();
+        Self { tip_daa, tip_hash, rows }
+    }
+}
+
 /// ADR-0088 Decision 12: `getPalwModelLine`'s answer — the row, the current root, the roots in
 /// force for the class at the tip.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +139,19 @@ pub struct PalwModelLineReadV1 {
     /// ADR-0095: the declaration as stored, plus what it means at `tip_daa` — the tiers actually
     /// governing, any pending weakening, the lapse, and the lead the fold is enforcing.
     pub benefits: Option<PalwModelBenefitsReadV1>,
+}
+
+/// **`getPalwModelMarket`'s lifecycle half** (the 2026-09-23 Position route matrix, P-B3): what the
+/// registry says of a line's class, and whether the fold at the next block takes a seed or a buy of
+/// the line — asked through `palw_model_market_admits_v1`, the function the fold itself calls.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwModelMarketGateReadV1 {
+    /// The registry lifecycle of the line's class as the tip holds it, `Debug`-printed; empty where
+    /// the registry holds no row for it.
+    pub lifecycle: String,
+    /// The fold's refusal of a seed or a buy of this line, as text; `None` where it would take them.
+    /// A sell is never refused for this.
+    pub refusal: Option<String>,
 }
 
 /// ADR-0088 Decision 12: `getPalwModelVersion`'s answer — the row and its evaluations, each
@@ -376,11 +444,20 @@ pub trait ConsensusApi: Send + Sync {
     /// reader still reads what ADR-0087 wrote. `None` when the line (or its class) does not exist;
     /// a line with no market row yet reads as an unopened market (the whole supply in the curve,
     /// no MSK) beside its class's status, so a reader can quote before the first move. The `bool`
-    /// says whether a row exists.
+    /// says whether a row exists — which is not whether the line is a market: since ADR-0094 a
+    /// seed's first instalment writes a row, and the RPC's `opened` is `PalwModelMarketV1::is_open`
+    /// (the 2026-09-23 Position route matrix, P10).
     fn palw_model_market_v1(
         &self,
         _line_id: kaspa_hashes::Hash64,
     ) -> Option<(crate::palw_model_market_v1::PalwModelMarketV1, bool, crate::palw_state_v2::PalwClassStatusV2)> {
+        None
+    }
+
+    /// **The fold's market gate, asked at the tip for the virtual's next block** (the 2026-09-23
+    /// Position route matrix, P-B3) — the line's class's registry lifecycle and the refusal a seed
+    /// or a buy of the line would meet. `None` off ConsensusV2 and for a line the chain does not hold.
+    fn palw_model_market_gate_v1(&self, _line_id: kaspa_hashes::Hash64) -> Option<PalwModelMarketGateReadV1> {
         None
     }
 
@@ -394,6 +471,14 @@ pub trait ConsensusApi: Send + Sync {
     /// the tip DAA. `None` when neither a row nor a class of that id exists.
     fn palw_model_line_v1(&self, _line_id: kaspa_hashes::Hash64) -> Option<PalwModelLineReadV1> {
         None
+    }
+
+    /// **ADR-0087 Decision 8's read with ADR-0095's membership on each row** — every position a
+    /// holder id has at the tip, its tenure and the tier it buys, all at one height (the
+    /// 2026-09-23 Position route matrix, P-B2). `getPalwModelPositions` answers from this one;
+    /// [`Self::palw_model_positions_v1`] is the units-only read it replaces.
+    fn palw_model_positions_read_v1(&self, _holder: kaspa_hashes::Hash64) -> PalwModelPositionsReadV1 {
+        PalwModelPositionsReadV1::default()
     }
 
     /// ADR-0088 Decision 12: one version of a line, with its usage and its evaluations. `None`

@@ -1670,6 +1670,7 @@ mod tests {
                 evm_active,
                 leg_v2_active: false,
                 seed_v2_active: false,
+                audit_2026_09_23_active: false,
             },
             expected_settlements: expected,
             chain_id: EVM_CHAIN_ID,
@@ -1808,6 +1809,56 @@ mod tests {
         assert_eq!(res.receipts[0].logs.len(), 1, "the buy's receipt carries the one ActionQueued log");
         assert_eq!(res.receipts[0].logs[0].address, MISAKA_MODEL_WRITER);
         assert_eq!(db.basic(from).unwrap().unwrap().nonce, 3);
+    }
+
+    /// **The 2026-09-23 Position route matrix, P-B3, on the EVM lane: the writer asks the fold's
+    /// lifecycle gate before it takes the escrow.** Consensus fills `market_refused_classes` past the
+    /// audit fence with every class `palw_model_market_admits_v1` refuses; a seed or a buy of such a
+    /// line reverts `ClassNotEligible()` at the call and moves no value, where it used to be escrowed,
+    /// queued and refunded one block later. A sell is never gated. With the set empty — every block
+    /// below the fence, i.e. testnet-11 — the same three calls queue exactly as before.
+    #[test]
+    fn p_b3_the_writer_refuses_a_seed_or_a_buy_the_fold_would_refuse_and_never_a_sell() {
+        use crate::model_market::{send_action_buy_calldata, send_action_seed_calldata, send_action_sell_calldata, writer_address};
+        use kaspa_consensus_core::evm::model_market::PalwEvmMarketActionKindV1;
+        let basefee = EVM_INITIAL_BASE_FEE as u128;
+        let scale = EVM_NATIVE_SCALE as u128;
+        let line = kaspa_consensus_core::Hash64::from_u64_word(7);
+        let writer = writer_address();
+        let (from, buy) = signed_call(0x11, 0, writer, 7 * scale, 100_000, basefee, send_action_buy_calldata(&line, 1));
+        let (_, seed) = signed_call(0x11, 1, writer, 5 * scale, 100_000, basefee, send_action_seed_calldata(&line));
+        let (_, sell) = signed_call(0x11, 2, writer, 0, 100_000, basefee, send_action_sell_calldata(&line, 5, 2));
+        let payload = EvmExecutionPayload { evm_coinbase: EvmAddress::from_bytes([0xFE; 20]), ..Default::default() };
+        let accepted = [cand(buy, 0xAA), cand(seed, 0xAA), cand(sell, 0xAA)];
+
+        // Below the fence (the set empty): all three queue, the buy's and the seed's value escrowed.
+        let open = line_view(line);
+        assert!(!open.market_refuses(&line));
+        let below = EvmBlockInput { market: market_input(&open, true, &[]), ..input_v2(&payload, &accepted) };
+        let (res, mut db) = execute_block_evm(funded_seed(from, HUGE_SEED), &below).unwrap();
+        assert!(res.receipts.iter().all(|r| r.succeeded), "testnet-11's writer: nothing new reverts");
+        assert_eq!(res.market_actions.len(), 3);
+        assert_eq!(db.basic(writer).unwrap().unwrap().balance, U256::from(12 * scale));
+
+        // Past it, the line's class refused by the gate: the seed and the buy revert with no escrow,
+        // the sell queues.
+        let mut gated = (*open).clone();
+        gated.market_refused_classes.insert(line);
+        assert!(gated.market_refuses(&line));
+        let gated = std::sync::Arc::new(gated);
+        let past = EvmBlockInput { market: market_input(&gated, true, &[]), ..input_v2(&payload, &accepted) };
+        let (res, mut db) = execute_block_evm(funded_seed(from, HUGE_SEED), &past).unwrap();
+        assert_eq!(res.header.accepted_tx_count, 3, "the refusals are reverts, not skips");
+        assert!(!res.receipts[0].succeeded, "the buy reverts at the call");
+        assert!(!res.receipts[1].succeeded, "the seed reverts at the call");
+        assert!(res.receipts[2].succeeded, "a sell never waits for the registry");
+        assert_eq!(res.market_actions.len(), 1, "only the sell is queued");
+        assert!(matches!(res.market_actions[0].kind, PalwEvmMarketActionKindV1::Sell { .. }));
+        assert_eq!(
+            db.basic(writer).unwrap().map(|account| account.balance).unwrap_or_default(),
+            U256::ZERO,
+            "no escrow was taken for a refused move (the writer was never even credited)"
+        );
     }
 
     /// ADR-0089 Decision 6 at the executor: a block's `MarketSettle` ops must equal, in order,

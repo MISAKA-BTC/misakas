@@ -22,7 +22,7 @@ fn t12_bonds() -> Vec<kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSp
     PALW_T12_GENESIS_BONDS
         .iter()
         .map(|c| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
-            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(premine_outpoint(c.premine_index)),
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(premine_outpoint_for(t12(), c.premine_index)),
             pubkey: c.bond_pubkey.to_vec(),
             operator_pubkey: c.operator_pubkey.to_vec(),
             payout_payload: Hash64::from_bytes(c.payout_payload),

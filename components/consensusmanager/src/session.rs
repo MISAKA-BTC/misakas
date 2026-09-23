@@ -417,6 +417,16 @@ impl ConsensusSessionOwned {
         self.consensus.palw_model_market_v1(class_id)
     }
 
+    /// The 2026-09-23 Position route matrix, P-B3: the lifecycle of a line's class and the fold's
+    /// refusal of a seed or a buy of the line at the virtual's next block. `None` for an unknown
+    /// line or off ConsensusV2.
+    pub fn palw_model_market_gate_v1(
+        &self,
+        line_id: kaspa_consensus_core::Hash64,
+    ) -> Option<kaspa_consensus_core::api::PalwModelMarketGateReadV1> {
+        self.consensus.palw_model_market_gate_v1(line_id)
+    }
+
     /// ADR-0087 Decision 8: every position a holder has at the tip, by line.
     pub fn palw_model_positions_v1(&self, holder: kaspa_consensus_core::Hash64) -> Vec<(kaspa_consensus_core::Hash64, u64)> {
         self.consensus.palw_model_positions_v1(holder)
@@ -425,6 +435,15 @@ impl ConsensusSessionOwned {
     /// ADR-0088 Decision 12: a line at the tip — the row, the current root, the roots in force.
     pub fn palw_model_line_v1(&self, line_id: kaspa_consensus_core::Hash64) -> Option<kaspa_consensus_core::api::PalwModelLineReadV1> {
         self.consensus.palw_model_line_v1(line_id)
+    }
+
+    /// ADR-0087 Decision 8's read with ADR-0095's tenure and tier per row, at one tip (the
+    /// 2026-09-23 Position route matrix, P-B2).
+    pub fn palw_model_positions_read_v1(
+        &self,
+        holder: kaspa_consensus_core::Hash64,
+    ) -> kaspa_consensus_core::api::PalwModelPositionsReadV1 {
+        self.consensus.palw_model_positions_read_v1(holder)
     }
 
     /// ADR-0135: the model registry as the tip state holds it — rows, ready seats, proofs.

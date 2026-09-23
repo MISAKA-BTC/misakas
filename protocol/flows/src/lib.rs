@@ -3,6 +3,7 @@ pub mod flow_trait;
 pub mod flowcontext;
 pub mod ibd;
 pub mod palw_gossip;
+pub mod palw_heartbeat_relay;
 pub mod palw_round_relay;
 pub mod service;
 pub mod v7;

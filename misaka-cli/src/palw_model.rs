@@ -3,7 +3,8 @@
 //!
 //! `show` and `positions` are reads of the tip (`getPalwModelMarket`, `getPalwModelPositions`);
 //! `buy` files a `ModelBuy` in a carrier whose output 1 pays the class's sink; `sell` files a
-//! `ModelSell` signed by the key whose payout payload is the holder. A quote is printed before
+//! `ModelSell` signed by the key whose id is the holder (`palw_model_holder_of_pubkey_v1`, the
+//! key's unkeyed id — not its address payload). A quote is printed before
 //! anything is sent and nothing is sent without `--yes`. The arithmetic is the chain's own
 //! (`kaspa_consensus_core::palw_model_market_v1`), so the quote is what the fold will compute
 //! against the market as this node holds it — a move that lands after another move fills at the
@@ -23,6 +24,21 @@ use kaspa_consensus_core::palw_model_market_v1::{
 /// schedule this build assumes, so a preview agrees with the fold on either side of the fence.
 pub(crate) fn served_schedule(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> PalwModelFeesV1 {
     PalwModelFeesV1 { burn_permille: r.burn_permille, leg_permille: r.leg_permille }
+}
+
+/// **The 2026-09-23 Position route matrix, P-B3: the fold's lifecycle gate, as the node served it.**
+/// `Some(why)` where the fold at the node's next block refuses a seed or a buy of this line because
+/// the registry has not admitted its class. Asked before a carrier is built: a refused carrier seed
+/// or buy still lands, and its sink output is the payment (P-B1). A node older than version 7 served
+/// no gate — its fold asked none — and reads as `None`. A sell never asks.
+pub(crate) fn market_refusal(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> Option<String> {
+    (!r.market_refusal.is_empty()).then(|| {
+        format!(
+            "line {} takes no seed and no buy now: {} — the chain would refuse the move and the MSK paid into the \
+             sink would not come back (sells stay open)",
+            r.line_id, r.market_refusal
+        )
+    })
 }
 
 /// "5 %", "1 %": a permille as the percentage the CLI prints.
@@ -99,7 +115,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "schema": "misaka.palw.model-market.v1",
         "found": r.found,
         "line_id": r.line_id,
-        // `opened` is the wire's "a market row exists" (a pledge makes one); `open` is a market.
+        // `open` is a market, read off the row itself. `opened` is the node's flag as served: the
+        // same fact from a node with the 2026-09-23 Position route matrix's P10 repair, and "a
+        // market row exists" (a pledge makes one) from a node without it.
         "opened": r.opened,
         "open": market_from_response(r).is_open(),
         "opened_daa": r.opened_daa,
@@ -122,6 +140,9 @@ fn market_json(r: &kaspa_rpc_core::GetPalwModelMarketResponse) -> serde_json::Va
         "supply_units": r.supply_units,
         "virtual_sompi": r.virtual_sompi,
         "class_status": r.class_status,
+        // P-B3: the registry's lifecycle, and the fold's refusal of a seed or a buy ("" = none).
+        "class_lifecycle": r.class_lifecycle,
+        "market_refusal": r.market_refusal,
         "burn_permille": r.burn_permille,
         "owner_leg_permille": r.leg_permille,
         "owner_leg_v2_activation_daa": r.leg_v2_activation_daa,
@@ -160,6 +181,13 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
     } else {
         println!("line {}", r.line_id);
         println!("  class status   {}{}", r.class_status, if r.closed_to_buys { " (closed to buys)" } else { "" });
+        if !r.class_lifecycle.is_empty() {
+            println!("  registry       {}", r.class_lifecycle);
+        }
+        if !r.market_refusal.is_empty() {
+            // P-B3: what the fold says of a seed or a buy here; a holder can still sell.
+            println!("  seed / buy     refused — {} (sells stay open)", r.market_refusal);
+        }
         println!(
             "  market         {}",
             if market_from_response(&r).is_open() {
@@ -169,8 +197,9 @@ pub async fn show(ctx: &Ctx, line_id: &str, quote_msk: Option<String>, json: boo
             }
         );
         println!("  reserve        {}", msk(r.msk_reserve));
-        // `opened` on the wire is "a market row exists", which a pledge alone creates (ADR-0094):
-        // the pair is a market once it holds a seed.
+        // Openness is read off the row (`seed_sompi > 0`), not the wire's `opened`: a node without
+        // the 2026-09-23 P10 repair serves `opened` as "a market row exists", which a pledge alone
+        // creates (ADR-0094). The pair is a market once it holds a seed.
         if market_from_response(&r).is_open() {
             println!("  seed (locked)  {} by {}", msk(r.seed_sompi), r.seeded_by);
         } else if r.seed_pledged_sompi > 0 {
@@ -375,9 +404,14 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     if !r.found {
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
-    // **Open is `seed_sompi > 0`, not the wire's `opened`** — that flag is "a market row exists",
-    // and the first instalment creates one: the second instalment this command's own hint asks
-    // for was refused here as "already seeded (0 MSK locked)".
+    // P-B3 (the 2026-09-23 Position route matrix): the registry's gate first, as the fold asks it.
+    if let Some(why) = market_refusal(&r) {
+        return Err(CliError::new(exit::GENERIC, why));
+    }
+    // **Open is `seed_sompi > 0`, not the wire's `opened`** — a node without the 2026-09-23 P10
+    // repair serves that flag as "a market row exists", and the first instalment creates one: the
+    // second instalment this command's own hint asks for was refused here as "already seeded (0 MSK
+    // locked)". Reading the row works against every node.
     if market_from_response(&r).is_open() {
         return Err(CliError::new(
             exit::GENERIC,
@@ -436,6 +470,7 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
         println!(
             "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
         );
+        println!("{}", refusal_line(&nv, msk_seed, &addr));
     }
     let what = format!("ModelSeed {} into line {}", msk(msk_seed), line);
     let out = submit_move(ctx, &nv, tx, fee, &what, yes).await;
@@ -443,8 +478,92 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     out
 }
 
-/// `misaka palw model-buy --line <id> --msk <amount> [--min-positions <n>] --key … [--yes]`.
-pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text: &str, min_positions: u64, yes: bool) -> CliResult {
+/// **What a buy insists on** (the 2026-09-23 Position route matrix, P-B1): a floor the buyer
+/// stated, a slippage under the quote the node serves now, or nothing stated — which is the quote
+/// less [`DEFAULT_BUY_SLIPPAGE_PERMILLE`] where the chain pays a refused carrier back, and a refusal
+/// to guess where it does not. The old default, no floor at all, was a buy at any price.
+pub(crate) enum BuyFloor {
+    /// Whole positions (`--min-positions`).
+    Positions(u64),
+    /// Permille under the quote, rounded down to whole positions (`--slippage`, `misaka position
+    /// buy`'s rule).
+    SlippagePermille(u64),
+    /// Neither flag.
+    Unstated,
+}
+
+/// The slippage an unstated floor sits at on a chain that refunds a refused carrier — the same
+/// 1 % `misaka position buy` defaults to.
+pub(crate) const DEFAULT_BUY_SLIPPAGE_PERMILLE: u64 = 10;
+
+impl BuyFloor {
+    /// The whole positions the buy insists on, given the curve's quote and whether this chain pays
+    /// a refused carrier back.
+    ///
+    /// **Unstated on a chain that keeps a refused carrier's MSK, nothing is guessed.** A floor there
+    /// is a bet the whole payment on the price holding until inclusion, and no floor is a buy at any
+    /// price; both are the buyer's call, so the tool asks for one — as `model-sell` asks for
+    /// `--min-msk`.
+    pub(crate) fn min_positions(&self, quoted_units: u64, refused_is_refunded: bool) -> Result<u64, CliError> {
+        let slippage = match *self {
+            BuyFloor::Positions(positions) => return Ok(positions),
+            BuyFloor::SlippagePermille(permille) => permille,
+            BuyFloor::Unstated if refused_is_refunded => DEFAULT_BUY_SLIPPAGE_PERMILLE,
+            BuyFloor::Unstated => {
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    "state --min-positions <n> or --slippage <p%>: this chain keeps a refused carrier's MSK in the line's sink, \
+                     so a floor risks the whole payment on the price holding until the carrier is accepted, and \
+                     --min-positions 0 buys at any price"
+                        .to_string(),
+                ));
+            }
+        };
+        Ok(crate::operator::market::floor_after(quoted_units, slippage) / PALW_MODEL_POSITION_UNITS_V1)
+    }
+}
+
+/// **Whether this chain pays a refused carrier back** (P-B1): past `palw_audit_2026_09_23` at the
+/// tip the node reported, the sink's MSK is paid back to the carrier's change address.
+fn refused_is_refunded(nv: &crate::wallet::NodeView) -> bool {
+    nv.params.palw_audit_2026_09_23_active_at(nv.virtual_daa)
+}
+
+/// **What a refused carrier costs on this chain**, printed before anything is signed, because a
+/// floor is only as safe as its refusal.
+fn refusal_line(nv: &crate::wallet::NodeView, amount: u64, change_to: &impl std::fmt::Display) -> String {
+    if refused_is_refunded(nv) {
+        format!(
+            "  if refused     {} is paid back to {change_to} through the coinbase (a node will not relay or mine this carrier \
+             while the payout queue has no row left for its refund)",
+            msk(amount)
+        )
+    } else {
+        format!("  if refused     {} STAYS IN THE SINK: this chain does not pay a refused carrier back", msk(amount))
+    }
+}
+
+#[cfg(test)]
+mod buy_floor_tests {
+    use super::{BuyFloor, DEFAULT_BUY_SLIPPAGE_PERMILLE};
+    use kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_POSITION_UNITS_V1;
+
+    /// P-B1: an unstated floor is the quote less 1 % in whole positions where a refusal is paid
+    /// back, and an error where it is kept; a stated one is what was stated.
+    #[test]
+    fn an_unstated_buy_floor_is_a_slippage_only_where_a_refusal_is_refunded() {
+        let quoted = 1_000 * PALW_MODEL_POSITION_UNITS_V1 + PALW_MODEL_POSITION_UNITS_V1 / 2;
+        assert_eq!(DEFAULT_BUY_SLIPPAGE_PERMILLE, 10);
+        assert_eq!(BuyFloor::Unstated.min_positions(quoted, true).unwrap(), 990, "1,000.5 less 1 %, rounded down");
+        assert!(BuyFloor::Unstated.min_positions(quoted, false).is_err(), "no guess where a refusal burns the payment");
+        assert_eq!(BuyFloor::SlippagePermille(50).min_positions(quoted, false).unwrap(), 950);
+        assert_eq!(BuyFloor::Positions(0).min_positions(quoted, false).unwrap(), 0, "0 is still sayable, out loud");
+        assert_eq!(BuyFloor::Positions(7).min_positions(quoted, true).unwrap(), 7);
+    }
+}
+
+/// `misaka palw model-buy --line <id> --msk <amount> [--min-positions <n> | --slippage <p%>] --key … [--yes]`.
+pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text: &str, floor: BuyFloor, yes: bool) -> CliResult {
     let line = parse_line(line_id)?;
     let msk_in = parse_msk_amount(msk_text)?;
     let key = ks.load_key()?;
@@ -458,10 +577,15 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     if !r.found {
         return Err(CliError::new(exit::GENERIC, format!("this chain holds no line {line}")));
     }
+    // P-B3 (the 2026-09-23 Position route matrix): named, before the quote the gate also closes.
+    if let Some(why) = market_refusal(&r) {
+        return Err(CliError::new(exit::GENERIC, why));
+    }
     let market = market_from_response(&r);
     let Some(quote) = palw_model_buy_quote_with(&market, msk_in, served_schedule(&r)) else {
         return Err(CliError::new(exit::GENERIC, format!("a buy of {} releases nothing (closed to buys, or too small)", msk(msk_in))));
     };
+    let min_positions = floor.min_positions(quote.units_out, refused_is_refunded(&nv))?;
     let min_units_out = min_positions.saturating_mul(PALW_MODEL_POSITION_UNITS_V1);
     if quote.units_out < min_units_out {
         return Err(CliError::new(
@@ -493,6 +617,7 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
             quote.units_out
         );
         println!("  price after    {} per position", msk(quote.after.price_sompi_per_position_v1()));
+        println!("{}", refusal_line(&nv, msk_in, &addr));
     }
     let what = format!("ModelBuy {} of line {}", msk(msk_in), line);
     let out = submit_move(ctx, &nv, tx, fee, &what, yes).await;
@@ -500,7 +625,26 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     out
 }
 
-/// `misaka palw model-sell --line <id> --positions <n> [--min-msk <amount>] --key … [--yes]`.
+/// **Whether this chain pays a carrier sell's net leg where the seller can spend it** (the
+/// 2026-09-23 Position route matrix, P-B4). Past `Params::palw_audit_2026_09_23` the fold pays the
+/// seller's own address payload; below it (testnet-11) it pays the holder id, the key's unkeyed
+/// hash, and the coinbase output locked to that is one no key can spend — the proceeds are burned.
+/// So below the fence the tool refuses to sign unless the seller named the burn with
+/// `--accept-burned-proceeds`. `None` is "sign".
+pub(crate) fn sell_payee_refusal(fence_active: bool, accept_burned_proceeds: bool) -> Option<String> {
+    if fence_active || accept_burned_proceeds {
+        return None;
+    }
+    Some(
+        "this chain pays a sell's proceeds to the holder id, an output no key can spend (the 2026-09-23 Position route \
+         matrix, P-B4; fixed only past the 2026-09-23 audit fence, which this network does not arm), so the proceeds \
+         would be burned. Nothing was signed. Pass --accept-burned-proceeds to sell anyway and burn them."
+            .to_string(),
+    )
+}
+
+/// `misaka palw model-sell --line <id> --positions <n> [--min-msk <amount>] --key … [--yes]
+/// [--accept-burned-proceeds]`.
 pub async fn sell(
     ctx: &Ctx,
     ks: &crate::keys::KeySource,
@@ -508,6 +652,7 @@ pub async fn sell(
     positions: u64,
     min_msk_text: Option<String>,
     yes: bool,
+    accept_burned_proceeds: bool,
 ) -> CliResult {
     let line = parse_line(line_id)?;
     let units_in = positions
@@ -531,6 +676,12 @@ pub async fn sell(
     let key = ks.load_key()?;
     let holder = palw_model_holder_of_pubkey_v1(key.public_key());
     let nv = connect(ctx).await?;
+    // P-B4: on a chain that pays the net leg to the holder id, refuse before anything is signed.
+    let fence_active = nv.params.palw_audit_2026_09_23_active_at(nv.virtual_daa);
+    if let Some(why) = sell_payee_refusal(fence_active, accept_burned_proceeds) {
+        let _ = nv.client.disconnect().await;
+        return Err(CliError::new(exit::GENERIC, why));
+    }
     let r = nv
         .client
         .get_palw_model_market(line.to_string())
@@ -597,6 +748,14 @@ pub async fn sell(
         println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
         println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
         println!("  paid to you    {} (coinbase payout), at least {}", msk(quote.fees.net), msk(min_msk_out));
+        // **Where the net leg lands** (the 2026-09-23 Position route matrix, P-B4). Past the
+        // 2026-09-23 fence the chain pays this key's own address; below it, the holder id, and an
+        // output locked to the holder id is one no key can spend. The seller is told which.
+        if fence_active {
+            println!("  paid to        {addr}");
+        } else {
+            println!("  BURNED         the net leg goes to the holder id, which no key can spend (--accept-burned-proceeds)");
+        }
         println!("  price after    {} per position", msk(quote.after.price_sompi_per_position_v1()));
     }
     let what = format!("ModelSell {positions} positions of line {line}");
@@ -607,7 +766,36 @@ pub async fn sell(
 
 #[cfg(test)]
 mod tests {
-    use super::parse_msk_amount;
+    use super::{market_refusal, parse_msk_amount};
+
+    /// P-B3 (the 2026-09-23 Position route matrix): the node's refusal stops a seed or a buy before
+    /// a carrier is built, and a node that served none — a version-6 peer — stops nothing.
+    #[test]
+    fn a_served_market_refusal_stops_the_seed_and_the_buy_and_an_empty_one_does_not() {
+        let quiet = kaspa_rpc_core::GetPalwModelMarketResponse { found: true, ..Default::default() };
+        assert_eq!(market_refusal(&quiet), None);
+        let refused = kaspa_rpc_core::GetPalwModelMarketResponse {
+            found: true,
+            line_id: "74".repeat(64),
+            class_lifecycle: "Prefetching".into(),
+            market_refusal: "class 74… is Prefetching under the model registry".into(),
+            ..Default::default()
+        };
+        let why = market_refusal(&refused).expect("refused");
+        assert!(why.contains("Prefetching") && why.contains("would not come back"), "{why}");
+    }
+
+    /// **P-B4: below the 2026-09-23 fence a sell burns its proceeds, so the tool refuses to sign
+    /// unless the seller names the burn.** Past the fence it signs with or without the flag.
+    #[test]
+    fn a_sell_whose_proceeds_would_burn_is_refused_unless_the_burn_is_named() {
+        use super::sell_payee_refusal;
+        let refusal = sell_payee_refusal(false, false).expect("testnet-11 shape: no fence, no override → refused");
+        assert!(refusal.contains("--accept-burned-proceeds") && refusal.contains("burned"), "{refusal}");
+        assert_eq!(sell_payee_refusal(false, true), None, "the override signs, and burns");
+        assert_eq!(sell_payee_refusal(true, false), None, "testnet-12 shape: the fence pays the seller's address");
+        assert_eq!(sell_payee_refusal(true, true), None);
+    }
 
     #[test]
     fn msk_amounts_parse_to_sompi() {

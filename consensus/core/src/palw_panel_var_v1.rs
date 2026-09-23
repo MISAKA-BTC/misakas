@@ -9,11 +9,9 @@
 //! fence arms this ledger together with PanelFalseValid.
 //!
 //! Registry floor stays the producer floor. Panel eligibility is a dynamic predicate on
-//! *available* slashable collateral, not a raised `min_collateral_sompi`. (Past
-//! `palw_audit_2026_09_23` a `BondRegistered` must post the PANEL floor —
-//! `palw_state_v2::palw_bond_registration_floor_v1`, 2026-09-24 DoS audit #12 (c) — to price the
-//! permanent registry row; `min_collateral_sompi` itself, and every exposure priced off it, is
-//! unchanged.)
+//! *available* slashable collateral, not a raised `min_collateral_sompi`. (A `BondRegistered`
+//! posts `palw_state_v2::palw_bond_registration_floor_v1` — the producer floor, by the user's
+//! decision on 2026-09-24 DoS audit #12 (c).)
 
 use crate::palw_offence_v1::{PALW_PANEL_COLLUDING_QUORUM_V1, palw_min_slashable_per_colluding_seat_v1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwClaimStateV2, PalwVoidReasonV2};
@@ -660,6 +658,7 @@ mod tests {
             work_leaves: 0,
             work_id: None,
             phase: PalwClaimPhaseV2::Provisional,
+            rights_reserved: 0,
         }
     }
 

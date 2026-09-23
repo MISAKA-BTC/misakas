@@ -147,7 +147,11 @@ fn a_copy_of_a_convicted_execution_is_also_forfeit() {
     assert!(minted.is_empty(), "neither the original nor its copy mints a ticket");
 }
 
-/// **Maturity: not one ticket is scheduled before the Final's conviction window has run.**
+/// **Maturity: not one ticket is scheduled before the Final's conviction window has run** — as
+/// the matured mint expresses it. The fold no longer calls this mint on testnet-12: since the
+/// 2026-09-23 route-matrix audit's #2 it serves the maturity by delaying the SNAPSHOT
+/// (`palw_state_v2::tests::past_the_economic_safety_bundle_a_finals_tickets_land_where_their_schedule_is_judged`),
+/// because a ticket 144,000 rounds out was on a round no kept schedule lists.
 #[test]
 fn no_ticket_is_scheduled_before_its_maturity() {
     let p = t12();

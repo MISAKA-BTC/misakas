@@ -369,8 +369,14 @@ fn assemble(path: &str, artifact_root: Hash64) {
         }
         let Ok(payout) = <[u8; 64]>::try_from(payout_bytes.as_slice()) else { bad("payout payload is not 64 bytes") };
         let payout = Hash64::from_bytes(payout);
+        // The bond is named on the premine txid of the network this card assembles for
+        // (`premine_outpoint_for`): the sentinel on the RC identity (testnet-11), and testnet-12's
+        // own separated txid were the card ever assembled for it (replay separation, 2026-09-24).
         registry.push(kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
-            bond: PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(index)),
+            bond: PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint_for(
+                kaspa_consensus_core::config::params::palw_rc_base_params().net,
+                index,
+            )),
             pubkey: bond_pk.clone(),
             operator_pubkey: op_pk.clone(),
             payout_payload: payout,

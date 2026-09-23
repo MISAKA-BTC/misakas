@@ -113,6 +113,8 @@ impl ConsensusServices {
             // ADR-0142: past this one the heartbeat lane earns its exemption only at or past the
             // cursor, so the score is bounded in wall clock rather than in chain blocks.
             params.palw_clock_cursor,
+            // The 2026-09-24 heartbeat audit's H3/H5: the stamp rules the header stage reads.
+            params.palw_clock_floor,
         );
         let depth_manager = BlockDepthManager::new(
             params.merge_depth(),

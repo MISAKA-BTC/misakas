@@ -56,6 +56,8 @@ fn registry_fold(p: &Params, b: &PalwConsensusParamsV2) -> PalwModelRegistryFold
         span_daa: lane.schedule_span_daa,
         genesis_works: works.clone(),
         grace_until_daa: PalwModelRegistryFoldV1::grace_until_v1(activation, lane.schedule_span_daa, &globals),
+        admission_audit_period_daa: p.palw_admission_audit_period_daa,
+        readiness_v2_active: p.palw_readiness_v2_at(0),
     }
 }
 fn t12_extras(p: &Params, b: &PalwConsensusParamsV2) -> PalwTransitionExtrasV1 {
@@ -231,13 +233,14 @@ fn review12_0_burn_leaves_live_slashable_locks_covered() {
         carriage.into_state(&b.state, None).expect("consistent")
     };
 
-    // (1) The probe's bond: 10 MSK, a lock on all of it but the registration's price.
-    let collateral: u64 = 10 * 100_000_000;
+    // (1) The probe's bond: 10 MSK or the registration floor if that is higher (the producer floor,
+    // 13,000 MSK on testnet-12's regenesis params), a lock on all of it but the registration's price.
+    let collateral: u64 = (10 * 100_000_000u64).max(b.state.min_collateral_sompi());
     let lock_amount = collateral as u128 - price;
     let s0 = with_lock(collateral, lock_amount);
     let avail_before = s0.slashable_available_v2(&bond_key(ATTACKER), 2, None);
     let refused = fold_one(&b, &s0, 2, &bought(&b, &s0, 70_000, 1), &extras);
-    println!("10 MSK bond, live lock {lock_amount}, slashable available {avail_before}: {refused:?}");
+    println!("{collateral} sompi bond, live lock {lock_amount}, slashable available {avail_before}: {refused:?}");
     match &refused {
         Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable { burn: b_, already, collateral: c, .. }) => {
             assert_eq!(*b_ as u128, burn, "the refused burn is the registration burn");

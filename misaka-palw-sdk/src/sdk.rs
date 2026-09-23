@@ -643,8 +643,9 @@ impl PalwClassSdk {
             false,
             shape.token_lift,
             shape.fused_dissectable,
-            // F4's deepest-legal-job bound rides the economic bundle, dormant on every preset.
-            false,
+            // F4's deepest-legal-job bound, at the height the shape was read at — what the chain
+            // passes (route-matrix #6: this was `false` while testnet-12 armed it).
+            shape.legal_job_bound,
             shape.held,
             shape.kimi_family,
             // 2026-09-23 audit C-4 — the fence the acceptance path passes, read into the shape.

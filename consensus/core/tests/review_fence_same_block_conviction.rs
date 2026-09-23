@@ -45,6 +45,13 @@ use kaspa_consensus_core::palw_work_target_v1::palw_work_floor_v1;
 
 const MSK: f64 = 1e8;
 fn to_msk(s: u128) -> f64 { s as f64 / MSK }
+
+/// The attacker's bond: 1,000 MSK, or the registration floor where that is higher (the producer
+/// floor — 13,000 MSK on testnet-12's regenesis params, `palw_bond_registration_floor_v1`).
+fn attacker_collateral(p: &Params) -> u64 {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { unreachable!() };
+    100_000_000_000u64.max(kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(b.state.min_collateral_sompi(), true))
+}
 /// The fold's `mul_div_u128` is pub(crate); the operands here stay far below 2^128.
 fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 { a * b / d }
 
@@ -251,7 +258,7 @@ fn run(audit: bool) {
     let bond = bond_key(attacker);
     let pk = pubkey_of(attacker);
     let g = genesis_state(&p);
-    let s = fold_at(&p, audit, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, 100_000_000_000)], PalwBlockWorkV3::None).unwrap();
+    let s = fold_at(&p, audit, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, attacker_collateral(&p))], PalwBlockWorkV3::None).unwrap();
     let s = seed_prereqs(&p, &s);
     let publish = PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
     let s = fold_at(&p, audit, &s, &ctx(2, 1_001, 2, 0), &[publish], PalwBlockWorkV3::None).expect("real ClassLaneCertified publishes the profile");
@@ -464,7 +471,7 @@ fn same_block(audit: bool, spend_named: bool) -> (bool, bool, Result<PalwChainSt
     let attacker = 1u64;
     let bond = bond_key(attacker);
     let pk = pubkey_of(attacker);
-    let s = fold_at(&p, audit, &genesis_state(&p), &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, 100_000_000_000)], PalwBlockWorkV3::None).unwrap();
+    let s = fold_at(&p, audit, &genesis_state(&p), &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, attacker_collateral(&p))], PalwBlockWorkV3::None).unwrap();
     let s = seed_prereqs(&p, &s);
     let publish = PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
     let s = fold_at(&p, audit, &s, &ctx(2, 1_001, 2, 0), &[publish], PalwBlockWorkV3::None).unwrap();
@@ -557,7 +564,7 @@ fn sibling_spend_after_conviction(audit: bool) -> Result<PalwChainStateV2, PalwS
     let attacker = 1u64;
     let bond = bond_key(attacker);
     let pk = pubkey_of(attacker);
-    let s = fold_at(&p, audit, &genesis_state(&p), &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, 100_000_000_000)], PalwBlockWorkV3::None).unwrap();
+    let s = fold_at(&p, audit, &genesis_state(&p), &ctx(1, 1_000, 1, 0), &[bond_obj(attacker, attacker_collateral(&p))], PalwBlockWorkV3::None).unwrap();
     let s = seed_prereqs(&p, &s);
     let publish = PalwConsensusObjectV2::ClassLaneCertified { class_id: floor, lane: PalwCertifiedLaneV1::FreePrompt, profile: floor_profile() };
     let s = fold_at(&p, audit, &s, &ctx(2, 1_001, 2, 0), &[publish], PalwBlockWorkV3::None).unwrap();

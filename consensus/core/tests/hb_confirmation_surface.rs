@@ -194,24 +194,14 @@ fn heartbeat_only_history_settles_nothing_but_matures_everything() {
     // 4. the wallet framework's Maturity, wallet/core/src/utxo/reference.rs:47-64 (formula
     //    transcribed; the crate is not a dependency of this one).
     let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
-    // Below `palw_audit_2026_09_23` the long fallback was a DAA count alone — this record.
+    // The long fallback is a DAA count alone (the user's Mainnet Decision A, 2026-09-24: a
+    // coinbase's spendability is DAA-based maturity only — no settled-anchor second clock).
     let settlement = DnsCoinbaseSettlement {
         long_maturity_daa: t12.coinbase_settlement_long_maturity_daa(),
         confirmed_anchor_daa: None, // no DNS validator ever confirmed an anchor
-        settled_anchor_armed: false,
-        settled_anchor_floor_daa: None,
     };
-    // Past it, the same history: the second clock is armed and this chain has settled no anchor,
-    // so the fallback does not mature. That difference is the fix.
-    let settlement_armed = DnsCoinbaseSettlement { settled_anchor_armed: true, ..settlement };
     let coinbase_spendable =
         coinbase_spend_settled(PAYMENT_DAA, sink_daa, t12.coinbase_maturity(), (settlement.long_maturity_daa > 0).then_some(&settlement));
-    let coinbase_spendable_armed = coinbase_spend_settled(
-        PAYMENT_DAA,
-        sink_daa,
-        t12.coinbase_maturity(),
-        (settlement_armed.long_maturity_daa > 0).then_some(&settlement_armed),
-    );
     // wallet/core/src/utxo/settings.rs: user_transaction_maturity_period_daa = 100,
     // coinbase_transaction_maturity_period_daa = 1_000, stasis = 500 (every shipped network).
     const WALLET_USER_MATURITY_DAA: u64 = 100;
@@ -225,8 +215,7 @@ fn heartbeat_only_history_settles_nothing_but_matures_everything() {
     println!("  getPalwSettlement.settled                = {}", after.settled);
     println!("  getPalwSettlement.pendingAnchors         = {}", after.pending);
     println!("  DAA depth (virtualDaaScore - blockDaa)   = {daa_depth}");
-    println!("  node mempool: coinbase spendable         = {coinbase_spendable}  (pre-fence, DAA only)");
-    println!("  node mempool: coinbase spendable, armed  = {coinbase_spendable_armed}  (both clocks)");
+    println!("  node mempool: coinbase spendable         = {coinbase_spendable}  (DAA only, Decision A)");
     println!("  wallet Balance: user tx Maturity::Confirmed = {wallet_user_confirmed}");
 
     // GATE B holds on the op that exists.
@@ -236,30 +225,47 @@ fn heartbeat_only_history_settles_nothing_but_matures_everything() {
     // And every OTHER depth-like number the same history produces says the opposite.
     assert_eq!(daa_depth, BEATS, "the DAA depth is exactly the beat count");
     assert!(wallet_user_confirmed, "wallet/core/src/utxo/reference.rs:60 matures a payment on {WALLET_USER_MATURITY_DAA} DAA alone");
+    // DECISION A: a coinbase matures on the DAA alone, so the same heartbeat-only history — zero
+    // settled anchors — leaves a mined coinbase spendable once its long fallback has elapsed. The
+    // settlement a MERCHANT reads (GATE B above: getPalwSettlement's anchors) is what says the
+    // history is unsecured; coin liquidity no longer waits on the attempt lane.
     assert!(
         coinbase_spendable,
-        "PRE-FENCE: the {} DAA long fallback was a DAA count, so heartbeats alone made mined coin spendable",
+        "the {} DAA long fallback is a DAA count, and a coinbase is spendable after it with zero settled anchors",
         settlement.long_maturity_daa
     );
-    // THE FIX: past `palw_audit_2026_09_23` the same heartbeat-only history matures nothing,
-    // because the second clock has no settled anchor to count.
-    assert!(
-        !coinbase_spendable_armed,
-        "past the fence the long fallback also needs settled anchors, and {BEATS} heartbeats settle none"
-    );
+}
+
+/// **The user's Mainnet Decision A: a coinbase is spendable after its DAA maturity with zero settled
+/// anchors** — the mempool's rule (`coinbase_spend_settled` under the node's
+/// `dns_coinbase_settlement`, which no longer carries a settled-anchor clock), on testnet-12's own
+/// params, at the exact bound: one DAA short it waits, at the long maturity it is spendable, and a
+/// DNS-final anchor at or past the block still releases it early.
+#[test]
+fn a_coinbase_is_spendable_after_its_daa_maturity_with_zero_settled_anchors() {
+    let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+    let long = t12.coinbase_settlement_long_maturity_daa();
+    assert!(long > 0, "testnet-12 keeps its long coinbase maturity");
+    let floor = t12.coinbase_maturity();
+    let no_anchor = DnsCoinbaseSettlement { long_maturity_daa: long, confirmed_anchor_daa: None };
+    let block = 5_000u64;
+    assert!(!coinbase_spend_settled(block, block + long - 1, floor, Some(&no_anchor)), "one DAA short of the maturity");
+    assert!(coinbase_spend_settled(block, block + long, floor, Some(&no_anchor)), "at the DAA maturity, with no anchor at all");
+    let dns_final = DnsCoinbaseSettlement { long_maturity_daa: long, confirmed_anchor_daa: Some(block) };
+    assert!(coinbase_spend_settled(block, block + floor.max(1), floor, Some(&dns_final)), "DNS-final early release");
+    // The validator's coin selection asks the same DAA number (`coinbase_spend_maturity`), so it
+    // never selects a coinbase the mempool refuses and never waits on anchors the mempool ignores.
+    assert_eq!(t12.coinbase_spend_maturity(), floor.max(long));
+    assert!(coinbase_spend_settled(block, block + t12.coinbase_spend_maturity(), floor, Some(&no_anchor)));
 }
 
 /// The smallest beat counts that flip each economic threshold, with no anchor and no bond.
 #[test]
 fn the_beat_count_that_buys_each_economic_threshold() {
     let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
-    // The pre-fence record: the DAA clock alone, which is what this table measures.
-    let settlement = DnsCoinbaseSettlement {
-        long_maturity_daa: t12.coinbase_settlement_long_maturity_daa(),
-        confirmed_anchor_daa: None,
-        settled_anchor_armed: false,
-        settled_anchor_floor_daa: None,
-    };
+    // The DAA clock alone — the coinbase rule since Decision A, which is what this table measures.
+    let settlement =
+        DnsCoinbaseSettlement { long_maturity_daa: t12.coinbase_settlement_long_maturity_daa(), confirmed_anchor_daa: None };
     let first_true = |f: &dyn Fn(u64) -> bool| (0u64..5_000).find(|n| f(*n)).expect("flips inside 5,000 beats");
     let coinbase = first_true(&|n| {
         coinbase_spend_settled(1_000, 1_000 + n, t12.coinbase_maturity(), (settlement.long_maturity_daa > 0).then_some(&settlement))

@@ -278,7 +278,8 @@ everything else. CLI: `misaka palw model buy|sell|show`.
 * **M7 (determinism).** The fold over a recorded sequence of moves reaches one state root on
   every node; the fingerprint is unchanged where the flag is `None`.
 * **M8 (the address).** A holder is its payout payload; a sell is signed by the key that
-  payload names; no other key can sell it.
+  payload names; no other key can sell it. (Amended 2026-09-23, §10: the holder is the key's id,
+  which is not a payout payload, and a sell pays the key's own address.)
 
 ## 6. Order of work
 
@@ -348,3 +349,28 @@ misakaoptions.com) reads the market over wRPC and the EVM windows, and offers on
 
 This is ADR-0087. The README's next free number was 0087 after 0086's row; it becomes 0088 with
 this row.
+
+## 10. Amendment 2026-09-23: the holder id is not a payout payload (P-B4)
+
+The 2026-09-23 Position route matrix found that no one could spend the proceeds of a sell (P-B4).
+The holder was implemented as `mldsa87_key_id(pubkey)`, the **unkeyed** BLAKE2b-512 of the key, and
+Decision 3's `PalwPayoutV2 { payload: holder }` put that id in the payout. The coinbase locks a
+payout with `p2pkh_mldsa87_spk(payload)`. Its `OP_BLAKE2B_512` recomputes the **keyed** address
+payload (`blake2b_512_address_payload`, the value in the wallet's address) at spend time. The two
+hashes never match, so each sell's net leg was locked to an output no key can spend. A bond's
+`payout_payload` is the keyed value, which is why the owner and contributor legs were not affected.
+
+What changed is under `Params::palw_audit_2026_09_23`. Testnet-11 armed the market before that
+fence existed, so its fold is unchanged byte for byte.
+
+* The holder stays the key's id (`palw_model_holder_of_pubkey_v1`). Positions, the sell message,
+  the RPC and the CLI name holders exactly as before.
+* Past the fence, a carrier sell's net leg is paid to `palw_model_sell_net_payload_v1(pubkey)`. That
+  is the keyed address payload of the key that signed the sell. The payout row's key still hashes
+  the holder, so only the payee changes.
+* Past the fence, the fold checks that the sell's key is the holder's
+  (`ModelSellKeyIsNotTheHolders`), because that key is now the payee. Acceptance already refused a
+  mismatch, so this is a second check.
+* The EVM lane pays its net leg through the settlement, not through a payout row, so it has no payee
+  to fix. No other market, line, benefit or buyback path pays a holder id. The owner, contributor
+  and panel legs pay a bond's `payout_payload`.

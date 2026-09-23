@@ -86,7 +86,10 @@ finds a majority of itself holding the class:
   "ready" means one thing;
 * **ration** — one audit per `epoch_length / span_daa` spans, on the spans whose index is a multiple
   of it. Stateless: no row records the last audit, so none can be written or rewound to run another.
-  No seed anchor in the span before is no audit; a short jury admits nothing.
+  No seed anchor in the span before is no audit; a short jury admits nothing. *(Amended 2026-09-23,
+  user decision: a network may set the period in DAA — `Params::palw_admission_audit_period_daa`;
+  testnet-12 uses the standard `PALW_ADMISSION_AUDIT_PERIOD_DAA_STANDARD` = 100 DAA, one audit per
+  100 spans at its one-DAA span. `None` keeps the one-epoch period above, byte for byte.)*
 
 A lottery that may be re-run every span is passed by waiting — at a five-DAA span, a registrant who
 wins the jury one time in a thousand would be through in under an hour and a half. The rate the chain

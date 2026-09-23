@@ -325,9 +325,9 @@ fn a_withdrawn_bond_row_is_permanent_and_its_collateral_recycles() {
     row.pubkey = vec![0u8; 2_592]; // ML-DSA-87 public key
     row.status = PalwBondStatusV2::Retiring { since_daa: 1, settled_at_since: 0 };
     let bytes = borsh::to_vec(&bond_key(1)).unwrap().len() + borsh::to_vec(&row).unwrap().len();
-    // #12 (c): past the audit fence a bond must post the panel floor, not the producer floor.
+    // #12 (c), the user's decision: a bond registers at the PRODUCER floor, read from the params.
     let min = palw_bond_registration_floor_v1(b.state.min_collateral_sompi(), p.palw_audit_2026_09_23_active_at(0));
-    assert_eq!(min, 4_000_000, "testnet-12 registers at the panel floor");
+    assert_eq!(min, b.state.min_collateral_sompi(), "testnet-12 registers at the producer floor");
     let delay = b.bond.withdrawal_delay_daa();
     let cadence_s = p.target_time_per_block() / 1_000;
     let cycle_s = delay * cadence_s;
@@ -430,17 +430,19 @@ fn register_at(collateral: u64, audit: bool) -> Result<PalwChainStateV2, PalwSta
     .map(|(s, _, _)| s)
 }
 
-/// **#12 (c): past the fence a bond registers at the panel floor, 4,000,000 sompi** — 3,999,999 is
-/// refused and 4,000,000 folds; below the fence the producer floor (400,000) still registers, as it
-/// always did.
-///
-/// Fails without the fix: 3,999,999 (and 400,000) register past the fence.
+/// **#12 (c), the user's decision at the t12 merge: a bond registers at the PRODUCER floor** —
+/// `min_collateral_sompi`, read from testnet-12's params (13,000 MSK), on both sides of the fence:
+/// one sompi under it is refused and the floor itself folds.
 #[test]
-fn the_registration_floor_is_the_panel_floor_past_the_fence() {
-    assert!(matches!(register_at(3_999_999, true), Err(PalwStateV2Error::CollateralBelowMinimum { got: 3_999_999, .. })));
-    assert!(matches!(register_at(400_000, true), Err(PalwStateV2Error::CollateralBelowMinimum { .. })));
-    let s = register_at(4_000_000, true).expect("the panel floor registers");
-    assert_eq!(s.bond(&bond_key(0x51)).map(|b| b.collateral), Some(4_000_000));
-    register_at(400_000, false).expect("below the fence the producer floor still registers");
-    assert!(matches!(register_at(399_999, false), Err(PalwStateV2Error::CollateralBelowMinimum { .. })));
+fn the_registration_floor_is_the_producer_floor() {
+    let p = t12();
+    let min = state_params(&p).min_collateral_sompi();
+    for audit in [true, false] {
+        assert!(
+            matches!(register_at(min - 1, audit), Err(PalwStateV2Error::CollateralBelowMinimum { got, .. }) if got == min - 1),
+            "one sompi under the producer floor is refused (audit {audit})"
+        );
+        let s = register_at(min, audit).expect("the producer floor registers");
+        assert_eq!(s.bond(&bond_key(0x51)).map(|b| b.collateral), Some(min));
+    }
 }

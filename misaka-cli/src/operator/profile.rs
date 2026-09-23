@@ -210,8 +210,8 @@ impl Profile {
         let (network, network_source) = match (global_network, file.mining.network.as_deref()) {
             (Some(n), _) => (n.to_string(), Source::Flag),
             (None, Some(n)) => (n.to_string(), Source::File),
-            // A mining command never guesses a network: the CLI's own default is testnet-10, which
-            // is not the network anyone mines. The running node is asked instead, below.
+            // A mining command asks the running node before it takes the CLI's default network
+            // (`node::DEFAULT_NETWORK`): a miner's node is the network it mines. Below.
             (None, None) => (String::new(), Source::Default),
         };
         let appdir_hint = ov.appdir.clone().or_else(|| file.advanced.appdir.clone());
@@ -239,8 +239,8 @@ impl Profile {
         let (network, network_source) = if network.is_empty() {
             match &kaspad {
                 Some((_, a)) => (a.network.clone(), Source::Process),
-                // The public network since the 2026-09-22 regenesis.
-                None => ("testnet-12".to_string(), Source::Default),
+                // The CLI's one default, the public network (testnet-12 since the 2026-09-22 regenesis).
+                None => (crate::node::DEFAULT_NETWORK.to_string(), Source::Default),
             }
         } else {
             (network, network_source)

@@ -131,6 +131,8 @@ fn registry_fold(p: &Params, b: &PalwConsensusParamsV2) -> kaspa_consensus_core:
         span_daa: lane.schedule_span_daa,
         genesis_works: works.clone(),
         grace_until_daa: PalwModelRegistryFoldV1::grace_until_v1(activation, lane.schedule_span_daa, &globals),
+        admission_audit_period_daa: p.palw_admission_audit_period_daa,
+        readiness_v2_active: p.palw_readiness_v2_at(0),
     }
 }
 
@@ -424,7 +426,7 @@ fn dos_repro_0_held_class_dense_materialization_defeats_defect_record() {
             let price = palw_fp_commitment_price_v1(
                 &s0,
                 &b.state,
-                PalwFpPriceInputsV1 { fp_derived_work_daa: None, canonical_work_daa: None, daa_score: 0 },
+                PalwFpPriceInputsV1 { fp_derived_work_daa: None, canonical_work_daa: None, daa_score: 0, receipt_rights: None },
                 &h(0xC1A1),
                 &id,
                 &[1u32; 4],

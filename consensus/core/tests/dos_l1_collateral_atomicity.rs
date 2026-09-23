@@ -219,8 +219,8 @@ fn probe_reserved(p: &PalwStateParamsV2, a: &PalwAdmissionParamsV2, class: (Hash
     s2.claim(&attempt_id_v2(&env.attempt)).expect("claim").reserved
 }
 
-/// The least collateral a `BondRegistered` folds at under `armed()` — the panel floor past the audit
-/// fence (2026-09-24 DoS audit #12 (c)), 4,000,000 sompi on t12.
+/// The least collateral a `BondRegistered` folds at under `armed()` — the registration floor
+/// (2026-09-24 DoS audit #12 (c)): the producer floor, by the user's decision.
 fn registration_floor(sp: &PalwStateParamsV2) -> u64 {
     kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(sp.min_collateral_sompi(), true)
 }
@@ -302,15 +302,22 @@ fn dos_l1_q1_merged_parallel_attempts_are_rechecked_against_the_running_reservat
     let p = t12();
     let b = bundle(&p);
     let sp = &b.state;
-    let cls = floor_row(&b);
-    let (class_id, leaves, target, _) = cls;
-    let r = probe_reserved(sp, &b.admission, cls, kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI);
+    let big = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
     let ratio = b.admission.max_exposure_ratio_permille();
+    // #12 (c): the least a bond can register at is the registration floor — testnet-12's 13,000 MSK
+    // producer floor since the regenesis params. A bond at it holds millions of floor claims, so
+    // the class's `slash_value_per_pwu` is scaled (the reservation is linear in it) until TWO
+    // claims fill a bond at the floor, which keeps the probe's premise and its size.
+    let floor = floor_row(&b);
+    let two_at = |r: u128| ((2 * r * 1000) / ratio as u128) as u64 + 1;
+    let scale = registration_floor(sp).div_ceil(two_at(probe_reserved(sp, &b.admission, floor, big))).max(1);
+    let cls = (floor.0, floor.1, floor.2, floor.3 * scale);
+    let (class_id, leaves, target, _) = cls;
+    let r = probe_reserved(sp, &b.admission, cls, big);
     // Collateral whose ceiling holds exactly TWO claims.
-    let collateral = ((2 * r * 1000) / ratio as u128) as u64 + 1;
-    // #12 (c): past the audit fence the least a bond can register at is the panel floor.
-    let collateral = collateral.max(registration_floor(sp));
+    let collateral = two_at(r).max(registration_floor(sp));
     let k = ceiling(collateral, ratio) / r;
+    assert!((2..=3).contains(&k), "the bond's ceiling holds two claims (or three at the floor's rounding), not {k}");
     let f = Fold { p: sp, admission: &b.admission, extras: armed() };
     let (s1, _, _) = f.go(
         &PalwChainStateV2::genesis(),
@@ -1282,6 +1289,8 @@ fn dos_l1_q7_a_free_prompt_commitment_on_a_non_admitting_t12_class_is_refused() 
         span_daa: span,
         genesis_works: [(floor.0, work), (held_id, work)].into_iter().collect(),
         grace_until_daa: 0,
+        admission_audit_period_daa: p.palw_admission_audit_period_daa,
+        readiness_v2_active: p.palw_readiness_v2_at(0),
     };
     let with_registry = |audit: bool| PalwTransitionExtrasV1 {
         audit_2026_09_23_active: audit,

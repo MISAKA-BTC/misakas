@@ -734,6 +734,14 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // 2026-08-13. One line here makes "is this binary the release?" answerable without a peer,
     // which is what a flag day needs.
     info!("Consensus params fingerprint: {} (network {})", config.params.consensus_params_id(), config.params.net);
+    // `--palw-chain-classes`, resolved once: the operator's word, else the network's default (ON where
+    // the permissionless model registry is in force from genesis — testnet-12 — OFF elsewhere).
+    let palw_chain_classes = args.palw_chain_classes_for(&config.params);
+    info!(
+        "PALW chain-registered classes (--palw-chain-classes): {} ({})",
+        if palw_chain_classes { "armed" } else { "off" },
+        if args.palw_chain_classes.is_some() { "set by the operator" } else { "this network's default" }
+    );
     // **…and the heights, printed as heights.** The fingerprint above writes each scheduled fence's
     // height — the 1900 fences and the 2150 ladder each moved testnet-11's pin — but until
     // 2026-09-11 `consensus_params_id` left ADR-0095's `palw_model_benefits` out, so on 2026-09-09
@@ -1420,7 +1428,7 @@ Do you confirm? (y/n)";
                         pay_address: pay_address.clone(),
                         address_prefix: config.prefix(),
                         network_id: config.params.net.to_string(),
-                        chain_classes: args.palw_chain_classes,
+                        chain_classes: palw_chain_classes,
                         genesis_hash: config.genesis.hash,
                         // Beside the per-network data dir: the material behind a published attempt
                         // is a data-availability obligation for `trace_retention_daa`, so it has to
@@ -1620,7 +1628,8 @@ Do you confirm? (y/n)";
             notify_service.notifier(),
             index_service.as_ref().map(|x| x.notifier()),
             mining_manager,
-            flow_context,
+            // Cloned, not moved: the lane watch registered below reads the same runtime.
+            flow_context.clone(),
             subscription_context,
             index_service.as_ref().map(|x| x.utxoindex().unwrap()),
             config.clone(),
@@ -1721,7 +1730,7 @@ Do you confirm? (y/n)";
                     crate::palw_panel::PalwPanelConfig {
                         telemetry: palw_telemetry.clone(),
                         register_class: args.palw_register_class.clone(),
-                        chain_classes: args.palw_chain_classes,
+                        chain_classes: palw_chain_classes,
                         register_bond: args.palw_register_bond,
                         bond_collateral: args.palw_bond_collateral,
                         pay_address: palw_producer_pay_address.clone(),
@@ -1861,6 +1870,12 @@ Do you confirm? (y/n)";
     // panel seat, pool slot, a node restarted without either, a node still syncing. A producer's
     // captures outlive the process that wrote them, and a node an operator joins with has a small SSD
     // (see `palw_retention`).
+    // **The lane watch runs on every ConsensusV2 node too** (the route-matrix audit's #1): a chain
+    // that only ticks its clock looks alive by every block count, so the lanes are counted where
+    // every operator — producer, seat, seeder host, explorer backend — reads the node.
+    if palw_consensus_v2 {
+        async_runtime.register(Arc::new(crate::palw_lane_watch::PalwLaneWatch::new(consensus_manager.clone(), flow_context.clone())));
+    }
     if palw_consensus_v2 {
         async_runtime.register(Arc::new(crate::palw_retention::PalwRetentionJanitor::new(
             consensus_manager.clone(),

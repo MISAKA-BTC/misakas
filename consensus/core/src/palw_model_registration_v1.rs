@@ -24,6 +24,52 @@ pub fn palw_registration_object_id_v1(bytes: &[u8]) -> Hash64 {
     kaspa_hashes::blake2b_512_keyed(b"PALW_MODEL_REG_V1", bytes)
 }
 
+/// **The class a lifecycle carrier registers**: `(class_id, artifact_root)` exactly when `tx` rides
+/// the lifecycle subnetwork (0x4b) at the wire version the fold reads and its one object is a
+/// `ClassRegistered`; `None` for any other transaction.
+///
+/// Read off the carrier's own bytes, the way the fold reads them
+/// (`palw_lifecycle_objects_from_accepted_txs_v2`), so a registration status and the transition
+/// cannot disagree about what a transaction carried.
+pub fn palw_registration_carrier_class_v1(tx: &crate::tx::Transaction) -> Option<(Hash64, Hash64)> {
+    use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return None;
+    }
+    let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
+    if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
+        return None;
+    }
+    match payload.object {
+        PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => Some((class_id, artifact_root)),
+        _ => None,
+    }
+}
+
+/// **Which class-table row a carrier wrote — inclusion read off the chain's own record.**
+///
+/// The class table stamps every row with the DAA of the chain block whose fold wrote it
+/// (`registered_daa`), and that chain block's acceptance data records which transactions it
+/// accepted. A carrier wrote a row exactly when the chain block at the row's DAA accepted it and
+/// the object it carries is that row's `ClassRegistered` (same class, same root). `carrier` is the
+/// transaction as the chain block at `accepting_daa` accepted it — the caller reads the acceptance
+/// record for it, never the mempool.
+///
+/// `getPalwModelRegistrationStatus` had no such door (testnet-12, 2026-09-23). It found a row only
+/// by class id, and about a carrier it asked the mempool alone — and a carrier leaves the mempool
+/// when it is MINED as well as when it is dropped. So `misaka model registration <txid>`, which
+/// sends the carrier id in the class-id slot, read `accepted` while the carrier waited and then
+/// `submitted` / `REGISTRATION_NOT_INCLUDED` once two blocks had carried it and its Candidate row
+/// stood in the registry.
+pub fn palw_registration_row_written_by_v1<'a>(
+    carrier: &crate::tx::Transaction,
+    accepting_daa: u64,
+    rows: &'a [crate::palw_state_v2::PalwClassRowV2],
+) -> Option<&'a crate::palw_state_v2::PalwClassRowV2> {
+    let (class_id, artifact_root) = palw_registration_carrier_class_v1(carrier)?;
+    rows.iter().find(|row| row.class_id == class_id && row.artifact_root == artifact_root && row.registered_daa == accepting_daa)
+}
+
 /// Where the registration currently sits. Later stages imply earlier ones, except that
 /// `Accepted` can fail without ever becoming `Included`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -263,11 +309,12 @@ pub fn palw_model_preflight_v1(
         false,
         shape.token_lift,
         shape.fused_dissectable,
-        params.palw_canonical_work_at(daa_score),
+        // F4 and C-4 from the shape, the one reading every preflight shares (route-matrix #6).
+        shape.legal_job_bound,
         shape.held,
         shape.kimi_family,
         // 2026-09-23 audit C-4: the geometry a non-fused class is priced from must fit its query row.
-        params.palw_audit_2026_09_23_active_at(daa_score),
+        shape.attention_geometry_bound,
     );
 
     let mut reject_code = String::new();
@@ -342,5 +389,101 @@ mod tests {
         assert!(PalwModelRegistrationStageV1::Submitted < PalwModelRegistrationStageV1::Accepted);
         assert!(PalwModelRegistrationStageV1::Accepted < PalwModelRegistrationStageV1::Included);
         assert!(PalwModelRegistrationStageV1::Included < PalwModelRegistrationStageV1::Folded);
+    }
+
+    fn class_registered(class_id: Hash64, artifact_root: Hash64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root,
+            slash_value_per_pwu: 1,
+            pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(500),
+            initial_target: u128::MAX,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: None,
+        }
+    }
+
+    fn carrier_on(subnetwork: crate::subnets::SubnetworkId, payload: Vec<u8>) -> crate::tx::Transaction {
+        crate::tx::Transaction::new(
+            0,
+            Vec::new(),
+            vec![crate::tx::TransactionOutput::new(9_996_000_000, crate::tx::ScriptPublicKey::from_vec(0, vec![0x51]))],
+            0,
+            subnetwork,
+            0,
+            payload,
+        )
+    }
+
+    fn carrier(object: PalwConsensusObjectV2) -> crate::tx::Transaction {
+        let payload = borsh::to_vec(&crate::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+            version: crate::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+            object,
+        })
+        .expect("the lifecycle payload serializes");
+        carrier_on(crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, payload)
+    }
+
+    fn row(class_id: Hash64, artifact_root: Hash64, registered_daa: u64) -> crate::palw_state_v2::PalwClassRowV2 {
+        crate::palw_state_v2::PalwClassRowV2 {
+            class_id,
+            status: "Registered".to_string(),
+            share_permille: Some(0),
+            budget_blocks: 0,
+            canonical_leaves: 0,
+            is_base_class: false,
+            artifact_root,
+            fp_certified: false,
+            held: false,
+            registered_daa,
+        }
+    }
+
+    /// **An included registration reads as included, by the chain's own record** (testnet-12,
+    /// 2026-09-23). The carrier id is not a class id, so the class column alone can never answer a
+    /// question asked by carrier — which is how `model registration <txid>` read
+    /// `REGISTRATION_NOT_INCLUDED` for a registration two blocks had carried. The row the carrier
+    /// wrote is found through the DAA the row itself records.
+    #[test]
+    fn a_carrier_resolves_to_the_row_it_wrote() {
+        let (class, root) = (Hash64::from_u64_word(0xC1A5), Hash64::from_u64_word(0x2007));
+        let rows = vec![row(Hash64::from_u64_word(1), Hash64::from_u64_word(2), 0), row(class, root, 1_234)];
+        let tx = carrier(class_registered(class, root));
+
+        assert!(rows.iter().all(|r| r.class_id != tx.id()), "the defect: a carrier id finds no row in the class column");
+        assert_eq!(palw_registration_carrier_class_v1(&tx), Some((class, root)));
+        let written = palw_registration_row_written_by_v1(&tx, 1_234, &rows).expect("accepted at the row's DAA, it wrote the row");
+        assert_eq!(written.class_id, class);
+
+        assert!(palw_registration_row_written_by_v1(&tx, 1_235, &rows).is_none(), "accepted elsewhere, it did not write this row");
+        let other_root = carrier(class_registered(class, Hash64::from_u64_word(9)));
+        assert!(
+            palw_registration_row_written_by_v1(&other_root, 1_234, &rows).is_none(),
+            "a rival registration does not claim the row"
+        );
+    }
+
+    /// Only a lifecycle carrier at the fold's wire version carrying a `ClassRegistered` names a class.
+    #[test]
+    fn only_a_class_registration_carrier_names_a_class() {
+        let object = class_registered(Hash64::from_u64_word(3), Hash64::from_u64_word(4));
+        let payload = borsh::to_vec(&crate::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+            version: crate::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+            object: object.clone(),
+        })
+        .unwrap();
+        assert!(palw_registration_carrier_class_v1(&carrier_on(crate::subnets::SUBNETWORK_ID_NATIVE, payload)).is_none());
+        let wrong_version = borsh::to_vec(&crate::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+            version: crate::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2 + 1,
+            object,
+        })
+        .unwrap();
+        assert!(
+            palw_registration_carrier_class_v1(&carrier_on(crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, wrong_version)).is_none()
+        );
+        assert!(
+            palw_registration_carrier_class_v1(&carrier_on(crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, vec![1, 2, 3])).is_none()
+        );
     }
 }

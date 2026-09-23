@@ -87,6 +87,8 @@ pub struct HandleRelayInvsFlow {
     ibd_sender: JobSender<Block>,
     /// Header format determined by protocol version
     header_format: HeaderFormat,
+    /// H2 (the 2026-09-24 heartbeat audit): how many more heartbeats this peer may hand over.
+    heartbeat_budget: crate::palw_heartbeat_relay::PalwHeartbeatInvBudgetV1,
 }
 
 #[async_trait::async_trait]
@@ -114,7 +116,15 @@ impl HandleRelayInvsFlow {
         ibd_sender: JobSender<Block>,
         header_format: HeaderFormat,
     ) -> Self {
-        Self { ctx, router, invs_route: TwoWayIncomingRoute::new(invs_route), msg_route, ibd_sender, header_format }
+        Self {
+            ctx,
+            router,
+            invs_route: TwoWayIncomingRoute::new(invs_route),
+            msg_route,
+            ibd_sender,
+            header_format,
+            heartbeat_budget: crate::palw_heartbeat_relay::PalwHeartbeatInvBudgetV1::new(kaspa_core::time::unix_now()),
+        }
     }
 
     async fn start_impl(&mut self) -> Result<(), ProtocolError> {
@@ -253,6 +263,24 @@ impl HandleRelayInvsFlow {
                 return Err(ProtocolError::OtherOwned(format!("sent header of {} where expected block with body", block.hash())));
             }
 
+            // **H2: a peer's heartbeats are budgeted.** Consensus admits any number of valid beats
+            // in an open slot (a beat is priced by its hash; the width rule bounds a mergeset, not
+            // the DAG), so the transport bounds what one peer can make this node download and
+            // validate. An orphan root is exempt: it is a beat some descendant needs, and refusing
+            // it would strand the descendant. A skipped beat is not an offence — it is valid, it
+            // is simply not this peer's to push past the allowance.
+            if !inv.is_orphan_root
+                && block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
+                && self.ctx.palw_heartbeat_relay_governs(block.header.daa_score)
+                && !self.heartbeat_budget.take(kaspa_core::time::unix_now())
+            {
+                debug!(
+                    "Relay heartbeat {} from {} is over the peer's heartbeat allowance — not processed (a descendant brings it back as an orphan root if the chain needs it)",
+                    inv.hash, self.router
+                );
+                continue;
+            }
+
             let blue_work_threshold = session.async_get_virtual_merge_depth_blue_work_threshold().await;
             // Since `blue_work` respects topology, the negation of this condition means that the relay
             // block is not in the future of virtual's merge depth root, and thus cannot be merged unless
@@ -315,8 +343,9 @@ impl HandleRelayInvsFlow {
             // As a policy, we only relay blocks who stand a chance to enter past(virtual).
             // The only mining rule which permanently excludes a block is the merge depth bound
             // (as opposed to "max parents" and "mergeset size limit" rules). ADR-0125 §7.3: and a
-            // round block only when it is the first this node holds for its permit.
-            let broadcast = broadcast && self.ctx.palw_round_relay_admits(&session, &block).await;
+            // round block only when it is the first this node holds for its permit; H2: a
+            // heartbeat only when it is the first for its slot.
+            let broadcast = broadcast && self.ctx.palw_lane_relay_admits(&session, &block).await;
             if broadcast {
                 let msgs = ancestor_batch
                     .blocks

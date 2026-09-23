@@ -17,6 +17,19 @@ use kaspa_wrpc_client::{
 
 use crate::{CliError, CliResult, OutputFormat, exit};
 
+/// **The network every `misaka` command falls back to when none is named** — the public network,
+/// testnet-12 since the 2026-09-22 regenesis. The ONE default: the global `--network` resolution
+/// ([`resolve_network`]), the operator profile's and the setup wizard's fallbacks all read it, so a
+/// `misaka bond` / `wallet` / `key` command and a `misaka mining` command can no longer land on two
+/// different networks from the same shell.
+pub(crate) const DEFAULT_NETWORK: &str = "testnet-12";
+
+/// The global network: `--network` (clap fills it from `MISAKA_NETWORK` when the flag is absent),
+/// else `~/.misaka/config.toml`'s `network_id`, else [`DEFAULT_NETWORK`].
+pub(crate) fn resolve_network(flag_or_env: Option<String>, config_file: Option<String>) -> String {
+    flag_or_env.or(config_file).unwrap_or_else(|| DEFAULT_NETWORK.to_string())
+}
+
 /// Shared CLI context (the resolved global flags).
 pub struct Ctx {
     pub output: OutputFormat,

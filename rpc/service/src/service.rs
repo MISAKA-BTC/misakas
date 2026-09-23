@@ -303,6 +303,80 @@ fn palw_class_context_row(
     }
 }
 
+/// **`getPalwModelMarket`'s answer, from the tip's read of the line** — the row (or the unopened
+/// market synthesised for a line that has none), whether a row exists, and the class's status.
+///
+/// **`opened` is "this line is a market", not "this line has a row"** (the 2026-09-23 Position
+/// route matrix, P10). Since ADR-0094 a seed's first instalment writes a row that is not yet a
+/// market — nothing in the curve, no price, every buy refused (`ModelMarketMissing`) — and this
+/// answer said `opened: true` for it, so a reader that trusted the flag would offer a buy the fold
+/// refuses. The flag is now the fold's own predicate, `PalwModelMarketV1::is_open`. What a row
+/// does mean stays where it is read: a pledged line still names its first payer (ADR-0094
+/// Decision 3), and `seed_pledged_sompi` says how far it has come. The field and its version are
+/// unchanged, so every client that reads `opened` from the wire — the CLI's JSON, any RPC consumer
+/// — reads the corrected value. (The options site derives "open" from the reserve instead and
+/// does not read this flag.)
+///
+/// **`gate` is the fold's P-B3 market gate** (`ConsensusApi::palw_model_market_gate_v1`) at the
+/// virtual's next block: the class's registry lifecycle and, where the fold would refuse a seed or
+/// a buy, its refusal. A refusal is also OR'd into `closed_to_buys`, so a client that reads only
+/// that flag — an older CLI, the options site — is not offered a buy the fold refuses.
+fn rpc_palw_model_market(
+    line_id: kaspa_hashes::Hash64,
+    read: Option<(
+        kaspa_consensus_core::palw_model_market_v1::PalwModelMarketV1,
+        bool,
+        kaspa_consensus_core::palw_state_v2::PalwClassStatusV2,
+    )>,
+    gate: kaspa_consensus_core::api::PalwModelMarketGateReadV1,
+    schedule: kaspa_consensus_core::palw_model_market_v1::PalwModelFeesV1,
+    seed_min_sompi: u64,
+    leg_v2_activation_daa: u64,
+) -> GetPalwModelMarketResponse {
+    use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
+    let Some((market, row, status)) = read else {
+        return GetPalwModelMarketResponse {
+            line_id: line_id.to_string(),
+            seed_min_sompi,
+            burn_permille: schedule.burn_permille,
+            leg_permille: schedule.leg_permille,
+            leg_v2_activation_daa,
+            ..Default::default()
+        };
+    };
+    let market_refusal = gate.refusal.unwrap_or_default();
+    GetPalwModelMarketResponse {
+        found: true,
+        line_id: line_id.to_string(),
+        opened: row && market.is_open(),
+        opened_daa: market.opened_daa,
+        msk_reserve: market.msk_reserve,
+        position_units: market.position_units,
+        sold_units: market.sold_units,
+        burned_sompi: market.burned_sompi,
+        registrant_paid_sompi: market.registrant_paid_sompi,
+        closed_to_buys: market.closed_to_buys
+            || !matches!(status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active)
+            || !market_refusal.is_empty(),
+        price_sompi_per_position: market.price_sompi_per_position_v1(),
+        supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
+        virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
+        class_status: format!("{status:?}"),
+        contributor_paid_sompi: market.contributor_paid_sompi,
+        seed_sompi: market.seed_sompi,
+        seeded_by: if row { market.seeded_by.to_string() } else { String::new() },
+        seed_min_sompi,
+        seed_pledged_sompi: market.seed_pledged_sompi,
+        buyback_sompi: market.buyback_sompi,
+        retired_units: market.retired_units,
+        burn_permille: schedule.burn_permille,
+        leg_permille: schedule.leg_permille,
+        leg_v2_activation_daa,
+        class_lifecycle: gate.lifecycle,
+        market_refusal,
+    }
+}
+
 /// Parse a "txid_hex:index" stake-bond outpoint (txid = 64-byte Hash64) for the
 /// kaspa-pq Phase 12 (ADR-0011) validator RPCs. A malformed value is a client error.
 fn parse_bond_outpoint(s: &str) -> RpcResult<kaspa_consensus_core::tx::TransactionOutpoint> {
@@ -470,7 +544,20 @@ impl RpcCoreService {
         Ok((report, class_row))
     }
 
-    async fn fill_registration_from_tx(&self, registration: &mut RpcPalwModelRegistration, txid: &str) -> RpcResult<()> {
+    /// The carrier's MEMPOOL half of a registration's status — and only that half.
+    ///
+    /// **A carrier leaves the mempool when it is mined as well as when it is dropped**, so "not in
+    /// my mempool" says nothing about a block. `included` / `folded` are the chain's record, which
+    /// the caller has already read (the row the registration names, or the row its carrier wrote);
+    /// `inclusion_known` says that read was complete. Only then is a carrier that is neither in the
+    /// mempool nor behind a row `REGISTRATION_NOT_INCLUDED` — an incomplete read (acceptance data
+    /// past the retention root, or no class to look under) reports no verdict rather than a guess.
+    async fn fill_registration_from_tx(
+        &self,
+        registration: &mut RpcPalwModelRegistration,
+        txid: &str,
+        inclusion_known: bool,
+    ) -> RpcResult<()> {
         let txid = parse_hash64(txid, "transaction id")?;
         registration.transaction_id = txid.to_string();
         registration.submitted = true;
@@ -478,7 +565,7 @@ impl RpcCoreService {
         if in_mempool {
             registration.accepted = true;
             registration.mempool_accepted = true;
-        } else if !registration.included && !registration.folded {
+        } else if inclusion_known && !registration.included && !registration.folded {
             registration.reject_code = kaspa_consensus_core::palw_model_registration_v1::PalwModelRegistrationCodeV1::RegistrationNotIncluded
                 .code()
                 .to_string();
@@ -487,6 +574,42 @@ impl RpcCoreService {
             }
         }
         Ok(())
+    }
+
+    /// **The class row a registration carrier wrote, read off the chain's own record** — see
+    /// `palw_registration_row_written_by_v1`. Every row a post-genesis carrier could have written
+    /// is stamped with the DAA of the chain block that folded it; that block's acceptance data is
+    /// asked for exactly this transaction, and the carrier is decoded the way the fold decodes it.
+    ///
+    /// Returns the row, if any, and whether the read was complete: `false` when some row's
+    /// accepting block could not be read (acceptance data pruned past the retention root), in which
+    /// case an absence is not established and the caller must not report one.
+    async fn palw_registration_row_for_carrier(
+        &self,
+        session: &ConsensusSessionOwned,
+        rows: &[kaspa_consensus_core::palw_state_v2::PalwClassRowV2],
+        carrier: kaspa_hashes::Hash64,
+    ) -> (Option<kaspa_consensus_core::palw_state_v2::PalwClassRowV2>, bool) {
+        // Genesis rows (DAA 0) were written by no carrier.
+        let mut daas: Vec<u64> = rows.iter().map(|row| row.registered_daa).filter(|daa| *daa > 0).collect();
+        daas.sort_unstable();
+        daas.dedup();
+        let mut complete = true;
+        for daa in daas {
+            match session.async_get_transactions_by_accepting_daa_score(daa, Some(vec![carrier]), TransactionType::Transaction).await {
+                Ok(TransactionQueryResult::Transaction(txs)) => {
+                    for tx in txs.iter().filter(|tx| tx.id() == carrier) {
+                        if let Some(row) =
+                            kaspa_consensus_core::palw_model_registration_v1::palw_registration_row_written_by_v1(tx, daa, rows)
+                        {
+                            return (Some(row.clone()), true);
+                        }
+                    }
+                }
+                Ok(TransactionQueryResult::SignableTransaction(_)) | Err(_) => complete = false,
+            }
+        }
+        (None, complete)
     }
 
     pub const IDENT: &'static str = "rpc-core-service";
@@ -1196,7 +1319,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetPalwModelMarketRequest,
     ) -> RpcResult<GetPalwModelMarketResponse> {
-        use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1, PALW_MODEL_SUPPLY_UNITS_V1};
         let line_id = parse_hash64(&request.line_id, "line id")?;
         let session = self.consensus_manager.consensus().unguarded_session();
         // ADR-0114: the schedule the fold would settle a move under at the virtual's DAA — served
@@ -1207,42 +1329,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // ADR-0120: the least seed the fold would open this pair at, at the virtual's DAA — served with
         // an unseeded line too, which is the one a seeder is reading it for.
         let seed_min_sompi = params.palw_model_seed_min_sompi_at(session.get_virtual_daa_score());
-        let Some((market, opened, status)) = session.palw_model_market_v1(line_id) else {
-            return Ok(GetPalwModelMarketResponse {
-                line_id: line_id.to_string(),
-                seed_min_sompi,
-                burn_permille: schedule.burn_permille,
-                leg_permille: schedule.leg_permille,
-                leg_v2_activation_daa,
-                ..Default::default()
-            });
-        };
-        Ok(GetPalwModelMarketResponse {
-            found: true,
-            line_id: line_id.to_string(),
-            opened,
-            opened_daa: market.opened_daa,
-            msk_reserve: market.msk_reserve,
-            position_units: market.position_units,
-            sold_units: market.sold_units,
-            burned_sompi: market.burned_sompi,
-            registrant_paid_sompi: market.registrant_paid_sompi,
-            closed_to_buys: market.closed_to_buys || !matches!(status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Active),
-            price_sompi_per_position: market.price_sompi_per_position_v1(),
-            supply_units: PALW_MODEL_SUPPLY_UNITS_V1,
-            virtual_sompi: PALW_MODEL_MARKET_VIRTUAL_SOMPI_V1,
-            class_status: format!("{status:?}"),
-            contributor_paid_sompi: market.contributor_paid_sompi,
-            seed_sompi: market.seed_sompi,
-            seeded_by: if opened { market.seeded_by.to_string() } else { String::new() },
-            seed_min_sompi,
-            seed_pledged_sompi: market.seed_pledged_sompi,
-            buyback_sompi: market.buyback_sompi,
-            retired_units: market.retired_units,
-            burn_permille: schedule.burn_permille,
-            leg_permille: schedule.leg_permille,
-            leg_v2_activation_daa,
-        })
+        let read = session.palw_model_market_v1(line_id);
+        // **The 2026-09-23 Position route matrix, P-B3: the fold's own market gate**, asked at the
+        // virtual's next block — only for a line the chain holds.
+        let gate = if read.is_some() { session.palw_model_market_gate_v1(line_id).unwrap_or_default() } else { Default::default() };
+        Ok(rpc_palw_model_market(line_id, read, gate, schedule, seed_min_sompi, leg_v2_activation_daa))
     }
 
     async fn get_palw_model_line_call(
@@ -1361,12 +1452,27 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
     ) -> RpcResult<GetPalwModelPositionsResponse> {
         let holder = parse_hash64(&request.holder, "holder")?;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let positions = session
-            .palw_model_positions_v1(holder)
-            .into_iter()
-            .map(|(line_id, units)| RpcPalwModelPosition { line_id: line_id.to_string(), units })
+        // The 2026-09-23 Position route matrix, P-B2: the chain's tenure and tier per row, read at
+        // one tip and stated with it — the membership a provider serves on, not only the units.
+        let read = session.palw_model_positions_read_v1(holder);
+        let positions = read
+            .rows
+            .iter()
+            .map(|r| RpcPalwModelPosition {
+                line_id: r.line_id.to_string(),
+                units: r.units,
+                holding_since_daa: r.holding_since_daa,
+                tenure_daa: r.tenure_daa,
+                tier_index: r.tier.as_ref().map(|(index, _)| *index as u32),
+                tier: r.tier.as_ref().map(|(_, tier)| rpc_palw_model_benefit_tier(tier)),
+            })
             .collect();
-        Ok(GetPalwModelPositionsResponse { holder: holder.to_string(), positions })
+        Ok(GetPalwModelPositionsResponse {
+            holder: holder.to_string(),
+            positions,
+            tip_daa: read.tip_daa,
+            tip_hash: read.tip_hash.map(|hash| hash.to_string()).unwrap_or_default(),
+        })
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1440,6 +1546,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     quanta_spent: row.quanta_spent,
                     work_leaves: row.work_leaves,
                     open_courts: row.open_courts as u32,
+                    exec_stage: row.exec_lane.as_ref().map(|lane| lane.stage.to_string()).unwrap_or_default(),
+                    exec_credit: row.exec_lane.as_ref().map(|lane| lane.credit).unwrap_or(0),
+                    exec_span: row.exec_lane.as_ref().map(|lane| lane.span),
+                    exec_tickets: row.exec_lane.as_ref().map(|lane| lane.tickets).unwrap_or(0),
+                    exec_tickets_spent: row.exec_lane.as_ref().map(|lane| lane.tickets_spent).unwrap_or(0),
+                    exec_first_round: row.exec_lane.as_ref().and_then(|lane| lane.first_round),
+                    exec_last_round: row.exec_lane.as_ref().and_then(|lane| lane.last_round),
                 }
             })
             .collect();
@@ -1525,6 +1638,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             memory_available_bytes: rt.memory_available_bytes,
             memory_bounded: rt.memory_bounded,
             memory_holders: rt.memory_holders,
+            lane_window_blocks: rt.lane_window_blocks,
+            lane_work_blocks: rt.lane_work_blocks,
+            lane_heartbeat_blocks: rt.lane_heartbeat_blocks,
+            lane_last_work_daa: rt.lane_last_work_daa,
+            lane_mix: rt.lane_mix,
+            lane_alarm: rt.lane_alarm,
         })
     }
 
@@ -1639,10 +1758,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .schedule
             .as_ref()
             .map(|schedule| {
-                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v1(
+                kaspa_consensus_core::palw_execution_lane_v1::palw_execution_permits_v2(
                     schedule,
                     status.view.round + 1,
                     status.view.width,
+                    status.tickets_only,
                 )
                 .len() as u16
             })
@@ -1832,7 +1952,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             utilization_permille: globals.map(|g| g.utilization_permille).unwrap_or(0),
             probation_claims: globals.map(|g| g.probation_claims).unwrap_or(0),
             stable_epochs: globals.map(|g| g.stable_epochs).unwrap_or(0),
-            readiness_probe_max_age_spans: globals.map(|g| g.readiness_probe_max_age_spans).unwrap_or(0),
+            // The age a row is JUDGED by now (the readiness-age sweep, 2026-09-24): readiness V2's
+            // eight spans past its fence, the globals' thirty before it — what `readySeatsNow`
+            // counts by, not the globals' V1 constant a reader would otherwise print.
+            readiness_probe_max_age_spans: (read.readiness_max_age_daa / read.span_daa.max(1)).min(u32::MAX as u64) as u32,
             readiness_collateral_multiple: globals.map(|g| g.readiness_collateral_multiple).unwrap_or(0),
             classes,
             readiness,
@@ -2031,7 +2154,10 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 priced_in_compute: price.priced_in_compute,
                 quanta: price.quanta,
                 pwu: price.pwu,
-                reserved_sompi: price.reserved.to_string(),
+                // The whole reservation the ledger will hold — the weight and, past the audit fence, a
+                // compute-priced claim's receipt rights (#5) — because a gateway checks exactly this
+                // against `bond_room_sompi`.
+                reserved_sompi: price.reserved.saturating_add(price.rights_reserved).to_string(),
                 bond_room_sompi,
             },
             Err(refusal) => GetPalwFreePromptPriceResponse {
@@ -2281,7 +2407,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             }
         }
         if !request.transaction_id.trim().is_empty() {
-            self.fill_registration_from_tx(&mut registration, &request.transaction_id).await?;
+            // The object names the class, so its row (or its absence) is the chain's whole answer;
+            // with no object there is no class to look under, and no absence to report.
+            self.fill_registration_from_tx(&mut registration, &request.transaction_id, object.is_some()).await?;
         }
         finalize_registration_state(&mut registration);
         Ok(SubmitPalwModelRegistrationResponse { available: true, tip_daa, registration, checks })
@@ -2295,6 +2423,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwModelRegistrationStatusResponse::default());
         }
+        // Everything the caller sent is parsed before a byte of chain state is read (M-5).
+        let requested_class =
+            if request.class_id.trim().is_empty() { None } else { Some(parse_class_id_or_alias(&request.class_id)?) };
+        let carrier = if request.transaction_id.trim().is_empty() {
+            None
+        } else {
+            Some(parse_hash64(&request.transaction_id, "transaction id")?)
+        };
         let session = self.consensus_manager.consensus().unguarded_session();
         let tip_daa = session.get_virtual_daa_score();
         let mut registration = RpcPalwModelRegistration {
@@ -2304,13 +2440,29 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             constructed: !request.object_id.trim().is_empty(),
             ..Default::default()
         };
-        if !request.class_id.trim().is_empty() {
-            let class_id = parse_class_id_or_alias(&request.class_id)?;
+        if let Some(class_id) = requested_class {
             registration.class_id = class_id.to_string();
-            let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
-            if let Some(row) = rows.into_iter().find(|r| r.class_id == class_id) {
-                fill_registration_from_class(&mut registration, &row);
-            }
+        }
+        // **Inclusion is the chain's record, reached by either door.** A class id names its row. A
+        // carrier id names the row it WROTE — found through the DAA that row records and the
+        // acceptance data of the chain block at it — because a carrier id is not a class id, and
+        // `misaka model registration <txid>` sends it in the class slot. Only the class door
+        // existed, so an included carrier found no row, fell through to the mempool, and read
+        // REGISTRATION_NOT_INCLUDED once it had been mined (testnet-12, 2026-09-23).
+        let rows = session.clone().spawn_blocking(|c| c.palw_v2_class_table()).await;
+        let mut row = requested_class.and_then(|id| rows.iter().find(|r| r.class_id == id).cloned());
+        let mut inclusion_known = requested_class.is_some();
+        if row.is_none()
+            && let Some(txid) = carrier
+        {
+            let (written, complete) = self.palw_registration_row_for_carrier(&session, &rows, txid).await;
+            row = written;
+            inclusion_known = complete;
+        }
+        if let Some(row) = &row {
+            fill_registration_from_class(&mut registration, row);
+        }
+        if let Some(class_id) = row.as_ref().map(|r| r.class_id).or(requested_class) {
             if let Some(read) = session.clone().spawn_blocking(|c| c.palw_model_registry_v1()).await {
                 if let Some(class) = read.classes.iter().find(|c| c.class_id == class_id) {
                     registration.registry_state = class.row.as_ref().map(|r| format!("{:?}", r.state)).unwrap_or_else(|| "Legacy".into());
@@ -2324,8 +2476,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 }
             }
         }
-        if !request.transaction_id.trim().is_empty() {
-            self.fill_registration_from_tx(&mut registration, &request.transaction_id).await?;
+        if carrier.is_some() {
+            self.fill_registration_from_tx(&mut registration, &request.transaction_id, inclusion_known).await?;
         }
         finalize_registration_state(&mut registration);
         let found = registration.folded || registration.included || registration.accepted || registration.submitted || registration.constructed;
@@ -2417,7 +2569,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(GetPalwModelReadinessResponse { available: true, ..Default::default() });
         };
         let class = read.classes.iter().find(|c| c.class_id == class_id);
-        let max_age = read.globals.map(|g| g.readiness_probe_max_age_spans as u64).unwrap_or(0).saturating_mul(read.span_daa.max(1));
+        // A proof expires one readiness age after it was dated — the age the registry judges by
+        // (the readiness-age sweep: V2's eight spans past its fence, not the V1 thirty).
+        let max_age = read.readiness_max_age_daa;
         let seats = read
             .readiness
             .iter()
@@ -2704,7 +2858,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             "no bond was named in this request — readiness is a property of a bond".to_string()
         } else {
             let key = facts.bond.as_ref().map(|b| b.registered_pubkey.as_slice()).unwrap_or(&[]);
-            facts.ready_to_produce(key).err().unwrap_or_default().to_string()
+            match (facts.ready_to_produce(key), facts.class_admission_refusal.as_deref()) {
+                // The sentence first — the CLI matches on it — then the gate's own words.
+                (Err(why), Some(detail)) if why == kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2 => {
+                    format!("{why} [{detail}]")
+                }
+                (verdict, _) => verdict.err().unwrap_or_default().to_string(),
+            }
         };
         Ok(response)
     }
@@ -4262,29 +4422,39 @@ fn local_hold_or_chain(
     seat.and_then(|s| s.hold).map(rpc_hold)
 }
 
+/// ADR-0095 §4.1: one tier for the wire — the line's card and a holder's own row
+/// (`getPalwModelPositions`, the 2026-09-23 Position route matrix, P-B2) spell it the same way.
+fn rpc_palw_model_benefit_tier(
+    t: &kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1,
+) -> kaspa_rpc_core::RpcPalwModelBenefitTier {
+    kaspa_rpc_core::RpcPalwModelBenefitTier {
+        min_units: t.min_units,
+        grants: t.grants,
+        grant_names: kaspa_consensus_core::palw_model_benefits_v1::grant::names_of(t.grants).into_iter().map(String::from).collect(),
+        lead_daa: t.lead_daa,
+        min_hold_daa: t.min_hold_daa,
+        note: String::from_utf8_lossy(&t.note).to_string(),
+    }
+}
+
 /// ADR-0088 Decision 12: one line's row for the wire.
 /// ADR-0095: the membership as a card — the tiers governing now, the weakening waiting out its
 /// notice, and why the promise is silent when it is.
 fn rpc_palw_model_benefits(read: &kaspa_consensus_core::api::PalwModelBenefitsReadV1) -> kaspa_rpc_core::RpcPalwModelBenefits {
-    use kaspa_consensus_core::palw_model_benefits_v1::{PalwModelBenefitLapseV1, grant};
-    fn tier(t: &kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitTierV1) -> kaspa_rpc_core::RpcPalwModelBenefitTier {
-        kaspa_rpc_core::RpcPalwModelBenefitTier {
-            min_units: t.min_units,
-            grants: t.grants,
-            grant_names: grant::names_of(t.grants).into_iter().map(String::from).collect(),
-            lead_daa: t.lead_daa,
-            min_hold_daa: t.min_hold_daa,
-            note: String::from_utf8_lossy(&t.note).to_string(),
-        }
-    }
+    use kaspa_consensus_core::palw_model_benefits_v1::PalwModelBenefitLapseV1;
     let (lapsed, lapse_daa) = match read.lapse {
         Some(PalwModelBenefitLapseV1::Expired { at_daa }) => (Some("expired".to_string()), Some(at_daa)),
         Some(PalwModelBenefitLapseV1::CadenceMissed { due_daa }) => (Some("cadenceMissed".to_string()), Some(due_daa)),
         None => (None, None),
     };
     kaspa_rpc_core::RpcPalwModelBenefits {
-        tiers: read.in_effect.iter().map(tier).collect(),
-        pending_tiers: read.row.pending.as_ref().map(|p| p.tiers.iter().map(tier).collect()).unwrap_or_default(),
+        tiers: read.in_effect.iter().map(rpc_palw_model_benefit_tier).collect(),
+        pending_tiers: read
+            .row
+            .pending
+            .as_ref()
+            .map(|p| p.tiers.iter().map(rpc_palw_model_benefit_tier).collect())
+            .unwrap_or_default(),
         pending_effective_daa: read.row.pending.as_ref().map(|p| p.effective_daa),
         cadence_daa: read.row.cadence_daa,
         expires_daa: read.row.expires_daa,
@@ -4433,5 +4603,74 @@ mod palw_class_context_tests {
         );
         let no_ledger = palw_class_context_row(two, None, None);
         assert_eq!(no_ledger.source, "unknown", "a node built without a ledger answers from the chain alone");
+    }
+}
+
+#[cfg(test)]
+mod palw_model_market_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_model_market_v1::{PALW_MODEL_SEED_MIN_SOMPI_V1, PalwModelFeesV1, PalwModelMarketV1};
+    use kaspa_consensus_core::palw_state_v2::PalwClassStatusV2;
+
+    fn answer(read: Option<(PalwModelMarketV1, bool, PalwClassStatusV2)>) -> GetPalwModelMarketResponse {
+        answer_gated(read, Default::default())
+    }
+
+    fn answer_gated(
+        read: Option<(PalwModelMarketV1, bool, PalwClassStatusV2)>,
+        gate: kaspa_consensus_core::api::PalwModelMarketGateReadV1,
+    ) -> GetPalwModelMarketResponse {
+        rpc_palw_model_market(kaspa_hashes::Hash64::from_u64_word(7), read, gate, PalwModelFeesV1::V1, PALW_MODEL_SEED_MIN_SOMPI_V1, 0)
+    }
+
+    /// **P-B3 carried through the P10 refactor: the gate's refusal closes the quote and is served
+    /// word for word; no refusal changes nothing.**
+    #[test]
+    fn a_gate_refusal_closes_buys_and_is_served() {
+        let seeded = PalwModelMarketV1::seed_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, kaspa_hashes::Hash64::from_u64_word(0xF1));
+        let open = answer(Some((seeded, true, PalwClassStatusV2::Active)));
+        assert!(open.opened && !open.closed_to_buys && open.market_refusal.is_empty() && open.class_lifecycle.is_empty());
+        let gate = kaspa_consensus_core::api::PalwModelMarketGateReadV1 {
+            lifecycle: "Prefetching".to_string(),
+            refusal: Some("class 07… is Prefetching under the model registry".to_string()),
+        };
+        let refused = answer_gated(Some((seeded, true, PalwClassStatusV2::Active)), gate);
+        assert!(refused.opened, "a market the gate refuses buys on is still a market a holder sells into");
+        assert!(refused.closed_to_buys, "the refusal is OR'd into closed_to_buys for clients that read only that");
+        assert_eq!(refused.class_lifecycle, "Prefetching");
+        assert_eq!(refused.market_refusal, "class 07… is Prefetching under the model registry");
+        let admitted = kaspa_consensus_core::api::PalwModelMarketGateReadV1 { lifecycle: "Active".to_string(), refusal: None };
+        let admitted = answer_gated(Some((seeded, true, PalwClassStatusV2::Active)), admitted);
+        assert!(!admitted.closed_to_buys && admitted.market_refusal.is_empty() && admitted.class_lifecycle == "Active");
+    }
+
+    /// **A line paid into but short of its floor is not `opened`** (the 2026-09-23 Position route
+    /// matrix, P10: the live pledge-only line read `opened: true`). It still says who started it and
+    /// how much is collected; a line with no row is not opened and names nobody; the market the
+    /// crossing payment opens is opened, and so is one seeded whole.
+    #[test]
+    fn opened_is_a_market_not_a_row() {
+        let first = kaspa_hashes::Hash64::from_u64_word(0xF1);
+        let pledged = PalwModelMarketV1::pledge_v1(5, 2 * 100_000_000, first);
+        let r = answer(Some((pledged, true, PalwClassStatusV2::Active)));
+        assert!(r.found);
+        assert!(!r.opened, "two MSK toward a {PALW_MODEL_SEED_MIN_SOMPI_V1}-sompi floor is not a market");
+        assert_eq!((r.seed_sompi, r.seed_pledged_sompi, r.position_units), (0, 2 * 100_000_000, 0));
+        assert_eq!(r.seeded_by, first.to_string(), "ADR-0094 Decision 3: the row names its first payer");
+
+        let unopened = PalwModelMarketV1::seed_v1(5, 0, kaspa_hashes::Hash64::default());
+        let r = answer(Some((unopened, false, PalwClassStatusV2::Active)));
+        assert!(r.found && !r.opened && r.seeded_by.is_empty(), "no row: nothing opened, nobody named");
+
+        let crossed = PalwModelMarketV1::pledge_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, first).open_from_pledge_v1(9);
+        let r = answer(Some((crossed, true, PalwClassStatusV2::Active)));
+        assert!(r.opened, "the payment that reaches the floor opens it");
+        assert_eq!((r.seed_sompi, r.opened_daa, r.seeded_by), (PALW_MODEL_SEED_MIN_SOMPI_V1, 9, first.to_string()));
+
+        let seeded = PalwModelMarketV1::seed_v1(5, PALW_MODEL_SEED_MIN_SOMPI_V1, first);
+        assert!(answer(Some((seeded, true, PalwClassStatusV2::Active))).opened);
+
+        let missing = answer(None);
+        assert!(!missing.found && !missing.opened);
     }
 }

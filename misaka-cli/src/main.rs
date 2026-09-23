@@ -152,13 +152,13 @@ struct Cli {
     #[arg(long, global = true, value_enum, default_value = "human")]
     output: OutputFormat,
 
-    /// Network id (e.g. testnet-10). Sets default RPC ports + the node-network match check.
-    /// Resolution: CLI > env MISAKA_NETWORK > ~/.misaka/config.toml > testnet-10.
+    /// Network id (e.g. testnet-12). Sets default RPC ports + the node-network match check.
+    /// Resolution: CLI > env MISAKA_NETWORK > ~/.misaka/config.toml > testnet-12 (every command).
     #[arg(long, global = true, visible_alias = "network-id", env = "MISAKA_NETWORK")]
     network: Option<String>,
 
     /// Node wRPC Borsh endpoint host:port (validator/wallet/operator transport).
-    /// Default derives from --network (testnet-10 => 127.0.0.1:27210). NOTE: this is
+    /// Default derives from --network (e.g. testnet-10 => 127.0.0.1:27210). NOTE: this is
     /// the CODE default; some deployments bind borsh on a non-standard port (e.g.
     /// 27610) — pass it here. This is NOT node gRPC (26210) nor EVM JSON-RPC (8545).
     #[arg(long, global = true, visible_alias = "node-wrpc-borsh", env = "MISAKA_RPC")]
@@ -639,7 +639,8 @@ enum MarketCmd {
 enum PositionCmd {
     /// What this key holds, and what a sell would pay now.
     List {
-        /// Another holder (its 128-hex payout payload) instead of the key's own.
+        /// Another holder (its 128-hex holder id, the unkeyed BLAKE2b-512 of its ML-DSA-87 public
+        /// key — not its address payload) instead of the key's own.
         #[arg(long)]
         holder: Option<String>,
         #[command(flatten)]
@@ -669,6 +670,8 @@ enum PositionCmd {
         profile: ProfileArgs,
     },
     /// Sell positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    /// Refused on a chain without the 2026-09-23 audit fence (testnet-11), where the proceeds
+    /// would be paid to an output no key can spend, unless --accept-burned-proceeds.
     Sell {
         line: String,
         #[arg(long)]
@@ -677,6 +680,10 @@ enum PositionCmd {
         slippage: String,
         #[arg(long)]
         yes: bool,
+        /// Sell anyway on a chain that pays the proceeds to the holder id, which no key can spend:
+        /// the proceeds are burned (the 2026-09-23 Position route matrix, P-B4).
+        #[arg(long)]
+        accept_burned_proceeds: bool,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -1282,10 +1289,11 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
-    /// **ADR-0087: every position a holder has**, by line. The holder is its payout payload —
-    /// name it, or name the key it is derived from.
+    /// **ADR-0087: every position a holder has**, by line. The holder is its key's id, not its
+    /// address payload — name it, or name the key it is derived from.
     ModelPositions {
-        /// 128-hex holder (the BLAKE2b-512 of an ML-DSA-87 public key).
+        /// 128-hex holder id (the unkeyed BLAKE2b-512 of an ML-DSA-87 public key,
+        /// `palw_model_holder_of_pubkey_v1`; not the payload in the key's address).
         #[arg(long)]
         holder: Option<String>,
         #[command(flatten)]
@@ -1393,7 +1401,7 @@ enum PalwCmd {
     /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
     /// line's sink; the fold credits the net leg to the curve (5 % burned, and 1 % to the line's
     /// owner — 5 % past ADR-0114's fence; the preview prints the schedule the node serves) and
-    /// the curve's positions to the key's payout payload. Refused on chain when fewer than
+    /// the curve's positions to the key's holder id. Refused on chain when fewer than
     /// `--min-positions` would be released.
     ModelBuy {
         #[command(flatten)]
@@ -1405,15 +1413,24 @@ enum PalwCmd {
         #[arg(long)]
         msk: String,
         /// The fewest positions to accept; the move is refused, never partially filled, below it.
-        #[arg(long, default_value_t = 0)]
-        min_positions: u64,
+        #[arg(long, conflicts_with = "slippage")]
+        min_positions: Option<u64>,
+        /// The floor as a slippage under the quote (e.g. `1%`). With neither flag the floor is the
+        /// quote less 1 % on a chain that pays a refused carrier back, and the command asks for
+        /// one on a chain that keeps it (the 2026-09-23 Position route matrix, P-B1: the old
+        /// default, 0, was a buy at any price).
+        #[arg(long)]
+        slippage: Option<String>,
         /// Actually broadcast (otherwise a dry-run preview with the quote).
         #[arg(long)]
         yes: bool,
     },
-    /// **ADR-0087: sell positions back to the curve.** Signed by the key whose payout payload
-    /// holds them; the net leg (94 % of what the curve pays, 90 % past ADR-0114) reaches the same payload through the
-    /// coinbase. Refused on chain when the net would be under `--min-msk`.
+    /// **ADR-0087: sell positions back to the curve.** Signed by the key whose id holds them; the
+    /// net leg (94 % of what the curve pays, 90 % past ADR-0114) is paid through the coinbase to
+    /// that key's own address where the 2026-09-23 audit fence is active. Where it is not
+    /// (testnet-11) the chain pays the holder id, which no key can spend, so the command refuses
+    /// to sign unless `--accept-burned-proceeds`. Refused on chain when the net would be under
+    /// `--min-msk`.
     ModelSell {
         #[command(flatten)]
         key: KeyArgs,
@@ -1429,6 +1446,10 @@ enum PalwCmd {
         /// Actually broadcast (otherwise a dry-run preview with the quote).
         #[arg(long)]
         yes: bool,
+        /// Sell anyway on a chain that pays the net leg to the holder id, which no key can spend:
+        /// the proceeds are burned (the 2026-09-23 Position route matrix, P-B4).
+        #[arg(long)]
+        accept_burned_proceeds: bool,
     },
     /// **ADR-0088: a line** as the tip holds it — owner, developer, maintainer (and their payout
     /// payloads), the current and preview versions, the roots in force for its class. A class id
@@ -2349,7 +2370,7 @@ async fn main() -> std::process::ExitCode {
     };
     let ctx = node::Ctx {
         output: cli.output,
-        network: cli.network.clone().or(cfg.network_id.clone()).unwrap_or_else(|| "testnet-10".to_string()),
+        network: node::resolve_network(cli.network.clone(), cfg.network_id.clone()),
         rpc: cli.rpc.clone().or_else(|| cfg.node.wrpc_borsh.clone()),
         node_grpc: cli.node_grpc.clone().or_else(|| cfg.node.grpc.clone()),
         evm_rpc: cli.evm_rpc.clone().or_else(|| cfg.evm.rpc_url.clone()).unwrap_or_else(|| "http://127.0.0.1:8545".to_string()),
@@ -2358,8 +2379,8 @@ async fn main() -> std::process::ExitCode {
     };
 
     // ADR-0122: a mining command takes the network the operator NAMED (the flag, the env, the
-    // config file) and otherwise reads it from mining.toml or the running node — never the CLI's
-    // testnet-10 default, which is not a network anyone mines.
+    // config file) and otherwise reads it from mining.toml or the running node, falling back to the
+    // same `node::DEFAULT_NETWORK` every other command uses only when neither says.
     let named_network = cli.network.clone().or_else(|| cfg.network_id.clone());
     let profile =
         |args: &ProfileArgs| operator::profile::Profile::resolve(&args.overrides(), named_network.as_deref(), ctx.rpc.as_deref());
@@ -2517,10 +2538,12 @@ async fn main() -> std::process::ExitCode {
             Ok(p) => operator::market::position_buy(&ctx, p, &line, &msk, &slippage, yes).await,
             Err(e) => Err(e),
         },
-        Command::Position(PositionCmd::Sell { line, positions, slippage, yes, profile: args }) => match profile(&args) {
-            Ok(p) => operator::market::position_sell(&ctx, p, &line, positions, &slippage, yes).await,
-            Err(e) => Err(e),
-        },
+        Command::Position(PositionCmd::Sell { line, positions, slippage, yes, accept_burned_proceeds, profile: args }) => {
+            match profile(&args) {
+                Ok(p) => operator::market::position_sell(&ctx, p, &line, positions, &slippage, yes, accept_burned_proceeds).await,
+                Err(e) => Err(e),
+            }
+        }
         Command::Logs(args) => match profile(&args.profile) {
             Ok(p) => operator::logs::run(p, &args.components, args.work.as_deref(), args.events, args.follow, args.lines).await,
             Err(e) => Err(e),
@@ -2656,11 +2679,19 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
             evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait)
         }
-        Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, yes }) => {
-            palw_model::buy(&ctx, &key.source(), &line, &msk, min_positions, yes).await
+        Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, slippage, yes }) => {
+            let floor = match (min_positions, slippage) {
+                (Some(positions), _) => Ok(palw_model::BuyFloor::Positions(positions)),
+                (None, Some(slippage)) => operator::market::parse_slippage(&slippage).map(palw_model::BuyFloor::SlippagePermille),
+                (None, None) => Ok(palw_model::BuyFloor::Unstated),
+            };
+            match floor {
+                Ok(floor) => palw_model::buy(&ctx, &key.source(), &line, &msk, floor, yes).await,
+                Err(e) => Err(e),
+            }
         }
-        Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes }) => {
-            palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes).await
+        Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes, accept_burned_proceeds }) => {
+            palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes, accept_burned_proceeds).await
         }
         Command::Palw(PalwCmd::LineShow { line_id, json }) => palw_line::line_show(&ctx, &line_id, json).await,
         Command::Palw(PalwCmd::LineLog { line_id, json }) => palw_line::line_log(&ctx, &line_id, json).await,
@@ -3048,5 +3079,38 @@ mod cli_surface_tests {
         let listed =
             Cli::try_parse_from(["misaka", "wallet", "utxo", "list", "--address", "misakatest:q", "--recent", "3"]).expect("parses");
         assert!(matches!(listed.command, Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { recent: 3, .. }))));
+    }
+
+    /// **Every command defaults to testnet-12 through the one default the operator commands use,
+    /// and a named network still wins** (docs/testnet12-join-mining.md: `misaka bond`, `wallet` and
+    /// `key` used to fall back to testnet-10 while `misaka mining` fell back to testnet-12).
+    #[test]
+    fn every_command_defaults_to_the_one_network_and_a_named_one_wins() {
+        use crate::node::{DEFAULT_NETWORK, resolve_network};
+        assert_eq!(DEFAULT_NETWORK, "testnet-12", "the public network since the 2026-09-22 regenesis");
+        assert_eq!(resolve_network(None, None), DEFAULT_NETWORK);
+        assert_eq!(resolve_network(None, Some("testnet-11".into())), "testnet-11", "~/.misaka/config.toml beats the default");
+        assert_eq!(
+            resolve_network(Some("testnet-10".into()), Some("testnet-11".into())),
+            "testnet-10",
+            "flag / MISAKA_NETWORK beat it"
+        );
+        // The global flag is read the same way by every command family; with no flag the value is
+        // the env's (clap), and only an unset env reaches the default. The env is read, never set,
+        // so this test cannot move a neighbour's.
+        let env = std::env::var("MISAKA_NETWORK").ok();
+        for argv in [
+            vec!["misaka", "bond", "status", "--bond", "aa:0"],
+            vec!["misaka", "wallet", "utxo", "list", "--address", "misakatest:q"],
+            vec!["misaka", "key", "pubkey", "--key-file", "/tmp/never-read"],
+        ] {
+            let plain = Cli::try_parse_from(&argv).expect("parses");
+            assert_eq!(plain.network, env, "{argv:?}: no flag → the env's value or none");
+            assert_eq!(resolve_network(plain.network.clone(), None), env.clone().unwrap_or_else(|| DEFAULT_NETWORK.to_string()));
+            let mut named = argv.clone();
+            named.insert(1, "--network=testnet-11");
+            let named = Cli::try_parse_from(&named).expect("parses");
+            assert_eq!(resolve_network(named.network, Some("testnet-10".into())), "testnet-11", "{argv:?}: the flag wins");
+        }
     }
 }

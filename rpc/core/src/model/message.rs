@@ -3030,7 +3030,11 @@ pub struct GetPalwModelMarketResponse {
     /// ConsensusV2).
     pub found: bool,
     pub line_id: String,
-    /// False until the first buy folded a row; the numbers below are then the unopened market's.
+    /// **True once the line is a market** — its seed reached the floor (ADR-0094 Decision 2) and
+    /// the curve holds the supply. A line still collecting its floor has a row, a first payer in
+    /// `seeded_by` and a total in `seed_pledged_sompi`, and reads false here, as does a line nothing
+    /// was paid into (the numbers below are then the unopened market's). Until the 2026-09-23
+    /// Position route matrix (P10) a node answered "a row exists", so a pledge alone read true.
     pub opened: bool,
     pub opened_daa: u64,
     pub msk_reserve: u64,
@@ -3051,7 +3055,8 @@ pub struct GetPalwModelMarketResponse {
     pub contributor_paid_sompi: u64,
     /// ADR-0090: the seed the market opened with — locked for good (0 while unseeded).
     pub seed_sompi: u64,
-    /// ADR-0090: who seeded it, as a payout payload (128 hex; empty while unseeded).
+    /// ADR-0090: who seeded it, as the seeder's holder id (128 hex; empty while unseeded) — kept
+    /// for the record and never paid, so not a payout payload.
     pub seeded_by: String,
     /// ADR-0090: the least seed this network takes, in sompi.
     pub seed_min_sompi: u64,
@@ -3071,11 +3076,22 @@ pub struct GetPalwModelMarketResponse {
     pub leg_permille: u64,
     /// ADR-0114: the DAA the five-percent leg takes effect at on this network (0 = not scheduled).
     pub leg_v2_activation_daa: u64,
+    /// **The 2026-09-23 Position route matrix, P-B3: the registry lifecycle of the line's class**
+    /// (`Prefetching`, `Probation { .. }`, `Active`, `Held`, …); empty where the registry holds no
+    /// row, and from a peer older than version 7.
+    #[serde(default)]
+    pub class_lifecycle: String,
+    /// **P-B3: why the fold at the node's next block would refuse a seed or a buy of this line on
+    /// its class's lifecycle; empty where it would take them.** A client asks this before it pays,
+    /// because a refused carrier seed or buy loses its sink output (P-B1). A sell is never refused
+    /// for it. A peer older than version 7 serves it empty — its fold asked no such question.
+    #[serde(default)]
+    pub market_refusal: String,
 }
 
 impl Serializer for GetPalwModelMarketResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &6, writer)?;
+        store!(u16, &7, writer)?;
         store!(bool, &self.found, writer)?;
         store!(String, &self.line_id, writer)?;
         store!(bool, &self.opened, writer)?;
@@ -3104,6 +3120,9 @@ impl Serializer for GetPalwModelMarketResponse {
         store!(u64, &self.burn_permille, writer)?;
         store!(u64, &self.leg_permille, writer)?;
         store!(u64, &self.leg_v2_activation_daa, writer)?;
+        // Version 7 (the 2026-09-23 Position route matrix, P-B3): the lifecycle and the market gate.
+        store!(String, &self.class_lifecycle, writer)?;
+        store!(String, &self.market_refusal, writer)?;
         Ok(())
     }
 }
@@ -3142,6 +3161,9 @@ impl Deserializer for GetPalwModelMarketResponse {
             let v1 = kaspa_consensus_core::palw_model_market_v1::PalwModelFeesV1::V1;
             (v1.burn_permille, v1.leg_permille, 0)
         };
+        // Version 7 (P-B3): an older peer's fold never asked the registry, so it names no refusal.
+        let (class_lifecycle, market_refusal) =
+            if version >= 7 { (load!(String, reader)?, load!(String, reader)?) } else { (String::new(), String::new()) };
         Ok(Self {
             found,
             line_id,
@@ -3167,6 +3189,8 @@ impl Deserializer for GetPalwModelMarketResponse {
             burn_permille,
             leg_permille,
             leg_v2_activation_daa,
+            class_lifecycle,
+            market_refusal,
         })
     }
 }
@@ -3175,7 +3199,12 @@ impl Deserializer for GetPalwModelMarketResponse {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwModelPositionsRequest {
-    /// 128-hex holder — the payout payload (the BLAKE2b-512 of the ML-DSA-87 public key).
+    /// 128-hex holder id — NOT a payout payload (the 2026-09-23 Position route matrix, P-B4). On
+    /// the carrier lane it is `palw_model_holder_of_pubkey_v1(pubkey)`, the UNKEYED BLAKE2b-512 of
+    /// the ML-DSA-87 public key (`mldsa87_key_id`); the keyed `blake2b_512_address_payload` in the
+    /// key's address is a different value and holds nothing. On the ADR-0089 EVM lane it is
+    /// `evm_holder_v1(chain_id, address)`. A provider derives the id from the key or account the
+    /// member PROVED, never from the request.
     pub holder: String,
 }
 
@@ -3201,23 +3230,58 @@ pub struct RpcPalwModelPosition {
     /// 128-hex line id (ADR-0088 Decision 9).
     pub line_id: String,
     pub units: u64,
+    /// **Version 2 — ADR-0095 §4.5 and §4.3 for this id, at the response's `tip_daa`** (the
+    /// 2026-09-23 Position route matrix, P-B2): the membership a provider serves on, which the
+    /// wire used not to carry at all. When this id's tenure clock last started; `None` where the
+    /// chain keeps no clock (a holding from before the membership fence) or the peer is older.
+    #[serde(default)]
+    pub holding_since_daa: Option<u64>,
+    /// How long this id has held without selling — the chain's `model_position_tenure`.
+    #[serde(default)]
+    pub tenure_daa: u64,
+    /// The index of the tier this id ALONE buys in the line's tiers in effect (`getPalwModelLine`'s
+    /// `benefits.tiers` at the same height), and that tier. `None` below the first rung, where
+    /// nothing is in effect, or from an older peer — which a gateway reads as "grants nothing".
+    #[serde(default)]
+    pub tier_index: Option<u32>,
+    #[serde(default)]
+    pub tier: Option<RpcPalwModelBenefitTier>,
 }
 
 impl Serializer for RpcPalwModelPosition {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.line_id, writer)?;
         store!(u64, &self.units, writer)?;
+        // Version 2 (ADR-0095 §4.3/§4.5): appended, so a version-1 reader stops before it — each
+        // element is its own length-framed payload, and the bytes it does not know are skipped.
+        store!(Option<u64>, &self.holding_since_daa, writer)?;
+        store!(u64, &self.tenure_daa, writer)?;
+        store!(Option<u32>, &self.tier_index, writer)?;
+        serialize!(Option<RpcPalwModelBenefitTier>, &self.tier, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwModelPosition {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let line_id = load!(String, reader)?;
         let units = load!(u64, reader)?;
-        Ok(Self { line_id, units })
+        // A version-1 peer computed no tenure and no tier. Read FAIL-CLOSED: no clock, no tier —
+        // never "tier 0", which on a line whose first rung is tenure-free would grant service on
+        // a peer's ignorance.
+        let (holding_since_daa, tenure_daa, tier_index, tier) = if version >= 2 {
+            (
+                load!(Option<u64>, reader)?,
+                load!(u64, reader)?,
+                load!(Option<u32>, reader)?,
+                deserialize!(Option<RpcPalwModelBenefitTier>, reader)?,
+            )
+        } else {
+            (None, 0, None, None)
+        };
+        Ok(Self { line_id, units, holding_since_daa, tenure_daa, tier_index, tier })
     }
 }
 
@@ -3226,23 +3290,149 @@ impl Deserializer for RpcPalwModelPosition {
 pub struct GetPalwModelPositionsResponse {
     pub holder: String,
     pub positions: Vec<RpcPalwModelPosition>,
+    /// Version 2 (the 2026-09-23 Position route matrix, P-B2): the tip every row's tenure and tier
+    /// was read at — the height a membership challenge names (ADR-0095 §4.8, A8). 0 from a peer
+    /// that computed neither, so a caller can tell "no tier" from "not asked".
+    #[serde(default)]
+    pub tip_daa: u64,
+    /// Version 2: the 128-hex hash of that tip block. A DAA score does not name a state — after a
+    /// reorg another block carries the same score — so a caller that combines several reads (this
+    /// one per id, `getPalwModelLine`'s tiers) checks they share THIS hash, not only the score.
+    /// Empty from a peer that computed no tier, or off ConsensusV2.
+    #[serde(default)]
+    pub tip_hash: String,
 }
 
 impl Serializer for GetPalwModelPositionsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.holder, writer)?;
         serialize!(Vec<RpcPalwModelPosition>, &self.positions, writer)?;
+        store!(u64, &self.tip_daa, writer)?;
+        store!(String, &self.tip_hash, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwModelPositionsResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let holder = load!(String, reader)?;
         let positions = deserialize!(Vec<RpcPalwModelPosition>, reader)?;
-        Ok(Self { holder, positions })
+        let (tip_daa, tip_hash) = if version >= 2 { (load!(u64, reader)?, load!(String, reader)?) } else { (0, String::new()) };
+        Ok(Self { holder, positions, tip_daa, tip_hash })
+    }
+}
+
+/// **`getPalwModelPositions` version 2 on the borsh wire** (the 2026-09-23 Position route matrix,
+/// P-B2): the tenure and the tier a provider serves a line's holders on. wRPC is the transport a
+/// gateway reads, so a field lost here is a membership served on units alone — and an older peer
+/// on either side of the wire must neither break nor be read as granting anything.
+#[cfg(test)]
+mod palw_model_positions_wire_tests {
+    use super::*;
+
+    fn a_tier() -> RpcPalwModelBenefitTier {
+        RpcPalwModelBenefitTier {
+            min_units: 2,
+            grants: 0b1000_0100,
+            grant_names: vec!["PRIORITY_INFERENCE".to_string(), "SUPPORT".to_string()],
+            lead_daa: 0,
+            min_hold_daa: 50,
+            note: "two jobs ahead".to_string(),
+        }
+    }
+
+    fn a_response() -> GetPalwModelPositionsResponse {
+        GetPalwModelPositionsResponse {
+            holder: "b0".repeat(64),
+            positions: vec![
+                RpcPalwModelPosition {
+                    line_id: "c1".repeat(64),
+                    units: 4_656,
+                    holding_since_daa: Some(260),
+                    tenure_daa: 60,
+                    tier_index: Some(1),
+                    tier: Some(a_tier()),
+                },
+                // A holding with no clock and no tier, so a field read from the wrong slot, or a
+                // `None` written as a value, cannot pass as carried.
+                RpcPalwModelPosition { line_id: "c2".repeat(64), units: 7, ..Default::default() },
+            ],
+            tip_daa: 320,
+            tip_hash: "a7".repeat(64),
+        }
+    }
+
+    #[test]
+    fn the_tenure_and_the_tier_survive_the_borsh_round_trip() {
+        let response = a_response();
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwModelPositionsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back.tip_daa, 320, "the height a challenge names");
+        assert_eq!(back.tip_hash, "a7".repeat(64), "and the block that height was read at");
+        assert_eq!(back.positions, response.positions, "every row, the clock and the tier included");
+        assert_eq!(back.positions[1].tier_index, None, "no tier stays no tier");
+    }
+
+    /// **A version-1 writer reads FAIL-CLOSED.** An older node computed no tier; reading its silence
+    /// as tier 0 would serve a stranger on a peer's ignorance.
+    #[test]
+    fn a_version_one_writer_reads_as_no_clock_and_no_tier() {
+        let mut row = Vec::new();
+        store!(u16, &1, &mut row).unwrap();
+        store!(String, &"c1".repeat(64), &mut row).unwrap();
+        store!(u64, &4_656, &mut row).unwrap();
+        // `serialize!` frames the Vec as one payload, and each row inside it as its own.
+        let mut rows = Vec::new();
+        store!(u32, &1, &mut rows).unwrap();
+        store!(Vec<u8>, &row, &mut rows).unwrap();
+        let mut v1 = Vec::new();
+        store!(u16, &1, &mut v1).unwrap();
+        store!(String, &"b0".repeat(64), &mut v1).unwrap();
+        store!(Vec<u8>, &rows, &mut v1).unwrap();
+
+        let back = <GetPalwModelPositionsResponse as Deserializer>::deserialize(&mut v1.as_slice()).unwrap();
+        assert_eq!(back.positions.len(), 1);
+        let p = &back.positions[0];
+        assert_eq!(p.line_id, "c1".repeat(64), "everything version 1 DID say is read");
+        assert_eq!(p.units, 4_656);
+        assert_eq!((p.holding_since_daa, p.tenure_daa, p.tier_index), (None, 0, None), "and nothing it did not");
+        assert!(p.tier.is_none(), "no tier, never tier 0");
+        assert_eq!(back.tip_daa, 0, "a peer that read no tier names no height");
+        assert!(back.tip_hash.is_empty(), "…and no tip");
+    }
+
+    /// **A version-1 READER is not broken by a version-2 frame** — the property that lets a node
+    /// ship this without its peers' clients. `serialize!` frames the Vec, and each row inside it,
+    /// as a length-prefixed payload, so the appended fields are skipped with the row; the
+    /// response's own tail is past the last field an old reader loads. Spelled as the old
+    /// deserializer, field by field.
+    #[test]
+    fn a_version_one_reader_still_reads_a_version_two_frame() {
+        let response = a_response();
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+
+        let mut r = bytes.as_slice();
+        let _version = load!(u16, &mut r).unwrap();
+        assert_eq!(load!(String, &mut r).unwrap(), response.holder);
+        let framed = load!(Vec<u8>, &mut r).unwrap();
+        let mut rows = framed.as_slice();
+        assert_eq!(load!(u32, &mut rows).unwrap(), 2);
+        for want in &response.positions {
+            let payload = load!(Vec<u8>, &mut rows).unwrap();
+            let mut row = payload.as_slice();
+            let _row_version = load!(u16, &mut row).unwrap();
+            assert_eq!(load!(String, &mut row).unwrap(), want.line_id);
+            assert_eq!(load!(u64, &mut row).unwrap(), want.units, "the old reader's units are the new writer's units");
+            assert!(!row.is_empty(), "version 2's fields are in the row's frame, and an old reader leaves them there");
+        }
+        let mut tail = r;
+        assert_eq!(load!(u64, &mut tail).unwrap(), 320, "past the rows an old reader stops, and `tipDaa` is left behind…");
+        assert_eq!(load!(String, &mut tail).unwrap(), response.tip_hash, "…with `tipHash`");
+        assert!(tail.is_empty());
     }
 }
 
@@ -3997,11 +4187,21 @@ pub struct RpcPalwClaimRow {
     pub quanta_spent: u32,
     pub work_leaves: u64,
     pub open_courts: u32,
+    /// **The execution lane's view of this claim's Final** (route-matrix #7): `credited`,
+    /// `maturing`, `scheduled`, or empty where it earned no credit or the state no longer keeps it.
+    pub exec_stage: String,
+    pub exec_credit: u64,
+    /// The span it was gathered in, waits for, or was scheduled by.
+    pub exec_span: Option<u64>,
+    pub exec_tickets: u32,
+    pub exec_tickets_spent: u32,
+    pub exec_first_round: Option<u64>,
+    pub exec_last_round: Option<u64>,
 }
 
 impl Serializer for RpcPalwClaimRow {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        store!(u16, &2, writer)?;
         store!(String, &self.claim_id, writer)?;
         store!(bool, &self.is_free_prompt, writer)?;
         store!(String, &self.class_id, writer)?;
@@ -4022,14 +4222,22 @@ impl Serializer for RpcPalwClaimRow {
         store!(u32, &self.quanta_spent, writer)?;
         store!(u64, &self.work_leaves, writer)?;
         store!(u32, &self.open_courts, writer)?;
+        // Version 2: the execution lane's view.
+        store!(String, &self.exec_stage, writer)?;
+        store!(u64, &self.exec_credit, writer)?;
+        store!(Option<u64>, &self.exec_span, writer)?;
+        store!(u32, &self.exec_tickets, writer)?;
+        store!(u32, &self.exec_tickets_spent, writer)?;
+        store!(Option<u64>, &self.exec_first_round, writer)?;
+        store!(Option<u64>, &self.exec_last_round, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for RpcPalwClaimRow {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
-        Ok(Self {
+        let version = load!(u16, reader)?;
+        let mut row = Self {
             claim_id: load!(String, reader)?,
             is_free_prompt: load!(bool, reader)?,
             class_id: load!(String, reader)?,
@@ -4050,7 +4258,18 @@ impl Deserializer for RpcPalwClaimRow {
             quanta_spent: load!(u32, reader)?,
             work_leaves: load!(u64, reader)?,
             open_courts: load!(u32, reader)?,
-        })
+            ..Default::default()
+        };
+        if version >= 2 {
+            row.exec_stage = load!(String, reader)?;
+            row.exec_credit = load!(u64, reader)?;
+            row.exec_span = load!(Option<u64>, reader)?;
+            row.exec_tickets = load!(u32, reader)?;
+            row.exec_tickets_spent = load!(u32, reader)?;
+            row.exec_first_round = load!(Option<u64>, reader)?;
+            row.exec_last_round = load!(Option<u64>, reader)?;
+        }
+        Ok(row)
     }
 }
 
@@ -5461,6 +5680,9 @@ pub struct GetPalwModelRegistryResponse {
     pub utilization_permille: u32,
     pub probation_claims: u32,
     pub stable_epochs: u32,
+    /// The readiness age a seat's possession proof is judged by NOW, in spans — readiness V2's eight
+    /// past `Params::palw_readiness_v2`, the registry globals' thirty before it (a node before the
+    /// 2026-09-24 readiness-age sweep served the globals' thirty whatever the fence).
     pub readiness_probe_max_age_spans: u32,
     pub readiness_collateral_multiple: u32,
     pub classes: Vec<RpcPalwModelLifecycle>,
@@ -6988,11 +7210,19 @@ pub struct GetPalwNodeStatusResponse {
     pub memory_available_bytes: u64,
     pub memory_bounded: bool,
     pub memory_holders: String,
+    /// Version 3: the selected chain's last blocks by lane (`palw_lane_watch`) — see the node
+    /// runtime's fields of the same names.
+    pub lane_window_blocks: u64,
+    pub lane_work_blocks: u64,
+    pub lane_heartbeat_blocks: u64,
+    pub lane_last_work_daa: u64,
+    pub lane_mix: String,
+    pub lane_alarm: String,
 }
 
 impl Serializer for GetPalwNodeStatusResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &2, writer)?;
+        store!(u16, &3, writer)?;
         store!(String, &self.consensus_params_id, writer)?;
         store!(Vec<u64>, &self.fence_schedule, writer)?;
         store!(String, &self.consensus_schedule_id, writer)?;
@@ -7018,6 +7248,13 @@ impl Serializer for GetPalwNodeStatusResponse {
         store!(u64, &self.memory_available_bytes, writer)?;
         store!(bool, &self.memory_bounded, writer)?;
         store!(String, &self.memory_holders, writer)?;
+        // Version 3: the lane mix.
+        store!(u64, &self.lane_window_blocks, writer)?;
+        store!(u64, &self.lane_work_blocks, writer)?;
+        store!(u64, &self.lane_heartbeat_blocks, writer)?;
+        store!(u64, &self.lane_last_work_daa, writer)?;
+        store!(String, &self.lane_mix, writer)?;
+        store!(String, &self.lane_alarm, writer)?;
         Ok(())
     }
 }
@@ -7054,6 +7291,15 @@ impl Deserializer for GetPalwNodeStatusResponse {
             out.memory_available_bytes = load!(u64, reader)?;
             out.memory_bounded = load!(bool, reader)?;
             out.memory_holders = load!(String, reader)?;
+        }
+        // A version-2 sender stops here; the lane fields stay at their defaults.
+        if version >= 3 {
+            out.lane_window_blocks = load!(u64, reader)?;
+            out.lane_work_blocks = load!(u64, reader)?;
+            out.lane_heartbeat_blocks = load!(u64, reader)?;
+            out.lane_last_work_daa = load!(u64, reader)?;
+            out.lane_mix = load!(String, reader)?;
+            out.lane_alarm = load!(String, reader)?;
         }
         Ok(out)
     }
@@ -10345,5 +10591,58 @@ mod palw_derived_artifacts_wire_tests {
         assert_eq!(back.phase, "final");
         assert_eq!(back.derived_count, 2);
         assert!(back.is_free_prompt);
+    }
+}
+
+#[cfg(test)]
+mod palw_model_market_wire_tests {
+    use super::*;
+
+    fn a_market() -> GetPalwModelMarketResponse {
+        GetPalwModelMarketResponse {
+            found: true,
+            line_id: "74".repeat(64),
+            opened: true,
+            seed_pledged_sompi: 200_000_000,
+            seed_min_sompi: 100_000_000_000_000,
+            burn_permille: 50,
+            leg_permille: 50,
+            leg_v2_activation_daa: 3_500,
+            class_status: "Active".to_string(),
+            // Version 7, non-default so a lost field cannot pass as a carried one.
+            class_lifecycle: "Prefetching".to_string(),
+            market_refusal: "class 74… is Prefetching under the model registry".to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **The 2026-09-23 Position route matrix, P-B3: the gate reaches the client.** A version-7 node
+    /// carries the lifecycle and the refusal; they are what `misaka palw model-seed` and `model-buy`
+    /// refuse on before a carrier's sink output is spent.
+    #[test]
+    fn the_lifecycle_and_the_market_refusal_survive_the_round_trip() {
+        let response = a_market();
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwModelMarketResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!(back.class_lifecycle, "Prefetching");
+        assert_eq!(back.market_refusal, response.market_refusal);
+        assert_eq!((back.seed_pledged_sompi, back.leg_v2_activation_daa), (200_000_000, 3_500), "the version-6 fields still land");
+    }
+
+    /// A version-6 peer's answer — the same bytes without the suffix — reads as no refusal: its fold
+    /// never asked the registry, so there is nothing to refuse on, and a client does what it did.
+    #[test]
+    fn a_version_6_peer_reads_as_no_refusal() {
+        let response = GetPalwModelMarketResponse { class_lifecycle: String::new(), market_refusal: String::new(), ..a_market() };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        // Version 7 appended two strings; two empty borsh strings are two zero u32 lengths.
+        assert_eq!(&bytes[bytes.len() - 8..], &[0u8; 8]);
+        bytes.truncate(bytes.len() - 8);
+        bytes[..2].copy_from_slice(&6u16.to_le_bytes());
+        let back = <GetPalwModelMarketResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert!(back.class_lifecycle.is_empty() && back.market_refusal.is_empty());
+        assert_eq!((back.burn_permille, back.leg_permille, back.leg_v2_activation_daa), (50, 50, 3_500));
     }
 }

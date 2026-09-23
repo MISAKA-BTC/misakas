@@ -186,50 +186,78 @@ async fn local_registration_object(ctx: &Ctx, profile: &Profile, artifact: &Path
         .map_err(|e| CliError::new(exit::MODEL, e))
 }
 
+/// **What `misaka model registration <id>` asks the node**, from the id, the object file it may
+/// name, and the journal `model add` wrote when it submitted (one row per registration naming its
+/// class, its object and its carrier together).
+///
+/// Two defects lived here (testnet-12, 2026-09-23). A 128-hex id was copied into all three slots
+/// and the journal could only fill an EMPTY slot, so `registration <txid>` asked the node about a
+/// class whose id was the carrier's — no row has that id — even when the journal named the real
+/// class. And the journal matched by `text.contains(slot)`, which an empty slot satisfies for every
+/// row, so `registration QWEN36` borrowed whichever registration's carrier the directory listed
+/// first. A row now matches only by equality with one of its own ids, and a matching row supplies
+/// all three.
+pub(crate) fn registration_status_request(
+    id: &str,
+    object: Option<&[u8]>,
+    journal: &[serde_json::Value],
+) -> GetPalwModelRegistrationStatusRequest {
+    let mut req = GetPalwModelRegistrationStatusRequest::default();
+    if let Some(bytes) = object
+        && let Ok(object) = borsh::from_slice::<PalwConsensusObjectV2>(bytes)
+    {
+        req.object_id = palw_registration_object_id_v1(bytes).to_string();
+        if let PalwConsensusObjectV2::ClassRegistered { class_id, .. } = object {
+            req.class_id = class_id.to_string();
+        }
+    }
+    let field = |row: &serde_json::Value, name: &str| row.get(name).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let wanted = [id.trim().to_string(), req.class_id.clone(), req.object_id.clone()];
+    let journaled = journal.iter().find(|row| {
+        ["class_id", "object_id", "transaction_id"].iter().any(|name| {
+            let have = field(row, name);
+            !have.is_empty() && wanted.iter().any(|want| !want.is_empty() && have.eq_ignore_ascii_case(want))
+        })
+    });
+    if let Some(row) = journaled {
+        if req.class_id.is_empty() {
+            req.class_id = field(row, "class_id");
+        }
+        if req.object_id.is_empty() {
+            req.object_id = field(row, "object_id");
+        }
+        req.transaction_id = field(row, "transaction_id");
+        return req;
+    }
+    if req.class_id.is_empty() && req.object_id.is_empty() {
+        let bare = id.trim();
+        if bare.len() >= 64 && bare.chars().all(|c| c.is_ascii_hexdigit()) {
+            // A class id, an object id or a carrier id, and nothing here says which: asked as all
+            // three, the node answers by its own record — a class id names its row, a carrier id
+            // the row it wrote.
+            req.class_id = bare.to_string();
+            req.object_id = bare.to_string();
+            req.transaction_id = bare.to_string();
+        } else {
+            req.class_id = bare.to_string();
+        }
+    }
+    req
+}
+
 pub(crate) async fn registration(ctx: &Ctx, profile: Profile, id: String) -> CliResult {
     let nv = connect(ctx).await?;
-    let mut req = GetPalwModelRegistrationStatusRequest::default();
-    if id.chars().all(|c| c.is_ascii_hexdigit()) && id.len() >= 16 {
-        if Path::new(&id).exists() {
-            // fall through
-        } else if id.len() >= 64 {
-            req.class_id = id.clone();
-            req.transaction_id = id.clone();
-            req.object_id = id.clone();
-        } else {
-            req.class_id = id.clone();
-        }
-    }
-    if let Ok(bytes) = std::fs::read(&id) {
-        if let Ok(object) = borsh::from_slice::<PalwConsensusObjectV2>(&bytes) {
-            let oid = palw_registration_object_id_v1(&bytes).to_string();
-            req.object_id = oid;
-            if let PalwConsensusObjectV2::ClassRegistered { class_id, .. } = object {
-                req.class_id = class_id.to_string();
-            }
-        }
-    }
-    if req.class_id.is_empty() && req.object_id.is_empty() && req.transaction_id.is_empty() {
-        req.class_id = id;
-    }
-    let journal = dirs::home_dir().unwrap_or_default().join(".misaka").join(&profile.network).join("model-add");
-    if let Ok(rd) = std::fs::read_dir(&journal) {
-        for ent in rd.flatten() {
-            let path = ent.path().join("registration.json");
-            if let Ok(text) = std::fs::read_to_string(&path) {
-                if text.contains(&req.class_id) || text.contains(&req.object_id) || text.contains(&req.transaction_id) {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if req.transaction_id.is_empty() {
-                            req.transaction_id = v.get("transaction_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        }
-                        if req.object_id.is_empty() {
-                            req.object_id = v.get("object_id").and_then(|x| x.as_str()).unwrap_or("").to_string();
-                        }
-                    }
-                }
-            }
-        }
-    }
+    let object = if Path::new(&id).is_file() { std::fs::read(&id).ok() } else { None };
+    let journal_dir = dirs::home_dir().unwrap_or_default().join(".misaka").join(&profile.network).join("model-add");
+    let journal: Vec<serde_json::Value> = std::fs::read_dir(&journal_dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|ent| std::fs::read_to_string(ent.path().join("registration.json")).ok())
+                .filter_map(|text| serde_json::from_str(&text).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let req = registration_status_request(&id, object.as_deref(), &journal);
     let resp = nv
         .client
         .get_palw_model_registration_status(req)
@@ -412,4 +440,50 @@ pub(crate) async fn track_after_submit(
         }
     }
     reg
+}
+
+#[cfg(test)]
+mod registration_request_tests {
+    use super::registration_status_request;
+
+    fn journal_row(class: &str, object: &str, tx: &str) -> serde_json::Value {
+        serde_json::json!({ "class_id": class, "object_id": object, "transaction_id": tx })
+    }
+
+    /// **`misaka model registration <txid>` asks about the class the carrier registered**
+    /// (testnet-12, 2026-09-23): the carrier id went into the class slot and the journal, which
+    /// names the class, was never allowed to replace it — so the node looked for a class whose id
+    /// was the carrier's, found none, and read an included registration as not included.
+    #[test]
+    fn a_carrier_id_asks_about_the_class_it_registered() {
+        let (class, object, tx) = ("c1".repeat(64), "0b".repeat(64), "27".repeat(64));
+        let journal = vec![journal_row(&"aa".repeat(64), &"bb".repeat(64), &"cc".repeat(64)), journal_row(&class, &object, &tx)];
+        let req = registration_status_request(&tx, None, &journal);
+        assert_eq!(req.class_id, class, "the class the carrier registered, not the carrier id");
+        assert_eq!(req.object_id, object);
+        assert_eq!(req.transaction_id, tx);
+        let by_class = registration_status_request(&class, None, &journal);
+        assert_eq!((by_class.object_id, by_class.transaction_id), (object, tx), "a class id finds its carrier");
+    }
+
+    /// An empty slot matches no journal row: `text.contains("")` matched every one.
+    #[test]
+    fn an_alias_borrows_no_other_registrations_carrier() {
+        let journal = vec![journal_row(&"aa".repeat(64), &"bb".repeat(64), &"cc".repeat(64))];
+        let req = registration_status_request("QWEN36", None, &journal);
+        assert_eq!(req.class_id, "QWEN36");
+        assert!(req.object_id.is_empty() && req.transaction_id.is_empty(), "{req:?}");
+    }
+
+    /// With no journal row, a 128-hex id is asked as all three — the node resolves a carrier id to
+    /// the row it wrote.
+    #[test]
+    fn an_unjournaled_id_is_asked_in_every_slot() {
+        let id = "27".repeat(64);
+        let req = registration_status_request(&id, None, &[]);
+        assert_eq!(
+            (req.class_id.as_str(), req.object_id.as_str(), req.transaction_id.as_str()),
+            (id.as_str(), id.as_str(), id.as_str())
+        );
+    }
 }

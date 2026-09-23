@@ -36,7 +36,9 @@ pragma solidity ^0.8.20;
 ///         WHAT ELSE REVERTS AT THE CALL (the "user-input fault ⇒ tx revert, block valid"
 ///         class): malformed data, an unknown version or action id, an unknown line, a
 ///         `msg.value` that is zero or not a multiple of 1e10 on a buy or a seed, a seed under
-///         SEED_MIN_SOMPI (`SeedTooSmall()`), a nonzero `msg.value` on a sell, a sell of zero units, a buy on a line closed to buys, the 129th action
+///         SEED_MIN_SOMPI (`SeedTooSmall()`), a nonzero `msg.value` on a sell, a sell of zero units, a buy on a line closed to buys,
+///         a seed or a buy of a line whose class the registry has not admitted (`ClassNotEligible()`, past the
+///         2026-09-23 audit fence only), the 129th action
 ///         in one EVM block (`PALW_EVM_MARKET_ACTIONS_PER_BLOCK_V1` = 128, `TooManyActions()`),
 ///         and the 17th action from ONE ACCOUNT in one EVM block
 ///         (`TooManyActionsForAccount()`; mainnet audit 2026-09-06, M-16/L-6 — the block bound is
@@ -89,4 +91,9 @@ interface IMisakaModelWriter {
     /// This account already queued its share of the block's 128 actions
     /// (`MAX_MARKET_ACTIONS_PER_EVM_BLOCK_PER_ACCOUNT` = 16; mainnet audit 2026-09-06, M-16/L-6).
     error TooManyActionsForAccount();
+    /// A seed or a buy of a line whose class the model registry has not admitted (its lifecycle is
+    /// not Probation, ActiveLimited or Active), which the fold would refuse — reverted at the call
+    /// so no escrow is taken (the 2026-09-23 Position route matrix, P-B3). Only on a network that
+    /// arms the 2026-09-23 audit fence (testnet-12); a sell is never refused for this.
+    error ClassNotEligible();
 }

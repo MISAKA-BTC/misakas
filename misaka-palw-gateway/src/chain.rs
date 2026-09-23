@@ -419,7 +419,13 @@ impl RpcChainSource {
                 facts.registered = producer.available;
                 facts.fp_certified = producer.fp_certified;
                 facts.bond_known = producer.bond_known;
-                facts.bond_active = producer.bond_known && producer.not_ready_reason.is_empty();
+                // The registry's class gate (route-matrix #7) holds the ATTEMPT lane's claims, not
+                // this bond's free-prompt commitments, so it does not make the bond inactive here.
+                facts.bond_active = producer.bond_known
+                    && (producer.not_ready_reason.is_empty()
+                        || producer
+                            .not_ready_reason
+                            .starts_with(kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2));
                 facts.class_canonical_leaves = producer
                     .class_target
                     .parse::<u128>()

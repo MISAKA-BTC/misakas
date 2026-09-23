@@ -62,6 +62,8 @@ fn registry_fold(p: &Params, b: &PalwConsensusParamsV2) -> PalwModelRegistryFold
         span_daa: lane.schedule_span_daa,
         genesis_works: works.clone(),
         grace_until_daa: PalwModelRegistryFoldV1::grace_until_v1(activation, lane.schedule_span_daa, &globals),
+        admission_audit_period_daa: p.palw_admission_audit_period_daa,
+        readiness_v2_active: p.palw_readiness_v2_at(0),
     }
 }
 
@@ -229,8 +231,11 @@ fn review12_1_registration_burn_is_counted_once_by_seat_readiness() {
     assert!(extras.audit_2026_09_23_active);
     let reg_floor = palw_bond_registration_floor_v1(b.state.min_collateral_sompi(), true);
     let price = b.state.registration_exposure_sompi();
-    // The registrant posts 1.2 MSK; the control posts what the registrant will have left.
-    let registrant_collateral = 120_000_000u64;
+    // The registrant posts 1.2 MSK — or, where the registration floor is higher (the producer floor,
+    // 13,000 MSK on testnet-12's regenesis params), enough to clear readiness with the price and
+    // the burn on top; the control posts what the registrant will have left.
+    let readiness_bar = u64::from(registry_fold(&p, &b).globals.readiness_collateral_multiple) * b.state.min_collateral_sompi();
+    let registrant_collateral = 120_000_000u64.max(readiness_bar.max(reg_floor) + price + 2 * PALW_CLASS_REGISTRATION_BURN_SOMPI_V1);
     let left = registrant_collateral - PALW_CLASS_REGISTRATION_BURN_SOMPI_V1;
     assert!(left >= reg_floor, "the control can register at the floor");
     let s0 = genesis_with(&b, &[(REGISTRANT, registrant_collateral), (CONTROL, left)], &extras);

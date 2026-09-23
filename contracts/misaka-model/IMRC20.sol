@@ -92,7 +92,8 @@ interface IMRC20 {
     /// MSK leg in wei — a nonzero multiple of 1e10 — held in escrow at `0x…F013` until `C`.
     /// `minUnitsOut` (units) is checked in the fold: a worse fill is refused, never partial.
     /// Reverts at the call: `NotAnAccount()`, `BadValue()`, `ClosedToBuys()` (a retired line —
-    /// ADR-0087 D7 / ADR-0088 D6), or the block's 128-action cap.
+    /// ADR-0087 D7 / ADR-0088 D6), `ClassNotEligible()` (the registry has not admitted the line's
+    /// class — past the 2026-09-23 audit fence only), or the block's 128-action cap.
     function buy(uint256 minUnitsOut) external payable;
 
     /// Queue a sell: = `IMisakaModelWriter` action 2 with this line. `unitsIn` units are the
@@ -105,7 +106,9 @@ interface IMRC20 {
     /// wei, a multiple of 1e10) as the curve's reserve for good — 500,000 whole positions open in
     /// the curve at `seed / 500,000` each. The seeder receives no position and nothing ever pays
     /// the seed out. Refused at the fold (a `Refused` event, escrow refunded) when the line is
-    /// already seeded or its class is frozen; reverts `SeedTooSmall()` at the call under the floor.
+    /// already seeded or its class is frozen; reverts `SeedTooSmall()` at the call under the floor,
+    /// and `ClassNotEligible()` where the registry has not admitted the class (past the 2026-09-23
+    /// audit fence only).
     function seed() external payable;
 
     /// ERC-165. True for `type(IMRC20).interfaceId`; FALSE for 0x36372b07 (ERC-20): this is a
@@ -151,4 +154,8 @@ interface IMRC20 {
     error BadValue();
     /// ADR-0090: `seed()` with a value under the network's least seed.
     error SeedTooSmall();
+    /// `buy` or `seed()` of a line whose class the model registry has not admitted (lifecycle not
+    /// Probation, ActiveLimited or Active) — the fold would refuse it (the 2026-09-23 Position route
+    /// matrix, P-B3). The same selector `IMisakaModelWriter` declares. Past the audit fence only.
+    error ClassNotEligible();
 }

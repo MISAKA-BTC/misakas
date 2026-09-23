@@ -391,7 +391,7 @@ async fn fee_funding(snap: &Snapshot, candidates: &[(&'static str, String)]) -> 
             return FeeFunding::Candidate(whence, op.clone(), u.amount);
         }
     }
-    match all.iter().filter(|u| u.mature && !u.bonded && !u.entry.is_coinbase).max_by_key(|u| u.amount) {
+    match all.iter().filter(|u| u.selectable() && !u.entry.is_coinbase).max_by_key(|u| u.amount) {
         Some(u) => FeeFunding::Scan(format!("{}:{}", u.outpoint.transaction_id, u.outpoint.index), u.amount),
         None => FeeFunding::Nothing,
     }

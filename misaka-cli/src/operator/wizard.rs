@@ -359,7 +359,7 @@ fn collateral_shortfall(current: u64, whole_lifetime: Option<u64>) -> Option<u64
 fn funds_of(all: &[crate::wallet::Funding]) -> Funds {
     let mut f = Funds::default();
     for u in all {
-        if u.bonded {
+        if u.bonded || u.reserved {
             continue;
         }
         if !u.mature {
@@ -620,7 +620,7 @@ impl<'a> Wizard<'a> {
         let single = (running.len() == 1).then(|| procs::parse_kaspad_args(&running[0].args).network);
         let named = args.network.clone().or_else(|| parsed.as_ref().and_then(|f| f.mining.network.clone()));
         let network_guessed = named.is_none();
-        let network = named.or(single).unwrap_or_else(|| "testnet-12".to_string());
+        let network = named.or(single).unwrap_or_else(|| crate::node::DEFAULT_NETWORK.to_string());
         // A file for another network is not this setup's starting point; it is replaced at the end
         // (with a question), and its values do not leak into this network's.
         let file = parsed.filter(|f| f.mining.network.as_deref().is_none_or(|n| n == network)).unwrap_or_default();
@@ -1735,7 +1735,7 @@ impl<'a> Wizard<'a> {
                     Finding::error("E-SETUP-FUNDS-UNREAD", exit::COMPONENT_DOWN, "The key's outputs could not be read").current(e.msg),
                 )
             })?;
-            let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
+            let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.selectable()).collect();
             spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
             let (mut sum, mut picked, mut fee) = (0u64, Vec::new(), key.estimate_bond_fee_for_inputs(&mass, prefix, 1));
             for u in spendable.iter().take(MAX_BOND_INPUTS) {
@@ -2116,7 +2116,7 @@ impl<'a> Wizard<'a> {
         }
         let best = all
             .iter()
-            .filter(|u| u.mature && !u.bonded && !u.entry.is_coinbase && u.amount >= FEE_OUTPOINT_MIN_SOMPI && op_of(u) != bond_op)
+            .filter(|u| u.selectable() && !u.entry.is_coinbase && u.amount >= FEE_OUTPOINT_MIN_SOMPI && op_of(u) != bond_op)
             .max_by_key(|u| u.amount);
         if let Some(u) = best {
             return self.accept_fee(&op_of(u), u.amount, "chosen: the largest ordinary output at the key");
@@ -2126,7 +2126,7 @@ impl<'a> Wizard<'a> {
             self.self_send(FEE_FLOAT_SPLIT_SOMPI, "make the panel a fee float").await?;
             let (all, _) = self.read_funds().await?;
             if let Some(u) =
-                all.iter().filter(|u| u.mature && !u.bonded && !u.entry.is_coinbase && op_of(u) != bond_op).max_by_key(|u| u.amount)
+                all.iter().filter(|u| u.selectable() && !u.entry.is_coinbase && op_of(u) != bond_op).max_by_key(|u| u.amount)
             {
                 let op = op_of(u);
                 return self.accept_fee(&op, u.amount, "made by the self-send");
@@ -2434,6 +2434,7 @@ mod tests {
             mature,
             amount,
             bonded,
+            reserved: false,
         }
     }
 

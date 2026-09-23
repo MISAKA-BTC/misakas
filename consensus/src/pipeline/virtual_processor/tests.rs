@@ -718,6 +718,269 @@ async fn adr0142_past_the_cursor_a_beat_is_never_starved_and_the_clock_still_tic
     );
 }
 
+/// The ADR-0142 fixture the cursor tests share: a V2 bundle with the heartbeat lane, the anchor
+/// clock and the cursor armed from genesis — and, when `floor` is set, the clock floor (H3/H5).
+fn clock_cursor_config(floor: bool) -> kaspa_consensus_core::config::Config {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+            p.palw_anchor_clock = Some(ForkActivation::always());
+            p.palw_clock_cursor = Some(ForkActivation::always());
+            p.palw_clock_floor = floor.then(ForkActivation::always);
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the clock and its cursor are a runnable ruleset");
+    config
+}
+
+/// Adapt a template built at `at` into a heartbeat, insert it, and return it with the `earliest`
+/// the adapter reported. The simulated clock follows the stamp, as a miner's would.
+async fn insert_beat_at(ctx: &mut TestContext, nonce: u64, at: u64) -> (kaspa_consensus_core::block::Block, u64) {
+    ctx.simulated_time = ctx.simulated_time.max(at);
+    let t = ctx.build_block_template(nonce, at);
+    let (t, earliest) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(t).expect("the lane adapts");
+    let block = t.block.to_immutable();
+    ctx.simulated_time = ctx.simulated_time.max(block.header.timestamp);
+    ctx.validate_and_insert_block(block.clone()).await.assert_valid_utxo_tip();
+    (block, earliest)
+}
+
+/// **H1 (the 2026-09-24 heartbeat audit): past the cursor the adapter's `earliest` IS the slot, and
+/// the hint says when a slot is taken.**
+///
+/// Measured on testnet-12: a tick took `120 s + a + b + c` (163–261 s per DAA), heartbeats were 74%
+/// of blocks and 11% of beats got a tick. The miner never waited, because the adapter answered
+/// `earliest = now` past the cursor — so it ground beats into a slot the clock had already advanced
+/// through, each one a blue score and a relay for nothing, and the beat that could have been granted
+/// started late. Both answers now come from the decision the DAA score itself is computed from.
+#[tokio::test]
+async fn h1_past_the_cursor_the_adapter_waits_for_the_slot_and_the_hint_names_it() {
+    use kaspa_consensus_core::palw_heartbeat_v1::{HEARTBEAT_RECOVERY_INTERVAL_MS as I, HeartbeatYieldHintV1};
+    kaspa_core::log::try_init_logger("info");
+    let config = clock_cursor_config(false);
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let daa = |ctx: &TestContext, h| ctx.consensus.virtual_processor().headers_store.get_daa_score(h).unwrap();
+
+    // Beat 0 merges the priced anchor, so the anchor ticks and beat 0 is the block at the new score:
+    // the reference. The next slot opens one interval after it.
+    let t0 = ctx.simulated_time + I;
+    let (beat0, _) = insert_beat_at(&mut ctx, 31, t0).await;
+    let slot = beat0.header.timestamp + I;
+
+    // **Ten seconds later the slot is taken.** The adapter used to answer "now" here.
+    let (early, earliest) = {
+        let t = ctx.build_block_template(32, beat0.header.timestamp + 10_000);
+        ctx.consensus.virtual_processor().heartbeat_adapt_block_template(t).expect("the lane adapts")
+    };
+    assert_eq!(earliest, slot, "past the cursor `earliest` is the next slot, not the template's own time");
+    assert_eq!(early.block.header.timestamp, slot, "and a template adapted early is stamped for the slot, never before it");
+    let vp = ctx.consensus.virtual_processor().clone();
+    assert_eq!(vp.heartbeat_yield_hint_at(beat0.header.timestamp + 10_000), HeartbeatYieldHintV1::SlotTaken(slot));
+    assert_eq!(vp.heartbeat_yield_hint_at(slot - 1), HeartbeatYieldHintV1::SlotTaken(slot), "until the last millisecond");
+    assert_ne!(vp.heartbeat_yield_hint_at(slot), HeartbeatYieldHintV1::SlotTaken(slot), "and open at the boundary");
+
+    // At the slot the beat is minted and holds it; a block that merges it steps. Between the two
+    // the hint does NOT say "taken" — the step is the next block, and this lane may be the only one
+    // that builds it.
+    let (beat1, earliest1) = insert_beat_at(&mut ctx, 33, slot).await;
+    assert_eq!(earliest1, slot);
+    assert_eq!(daa(&ctx, beat1.header.hash), daa(&ctx, beat0.header.hash), "a beat holding the slot has not stepped yet");
+    assert!(
+        !matches!(vp.heartbeat_yield_hint_at(slot + 1), HeartbeatYieldHintV1::SlotTaken(_)),
+        "a granted beat waiting in the virtual is not a taken slot: the next block steps the clock"
+    );
+    let (beat2, earliest2) = insert_beat_at(&mut ctx, 34, slot + 1_000).await;
+    assert_eq!(earliest2, slot + 1_000, "the step's slot is already open: its own time");
+    assert_eq!(daa(&ctx, beat2.header.hash), daa(&ctx, beat1.header.hash) + 1, "the step advanced the clock");
+
+    // …and now the slot IS taken, until one interval after the step: the step is the reference.
+    let next = beat2.header.timestamp + I;
+    assert_eq!(vp.heartbeat_yield_hint_at(beat2.header.timestamp + 1), HeartbeatYieldHintV1::SlotTaken(next));
+}
+
+/// The cursor fixture with the attempt-work constant (so an attempt block outweighs any heartbeat
+/// line) and, when `floor` is set, the clock floor.
+fn clock_floor_config(floor: bool) -> kaspa_consensus_core::config::Config {
+    let mut config = clock_cursor_config(floor);
+    let mut params = config.params.clone();
+    params.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
+        activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+        work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+        ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
+    });
+    config = ConfigBuilder::new(params).skip_proof_of_work().build();
+    config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
+    config
+}
+
+/// A heartbeat on explicit parents: the harness block, re-declared into the lane (algo 8, no
+/// carriage, a zero-subsidy coinbase — Decision 1.4) and stamped `timestamp`.
+fn heartbeat_on(ctx: &TestContext, parents: Vec<BlockHash>, nonce: u64, timestamp: u64) -> MutableBlock {
+    let mut b = ctx.build_block_with_parents(parents, nonce, timestamp);
+    b.header.pow_algo_id = kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID;
+    b.header.palw_commitment = Vec::new();
+    b.transactions[0].payload[8..16].copy_from_slice(&0u64.to_le_bytes());
+    b.transactions[0].finalize();
+    b.header.hash_merkle_root = kaspa_consensus_core::merkle::calc_hash_merkle_root(b.transactions.iter());
+    b.header.finalize();
+    b
+}
+
+/// **H3: past the floor F5's chain exemption is paced — a burst chain is refused, the outage chain
+/// F5 exists for still merges.**
+///
+/// The burst: eight attempt blocks a second apart (each outweighs any heartbeat line, and here each
+/// advances the score), and a heartbeat hung off each, merging the beat before it. Every beat is
+/// stamped at its own slot, so each is valid alone; together they are ONE chain of beats a second
+/// apart that no slot paid for, and every one lands in the next beat's mergeset. Without the floor
+/// the whole chain is admitted; with it, the first block whose mergeset holds more beats than their
+/// timestamps pay for is refused.
+#[tokio::test]
+async fn h3_past_the_floor_a_burst_heartbeat_chain_is_refused_and_an_outage_chain_merges() {
+    use kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS as I;
+    kaspa_core::log::try_init_logger("info");
+    for floor in [true, false] {
+        let config = clock_floor_config(floor);
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        ctx.simulated_time += 120_000;
+        let base = ctx.build_block_template(1, ctx.simulated_time);
+        ctx.validate_and_insert_block(base.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+        let t = ctx.simulated_time;
+        let mut line = vec![base.block.header.hash];
+        for i in 1..=8u64 {
+            let y = ctx.build_block_with_parents(vec![line[i as usize - 1]], 100 + i, t + i * 1_000);
+            line.push(y.header.hash);
+            ctx.consensus.validate_and_insert_block(y.to_immutable()).virtual_state_task.await.expect("an attempt on the line");
+        }
+        let mut previous: Option<BlockHash> = None;
+        let mut refused = None;
+        for i in 1..=8u64 {
+            let mut parents = vec![line[i as usize - 1]];
+            parents.extend(previous);
+            let stamp = t + (i - 1) * 1_000 + I;
+            if floor {
+                let slot = ctx.consensus.virtual_processor().palw_clock_step_for_parents(&parents).unwrap().next_slot_ms();
+                assert_eq!(slot, Some(stamp), "beat {i} is stamped exactly at its own slot");
+            }
+            let beat = heartbeat_on(&ctx, parents, 200 + i, stamp);
+            let hash = beat.header.hash;
+            match ctx.consensus.validate_and_insert_block(beat.to_immutable()).virtual_state_task.await {
+                Ok(_) => previous = Some(hash),
+                Err(e) => {
+                    refused = Some((i, e));
+                    break;
+                }
+            }
+        }
+        use kaspa_consensus_core::errors::block::RuleError::MergeSetHeartbeatChainUnpaced as Unpaced;
+        match (floor, refused) {
+            (true, Some((i, Unpaced(count, span, capacity)))) => {
+                assert_eq!(i, 8, "the first beat whose mergeset holds more beats than they paid for");
+                assert_eq!((count, span, capacity), (7, 6_000, 6), "seven beats over six seconds: the flat bound and one slot's two");
+            }
+            (false, None) => {}
+            (floor, other) => panic!("floor={floor}: the burst answered {other:?}"),
+        }
+    }
+
+    // **F5's own shape still merges past the floor.** Six outage beats in one chain, minted by the
+    // lane's adapter a slot at a time, stranded behind a heavier bonded fork and merged whole.
+    let config = clock_floor_config(true);
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    ctx.simulated_time += 120_000;
+    let base = ctx.build_block_template(1, ctx.simulated_time);
+    let base_hash = base.block.header.hash;
+    ctx.validate_and_insert_block(base.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let mut chain = Vec::new();
+    for nonce in 0..6u64 {
+        ctx.simulated_time += I;
+        let template = ctx.build_block_template(2 + nonce, ctx.simulated_time);
+        let (hb_template, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+        ctx.simulated_time = ctx.simulated_time.max(hb_template.block.header.timestamp);
+        chain.push(hb_template.block.header.hash);
+        ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await;
+    }
+    let fork = ctx.build_block_with_parents(vec![base_hash], 77, ctx.simulated_time + 1_000);
+    let fork_hash = fork.header.hash;
+    ctx.consensus.validate_and_insert_block(fork.to_immutable()).virtual_state_task.await.expect("the bonded fork is valid");
+    let fork_ext = ctx.build_block_with_parents(vec![fork_hash], 78, ctx.simulated_time + 1_500);
+    let fork_ext_hash = fork_ext.header.hash;
+    ctx.consensus.validate_and_insert_block(fork_ext.to_immutable()).virtual_state_task.await.expect("the extension is valid");
+    let merger = ctx.build_block_with_parents(vec![fork_ext_hash, chain[5]], 79, ctx.simulated_time + 2_000);
+    {
+        let gd = ctx.consensus.services.ghostdag_manager.ghostdag(merger.header.direct_parents());
+        assert_eq!(gd.selected_parent, fork_ext_hash);
+        let merged = gd.mergeset_blues.iter().chain(gd.mergeset_reds.iter()).filter(|h| chain.contains(h)).count() as u64;
+        assert_eq!(merged, 6, "all six outage beats in one mergeset");
+        assert!(merged > kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
+    }
+    ctx.consensus
+        .validate_and_insert_block(merger.to_immutable())
+        .virtual_state_task
+        .await
+        .expect("a chain paced a slot at a time is what F5's exemption is for, and the floor admits it");
+}
+
+/// **H5: a block of ANY lane that steps the clock on a beat's grant is stamped at or past the slot it
+/// consumed — and without the floor one stamped two seconds after the reference stepped anyway.**
+///
+/// The block that steps becomes the next slot's reference. A heartbeat step already meets H3 (it is
+/// a beat, over the same cursor); this is the step from another lane — here an attempt block whose
+/// mergeset holds nothing priced but the beat that holds the slot, so the beat's grant is its tick.
+#[tokio::test]
+async fn h5_a_step_from_another_lane_is_stamped_at_or_past_its_slot() {
+    use kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_RECOVERY_INTERVAL_MS as I;
+    kaspa_core::log::try_init_logger("info");
+    for floor in [true, false] {
+        let config = clock_cursor_config(floor);
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        for _ in 0..2 {
+            ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        }
+        let first = ctx.simulated_time + I;
+        let (beat0, _) = insert_beat_at(&mut ctx, 41, first).await;
+        let reference = beat0.header.timestamp;
+        let slot = reference + I;
+        let (holder, _) = insert_beat_at(&mut ctx, 42, slot).await;
+        let holder_daa = ctx.consensus.virtual_processor().headers_store.get_daa_score(holder.header.hash).unwrap();
+        // The next template steps the clock on the holder's grant; stamped "now" — two seconds after
+        // the reference, long before the slot it consumes.
+        let early = ctx.build_block_template(43, reference + 2_000);
+        assert!(kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(early.block.header.pow_algo_id), "another lane");
+        assert_eq!(early.block.header.daa_score, holder_daa + 1, "it steps the clock");
+        let hash = early.block.header.hash;
+        match (floor, ctx.consensus.validate_and_insert_block(early.block.to_immutable()).virtual_state_task.await) {
+            (true, Err(kaspa_consensus_core::errors::block::RuleError::ClockStepBeforeItsSlot(h, stamped, opens))) => {
+                assert_eq!((h, stamped, opens), (hash, reference + 2_000, slot), "refused with the slot it consumed");
+            }
+            (false, Ok(_)) => {
+                let parents: Vec<BlockHash> = ctx.consensus.get_virtual_parents().into_iter().collect();
+                assert_eq!(
+                    ctx.consensus.virtual_processor().palw_clock_step_for_parents(&parents).unwrap().next_slot_ms(),
+                    Some(reference + 2_000 + I),
+                    "without the floor it ticked, and the next slot opened two seconds after the last"
+                );
+            }
+            (floor, other) => panic!("floor={floor}: a step two seconds after the reference answered {other:?}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
@@ -11893,6 +12156,351 @@ async fn palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read() {
     );
 }
 
+/// **The 2026-09-23 Position route matrix, P-B1: a carrier buy the chain refuses is paid back to the
+/// payer, end to end — never kept in the sink.**
+///
+/// The route matrix measured the defect in-process (P8): the carrier is accepted, its `OP_RETURN`
+/// sink holds the MSK, the fold drops the object, and nothing pays anything back. This drives a
+/// REAL 0x4b `ModelBuy` carrier — funded from a matured coinbase, ML-DSA-87-signed, change at
+/// output 0 and the sink at output 1 exactly as `misaka palw model-buy` builds it — onto a line
+/// that has no market, through `validate_and_insert_block`, and follows the money: past
+/// `palw_audit_2026_09_23` the object walk names the payer, the filter records the refund, the
+/// transition writes the row, and a later coinbase pays the sink's value to the change script the
+/// payer signed. Below the fence — testnet-11's shape — the same carrier is folded exactly as
+/// before: no row and no payment.
+///
+/// It also checks the filter's bookkeeping on the order it cares about: a refund is owed by the
+/// objects acceptance DROPPED, and never by one it applied.
+#[tokio::test]
+async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+
+    /// `(the refund row the tip state holds for the carrier, whether a coinbase paid it to the payer,
+    /// the payer's change payload)`.
+    async fn run(audit: Option<ForkActivation>) -> (Option<(kaspa_hashes::Hash64, u64)>, bool, kaspa_hashes::Hash64) {
+        use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
+        use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+        use kaspa_consensus_core::mass::MassCalculator;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+        use kaspa_consensus_core::palw_state_v2::{PalwCarrierRefundV1, PalwConsensusObjectV2, palw_model_refund_payout_key_v1};
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        use kaspa_consensus_core::tx::{PopulatedTransaction, TransactionInput, TransactionOutput, UtxoEntry};
+        use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        kaspa_core::log::try_init_logger("info");
+        let catalog = palw_v2_test_catalog();
+        let mut bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+        // Past the 2026-09-23 audit a claim reserves its ESCROW on its bond (option A), which the
+        // `pwu`-priced fixture above does not cover; fund the bonds for the unit the fence prices in,
+        // so the harness's own attempt blocks stay admissible on both sides of the comparison.
+        for object in bundle.genesis_objects.iter_mut() {
+            if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
+                *collateral = 10_000_000 * 100_000_000;
+            }
+        }
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params({
+                let bundle = bundle.clone();
+                move |p| {
+                    p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                    p.palw_model_market = Some(ForkActivation::always());
+                    p.palw_audit_2026_09_23 = audit;
+                    // testnet-12 arms the 2026-09-11 audit from genesis too, and with it the
+                    // acceptance rehearsal that folds the real step 3 — the one whose queue count
+                    // the P-B1 refund accounting reads exactly. The unarmed run keeps testnet-11's
+                    // pre-fence shape.
+                    if audit.is_some() {
+                        p.palw_audit_2026_09_11 = Some(ForkActivation::always());
+                    }
+                    p.coinbase_maturity = 2;
+                    *p = p.clone().with_palw_v2_cadence();
+                    p.sync_palw_escrow_backed_exposure();
+                }
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        let state_params = match &ctx.consensus.params().palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.clone(),
+            _ => unreachable!("the fixture is ConsensusV2"),
+        };
+
+        // The harness's miner, as in the rent test above: the template declares algo-6 and the
+        // harness stands in for the producer.
+        async fn mine(ctx: &mut TestContext, miner: MinerData, txs: Vec<Transaction>) -> Block {
+            ctx.simulated_time += ctx.consensus.params().target_time_per_block();
+            let mut t =
+                ctx.consensus.build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard).unwrap();
+            t.block.header.timestamp = ctx.simulated_time;
+            t.block.header.nonce = ctx.simulated_time;
+            if t.block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+                t.block.header.palw_commitment = ctx.consensus.palw_v2_test_carriage(&t.block.header);
+            }
+            t.block.header.finalize();
+            let block = t.block.to_immutable();
+            ctx.validate_and_insert_block(block.clone()).await;
+            block
+        }
+
+        // The payer: a key whose coinbase this test can spend, funded by a two-wide row (see the
+        // rent test above for why a linear V2 chain pays nobody).
+        let kp = mldsa::generate_key_pair([0x8Cu8; 32]);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let address_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&address_payload);
+        ctx.miner_data = MinerData::new(spk.clone(), vec![]);
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await;
+        let harvest = mine(&mut ctx, new_miner_data(), vec![]).await;
+        let coinbase = &harvest.transactions[0];
+        let (index, out) = coinbase
+            .outputs
+            .iter()
+            .enumerate()
+            .find(|(_, o)| o.script_public_key == spk)
+            .expect("the block merging the row pays the sibling's miner");
+        let funding = TransactionOutpoint::new(coinbase.id(), index as u32);
+        let value = out.value;
+        let funding_daa = harvest.header.daa_score;
+        for _ in 0..4 {
+            mine(&mut ctx, new_miner_data(), vec![]).await;
+        }
+
+        // A buy of a line nobody has seeded: the fold refuses it on every build (ADR-0090 Decision 2
+        // — no market opens by a buy), so its carrier is accepted and its object is not.
+        let vp = ctx.consensus.virtual_processor();
+        let (_, tip) = vp.palw_state_v2_store.read().load_tip(&state_params).unwrap().expect("the tip loads");
+        let line = *tip.classes_iter().map(|(id, _)| id).next().expect("the catalog registers a class");
+        assert!(tip.model_market(&line).is_none(), "the fixture's line has no market");
+        let paid = value / 4;
+        let fee = 1_000_000;
+        let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+        // A funded, signed 0x4b carrier of a `ModelBuy` paying `paid` into the line's sink, change at
+        // output 0 back to the payer's own script — exactly as `misaka palw model-buy` builds it.
+        let carrier_of = |funding: TransactionOutpoint, value: u64, funding_daa: u64, from_coinbase: bool, paid: u64| {
+            let object = PalwConsensusObjectV2::ModelBuy {
+                line_id: line,
+                holder: kaspa_hashes::Hash64::from_u64_word(0xB0B),
+                msk_in: paid,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+                .expect("the lifecycle payload serializes");
+            let mut tx = Transaction::new(
+                crate::constants::TX_VERSION,
+                vec![TransactionInput::new(funding, vec![], 0, 1)],
+                vec![
+                    TransactionOutput::new(value - paid - fee, spk.clone()),
+                    TransactionOutput::new(paid, palw_model_sink_spk_v1(&line)),
+                ],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                payload,
+            );
+            let utxo = UtxoEntry::new(value, spk.clone(), funding_daa, from_coinbase);
+            let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+                .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+                .expect("contextual mass is computable for the funded carrier")
+                .storage_mass;
+            tx.set_mass(storage_mass);
+            let reused = Mldsa87SigHashReusedValuesUnsync::new();
+            let sig_hash = {
+                let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+                calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+            };
+            let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x8Cu8; 32])
+                .expect("ML-DSA-87 sign on the 64-byte sighash");
+            let mut sig_item = sig.as_ref().to_vec();
+            sig_item.push(SIG_HASH_ALL.to_u8());
+            tx.inputs[0].signature_script = ScriptBuilder::new()
+                .add_data(&sig_item)
+                .expect("the signature push fits")
+                .add_data(&pubkey)
+                .expect("the public-key push fits")
+                .drain();
+            tx
+        };
+        let tx = carrier_of(funding, value, funding_daa, true, paid);
+        let carrier_id = tx.id();
+
+        let carrier_block = mine(&mut ctx, new_miner_data(), vec![tx]).await;
+        let carrier_daa = carrier_block.header.daa_score;
+        assert!(carrier_block.transactions.iter().any(|t| t.id() == carrier_id), "the carrier reached the block");
+        assert_eq!(ctx.consensus.block_status(carrier_block.header.hash), BlockStatus::StatusUTXOValid);
+        // One more block, so the carrier block's acceptance is folded into the tip state.
+        mine(&mut ctx, new_miner_data(), vec![]).await;
+        let vp = ctx.consensus.virtual_processor();
+        let (_, tip) = vp.palw_state_v2_store.read().load_tip(&state_params).unwrap().expect("the tip loads");
+        let key = palw_model_refund_payout_key_v1(&carrier_id);
+        let row = tip.pending_payouts_iter().find(|(k, _)| **k == key).map(|(_, row)| (row.payload, row.amount));
+
+        // The filter's bookkeeping, on the tip: a refund is owed by the objects acceptance dropped
+        // — before and after one it applied — and never by the one it applied.
+        if audit.is_some() {
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: ctx.consensus.get_sink(),
+                daa_score: ctx.consensus.get_virtual_daa_score(),
+                blue_score: vp.headers_store.get_header(ctx.consensus.get_sink()).unwrap().blue_score + 1,
+                subsidy: 0,
+            };
+            let owed = |carrier: u64, amount: u64| PalwCarrierRefundV1 {
+                carrier: kaspa_consensus_core::tx::TransactionId::from_u64_word(carrier),
+                line_id: line,
+                payee: kaspa_hashes::Hash64::from_u64_word(0xFA),
+                amount,
+            };
+            let buy = |min_units_out: u64| PalwConsensusObjectV2::ModelBuy {
+                line_id: line,
+                holder: kaspa_hashes::Hash64::from_u64_word(0xB0B),
+                msk_in: 1_000_000,
+                min_units_out,
+                sink_index: 1,
+            };
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: line,
+                seeder: kaspa_hashes::Hash64::from_u64_word(0x5EED),
+                msk_seed: kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            let vp = ctx.consensus.virtual_processor();
+            let (accepted, _, refunds) = vp.palw_v2_accepted_refundable_objects_for_tests(
+                &tip,
+                &state_params,
+                &point,
+                vec![
+                    (buy(0), Some(owed(1, 1_000_000))),
+                    (seed.clone(), Some(owed(2, kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1))),
+                    (buy(u64::MAX), Some(owed(3, 1_000_000))),
+                ],
+                point.block,
+            );
+            assert_eq!(accepted, vec![seed.clone()], "the seed opens the pair; both buys are refused");
+            assert_eq!(refunds, vec![owed(1, 1_000_000), owed(3, 1_000_000)], "the two refused carriers are owed, the seed is not");
+            let folded = vp
+                .palw_v2_block_fold_with_refunds_for_tests(&tip, &state_params, &point, &accepted, refunds.clone())
+                .expect("what the filter returns, the transition applies");
+            for refund in &refunds {
+                let key = palw_model_refund_payout_key_v1(&refund.carrier);
+                assert!(
+                    folded
+                        .pending_payouts_iter()
+                        .any(|(k, row)| *k == key && row.payload == refund.payee && row.amount == refund.amount)
+                );
+            }
+
+            // ---- Refunds COUNT against the cap (user decision on the P-B1 review) ----------------
+            use kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS as CAP;
+            // A queue filled to the cap by refunds alone: the cap holds with refunds, whatever the
+            // list handed to the fold.
+            let flood = |from: u64, n: usize| (0..n as u64).map(|i| owed(from + i, 1_000)).collect::<Vec<_>>();
+            let full = vp
+                .palw_v2_block_fold_with_refunds_for_tests(&tip, &state_params, &point, &[], flood(0x40_0000, CAP + 16))
+                .expect("a block of refunds folds");
+            assert_eq!(full.pending_payouts_iter().count(), CAP, "the cap holds with refunds");
+
+            // **Refused buys cannot starve a valid move in the same block.** The next block drains
+            // eight rows first, so it has eight. A cheap refused buy (`min_units_out = u64::MAX`)
+            // used to promise its two fee rows and then write none — six of them took twelve phantom
+            // rows and the valid buy behind them was dropped. Now a refused buy takes exactly the one
+            // row its refund really needs, reserved: six refunds and the valid buy's two legs fit.
+            let next = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: kaspa_hashes::Hash64::from_u64_word(0x9E47),
+                daa_score: point.daa_score + 1,
+                blue_score: point.blue_score + 1,
+                subsidy: 0,
+            };
+            let valid = PalwConsensusObjectV2::ModelBuy {
+                line_id: line,
+                holder: kaspa_hashes::Hash64::from_u64_word(0xB0B),
+                msk_in: 1_000 * 100_000_000,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let mut carried = vec![(seed.clone(), None)];
+            carried.extend((0..6u64).map(|i| (buy(u64::MAX), Some(owed(0x50_0000 + i, 1_000_000)))));
+            carried.push((valid.clone(), Some(owed(0x50_0100, 1_000 * 100_000_000))));
+            let (accepted, _, refunds) =
+                vp.palw_v2_accepted_refundable_objects_for_tests(&full, &state_params, &next, carried, next.block);
+            assert_eq!(accepted, vec![seed.clone(), valid], "the valid buy behind six refused ones is not starved");
+            assert_eq!(refunds.len(), 6, "each refused buy owes, and reserves, one row");
+            let after = vp
+                .palw_v2_block_fold_with_refunds_for_tests(&full, &state_params, &next, &accepted, refunds)
+                .expect("what the filter returns, the transition applies");
+            assert!(after.pending_payouts_iter().count() <= CAP, "and the block's refunds keep the cap");
+
+            // **A full queue refuses a market carrier at the mempool and at the template** — it
+            // is neither relayed nor mined, so nothing it pays can burn. The tip is swapped for the
+            // full state (test-only), a second real carrier is offered from the first one's change,
+            // and the real tip is put back afterwards.
+            let sink = ctx.consensus.get_sink();
+            let (_, real_tip) = vp.palw_state_v2_store.read().load_tip(&state_params).unwrap().expect("the tip loads");
+            let second = carrier_of(TransactionOutpoint::new(carrier_id, 0), value - paid - fee, carrier_daa, false, paid / 2);
+            let mempool = |tx: &Transaction| {
+                let mut mutable = kaspa_consensus_core::tx::MutableTransaction::from_tx(tx.clone());
+                ctx.consensus.validate_mempool_transaction(&mut mutable, &Default::default())
+            };
+            mempool(&second).expect("with room, the carrier is admitted");
+            vp.palw_state_v2_store.write().set_tip_for_tests(sink, &full).expect("the full queue becomes the tip");
+            match mempool(&second) {
+                Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(why)) => {
+                    assert!(why.contains("payout queue"), "{why}")
+                }
+                other => panic!("a full queue must refuse the carrier at the mempool, got {other:?}"),
+            }
+            let template = ctx.consensus.build_block_template(
+                new_miner_data(),
+                Box::new(OnetimeTxSelector::new(vec![second.clone()])),
+                TemplateBuildMode::Standard,
+            );
+            match template {
+                Err(crate::errors::RuleError::InvalidTransactionsInNewBlock(invalid)) => assert!(
+                    matches!(
+                        invalid.get(&second.id()),
+                        Some(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(_))
+                    ),
+                    "the template refuses the carrier on the queue: {invalid:?}"
+                ),
+                other => {
+                    panic!("a full queue must keep the carrier out of the template, got {:?}", other.map(|t| t.block.header.hash))
+                }
+            }
+            vp.palw_state_v2_store.write().set_tip_for_tests(sink, &real_tip).expect("the real tip is restored");
+            mempool(&second).expect("room again: the same carrier is admitted");
+        }
+
+        // Follow the row to a coinbase: it drains after the claim and seat rows, which on this
+        // short chain are few.
+        let mut paid_back = false;
+        for _ in 0..12 {
+            let block = mine(&mut ctx, new_miner_data(), vec![]).await;
+            if block.transactions[0].outputs.iter().any(|o| o.script_public_key == spk && o.value == paid) {
+                assert_eq!(
+                    ctx.consensus.block_status(block.header.hash),
+                    BlockStatus::StatusUTXOValid,
+                    "the coinbase that pays the refund is the one validation expects (construction == validation)"
+                );
+                paid_back = true;
+                break;
+            }
+        }
+        (row, paid_back, kaspa_hashes::Hash64::from_bytes(address_payload))
+    }
+
+    let (row, paid_back, payer) = run(Some(ForkActivation::always())).await;
+    let Some((payee, amount)) = row else { panic!("past the fence the refused carrier is owed a refund row") };
+    assert_eq!(payee, payer, "the refund pays the change script the payer signed — a key it can spend");
+    assert!(amount > 0);
+    assert!(paid_back, "and a coinbase pays it to that script");
+
+    let (row, paid_back, _) = run(None).await;
+    assert_eq!(row, None, "below the fence (testnet-11's shape) a refused carrier is folded exactly as before");
+    assert!(!paid_back);
+}
+
 /// **A candidate this consensus cannot REACH is an absent opinion, not a dead node** (audit
 /// 2026-09-02).
 ///
@@ -12821,6 +13429,33 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         found, allowed,
         "a `load_tip` caller in virtual_processor/processor.rs is not one of the fold/restart paths. A READ path \
          must take `load_tip_cached`; a new walk-or-write path belongs in OWNED_STATE_CALLERS."
+    );
+}
+
+/// **The 2026-09-23 Position route matrix, P-B3: the template asks the market gate the mempool
+/// asks** (the review's MEDIUM point). A carrier admitted to the mempool while its class served can
+/// be in the pool when the class regresses (Probation → Held); only a template-time check keeps
+/// this node from mining it into a fold that drops it. Pinned on the source: both
+/// `validate_mempool_transaction_impl` and `validate_block_template_transaction` call
+/// `palw_mempool_market_refusal`, the one function that asks `palw_model_market_carrier_refusal_v1`.
+#[test]
+fn p_b3_the_template_asks_the_market_gate_the_mempool_asks() {
+    let source = include_str!("processor.rs");
+    let body_of = |name: &str| -> String {
+        let start = source.find(&format!("fn {name}(")).unwrap_or_else(|| panic!("{name} exists"));
+        let rest = &source[start..];
+        let end = rest[1..].find("\n    fn ").or_else(|| rest[1..].find("\n    pub")).map(|i| i + 1).unwrap_or(rest.len());
+        rest[..end].to_string()
+    };
+    for caller in ["validate_mempool_transaction_impl", "validate_block_template_transaction"] {
+        assert!(
+            body_of(caller).contains("self.palw_mempool_market_refusal("),
+            "{caller} must ask the P-B3 market gate (palw_mempool_market_refusal)"
+        );
+    }
+    assert!(
+        body_of("palw_mempool_market_refusal").contains("palw_model_market_carrier_refusal_v1("),
+        "the gate is the core predicate the fold's refusal is tested against"
     );
 }
 
@@ -15219,7 +15854,7 @@ async fn fix12_walk_fixture(armed: bool) -> Fix12WalkFixture {
     use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwStateCarriageV2};
     let catalog = palw_v2_test_catalog();
     let mut bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
-    // Past the fence a `BondRegistered` posts the panel floor (#12 (c)); genesis rows too.
+    // A `BondRegistered` posts the registration floor (#12 (c): the producer floor); genesis rows too.
     let floor = kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(bundle.bond.min_collateral_sompi(), true);
     for object in bundle.genesis_objects.iter_mut() {
         if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
@@ -15531,3 +16166,9 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
     let accepted = f.accepted(&state, objects);
     assert_eq!(accepted, honest[..3].to_vec(), "the refused registrant spent one slot; the honest registrant keeps three");
 }
+
+// ---- testnet-12: the execution lane end to end, from a floor attempt to a paid round block ----
+// Test-only: the scenario lives in `tests/t12_round_lane_e2e.rs` beside this file, as a child of
+// this module so it reuses `TestContext` and the harness identities.
+mod t12_clock_floor;
+mod t12_round_lane_e2e;
