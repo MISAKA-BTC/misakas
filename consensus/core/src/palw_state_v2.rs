@@ -1945,6 +1945,80 @@ pub fn palw_bond_collateral_is_locked_v3(
     }
 }
 
+/// **The second clock's liveness escape** (2026-09-24 DoS audit, §4c; the user's decision): the
+/// depth the second clock demands at `now_daa`, or `None` once no anchor has settled for
+/// `2 × window_court` DAA.
+///
+/// The second clock exists so that nothing economic concludes on history nobody signed. Counted
+/// without an escape it had no upper bound at all: an attempt lane that stops licensing —
+/// testnet-12's eight bonds with five seats and the executor excluded stop seating a panel at the
+/// third retirement — froze every lock, every liability and every retiring bond until the end of
+/// the chain (up to 4.13M MSK measured, `dos_l4_two_clock`). A stretch of `2 × window_court` with
+/// no licence is one no court could have run inside, so past it the DAA clock alone decides again.
+/// `recent_anchor_daas` is the state's sorted ring; "the last anchor" is the newest entry at or
+/// before `now_daa`, `0` when there is none. `None` in, `None` out: below the fence nothing moves.
+pub fn palw_second_clock_depth_v1(depth: Option<u64>, recent_anchor_daas: &[u64], now_daa: u64, window_court: u64) -> Option<u64> {
+    let depth = depth?;
+    let at_or_before = recent_anchor_daas.partition_point(|&daa| daa <= now_daa);
+    let last = if at_or_before == 0 { 0 } else { recent_anchor_daas[at_or_before - 1] };
+    if now_daa.saturating_sub(last) >= window_court.saturating_mul(2) { None } else { Some(depth) }
+}
+
+/// **How far back a live panel's anchor can lie behind the state that validates it**: a
+/// `PanelBound` is derived no later than `window_bind` after its bind base, and the receipt window
+/// is added as margin. The anchor ring keeps everything inside this horizon.
+pub fn palw_anchor_ring_horizon_v1(params: &PalwStateParamsV2) -> u64 {
+    params.window_bind().saturating_add(params.window_receipt())
+}
+
+/// **How many of the ring's oldest entries a push at `now_daa` may drop** (2026-09-24 DoS audit,
+/// fix #13). A query asks for the `depth`-th most recent anchor strictly before some DAA
+/// `x >= now_daa - horizon_daa`. Every entry at or after that cutoff may be needed, and so may the
+/// `depth` newest entries before it — nothing older ever is. `ring` is sorted ascending.
+pub fn palw_anchor_ring_prune_count_v1(ring: &[u64], now_daa: u64, horizon_daa: u64, depth: u64) -> usize {
+    let cutoff = now_daa.saturating_sub(horizon_daa);
+    let older = ring.partition_point(|&daa| daa < cutoff);
+    older.saturating_sub(usize::try_from(depth).unwrap_or(usize::MAX))
+}
+
+/// **Does this bond still stand behind anything?** (2026-09-24 DoS audit, fix #1). It does while
+/// it carries any reservation — its own claims or a panel seat's duty — or any slashable lock that
+/// is live on the clocks `depth` names (pass the escaped depth, [`palw_second_clock_depth_v1`]).
+///
+/// The withdrawal gate read only the bond's status and delay. A seat drawn onto a panel could
+/// request retirement before signing (no lock existed yet, so the retire gate passed), sign
+/// `Valid` afterwards — writing a lock onto a `Retiring` bond — and spend its collateral once the
+/// delay elapsed while that lock was still live: up to a whole seat's collateral of liability
+/// that nothing could recover (`dos_l1_q4b`).
+pub fn palw_bond_backs_live_duty_v1(state: &PalwChainStateV2, key: &PalwBondKeyV2, now_daa: u64, depth: Option<u64>) -> bool {
+    if state.reserved_exposure(key) > 0 {
+        return true;
+    }
+    let settled_now = state.settled_attempt_finals;
+    state
+        .slashable_locks
+        .range((*key, ZERO_HASH64)..)
+        .take_while(|((bond, _), _)| bond == key)
+        .any(|(_, lock)| lock.is_live_v2(now_daa, settled_now, depth))
+}
+
+/// [`palw_bond_collateral_is_locked_v3`] that also reads the bond's live duties
+/// ([`palw_bond_backs_live_duty_v1`]) where `duty_gate` is set — past `palw_audit_2026_09_23`.
+/// `depth` is the second clock's escaped depth at `now_daa`. With `duty_gate` unset this is v3,
+/// byte for byte.
+pub fn palw_bond_collateral_is_locked_v4(
+    state: &PalwChainStateV2,
+    key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    now_daa: u64,
+    withdrawal_delay_daa: u64,
+    depth: Option<u64>,
+    duty_gate: bool,
+) -> bool {
+    palw_bond_collateral_is_locked_v3(bond, now_daa, withdrawal_delay_daa, state.settled_attempt_finals, depth)
+        || (duty_gate && palw_bond_backs_live_duty_v1(state, key, now_daa, depth))
+}
+
 pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
     match bond.status {
         PalwBondStatusV2::Active => true,
@@ -5909,13 +5983,28 @@ pub struct PalwChainStateV2 {
     ///
     /// Zero on every state of a network that does not retire.
     retired_safe_weight: u128,
-    /// **The second clock** (2026-09-23 heartbeat audit): how many attempt claims have EVER reached
-    /// `Final` on this chain. Monotone, rooted, and — unlike a walk over the live claims — not
-    /// lowered by retirement, so a liability that began at count `c` can ask "have `depth` anchors
-    /// settled since?" as `settled_attempt_finals - c >= depth` for as long as it lives. Counts on
-    /// every network (it is a fact, not a rule); only the deadlines past `palw_audit_2026_09_23`
-    /// read it. Schema v21.
+    /// **The second clock** (2026-09-23 heartbeat audit): how many ANCHORS this chain has ever
+    /// settled. Monotone, rooted, and — unlike a walk over the live claims — not lowered by
+    /// retirement, so a liability that began at count `c` can ask "have `depth` anchors settled
+    /// since?" as `settled_attempt_finals - c >= depth` for as long as it lives. Schema v21.
+    ///
+    /// What an anchor IS depends on the fence (2026-09-24 DoS audit, §4b). Below
+    /// `palw_audit_2026_09_23` it is an attempt claim reaching `Final` — which the DAA-driven
+    /// deadline sweep does on its own, so a pipeline of claims licensed earlier kept ticking this
+    /// counter on heartbeat-only blocks and a colluding quorum's lock died with no live history at
+    /// all. Past the fence it is an attempt claim being LICENSED: an event that needs a quorum's
+    /// live signatures in the block that carries it (`license_claim`). The field keeps its name
+    /// so the v21 layout does not move.
     settled_attempt_finals: u64,
+    /// **The DAAs of the most recent anchors** (2026-09-24 DoS audit, fixes #3 and #13), sorted,
+    /// past `palw_audit_2026_09_23` only — empty (and unhashed) on every other network. It answers
+    /// the two questions the second clock asks of history in O(log n) instead of a walk over
+    /// every retained claim: "when did the `depth`-th most recent anchor before DAA `x` settle?"
+    /// (ADR-0065 D1's floor, the coinbase floor) and "when did the last one?" (the liveness
+    /// escape). Pruned on each push to the `depth` newest entries older than the bind horizon plus
+    /// everything inside it ([`palw_anchor_ring_prune_count_v1`]), which is exactly what a query
+    /// from any anchor a live panel can still be validated at needs.
+    recent_anchor_daas: Vec<u64>,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -6013,6 +6102,7 @@ impl PalwChainStateV2 {
             last_point: None,
             retired_safe_weight: 0,
             settled_attempt_finals: 0,
+            recent_anchor_daas: Vec::new(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -7293,9 +7383,16 @@ impl PalwChainStateV2 {
         self.retired_safe_weight
     }
 
-    /// The second clock's reading: attempt claims that have ever reached `Final` (rooted, monotone).
+    /// The second clock's reading: anchors ever settled (rooted, monotone) — attempt licences past
+    /// `palw_audit_2026_09_23`, attempt `Final`s below it. See the field.
     pub fn settled_attempt_finals(&self) -> u64 {
         self.settled_attempt_finals
+    }
+
+    /// The DAAs of the most recent anchors, sorted ascending — see the field. Empty below
+    /// `palw_audit_2026_09_23`.
+    pub fn recent_anchor_daas(&self) -> &[u64] {
+        &self.recent_anchor_daas
     }
 
     pub fn safe_frontier(&self) -> (u64, BlockHash) {
@@ -7503,6 +7600,15 @@ impl PalwChainStateV2 {
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
         state.update(&self.settled_attempt_finals.to_le_bytes());
+        // Empty below `palw_audit_2026_09_23`, and then absent, so a dormant network's root is
+        // byte-identical to one computed before the ring existed.
+        if !self.recent_anchor_daas.is_empty() {
+            state.update(b"recent_anchor_daas/v1");
+            state.update(&(self.recent_anchor_daas.len() as u64).to_le_bytes());
+            for daa in &self.recent_anchor_daas {
+                state.update(&daa.to_le_bytes());
+            }
+        }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
         state.update(self.safe_frontier.as_byte_slice());
@@ -8568,10 +8674,20 @@ pub enum PalwDeltaEntryV2 {
         new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
     },
     /// The second clock's counter (2026-09-23 audit), appended last: its own entry, like
-    /// `RetiredWeight`, because it moves on its own event (an attempt reaching `Final`).
+    /// `RetiredWeight`, because it moves on its own event (an anchor settling — see the field).
     SettledFinals {
         old: u64,
         new: u64,
+    },
+    /// An anchor's DAA was appended to `recent_anchor_daas` (2026-09-24 DoS audit) (64). Revert
+    /// pops it, and refuses unless it is the last entry.
+    AnchorDaaPushed {
+        daa: u64,
+    },
+    /// The oldest entry of `recent_anchor_daas` was pruned (65). Revert puts it back in front,
+    /// and refuses unless it is no later than the entry now first.
+    AnchorDaaPruned {
+        daa: u64,
     },
 }
 
@@ -9513,9 +9629,46 @@ impl<'a> TransitionBuilder<'a> {
         if self.extras.audit_2026_09_23_active { self.extras.settled_anchor_depth } else { None }
     }
 
+    /// The second clock's depth at `now_daa` AFTER the liveness escape
+    /// ([`palw_second_clock_depth_v1`]): `None` below the fence, and `None` once no anchor has
+    /// settled for `2 × window_court`.
+    fn second_clock_depth(&self, now_daa: u64) -> Option<u64> {
+        palw_second_clock_depth_v1(self.settled_anchor_depth(), &self.state.recent_anchor_daas, now_daa, self.params.window_court)
+    }
+
+    /// **One anchor settles at `daa`** — the one writer of the second clock. The counter moves;
+    /// past `palw_audit_2026_09_23` the anchor's DAA also joins `recent_anchor_daas`, and the
+    /// entries no live panel's anchor can still ask about are pruned in the same step
+    /// ([`palw_anchor_ring_prune_count_v1`]). Every move is its own delta entry, so a reorg
+    /// undoes it exactly.
+    fn settle_anchor(&mut self, daa: u64, into_ring: bool) -> Result<(), PalwStateV2Error> {
+        let old = self.state.settled_attempt_finals;
+        let new = old.checked_add(1).ok_or(PalwStateV2Error::Overflow("settled_attempt_finals"))?;
+        self.state.settled_attempt_finals = new;
+        self.entries.push(PalwDeltaEntryV2::SettledFinals { old, new });
+        if into_ring {
+            // Chain blocks carry non-decreasing DAA scores, so this is `daa` itself; the `max`
+            // only keeps the ring sorted if that ever stopped being true.
+            let daa = self.state.recent_anchor_daas.last().map_or(daa, |last| daa.max(*last));
+            self.state.recent_anchor_daas.push(daa);
+            self.entries.push(PalwDeltaEntryV2::AnchorDaaPushed { daa });
+            let prune = palw_anchor_ring_prune_count_v1(
+                &self.state.recent_anchor_daas,
+                daa,
+                palw_anchor_ring_horizon_v1(self.params),
+                self.extras.settled_anchor_depth.unwrap_or(0),
+            );
+            for _ in 0..prune {
+                let first = self.state.recent_anchor_daas.remove(0);
+                self.entries.push(PalwDeltaEntryV2::AnchorDaaPruned { daa: first });
+            }
+        }
+        Ok(())
+    }
+
     fn slashable_available(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
         let posted = self.state.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
-        let (settled_now, depth) = (self.state.settled_attempt_finals, self.settled_anchor_depth());
+        let (settled_now, depth) = (self.state.settled_attempt_finals, self.second_clock_depth(now_daa));
         let locked = self
             .state
             .slashable_locks
@@ -9527,7 +9680,7 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn slashable_live_locked(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u128 {
-        let (settled_now, depth) = (self.state.settled_attempt_finals, self.settled_anchor_depth());
+        let (settled_now, depth) = (self.state.settled_attempt_finals, self.second_clock_depth(now_daa));
         self.state
             .slashable_locks
             .iter()
@@ -11876,6 +12029,13 @@ impl<'a> TransitionBuilder<'a> {
     /// armed unless a court is already open. Spelled once for the whole-object licence and the
     /// last shard's part (ADR-0100 Decision 4), so the two cannot license differently.
     fn license_claim(&mut self, claim_id: Hash64, claim: PalwClaimStateV2, daa_score: u64) -> Result<(), PalwStateV2Error> {
+        // **The second clock ticks HERE past `palw_audit_2026_09_23`** (2026-09-24 DoS audit,
+        // §4b): a licence needs a quorum's live signatures in the very block that carries it, so
+        // heartbeat-only history cannot produce one. `Final` — which the DAA-driven deadline sweep
+        // reaches on its own — keeps the tick only below the fence (`finalize_claim`).
+        if self.extras.audit_2026_09_23_active && matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            self.settle_anchor(daa_score, true)?;
+        }
         let mut licensed = claim;
         licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa_score };
         self.write_claim(claim_id, Some(licensed));
@@ -12128,13 +12288,12 @@ impl<'a> TransitionBuilder<'a> {
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
         self.write_claim(id, Some(finalized.clone()));
-        // The second clock ticks: one more anchor has settled. Counted on every network — it is a
-        // fact about the chain — and read only by the deadlines past `palw_audit_2026_09_23`.
-        if matches!(claim.source, PalwClaimSourceV2::Attempt) {
-            let old = self.state.settled_attempt_finals;
-            let new = old.checked_add(1).ok_or(PalwStateV2Error::Overflow("settled_attempt_finals"))?;
-            self.state.settled_attempt_finals = new;
-            self.entries.push(PalwDeltaEntryV2::SettledFinals { old, new });
+        // Below `palw_audit_2026_09_23` the second clock ticks here, as it always did — counted on
+        // every network (a fact about the chain) and read by no rule there. Past the fence it
+        // ticks at the licence instead (`license_claim`): a `Final` is reached by the DAA sweep
+        // alone and must not settle anything on history nobody signed.
+        if matches!(claim.source, PalwClaimSourceV2::Attempt) && !self.extras.audit_2026_09_23_active {
+            self.settle_anchor(final_daa, false)?;
         }
         self.disarm_deadline(id);
         self.arm_retirement(id, &finalized)?;
@@ -19391,6 +19550,32 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             state.settled_attempt_finals = *install;
         }
+        PalwDeltaEntryV2::AnchorDaaPushed { daa } => {
+            if revert {
+                if state.recent_anchor_daas.last() != Some(daa) {
+                    return Err(PalwStateV2Error::DeltaMismatch("the anchor ring's last entry is not the pushed DAA"));
+                }
+                state.recent_anchor_daas.pop();
+            } else {
+                if state.recent_anchor_daas.last().is_some_and(|last| last > daa) {
+                    return Err(PalwStateV2Error::DeltaMismatch("an anchor DAA pushed below the ring's last entry"));
+                }
+                state.recent_anchor_daas.push(*daa);
+            }
+        }
+        PalwDeltaEntryV2::AnchorDaaPruned { daa } => {
+            if revert {
+                if state.recent_anchor_daas.first().is_some_and(|first| first < daa) {
+                    return Err(PalwStateV2Error::DeltaMismatch("a pruned anchor DAA restored above the ring's first entry"));
+                }
+                state.recent_anchor_daas.insert(0, *daa);
+            } else {
+                if state.recent_anchor_daas.first() != Some(daa) {
+                    return Err(PalwStateV2Error::DeltaMismatch("the anchor ring's first entry is not the pruned DAA"));
+                }
+                state.recent_anchor_daas.remove(0);
+            }
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -19654,6 +19839,9 @@ pub struct PalwStateCarriageV2 {
     pub retired_safe_weight: u128,
     /// The second clock's counter — primary data, like the row above (schema v21).
     pub settled_attempt_finals: u64,
+    /// The second clock's anchor ring (2026-09-24 DoS audit) — primary data: the DAAs of anchors
+    /// whose claims may have retired. Empty below `palw_audit_2026_09_23`.
+    pub recent_anchor_daas: Vec<u64>,
     pub bounded_immature: u128,
     pub safe_frontier_blue_score: u64,
     /// The block that carried the deepest `Final` work, and its blue score above.
@@ -19821,9 +20009,11 @@ const PALW_CARRIAGE_FP_DERIVED_WORK_TAIL_V1: u8 = 0xAF;
 /// any exists (past `Params::palw_objective_offence`). Rooted. Empty is omitted, so a dormant
 /// chain's carriage is byte-identical to a carriage before this tail existed.
 const PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1: u8 = 0xB2;
-/// 2026-09-23 audit: the second clock's counter (`settled_attempt_finals`), once it is non-zero —
-/// i.e. once this chain has ever settled an anchor. Rooted. Zero is omitted, so a chain that has
-/// produced no `Final` writes a carriage byte-identical to one before this tail existed.
+/// 2026-09-23 audit: the second clock — its counter (`settled_attempt_finals`) and, since the
+/// 2026-09-24 DoS audit, its anchor ring (`recent_anchor_daas`) — once either is non-empty, i.e.
+/// once this chain has ever settled an anchor. Rooted. Absent otherwise, so a chain that has
+/// settled no anchor writes a carriage byte-identical to one before this tail existed. The v21
+/// layout gained the ring before any network shipped v21.
 const PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1: u8 = 0xB3;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
@@ -19959,9 +20149,10 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.slashable_locks.serialize(writer)?;
             self.panel_liabilities.serialize(writer)?;
         }
-        if self.settled_attempt_finals != 0 {
+        if self.settled_attempt_finals != 0 || !self.recent_anchor_daas.is_empty() {
             PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1.serialize(writer)?;
             self.settled_attempt_finals.serialize(writer)?;
+            self.recent_anchor_daas.serialize(writer)?;
         }
         Ok(())
     }
@@ -20035,6 +20226,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_fp_derived_work = false;
         let mut consumed_offences = BTreeMap::new();
         let mut settled_attempt_finals = 0u64;
+        let mut recent_anchor_daas: Vec<u64> = Vec::new();
         let mut slashable_locks = BTreeMap::new();
         let mut panel_liabilities = BTreeMap::new();
         let mut seen_objective_offence = false;
@@ -20133,6 +20325,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                 PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1 if !seen_settled_finals => {
                     seen_settled_finals = true;
                     settled_attempt_finals = u64::deserialize_reader(reader)?;
+                    recent_anchor_daas = Vec::<u64>::deserialize_reader(reader)?;
                 }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
@@ -20217,6 +20410,7 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             slashable_locks,
             panel_liabilities,
             settled_attempt_finals,
+            recent_anchor_daas,
         })
     }
 }
@@ -20287,6 +20481,7 @@ impl PalwStateCarriageV2 {
             safe_weight: state.safe_weight,
             retired_safe_weight: state.retired_safe_weight,
             settled_attempt_finals: state.settled_attempt_finals,
+            recent_anchor_daas: state.recent_anchor_daas.clone(),
             bounded_immature: state.bounded_immature,
             safe_frontier_blue_score: state.safe_frontier_blue_score,
             safe_frontier: state.safe_frontier,
@@ -20416,6 +20611,7 @@ impl PalwStateCarriageV2 {
             safe_weight: self.safe_weight,
             retired_safe_weight: self.retired_safe_weight,
             settled_attempt_finals: self.settled_attempt_finals,
+            recent_anchor_daas: self.recent_anchor_daas,
             bounded_immature: self.bounded_immature,
             safe_frontier_blue_score: self.safe_frontier_blue_score,
             safe_frontier: self.safe_frontier,
@@ -35068,6 +35264,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::SlashableLock { .. } => "slashable_lock",
                     PalwDeltaEntryV2::PanelLiability { .. } => "panel_liability",
                     PalwDeltaEntryV2::SettledFinals { .. } => "settled_finals",
+                    PalwDeltaEntryV2::AnchorDaaPushed { .. } => "anchor_daa_pushed",
+                    PalwDeltaEntryV2::AnchorDaaPruned { .. } => "anchor_daa_pruned",
                 });
             }
         }
@@ -35136,6 +35334,9 @@ pub(crate) mod tests {
             (62, PalwDeltaEntryV2::PanelLiability { key, old: None, new: None }),
             // 2026-09-23 audit, appended last.
             (63, PalwDeltaEntryV2::SettledFinals { old: 0, new: 1 }),
+            // 2026-09-24 DoS audit, appended last.
+            (64, PalwDeltaEntryV2::AnchorDaaPushed { daa: 0 }),
+            (65, PalwDeltaEntryV2::AnchorDaaPruned { daa: 0 }),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -35397,6 +35598,13 @@ pub(crate) mod tests {
             s.update(&c.safe_weight.to_le_bytes());
             s.update(&c.retired_safe_weight.to_le_bytes());
             s.update(&c.settled_attempt_finals.to_le_bytes());
+            if !c.recent_anchor_daas.is_empty() {
+                s.update(b"recent_anchor_daas/v1");
+                s.update(&(c.recent_anchor_daas.len() as u64).to_le_bytes());
+                for daa in &c.recent_anchor_daas {
+                    s.update(&daa.to_le_bytes());
+                }
+            }
             s.update(&c.bounded_immature.to_le_bytes());
             s.update(&c.safe_frontier_blue_score.to_le_bytes());
             s.update(c.safe_frontier.as_byte_slice());
@@ -35595,6 +35803,7 @@ pub(crate) mod tests {
         state.safe_weight = 15_800;
         state.retired_safe_weight = 31_600;
         state.settled_attempt_finals = 4;
+        state.recent_anchor_daas = vec![7, 9, 9, 12];
         state.bounded_immature = 1_580;
         state.safe_frontier_blue_score = 11;
         state.safe_frontier = block(0xB2);
@@ -35687,6 +35896,8 @@ pub(crate) mod tests {
             retired_safe_weight: _,
             // 2026-09-23 audit: the second clock's counter, hashed beside the weights it sits with.
             settled_attempt_finals: _,
+            // 2026-09-24 DoS audit: the second clock's anchor ring, hashed right after its counter.
+            recent_anchor_daas: _,
             bounded_immature: _,
             safe_frontier_blue_score: _,
             safe_frontier: _,
@@ -35753,6 +35964,7 @@ pub(crate) mod tests {
             ("safe_weight", Box::new(|s| s.safe_weight += 1)),
             ("retired_safe_weight", Box::new(|s| s.retired_safe_weight += 1)),
             ("settled_attempt_finals", Box::new(|s| s.settled_attempt_finals += 1)),
+            ("recent_anchor_daas", Box::new(|s| *s.recent_anchor_daas.last_mut().unwrap() += 1)),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),
             ("safe_frontier_blue_score", Box::new(|s| s.safe_frontier_blue_score += 1)),
             ("safe_frontier", Box::new(|s| s.safe_frontier = block(0xB9))),
@@ -35826,12 +36038,17 @@ pub(crate) mod tests {
     /// empty root moves for the version and for the counter, which is hashed at zero; a root that
     /// stayed byte-identical at zero was never available, because a v20 carriage cannot decode under
     /// v21 whatever the counter does. The v20 pair was empty `966bae07…`, inhabited `a0b711e1…`.
+    ///
+    /// The v21 layout then gained the anchor ring (`recent_anchor_daas`, 2026-09-24 DoS audit)
+    /// before any network shipped it. The empty root does NOT move — an empty ring is not hashed —
+    /// and the inhabited one moves for the fixture's four ring entries alone. The pre-ring
+    /// inhabited root was `51a8ddd5…`.
     #[test]
     fn the_version_21_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
         let want_empty = "d34ae7ed8a71a6269f19f4ca14d7b1c63cae3508b36f6e74d0ecf43e84a8af79333723fec55c8d3e6eab5a9bbc6e4818faf39dbfe675f8967c715fd3b1d94f9e";
-        let want_full = "51a8ddd5b1fb3d5975a2b35c020e56aa6082c93166350b9c4d2f9dbcdb8f34a3c33d74cd900d38114d370683c648b8091b256fade57944371e8c9186008b11f2";
+        let want_full = "4dc676ac3e57cc815403ae4e5858a4ef87b0bb70c5886153413d0ae37be01065d99f3c614746ee9454f67029c01d668e7148c74b3582b9c81128b67dad35502a";
         assert!(
             empty == want_empty && full == want_full,
             "a version-21 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"

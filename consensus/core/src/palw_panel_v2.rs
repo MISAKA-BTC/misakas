@@ -481,25 +481,28 @@ pub fn palw_seat_maturity_floor_v1(anchor_daa: u64, bond_maturity_daa: Option<u6
 /// would let it judge after `window_daa` of bondless heartbeats. `None` when fewer than `depth`
 /// such anchors exist before the anchor at all: the bootstrap waiver, because the first anchors
 /// of a chain are produced by panels drawn before any anchor could have settled, and a floor that
-/// forbade them would forbid the chain its first `Final`. Retired claims have left the state, so
-/// the count is a lower bound over a horizon longer than `claim_retirement_daa`; a maturity window
-/// (1,000 DAA on testnet-12) is well inside it.
+/// forbade them would forbid the chain its first `Final`.
+///
+/// **Read from the anchor ring** (2026-09-24 DoS audit, fixes #2 and #13). This used to walk every
+/// retained claim for its `Final` attempts — once per candidate claim per template, quadratic in
+/// the claim table — and it counted `Final`s, which the DAA sweep produces on heartbeat-only
+/// blocks. It now reads `recent_anchor_daas`: the anchors the second clock counts past the fence
+/// (licences, each a quorum's live signatures), sorted, and kept for every anchor a live panel can
+/// still be validated at. When fewer than `depth` anchors lie before `anchor_daa` in the ring but
+/// the chain has settled more than the ring holds, older ones were pruned and the answer is not in
+/// the state: the floor is then `0`, the conservative end (only genesis bonds are mature), never
+/// the bootstrap waiver.
 pub fn palw_settled_anchor_floor_daa_v1(state: &PalwChainStateV2, anchor_daa: u64, depth: u64) -> Option<u64> {
     if depth == 0 {
         return None;
     }
-    let mut finals: Vec<u64> = state
-        .claims_iter()
-        .filter(|(_, c)| matches!(c.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt))
-        .filter(|(_, c)| matches!(c.phase, crate::palw_state_v2::PalwClaimPhaseV2::Final { .. }))
-        .map(|(_, c)| c.accepted_daa)
-        .filter(|&d| d < anchor_daa)
-        .collect();
-    if (finals.len() as u64) < depth {
-        return None;
+    let ring = state.recent_anchor_daas();
+    let before = ring.partition_point(|&daa| daa < anchor_daa);
+    match usize::try_from(depth) {
+        Ok(depth) if before >= depth => Some(ring[before - depth]),
+        _ if state.settled_attempt_finals() > ring.len() as u64 => Some(0),
+        _ => None,
     }
-    finals.sort_unstable();
-    finals.get(finals.len() - depth as usize).copied()
 }
 
 /// **ADR-0065 D1's window on both clocks** — the window the draw and the validator are handed,

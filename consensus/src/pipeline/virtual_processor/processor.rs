@@ -4569,16 +4569,22 @@ impl VirtualStateProcessor {
         let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
             return Default::default();
         };
+        // Both clocks, after the liveness escape; past the fence the gate also reads what the bond
+        // still stands behind — its reservations and its live slashable locks (2026-09-24 DoS
+        // audit, fix #1). One predicate for the lock and the burn beside it.
+        let depth = self.palw_second_clock_depth_at(state, now_daa);
+        let duty_gate = self.palw_audit_2026_09_23_at(now_daa);
         state
             .bonds_iter()
-            .filter(|(_, record)| {
-                kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v3(
+            .filter(|(key, record)| {
+                kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v4(
+                    state,
+                    key,
                     record,
                     now_daa,
                     self.palw_bond_withdrawal_delay_at(now_daa),
-                    // The second clock: a retiring bond's collateral also waits for settled anchors.
-                    state.settled_attempt_finals(),
-                    self.palw_settled_anchor_depth_at(now_daa),
+                    depth,
+                    duty_gate,
                 )
             })
             .map(|(key, _)| key.0)
@@ -4953,16 +4959,20 @@ impl VirtualStateProcessor {
         let Some(_bond_params) = self.palw_bond_params_v2.as_ref() else {
             return Default::default();
         };
+        // The same predicate as the lock beside it — see `palw_v2_locked_bond_outpoints`.
+        let depth = self.palw_second_clock_depth_at(state, now_daa);
+        let duty_gate = self.palw_audit_2026_09_23_at(now_daa);
         state
             .bonds_iter()
-            .filter(|(_, record)| {
-                !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v3(
+            .filter(|(key, record)| {
+                !kaspa_consensus_core::palw_state_v2::palw_bond_collateral_is_locked_v4(
+                    state,
+                    key,
                     record,
                     now_daa,
                     self.palw_bond_withdrawal_delay_at(now_daa),
-                    // The second clock: a retiring bond's collateral also waits for settled anchors.
-                    state.settled_attempt_finals(),
-                    self.palw_settled_anchor_depth_at(now_daa),
+                    depth,
+                    duty_gate,
                 )
             })
             .map(|(key, record)| (key.0, kaspa_consensus_core::palw_state_v2::palw_bond_burn_obligation_v2(record)))
@@ -8620,6 +8630,23 @@ impl VirtualStateProcessor {
         if self.palw_audit_2026_09_23_at(daa_score) { self.palw_settled_anchor_depth } else { None }
     }
 
+    /// The second clock's depth at `daa_score` AFTER the liveness escape
+    /// (`palw_second_clock_depth_v1`, 2026-09-24 DoS audit): `None` once `state` has settled no
+    /// anchor for `2 × window_court`. Read against the state the caller judges on, so the fold, the
+    /// spend gate and the draw see one clock.
+    fn palw_second_clock_depth_at(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, daa_score: u64) -> Option<u64> {
+        let depth = self.palw_settled_anchor_depth_at(daa_score);
+        match self.palw_state_params_v2.as_ref() {
+            Some(params) => kaspa_consensus_core::palw_state_v2::palw_second_clock_depth_v1(
+                depth,
+                state.recent_anchor_daas(),
+                daa_score,
+                params.window_court(),
+            ),
+            None => depth,
+        }
+    }
+
     /// **ADR-0065 D1's window on both clocks** — `Params::palw_bond_maturity` widened so that the
     /// maturity floor is no later than the second clock's (`palw_settled_anchor_floor_daa_v1`): a
     /// bond may judge only once its window has elapsed AND the chain has settled `depth` anchors
@@ -8629,7 +8656,7 @@ impl VirtualStateProcessor {
     fn palw_bond_maturity_window_at(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2, anchor_daa: u64) -> Option<u64> {
         let window = self.palw_bond_maturity_at(anchor_daa)?;
         let floor = self
-            .palw_settled_anchor_depth_at(anchor_daa)
+            .palw_second_clock_depth_at(state, anchor_daa)
             .and_then(|depth| kaspa_consensus_core::palw_panel_v2::palw_settled_anchor_floor_daa_v1(state, anchor_daa, depth));
         Some(kaspa_consensus_core::palw_panel_v2::palw_bond_maturity_window_v2(anchor_daa, window, floor))
     }
@@ -10920,14 +10947,24 @@ impl VirtualStateProcessor {
         // `Final` attempt claims the PALW state holds at the tip — a lower bound past retirement,
         // which a 600-DAA maturity never reaches. Policy layer, like the rest of this record.
         let now_daa = self.lkg_virtual_state.load().daa_score;
-        let depth = self.palw_settled_anchor_depth_at(now_daa);
+        // The tip state the second clock is read against — loaded only where the clock is armed.
+        let armed_depth = self.palw_settled_anchor_depth_at(now_daa);
+        let tip_state = armed_depth.and_then(|_| {
+            let params = self.palw_state_params_v2.as_ref()?;
+            self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten().map(|(_, state)| state)
+        });
+        // Both clocks after the liveness escape (2026-09-24 DoS audit): no anchor for
+        // `2 × window_court` and the DAA clock alone decides again, as it does for every lock. A
+        // tip that cannot be read keeps the clock armed with no floor, which refuses (below).
+        let depth = match &tip_state {
+            Some(state) => self.palw_second_clock_depth_at(state, now_daa),
+            None => armed_depth,
+        };
         // The second clock's reading: the DAA of the `depth`-th most recent settled anchor, over
-        // the whole chain (`u64::MAX` bounds nothing). The same one-place walk the panel floor
+        // the whole chain (`u64::MAX` bounds nothing). The same one-place read the panel floor
         // uses, so the two rules cannot come to disagree about what "settled" counts.
         let settled_anchor_floor_daa = depth.and_then(|depth| {
-            let params = self.palw_state_params_v2.as_ref()?;
-            let (_, state) = self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten()?;
-            kaspa_consensus_core::palw_panel_v2::palw_settled_anchor_floor_daa_v1(&state, u64::MAX, depth)
+            kaspa_consensus_core::palw_panel_v2::palw_settled_anchor_floor_daa_v1(tip_state.as_ref()?, u64::MAX, depth)
         });
         Some(DnsCoinbaseSettlement {
             long_maturity_daa,
