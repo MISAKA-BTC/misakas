@@ -86,6 +86,11 @@ pub struct PalwEpochBudgetFencesV1 {
     /// reason `canonical_work_daa` is a height: the ceiling must price a claim exactly as the fold
     /// will write `claim.reserved` in this same block.
     pub audit_2026_09_23_active: bool,
+    /// **Option A: the carve this block's escrow is taken at** — ADR-0126's overlay carve resolved at
+    /// the block's DAA, the very value the fold's own-work origin reads (`extras.escrow_carve`), so the
+    /// ceiling's escrow term is the `escrowed_reward` the ledger will store. `None` is the bundle's
+    /// own `worker_carve_permille`, which is also what the fold falls back to.
+    pub escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
     /// **ADR-0145: `Params::palw_canonical_work_daa()` — the HEIGHT, not this block's answer.**
     ///
     /// The exposure ceiling below must price a claim the way the fold will price it when it writes
@@ -616,15 +621,26 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         .checked_mul(class.slash_value_per_pwu as u128)
         .and_then(|sompi| sompi.checked_mul(attempts as u128))
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
+    // **Option A: the ceiling holds the claim's ESCROW as well as its weight**, past the height the
+    // bundle carries — priced from the SAME expression the fold stores as `escrowed_reward` (this
+    // block's subsidy, the carve resolved at this block's DAA) and read through the same reservation
+    // the ledger reserves, so the gate admits exactly what the ledger can record. Outside H-1's
+    // `x attempts`: the escrow is one claim's cash, not a per-draw quantity.
+    let claim_reservation = claim_exposure
+        .checked_add(state_params.claim_escrow_reservation_v1(
+            ctx.daa_score,
+            crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve),
+        ))
+        .ok_or(PalwAdmissionV2Error::Overflow("claim reservation"))?;
     let ceiling = (bond.collateral as u128)
         .checked_mul(admission.max_exposure_ratio_permille as u128)
         .ok_or(PalwAdmissionV2Error::Overflow("exposure ceiling"))?
         / 1000;
-    let would_reserve = reserved.checked_add(claim_exposure).ok_or(PalwAdmissionV2Error::Overflow("reserved exposure"))?;
+    let would_reserve = reserved.checked_add(claim_reservation).ok_or(PalwAdmissionV2Error::Overflow("reserved exposure"))?;
     if would_reserve > ceiling {
         return Err(PalwAdmissionV2Error::ExposureCeilingExceeded {
             reserved,
-            claim: claim_exposure,
+            claim: claim_reservation,
             ceiling,
             collateral: bond.collateral,
             ratio_permille: admission.max_exposure_ratio_permille,
@@ -1445,6 +1461,30 @@ mod tests {
             Ok(_) | Err(PalwAdmissionV2Error::ClassTicketAboveTarget { .. }) => {}
             Err(other) => panic!("a re-derived manifest reaches the lottery, got {other:?}"),
         }
+    }
+
+    /// **Option A: past the escrow height the ceiling holds a claim's escrow beside its weight**, priced
+    /// from the same expression the fold stores (`palw_claim_escrow_v1` of the block's subsidy), so
+    /// the gate admits exactly what the ledger will record. A claim whose weight alone sits exactly at
+    /// the ceiling admits dormant and is refused armed, by the escrow and nothing else.
+    #[test]
+    fn option_a_the_ceiling_counts_the_escrow_past_its_height() {
+        let state = base_state();
+        let funded = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 100_000 };
+        let dormant = state_params().with_worker_carve_permille(620).expect("a legal carve");
+        let armed = dormant.clone().with_escrow_backed_exposure_from_daa(Some(0));
+        let escrow = crate::palw_state_v2::palw_claim_escrow_v1(&armed, 100_000, None);
+        assert_eq!(escrow, 62_000, "the premise: a funded block escrows 62 % of its subsidy");
+        // 100 pwu at 5 sompi reserves 500 of weight — exactly the ceiling (1,000 x 50 %).
+        let env = attempt(100, 1);
+        check_palw_attempt_admission_v2(&state, &dormant, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
+            .expect("below the height the weight alone fits the ceiling");
+        let err = check_palw_attempt_admission_v2(&state, &armed, &admission_params(), &funded, &env, PalwEpochBudgetFencesV1::default())
+            .expect_err("past it the escrow does not fit beside the weight");
+        assert!(
+            matches!(err, PalwAdmissionV2Error::ExposureCeilingExceeded { claim, ceiling: 500, .. } if claim == 500 + 62_000),
+            "{err:?}"
+        );
     }
 
     #[test]

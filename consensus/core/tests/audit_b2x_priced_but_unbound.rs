@@ -58,6 +58,9 @@ fn b2x_the_exposure_basis_denominator_is_a_build_constant() {
             ],
             GENESIS_ESCROW_SOMPI,
             None,
+            // The concurrency this probe was written against (pre-option-A): a claim every block for
+            // the whole exposure window.
+            7_201,
         );
         println!(
             "{:<14} {floor_draw:>16} {unit:>22} {reserved:>22} {:>15.2} MSK{}",

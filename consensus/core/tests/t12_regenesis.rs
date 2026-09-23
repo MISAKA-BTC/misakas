@@ -71,18 +71,41 @@ fn t12_bond_collateral_matches_the_card() {
     for c in &declared {
         assert_eq!(*c, PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI, "the card declares exactly what the premine carves (audit C-08)");
         assert_eq!(
-            *c, 51_642_979_663_480,
-            "516,429.79663480 MSK: the fraud a bond's reachable claims authorize, in the unit the RUNTIME reserves in \
-             (ADR-0151 D1). The 60,088.18407600 MSK this replaced was the same sum on each class's OWN declared leaves, \
-             44.25x short on the 2M row, and it wedged every producer of the first t12 fleet shut at produced=0."
+            *c, 93_906_321_001_040,
+            "939,063.21001040 MSK: the fraud a bond's reachable claims authorize, in the unit the RUNTIME reserves in \
+             (ADR-0151 D1), at the escrow block one really pays and a floor concurrency of 64 (option A). The \
+             516,429.79663480 MSK before it priced the escrow at a subsidy no block pays (1,200x short); the \
+             60,088.18407600 MSK before that wedged every producer of the first t12 fleet shut at produced=0."
         );
     }
     // And the premine really holds it.
     let utxos = genesis_premine_utxos_for(t12());
-    for card in PALW_RC_GENESIS_BONDS {
+    for card in PALW_T12_GENESIS_BONDS {
         let held = utxos.get(&premine_outpoint(card.premine_index)).map(|e| e.amount);
         assert_eq!(held, Some(PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI), "bond {} holds its declared collateral", card.premine_index);
     }
+}
+
+/// **Option A is live on the network that ships it: a claim reserves its escrow on its bond from DAA 0.**
+///
+/// The bundle's copy of the height is borsh-skipped and mirrored from `palw_audit_2026_09_23` when the
+/// bundle is assembled, so a preset that armed the fence and a bundle that did not mirror it would
+/// reserve only the weight — the 1,200×-short collateral this regenesis exists to correct.
+/// `validate_palw_v2` refuses the two apart; this pins that they are together on testnet-12, and
+/// absent everywhere the fence is.
+#[test]
+fn t12_reserves_the_escrow_from_genesis() {
+    let p = Params::from(t12());
+    assert_eq!(p.palw_audit_2026_09_23, Some(ForkActivation::always()), "the audit's fence is armed from DAA 0");
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+    assert_eq!(bundle.state.escrow_backed_exposure_from_daa(), Some(0), "the bundle reserves the escrow from DAA 0");
+    // A claim accepted at any height carries its escrow into the reservation…
+    assert_eq!(bundle.state.claim_escrow_reservation_v1(0, 320_084_650_080), 320_084_650_080);
+    // …and testnet-11, where the fence is dormant, reserves only the weight.
+    let t11 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+    let PalwConsensusMode::ConsensusV2(b11) = &t11.palw_consensus_mode else { panic!("testnet-11 is ConsensusV2") };
+    assert_eq!(b11.state.escrow_backed_exposure_from_daa(), None);
+    assert_eq!(b11.state.claim_escrow_reservation_v1(u64::MAX, 320_084_650_080), 0);
 }
 
 /// **No model class declares an economic share.** ADR-0137 made a share a RESULT — past
@@ -113,36 +136,52 @@ fn no_model_class_declares_a_share() {
     assert_eq!(models, 2, "the two held rows an artifact exists for");
 }
 
-/// **The two held rows, at the widths an artifact can serve** — and the dense one is the class the
-/// fleet is already mining, so it is a genesis class here rather than a post-genesis registration.
+/// **The two held rows are both the dense family's, at 8,192 and at 2M** (operator decision
+/// 2026-09-23): the 2M row is the class the fleet was already mining, and the 8k row is the one a
+/// fleet host can actually produce at. The held hybrid row is gone — its map is wrong for Qwen3.6's
+/// geometry, so it would be a genesis class nobody can produce for.
 #[test]
 fn the_held_rows_are_the_fleets_classes() {
     let dense = kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v7(PALW_T12_DENSE_N_CTX)
         .expect("the held dense row derives at 2M");
-    let hybrid = kaspa_consensus_core::palw_context_ladder::palw_qwen36_context_row_profile_v7(PALW_T12_HYBRID_N_CTX)
-        .expect("the held hybrid row derives at 512");
+    let narrow = kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v7(PALW_T12_NARROW_DENSE_N_CTX)
+        .expect("the held dense row derives at 8,192");
     assert_eq!(PALW_T12_DENSE_N_CTX, 2_097_152, "ADR-0103's widest context");
+    assert_eq!(PALW_T12_NARROW_DENSE_N_CTX, 8_192, "the dense ladder's third rung");
     // `/root/palw-class/qwen25-1.5b-a16-2m.class-registration.json` on all four hosts:
-    // "Qwen2.5-1.5B A16 graph-v7@2097152".
+    // "Qwen2.5-1.5B A16 graph-v7@2097152"; and the 8k sidecar `palw-class manifest` wrote on
+    // 5.104.81.23: "Qwen/Qwen2.5-1.5B/graph-v7@8192".
     let hex = |h: kaspa_consensus_core::Hash64| h.as_bytes().iter().map(|b| format!("{b:02x}")).collect::<String>();
     assert_eq!(
         hex(dense.shape_profile_id()),
         "74c67e63d9c03daa05880c5d8a47b354ca20e952b1a2d49c107abe14f890a9c50790371bb715c7cea33ae8ac9213a3a63da409070cb2c98b8e861598db902f7a",
-        "the dense row is the class the fleet mines"
+        "the 2M row is the class the fleet mines"
+    );
+    assert_eq!(
+        hex(narrow.shape_profile_id()),
+        "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+        "the 8k row is the class the 8k artifact's sidecar names"
     );
     let p = Params::from(t12());
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!() };
-    for id in [dense.shape_profile_id(), hybrid.shape_profile_id()] {
-        assert!(
-            bundle.genesis_objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { class_id, .. } if *class_id == id)),
-            "every held row this preset names is registered at genesis"
-        );
-        assert!(bundle.class_catalog_root != kaspa_consensus_core::Hash64::default());
-    }
+    let registered: Vec<_> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { class_id, .. } if *class_id != bundle.base_class_id => Some(*class_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        registered,
+        vec![narrow.shape_profile_id(), dense.shape_profile_id()],
+        "exactly the two dense rows, the 8k row first — and no hybrid row"
+    );
+    assert!(bundle.class_catalog_root != kaspa_consensus_core::Hash64::default());
     // A held class is one that registered a held map, and both of these did — which is the fact
     // that lifts the `n_ctx × layer_count` product ceiling and is the ONLY reason 2M derives.
     assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&dense));
-    assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&hybrid));
+    assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&narrow));
 }
 
 /// **Every rule this binary can carry is in force at DAA 0, and the three exceptions are named.**
@@ -234,7 +273,7 @@ fn t12_keeps_t11_peer_port() {
 fn the_fleets_premine_outpoints_are_unchanged() {
     let utxos = genesis_premine_utxos_for(t12());
     // The floats sit after the main wallet, one per card, in card order.
-    for (position, card) in PALW_RC_GENESIS_BONDS.iter().enumerate() {
+    for (position, card) in PALW_T12_GENESIS_BONDS.iter().enumerate() {
         let float_index = MAIN_PREMINE_INDEX + 1 + position as u32;
         let float = utxos.get(&premine_outpoint(float_index)).map(|e| e.amount);
         assert_eq!(float, Some(PALW_RC_BOND_FEE_FLOAT_SOMPI), "bond {} float at outpoint {float_index}", card.premine_index);
@@ -242,9 +281,10 @@ fn the_fleets_premine_outpoints_are_unchanged() {
         let collateral = utxos.get(&premine_outpoint(card.premine_index)).map(|e| e.amount);
         assert_eq!(collateral, Some(PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI), "bond {} collateral", card.premine_index);
     }
-    // The six the fleet actually runs, spelled out so the pairing is readable rather than derived.
-    for (bond_index, fee_index) in [(1u32, 42u32), (2, 43), (3, 44), (4, 45), (5, 46), (6, 47)] {
-        let position = PALW_RC_GENESIS_BONDS
+    // The eight the fleet runs after the regenesis (bond 0 on ibm beside bond 1, the re-keyed bond 7
+    // beside bonds 2–5), spelled out so the pairing is readable rather than derived.
+    for (bond_index, fee_index) in [(0u32, 41u32), (1, 42), (2, 43), (3, 44), (4, 45), (5, 46), (6, 47), (7, 48)] {
+        let position = PALW_T12_GENESIS_BONDS
             .iter()
             .position(|c| c.premine_index == bond_index)
             .expect("the fleet's bond is a genesis card");
@@ -268,48 +308,49 @@ fn the_fleets_premine_outpoints_are_unchanged() {
 fn t12_genesis_reads_its_root_from_the_committed_manifest() {
     use kaspa_consensus_core::config::class_manifest_const_v1 as manifest;
 
-    let read_root = manifest::inventory_root_of_class(manifest::QWEN25_A16_2M_MANIFEST_V1, 1);
-    let read_class = manifest::class_id_of_class(manifest::QWEN25_A16_2M_MANIFEST_V1, 1);
-
-    // The card registers exactly what it read.
-    assert_eq!(
-        PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT, read_root,
-        "the genesis constant is the manifest's root, not a copy of it"
-    );
-
-    // And the row the card builds is the class that manifest row is about.
-    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
-        kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
-            n_ctx: PALW_T12_DENSE_N_CTX,
-            ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
-        },
-    )
-    .expect("the 2M graph-v7 profile projects");
-    assert_eq!(
-        profile.shape_profile_id(),
-        read_class,
-        "the manifest row this card reads is about the class this card registers"
-    );
-
-    // **The digest is in the same file and must never be the root.** The two substitutions that shut
-    // two networks' dense tiers were exactly this equality holding.
-    assert_ne!(
-        PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT,
-        manifest::artifact_digest_of(manifest::QWEN25_A16_2M_MANIFEST_V1),
-        "the card would be registering a flat artifact digest again"
-    );
-
-    // The registry really carries it — the card, not just the constant.
     let p = Params::from(t12());
     let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
-    assert!(
-        bundle.genesis_objects.iter().any(|o| matches!(
-            o,
-            PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. }
-                if *class_id == read_class && *artifact_root == read_root
-        )),
-        "testnet-12 registers the measured root for the measured class"
-    );
+    for (name, text, n_ctx, pinned) in [
+        ("2M", manifest::QWEN25_A16_2M_MANIFEST_V1, PALW_T12_DENSE_N_CTX, PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT),
+        ("8k", manifest::QWEN25_A16_8K_MANIFEST_V1, PALW_T12_NARROW_DENSE_N_CTX, PALW_T12_GENESIS_QWEN25_A16_8K_ARTIFACT_ROOT),
+    ] {
+        let read_root = manifest::inventory_root_of_class(text, 1);
+        let read_class = manifest::class_id_of_class(text, 1);
+
+        // The card registers exactly what it read.
+        assert_eq!(pinned, read_root, "{name}: the genesis constant is the manifest's root, not a copy of it");
+
+        // And the row the card builds is the class that manifest row is about.
+        let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(
+            kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                n_ctx,
+                ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+            },
+        )
+        .expect("the graph-v7 profile projects");
+        assert_eq!(
+            profile.shape_profile_id(),
+            read_class,
+            "{name}: the manifest row this card reads is about the class this card registers"
+        );
+
+        // **The digest is in the same file and must never be the root.** The two substitutions that
+        // shut two networks' dense tiers were exactly this equality holding.
+        assert_ne!(pinned, manifest::artifact_digest_of(text), "{name}: the card would be registering a flat artifact digest again");
+
+        // The registry really carries it — the card, not just the constant.
+        assert!(
+            bundle.genesis_objects.iter().any(|o| matches!(
+                o,
+                PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. }
+                    if *class_id == read_class && *artifact_root == read_root
+            )),
+            "{name}: testnet-12 registers the measured root for the measured class"
+        );
+    }
+    // Two conversions of one model are two artifacts: a shared root would give ADR-0143's one owner
+    // two classes.
+    assert_ne!(PALW_T12_GENESIS_QWEN25_A16_8K_ARTIFACT_ROOT, PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT);
 }
 
 
@@ -393,8 +434,8 @@ fn t12_certifies_both_lanes_of_the_classes_it_registers() {
     );
     // The commitment the registration gate checks the certified set against is this build's pin.
     assert_eq!(bundle.court_e2e_root, palw_rc_court_e2e_root_v1());
-    // And the coverage is real on both lanes, per registered profile: the held hybrid row by
-    // `PALW-QWEN36-V6`, the held dense row by `PALW-QWEN25-A16-V5`, the floor by `PALW-BASE-0`.
+    // And the coverage is real on both lanes, per registered profile: both held dense rows by
+    // `PALW-QWEN25-A16-V5`, the floor by `PALW-BASE-0`.
     let attempt = palw_rc_certified_families_v1();
     let fp = palw_rc_fp_certified_families_v1();
     assert_eq!(attempt.len(), 5, "five families since 2026-09-23");
@@ -443,7 +484,11 @@ fn t12_genesis_roots_are_all_read_from_committed_manifests() {
     // (class id, inventory root) of every row of every committed sidecar, read through the SAME
     // const fn the genesis constants read, so the test cannot agree with a value the card does not use.
     let mut committed: Vec<(kaspa_consensus_core::Hash64, kaspa_consensus_core::Hash64)> = Vec::new();
-    for (name, text) in [("qwen25-1.5b-a16-2m", manifest::QWEN25_A16_2M_MANIFEST_V1), ("qwen36-35b-a3b-512", manifest::QWEN36_512_MANIFEST_V1)] {
+    for (name, text) in [
+        ("qwen25-1.5b-a16-2m", manifest::QWEN25_A16_2M_MANIFEST_V1),
+        ("qwen25-1.5b-a16-8k", manifest::QWEN25_A16_8K_MANIFEST_V1),
+        ("qwen36-35b-a3b-512", manifest::QWEN36_512_MANIFEST_V1),
+    ] {
         let rows = text.matches("\"inventory_root\"").count();
         assert!(rows > 0, "{name}: a committed sidecar with no rows measures nothing");
         for occurrence in 1..=rows {
@@ -480,5 +525,5 @@ fn t12_genesis_roots_are_all_read_from_committed_manifests() {
         );
         checked += 1;
     }
-    assert_eq!(checked, 3, "the floor and the two held rows are what this card registers");
+    assert_eq!(checked, 3, "the floor and the two held dense rows are what this card registers");
 }

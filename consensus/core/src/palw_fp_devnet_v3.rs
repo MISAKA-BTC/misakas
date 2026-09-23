@@ -589,6 +589,15 @@ pub struct PalwGenesisBondSpecV1 {
 /// and small enough that the margin is not the entry price.
 pub const PALW_MODEL_CLAIM_CONCURRENCY_V1: u64 = 4;
 
+/// **Option A (2026-09-23, operator decision): the floor claims one testnet-12 genesis seat is sized
+/// to hold at once** — 64, against the 7,201 (a claim every block for a claim's whole exposure window)
+/// the card used to assume. At the real subsidy one floor claim's fraud gain is its 3,200.85 MSK escrow,
+/// so 7,201 of them asked 46.6 M MSK a seat; 64 ask about 410 k of the seat's collateral for the floor
+/// (938,888 MSK a seat with the model rows). The runtime ceiling enforces it: a bond at its ceiling
+/// simply does not draw another floor claim until one finalizes, and testnet-12's clock is the
+/// heartbeat (ADR-0151 D3), so a capped floor lane costs the chain no liveness.
+pub const PALW_T12_GENESIS_FLOOR_CONCURRENCY_V1: u64 = 64;
+
 /// **One class row, in both of the units a collateral derivation has to reconcile.**
 ///
 /// A registration declares `pwu_per_inference` (its canonical job's leaf count) and the chain
@@ -649,25 +658,28 @@ pub fn palw_exposure_unit_pwu_v1(derived_per_draw: u128, floor_declared_leaves: 
 /// under this rule even as the dense row's concurrency correction lowers the total.
 ///
 /// ```text
-/// (  max_fraud_gain(floor claim)  × (MAX_CLAIM_EXPOSURE_DAA + 1)     // the floor, really concurrent
+/// (  max_fraud_gain(floor claim)  × floor_concurrency                // the floor claims ONE seat backs
 ///  + Σ max_fraud_gain(model claim) × PALW_MODEL_CLAIM_CONCURRENCY_V1 // each model row, at its cap ×4
 ///  , and never less than the genesis liveness bound where that still applies )
 /// × 1000 / MAX_EXPOSURE_RATIO_PERMILLE
 /// ```
 ///
-/// **What this does NOT fix, and it is named rather than left to be discovered:** the RUNTIME
-/// reservation is still `palw_exposure_pwu_v1 × slash_value`, so a producer's live exposure is half
-/// the gain its claim authorizes on the dense row. Closing that means splitting a value the design
-/// deliberately keeps unified — `palw_exposure_pwu_v1`'s `DerivedV1` arm is read by the collateral, by
-/// ADR-0124's work price and by ADR-0125's execution credit at once, and "paid on the same number it
-/// can be slashed on" is what `work_priced_escrow` is built on. That is ADR-0151 D1's second half and
-/// it wants its own commit. This function makes the GENESIS carve honest; it does not make the
-/// runtime ledger honest.
+/// **`floor_concurrency` is a CAPACITY the card chooses, not the lane's whole throughput**
+/// (option A, 2026-09-23). This used to be `MAX_CLAIM_EXPOSURE_DAA + 1` — a claim every block for a
+/// claim's whole exposure window, i.e. one seat sized to carry the ENTIRE floor lane alone. With the
+/// escrow priced at the real subsidy (4,445.62 MSK a block on testnet-12, 3,200.85 MSK a claim) that
+/// asked 46,627,776.51 MSK a seat, 98.9 % of it that one term, and the operator refused it as a closed
+/// network. The runtime now reserves each claim's escrow beside its weight
+/// (`PalwStateParamsV2::claim_escrow_reservation_v1`), so the admission ceiling caps every bond at
+/// the claims its collateral backs; the genesis card therefore sizes a seat for the concurrency it
+/// WANTS a genesis seat to carry (`PALW_T12_GENESIS_FLOOR_CONCURRENCY_V1`), and a newcomer posts for
+/// the claims it wants to hold.
 pub fn palw_v2_collateral_for_class_set_v1(
     floor: PalwCollateralRowV1,
     model_rows: &[PalwCollateralRowV1],
     escrowed_reward: u64,
     bind_window_liveness: Option<u64>,
+    floor_concurrency: u64,
 ) -> u64 {
     // **The reservation the RUNTIME really writes, which is the unit the collateral must be posted
     // in** — `palw_exposure_pwu_v3`: this row's derived work for one draw, renormalised by the FLOOR
@@ -682,7 +694,7 @@ pub fn palw_v2_collateral_for_class_set_v1(
     // the seat lock, not at the bond's exposure ceiling, and double-counting it would move every
     // shipped genesis.
     let gain = |row: PalwCollateralRowV1| -> u128 { (escrowed_reward as u128).saturating_add(reservation(row)).max(1) };
-    let mut ceiling = gain(floor).saturating_mul(MAX_CLAIM_EXPOSURE_DAA as u128 + 1);
+    let mut ceiling = gain(floor).saturating_mul(floor_concurrency.max(1) as u128);
     for row in model_rows {
         ceiling = ceiling.saturating_add(gain(*row).saturating_mul(PALW_MODEL_CLAIM_CONCURRENCY_V1 as u128));
     }

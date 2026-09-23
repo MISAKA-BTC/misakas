@@ -4394,6 +4394,13 @@ impl VirtualStateProcessor {
             budget_fences.canonical_work_daa,
             budget_fences.base_known_draw,
             budget_fences.audit_2026_09_23_active,
+            // Option A: the escrow the candidate block's own claim would carry — this block's subsidy
+            // under the carve resolved at its DAA, the pair the fold and the ceiling price it from.
+            kaspa_consensus_core::palw_state_v2::palw_claim_escrow_v1(
+                state_params,
+                self.coinbase_manager.calc_block_subsidy(candidate_daa),
+                budget_fences.escrow_carve,
+            ),
         )?;
         // The producer reads the same parent snapshot as admission. At a crossing block the
         // snapshot still carries the closed epoch's table, so the boundary fence must derive the
@@ -8476,6 +8483,9 @@ impl VirtualStateProcessor {
             base_known_draw: self.palw_canonical_work_daa.and_then(|_| self.palw_base_known_draw_v1()),
             // 2026-09-23 audit H-1: the ceiling reserves `attempts x` one draw past the fence.
             audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
+            // Option A: the carve this block's escrow is taken at — the value the fold's own-work
+            // origin reads, so the ceiling's escrow term is the `escrowed_reward` the ledger stores.
+            escrow_carve: self.palw_escrow_carve_at(daa_score, daa_score),
         }
     }
 

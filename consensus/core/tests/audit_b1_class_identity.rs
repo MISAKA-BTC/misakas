@@ -16,7 +16,7 @@ fn t12() -> NetworkId {
 }
 
 fn t12_bonds() -> Vec<kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1> {
-    PALW_RC_GENESIS_BONDS
+    PALW_T12_GENESIS_BONDS
         .iter()
         .map(|c| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
             bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(premine_outpoint(c.premine_index)),
@@ -27,20 +27,16 @@ fn t12_bonds() -> Vec<kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSp
         .collect()
 }
 
-/// Assemble the t12 card with `dense_root` in the dense `artifact_root` slot.
+/// Assemble the t12 card with `dense_root` in the 2M dense row's `artifact_root` slot.
 fn t12_card_with_dense_root(dense_root: Hash64) -> Params {
     let base = palw_t12_base_params();
     let utxos = genesis_premine_utxos_for(base.net);
-    palw_v2_params_with_class_rows_v1(
-        base,
-        PALW_RC_GENESIS_ARTIFACT_ROOT,
-        PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
-        Some(dense_root),
-        t12_bonds(),
-        utxos,
-        PalwGenesisClassRowsV1::HeldLadder { dense_n_ctx: PALW_T12_DENSE_N_CTX, hybrid_n_ctx: PALW_T12_HYBRID_N_CTX },
-    )
-    .expect("the card assembles")
+    let mut rows = PALW_T12_GENESIS_HELD_ROWS;
+    for row in rows.iter_mut().filter(|row| row.n_ctx == PALW_T12_DENSE_N_CTX) {
+        row.artifact_root = dense_root;
+    }
+    palw_v2_params_with_class_rows_v1(base, PALW_RC_GENESIS_ARTIFACT_ROOT, t12_bonds(), utxos, PalwGenesisClassRowsV1::Held(&rows))
+        .expect("the card assembles")
 }
 
 fn dense_registered_root(p: &Params) -> Hash64 {

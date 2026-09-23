@@ -136,9 +136,19 @@ fn the_ceiling_and_the_per_claim_reservation_are_in_different_units() {
     println!("\n=== the corrected card ===");
     println!("  collateral       {shipped} sompi = {:.2} MSK", shipped as f64 / 1e8);
     println!("  ceiling (500‰)   {shipped_ceiling} sompi = {:.2} MSK", shipped_ceiling as f64 / 1e8);
-    println!("  concurrent 2M claims it clears: {}", shipped_ceiling / per_claim);
-    assert!(shipped_ceiling > per_claim, "the corrected card admits at least one 2M claim");
-    assert_eq!(shipped_ceiling / per_claim, 4, "four, which is PALW_MODEL_CLAIM_CONCURRENCY_V1");
+    // Option A (2026-09-23): the runtime now reserves a claim's FULL fraud gain — the escrow it
+    // carries (3,200.84650080 MSK, block one's subsidy through the 720‰ worker carve) beside the
+    // weight above — so the headroom is counted at that, not at the weight the pre-A fleet printed.
+    let escrow = 320_084_650_080u128;
+    let per_claim_a = per_claim + escrow;
+    println!("  per 2M claim, escrow + weight: {per_claim_a} sompi = {:.2} MSK", per_claim_a as f64 / 1e8);
+    println!("  concurrent 2M claims it clears: {}", shipped_ceiling / per_claim_a);
+    assert!(shipped_ceiling > per_claim_a, "the corrected card admits at least one 2M claim");
+    // The card prices the SET (64 floor claims, and 4 in flight per model row), so a bond running
+    // only 2M claims has the floor's and the 8k row's share of the ceiling to spare: 7, which is at
+    // least `PALW_MODEL_CLAIM_CONCURRENCY_V1`.
+    assert_eq!(shipped_ceiling / per_claim_a, 7, "a bond's ceiling clears seven concurrent 2M claims at the full reservation");
+    assert!(shipped_ceiling / per_claim_a >= kaspa_consensus_core::palw_fp_devnet_v3::PALW_MODEL_CLAIM_CONCURRENCY_V1 as u128);
 }
 
 /// **The collateral each option would need, in the unit the RUNTIME reserves in.**

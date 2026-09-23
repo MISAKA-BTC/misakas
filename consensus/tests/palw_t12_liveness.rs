@@ -107,22 +107,31 @@ fn t12_collateral_is_the_liability_not_the_liveness_bound() {
         })
         .expect("eight genesis bonds");
     assert_eq!(
-        declared, 51_642_979_663_480,
-        "516,429.79663480 MSK — the fraud a bond's reachable claims authorize, in the unit the RUNTIME reserves in"
+        declared, 93_906_321_001_040,
+        "939,063.21001040 MSK — the fraud a bond's reachable claims authorize, in the unit the RUNTIME reserves in, \
+         at the escrow block one really pays and a floor concurrency of 64 (option A)"
     );
     // The bind-window figure this replaced, stated so the test names the size of the change rather
-    // than asserting a number nobody can place: 1,620,178.03104000 MSK, about 3.1x.
-    assert_eq!(162_017_803_104_000u64 / declared, 3, "the liveness bound is ~3.1x the liability it stood in for");
+    // than asserting a number nobody can place: 1,620,178.03104000 MSK (the 2M row's declared leaves
+    // x slash x the bind window — unchanged by option A, which moved the liability side). About 1.7x.
+    assert_ne!(declared, 162_017_803_104_000, "the card declares the liability, not the liveness bound");
+    assert_eq!(162_017_803_104_000u64 / declared, 1, "the liveness bound is ~1.7x the liability it stood in for");
     // **And the margin that matters, which the first t12 card did not have.** The ceiling is
-    // `declared x max_exposure_ratio`, and one held 2M claim reserves 5,974,294,206,820 — so the test
-    // that the fleet can actually mine is that the ceiling clears one claim with room for more.
+    // `declared x max_exposure_ratio`, and one held 2M claim now reserves its weight
+    // (5,974,294,206,820) AND its escrow (320,084,650,080) — so the test that the fleet can actually
+    // mine is that the ceiling clears one claim at the full reservation with room for more.
     let ceiling = declared as u128 * 500 / 1000;
-    let one_2m_claim = 5_974_294_206_820u128;
+    let one_2m_claim = 5_974_294_206_820u128 + 320_084_650_080;
     assert!(
         ceiling > one_2m_claim,
         "the first t12 card failed exactly here: ceiling {ceiling} against {one_2m_claim} for one claim"
     );
-    assert_eq!(ceiling / one_2m_claim, 4, "four concurrent 2M claims, which is PALW_MODEL_CLAIM_CONCURRENCY_V1");
+    assert_eq!(
+        ceiling / one_2m_claim,
+        7,
+        "seven concurrent 2M claims: the card prices the set (64 floor claims and four per model row), \
+         so a bond running only 2M claims has the floor's and the 8k row's share to spare"
+    );
 }
 
 /// **A network that does NOT have the structural guarantee keeps the bind-window rule.** The default

@@ -16,13 +16,18 @@ fn t12_genesis_class_ids() -> Vec<kaspa_consensus_core::Hash64> {
     b.genesis_objects.iter().filter_map(|o| match o { PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id), _ => None }).collect()
 }
 
+/// **The held 512 row is the class the first t12 fleet registered at genesis — and, since the
+/// 2026-09-23 regenesis, a class a transaction registers instead.** The graph-v7 held map gathers
+/// the GDN convolution over `(2k+v)·heads`, which is the engine's window only when key and value
+/// head counts agree (Qwen3.6-35B-A3B: 16 and 32), so a genesis hybrid row would be a class nobody
+/// can produce for. The id is pinned because the fleet's logs name it.
 #[test]
-fn the_held_512_row_is_testnet_12s_genesis_hybrid_class() {
+fn the_held_512_row_is_the_fleets_hybrid_class_and_not_a_t12_genesis_one() {
     let rows = qwen36_canonical_classes_v1();
     let row = rows.iter().find(|r| r.model_id == QWEN36_GRAPH_V7_512_MODEL_ID).expect("the held 512 row exists");
     let id = row.class_id().expect("the held 512 profile projects");
-    assert!(t12_genesis_class_ids().contains(&id), "row {} must be the class t12 registered at genesis, got {id}", row.model_id);
     assert_eq!(id.to_string()[..8], *"e108e736", "the id the fleet's logs name");
+    assert!(!t12_genesis_class_ids().contains(&id), "row {} left t12's genesis set on 2026-09-23, got {id} registered", row.model_id);
 }
 
 #[test]
@@ -30,7 +35,7 @@ fn the_held_2m_row_is_a_distinct_class_the_registry_can_add() {
     let rows = qwen36_canonical_classes_v1();
     let r2m = rows.iter().find(|r| r.model_id == QWEN36_GRAPH_V7_2M_MODEL_ID).expect("the held 2M row exists");
     let id = r2m.class_id().expect("the held 2M profile projects");
-    assert!(!t12_genesis_class_ids().contains(&id), "2M is not a genesis class on t12 — it is the one the registry adds");
+    assert!(!t12_genesis_class_ids().contains(&id), "2M is not a genesis class on t12 — it is one the registry adds");
     let r512 = rows.iter().find(|r| r.model_id == QWEN36_GRAPH_V7_512_MODEL_ID).unwrap();
     assert_ne!(id, r512.class_id().unwrap(), "width is the axis: two ids");
     // Both held profiles register the operand-inventory root, so a manifest over either artifact

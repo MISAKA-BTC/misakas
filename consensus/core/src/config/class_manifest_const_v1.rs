@@ -24,6 +24,12 @@ use crate::Hash64;
 /// `palw-class manifest` wrote it (169.58.39.220, 2026-09-23).
 pub const QWEN25_A16_2M_MANIFEST_V1: &str = include_str!("class-manifests/qwen25-1.5b-a16-2m.palwmanifest");
 
+/// **The manifest the fleet's 8k Qwen2.5 artifact measured** (`qwen25-convert --a16 --n-ctx 8192`
+/// over the same source as the 2M artifact; 5.104.81.23, 2026-09-23), byte for byte as
+/// `palw-class manifest` wrote it and `palw-class manifest --check` re-derived it. One row: the file
+/// pairs with the `graph-v7@8192` class only.
+pub const QWEN25_A16_8K_MANIFEST_V1: &str = include_str!("class-manifests/qwen25-1.5b-a16-8k.palwmanifest");
+
 /// **The manifest the fleet's Qwen3.6 mapping measured** (`qwen36.palwq36`, the 512-context
 /// conversion the hybrid tier has run since testnet-11), byte for byte as `palw-class manifest`
 /// wrote it (169.58.39.220, 2026-09-23).
@@ -151,6 +157,25 @@ mod tests {
             artifact_digest_of(QWEN25_A16_2M_MANIFEST_V1).to_string(),
             "b5baca6364135a62bd4512a58c2ca747373019a495505968d884b2c0e52e4ce9322a8af0db90d3ec1001c15b5a89fe0e8008519e55a5f3f865e15562fb8967ae"
         );
+    }
+
+    /// The 8k sidecar, transcribed the same way: the three values `palw-class manifest` printed when it
+    /// wrote the file.
+    #[test]
+    fn the_committed_8k_manifest_parses_to_what_it_says() {
+        assert_eq!(
+            inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1).to_string(),
+            "88096dc177826d880c1c5fca4ec93cffe5ab51af108ed169a8e03cd4726308f91263f79f81904b043327bfa277e3558b1656f14259f6dd33603a9f91871aae20"
+        );
+        assert_eq!(
+            class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1).to_string(),
+            "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01"
+        );
+        assert_eq!(
+            artifact_digest_of(QWEN25_A16_8K_MANIFEST_V1).to_string(),
+            "f4af38d91cb4d012189051742a98322ba9a20c9e62bbc9383b0d2c03727d0e5dbb7292be7186b7bc948a28ca0e02a4f59191edc71ff37bb4d7067b559bc3f0d0"
+        );
+        assert_ne!(artifact_digest_of(QWEN25_A16_8K_MANIFEST_V1), inventory_root_of_class(QWEN25_A16_8K_MANIFEST_V1, 1));
     }
 
     /// **The digest and the root are different values in this very file**, which is what made the

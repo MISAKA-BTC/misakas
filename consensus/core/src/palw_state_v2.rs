@@ -1134,6 +1134,26 @@ pub struct PalwStateParamsV2 {
     /// a field that is `None`.
     #[borsh(skip)]
     class_receipt_window: Option<PalwClassReceiptWindowV1>,
+    /// **Option A (2026-09-23): the height from which a claim's ESCROW is reserved on its producer's
+    /// bond beside its weight** — `Params::palw_audit_2026_09_23`'s height, mirrored here by
+    /// `Params::sync_palw_escrow_backed_exposure` because the ledger's re-derivation at load
+    /// (`assert_internal_consistency_v3`) has no transition extras to read a fence from.
+    ///
+    /// ADR-0151 D1 sizes collateral by the fraud a claim authorizes — `escrow + weight`. The runtime
+    /// reserved the weight half alone, so on testnet-12 a floor claim held 0.0008 MSK of collateral
+    /// against a 3,200.85 MSK escrow: a newcomer's claims were effectively uncollateralized and
+    /// nothing tied how many a bond could hold to what it had posted. Past this height the claim's
+    /// `escrowed_reward` joins its bond's `reserved_exposure` at acceptance and leaves it at Final or
+    /// void, the admission ceiling and the producer's headroom count it the same way, and a
+    /// `CourtFraud` conviction slashes it with the weight.
+    ///
+    /// Decided at the CLAIM's `accepted_daa`, never at the current block's: the reservation and its
+    /// release then agree whatever height the fence sits at, with no per-claim flag in the schema.
+    /// Skipped by borsh for `short_challenge_window_from_daa`'s reason — the fence is what
+    /// `Params::consensus_params_id` hashes (Some-only), and `validate_palw_v2` refuses a bundle whose
+    /// copy disagrees with it.
+    #[borsh(skip)]
+    escrow_backed_exposure_from_daa: Option<u64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1254,6 +1274,7 @@ impl PalwStateParamsV2 {
             class_growth_permille: 0,
             fp_decode_rules_daa: None,
             class_receipt_window: None,
+            escrow_backed_exposure_from_daa: None,
         })
     }
 
@@ -1586,6 +1607,29 @@ impl PalwStateParamsV2 {
     pub fn with_short_challenge_window_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.short_challenge_window_from_daa = from_daa;
         self
+    }
+
+    /// Option A: the height from which a claim's escrow is reserved on its bond, if the network arms it.
+    pub fn escrow_backed_exposure_from_daa(&self) -> Option<u64> {
+        self.escrow_backed_exposure_from_daa
+    }
+
+    /// Option A: sets that height — the V2 bundle's copy of `Params::palw_audit_2026_09_23`, written by
+    /// `Params::sync_palw_escrow_backed_exposure`.
+    pub fn with_escrow_backed_exposure_from_daa(mut self, from_daa: Option<u64>) -> Self {
+        self.escrow_backed_exposure_from_daa = from_daa;
+        self
+    }
+
+    /// **The escrow term a claim accepted at `accepted_daa` holds on its producer's bond** — its
+    /// `escrowed_reward` past the height, nothing before it. The ONE reading the ledger's reserve and
+    /// release, its re-derivation at load, the admission ceiling and the producer's headroom share,
+    /// so the gate can never admit a claim the ledger cannot record, or release what it never held.
+    pub fn claim_escrow_reservation_v1(&self, accepted_daa: u64, escrowed_reward: u64) -> u128 {
+        match self.escrow_backed_exposure_from_daa {
+            Some(from) if accepted_daa >= from => escrowed_reward as u128,
+            _ => 0,
+        }
     }
 
     /// The per-session court budget (see the field's doc).
@@ -7622,14 +7666,22 @@ impl PalwChainStateV2 {
                         && palw_claim_is_on_abandon_hold_v2(claim, params, point.daa_score)
                     {
                         let entry = exposure.entry(claim.bond).or_insert(0);
-                        *entry = entry.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
+                        *entry = entry
+                            .checked_add(claim.reserved)
+                            .and_then(|held| held.checked_add(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward)))
+                            .ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     }
                 }
                 _ => {
                     immature =
                         immature.checked_add(claim.immature_contribution).ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
                     let entry = exposure.entry(claim.bond).or_insert(0);
-                    *entry = entry.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
+                    // Both halves of the claim's reservation (option A's escrow term is 0 below its
+                    // height), exactly as `reserve_for_claim` wrote them.
+                    *entry = entry
+                        .checked_add(claim.reserved)
+                        .and_then(|held| held.checked_add(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward)))
+                        .ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     // **ADR-0124 Decision 3: every seat on duty holds its exposure**, rebuilt from the
                     // duty row so the ledger and the row cannot drift apart about who holds what —
                     // and at the amount the row STORES (ADR-0130), which is what binding reserved
@@ -11668,7 +11720,12 @@ impl<'a> TransitionBuilder<'a> {
             }
         }
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
-        let next = current.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        // Option A: the claim's escrow joins its weight on the bond past the fence (0 before it).
+        let escrow = self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
+        let next = current
+            .checked_add(claim.reserved)
+            .and_then(|held| held.checked_add(escrow))
+            .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         self.write_exposure(claim.bond, Some(next));
         self.state.bounded_immature = self
             .state
@@ -11682,7 +11739,12 @@ impl<'a> TransitionBuilder<'a> {
     /// the immature contribution both belong only to non-terminal claims).
     fn release_for_claim(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
-        let next = current.checked_sub(claim.reserved).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
+        // What `reserve_for_claim` added, both halves — decided at the claim's own acceptance height.
+        let held = claim
+            .reserved
+            .checked_add(self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
+            .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         self.state.bounded_immature = self
             .state
@@ -11790,7 +11852,19 @@ impl<'a> TransitionBuilder<'a> {
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
         self.void_claim(id, claim, voided_daa, reason)?;
-        self.slash_bond(claim.bond, claim.reserved)
+        // **Option A: a PROVEN fraud forfeits the whole fraud gain it reached for — weight and
+        // escrow.** The escrow was never paid (it is released at Final, and a void is pre-Final), so
+        // this is not a claw-back: it is what makes a lie cost what it would have earned. Only for
+        // `CourtFraud` — the court re-executed the step and the executor's answer was wrong. A
+        // liveness fault (`ProducerWithholding`, a timeout) keeps the weight-only slash: ADR-0151 puts
+        // collateral against fraud, not against availability, and ADR-0065 D4's caution stands —
+        // a larger slash on a liveness verdict multiplies false convictions before it deters any.
+        let escrow = if matches!(reason, PalwVoidReasonV2::CourtFraud) {
+            self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward)
+        } else {
+            0
+        };
+        self.slash_bond(claim.bond, claim.reserved.saturating_add(escrow))
     }
 
     /// Charge every seat whose verdict the panel's own quorum refuted.
@@ -12274,7 +12348,13 @@ impl<'a> TransitionBuilder<'a> {
     /// released at the void.
     fn release_abandon_hold(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
-        let next = current.checked_sub(claim.reserved).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
+        // Both halves, as `release_for_claim` — the escrow term is zero for a free-prompt claim (the
+        // only kind that is held), and spelling it anyway keeps the three sites one expression.
+        let held = claim
+            .reserved
+            .checked_add(self.params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
+            .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         Ok(())
     }
@@ -17795,6 +17875,19 @@ pub fn palw_work_floor_for_block_v1(
     crate::palw_work_target_v1::palw_work_floor_v1(escrow, rate_sompi_per_giga)
 }
 
+/// **The escrow the fold writes for a claim carved from `subsidy` under `escrow_carve`** — the same
+/// expression `apply_attempt` stores as `escrowed_reward`, exposed so the admission ceiling and the
+/// producer's headroom price option A's escrow term from the number the ledger will record rather
+/// than from a second spelling of it (the bundle's own carve, say, which differs past ADR-0126's
+/// overlay carve).
+pub fn palw_claim_escrow_v1(
+    params: &PalwStateParamsV2,
+    subsidy: u64,
+    escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
+) -> u64 {
+    worker_carve_v2(params, subsidy, escrow_carve)
+}
+
 fn worker_carve_v2(params: &PalwStateParamsV2, subsidy: u64, escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>) -> u64 {
     let carve = match escrow_carve {
         Some(carve) => carve,
@@ -22987,6 +23080,76 @@ pub(crate) mod tests {
             PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: vec![receipt_at(claim, bond_key(seat), true, daa)] }
         }
 
+        /// **Option A: a claim's escrow sits on its bond beside its weight from acceptance to `Final`,
+        /// and nowhere below the height** — reserved, re-derived at load (`step_with` runs the
+        /// consistency check every block), reverted with its block, and released at `Final`, both
+        /// halves. Run dormant and armed over the same chain so the escrow term is the ONLY difference.
+        #[test]
+        fn option_a_the_escrow_is_reserved_on_the_bond_until_final_and_the_ledger_rederives_it() {
+            for armed in [false, true] {
+                let p = params()
+                    .with_worker_carve_permille(620)
+                    .expect("a legal carve")
+                    .with_escrow_backed_exposure_from_daa(armed.then_some(0));
+                let (s7, root) = kimi_active_and_priced(&p, 10_000);
+                let priced = priced_extras(Some(payout_fold(10_000, 0)));
+                let env = kimi_attempt(2, root);
+                let claim_id = attempt_id_v2(&env.attempt);
+                let bond = bond_key(1);
+                let before = s7.reserved_exposure(&bond);
+                let (s8, d8) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &priced);
+                let claim = s8.claim(&claim_id).expect("accepted").clone();
+                assert_eq!(claim.escrowed_reward, 620_000, "the premise: 62 % of a funded block is the escrow");
+                let escrow: u128 = if armed { 620_000 } else { 0 };
+                assert_eq!(
+                    s8.reserved_exposure(&bond),
+                    before + claim.reserved + escrow,
+                    "armed={armed}: the bond holds the weight and, past the height, the escrow"
+                );
+                assert_eq!(revert_delta_v2(&s8, &d8, &p).unwrap().state_root(), s7.state_root(), "armed={armed}: reverts with its block");
+                let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[bound_to(claim_id, 78, 2)], None, &priced);
+                let (s10, _) = step_with(&s9, &p, &funded(10, 133, 10), &[licensed_by(claim_id, 2, 133)], None, &priced);
+                let (s11, _) = step_with(&s10, &p, &funded(11, 154, 11), &[], None, &priced);
+                assert!(matches!(s11.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the premise: it finalizes");
+                assert_eq!(s11.reserved_exposure(&bond), before, "armed={armed}: released at Final, both halves");
+            }
+        }
+
+        /// **Option A: a PROVEN fraud forfeits the escrow term with the weight; a liveness void does
+        /// not.** Driven through the builder's own `void_and_slash`, so the rule is read where it is
+        /// written. Both paths release both halves of the reservation.
+        #[test]
+        fn option_a_court_fraud_slashes_the_escrow_term_and_a_liveness_void_does_not() {
+            let p = params()
+                .with_worker_carve_permille(620)
+                .expect("a legal carve")
+                .with_escrow_backed_exposure_from_daa(Some(0));
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let priced = priced_extras(Some(payout_fold(10_000, 0)));
+            let env = kimi_attempt(2, root);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (mut s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[], Some(&env), &priced);
+            let claim = s8.claim(&claim_id).expect("accepted").clone();
+            let bond = bond_key(1);
+            // The fixture's bonds carry 1,000 sompi — sized for the weight, not for a 620,000-sompi
+            // escrow — so either slash would be capped at the collateral and the two rules could not be
+            // told apart. This one bond is given room to pay the larger in full.
+            s8.bonds.get_mut(&bond).expect("the executor's bond").collateral = 10_000_000;
+            let collateral = s8.bond(&bond).expect("the executor's bond").collateral as u128;
+            assert!(collateral > claim.reserved + 620_000, "the premise: the bond can pay the larger slash in full");
+            let exposure = s8.reserved_exposure(&bond);
+            for (reason, slash) in [
+                (PalwVoidReasonV2::CourtFraud, claim.reserved + 620_000),
+                (PalwVoidReasonV2::ProducerWithholding, claim.reserved),
+            ] {
+                let mut b = TransitionBuilder::new(&s8, &p, false, false, false, false, &priced);
+                b.void_and_slash(claim_id, &claim, 140, reason).expect("the claim voids");
+                let after = b.state.bonds.get(&bond).expect("the bond survives a slash");
+                assert_eq!(collateral - after.collateral as u128, slash, "{reason:?}: what the bond loses");
+                assert_eq!(b.state.reserved_exposure(&bond), exposure - claim.reserved - 620_000, "{reason:?}: both halves released");
+            }
+        }
+
         /// Kimi ACTIVE under the registry with seven ready seats and the payout in force at `rate`:
         /// the chain every Upgrade C test starts from, at DAA 130 (the first block of span 13). That
         /// boundary opens Kimi's row (ACTIVE: it has a `Final`) and seats it at 900 ‰, so it leaves
@@ -23919,7 +24082,7 @@ pub(crate) mod tests {
 
                 // The rule without the floor's known draw — the rule as it stood: nobody can produce.
                 assert!(
-                    palw_producer_facts_v3(&s1, &p, &admission, c.block, FENCE, h64(1), Some(&bond_key(2)), None, Some(FENCE), None, false)
+                    palw_producer_facts_v3(&s1, &p, &admission, c.block, FENCE, h64(1), Some(&bond_key(2)), None, Some(FENCE), None, false, 0)
                         .is_none(),
                     "a floor with no row and no known draw has no facts: every producer holds"
                 );
@@ -23942,6 +24105,7 @@ pub(crate) mod tests {
                     Some(FENCE),
                     Some(floor_draw()),
                     false,
+                    0,
                 )
                 .expect("the floor has facts before its row");
                 assert_eq!(facts.pwu, derived, "the producer's pwu is the derivation");
@@ -23980,7 +24144,7 @@ pub(crate) mod tests {
                     "the row carries the number the row-less claim was priced on"
                 );
                 let next =
-                    palw_producer_facts_v3(&s3, &p, &admission, h64(3), 111, h64(1), Some(&bond_key(2)), None, Some(FENCE), None, false)
+                    palw_producer_facts_v3(&s3, &p, &admission, h64(3), 111, h64(1), Some(&bond_key(2)), None, Some(FENCE), None, false, 0)
                         .expect("row-backed facts");
                 assert_eq!(next.pwu, derived, "the row and the known draw are one price");
                 check_palw_attempt_admission_v2(&s3, &p, &admission, &ctx(4, 111, 4), &floor_attempt(derived, 3), fences(None))

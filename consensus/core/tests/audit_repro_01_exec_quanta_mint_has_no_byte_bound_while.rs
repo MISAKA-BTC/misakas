@@ -101,12 +101,22 @@ fn t12_rows() -> Vec<Row> {
         } else {
             works.get(class_id).map(|w| w.economic_ccu_per_claim).expect("a model row carries a carriage")
         };
+        // Named by class id, not by size: the genesis rows changed on 2026-09-23 (the 8k dense row
+        // replaced the hybrid @512 row), and a size heuristic silently put the old name on the new row.
         let name = if *class_id == base {
             "BASE-0 liveness floor"
-        } else if declared_leaves > 1_000_000_000 {
+        } else if *class_id == kaspa_consensus_core::config::class_manifest_const_v1::class_id_of_class(
+            kaspa_consensus_core::config::class_manifest_const_v1::QWEN25_A16_2M_MANIFEST_V1,
+            1,
+        ) {
             "Qwen2.5-1.5B A16 graph-v7 @ n_ctx 2,097,152"
+        } else if *class_id == kaspa_consensus_core::config::class_manifest_const_v1::class_id_of_class(
+            kaspa_consensus_core::config::class_manifest_const_v1::QWEN25_A16_8K_MANIFEST_V1,
+            1,
+        ) {
+            "Qwen2.5-1.5B A16 graph-v7 @ n_ctx 8,192"
         } else {
-            "Qwen3.6-35B-A3B graph-v7 @ n_ctx 512"
+            panic!("a t12 genesis class this record does not name: {class_id}")
         };
         // The class row exactly as the fold holds it; `palw_exposure_pwu_v2` reads `pwu_rule`.
         let class = PalwClassStateV2 {
@@ -156,8 +166,8 @@ fn repro_01_the_mint_divides_derived_mac_eq_by_a_quantum_declared_in_exposure_pw
     let final_id = Hash64::from_u64_word(0x0123_4567_89AB_CDEF);
 
     println!("\n=== per t12 genesis class: what record_round_final credits, and what it mints ===");
-    let mut hybrid_raw_quanta = 0u32;
-    let mut hybrid_declared_quanta = 0u32;
+    let mut narrow_raw_quanta = 0u32;
+    let mut narrow_declared_quanta = 0u32;
     let mut dense_raw_quanta = 0u32;
     let mut dense_declared_quanta = 0u32;
 
@@ -212,11 +222,11 @@ fn repro_01_the_mint_divides_derived_mac_eq_by_a_quantum_declared_in_exposure_pw
             println!("    ^^ SATURATED at u32::MAX — the true quotient is {}", row.derived_mac_eq / 100_000);
         }
 
-        if row.name.starts_with("Qwen3.6") {
-            hybrid_raw_quanta = quanta_raw;
-            hybrid_declared_quanta = quanta_declared;
+        if row.name.ends_with("8,192") {
+            narrow_raw_quanta = quanta_raw;
+            narrow_declared_quanta = quanta_declared;
         }
-        if row.name.starts_with("Qwen2.5") {
+        if row.name.ends_with("2,097,152") {
             dense_raw_quanta = quanta_raw;
             dense_declared_quanta = quanta_declared;
         }
@@ -224,17 +234,17 @@ fn repro_01_the_mint_divides_derived_mac_eq_by_a_quantum_declared_in_exposure_pw
 
     // ---- (d) The finding's headline numbers, asserted. ----
     println!("\n=== the exploit, asserted ===");
-    println!("  Qwen3.6@512 one honest Final mints {hybrid_raw_quanta} quanta (declared unit would give {hybrid_declared_quanta})");
+    println!("  Qwen2.5@8k  one honest Final mints {narrow_raw_quanta} quanta (declared unit would give {narrow_declared_quanta})");
     println!("  Qwen2.5@2M  one honest Final mints {dense_raw_quanta} quanta (declared unit would give {dense_declared_quanta})");
     assert!(
-        hybrid_raw_quanta > 1_500_000,
-        "one honest Qwen3.6@512 Final must mint over 1.5 million quanta; measured {hybrid_raw_quanta}"
+        narrow_raw_quanta > 1_500_000,
+        "one honest Qwen2.5@8k Final must mint over 1.5 million quanta; measured {narrow_raw_quanta}"
     );
-    assert!(hybrid_declared_quanta < 1_000, "the quantum's own declared unit gives a three-digit count; measured {hybrid_declared_quanta}");
+    assert!(narrow_declared_quanta < 10_000, "the quantum's own declared unit gives a four-digit count; measured {narrow_declared_quanta}");
     assert!(
-        hybrid_raw_quanta as u64 / hybrid_declared_quanta.max(1) as u64 > 2_800,
+        narrow_raw_quanta as u64 / narrow_declared_quanta.max(1) as u64 > 2_800,
         "the unit mismatch is at least the floor's 2,810x; measured {}x",
-        hybrid_raw_quanta / hybrid_declared_quanta.max(1)
+        narrow_raw_quanta / narrow_declared_quanta.max(1)
     );
     assert_eq!(dense_raw_quanta, u32::MAX, "the dense row saturates the ONLY bound in the mint (palw_execution_quanta_v1.rs:102)");
     assert!(dense_declared_quanta > 65_536, "even the DECLARED unit puts the dense row past assign_round's 2^16 probe horizon");
@@ -313,22 +323,22 @@ fn repro_03_the_rooted_schedule_costs_about_336_bytes_per_minted_ticket() {
     println!("  per minted ticket           {per_ticket:>12.1} bytes");
 
     // What the same expression costs for the class the t12 genesis actually registers.
-    let hybrid = t12_rows().into_iter().find(|r| r.name.starts_with("Qwen3.6")).expect("the hybrid row");
-    let hybrid_quanta = palw_execution_quantum_count_v1(
-        hybrid.derived_mac_eq,
+    let narrow = t12_rows().into_iter().find(|r| r.name.ends_with("8,192")).expect("the 8k row");
+    let narrow_quanta = palw_execution_quantum_count_v1(
+        narrow.derived_mac_eq,
         u128::from(PALW_EXECUTION_QUANTUM_V1),
         Hash64::default(),
         Hash64::default(),
     );
-    let hybrid_bytes = hybrid_quanta as f64 * per_ticket;
-    println!("\n  Qwen3.6@512, ONE honest Final:");
-    println!("    quanta minted                {hybrid_quanta:>12}");
-    println!("    rooted bytes                 {hybrid_bytes:>12.0} = {:.0} MB", hybrid_bytes / 1e6);
+    let narrow_bytes = narrow_quanta as f64 * per_ticket;
+    println!("\n  Qwen2.5@8k, ONE honest Final:");
+    println!("    quanta minted                {narrow_quanta:>12}");
+    println!("    rooted bytes                 {narrow_bytes:>12.0} = {:.0} MB", narrow_bytes / 1e6);
 
     assert!(per_ticket > 300.0 && per_ticket < 400.0, "a ticket costs ~336 rooted bytes; measured {per_ticket:.1}");
     assert!(
-        hybrid_bytes > 500e6,
-        "one honest hybrid Final writes over half a gigabyte into the rooted round_schedules row; computed {hybrid_bytes:.0} bytes"
+        narrow_bytes > 500e6,
+        "one honest 8k Final writes over half a gigabyte into the rooted round_schedules row; computed {narrow_bytes:.0} bytes"
     );
 }
 
@@ -362,26 +372,26 @@ fn repro_04_the_mint_falls_off_a_cliff_at_the_2_16_probe_horizon() {
          faster than the ticket count; measured {time_ratio:.1}x time for {count_ratio:.2}x tickets"
     );
 
-    // Fit E*(65536 + E/2)*c on the largest sample and extrapolate to one honest hybrid Final.
+    // Fit E*(65536 + E/2)*c on the largest sample and extrapolate to one honest 8k Final.
     let e_big = (n_big - 65_536) as f64;
     let c_ns = (ms_big * 1e6) / (e_big * (65_536.0 + e_big / 2.0));
-    let hybrid = t12_rows().into_iter().find(|r| r.name.starts_with("Qwen3.6")).expect("the hybrid row");
-    let hybrid_n = palw_execution_quantum_count_v1(
-        hybrid.derived_mac_eq,
+    let narrow = t12_rows().into_iter().find(|r| r.name.ends_with("8,192")).expect("the 8k row");
+    let narrow_n = palw_execution_quantum_count_v1(
+        narrow.derived_mac_eq,
         u128::from(PALW_EXECUTION_QUANTUM_V1),
         Hash64::default(),
         Hash64::default(),
     ) as f64;
-    let e_hybrid = hybrid_n - 65_536.0;
-    let hybrid_s = c_ns * e_hybrid * (65_536.0 + e_hybrid / 2.0) / 1e9;
+    let e_narrow = narrow_n - 65_536.0;
+    let narrow_s = c_ns * e_narrow * (65_536.0 + e_narrow / 2.0) / 1e9;
     println!("\n  fitted c = {c_ns:.1} ns per BTreeSet probe");
-    println!("  extrapolated to the hybrid's {hybrid_n:.0} tickets: {hybrid_s:.0} s = {:.1} h", hybrid_s / 3600.0);
-    println!("  t12 block interval: 120 s. Even a 20x release-build speedup leaves {:.0} s.", hybrid_s / 20.0);
+    println!("  extrapolated to the 8k row's {narrow_n:.0} tickets: {narrow_s:.0} s = {:.1} h", narrow_s / 3600.0);
+    println!("  t12 block interval: 120 s. Even a 20x release-build speedup leaves {:.0} s.", narrow_s / 20.0);
     assert!(
-        hybrid_s / 20.0 > 120.0,
-        "one honest hybrid Final's mint must exceed a block interval even allowing a 20x \
+        narrow_s / 20.0 > 120.0,
+        "one honest 8k Final's mint must exceed a block interval even allowing a 20x \
          release-build speedup; extrapolated {:.0} s",
-        hybrid_s / 20.0
+        narrow_s / 20.0
     );
 }
 
@@ -591,10 +601,10 @@ fn repro_05_the_real_fold_writes_an_unclamped_credit_and_mints_it_into_rooted_st
 fn repro_06_mirror_the_mint_is_bounded_and_credited_in_the_quantum_s_own_unit() {
     let rows = t12_rows();
     let floor = rows.iter().find(|r| r.name.starts_with("BASE-0")).expect("the floor row");
-    let hybrid = rows.iter().find(|r| r.name.starts_with("Qwen3.6")).expect("the hybrid row");
+    let narrow = rows.iter().find(|r| r.name.ends_with("8,192")).expect("the 8k row");
 
     // --- property 1: the credit is in exposure pwu, i.e. the floor-normalised unit (U3). ---
-    let correct_credit = (hybrid.derived_mac_eq * u128::from(floor.declared_leaves) / floor.derived_mac_eq) as u64;
+    let correct_credit = (narrow.derived_mac_eq * u128::from(floor.declared_leaves) / floor.derived_mac_eq) as u64;
     // Past `palw_audit_2026_09_23`, `record_round_final` credits through `palw_exposure_pwu_v3` over
     // the floor's exposure basis — the same expression the reservation is written with. Evaluated
     // here over the t12 rows' own basis (the fold resolves the same basis from the base class).
@@ -603,12 +613,12 @@ fn repro_06_mirror_the_mint_is_bounded_and_credited_in_the_quantum_s_own_unit() 
         base_canonical: floor.derived_mac_eq.min(u64::MAX as u128) as u64,
     };
     let credit_the_fold_writes_past_the_fence = kaspa_consensus_core::palw_state_v2::palw_exposure_pwu_v3(
-        &hybrid.class,
+        &narrow.class,
         1,
-        Some(hybrid.derived_mac_eq.min(u64::MAX as u128) as u64),
+        Some(narrow.derived_mac_eq.min(u64::MAX as u128) as u64),
         Some(basis),
     );
-    let credit_below_the_fence = palw_exposure_pwu_v2(&hybrid.class, 1, Some(hybrid.derived_mac_eq.min(u64::MAX as u128) as u64));
+    let credit_below_the_fence = palw_exposure_pwu_v2(&narrow.class, 1, Some(narrow.derived_mac_eq.min(u64::MAX as u128) as u64));
     println!("\n  credit in exposure pwu (U3, correct)        {correct_credit}");
     println!("  credit record_round_final writes, armed    {credit_the_fold_writes_past_the_fence}");
     println!("  credit record_round_final wrote, pre-fence {credit_below_the_fence}  (raw U2, {:.1}x)", credit_below_the_fence as f64 / correct_credit as f64);
@@ -621,7 +631,7 @@ fn repro_06_mirror_the_mint_is_bounded_and_credited_in_the_quantum_s_own_unit() 
     // A deliberately generous bound: 65,536 is assign_round's own probe horizon, the point past
     // which the mint stops being linear. Nothing in the tree enforces any bound at all.
     const GENEROUS_TICKET_BOUND: usize = 65_536;
-    let one = a_final(1, 1, 1, hybrid.derived_mac_eq.min(u64::MAX as u128) as u64);
+    let one = a_final(1, 1, 1, narrow.derived_mac_eq.min(u64::MAX as u128) as u64);
     let snapshot = palw_execution_schedule_snapshot_v1(7, &[one]);
     let anchor = PalwExecSeedAnchorV1 { span: 6, block: h(6), execution_key: h(0xBEEF) };
     let mut schedule = palw_execution_schedule_seeded_v1(&snapshot, &anchor, 1, h(0xF0F0));
@@ -634,11 +644,11 @@ fn repro_06_mirror_the_mint_is_bounded_and_credited_in_the_quantum_s_own_unit() 
         &std::collections::BTreeSet::new(),
         kaspa_consensus_core::palw_execution_quanta_v1::PALW_EXEC_MAX_QUANTA_PER_SPAN_V1,
     );
-    println!("  tickets one honest Qwen3.6@512 Final mints, armed = {}", schedule.quanta.len());
+    println!("  tickets one honest Qwen2.5@8k Final mints, armed = {}", schedule.quanta.len());
     assert!(
         schedule.quanta.len() <= GENEROUS_TICKET_BOUND,
         "schedule.quanta must be bounded like `domains` and `bonds` are in the same function; \
-         one honest Qwen3.6@512 Final minted {}",
+         one honest Qwen2.5@8k Final minted {}",
         schedule.quanta.len()
     );
     // And through the REAL fold, on the fixture repro_05 uses: 70,000 tickets' worth of credit

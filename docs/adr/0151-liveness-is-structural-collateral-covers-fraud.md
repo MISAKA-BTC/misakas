@@ -317,3 +317,34 @@ Also landed: one resource profile for producer / full seat / partial seat, a nod
 ledger (RAII, refusals name the holder, races decided deterministically), S1 partial seats replaying
 only their prefix, and RPC/CLI telemetry. The i16 acceptance run (does the 2M producer now START an
 attempt?) is appended when it completes.
+
+## Addendum 2026-09-23 (evening) — D1's second half, and the regenesis it forces
+
+**The escrow was priced at a subsidy no block pays.** The economic audit's U2: every ConsensusV2
+preset sets `deflationary_phase_daa_score = 0`, so a genesis-era claim carries block one's real
+subsidy through the 720‰ worker carve — 444,562,014,000 sompi a block, an escrow of 3,200.84650080 MSK —
+not the `pre_deflationary_phase_base_subsidy` figure (370,468,345 sompi) the card used, 1,200× short.
+Priced the way §D1's card prices it — every floor claim of the exposure horizon at once,
+`MAX_CLAIM_EXPOSURE_DAA + 1` — one seat would have to post 46,627,776.51 MSK, 98.9 % of it the floor
+term: a network nobody can join. The operator's decision (option A):
+
+* **The runtime reserves a claim's whole fraud gain, escrow + weight.** The escrow is a separate term
+  keyed on the claim's `accepted_daa` through a borsh-skipped state-params copy of
+  `palw_audit_2026_09_23` (`escrow_backed_exposure_from_daa`), so the audit's collateral-unit helper
+  (`reserved / slash`) keeps its meaning. It is reserved at acceptance, re-derived by the consistency
+  check, reverted with its block, and released at Final or void. A CourtFraud void forfeits
+  reserved + escrow; a liveness void (withholding, timeouts) forfeits the weight only. The admission
+  ceiling and the producer's headroom count it, so a bond holds exactly the claims its collateral
+  backs — participation proportional to stake, which is what a fraud-gain collateral is for.
+* **A genesis seat is sized for 64 concurrent floor claims** (`PALW_T12_GENESIS_FLOOR_CONCURRENCY_V1`)
+  plus each model row's in-flight cap: 939,063.21001040 MSK a seat, eight seats 0.0751 % of the cap.
+
+**The genesis rows changed in the same regenesis.** Floor + dense Qwen2.5-1.5B graph-v7 at 8,192
+(`ebf44d0a…`, over its own conversion, root `88096dc1…` from the committed sidecar) and at 2,097,152
+(`74c67e63…`). The held hybrid row is gone: the graph-v7 held map gathers the GDN convolution over
+`(2·k_dim + v_dim)·heads`, which is the engine's window only when key and value head counts agree,
+and Qwen3.6-35B-A3B's are 16 and 32 — every held hybrid attempt fails at the first recurrence
+checkpoint (prefill position 15). A hybrid row is a registration transaction once the map is
+corrected. Collateral and rows move the premine, so the genesis block moves with them — and so does
+genesis card 7, re-keyed for testnet-12 because its key is on no fleet host: testnet-12's genesis is
+`f6cc9576…` (utxo commitment `11669bc6…`); the deployment record carries the fingerprint.

@@ -108,6 +108,11 @@ fn hybrid_profile(g: PalwQwen36GeometryV1) -> Option<PalwShapeProfileV3> {
     guarded(move || qwen36_profile_v7(qwen36_geometry_artifact_eps(g)).ok()).unwrap_or(None)
 }
 
+/// The 8k dense row testnet-12 registers at genesis since 2026-09-23 (in place of the hybrid @512 row).
+fn t12_dense_8k_geometry() -> PalwQwen25GeometryV1 {
+    PalwQwen25GeometryV1 { n_ctx: kaspa_consensus_core::config::params::PALW_T12_NARROW_DENSE_N_CTX, ..t12_dense_geometry() }
+}
+
 fn t12_dense_geometry() -> PalwQwen25GeometryV1 {
     PalwQwen25GeometryV1 { n_ctx: 2_097_152, ..QWEN25_1_5B }
 }
@@ -801,12 +806,13 @@ fn the_live_reward_arm_at_the_t12_genesis_targets() {
     // --- the three profiles, with their canonical jobs and the registry's own work ---------------
     let floor = floor_profile();
     let dense = dense_profile(t12_dense_geometry()).unwrap();
-    let hybrid = hybrid_profile(t12_hybrid_geometry()).unwrap();
+    // The genesis rows since 2026-09-23: the 8k dense row replaced the hybrid @512 row.
+    let dense_8k = dense_profile(t12_dense_8k_geometry()).unwrap();
     let (dp, dd) = qwen25_a16_held_canonical_v1(2_097_152);
-    let (hp, hd) = qwen36_held_canonical_v1(512);
+    let (ep, ed) = qwen25_a16_held_canonical_v1(8_192);
     let rows: Vec<(&str, PalwShapeProfileV3, (u32, u32), u64)> = vec![
         ("BASE-0 floor", floor, PALW_RC_BASE0_CANONICAL, 7_708),
-        ("Qwen3.6 hybrid @512", hybrid, (hp, hd), 20_717_968),
+        ("Qwen2.5 dense @8k", dense_8k, (ep, ed), 105_518_224),
         ("Qwen2.5 dense @2M", dense, (dp, dd), 27_002_967_184),
     ];
 
@@ -956,7 +962,7 @@ fn the_cheapest_paid_class_is_not_throttled() {
                 *class_id,
                 match declared {
                     7_708 => "BASE-0 floor".into(),
-                    20_717_968 => "Qwen3.6 hybrid @512".into(),
+                    105_518_224 => "Qwen2.5 dense @8k".into(),
                     _ => "Qwen2.5 dense @2M".into(),
                 },
             );
@@ -1040,9 +1046,9 @@ fn the_draw_target_and_the_pay_target_are_not_the_same_number() {
         .collect();
 
     let dense = dense_profile(t12_dense_geometry()).unwrap();
-    let hybrid = hybrid_profile(t12_hybrid_geometry()).unwrap();
+    let dense_8k = dense_profile(t12_dense_8k_geometry()).unwrap();
     let (dp, dd) = qwen25_a16_held_canonical_v1(2_097_152);
-    let (hp, hd) = qwen36_held_canonical_v1(512);
+    let (ep, ed) = qwen25_a16_held_canonical_v1(8_192);
 
     println!("\n=== THE TWO TARGETS, PER MODEL ROW (the floor is exempt from both rules) ===");
     println!(
@@ -1051,7 +1057,7 @@ fn the_draw_target_and_the_pay_target_are_not_the_same_number() {
     );
     println!("  {:<22} {:>12} {:>12} {:>12} {:>14} {:>14} {:>13}", "", "(lottery)", "(snapshot)", "", "(ceiling 800)", "(paid, stale)", "(if honest)");
     for (name, profile, job, declared) in
-        [("Qwen3.6 hybrid @512", &hybrid, (hp, hd), 20_717_968u64), ("Qwen2.5 dense @2M", &dense, (dp, dd), 27_002_967_184)]
+        [("Qwen2.5 dense @8k", &dense_8k, (ep, ed), 105_518_224u64), ("Qwen2.5 dense @2M", &dense, (dp, dd), 27_002_967_184)]
     {
         let ctx = rc_job_context(profile, job.0, job.1);
         let work = palw_model_work_from_carriage_v1(profile, &ctx).unwrap();

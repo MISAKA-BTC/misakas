@@ -242,7 +242,7 @@ pub fn palw_producer_facts_v2(
     work_target_floor: Option<u128>,
 ) -> Option<PalwProducerFactsV2> {
     // v2's callers predate the 2026-09-23 fence: the pre-fence headroom, byte for byte.
-    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None, None, false)
+    palw_producer_facts_v3(state, state_params, admission, chain_point, daa_score, class_id, bond, work_target_floor, None, None, false, 0)
 }
 
 /// [`palw_producer_facts_v2`] with **ADR-0149's derived pwu**: `canonical_work_daa` is
@@ -272,6 +272,11 @@ pub fn palw_producer_facts_v3(
     // 2026-09-23 audit H-1: `Params::palw_audit_2026_09_23` at the block — past it the headroom
     // prediction reserves `attempts x` one draw, exactly as admission and the ledger do.
     audit_2026_09_23_active: bool,
+    // **Option A: the escrow this producer's own-work claim would carry at `daa_score`** —
+    // `palw_claim_escrow_v1` of the block's subsidy under the carve resolved at its DAA, computed by
+    // the caller that holds the coinbase schedule. The headroom counts it through the same
+    // reservation the ledger and the ceiling read; 0 where no escrow is priced.
+    claim_escrow: u64,
 ) -> Option<PalwProducerFactsV2> {
     let class = state.class(&class_id)?;
     // ADR-0137: past the work target a model class draws against `MAX · min(1, CCU / W₀)` from
@@ -327,13 +332,15 @@ pub fn palw_producer_facts_v3(
             // disagrees with the rule that refuses it.
             // ADR-0149: the admission's own expression (`palw_exposure_pwu_v3`), which below the
             // fence is `palw_exposure_pwu_v1` of the claimed pwu byte for byte.
-            claim_exposure: (exposure_pwu as u128).saturating_mul(class.slash_value_per_pwu as u128).saturating_mul(
-                if audit_2026_09_23_active {
+            claim_exposure: (exposure_pwu as u128)
+                .saturating_mul(class.slash_value_per_pwu as u128)
+                .saturating_mul(if audit_2026_09_23_active {
                     crate::palw_pwu::palw_claim_attempts_v1(pwu, derived_draw.map(|work| work.min(u64::MAX as u128) as u64)) as u128
                 } else {
                     1
-                },
-            ),
+                })
+                // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it.
+                .saturating_add(state_params.claim_escrow_reservation_v1(daa_score, claim_escrow)),
         })
     });
     Some(PalwProducerFactsV2 {

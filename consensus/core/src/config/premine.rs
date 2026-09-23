@@ -72,25 +72,37 @@ pub const MISAKA_PREMINE_CAP_SOMPI: u64 = 10_000_000_000 * SOMPI_PER_KASPA;
 /// `palw_locked_bond_outpoints_v2`.
 pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 
-/// **testnet-12's genesis-bond collateral: 516,429.79663480 MSK a seat.**
+/// **testnet-12's genesis-bond collateral: 939,063.21001040 MSK a seat.**
 ///
 /// Derived, not chosen — [`crate::palw_fp_devnet_v3::palw_v2_collateral_for_class_set_v1`] over the
 /// classes this genesis registers — and pinned here because the premine has to carve what the card
 /// declares (audit C-08: a bond may declare only what its outpoint holds).
 ///
 /// **The fraud a bond's reachable claims authorize, IN THE UNIT THE RUNTIME RESERVES IN**, class by
-/// class, at the concurrency the chain actually enforces (ADR-0151 D1):
+/// class, at the concurrency the card sizes a seat for (ADR-0151 D1). A claim's gain is its escrow —
+/// the cash a lie collects, 3,200.84650080 MSK: the 444,562,014,000 sompi block one really pays,
+/// through the overlay's 720‰ worker carve (the 2026-09-23 audit's U2) — plus the reservation:
 ///
 /// | class | exposure pwu | reservation / claim | gain / claim | concurrent | collateral |
 /// |---|---|---|---|---|---|
-/// | BASE-0 floor | 7,708 | 0.00039 MSK | 2.66776 MSK | 7,201 — `MAX_CLAIM_EXPOSURE_DAA + 1` | 38,421.01 MSK |
-/// | held Qwen3.6 @512 | 56,436,664 | 2.82183 MSK | 5.48920 MSK | 4 — its in-flight cap ×4 | 43.91 MSK |
-/// | held Qwen2.5 @2,097,152 | 1,194,858,841,364 | 59,742.94207 MSK | 59,745.60944 MSK | 4 — same | 477,964.88 MSK |
-/// | | | | | | **516,429.79663480 MSK** |
+/// | BASE-0 floor | 7,708 | 0.00039 MSK | 3,200.84689 MSK | 64 — `PALW_T12_GENESIS_FLOOR_CONCURRENCY_V1` | 409,708.40 MSK |
+/// | held Qwen2.5 @8,192 | 494,320,046 | 24.71600 MSK | 3,225.56250 MSK | 4 — its in-flight cap ×4 | 25,804.50 MSK |
+/// | held Qwen2.5 @2,097,152 | 1,194,858,841,364 | 59,742.94207 MSK | 62,943.78857 MSK | 4 — same | 503,550.31 MSK |
+/// | | | | | | **939,063.21001040 MSK** |
 ///
-/// Eight seats take 4,131,438.37 MSK, **0.0413 % of the 10B cap**, beside the 758M community table,
-/// and `every_network_genesis_mints_exactly_the_10b_cap` still holds because this is carved OUT of
-/// the main wallet like every other genesis output.
+/// Each term is `gain × concurrent ÷ max_exposure_ratio` (500‰, so ×2). Eight seats take
+/// 7,512,505.68 MSK, **0.0751 % of the 10B cap**, beside the 758M community table, and
+/// `every_network_genesis_mints_exactly_the_10b_cap` still holds because this is carved OUT of the
+/// main wallet like every other genesis output.
+///
+/// **Why the floor is sized for 64 concurrent claims and not for `MAX_CLAIM_EXPOSURE_DAA + 1`**
+/// (the operator's option A, 2026-09-23). A bond really can hold a floor claim for every DAA of the
+/// exposure horizon, and pricing all 7,201 of them at the real escrow asks 46,627,776.51 MSK a seat —
+/// 98.9 % of it the floor term, a seat nobody can post. So the RUNTIME now reserves each claim's full
+/// gain (escrow + weight, `PalwStateParamsV2::claim_escrow_reservation_v1`) against its bond, and the
+/// existing ceiling (`collateral × max_exposure_ratio`) caps a bond at the claims its collateral backs.
+/// A genesis seat is sized to back 64 concurrent floor claims; participation beyond that is
+/// proportional to stake, which is the property a fraud-gain collateral is for.
 ///
 /// **The unit is the whole story, and getting it wrong shipped a network that could not mine.** Three
 /// quantities describe one class and they are not proportional across classes:
@@ -113,7 +125,7 @@ pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 /// the number the chain can actually slash; `the_raw_fork_weight_of_a_2m_claim_is_not_collateralizable`
 /// pins the comparison so this paragraph cannot quietly become false.
 ///
-/// **Four figures preceded this one, and the path matters more than the number:**
+/// **Five figures preceded this one, and the path matters more than the number:**
 ///
 /// * **38,889,673.34 MSK** — `palw_v2_collateral_for_claim_lifetime_v1`, which prices the DEAREST
 ///   class at the FLOOR's concurrency (`max(per-claim) × 7,201`). The operator caught it.
@@ -125,6 +137,9 @@ pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 ///   what the runtime reserves in.
 /// * **60,088.18407600 MSK** — the same sum with the escrow half added but still on the declared
 ///   leaves. This is the one that shipped and wedged; it was short by 8.59×.
+/// * **516,429.79663480 MSK** — the right unit, the wrong escrow: `pre_deflationary_phase_base_subsidy`
+///   (370,468,345 sompi), which no ConsensusV2 block pays, so every claim's cash gain was 1,200× short
+///   (the 2026-09-23 audit's U2), with the hybrid @512 row where the 8k dense row now is.
 ///
 /// **What is still NOT closed:** the runtime reserves (3) while the fork weight it authorizes is (2),
 /// so the chain's own weight ledger is 5,620× the number the bond can be slashed for. The collateral
@@ -137,7 +152,7 @@ pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 /// canonical jobs and the ruleset's ladder — three things a premine table has no business holding.
 /// `t12_bond_collateral_matches_the_card` re-derives it from the shipped card and fails the build on
 /// any drift, which is the discipline the genesis hash pins already live under.
-pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 51_642_979_663_480;
+pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 93_906_321_001_040;
 
 /// The genesis-bond collateral `net` carves, per seat.
 fn genesis_bond_collateral_for(net: NetworkId) -> u64 {
@@ -528,15 +543,15 @@ pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
         return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_RC_GENESIS_BONDS), testnet11_community_utxos());
     }
-    // **testnet-12 — the 2026-09-22 regenesis of testnet-11.** The SAME eight genesis bond cards
-    // (`PALW_RC_GENESIS_BONDS`), because a card is a set of operator-held ML-DSA-87 keys and the
-    // fleet already holds those files; re-carding would be a key ceremony this regenesis does not
-    // need and does not include. What changes is the community table (t12's, on its own sentinel
-    // txid) — so the collateral outpoints a bond's identity is built from are byte-identical to
-    // t11's while the balances in the set are not, which is exactly the split this net wants: the
-    // operators keep their keys, the members keep their allocations, the chain is a different chain.
+    // **testnet-12 — the 2026-09-22 regenesis of testnet-11.** Testnet-11's cards 0–6, because a
+    // card is a set of operator-held ML-DSA-87 keys and the fleet already holds those files, and a
+    // re-keyed card 7 (`PALW_T12_GENESIS_BONDS`), because card 7's key is on no fleet host. What
+    // else changes is the community table (t12's, on its own sentinel txid) — so the collateral
+    // outpoints a bond's identity is built from are byte-identical to t11's while the balances in
+    // the set are not: the operators keep their keys, the members keep their allocations, the chain
+    // is a different chain.
     if net.network_type == NetworkType::Testnet && net.suffix == Some(12) {
-        return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_RC_GENESIS_BONDS), testnet12_community_utxos());
+        return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_T12_GENESIS_BONDS), testnet12_community_utxos());
     }
     // **Mainnet takes the same shape the moment it has cards, and not before.** The list is empty
     // until a genesis registry exists (real keys, held by the operators who will run those seats),
@@ -968,6 +983,21 @@ mod tests {
         println!("PALW_RC_GENESIS.utxo_commitment: Hash64::from_bytes([{rust}])");
         println!("PALW_RC_GENESIS.hash (recomputed over that commitment): Hash::from_bytes([{hash_rust}])");
         println!("PALW_RC_GENESIS.hash_merkle_root (unchanged by the commitment): {}", block.header.hash_merkle_root);
+        // testnet-12, the same pair for the same reason: its premine carries its own collateral pin
+        // and community table, so its commitment and the hash over it move on their own.
+        let mut ms = MuHash::new();
+        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 12)) {
+            ms.add_utxo(&outpoint, &entry);
+        }
+        let commitment = ms.finalize();
+        let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+        let mut t12 = crate::config::genesis::PALW_T12_GENESIS;
+        t12.utxo_commitment = commitment;
+        let block: crate::block::Block = (&t12).into();
+        let hash_rust = block.hash().as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+        println!("PALW_T12_GENESIS.utxo_commitment: Hash64::from_bytes([{rust}])");
+        println!("PALW_T12_GENESIS.hash (recomputed over that commitment): Hash64::from_bytes([{hash_rust}])");
+        println!("PALW_T12_GENESIS.hash_merkle_root (unchanged by the commitment): {}", block.header.hash_merkle_root);
     }
 }
 

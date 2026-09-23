@@ -19,7 +19,7 @@ fn t12() -> NetworkId {
 }
 
 fn t12_bonds() -> Vec<kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1> {
-    PALW_RC_GENESIS_BONDS
+    PALW_T12_GENESIS_BONDS
         .iter()
         .map(|c| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
             bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(premine_outpoint(c.premine_index)),
@@ -30,20 +30,17 @@ fn t12_bonds() -> Vec<kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSp
         .collect()
 }
 
-/// The t12 card, with each of the three root slots under the caller's control.
-fn card(base0: Hash64, qwen36: Hash64, dense: Hash64) -> Result<Params, String> {
+/// The t12 card, with each of the three root slots under the caller's control: the floor, the 8k
+/// dense row and the 2M dense row (the hybrid row left the genesis set on 2026-09-23).
+fn card(base0: Hash64, dense_8k: Hash64, dense: Hash64) -> Result<Params, String> {
     let base = palw_t12_base_params();
     let utxos = genesis_premine_utxos_for(base.net);
-    palw_v2_params_with_class_rows_v1(
-        base,
-        base0,
-        qwen36,
-        Some(dense),
-        t12_bonds(),
-        utxos,
-        PalwGenesisClassRowsV1::HeldLadder { dense_n_ctx: PALW_T12_DENSE_N_CTX, hybrid_n_ctx: PALW_T12_HYBRID_N_CTX },
-    )
-    .map_err(|e| format!("{e:?}"))
+    let mut rows = PALW_T12_GENESIS_HELD_ROWS;
+    for row in rows.iter_mut() {
+        row.artifact_root = if row.n_ctx == PALW_T12_DENSE_N_CTX { dense } else { dense_8k };
+    }
+    palw_v2_params_with_class_rows_v1(base, base0, t12_bonds(), utxos, PalwGenesisClassRowsV1::Held(&rows))
+        .map_err(|e| format!("{e:?}"))
 }
 
 fn registered_roots(p: &Params) -> Vec<(Hash64, Hash64)> {
@@ -101,35 +98,35 @@ fn a_digest_converts_to_an_inventory_root_in_one_line_of_safe_public_api() {
 #[test]
 fn the_three_genesis_root_slots_accept_each_others_values() {
     let b0 = PALW_RC_GENESIS_ARTIFACT_ROOT;
-    let q36 = PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT;
+    let d8k = PALW_T12_GENESIS_QWEN25_A16_8K_ARTIFACT_ROOT;
     let dense = PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT;
 
-    let honest = card(b0, q36, dense).expect("the shipped card assembles");
+    let honest = card(b0, d8k, dense).expect("the shipped card assembles");
     honest.validate_palw_v2().expect("the shipped card validates");
     println!("honest        params id {}", honest.consensus_params_id());
 
     // 1. base0 <-> qwen36 swapped.
-    match card(q36, b0, dense) {
+    match card(d8k, b0, dense) {
         Ok(p) => {
             let v = p.validate_palw_v2();
-            println!("b0<->q36 swap params id {}  validate {:?}", p.consensus_params_id(), v.as_ref().err());
-            assert!(v.is_ok(), "a card with the floor's and the hybrid's roots exchanged validates");
+            println!("b0<->d8k swap params id {}  validate {:?}", p.consensus_params_id(), v.as_ref().err());
+            assert!(v.is_ok(), "a card with the floor's and the 8k row's roots exchanged validates");
             assert_ne!(p.consensus_params_id(), honest.consensus_params_id());
         }
-        Err(why) => println!("b0<->q36 swap REFUSED at assembly: {why}"),
+        Err(why) => println!("b0<->d8k swap REFUSED at assembly: {why}"),
     }
 
-    // 2. the dense slot given the hybrid's root (one artifact, two classes claiming it).
-    match card(b0, q36, q36) {
+    // 2. the 2M slot given the 8k row's root (one artifact, two classes claiming it).
+    match card(b0, d8k, d8k) {
         Ok(p) => {
             let v = p.validate_palw_v2();
             let roots = registered_roots(&p);
-            let dup = roots.iter().filter(|(_, r)| *r == q36).count();
-            println!("dense:=q36    params id {}  validate {:?}  classes sharing that root: {dup}", p.consensus_params_id(), v.as_ref().err());
+            let dup = roots.iter().filter(|(_, r)| *r == d8k).count();
+            println!("dense:=d8k    params id {}  validate {:?}  classes sharing that root: {dup}", p.consensus_params_id(), v.as_ref().err());
             assert!(v.is_ok(), "two registered classes may pin the same artifact root at genesis");
-            assert_eq!(dup, 2, "the hybrid and the dense row now name one root");
+            assert_eq!(dup, 2, "the 8k and the 2M row now name one root");
         }
-        Err(why) => println!("dense:=q36 REFUSED at assembly: {why}"),
+        Err(why) => println!("dense:=d8k REFUSED at assembly: {why}"),
     }
 
     // 3. all three the same value.
@@ -183,21 +180,22 @@ fn the_only_consensus_check_on_a_root_is_membership_in_the_set_it_came_from() {
 /// **How many of testnet-12's three registered roots can any CI run re-derive?**
 ///
 /// One. The floor derives from a seed (`misaka-palw-base0` `the_pinned_rc_artifact_root_is_the_one_the_floor_derives`,
-/// not `#[ignore]`d). The dense 2M root is a committed JSON measurement whose only re-derivation is
-/// `#[ignore]`d and needs a 2.87 GB file absent from the repo. The hybrid root is a hand-pinned byte
-/// array with no derivation anywhere in the tree.
+/// not `#[ignore]`d). The two dense roots (8k and 2M) are committed JSON measurements: their only
+/// re-derivation is `palw-class manifest --check` against the artifact file, which no CI run holds
+/// (1.80 GB and 2.87 GB). Since 2026-09-23 no genesis root is a hand-pinned byte array — the hybrid
+/// row that carried one left the genesis set — but "committed measurement" is still not "derived".
 #[test]
 fn only_one_of_the_three_t12_roots_is_derivable_by_ci() {
     let p = Params::from(t12());
     let roots = registered_roots(&p);
-    assert_eq!(roots.len(), 3, "t12 registers three classes");
+    assert_eq!(roots.len(), 3, "t12 registers three classes: the floor and two dense rows");
 
     let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let manifests = std::fs::read_dir(repo.join("consensus/core/src/config/class-manifests"))
         .map(|d| d.filter_map(|e| e.ok()).count())
         .unwrap_or(0);
     println!("registered classes: {}   committed .palwmanifest files: {manifests}", roots.len());
-    assert_eq!(manifests, 1, "one manifest for three registered roots");
+    assert_eq!(manifests, 3, "one manifest per artifact the fleet measured: dense 2M, dense 8k, and the Qwen3.6 mapping");
 
     // The floor: derivable, and the test that does it is live.
     let rc = std::fs::read_to_string(repo.join("misaka-palw-base0/src/rc.rs")).expect("rc.rs");
@@ -214,11 +212,12 @@ fn only_one_of_the_three_t12_roots_is_derivable_by_ci() {
     assert!(probe.contains("PALW_A16_2M_PATH"), "and it needs a file no CI run has");
     println!("2M re-derivation: #[ignore], requires env PALW_A16_2M_PATH");
 
-    // The hybrid root: no derivation at all.
-    let q36 = PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT;
-    println!("hybrid root {q36} — hand-pinned byte array, re-pinned 2026-08-27, no derivation in-tree");
+    // The dense 8k root: a committed measurement, the same way.
+    let d8k = PALW_T12_GENESIS_QWEN25_A16_8K_ARTIFACT_ROOT;
+    assert!(roots.iter().any(|(_, r)| *r == d8k), "the card registers the 8k sidecar's root");
+    println!("8k root {d8k} — read from the committed sidecar; re-derivable only with the 1.80 GB artifact");
 
-    // And only the dense row carries a digest/root confusion guard.
+    // And the dense rows carry a digest/root confusion guard.
     let reg = std::fs::read_to_string(repo.join("consensus/core/tests/t12_regenesis.rs")).expect("t12_regenesis");
     assert!(reg.contains("the card would be registering a flat artifact digest again"), "the dense row has the guard");
     println!("assert_ne! digest-vs-root guards in t12_regenesis.rs: {}", reg.matches("artifact_digest_of").count());
