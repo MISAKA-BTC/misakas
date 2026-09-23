@@ -12660,7 +12660,17 @@ impl VirtualStateProcessor {
                 Err(early) => early.last_heartbeat_timestamp.saturating_add(early.interval_ms),
             }
         };
-        template.block.header.timestamp = template.block.header.timestamp.max(earliest);
+        let built_at = template.block.header.timestamp;
+        template.block.header.timestamp = built_at.max(earliest);
+        // **A stamp the builder did not execute against is a commitment for another block.** On an
+        // EVM-active network the builder ran the lane against ITS timestamp; stamped later, the
+        // beat carried the old `evm_commitment_root` and every node disqualified it from the chain
+        // — the node's own beat, on testnet-12, whose lane is active from DAA 0 in every default
+        // `kaspad` build. Found while diagnosing the 2026-09-24 merge battery: H1 began stamping
+        // beats for the cursor's slot, and before it this path never moved a testnet-12 stamp.
+        if template.block.header.timestamp != built_at {
+            self.heartbeat_recommit_evm_for_stamp(&mut template, built_at)?;
+        }
         template.block.header.pow_algo_id = hb::PALW_HEARTBEAT_ALGO_ID;
         template.block.header.palw_commitment = vec![];
         // **`bits` are left exactly as the global calculation set them** (ADR-0066 Decision 1).
@@ -12679,6 +12689,70 @@ impl VirtualStateProcessor {
         template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
         template.block.header.finalize();
         Ok((template, earliest))
+    }
+
+    /// **Re-commit the EVM lane for a heartbeat the adapter stamped later than its builder did.**
+    ///
+    /// The lane executes a chain block's mergeset acceptance against the header's timestamp in
+    /// whole seconds (`kaspa_evm::env::derive_env`), so a stamp in the same second as the builder's
+    /// changes nothing and anything else changes `evm_commitment_root` — and, through the bridge's
+    /// withdrawals, possibly `utxo_commitment`. Both are re-derived by the builder's OWN step,
+    /// [`Self::evm_template_fields`], over the virtual the template was built on and the payload it
+    /// already carries: construction and validation keep running one function.
+    ///
+    /// Refused, never guessed, when that virtual is gone (the template is stale and the miner
+    /// rebuilds) or when the re-run would carry a different payload (a claim that went stale in
+    /// between). Inert below the lane's activation, which covers every build without the `evm`
+    /// feature: such a build cannot produce an EVM-active template at all.
+    fn heartbeat_recommit_evm_for_stamp(&self, template: &mut BlockTemplate, built_at: u64) -> Result<(), RuleError> {
+        let header = &template.block.header;
+        if header.daa_score < self.evm_activation_daa_score || header.timestamp / 1000 == built_at / 1000 {
+            return Ok(());
+        }
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state = virtual_read.state.get().unwrap();
+        let built_on_this_virtual = virtual_state.daa_score == header.daa_score
+            && virtual_state.ghostdag_data.selected_parent == template.selected_parent_hash
+            && virtual_state.parents.len() == header.direct_parents().len()
+            && virtual_state.parents.iter().all(|p| header.direct_parents().contains(p));
+        if !built_on_this_virtual {
+            return Err(RuleError::EvmTemplateExecutionFailed(format!(
+                "the heartbeat adapter stamped this template for its slot ({built_at} -> {}), which moves its EVM commitment, and \
+                 the virtual it was built on has moved since — build a fresh template",
+                header.timestamp
+            )));
+        }
+        let payload = &template.block.evm_payload;
+        let claims: Vec<kaspa_consensus_core::evm::DepositClaim> = payload
+            .system_ops
+            .iter()
+            .filter_map(|op| match op {
+                kaspa_consensus_core::evm::EvmSystemOp::DepositClaim(claim) => Some(claim.clone()),
+                kaspa_consensus_core::evm::EvmSystemOp::MarketSettle(_) => None,
+            })
+            .collect();
+        let prepared_claims = crate::processes::evm::prepare_deposit_claims(&claims, &virtual_read.utxo_set, virtual_state.daa_score);
+        drop(virtual_read);
+        let evm_template_data = kaspa_consensus_core::evm::EvmTemplateData {
+            evm_coinbase: payload.evm_coinbase,
+            transactions: payload.transactions.clone(),
+            system_ops: claims,
+        };
+        // The builder's starting point: the virtual's multiset, before the lane folds the bridge's
+        // effects in (`evm_template_fields` re-folds them when there are any).
+        let mut restamped = template.block.header.clone();
+        restamped.utxo_commitment = virtual_state.multiset.clone().finalize();
+        let (restamped, payload, stale_claims) =
+            self.evm_template_fields(restamped, &virtual_state, evm_template_data, prepared_claims)?;
+        if payload != template.block.evm_payload || !stale_claims.is_empty() {
+            return Err(RuleError::EvmTemplateExecutionFailed(format!(
+                "the heartbeat adapter stamped this template for its slot ({built_at} -> {}), and the EVM payload it carries no longer \
+                 re-derives on its virtual — build a fresh template",
+                restamped.timestamp
+            )));
+        }
+        template.block.header = restamped;
+        Ok(())
     }
 
     /// **ADR-0142: the clock's decision for a block built on `parents`** — the cursor its window

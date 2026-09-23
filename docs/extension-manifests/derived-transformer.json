@@ -4,7 +4,7 @@
   "name": "music/smf/v1 — the shipped MIDI writer, over the corpus's smallest answer",
   "network": "testnet-11",
   "source": { "note": "the transformer this build publishes under the name; the vector is misaka-palw-derive's own corpus answer" },
-  "declares": { "object_id": "4f47c5786c58affbf0a24e3203d50728385e26aece93737d56b79eebe95cbfff91d10ba03b3ee4cf22cdd836bbe295537fcf810210c8b4cd16a77afa1e5eb50e" },
+  "declares": { "object_id": "0c4b009c106e3eca112c4d8e7175be1997c873d0d3293a70879a61bf78756aa7ce60204df8f9cb353fdc4ee8f5f528512fe541f061adcb9eb46e6b1c091f39ce" },
   "transformer": { "name": "music/smf/v1" },
   "verification": {
     "vectors": [
