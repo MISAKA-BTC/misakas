@@ -47,6 +47,20 @@ fn render_local(c: &RpcPalwLocalPanelClass) -> String {
     out.push_str(&format!("Artifact         {}\n", if c.artifact_loaded { "loaded" } else { "missing" }));
     out.push_str(&format!("Artifact root    {}\n", if c.artifact_root.is_empty() { "—".into() } else { short_id(&c.artifact_root) }));
     out.push_str(&format!("Working set      {}\n", if c.working_set_bytes == 0 { "—".into() } else { fmt_gib(c.working_set_bytes) }));
+    if !c.runtime_profile.is_empty() {
+        let capable = |yes: bool| if yes { "fits" } else { "held" };
+        out.push_str(&format!("Runtime profile  {}\n", c.runtime_profile));
+        out.push_str(&format!("Artifact resident {}\n", fmt_gib(c.artifact_resident_bytes)));
+        out.push_str(&format!(
+            "Needs            producer {} ({}) · full seat {} ({}) · partial seat {} ({})\n",
+            fmt_gib(c.producer_working_set_bytes),
+            capable(c.producer_capable),
+            fmt_gib(c.full_seat_working_set_bytes),
+            capable(c.full_seat_capable),
+            fmt_gib(c.partial_seat_working_set_bytes),
+            capable(c.partial_seat_capable)
+        ));
+    }
     out.push_str(&format!("Replay capable   {}\n", if c.replay_capable { "yes" } else { "no" }));
     out.push_str(&format!("Synced           {}\n", if c.synced { "yes" } else { "no" }));
     out.push_str(&format!("Bond active      {}\n", if c.bond_active { "yes" } else { "no" }));

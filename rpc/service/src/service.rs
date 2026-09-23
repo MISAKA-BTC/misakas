@@ -1519,6 +1519,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             panel_running: rt.panel_running,
             panel_submitter: rt.panel_submitter,
             retention_dir: self.flow_context.palw_retention_dir().map(|d| d.display().to_string()).unwrap_or_default(),
+            memory_share_bytes: rt.memory_share_bytes,
+            memory_headroom_bytes: rt.memory_headroom_bytes,
+            memory_reserved_bytes: rt.memory_reserved_bytes,
+            memory_available_bytes: rt.memory_available_bytes,
+            memory_bounded: rt.memory_bounded,
+            memory_holders: rt.memory_holders,
         })
     }
 
@@ -2144,6 +2150,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 chain_state: chain.map(|c| c.registry_state.clone()).unwrap_or_default(),
                 assignments: seat.map(|s| s.assigned).unwrap_or(0),
                 hold: local_hold_or_chain(local, seat),
+                runtime_profile: local.runtime_profile.clone(),
+                artifact_resident_bytes: local.artifact_resident_bytes,
+                producer_working_set_bytes: local.producer_working_set_bytes,
+                full_seat_working_set_bytes: local.full_seat_working_set_bytes,
+                partial_seat_working_set_bytes: local.partial_seat_working_set_bytes,
+                producer_capable: local.producer_capable,
+                full_seat_capable: local.full_seat_capable,
+                partial_seat_capable: local.partial_seat_capable,
             });
         }
         if classes.is_empty() {
@@ -2157,6 +2171,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     artifact_root: String::new(),
                     working_set_bytes: 0,
                     replay_capable: false,
+                    runtime_profile: String::new(),
+                    artifact_resident_bytes: 0,
+                    producer_working_set_bytes: 0,
+                    full_seat_working_set_bytes: 0,
+                    partial_seat_working_set_bytes: 0,
+                    producer_capable: false,
+                    full_seat_capable: false,
+                    partial_seat_capable: false,
                     synced,
                     bond_active: seat.map(|s| s.eligible || s.ready).unwrap_or(false),
                     collateral_sompi: seat.map(|s| s.collateral_available.min(u128::from(u64::MAX)) as u64).unwrap_or(0),

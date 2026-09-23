@@ -1837,6 +1837,13 @@ message GetPalwNodeStatusResponseMessage {
   bool panelRunning = 16;
   bool panelSubmitter = 17;
   string retentionDir = 18;
+  // ADR-0151 follow-up, item 6: the memory reservation ledger.
+  uint64 memoryShareBytes = 19;
+  uint64 memoryHeadroomBytes = 20;
+  uint64 memoryReservedBytes = 21;
+  uint64 memoryAvailableBytes = 22;
+  bool memoryBounded = 23;
+  string memoryHolders = 24;
   RPCError error = 1000;
 }
 
@@ -2288,6 +2295,15 @@ message RpcPalwLocalPanelClass {
   string chainState = 13;
   uint32 assignments = 14;
   RpcPalwPanelHoldReason hold = 15;
+  // ADR-0151 follow-up, item 6: the resource profile by role — node-local capacity, never chain fact.
+  string runtimeProfile = 16;
+  uint64 artifactResidentBytes = 17;
+  uint64 producerWorkingSetBytes = 18;
+  uint64 fullSeatWorkingSetBytes = 19;
+  uint64 partialSeatWorkingSetBytes = 20;
+  bool producerCapable = 21;
+  bool fullSeatCapable = 22;
+  bool partialSeatCapable = 23;
 }
 
 message GetPalwClassPanelStatusRequestMessage {

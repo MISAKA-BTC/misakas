@@ -593,6 +593,59 @@ pub fn dot_codes(a: &[i32], b: &[i32]) -> i64 {
     a.iter().zip(b).map(|(x, y)| *x as i64 * *y as i64).sum()
 }
 
+/// **The width a cached series arrives in.** The attention kernels are generic over it: `i32` is
+/// the lane the catalog reads, `i16` is the code's own width (`A16-KV-i16`,
+/// `engine_a16::KvStorageProfileV1`). The decode is [`Self::widen`] — a sign-extending cast at the
+/// multiply, exact for every A16 code — so a kernel instantiated at `i16` forms the same `i64`
+/// products in the same order as its `i32` instantiation and narrows them the same way. There is
+/// no arithmetic on the narrow type; there is only a wider load.
+///
+/// `is_a16_code` is the refusal the catalog's `as_a16` makes, at the width: `|v| ≤ 32,767`, which
+/// for an `i16` excludes exactly `i16::MIN`.
+pub trait A16SeriesCodeV1: Copy + Send + Sync {
+    fn widen(self) -> i64;
+    fn is_a16_code(self) -> bool;
+}
+
+impl A16SeriesCodeV1 for i32 {
+    #[inline(always)]
+    fn widen(self) -> i64 {
+        self as i64
+    }
+    #[inline(always)]
+    fn is_a16_code(self) -> bool {
+        (self as i64).abs() <= A16_CODE_MAX
+    }
+}
+
+impl A16SeriesCodeV1 for i16 {
+    #[inline(always)]
+    fn widen(self) -> i64 {
+        self as i64
+    }
+    #[inline(always)]
+    fn is_a16_code(self) -> bool {
+        self != i16::MIN
+    }
+}
+
+/// `Σ q[i] · k[i]` in `i64`, the key at whatever width the cache holds it — the same left fold as
+/// [`dot_codes`], widened per element.
+#[inline]
+pub fn dot_series<S: A16SeriesCodeV1>(q: &[i32], k: &[S]) -> i64 {
+    q.iter().zip(k).map(|(x, y)| *x as i64 * y.widen()).sum()
+}
+
+fn check_series_codes<S: A16SeriesCodeV1>(row: &[S]) -> Result<(), PalwA16OpError> {
+    if row.is_empty() {
+        return Err(PalwA16OpError::Empty);
+    }
+    if row.iter().any(|v| !v.is_a16_code()) {
+        return Err(PalwA16OpError::LengthMismatch { a: row.len(), b: row.len() });
+    }
+    Ok(())
+}
+
 /// **Op W9 on the pool** — `q · Kᵀ` per head, per key.
 ///
 /// The reference walks `heads × kv_len` independent dots in one serial loop. At a 360-token
@@ -602,17 +655,18 @@ pub fn dot_codes(a: &[i32], b: &[i32]) -> i64 {
 ///
 /// Every output element depends on one query head and one key, so nothing here is shared and the
 /// only question was scheduling. Bit-identical to `a16_attn_scores` by construction — same
-/// products, same order within a dot, same narrowing.
-pub fn a16_attn_scores_fast(
+/// products, same order within a dot, same narrowing — at either series width
+/// (`the_series_kernels_read_i16_as_they_read_i32`).
+pub fn a16_attn_scores_fast<S: A16SeriesCodeV1>(
     q: &[i32],
-    k_series: &[i32],
+    k_series: &[S],
     heads: usize,
     kv_heads: usize,
     d_head: usize,
     params: &[A16QuantParams],
 ) -> Result<Vec<i32>, PalwA16OpError> {
     check_codes(q)?;
-    check_codes(k_series)?;
+    check_series_codes(k_series)?;
     if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
         return Err(PalwA16OpError::Empty);
     }
@@ -637,7 +691,7 @@ pub fn a16_attn_scores_fast(
         let kv_off = (h / group) * d_head;
         let kh = &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head];
         let p = params[i];
-        a16_scale_round(dot_codes(qh, kh), p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+        a16_scale_round(dot_series(qh, kh), p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
     }))
 }
 
@@ -645,9 +699,9 @@ pub fn a16_attn_scores_fast(
 ///
 /// The reduction is over the history, so this one gets LONGER as the context grows while the
 /// scores arm gets WIDER. Both are `heads × …` independent outputs and both were serial.
-pub fn a16_attn_values_fast(
+pub fn a16_attn_values_fast<S: A16SeriesCodeV1>(
     probs: &[i32],
-    v_series: &[i32],
+    v_series: &[S],
     heads: usize,
     kv_heads: usize,
     d_head: usize,
@@ -658,9 +712,9 @@ pub fn a16_attn_values_fast(
 
 /// [`a16_attn_values_fast`] under the class's history bound (ADR-0116) — the catalog's
 /// `a16_attn_values_within`, refusal for refusal. The accumulator is `i64` whatever the width.
-pub fn a16_attn_values_fast_within(
+pub fn a16_attn_values_fast_within<S: A16SeriesCodeV1>(
     probs: &[i32],
-    v_series: &[i32],
+    v_series: &[S],
     heads: usize,
     kv_heads: usize,
     d_head: usize,
@@ -668,7 +722,7 @@ pub fn a16_attn_values_fast_within(
     max_history: usize,
 ) -> Result<Vec<i32>, PalwA16OpError> {
     check_codes(probs)?;
-    check_codes(v_series)?;
+    check_series_codes(v_series)?;
     if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
         return Err(PalwA16OpError::Empty);
     }
@@ -694,7 +748,7 @@ pub fn a16_attn_values_fast_within(
         // `V` is position-major, so this reduction strides by `kv_dim` — the one place in this
         // module where the inner loop is not contiguous, and the reason it is written as an
         // explicit sum rather than through `dot_codes`.
-        let acc: i64 = (0..kv_len).map(|j| ph[j] as i64 * v_series[j * kv_dim + kv_off + i] as i64).sum();
+        let acc: i64 = (0..kv_len).map(|j| ph[j] as i64 * v_series[j * kv_dim + kv_off + i].widen()).sum();
         let p = params[idx];
         a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
     }))
@@ -757,10 +811,10 @@ thread_local! {
 /// inside `i64`, so splitting the history into chunks across threads changes nothing (ADR-0040
 /// Decision E). Every refusal the composition makes, this makes too.
 #[allow(clippy::too_many_arguments)]
-pub fn a16_attn_fused_uniform_fast(
+pub fn a16_attn_fused_uniform_fast<S: A16SeriesCodeV1>(
     q: &[i32],
-    k_series: &[i32],
-    v_series: &[i32],
+    k_series: &[S],
+    v_series: &[S],
     heads: usize,
     kv_heads: usize,
     d_head: usize,
@@ -788,10 +842,10 @@ pub fn a16_attn_fused_uniform_fast(
 /// moves with the bound, and nothing else does — every accumulator here is `i64`, and the
 /// scratch rows are the history's own length.
 #[allow(clippy::too_many_arguments)]
-pub fn a16_attn_fused_uniform_fast_within(
+pub fn a16_attn_fused_uniform_fast_within<S: A16SeriesCodeV1>(
     q: &[i32],
-    k_series: &[i32],
-    v_series: &[i32],
+    k_series: &[S],
+    v_series: &[S],
     heads: usize,
     kv_heads: usize,
     d_head: usize,
@@ -803,7 +857,7 @@ pub fn a16_attn_fused_uniform_fast_within(
 ) -> Result<Vec<i32>, PalwA16OpError> {
     // W9's refusals.
     check_codes(q)?;
-    check_codes(k_series)?;
+    check_series_codes(k_series)?;
     if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
         return Err(PalwA16OpError::Empty);
     }
@@ -820,7 +874,7 @@ pub fn a16_attn_fused_uniform_fast_within(
     let kv_len = k_series.len() / kv_dim;
     // W10's refusals. The probability row it would be handed is `heads × kv_len` codes, every one
     // inside the code range by W5's clamp, so only the value row and the lengths can refuse.
-    check_codes(v_series)?;
+    check_series_codes(v_series)?;
     if v_series.is_empty() || !v_series.len().is_multiple_of(kv_dim) {
         return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
     }
@@ -848,7 +902,7 @@ pub fn a16_attn_fused_uniform_fast_within(
         let mut max = i64::MIN;
         for (o, slot) in run.iter_mut().enumerate() {
             let j = base + o;
-            *slot = narrow(dot_codes(qh, &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head]), logits);
+            *slot = narrow(dot_series(qh, &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head]), logits);
             max = max.max(*slot as i64);
         }
         max
@@ -874,7 +928,7 @@ pub fn a16_attn_fused_uniform_fast_within(
             };
             let code = narrow(prob as i64, probs) as i64;
             for (a, v) in acc.iter_mut().zip(&v_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head]) {
-                *a += code * *v as i64;
+                *a += code * v.widen();
             }
         }
         acc
@@ -1285,6 +1339,58 @@ mod tests {
             a16_attn_fused_uniform_fast(&q, &k, &v, 2, 2, 4, p, 16, p, p),
             fused_by_the_catalog(&q, &k, &v, 2, 2, 4, p, 16, p, p)
         );
+    }
+
+    /// **The kernels read an `i16` series as they read an `i32` one** — the claim the `A16-KV-i16`
+    /// cache rests on, at the kernel: over the fused test's shapes and histories, random codes over
+    /// the whole range including both rails, the `i16` instantiation of W9, W10 and the fused site
+    /// equals the `i32` instantiation to the bit. And the refusal is the same at both widths: the
+    /// one `i16` value that is not a code (`i16::MIN`) is refused as an out-of-range `i32` is.
+    #[test]
+    fn the_series_kernels_read_i16_as_they_read_i32() {
+        let mut rng = Lcg(0xA16_1616);
+        let narrow = |codes: &[i32]| -> Vec<i16> { codes.iter().map(|c| i16::try_from(*c).expect("a code fits i16")).collect() };
+        let p = A16QuantParams { multiplier: 1, shift: 26, zero: 0 };
+        let values = A16QuantParams { multiplier: 3, shift: 27, zero: 1 };
+        for (heads, kv_heads, d_head, lengths) in [
+            (2usize, 2usize, 4usize, &[1usize, 2, 63, 1_024, 1_025, 5_000, 70_000][..]),
+            (4, 2, 8, &[1, 64, 3_000][..]),
+            (12, 2, 128, &[1, 5, 65, 360][..]),
+        ] {
+            let kv_dim = kv_heads * d_head;
+            for &n in lengths {
+                let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+                let k: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                let v: Vec<i32> = (0..n * kv_dim).map(|_| rng.code()).collect();
+                let probs: Vec<i32> = (0..heads * n).map(|_| rng.code().abs() % 32_768).collect();
+                let (k16, v16) = (narrow(&k), narrow(&v));
+                let score_params = vec![p; heads * n];
+                let value_params = vec![values; heads * d_head];
+                assert_eq!(
+                    a16_attn_scores_fast(&q, &k16, heads, kv_heads, d_head, &score_params),
+                    a16_attn_scores_fast(&q, &k, heads, kv_heads, d_head, &score_params),
+                    "scores heads {heads} history {n}"
+                );
+                assert_eq!(
+                    a16_attn_values_fast(&probs, &v16, heads, kv_heads, d_head, &value_params),
+                    a16_attn_values_fast(&probs, &v, heads, kv_heads, d_head, &value_params),
+                    "values heads {heads} history {n}"
+                );
+                for up in [0u8, 14, 25, 62] {
+                    assert_eq!(
+                        a16_attn_fused_uniform_fast(&q, &k16, &v16, heads, kv_heads, d_head, p, up, p, values),
+                        a16_attn_fused_uniform_fast(&q, &k, &v, heads, kv_heads, d_head, p, up, p, values),
+                        "fused heads {heads} history {n} up {up}"
+                    );
+                }
+            }
+        }
+        // The refusal at the narrow width: `i16::MIN` is the one non-code an `i16` can hold.
+        let q = [1i32, 0];
+        assert!(a16_attn_scores_fast(&q, &[i16::MIN, 1], 1, 1, 2, &[p]).is_err(), "i16::MIN is not a code");
+        assert!(a16_attn_scores_fast(&q, &[A16_CODE_MAX as i32 + 1, 1], 1, 1, 2, &[p]).is_err(), "32,768 is not a code");
+        assert!(a16_attn_scores_fast(&q, &[-(A16_CODE_MAX as i16), 1i16], 1, 1, 2, &[p]).is_ok(), "-32,767 is");
+        assert!(a16_attn_fused_uniform_fast(&q, &[1i16, 1], &[i16::MIN, 1], 1, 1, 2, p, 16, p, p).is_err(), "and so on the value side");
     }
 
     /// The fused kernel refuses exactly where the composition does: a code out of range on any

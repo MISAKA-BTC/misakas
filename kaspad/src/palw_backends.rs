@@ -18,6 +18,7 @@ use std::sync::{Mutex, OnceLock};
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+use kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1;
 use kaspa_core::{error, info, warn};
 use kaspa_hashes::Hash64;
 use misaka_palw_sdk::{PalwClassSdk, PalwLoadedArtifactV1};
@@ -94,44 +95,109 @@ impl PalwBackendRegistry {
             .and_then(holding_replay_bytes_v1)
     }
 
-    /// **Bytes a replay of this class still has to take from MemAvailable.**
+    /// **Bytes a replay of this class still has to take from MemAvailable** — a full seat's need,
+    /// through [`Self::role_memory_need_v1`]. Kept for the readers that want one number.
+    pub fn incremental_replay_bytes_for_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<u64> {
+        self.role_memory_need_v1(class_id, artifact_root, PalwResourceRoleV1::FullSeat).map(|n| n.total_bytes())
+    }
+
+    /// **What `role` of this class needs on this node, decomposed** (ADR-0151 follow-up, items 1
+    /// and 2): the holding's incremental bytes plus the role's resource profile — the ONE
+    /// composition the producer's gate, the panel's pre-check and the court's replay read, so a
+    /// role is never again priced by the artifact's file size.
     ///
     /// A Qwen3.6 holding with ADR-0112 residency has already pinned its budget in this process.
     /// Charging `budget_bytes` again against `MemAvailable` made every 23 GiB seat that had just
     /// mapped QWEN36 defer it (`class needs 6.50 GiB` against a ~3 GiB leftover budget) — the
     /// always-set was already in RSS. A page-cache or dense holding still reports the file, which
     /// is what a replay will fault in.
-    pub fn incremental_replay_bytes_for_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<u64> {
-        // **Memoized, because this is the panel's PER-TICK pre-check and a resolve constructs a
-        // backend.** Every tick, before deciding whether a readiness proof is affordable, the panel
-        // asked this, and this resolved the class against each holding — compiling the class's plan
-        // and hashing the artifact each time. The figure is a function of (which holdings, class,
-        // root) and none of those change for the life of this registry, so it is computed once.
+    ///
+    /// **Memoized, because this is the panel's PER-TICK pre-check and a resolve constructs a
+    /// backend.** Every tick, before deciding whether a readiness proof is affordable, the panel
+    /// asked this, and this resolved the class against each holding — compiling the class's plan
+    /// and hashing the artifact each time. The figure is a function of (which holdings, class,
+    /// root, role) and none of those change for the life of this registry, so it is computed once.
+    /// A partial seat's figure is a function of the claim as well and is not memoized here — the
+    /// caller that holds the claim asks [`Self::role_memory_need_for_backend_v1`].
+    pub fn role_memory_need_v1(&self, class_id: Hash64, artifact_root: Hash64, role: PalwResourceRoleV1) -> Option<PalwRoleMemoryNeedV1> {
         let key = (
             self.holdings.iter().map(|h| h.path.clone().unwrap_or_default()).collect::<Vec<_>>(),
             class_id,
             artifact_root,
+            role,
         );
-        if let Ok(memo) = replay_bytes_memo_v1().lock() {
-            if let Some(hit) = memo.get(&key) {
-                return *hit;
-            }
+        let memoized = !matches!(role, PalwResourceRoleV1::PartialSeat { .. });
+        if memoized
+            && let Ok(memo) = replay_bytes_memo_v1().lock()
+            && let Some(hit) = memo.get(&key)
+        {
+            return hit.clone();
         }
-        // The holding's own bytes, PLUS the K/V cache one canonical attempt of this class allocates —
-        // the term the file-size proxy never had. Asked of the resolved backend once, here, because
-        // this figure is memoized and a resolve is what this memo exists to stop repeating.
         let figure = self.holdings.iter().find_map(|holding| {
             let backend = self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).ok()?;
             let holding_bytes = incremental_replay_bytes_v1(holding)?;
-            let prefill = backend.canonical_job_prefill_tokens().unwrap_or(0);
-            let kv = backend.attempt_working_set_bytes(prefill).unwrap_or(0);
-            Some(holding_bytes.saturating_add(kv))
+            Some(Self::compose_need_v1(backend.as_ref(), holding_bytes, None, role))
         });
-        if let Ok(mut memo) = replay_bytes_memo_v1().lock() {
-            memo.insert(key, figure);
+        if memoized && let Ok(mut memo) = replay_bytes_memo_v1().lock() {
+            memo.insert(key, figure.clone());
         }
         figure
     }
+
+    /// [`Self::role_memory_need_v1`] for a caller that already holds the resolved backend and the
+    /// job — the producer at its gate, a seat at its claim — so no second resolve is paid.
+    pub fn role_memory_need_for_backend_v1(
+        &self,
+        backend: &dyn PalwExecutionBackendV1,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
+        role: PalwResourceRoleV1,
+    ) -> PalwRoleMemoryNeedV1 {
+        let holding_bytes = self
+            .holdings
+            .iter()
+            .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
+            .and_then(incremental_replay_bytes_v1)
+            .unwrap_or(0);
+        Self::compose_need_v1(backend, holding_bytes, job, role)
+    }
+
+    fn compose_need_v1(
+        backend: &dyn PalwExecutionBackendV1,
+        holding_bytes: u64,
+        job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
+        role: PalwResourceRoleV1,
+    ) -> PalwRoleMemoryNeedV1 {
+        PalwRoleMemoryNeedV1 {
+            role,
+            holding_bytes,
+            derived_bytes: backend.artifact_derived_resident_bytes_v1(),
+            runtime: backend.runtime_profile_v1(),
+            profile: backend.resource_profile_v1(job, role),
+        }
+    }
+}
+
+/// **Write the ledger into the node's runtime state** (ADR-0151 follow-up, item 6) — the host
+/// pool's snapshot, as `getPalwNodeStatus` reports it. Called by the panel's per-tick publish and by
+/// the producer at its gate, so the figures a hold names are the figures a program can read.
+pub fn publish_memory_ledger_v1(runtime: &mut kaspa_p2p_flows::flow_context::PalwNodeRuntimeV1) {
+    let snapshot = crate::palw_memory_ledger::host_ledger_v1().snapshot();
+    runtime.memory_share_bytes = snapshot.share_bytes.unwrap_or(0);
+    runtime.memory_headroom_bytes = snapshot.live_bytes.unwrap_or(0);
+    runtime.memory_reserved_bytes = snapshot.reserved_bytes;
+    runtime.memory_available_bytes = snapshot.available_bytes.unwrap_or(0);
+    runtime.memory_bounded = snapshot.available_bytes.is_some();
+    runtime.memory_holders = snapshot
+        .rows
+        .iter()
+        .map(|row| format!("{} of class {} job {} ({:.2} GiB)", row.key.role, row.key.class_id, row.key.job, gib(row.bytes)))
+        .collect::<Vec<_>>()
+        .join("; ");
+}
+
+impl PalwBackendRegistry {
 
     /// **Resolve through the tables, then — armed — through the chain's own registration**
     /// (ADR-0067 Decisions 1–2). `fetch` is the caller's session read
@@ -492,9 +558,68 @@ fn class_manifest_verification_armed_v1() -> bool {
     *VERIFY_CLASS_MANIFESTS.get().unwrap_or(&false)
 }
 
-/// The per-(holdings, class, root) replay-bytes figures — see `incremental_replay_bytes_for_v1`.
-fn replay_bytes_memo_v1() -> &'static std::sync::Mutex<std::collections::HashMap<(Vec<PathBuf>, Hash64, Hash64), Option<u64>>> {
-    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(Vec<PathBuf>, Hash64, Hash64), Option<u64>>>> =
+/// **What a role of a class needs on this node** — the holding's incremental bytes beside the
+/// role's resource profile, kept apart so a log line can say which is which (the confusion the
+/// 3.17-vs-16 GiB estimate was made of). `profile` is `None` for a family that cannot derive one,
+/// and `total_bytes` then falls back to the scratch estimate the node used before.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwRoleMemoryNeedV1 {
+    pub role: PalwResourceRoleV1,
+    pub holding_bytes: u64,
+    /// Tables the backend derived at load and holds for the artifact's life (the dense tier's
+    /// rotary table: 1.07 GiB at 2M). Resident already, so reported and not reserved.
+    pub derived_bytes: u64,
+    pub runtime: Option<kaspa_consensus_core::palw_resource_profile_v1::PalwRuntimeProfileV1>,
+    pub profile: Option<kaspa_consensus_core::palw_resource_profile_v1::PalwResourceProfileV1>,
+}
+
+impl PalwRoleMemoryNeedV1 {
+    /// The figure a gate compares and the ledger reserves.
+    pub fn total_bytes(&self) -> u64 {
+        let working_set = self.profile.map(|p| p.working_set_bytes()).unwrap_or(PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1);
+        self.holding_bytes.saturating_add(working_set)
+    }
+
+    /// The artifact's resident bytes: its file (or its pinned residency) plus the derived tables.
+    pub fn artifact_resident_bytes(&self) -> u64 {
+        self.holding_bytes.saturating_add(self.derived_bytes)
+    }
+
+    /// The decomposition, for a hold line or a telemetry field.
+    pub fn describe(&self) -> String {
+        match self.profile {
+            Some(p) => format!(
+                "{:.2} GiB as {} (artifact {:.2} GiB + K/V {:.2} GiB at {} rows{} + attention scratch {:.2} GiB + trace scratch {:.2} GiB{}) under {}",
+                gib(self.total_bytes()),
+                self.role.name(),
+                gib(self.holding_bytes),
+                gib(p.kv_resident_bytes),
+                p.end_rows,
+                if p.opening_bytes > 0 { format!(" + opening {:.2} GiB", gib(p.opening_bytes)) } else { String::new() },
+                gib(p.attention_scratch_bytes),
+                gib(p.trace_scratch_bytes),
+                if p.retained_checkpoint_bytes > 0 {
+                    format!(" + retained checkpoints {:.2} GiB", gib(p.retained_checkpoint_bytes))
+                } else {
+                    String::new()
+                },
+                self.runtime.map(|r| r.name()).unwrap_or("no runtime profile"),
+            ),
+            None => format!(
+                "{:.2} GiB as {} (artifact {:.2} GiB + the {:.2} GiB scratch estimate; this family derives no resource profile)",
+                gib(self.total_bytes()),
+                self.role.name(),
+                gib(self.holding_bytes),
+                gib(PALW_REPLAY_SCRATCH_ESTIMATE_BYTES_V1)
+            ),
+        }
+    }
+}
+
+/// The per-(holdings, class, root, role) need figures — see `role_memory_need_v1`.
+type NeedMemoKey = (Vec<PathBuf>, Hash64, Hash64, PalwResourceRoleV1);
+fn replay_bytes_memo_v1() -> &'static std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<NeedMemoKey, Option<PalwRoleMemoryNeedV1>>>> =
         std::sync::OnceLock::new();
     MEMO.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
@@ -989,8 +1114,7 @@ pub fn incremental_replay_bytes_v1(holding: &PalwLoadedArtifactV1) -> Option<u64
 /// (the node then behaves as before this policy); `Err` names the numbers.
 pub fn replay_memory_budget_v1(need_bytes: u64) -> Result<(), String> {
     let Some(available) = host_available_bytes_v1() else { return Ok(()) };
-    let usable = available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1);
-    let budget = usable.saturating_mul(PALW_REPLAY_BUDGET_PERMILLE_V1) / 1_000;
+    let budget = host_headroom_of_v1(available);
     if need_bytes <= budget {
         return Ok(());
     }
@@ -1002,6 +1126,25 @@ pub fn replay_memory_budget_v1(need_bytes: u64) -> Result<(), String> {
         gib(PALW_REPLAY_HOST_RESERVE_BYTES_V1),
         gib(need_bytes)
     ))
+}
+
+/// The host's headroom for one more duty: `70 % × (available − reserve)` — the policy above, as
+/// the number the reservation ledger's live bound reads (`palw_memory_ledger`).
+fn host_headroom_of_v1(available: u64) -> u64 {
+    available.saturating_sub(PALW_REPLAY_HOST_RESERVE_BYTES_V1).saturating_mul(PALW_REPLAY_BUDGET_PERMILLE_V1) / 1_000
+}
+
+/// [`host_headroom_of_v1`] of the host now, or `None` where the platform cannot say.
+pub fn host_headroom_bytes_v1() -> Option<u64> {
+    host_available_bytes_v1().map(host_headroom_of_v1)
+}
+
+/// **Whether the reservation ledger could cover `need_bytes` now** — the dry run every
+/// pre-check runs instead of reading `MemAvailable` on its own: a figure the ledger has already
+/// promised to another duty is not available, whatever the kernel says (ADR-0151 follow-up,
+/// item 3). `Err` is the ledger's own sentence, naming what is held and by whom.
+pub fn ledger_admits_v1(need_bytes: u64) -> Result<(), String> {
+    crate::palw_memory_ledger::host_ledger_v1().can_reserve(need_bytes).map_err(|refusal| refusal.to_string())
 }
 
 /// A line logged at most once a minute per key — a deferral that repeats every tick is one fact.

@@ -560,6 +560,18 @@ pub struct PalwNodeRuntimeV1 {
     pub panel_submitter: bool,
     /// Per-class facts this node's panel last published: artifact, working set, replay, hold.
     pub panel_classes: Vec<PalwLocalPanelClassV1>,
+    /// **The memory reservation ledger, as last published** (ADR-0151 follow-up, items 3 and 6):
+    /// the operator's declared per-node share (0 = none declared), the host's live headroom
+    /// (0 = the platform cannot say), what this process's duties hold, and what one more duty may
+    /// take. `memory_bounded` is false when neither bound is known and every request is granted.
+    pub memory_share_bytes: u64,
+    pub memory_headroom_bytes: u64,
+    pub memory_reserved_bytes: u64,
+    pub memory_available_bytes: u64,
+    pub memory_bounded: bool,
+    /// Who holds what, rendered: `producer of class … job … (7.90 GiB); …` — the line a hold
+    /// names, so an OOM is never again diagnosed from `dmesg`.
+    pub memory_holders: String,
 }
 
 /// One class this node's panel is (or is not) serving.
@@ -570,10 +582,26 @@ pub struct PalwLocalPanelClassV1 {
     pub seat_id: String,
     pub artifact_loaded: bool,
     pub artifact_root: String,
+    /// A full-seat replay's whole need — the figure the pre-check compares.
     pub working_set_bytes: u64,
     pub replay_capable: bool,
     pub hold_code: String,
     pub hold_message: String,
+    /// **The resource profile, by role** (ADR-0151 follow-up, items 1 and 6): the representation
+    /// this node holds the class's cache in (`A16-KV-i16`, …; empty for a family without one), the
+    /// artifact's resident bytes (its file plus the tables derived at load), and what each role
+    /// needs on this node — the same derivation the gates reserve. `partial_seat_working_set_bytes`
+    /// is the widest segment's, which ends where the job ends and so equals the full seat's until a
+    /// server can hand a seat the checkpoint at its segment's start.
+    pub runtime_profile: String,
+    pub artifact_resident_bytes: u64,
+    pub producer_working_set_bytes: u64,
+    pub full_seat_working_set_bytes: u64,
+    pub partial_seat_working_set_bytes: u64,
+    /// Whether the ledger could cover each role NOW — capacity, never capability on the chain.
+    pub producer_capable: bool,
+    pub full_seat_capable: bool,
+    pub partial_seat_capable: bool,
 }
 
 impl PalwNodeRuntimeV1 {

@@ -560,6 +560,35 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **The runtime representation this backend holds its cache in** — a node-local, named choice
+    /// (`A16-KV-i32`, `A16-KV-i16`) reported in telemetry and never a chain fact. `None` for a
+    /// family whose cache has no such profile.
+    fn runtime_profile_v1(&self) -> Option<crate::palw_resource_profile_v1::PalwRuntimeProfileV1> {
+        None
+    }
+
+    /// **Bytes this backend holds resident beyond the artifact's file** — tables derived at load
+    /// that no file-size proxy sees. The dense tier generates its rotary table when the artifact is
+    /// decoded (`RopeTableV1::generate`): 2 × `max_position` × `d_head / 2` × 4 bytes, which at the
+    /// 2M context is 1.07 GiB of the producer's steady-state anonymous memory. Already resident
+    /// once the class is loaded, so it is reported beside a role's need and not added to it.
+    fn artifact_derived_resident_bytes_v1(&self) -> u64 {
+        0
+    }
+
+    /// **What `role` needs to execute `job` on this backend, term by term** (ADR-0151 follow-up,
+    /// item 1) — the ONE derivation the producer's gate, the panel's pre-check and the court's
+    /// replay read, so the three roles cannot be priced by three estimates again. `None` for
+    /// `job` means the class's canonical job. `None` for a family that cannot say; the caller then
+    /// has the file-size proxy and nothing better.
+    fn resource_profile_v1(
+        &self,
+        _job: Option<&PalwJobContextV2>,
+        _role: crate::palw_resource_profile_v1::PalwResourceRoleV1,
+    ) -> Option<crate::palw_resource_profile_v1::PalwResourceProfileV1> {
+        None
+    }
+
     /// **The artifact's root and leaf count, without its inventory** (ADR-0151 follow-up, item 6's
     /// finding). A readiness challenge draws against the leaf count and compares against the root,
     /// and neither needs a leaf materialized. The default goes through the digest, which is correct
