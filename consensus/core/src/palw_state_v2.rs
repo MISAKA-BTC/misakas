@@ -8795,6 +8795,75 @@ struct TransitionBuilder<'a> {
     /// attempt's SUCCESSFUL end, so a refused attempt (which the merged loop restores) leaves no
     /// mark; read only past `palw_audit_2026_09_11_deep`, so below the fence it is never consulted.
     seen_exec: std::collections::HashSet<Hash64>,
+    /// **2026-09-24 DoS audit #13b: the registry's claims in flight, per class, indexed once per
+    /// fold instead of walked once per question.**
+    ///
+    /// `panel_room_v1` summed `model_registry_inflight` over every lifecycle row, and that count
+    /// walked every claim — O(rows × claims) for each attempt, each free-prompt commitment (#11
+    /// puts them through the same gate) and each row of a span boundary, where the step asks it
+    /// once per row and therefore walked rows² × claims. Registration rows are permanent (the
+    /// audit's finding 15) and the claim table is what a flood grows, so the product is the one
+    /// quantity an attacker can inflate on both axes at once.
+    ///
+    /// The index is a CACHE, not state: it is never hashed, never in the delta, never carried.
+    /// It is built lazily from the `unresolved` index (the live claims — the same set
+    /// `!phase.is_terminal()` selects, and the one `assert_internal_consistency` checks against the
+    /// claims), kept in lockstep by `write_claim` — the only writer of `claims` in the fold — and
+    /// dropped by `restore`, which is the only other way the builder's claims change. So every
+    /// answer read from it is the answer the walk gave; `a_cached_panel_room_is_the_walked_one`
+    /// compares the two on a populated state through writes and a restore. A class with nothing
+    /// in flight has no entry, so the sum skips every row that contributes nothing — the Dormant,
+    /// Held and Registered rows a registration flood leaves behind — without a rule that could
+    /// ever disagree with the walk.
+    inflight_index: std::cell::RefCell<Option<BTreeMap<Hash64, PalwInflightTallyV1>>>,
+    /// The budget's horizon (`panel_room_v1`), cached for the same reason and dropped by every
+    /// `write_model_lifecycle` and by `restore` — the rows it reads change nowhere else.
+    panel_horizon: std::cell::Cell<Option<u64>>,
+}
+
+/// One class's claims in flight, by lane — the value `TransitionBuilder::inflight_index` holds.
+/// `u64` so an increment never wraps; readers clamp to `u32` exactly where the walk clamped its
+/// `count()`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PalwInflightTallyV1 {
+    attempts: u64,
+    free_prompts: u64,
+}
+
+impl PalwInflightTallyV1 {
+    fn is_empty(&self) -> bool {
+        self.attempts == 0 && self.free_prompts == 0
+    }
+
+    /// What the registry counts as this class's claims in flight: attempts, and — past the
+    /// 2026-09-23 audit fence (#11) — free-prompt claims too, clamped as the walk clamped.
+    fn counted(&self, audit_2026_09_23_active: bool) -> u32 {
+        let counted = if audit_2026_09_23_active { self.attempts.saturating_add(self.free_prompts) } else { self.attempts };
+        counted.min(u32::MAX as u64) as u32
+    }
+}
+
+/// Add (`add`) or remove one claim's contribution to the in-flight index. A terminal claim
+/// contributes nothing, so a phase change into `Final`/`Voided` is a remove of the old record and
+/// an add of nothing — the same predicate the walk filtered with.
+fn palw_inflight_index_note_v1(index: &mut BTreeMap<Hash64, PalwInflightTallyV1>, claim: &PalwClaimStateV2, add: bool) {
+    if claim.phase.is_terminal() {
+        return;
+    }
+    let tally = index.entry(claim.class_id).or_default();
+    let slot = match claim.source {
+        PalwClaimSourceV2::Attempt => &mut tally.attempts,
+        PalwClaimSourceV2::FreePrompt { .. } => &mut tally.free_prompts,
+    };
+    if add {
+        *slot = slot.saturating_add(1);
+    } else {
+        debug_assert!(*slot > 0, "an index in lockstep with the claims never removes what it did not count");
+        *slot = slot.saturating_sub(1);
+    }
+    if tally.is_empty() {
+        index.remove(&claim.class_id);
+    }
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -8818,6 +8887,8 @@ impl<'a> TransitionBuilder<'a> {
             da_court,
             extras,
             seen_exec: std::collections::HashSet::new(),
+            inflight_index: std::cell::RefCell::new(None),
+            panel_horizon: std::cell::Cell::new(None),
         }
     }
 
@@ -9074,6 +9145,16 @@ impl<'a> TransitionBuilder<'a> {
             Some(record) => self.state.claims.insert(key, record.clone()),
             None => self.state.claims.remove(&key),
         };
+        // Audit #13b: the registry's in-flight index, where this fold has built it, moves with
+        // the claim — the old record out, the new one in, each only while non-terminal.
+        if let Some(index) = self.inflight_index.get_mut().as_mut() {
+            if let Some(previous) = &old {
+                palw_inflight_index_note_v1(index, previous, false);
+            }
+            if let Some(record) = &new {
+                palw_inflight_index_note_v1(index, record, true);
+            }
+        }
         // The unresolved index tracks non-terminal claims; keep it in lockstep with every write.
         if let Some(previous) = &old
             && !previous.phase.is_terminal()
@@ -9446,6 +9527,8 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn write_model_lifecycle(&mut self, key: Hash64, new: Option<crate::palw_model_registry_v1::PalwModelLifecycleRowV1>) {
+        // The panel budget's horizon reads these rows (audit #13b's cache).
+        self.panel_horizon.set(None);
         let old = match new.clone() {
             Some(row) => self.state.model_lifecycles.insert(key, row),
             None => self.state.model_lifecycles.remove(&key),
@@ -10896,16 +10979,36 @@ impl<'a> TransitionBuilder<'a> {
         ready >= palw_admission_jury_quorum_v1(seats) as usize
     }
 
-    /// Attempt claims of a class still in flight (accepted and not terminal).
+    /// Claims of a class still in flight (accepted and not terminal): its attempts and — past the
+    /// 2026-09-23 audit fence — its free-prompt claims (audit #11, below).
+    ///
+    /// **Why a free-prompt claim counts.** It is drawn a panel from the same ready seats, its
+    /// seats replay the same model, and it holds the same seat duty until it is terminal; the
+    /// only thing it does not do is carry weight of its own. Leaving it out made the lane a way
+    /// to put verification work on a class's panel that ADR-0137's budget never saw — a held
+    /// class's whole ready set could be kept busy by commitments while the room check still
+    /// read an empty panel. One claim counts as one of the class's claims, the unit the budget
+    /// prices (`economic_ccu_per_claim`); a job-size weighting would need the free-prompt price's
+    /// compute and the registry's CCU to be one unit, which nothing on this chain asserts yet.
+    /// Below the fence the answer is the attempt count it always was.
     fn model_registry_inflight(&self, class_id: &Hash64) -> u32 {
-        self.state
-            .claims
-            .values()
-            .filter(|claim| {
-                claim.class_id == *class_id && matches!(claim.source, PalwClaimSourceV2::Attempt) && !claim.phase.is_terminal()
-            })
-            .count()
-            .min(u32::MAX as usize) as u32
+        let audit = self.extras.audit_2026_09_23_active;
+        self.with_inflight_index(|index| index.get(class_id).map(|tally| tally.counted(audit)).unwrap_or(0))
+    }
+
+    /// Read the in-flight index (audit #13b), building it from the live claims on first use.
+    fn with_inflight_index<R>(&self, read: impl FnOnce(&BTreeMap<Hash64, PalwInflightTallyV1>) -> R) -> R {
+        let mut slot = self.inflight_index.borrow_mut();
+        let index = slot.get_or_insert_with(|| {
+            let mut index = BTreeMap::new();
+            for (_, key) in self.state.unresolved.iter() {
+                if let Some(claim) = self.state.claims.get(key) {
+                    palw_inflight_index_note_v1(&mut index, claim, true);
+                }
+            }
+            index
+        });
+        read(index)
     }
 
     /// **The class-local gate at acceptance** (ADR-0135 Decision 6 and ADR-0132 F1): the base class
@@ -10947,24 +11050,36 @@ impl<'a> TransitionBuilder<'a> {
         let base = self.params.base_class_id();
         let g = &fold.globals;
         let seat_count = g.seat_count as u128;
-        let horizon = self
-            .state
-            .model_lifecycles
-            .iter()
-            .filter(|(id, r)| **id != base && r.state.admission_permille() > 0)
-            .map(|(_, r)| r.profile.verification_window_spans as u64)
-            .min()
-            .unwrap_or(1)
-            .max(1);
-        let inflight_replay: u128 = self
-            .state
-            .model_lifecycles
-            .iter()
-            .filter(|(id, _)| **id != base)
-            .map(|(id, r)| {
-                (self.model_registry_inflight(id) as u128).saturating_mul(r.work.economic_ccu_per_claim).saturating_mul(seat_count)
-            })
-            .fold(0u128, u128::saturating_add);
+        let horizon = match self.panel_horizon.get() {
+            Some(horizon) => horizon,
+            None => {
+                let horizon = self
+                    .state
+                    .model_lifecycles
+                    .iter()
+                    .filter(|(id, r)| **id != base && r.state.admission_permille() > 0)
+                    .map(|(_, r)| r.profile.verification_window_spans as u64)
+                    .min()
+                    .unwrap_or(1)
+                    .max(1);
+                self.panel_horizon.set(Some(horizon));
+                horizon
+            }
+        };
+        // **Audit #13b: summed over the classes WITH claims in flight, not over every row.** A row
+        // with none contributed `0 × ccu × seats` to the walk's sum, and a saturating sum of
+        // non-negative terms does not depend on its order or on its zeros — so iterating the
+        // index and looking each class's row up is the walk's number. A class in flight with no
+        // row contributed nothing to the walk (it iterated rows) and contributes nothing here.
+        let audit = self.extras.audit_2026_09_23_active;
+        let inflight_replay: u128 = self.with_inflight_index(|index| {
+            index
+                .iter()
+                .filter(|(id, _)| **id != base)
+                .filter_map(|(id, tally)| self.state.model_lifecycles.get(id).map(|r| (tally.counted(audit), r)))
+                .map(|(inflight, r)| (inflight as u128).saturating_mul(r.work.economic_ccu_per_claim).saturating_mul(seat_count))
+                .fold(0u128, u128::saturating_add)
+        });
         let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
         let per_span =
             ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
@@ -12115,6 +12230,10 @@ impl<'a> TransitionBuilder<'a> {
     fn restore(&mut self, checkpoint: (PalwChainStateV2, usize)) {
         self.state = checkpoint.0;
         self.entries.truncate(checkpoint.1);
+        // The caches describe the state just replaced; the next reader rebuilds them from the
+        // restored one (audit #13b).
+        *self.inflight_index.get_mut() = None;
+        self.panel_horizon.set(None);
     }
 
     fn reserve_for_claim(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
@@ -17769,6 +17888,26 @@ fn apply_object(
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
+            }
+            // **2026-09-24 DoS audit #11: the class gate an attempt passes, on this lane too.**
+            //
+            // `apply_attempt` asks `check_class_admits_claim` before it prices anything: a class the
+            // registry does not admit (`Registered`, `Prefetching`, `Held`, `Candidate`) takes no
+            // new claim, and an admitting one takes a claim only while ADR-0137's panel budget (or,
+            // before the work target, the class's inflight cap) has room. This arm asked neither.
+            // A commitment on a HELD class — held precisely because its ready seats cannot carry
+            // its panel — was accepted, drew a panel from those seats and bound them to duty, and
+            // the budget the attempt lane is refused by never saw it (the count below it walked
+            // attempts only). The lane was a door around the registry's brake.
+            //
+            // Past the fence the commitment passes the same gate, in the same place relative to
+            // the class checks, and `model_registry_inflight` counts it while it is in flight, so
+            // the room an attempt reads includes the panels commitments already hold. The base
+            // class is never gated (the gate's own first clause), so the floor's free-prompt lane
+            // is exactly what it was. Below the fence nothing here runs and the arm is
+            // byte-identical.
+            if builder.extras.audit_2026_09_23_active {
+                builder.check_class_admits_claim(class_id, ctx.daa_score)?;
             }
             // **Priced in leaves against the class's own canonical job** (ADR-0074 Decision 5):
             // the quantum is a fraction of the class's job size, quanta are whole quanta of the
@@ -24570,6 +24709,320 @@ pub(crate) mod tests {
                 &fenced,
             )
             .expect("the reverted block's claim gave its room back");
+        }
+
+        // ---- 2026-09-24 DoS audit #11 and #13b: the free-prompt lane under the class gate, and
+        //      the panel budget read from an index ------------------------------------------------
+
+        /// A free-prompt commitment on Kimi by bond 1: two quanta of Kimi's 160-leaf job (the
+        /// quantum is 20), one prompt per claim word.
+        fn kimi_fp_commit(claim_word: u64) -> PalwConsensusObjectV2 {
+            fp_commit_on(kimi_id(), claim_word, 1)
+        }
+
+        /// The same commitment on `class` by bond `n` (whose key `bond(n, _)` registers).
+        fn fp_commit_on(class: Hash64, claim_word: u64, n: u64) -> PalwConsensusObjectV2 {
+            let mut commit = fp_commit(claim_word, 40, 2);
+            let PalwConsensusObjectV2::FreePromptCommitted { class_id, consumed_prefix_state, bond, executor_pubkey, .. } =
+                &mut commit
+            else {
+                unreachable!("fp_commit builds a commitment")
+            };
+            *class_id = class;
+            *consumed_prefix_state = crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(class);
+            if n != 1 {
+                *bond = bond_key(n);
+                *executor_pubkey = vec![0x40 + n as u8; 4];
+            }
+            commit
+        }
+
+        fn audited(extras: &PalwTransitionExtrasV1) -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..extras.clone() }
+        }
+
+        /// **Audit #11 (finding 18): a HELD class takes no free-prompt commitment past the fence.**
+        ///
+        /// The attempt lane has been refused on a held class since ADR-0135; the commitment lane
+        /// asked no registry question at all, so a class held because its ready seats cannot carry
+        /// its panel still took claims that draw panels from those seats. Below the fence the
+        /// commitment is accepted — that is the record of the defect, and the dormant networks'
+        /// behaviour — and past it the refusal is the attempt's own, by name. The floor's lane is
+        /// never gated.
+        #[test]
+        fn audit_2026_09_24_a_held_class_takes_no_free_prompt_commitment_past_the_fence() {
+            let p = params();
+            let (_, root) = inventory();
+            let f = fold(kimi_work());
+            let s5 = kimi_with_a_final(&p, root);
+            let (s6, _) = step(&s5, &p, &ctx(6, 130, 6), &[], None, Some(f.clone())).unwrap();
+            assert_eq!(s6.model_lifecycle(&kimi_id()).unwrap().state, PalwModelLifecycleV1::Held, "the premise: Kimi is HELD");
+            let attempt_refused = step(&s6, &p, &ctx(7, 131, 7), &[], Some(&kimi_attempt(2, root)), Some(f.clone()));
+            assert!(matches!(attempt_refused, Err(PalwStateV2Error::ClassNotAdmitting { .. })), "{attempt_refused:?}");
+
+            let (below, _) = step(&s6, &p, &ctx(7, 131, 7), &[kimi_fp_commit(0x51)], None, Some(f.clone()))
+                .expect("PRE-FENCE DEFECT RECORD: below the fence the lane skips the gate the attempt is refused by");
+            assert!(below.claim(&h64(0x51)).is_some());
+
+            let armed = audited(&extras(Some(f.clone())));
+            let refused = apply_palw_transition_v2_with_extras(
+                &s6,
+                &p,
+                &ctx(7, 131, 7),
+                &[kimi_fp_commit(0x51)],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            );
+            assert!(
+                matches!(&refused, Err(PalwStateV2Error::ClassNotAdmitting { class, state }) if *class == kimi_id() && state == "Held"),
+                "past the fence the commitment is refused as the attempt is: {refused:?}"
+            );
+            let (floor, _) = apply_palw_transition_v2_with_extras(
+                &s6,
+                &p,
+                &ctx(7, 131, 7),
+                &[fp_commit(0x52, 40, 2)],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect("the base class's free-prompt lane is never gated");
+            assert!(floor.claim(&h64(0x52)).is_some());
+            floor.assert_internal_consistency(&p).expect("internal consistency after apply");
+        }
+
+        /// **Audit #11: a free-prompt claim in flight takes from ADR-0137's panel budget.**
+        ///
+        /// A budget of three Kimi claims. Two commitments and one attempt fill it; past the fence
+        /// the next claim of EITHER lane is refused `PanelRoomExhausted` with all three on the
+        /// budget. Below the fence — the recorded defect — the budget reads attempts only, so the
+        /// same chain takes a second attempt onto a panel that is already full.
+        #[test]
+        fn audit_2026_09_24_free_prompt_claims_in_flight_take_from_the_panel_budget() {
+            use crate::palw_work_target_v1::palw_panel_room_v1;
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let mut small = fold(kimi_work());
+            small.globals.reference_work_per_span = 1_300_000;
+            let fenced = PalwTransitionExtrasV1 {
+                work_target_active: true,
+                model_registry: Some(small),
+                ..priced_extras(Some(payout_fold(10_000, 0)))
+            };
+            let armed = audited(&fenced);
+            let window = s7.model_lifecycle(&kimi_id()).unwrap().profile.verification_window_spans as u64;
+            let per_span = 7u128 * 1_300_000 * 700 / 1_000;
+            let cost = 800_000u128 * 5;
+            assert_eq!(palw_panel_room_v1(per_span, window, 0, cost), 3, "the premise: a budget of three Kimi claims");
+
+            let fill = |extras: &PalwTransitionExtrasV1| {
+                let (s8, _) = step_with(&s7, &p, &funded(8, 131, 8), &[kimi_fp_commit(0x61)], None, extras);
+                let (s9, _) = step_with(&s8, &p, &funded(9, 132, 9), &[kimi_fp_commit(0x62)], None, extras);
+                let first = attempt_for_class(8, 700, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+                step_with(&s9, &p, &funded(10, 133, 10), &[], Some(&first), extras).0
+            };
+            let second = attempt_for_class(8, 701, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+
+            let full = fill(&armed);
+            let refused = apply_palw_transition_v2_with_extras(
+                &full,
+                &p,
+                &funded(11, 134, 11),
+                &[],
+                Some(&second),
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect_err("past the fence the budget is full");
+            assert!(
+                matches!(refused, PalwStateV2Error::PanelRoomExhausted { class, inflight_replay, .. } if class == kimi_id() && inflight_replay == 3 * cost),
+                "both commitments and the attempt are on the budget: {refused:?}"
+            );
+            let refused = apply_palw_transition_v2_with_extras(
+                &full,
+                &p,
+                &funded(11, 134, 11),
+                &[kimi_fp_commit(0x63)],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &armed,
+            )
+            .expect_err("and a third commitment meets the same full budget");
+            assert!(matches!(refused, PalwStateV2Error::PanelRoomExhausted { class, .. } if class == kimi_id()), "{refused:?}");
+            let row = full.model_lifecycle(&kimi_id()).unwrap();
+            assert_eq!(
+                row.state,
+                PalwModelLifecycleV1::Active,
+                "no boundary between: the refusal is the budget's, not the lifecycle's"
+            );
+
+            // PRE-FENCE DEFECT RECORD: the same chain below the fence takes the second attempt.
+            let unaudited = fill(&fenced);
+            step_with(&unaudited, &p, &funded(11, 134, 11), &[], Some(&second), &fenced);
+        }
+
+        /// The pre-#13b body of `panel_room_v1` and `model_registry_inflight`, kept verbatim as the
+        /// reference the index is measured against: every lifecycle row walked, and every claim
+        /// walked for each row.
+        fn walked_inflight(state: &PalwChainStateV2, class_id: &Hash64, audit: bool) -> u32 {
+            state
+                .claims
+                .values()
+                .filter(|claim| {
+                    claim.class_id == *class_id
+                        && !claim.phase.is_terminal()
+                        && (matches!(claim.source, PalwClaimSourceV2::Attempt)
+                            || (audit && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })))
+                })
+                .count()
+                .min(u32::MAX as usize) as u32
+        }
+
+        fn walked_room(
+            b: &TransitionBuilder<'_>,
+            class_id: &Hash64,
+            row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+            fold: &PalwModelRegistryFoldV1,
+            now_daa: u64,
+        ) -> (u64, u128, u128, u64) {
+            let audit = b.extras.audit_2026_09_23_active;
+            let base = b.params.base_class_id();
+            let g = &fold.globals;
+            let seat_count = g.seat_count as u128;
+            let horizon = b
+                .state
+                .model_lifecycles
+                .iter()
+                .filter(|(id, r)| **id != base && r.state.admission_permille() > 0)
+                .map(|(_, r)| r.profile.verification_window_spans as u64)
+                .min()
+                .unwrap_or(1)
+                .max(1);
+            let inflight_replay: u128 = b
+                .state
+                .model_lifecycles
+                .iter()
+                .filter(|(id, _)| **id != base)
+                .map(|(id, r)| {
+                    (walked_inflight(&b.state, id, audit) as u128)
+                        .saturating_mul(r.work.economic_ccu_per_claim)
+                        .saturating_mul(seat_count)
+                })
+                .fold(0u128, u128::saturating_add);
+            let ready = b.model_registry_ready_seats(class_id, now_daa, fold) as u128;
+            let per_span =
+                ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
+            let budget = per_span.saturating_mul(horizon as u128);
+            let cost = row.work.economic_ccu_per_claim.saturating_mul(seat_count);
+            (
+                crate::palw_work_target_v1::palw_panel_room_v1(per_span, horizon, inflight_replay, cost),
+                inflight_replay,
+                budget,
+                horizon,
+            )
+        }
+
+        /// Every class's in-flight count and every row's room, index against walk.
+        fn assert_index_is_the_walk(b: &TransitionBuilder<'_>, fold: &PalwModelRegistryFoldV1, now_daa: u64, when: &str) {
+            let audit = b.extras.audit_2026_09_23_active;
+            for class_id in b.state.classes.keys() {
+                assert_eq!(
+                    b.model_registry_inflight(class_id),
+                    walked_inflight(&b.state, class_id, audit),
+                    "{when}: in-flight count of {class_id} (audit {audit})"
+                );
+            }
+            let rows: Vec<_> = b.state.model_lifecycles.iter().map(|(id, row)| (*id, row.clone())).collect();
+            assert!(!rows.is_empty(), "{when}: the premise is a state with lifecycle rows");
+            for (class_id, row) in rows {
+                assert_eq!(
+                    b.panel_room_v1(&class_id, &row, fold, now_daa),
+                    walked_room(b, &class_id, &row, fold, now_daa),
+                    "{when}: the room of {class_id} (audit {audit})"
+                );
+            }
+        }
+
+        /// **Audit #13b: the indexed panel budget is the walked one** — on a populated state (two
+        /// model classes with rows, both lanes in flight, terminal claims retained, base-class
+        /// claims that the budget excludes), through every way the builder's claims and rows move:
+        /// a new claim, a claim going terminal, a claim dropped, a lifecycle row changing the
+        /// horizon, and a checkpoint restored over writes the index had already absorbed. Both
+        /// sides of the audit fence, because the count the index answers depends on it.
+        #[test]
+        fn audit_2026_09_24_a_cached_panel_room_is_the_walked_one() {
+            let p = params().with_worker_carve_permille(620).expect("a legal carve");
+            let (s7, root) = kimi_active_and_priced(&p, 10_000);
+            let priced = priced_extras(Some(payout_fold(10_000, 0)));
+            let armed = PalwTransitionExtrasV1 { work_target_active: true, ..audited(&priced) };
+            // Populate: Kimi commitments and attempts, base-class ones, a second rowed class. The
+            // commitments are bond 9's, a bond with room for all of them and no readiness row, so
+            // the seats the budget counts are the seven the premise names.
+            let mut s = step_with(&s7, &p, &funded(8, 131, 8), &[bond(9, 1_000_000)], None, &armed).0;
+            for i in 0..4u64 {
+                let kimi = attempt_for_class(8, 900 + i, kimi_id(), bond_key(1), vec![7; 4], op_id(21), root);
+                let objects = [fp_commit_on(kimi_id(), 0x70 + i, 9), fp_commit_on(h64(1), 0x80 + i, 9)];
+                s = step_with(&s, &p, &funded(9 + 2 * i, 132 + 2 * i, 9 + 2 * i), &objects, Some(&kimi), &armed).0;
+                let base = attempt(40, 950 + i);
+                s = step_with(&s, &p, &funded(10 + 2 * i, 133 + 2 * i, 10 + 2 * i), &[], Some(&base), &armed).0;
+            }
+            let mut other = s.model_lifecycle(&kimi_id()).unwrap().clone();
+            other.profile.verification_window_spans += 3;
+            other.work.economic_ccu_per_claim = 123_456;
+            s.set_model_lifecycle_for_tests(h64(3), other);
+            let mut stray = s.claims.values().find(|c| c.class_id == kimi_id() && !c.phase.is_terminal()).unwrap().clone();
+            stray.class_id = h64(3);
+            s.claims.insert(h64(0x3333), stray.clone());
+            s.unresolved.insert((stray.accepted_blue_score, h64(0x3333)));
+            assert!(s.claims.values().any(|c| c.phase.is_terminal()), "the premise: a terminal claim is retained");
+            let fold = armed.model_registry.clone().expect("the registry is in force");
+            let now = 140;
+            for extras in [armed.clone(), PalwTransitionExtrasV1 { audit_2026_09_23_active: false, ..armed.clone() }] {
+                let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+                assert_index_is_the_walk(&b, &fold, now, "populated");
+                // A new claim of each lane.
+                let mut fresh = stray.clone();
+                fresh.class_id = kimi_id();
+                b.write_claim(h64(0x4444), Some(fresh.clone()));
+                fresh.source = PalwClaimSourceV2::FreePrompt { quanta: 2, spent: BTreeSet::new() };
+                b.write_claim(h64(0x4445), Some(fresh.clone()));
+                assert_index_is_the_walk(&b, &fold, now, "after two new claims");
+                // A claim going terminal, and one dropped.
+                let live: Vec<Hash64> = b.state.claims.iter().filter(|(_, c)| !c.phase.is_terminal()).map(|(k, _)| *k).collect();
+                let mut voided = b.state.claims[&live[0]].clone();
+                voided.phase = PalwClaimPhaseV2::Voided { voided_daa: now, reason: PalwVoidReasonV2::BindTimeout };
+                b.write_claim(live[0], Some(voided));
+                b.write_claim(live[1], None);
+                assert_index_is_the_walk(&b, &fold, now, "after a void and a drop");
+                // A row that moves the horizon.
+                let mut held = b.state.model_lifecycles[&kimi_id()].clone();
+                held.state = PalwModelLifecycleV1::Held;
+                b.write_model_lifecycle(kimi_id(), Some(held));
+                assert_index_is_the_walk(&b, &fold, now, "after a row change");
+                // A restore over writes the index had absorbed.
+                let checkpoint = b.checkpoint();
+                b.write_claim(live[2], None);
+                b.write_claim(h64(0x4446), Some(fresh.clone()));
+                let mut active = b.state.model_lifecycles[&kimi_id()].clone();
+                active.state = PalwModelLifecycleV1::Active;
+                b.write_model_lifecycle(kimi_id(), Some(active));
+                assert_index_is_the_walk(&b, &fold, now, "before the restore");
+                b.restore(checkpoint);
+                assert_index_is_the_walk(&b, &fold, now, "after the restore");
+            }
         }
 
         /// **The chain's work target (ADR-0137 / ADR-0132 S): past the fence it opens at the boundary

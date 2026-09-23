@@ -17,6 +17,9 @@
 //!       seat duty or a lock live on the escaped clocks — Q4/Q4b assert that, the record keeps the
 //!       audit's measurement.
 //!   Q5  reorg: every write above reverted exactly by the delta.
+//!   Q7  the free-prompt lane and the class gate (finding 18, which the audit read off Q0's list of
+//!       lane-certified classes): past `palw_audit_2026_09_23` a commitment on a class the registry
+//!       does not admit is refused `ClassNotAdmitting`, as an attempt is; below it, accepted.
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::{PALW_T12_SETTLED_ANCHOR_DEPTH, Params, palw_v2_bond_withdrawal_delay_at_v1};
@@ -1079,4 +1082,133 @@ fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_priced_by_the_reward_not_the_res
     );
     println!("the claimant's registry-minimum bond (ceiling 200,000 sompi) can hold {} such claims at once", 200_000u128 / own.max(1));
     assert!(on_others > own * 1000, "the duty on other bonds is not bounded by the claimant's own reservation");
+}
+
+// =============================================================================================
+// Q7 — the free-prompt lane and the class gate (the audit's finding 18, fix #11)
+// =============================================================================================
+
+/// A free-prompt commitment by bond `n` on `class_id`, one canonical job of `leaves`.
+fn fp_commitment(class_id: Hash64, leaves: u64, n: u64, seed: u64) -> PalwConsensusObjectV2 {
+    PalwConsensusObjectV2::FreePromptCommitted {
+        claim: h(0xF0_0000 + seed),
+        class_id,
+        bond: bond_key(n),
+        executor_pubkey: pubkey(n),
+        work_leaves: leaves,
+        prompt_token_ids_hash: h(0x7E_0000 + seed),
+        prompt_tokens: 0,
+        prompt_token_ids: Vec::new(),
+        decode_tokens_executed: 1,
+        trace_root: h(0x1F00_0000 + seed),
+        output_root: h(0x2F00_0000 + seed),
+        execution_root: h(0x3F00_0000 + seed),
+        trace_chunk_count: 1,
+        trace_retention_daa: 9_999_999,
+        consumed_prefix_state: kaspa_consensus_core::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(class_id),
+    }
+}
+
+/// **Finding 18 / fix #11 on testnet-12's own numbers: a free-prompt commitment on a class the
+/// registry does not admit is refused, as an attempt on it is.**
+///
+/// Testnet-12 lane-certifies both of its held classes (Q0 prints them), so the free-prompt lane
+/// reaches them. With the registry in force and no seat ready for the held class, its row does not
+/// admit claims; the attempt lane has been refused there since ADR-0135 and, past
+/// `palw_audit_2026_09_23`, the commitment lane is refused by the same gate. The floor's lane is
+/// never gated. The pre-fence acceptance is kept as the defect's record.
+#[test]
+fn dos_l1_q7_a_free_prompt_commitment_on_a_non_admitting_t12_class_is_refused() {
+    use kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1;
+    use kaspa_consensus_core::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, PalwModelRegistryFoldV1, PalwModelWorkV1};
+    let p = t12();
+    let b = bundle(&p);
+    let sp = &b.state;
+    let floor = floor_row(&b);
+    let certified = sp.fp_certified_classes().expect("t12 lane-certifies its classes");
+    let held = b
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, initial_target, .. }
+                if *class_id != b.base_class_id && certified.contains(class_id) =>
+            {
+                Some((*class_id, pwu_rule.clone(), *initial_target))
+            }
+            _ => None,
+        })
+        .expect("t12 lane-certifies a held class");
+    let (held_id, held_rule, held_target) = held;
+    println!(
+        "t12 at DAA 1: model registry {}, work target {}, audit fence {}",
+        p.palw_model_registry_at(1),
+        p.palw_work_target_at(1),
+        p.palw_audit_2026_09_23.is_some_and(|f| f.is_active(1))
+    );
+    let span = 10;
+    let mut globals = PALW_REGISTRY_GLOBALS_V1;
+    globals.seat_count = b.panel.seat_count();
+    let work = PalwModelWorkV1 { verification_ccu: 1_000, economic_ccu_per_claim: 500, ops_supported: true, ..Default::default() };
+    let registry = PalwModelRegistryFoldV1 {
+        globals,
+        span_daa: span,
+        genesis_works: [(floor.0, work), (held_id, work)].into_iter().collect(),
+        grace_until_daa: 0,
+    };
+    let with_registry = |audit: bool| PalwTransitionExtrasV1 {
+        audit_2026_09_23_active: audit,
+        model_registry: Some(registry.clone()),
+        round_lane: Some(PalwExecLaneFoldV1 { schedule_span_daa: span, ..Default::default() }),
+        ..armed()
+    };
+    let big = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
+    let mut objects = setup(floor, &[(1, big)]);
+    objects.push(PalwConsensusObjectV2::ClassRegistered {
+        class_id: held_id,
+        artifact_root: h(0xB27),
+        slash_value_per_pwu: floor.3,
+        pwu_rule: held_rule.clone(),
+        initial_target: held_target,
+        share_permille: 0,
+        activation_daa: 0,
+        admission: None,
+    });
+    let armed_fold = Fold { p: sp, admission: &b.admission, extras: with_registry(true) };
+    let (s1, _, _) =
+        armed_fold.go(&PalwChainStateV2::genesis(), &ctx(1, 101, 1), &objects, PalwBlockWorkV3::None, &[], Hash64::default());
+    // The next span boundary opens the rows.
+    let (s2, _, _) = armed_fold.go(&s1, &ctx(2, 110, 2), &[], PalwBlockWorkV3::None, &[], Hash64::default());
+    let row = s2.model_lifecycle(&held_id).expect("the held class has a row");
+    assert!(!row.state.admits_claims(), "the premise: no seat is ready, the class admits nothing ({:?})", row.state);
+    println!("held class {held_id}: lifecycle {:?}, ready seats {}", row.state, row.ready_seats);
+
+    let leaves = held_rule.canonical_leaves_v1();
+    let commit = fp_commitment(held_id, leaves, 1, 1);
+    let fold_one = |audit: bool, object: PalwConsensusObjectV2| {
+        apply_palw_transition_v7(
+            &s2,
+            sp,
+            Some(&b.admission),
+            &ctx(3, 111, 3),
+            &[object],
+            PalwBlockWorkV3::None,
+            &[],
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &with_registry(audit),
+        )
+    };
+    let refused = fold_one(true, commit.clone()).expect_err("past the fence the class gate refuses the commitment");
+    println!("past the fence: {refused:?}");
+    assert!(
+        matches!(&refused, kaspa_consensus_core::palw_state_v2::PalwStateV2Error::ClassNotAdmitting { class, .. } if *class == held_id),
+        "{refused:?}"
+    );
+    let (below, _, _) = fold_one(false, commit).expect("PRE-FENCE DEFECT RECORD: below the fence the commitment skips the gate");
+    assert!(below.claim(&h(0xF0_0001)).is_some());
+    let (on_floor, _, _) = fold_one(true, fp_commitment(floor.0, floor.1, 1, 2)).expect("the floor's free-prompt lane is never gated");
+    assert!(on_floor.claim(&h(0xF0_0002)).is_some());
 }
