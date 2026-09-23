@@ -6,10 +6,13 @@
 //!   Q1  merged attempts from parallel blocks against one bond: re-checked against the RUNNING
 //!       reservation? (expected: yes — `palw_state_v2.rs` step 4b re-runs admission on live state)
 //!   Q2  the chain block's OWN attempt: the processor admits it against the PARENT state
-//!       (`processor.rs:1891` passes `state`, not the step-3 folded state) and `apply_attempt`
-//!       re-checks no ceiling. Objects folded at step 3 that raise the SAME bond's
-//!       `reserved_exposure` (PanelBound seat duties, free-prompt commitments, accusations) are
-//!       therefore invisible to the own attempt's ceiling.
+//!       (`processor.rs:1891` passes `state`, not the step-3 folded state). At the audit's commit
+//!       `apply_attempt` re-checked no ceiling, so objects folded at step 3 that raise the SAME
+//!       bond's `reserved_exposure` (PanelBound seat duties, free-prompt commitments, accusations)
+//!       were invisible to the own attempt's ceiling (finding 17). Since b38356fe (#9)
+//!       `apply_attempt` holds the escrow-inclusive ceiling on the live state and step 4 SKIPS the
+//!       own attempt; Q2 asserts that at an executor sized to #9's per-attempt collateral, the
+//!       record keeps the pre-fence overrun.
 //!   Q3  seat locks (`slashable_locks`) vs the exposure ledger: does either ceiling see the other?
 //!   Q4  retire-after-draw: a seat drawn while Active retires with no live lock, then signs Valid;
 //!       the lock lands on a Retiring bond. The 09-23 withdrawal predicate (`v3`) never read locks;
@@ -349,21 +352,75 @@ fn dos_l1_q1_merged_parallel_attempts_are_rechecked_against_the_running_reservat
 // Q2 — the OWN attempt is checked against the parent; step-3 objects are invisible to it
 // =============================================================================================
 
-#[test]
-#[ignore = "PRE-FENCE DEFECT RECORD: the own attempt checked against the parent state (finding 17); closed by b38356fe (#9, AttemptExposureCeiling on the live state) — converting it is the #9/#10 owner's"]
-fn dos_l1_q2_own_attempt_overruns_the_ceiling_after_same_block_seat_duty() {
+/// `armed()` with testnet-12's real escrow carve and ADR-0130 lambda: a floor claim folded with a
+/// block subsidy then carries option A's escrow next to its weight.
+fn armed_with_escrow(p: &Params) -> PalwTransitionExtrasV1 {
+    let mut x = armed();
+    x.panel_reward_multiple_permille = p.palw_panel_exposure_floor_fence().map(|f| f.reward_multiple_permille).unwrap_or(0);
+    x.escrow_carve = Some(
+        kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2::new(p.palw_overlay_carve.expect("t12 carve").worker_carve_permille).expect("carve"),
+    );
+    x
+}
+
+/// testnet-12's genesis block subsidy — what a floor attempt's escrow is carved from.
+const SUBSIDY: u64 = kaspa_consensus_core::config::params::PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI;
+
+fn ctx_paid(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
+    PalwBlockContextV2 { subsidy: SUBSIDY, ..ctx(block, daa, blue) }
+}
+
+/// **What one floor attempt reserves on its bond past option A — weight + escrow — read back from
+/// a real fold**, and the collateral the audit's #9 (b38356fe) asks per concurrent attempt:
+/// `ceil(reservation × 1000 / fp_max_exposure_ratio_permille)`.
+fn probe_reservation(p: &Params, sp: &PalwStateParamsV2, a: &PalwAdmissionParamsV2, class: (Hash64, u64, u128, u64)) -> (u128, u64) {
+    let f = Fold { p: sp, admission: a, extras: armed_with_escrow(p) };
+    let (class_id, leaves, target, _) = class;
+    let big = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
+    let (s1, _, _) = f.go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &setup(class, &[(0, big)]), PalwBlockWorkV3::None, &[], Hash64::default());
+    let env = attempt(class_id, palw_pwu_v1(target, leaves), 0, 1);
+    let (s2, _, _) = f.go(&s1, &ctx_paid(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env), &[], h(0xE1));
+    let claim = s2.claim(&attempt_id_v2(&env.attempt)).expect("claim");
+    let reservation = s2.reserved_exposure(&bond_key(0));
+    assert_eq!(reservation, claim.reserved + sp.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward), "weight + escrow");
+    let collateral = (reservation * 1000).div_ceil(u128::from(sp.fp_max_exposure_ratio_permille()));
+    (reservation, u64::try_from(collateral).expect("a bond"))
+}
+
+struct Q2 {
+    reservation: u128,
+    small: u64,
+    cap: u128,
+    parent_reserved: u128,
+    after_duty: u128,
+    pre_ok: bool,
+    held: u128,
+    own_recorded: bool,
+    own_skips: Vec<String>,
+    merged_skips: usize,
+    reverts: bool,
+}
+
+/// Q2's block, folded with the 2026-09-23 audit fence `audit`. The executor (bond 1) posts what #9
+/// admits for THREE concurrent floor attempts: two earlier claims of its own plus the block's own
+/// attempt fill its ceiling exactly on the parent state; the same block's `PanelBound` seats it on
+/// bond 2's claim, and that duty is what the parent-state check cannot see.
+fn q2_block(audit: bool) -> Q2 {
     let p = t12();
     let b = bundle(&p);
     let sp = &b.state;
     let cls = floor_row(&b);
     let (class_id, leaves, target, _) = cls;
-    let ratio = b.admission.max_exposure_ratio_permille();
+    let ratio = sp.fp_max_exposure_ratio_permille();
     let big = kaspa_consensus_core::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
-    let r = probe_reserved(sp, &b.admission, cls, big);
-    // Bond 1 (the executor): the registry's minimum bond — the panel floor past #12 (c), 4,000,000
-    // sompi on t12 (ceiling 2,000,000).
-    let small = registration_floor(sp);
-    let f = Fold { p: sp, admission: &b.admission, extras: armed() };
+    let (reservation, per_attempt) = probe_reservation(&p, sp, &b.admission, cls);
+    let small = (per_attempt * 3).max(registration_floor(sp));
+    let mut extras = armed_with_escrow(&p);
+    extras.audit_2026_09_23_active = audit;
+    if !audit {
+        extras.settled_anchor_depth = None;
+    }
+    let f = Fold { p: sp, admission: &b.admission, extras };
     // Bond 2 produces a claim; bonds 1,3,4,5 will be its panel.
     let bonds = [(1, small), (2, big), (3, big), (4, big), (5, big)];
     let (s1, _, _) =
@@ -371,43 +428,93 @@ fn dos_l1_q2_own_attempt_overruns_the_ceiling_after_same_block_seat_duty() {
     let pwu = palw_pwu_v1(target, leaves);
     let other = attempt(class_id, pwu, 2, 7);
     let other_id = attempt_id_v2(&other.attempt);
-    let (s2, _, _) = f.go(&s1, &ctx(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&other), &[], h(0xE7));
+    let (mut s2, _, _) = f.go(&s1, &ctx_paid(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&other), &[], h(0xE7));
     // Bond 1 already backs two claims of its own (each admitted in its own block).
-    let mut s2 = s2;
     for (i, seed) in [(0u64, 70u64), (1, 71)] {
         let e = attempt(class_id, pwu, 1, seed);
-        let c = ctx(20 + i, 101, 20 + i);
+        let c = ctx_paid(20 + i, 101, 20 + i);
         check_palw_attempt_admission_v2(&s2, sp, &b.admission, &c, &e, fences()).expect("bond 1's earlier claims are admissible");
-        s2 = f.go(&s2, &c, &[], PalwBlockWorkV3::Attempt(&e), &[], h(0xE700 + i)).0;
+        let (next, _, skips) = f.go(&s2, &c, &[], PalwBlockWorkV3::Attempt(&e), &[], h(0xE700 + i));
+        assert!(skips.is_empty(), "bond 1's earlier claim {i} is recorded: {skips:?}");
+        s2 = next;
     }
-    // Block 3: its accepted objects bind bond 2's claim to a panel that seats bond 1 (bond 1 HAD
-    // headroom when the draw was validated), and its own work is bond 1's attempt.
+    // Block 3: its accepted objects bind bond 2's claim to a panel that seats bond 1, and its own
+    // work is bond 1's attempt.
     let seats: Vec<PalwPanelSeatV2> = [1u64, 3, 4, 5]
         .iter()
         .map(|n| PalwPanelSeatV2 { bond: bond_key(*n), operator_id: palw_operator_id_v2(&op_pubkey(*n)) })
         .collect();
     let panel = PalwConsensusObjectV2::PanelBound { claim: other_id, anchor: h(0xA2C), seats };
     let own = attempt(class_id, pwu, 1, 8);
-    let c3 = ctx(30, 102, 30);
+    let own_id = attempt_id_v2(&own.attempt);
+    let c3 = ctx_paid(30, 102, 30);
     // The processor's pre-check: against the PARENT (`processor.rs:1891` passes `state`).
     let pre = check_palw_attempt_admission_v2(&s2, sp, &b.admission, &c3, &own, fences());
-    let (s3, delta, _) = f.go(&s2, &c3, &[panel.clone()], PalwBlockWorkV3::Attempt(&own), &[], h(0xE8));
-    let held = s3.reserved_exposure(&bond_key(1));
-    let cap = ceiling(small, ratio);
-    // Contrast: the SAME attempt carried as MERGED work in the same block is refused.
-    let (s3m, _, skips) = f.go(&s2, &c3, &[panel], PalwBlockWorkV3::None, &[merged(&own, 9, 9)], Hash64::default());
-    println!("=== Q2: own attempt vs same-block seat duty on the same bond ===");
-    println!("bond 1 collateral {small}  ceiling {cap}  own claim reserves {r}");
-    println!("bond 1 reserved in parent      : {}", s2.reserved_exposure(&bond_key(1)));
-    println!("after step-3 seat duty (merged): {}", s3m.reserved_exposure(&bond_key(1)));
-    println!("pre-check vs parent            : {:?}", pre.as_ref().map(|_| "Ok"));
-    println!("reserved after own-work fold   : {held}  ({} over the ceiling)", held.saturating_sub(cap));
-    println!("same attempt as MERGED work    : skipped = {} ({:?})", skips.len(), skips.first().map(|s| &s.1));
-    assert!(pre.is_ok(), "the processor admits the own attempt against the parent");
-    assert!(held > cap, "the own attempt is folded without re-checking the ceiling the objects just consumed");
-    assert_eq!(skips.len(), 1, "the merged path re-checks and refuses the identical attempt");
-    let back = revert_delta_v2(&s3, &delta, sp).expect("revert");
-    assert_eq!(back, s2, "revert is exact");
+    let (s3, delta, skips) = f.go(&s2, &c3, &[panel.clone()], PalwBlockWorkV3::Attempt(&own), &[], h(0xE8));
+    // What the step-3 duty alone leaves on bond 1.
+    let (s3d, _, _) = f.go(&s2, &c3, &[panel.clone()], PalwBlockWorkV3::None, &[], Hash64::default());
+    // Contrast: the SAME attempt carried as MERGED work in the same block, with the same subsidy
+    // and carve its own block would have escrowed.
+    let paid = PalwMergedWorkV1 { subsidy: SUBSIDY, escrow_carve: f.extras.escrow_carve, ..merged(&own, 9, 9) };
+    let (_, _, mskips) = f.go(&s2, &c3, &[panel], PalwBlockWorkV3::None, &[paid], Hash64::default());
+    Q2 {
+        reservation,
+        small,
+        cap: ceiling(small, ratio),
+        parent_reserved: s2.reserved_exposure(&bond_key(1)),
+        after_duty: s3d.reserved_exposure(&bond_key(1)),
+        pre_ok: pre.is_ok(),
+        held: s3.reserved_exposure(&bond_key(1)),
+        own_recorded: s3.claim(&own_id).is_some(),
+        own_skips: skips.iter().map(|(_, r)| r.clone()).collect(),
+        merged_skips: mskips.len(),
+        reverts: revert_delta_v2(&s3, &delta, sp).is_ok_and(|back| back == s2),
+    }
+}
+
+fn print_q2(label: &str, q: &Q2) {
+    println!("=== Q2 ({label}): own attempt vs same-block seat duty on the same bond ===");
+    println!(
+        "bond 1 collateral {} ({:.2} MSK = #9's 3 concurrent floor attempts)  ceiling {}  one attempt reserves {} (weight + escrow)",
+        q.small,
+        q.small as f64 / 1e8,
+        q.cap,
+        q.reservation
+    );
+    println!("bond 1 reserved in parent      : {}", q.parent_reserved);
+    println!("after step-3 seat duty         : {}", q.after_duty);
+    println!("pre-check vs parent            : {}", if q.pre_ok { "Ok" } else { "refused" });
+    println!("own attempt recorded           : {}  (skips: {:?})", q.own_recorded, q.own_skips);
+    println!("reserved after own-work fold   : {}  ({} over the ceiling)", q.held, q.held.saturating_sub(q.cap));
+    println!("same attempt as MERGED work    : skipped = {}", q.merged_skips);
+}
+
+#[test]
+fn dos_l1_q2_own_attempt_past_the_live_ceiling_is_skipped() {
+    let q = q2_block(true);
+    print_q2("FIXED, #9", &q);
+    assert!(q.pre_ok, "the processor admits the own attempt against the parent (the premise)");
+    assert_eq!(q.parent_reserved + q.reservation, q.cap, "the parent state leaves room for exactly this attempt");
+    assert!(q.after_duty > q.parent_reserved, "the same block's seat duty lands on the executor's bond first");
+    assert!(!q.own_recorded, "#9: the own attempt past the live ceiling is skipped, not recorded");
+    assert_eq!(q.own_skips.len(), 1, "and the skip is reported");
+    assert!(q.own_skips[0].contains("exposure ceiling"), "as the live ceiling: {:?}", q.own_skips);
+    assert!(q.held <= q.cap, "no sompi backs two claims: held {} <= ceiling {}", q.held, q.cap);
+    assert_eq!(q.held, q.after_duty, "the block leaves bond 1 exactly what its step-3 duty left");
+    assert_eq!(q.merged_skips, 1, "the merged path refuses the identical attempt too");
+    assert!(q.reverts, "revert is exact");
+}
+
+#[test]
+#[ignore = "PRE-FENCE DEFECT RECORD: the own attempt checked against the parent state (finding 17) — the same block with the 2026-09-23 audit fence forced off records the attempt past the ceiling; closed by b38356fe (#9, AttemptExposureCeiling on the live state)"]
+fn dos_l1_q2_pre_fence_record_own_attempt_overruns_the_ceiling_after_same_block_seat_duty() {
+    let q = q2_block(false);
+    print_q2("PRE-FENCE", &q);
+    assert!(q.pre_ok, "the processor admits the own attempt against the parent");
+    assert!(q.own_recorded, "pre-fence the own attempt is folded without re-checking the ceiling");
+    assert!(q.held > q.cap, "one sompi backs two claims");
+    assert_eq!(q.merged_skips, 0, "and the merged re-check priced the claim without option A's escrow, so it admitted it too");
+    assert!(q.reverts, "revert is exact");
 }
 
 // =============================================================================================
@@ -1045,11 +1152,14 @@ fn dos_l1_q6_seat_duty_moves_the_claimants_reservation_onto_other_bonds_times_th
 }
 
 /// Q6 with the escrow a real t12 floor claim carries (subsidy 444,562,014,000 sompi, t12's carve):
-/// the ADR-0130 floor `lambda x max_seat_reward` takes over, and the seat duty stops scaling with
-/// the claimant's reservation at all.
+/// the ADR-0130 floor `lambda x max_seat_reward` takes over, so the seat duty scales with the
+/// escrow, not with the claimant's weight. At the audit's commit the claimant reserved only its
+/// weight (0.000385 MSK) and put 1,280.34 MSK on others (finding 4). Past option A the claimant's
+/// bond carries the escrow too, and #9 asks it to post `ceil((weight + escrow) x 1000 / ratio)`;
+/// the claimant is sized to exactly that. Asserted: the duty it puts on all seats together is now
+/// BELOW its own reservation.
 #[test]
-#[ignore = "PRE-FENCE DEFECT RECORD: a registry-minimum bond's floor claim with the real escrow (finding 4); since b38356fe (#9/#10) that attempt is no longer admitted, so the record has no claim to measure — converting it is the #9/#10 owner's"]
-fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_priced_by_the_reward_not_the_reservation() {
+fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_covered_by_the_claimants_own_reservation() {
     let p = t12();
     let b = bundle(&p);
     let sp = &b.state;
@@ -1059,20 +1169,18 @@ fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_priced_by_the_reward_not_the_res
     let seat_count = b.panel.seat_count();
     let lambda = p.palw_panel_exposure_floor_fence().map(|f| f.reward_multiple_permille).unwrap_or(0);
     let carve = p.palw_overlay_carve.expect("t12 carve").worker_carve_permille;
-    let subsidy = kaspa_consensus_core::config::params::PALW_T12_GENESIS_BLOCK_SUBSIDY_SOMPI;
-    let mut extras = armed();
-    extras.panel_reward_multiple_permille = lambda;
-    extras.escrow_carve = Some(kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2::new(carve).expect("carve"));
-    let f = Fold { p: sp, admission: &b.admission, extras };
+    let (reservation, per_attempt) = probe_reservation(&p, sp, &b.admission, cls);
+    let f = Fold { p: sp, admission: &b.admission, extras: armed_with_escrow(&p) };
     let seats_n: Vec<u64> = (1..=seat_count as u64).collect();
     let mut bonds: Vec<(u64, u64)> = seats_n.iter().map(|n| (*n, big)).collect();
-    bonds.push((9, registration_floor(sp)));
+    let claimant = per_attempt.max(registration_floor(sp));
+    bonds.push((9, claimant));
     let (s1, _, _) =
         f.go(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &setup(cls, &bonds), PalwBlockWorkV3::None, &[], Hash64::default());
     let env = attempt(class_id, palw_pwu_v1(target, leaves), 9, 4343);
     let id = attempt_id_v2(&env.attempt);
-    let c2 = PalwBlockContextV2 { subsidy, ..ctx(2, 101, 2) };
-    let (s2, _, _) = f.go(&s1, &c2, &[], PalwBlockWorkV3::Attempt(&env), &[], h(0x4343));
+    let (s2, _, skips) = f.go(&s1, &ctx_paid(2, 101, 2), &[], PalwBlockWorkV3::Attempt(&env), &[], h(0x4343));
+    assert!(skips.is_empty(), "a claimant sized by #9 gets its claim: {skips:?}");
     let claim = s2.claim(&id).expect("claim").clone();
     let seats: Vec<PalwPanelSeatV2> =
         seats_n.iter().map(|n| PalwPanelSeatV2 { bond: bond_key(*n), operator_id: palw_operator_id_v2(&op_pubkey(*n)) }).collect();
@@ -1088,26 +1196,20 @@ fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_priced_by_the_reward_not_the_res
     let per_seat = s3.reserved_exposure(&bond_key(1));
     let on_others: u128 = seats_n.iter().map(|n| s3.reserved_exposure(&bond_key(*n))).sum();
     let honest_ceiling = ceiling(big, b.admission.max_exposure_ratio_permille());
-    println!("=== Q6b: seat duty with the real escrow (carve {carve} permille, lambda {lambda}) ===");
-    println!(
-        "claim escrowed_reward                  : {} sompi = {:.2} MSK",
-        claim.escrowed_reward,
-        claim.escrowed_reward as f64 / 1e8
-    );
-    println!("claimant reserves on its own bond      : {own} sompi = {:.6} MSK", own as f64 / 1e8);
+    println!("=== Q6b (FIXED: option A + #9): seat duty with the real escrow (carve {carve} permille, lambda {lambda}) ===");
+    println!("claim escrowed_reward                  : {} sompi = {:.2} MSK", claim.escrowed_reward, claim.escrowed_reward as f64 / 1e8);
+    println!("claimant posts (#9, one attempt)       : {claimant} sompi = {:.2} MSK (before: the 4,000,000-sompi registry minimum)", claimant as f64 / 1e8);
+    println!("claimant reserves on its own bond      : {own} sompi = {:.2} MSK (weight {} + escrow; before: weight only)", own as f64 / 1e8, claim.reserved);
     println!("each seat reserves                     : {per_seat} sompi = {:.2} MSK", per_seat as f64 / 1e8);
     println!(
-        "sum on {seat_count} other bonds                : {on_others} = {:.2} MSK -> {}x the claimant's own reservation",
+        "sum on {seat_count} other bonds                : {on_others} = {:.2} MSK -> {:.4}x the claimant's own reservation (before: ~3.3e6x)",
         on_others as f64 / 1e8,
-        on_others / own.max(1)
+        on_others as f64 / own.max(1) as f64
     );
-    println!(
-        "one honest genesis bond (ceiling {:.0} MSK) is full after {} concurrent duties",
-        honest_ceiling as f64 / 1e8,
-        honest_ceiling / per_seat.max(1)
-    );
-    println!("the claimant's registry-minimum bond (ceiling 200,000 sompi) can hold {} such claims at once", 200_000u128 / own.max(1));
-    assert!(on_others > own * 1000, "the duty on other bonds is not bounded by the claimant's own reservation");
+    println!("one honest genesis bond (ceiling {:.0} MSK) is full after {} concurrent duties", honest_ceiling as f64 / 1e8, honest_ceiling / per_seat.max(1));
+    assert_eq!(own, reservation, "the claimant's bond carries weight + escrow");
+    assert!(per_seat > 3 * claim.reserved, "the ADR-0130 escrow floor, not 3 x weight, prices the duty");
+    assert!(on_others <= own, "the duty on all seats together is covered by the claimant's own reservation");
 }
 
 // =============================================================================================

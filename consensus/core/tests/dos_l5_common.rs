@@ -312,3 +312,84 @@ impl Rng {
         self.next() % n.max(1)
     }
 }
+
+/// **What the audit's #9 (b38356fe, `AttemptExposureCeiling`) admits per concurrent attempt,
+/// read off the runtime.** `apply_attempt` refuses an attempt whose escrow-inclusive reservation
+/// (`claim.reserved + claim_escrow_reservation_v1`) would take its bond past
+/// `collateral × fp_max_exposure_ratio_permille / 1000` on the live state. One probe attempt of
+/// `class` (at `pwu`, carrying `subsidy`) is folded on testnet-12's genesis for a bond that can back
+/// it; what the bond reserved for it is the per-attempt reservation, and the collateral that admits
+/// one more such attempt is `ceil(reservation × 1000 / ratio)`.
+#[derive(Clone, Copy, Debug)]
+pub struct AdmittedPerAttempt {
+    /// `claim.reserved` — the weight term.
+    pub reserved: u128,
+    /// Option A's escrow term the bond carries next to it.
+    pub escrow: u128,
+    /// `reserved + escrow`: what one concurrent attempt holds on the bond, and what `void_and_slash`
+    /// takes past the audit fence on a `CourtFraud`, a `ProducerWithholding` or a second
+    /// `ReceiptTimeout` (#10).
+    pub reservation: u128,
+    /// `fp_max_exposure_ratio_permille`.
+    pub ratio_permille: u32,
+    /// `ceil(reservation × 1000 / ratio)`: the collateral one concurrent attempt needs past #9.
+    pub collateral: u64,
+}
+
+pub fn admitted_per_attempt(p: &Params, class: Hash64, pwu: u64, subsidy: u64) -> AdmittedPerAttempt {
+    admitted_per_attempt_on(p, &genesis_state(p), class, pwu, subsidy)
+}
+
+/// [`admitted_per_attempt`] on a given parent state (a state where `class` admits).
+pub fn admitted_per_attempt_on(p: &Params, parent: &PalwChainStateV2, class: Hash64, pwu: u64, subsidy: u64) -> AdmittedPerAttempt {
+    const PROBE: u64 = 0xAD_0009;
+    let b = bundle(p);
+    let sp = &b.state;
+    let rich = 1_000_000_000_000_000u64; // 10,000,000 MSK: enough to back any genesis class's claim
+    let (s, _, _) = fold(p, sp, parent, &ctx(0xAD00_0001, 1_000, 1, 0), &[bond_obj(PROBE, rich)], PalwBlockWorkV3::None, Hash64::default())
+        .expect("the probe bond registers");
+    let (env, key, id) = junk_attempt(class, bond_key(PROBE), pubkey_of(PROBE), &operator_pubkey_of(PROBE), pwu, 0xAD_5EED, 0xAD_0000_5EED);
+    let (s2, _, skips) = fold(p, sp, &s, &ctx(0xAD00_0002, 1_001, 2, subsidy), &[], PalwBlockWorkV3::Attempt(&env), key)
+        .expect("the probe attempt folds");
+    assert!(skips.is_empty(), "a 10,000,000 MSK bond backs one attempt: {skips:?}");
+    let claim = s2.claim(&id).expect("the probe claim is recorded");
+    let reserved = claim.reserved;
+    let escrow = sp.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
+    let reservation = s2.reserved_exposure(&bond_key(PROBE)) - s.reserved_exposure(&bond_key(PROBE));
+    assert_eq!(reservation, reserved + escrow, "the bond carries weight + escrow for one attempt (option A)");
+    let ratio_permille = sp.fp_max_exposure_ratio_permille();
+    let collateral = (reservation * 1000).div_ceil(u128::from(ratio_permille));
+    AdmittedPerAttempt { reserved, escrow, reservation, ratio_permille, collateral: u64::try_from(collateral).expect("fits a bond") }
+}
+
+/// [`fold`] with the 2026-09-23 audit fence forced OFF — the pre-fence rules (#9's live-state
+/// ceiling and #10's withholding charge absent), for PRE-FENCE DEFECT RECORDs only.
+pub fn fold_pre_fence(
+    p: &Params,
+    sp: &PalwStateParamsV2,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    objects: &[PalwConsensusObjectV2],
+    work: PalwBlockWorkV3<'_>,
+    exec_key: Hash64,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(Hash64, String)>), PalwStateV2Error> {
+    let f = flags(p, ctx.daa_score);
+    let mut x = extras(p, ctx.daa_score);
+    x.audit_2026_09_23_active = false;
+    x.settled_anchor_depth = None;
+    apply_palw_transition_v7(
+        parent,
+        sp,
+        None,
+        ctx,
+        objects,
+        work,
+        &[],
+        exec_key,
+        f.unavailable_abstains,
+        f.capability_bound,
+        f.uncertified_weightless,
+        f.da_court,
+        &x,
+    )
+}

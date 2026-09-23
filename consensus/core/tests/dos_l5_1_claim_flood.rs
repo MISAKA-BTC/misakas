@@ -16,10 +16,13 @@
 //!     clones the parent (`TransitionBuilder::new`, :8621); both run per chain block
 //!     (palw_state_v2_sync.rs:314). Timed at the residue size, extrapolated per row.
 //! 1c. **Reservations on OTHER parties.** A junk claim that IS bound puts every seat on duty at
-//!     `3 x claim.reserved` (`reserve_seat_duties`, :11190; `palw_seat_exposure_v1`). The producer
-//!     withholds (seats cannot sign Valid on junk), the receipt window lapses, the claim is redrawn
-//!     ONCE onto a fresh panel (:14966-14986), lapses again and voids `ReceiptTimeout` through
-//!     `void_claim` — not `void_and_slash` — and `slash_silent_seats` is an empty body (:11935).
+//!     the ADR-0130 floor `max(3 x claim.reserved, lambda x escrow share)`. The producer withholds
+//!     (seats cannot sign Valid on junk), the receipt window lapses, the claim is redrawn ONCE onto
+//!     a fresh panel, lapses again and voids `ReceiptTimeout`. **Converted to the fix (#9/#10,
+//!     b38356fe):** the producer is sized to what #9 admits for one floor attempt (read off the
+//!     runtime, `admitted_per_attempt`; the 1,000 MSK producer of the audit can no longer post one),
+//!     and past the fence the second `ReceiptTimeout` goes through `void_and_slash`, forfeiting
+//!     weight + escrow. Asserted: the charge covers the collateral the claim pinned on others.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test dos_l5_1_claim_flood -- --nocapture --test-threads=2
 
@@ -37,14 +40,15 @@ use std::time::Instant;
 
 const N_JUNK: u64 = 1_200;
 const ATTACKER: u64 = 1;
-const ATTACKER_COLLATERAL: u64 = 100_000_000_000; // 1,000 MSK
 /// 1a/1b's flooder: one junk attempt per block, each live for `window_bind` + 1 DAA before it
 /// voids, so ~601 of them are in flight at once. #9 refuses an attempt past the bond's exposure
-/// ceiling on the live state, so the flooder must be sized for that concurrency: at least
-/// 6,401.7 MSK of collateral per concurrent junk attempt (option A's escrow-inclusive reservation
-/// on the floor), doubled for the 50 % ceiling — 8,000,000 MSK, asserted against the measured
-/// reservation below rather than trusted.
-const FLOODER_COLLATERAL: u64 = 800_000_000_000_000; // 8,000,000 MSK
+/// ceiling on the live state, so the flooder is sized for that concurrency from the runtime:
+/// `admitted_per_attempt` (6,401.69 MSK per concurrent floor attempt at 500 permille) x
+/// (`window_bind` + 2), asserted against the measured reservation below.
+fn flooder_collateral(p: &kaspa_consensus_core::config::params::Params, floor: Hash64, pwu: u64) -> u64 {
+    let per = admitted_per_attempt(p, floor, pwu, T12_BLOCK_SUBSIDY_SOMPI);
+    per.collateral * (bundle(p).state.window_bind() + 2)
+}
 
 fn time_per_call<F: FnMut()>(iters: u32, mut f: F) -> f64 {
     let t = Instant::now();
@@ -61,9 +65,10 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     let sp = b.state.clone();
     let (floor, leaves, target, _) = genesis_classes(&p)[0];
     let pwu = palw_pwu_v1(target, leaves);
+    let flooder = flooder_collateral(&p, floor, pwu);
 
     let g = genesis_state(&p);
-    let (mut s, _, _) = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, FLOODER_COLLATERAL)], PalwBlockWorkV3::None, Hash64::default()).unwrap();
+    let (mut s, _, _) = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, flooder)], PalwBlockWorkV3::None, Hash64::default()).unwrap();
     let baseline_bytes = carriage_bytes(&s);
     let baseline_root_s = time_per_call(20, || {
         let _ = s.state_root();
@@ -134,7 +139,7 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     println!("reserved per junk claim   = {reserved_one} sompi ({:.6} MSK), held {bind} DAA", msk(reserved_one));
     println!("fold time for the flood   = {flood_s:.2} s debug ({:.2} ms/block)", flood_s * 1e3 / N_JUNK as f64);
     println!("carriage bytes: baseline {baseline_bytes} -> peak {peak_bytes} ({peak_claims} claims, attacker reserved {peak_reserved})");
-    println!("after bind+retirement windows: bytes {after_bytes}, claims {after_claims}, attacker reserved {after_reserved}, attacker collateral {attacker_after} (posted {FLOODER_COLLATERAL})");
+    println!("after bind+retirement windows: bytes {after_bytes}, claims {after_claims}, attacker reserved {after_reserved}, attacker collateral {attacker_after} (posted {flooder})");
     println!("panel_liabilities rows left by voided junk = {after_liabilities}/{N_JUNK}  (first: reason/signers/expiry = {voided_reason:?})");
     println!("residue                    = {residue} bytes = {residue_per_claim:.1} bytes per junk claim");
     println!("  (#12 (a): a signer-less BindTimeout writes no liability past the audit fence)");
@@ -159,7 +164,7 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
 
     // The flooder was sized for its own concurrency (#9 refuses past the ceiling on the live state).
     assert!(
-        peak_reserved <= FLOODER_COLLATERAL as u128 * u128::from(sp.fp_max_exposure_ratio_permille()) / 1000,
+        peak_reserved <= flooder as u128 * u128::from(sp.fp_max_exposure_ratio_permille()) / 1000,
         "the flood fits under the ceiling it is refused past"
     );
     let per_live = peak_reserved / peak_live.max(1) as u128;
@@ -171,7 +176,7 @@ fn dos_l5_1a_1b_junk_floor_flood_leaves_no_rooted_rows() {
     // The claims themselves are pruned — that part of launch-blocker §8 holds.
     assert_eq!(after_claims, 0, "every junk claim voided and retired");
     assert_eq!(after_reserved, 0, "every reservation released");
-    assert_eq!(attacker_after, FLOODER_COLLATERAL, "and the attacker lost nothing");
+    assert_eq!(attacker_after, flooder, "and the attacker lost nothing");
     assert_eq!(after_liabilities, 0, "#12 (a): no BindTimeout left a liability row");
     // **The bound this lane asserts: once every window a claim can be read in has closed, the claim
     // leaves nothing rooted behind.** It failed at the audit's commit (499.3 B per claim, for ever);
@@ -204,8 +209,7 @@ fn dense_2m_reserved_sompi() -> u128 {
 }
 
 #[test]
-#[ignore = "OPEN FINDING, not #12's (withholding is #10, option A's): its 1,000 MSK producer can no longer post one floor attempt under #9's live-state ceiling (6,401.7 MSK of collateral per attempt), so it stops at the claim lookup; resize it with #10's conversion"]
-fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_voids_unslashed() {
+fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_forfeits_at_the_second_timeout() {
     let p = t12();
     let b = bundle(&p);
     let sp = b.state.clone();
@@ -214,9 +218,12 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_voids_unslashed() {
     let bonds = genesis_bonds(&p);
     let seats_a: Vec<(PalwBondKeyV2, Hash64)> = bonds[1..6].iter().map(|(k, o, _)| (*k, *o)).collect();
     let seats_b: Vec<(PalwBondKeyV2, Hash64)> = [bonds[6], bonds[7], bonds[1], bonds[2], bonds[3]].iter().map(|(k, o, _)| (*k, *o)).collect();
+    // The least a producer can post and still get ONE floor attempt past #9 (runtime, not a guess).
+    let per = admitted_per_attempt(&p, floor, pwu, T12_BLOCK_SUBSIDY_SOMPI);
+    let attacker_collateral = per.collateral;
 
     let g = genesis_state(&p);
-    let mut s: PalwChainStateV2 = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, ATTACKER_COLLATERAL)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
+    let mut s: PalwChainStateV2 = fold(&p, &sp, &g, &ctx(1, 1_000, 1, 0), &[bond_obj(ATTACKER, attacker_collateral)], PalwBlockWorkV3::None, Hash64::default()).unwrap().0;
     let (env, key, id) = junk_attempt(floor, bond_key(ATTACKER), pubkey_of(ATTACKER), &operator_pubkey_of(ATTACKER), pwu, 1, 0x5EED);
     let mut daa = 1_001u64;
     let mut blue = 2u64;
@@ -224,7 +231,7 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_voids_unslashed() {
         fold(&p, &sp, s, &ctx(0x7000 + blue, daa, blue, sub), objs, work, key).unwrap_or_else(|e| panic!("DAA {daa}: {e:?}")).0
     };
     s = step(&s, daa, blue, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI);
-    let reserved = s.claim(&id).unwrap().reserved;
+    let reserved = s.claim(&id).expect("an attacker sized by #9 gets its claim").reserved;
     let escrow = s.claim(&id).unwrap().escrowed_reward;
 
     let others = |s: &PalwChainStateV2| -> u128 { bonds.iter().map(|(k, _, _)| s.reserved_exposure(k)).sum() };
@@ -262,52 +269,82 @@ fn dos_l5_1c_bound_junk_claim_reserves_on_other_parties_and_voids_unslashed() {
     account(&s, daa, &mut last, &mut integral_other, &mut integral_attacker);
     s = step(&s, daa, blue, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
     let final_phase = format!("{:?}", s.claim(&id).map(|c| c.phase.clone()));
-    let attacker_collateral = s.bond(&bond_key(ATTACKER)).unwrap().collateral;
+    let attacker_collateral_after = s.bond(&bond_key(ATTACKER)).unwrap().collateral;
+    let charge = (attacker_collateral - attacker_collateral_after) as u128;
     let seats_collateral: u64 = bonds.iter().map(|(k, _, _)| s.bond(k).unwrap().collateral).sum();
     let seats_posted: u64 = bonds.iter().map(|(_, _, c)| *c).sum();
 
     // ---- the 2M row at the registry-armed reservation (analytic, same arithmetic) --------------
+    // Option A: the 2M claim's bond carries its escrow too; #10 forfeits reserved + escrow.
     let r2m = dense_2m_reserved_sompi();
-    let seat2m = palw_seat_exposure_v1(r2m);
-    let genesis_collateral = bonds[0].2;
     let ratio = b.state.fp_max_exposure_ratio_permille();
+    let seat2m = kaspa_consensus_core::palw_panel_economy_v1::palw_panel_seat_exposure_v1(
+        r2m,
+        escrow,
+        b.panel.seat_count() as usize,
+        extras(&p, daa).panel_reward_multiple_permille,
+    );
+    let res2m = r2m + escrow as u128;
+    let genesis_collateral = bonds[0].2;
     let seats_per_bond = (genesis_collateral as u128 * ratio as u128 / 1000) / seat2m;
     let honest_bonds = bonds.len() as u128 - 1; // the executor is excluded from its own panel
     let fits_second = palw_seat_has_headroom_v1(genesis_collateral, seat2m, seat2m, ratio);
+    let fits_third = palw_seat_has_headroom_v1(genesis_collateral, 2 * seat2m, seat2m, ratio);
 
-    println!("=== 1c: one BOUND junk claim, producer withholds ===");
-    println!("floor junk: reserved {reserved} sompi, escrow {escrow} sompi ({:.2} MSK, burned at void)", msk(escrow as u128));
-    println!("seat duty per seat (3 x reserved) = {}", palw_seat_exposure_v1(reserved));
-    println!("reserved on OTHER bonds after bind #1 = {other_after_bind}  ({}x the producer's)", other_after_bind / reserved.max(1));
+    println!("=== 1c: one BOUND junk claim, producer withholds (FIXED: #9 + #10) ===");
+    println!(
+        "#9 admits one floor attempt at {:.2} MSK posted: reserved {reserved} + escrow {escrow} = {:.2} MSK at {ratio} permille (before: 1,000 MSK)",
+        msk(attacker_collateral as u128),
+        msk(per.reservation)
+    );
+    println!("seat duty per seat (ADR-0130 floor) = {} sompi; 3 x reserved = {}", other_after_bind / b.panel.seat_count() as u128, palw_seat_exposure_v1(reserved));
+    println!("reserved on OTHER bonds after bind #1 = {other_after_bind} ({:.2} MSK)", msk(other_after_bind));
     println!("after first receipt window: phase = {phase_after_first}");
     println!("reserved on OTHER bonds after redraw bind #2 = {other_after_rebind}");
     println!("after second receipt window: phase = {final_phase}");
-    println!("producer collateral {ATTACKER_COLLATERAL} -> {attacker_collateral}  (slashed {})", ATTACKER_COLLATERAL - attacker_collateral);
+    println!("producer collateral {attacker_collateral} -> {attacker_collateral_after}  (charged {charge} = {:.2} MSK; before: 0)", msk(charge));
     println!("seats' collateral {seats_posted} -> {seats_collateral}");
-    println!("sompi x DAA reserved: OTHER parties {integral_other}, producer {integral_attacker}  => ratio {:.1}", integral_other as f64 / integral_attacker.max(1) as f64);
+    println!(
+        "sompi x DAA reserved: OTHER parties {integral_other}, producer {integral_attacker}  => ratio {:.4} (before: 3,316,585)",
+        integral_other as f64 / integral_attacker.max(1) as f64
+    );
+    println!("peak pinned on others / charge = {:.4}", other_after_bind as f64 / charge.max(1) as f64);
     println!();
     println!("=== 1c': the 2M dense row at the registry-armed reservation (analytic, t12_collateral_terms arithmetic) ===");
     println!("expected draws per 2M win     = {}  (the lottery needs no inference at all)", palw_expected_attempts_v1(genesis_classes(&p)[2].2));
-    println!("reserved per 2M claim         = {r2m} sompi ({:.2} MSK)", msk(r2m));
+    println!("reserved per 2M claim         = {r2m} sompi ({:.2} MSK); + escrow = {:.2} MSK on the producer's bond", msk(r2m), msk(res2m));
     println!("seat duty per seat            = {seat2m} sompi ({:.2} MSK)", msk(seat2m));
     println!("genesis bond ceiling          = {:.2} MSK  -> 2M seats one bond can hold at once = {seats_per_bond}", msk(genesis_collateral as u128 * ratio as u128 / 1000));
-    println!("a second 2M seat fits on a bond already seated? {fits_second}");
+    println!("a second 2M seat fits on a bond already seated? {fits_second}; a third? {fits_third}");
     println!("honest bonds eligible for a panel = {honest_bonds}; seats per panel = {}", b.panel.seat_count());
     println!(
-        "=> ONE bound junk 2M claim leaves {} of {honest_bonds} honest bonds with headroom: every other 2M claim is InsufficientEligibleBonds -> BindTimeout, escrow burned",
-        honest_bonds - b.panel.seat_count() as u128
+        "attacker per 2M junk claim: {:.2} MSK posted (#9), {:.2} MSK forfeited at the second ReceiptTimeout (#10)",
+        msk(res2m * 1000 / ratio as u128),
+        msk(res2m)
     );
-    println!("attacker capital for it: {:.2} MSK collateral locked (ceiling 50% => {:.2} MSK posted), per junk claim life <= 2 x (bind+receipt) = {} DAA", msk(r2m), msk(r2m * 2), 2 * (sp.window_bind() + receipt_window));
-    println!("defender capital pinned: {} seats x {:.2} MSK = {:.2} MSK  (x{})", b.panel.seat_count(), msk(seat2m), msk(seat2m * b.panel.seat_count() as u128), seat2m * b.panel.seat_count() as u128 / r2m);
+    println!(
+        "defender pinned per 2M junk claim: {} seats x {:.2} MSK = {:.2} MSK -> pinned / charge = {:.2} (dos_repro_3d folds it)",
+        b.panel.seat_count(),
+        msk(seat2m),
+        msk(seat2m * b.panel.seat_count() as u128),
+        (seat2m * b.panel.seat_count() as u128) as f64 / res2m as f64
+    );
 
     assert!(final_phase.contains("ReceiptTimeout"), "the junk claim voids at the second receipt timeout");
+    assert!(phase_after_first.contains("Provisional"), "the first lapse redraws");
     assert_eq!(seats_collateral, seats_posted, "no seat was charged");
+    assert_eq!(other_after_rebind, other_after_bind, "the redraw pins the same duty again");
+    assert_eq!(charge, per.reservation, "#10: the second ReceiptTimeout forfeits weight + escrow");
     // **The bound this lane asserts: a claim that withheld its material through two panels must
-    // cost its producer at least what it pinned on others.** It does not — void_claim, not
-    // void_and_slash, at ReceiptTimeout; the producer is only charged if some seat files a DA
-    // accusation (node policy, kaspad/src/palw_panel.rs:7826).
+    // cost its producer at least what it pinned on others.** At the audit's commit it cost 0;
+    // past #10 it costs the escrow-inclusive reservation.
     assert!(
-        attacker_collateral < ATTACKER_COLLATERAL,
-        "a producer whose claim withheld through two panels must be charged; measured slash = 0 while it pinned {integral_other} sompi*DAA on others"
+        charge >= other_after_bind,
+        "a producer whose claim withheld through two panels must be charged at least what it pinned: charge {:.2} MSK, pinned {:.2} MSK",
+        msk(charge),
+        msk(other_after_bind)
     );
+    assert!(integral_attacker >= integral_other, "and it locks at least the capital x time it pins");
+    assert_eq!(seats_per_bond, 2, "option A's genesis bond holds two 2M seat duties");
+    assert!(fits_second && !fits_third);
 }
