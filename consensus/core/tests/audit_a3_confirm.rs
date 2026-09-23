@@ -23,6 +23,7 @@ fn hh(v: u64) -> Hash64 {
 /// **F1 confirmation: the mint's cost past the 2^16 probe horizon, fitted against the analytic
 /// op count `(n - 131_072) * 65_536 + (n - 131_072)^2 / 2`.**
 #[test]
+#[ignore = "MEASUREMENT, not a guard: fits the PRE-FENCE mint's O(n^2) cliff up to n = 200,000 tickets (tens of minutes in a debug build). The live guard on the bounded mint is audit_repro_01's repro_06."]
 fn a3_12_mint_cost_fit_past_the_probe_horizon() {
     let q = u128::from(PALW_EXECUTION_QUANTUM_V1);
     let seed = hh(0x5EED);

@@ -17947,15 +17947,15 @@ mod consensus_params_id_tests {
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
         previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
 
-        // **The "previous" here is the build the fleet is running**, not a hypothetical: its
-        // fingerprint must be the one testnet-11's nodes print at startup (71b35c25…, the ADR-0083
-        // flag day's). If this line ever fails, the reconstruction has drifted and every identity
-        // claim below it is about a network nobody runs.
-        assert_eq!(
-            previous.consensus_params_id().to_string(),
-            "71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9",
-            "the reconstruction is not the running fleet's ruleset"
-        );
+        // **The "previous" here WAS the build the testnet-11 fleet runs** (`71b35c25…`, the ADR-0083
+        // flag day's), and this line pinned it until 2026-09-23. It cannot any more: the economic
+        // audit raised `PALW_STATE_V2_VERSION` to 21, a compile-time constant hashed into every state
+        // root and the bundle, so no tree past that commit can reconstruct a v20 fleet's ruleset by
+        // clearing fields — the five-family court root above was the last difference that could be
+        // restated. testnet-11 is superseded by testnet-12 and no node on this build rejoins it, so
+        // what remains below is the property this test exists for, stated RELATIVELY within one
+        // build: scheduling the court widens the horizon, leaves the identity alone, and moves the
+        // fingerprint.
         // From here the claims are about the court FENCE: that scheduling it leaves the identity
         // alone. The family set's move is a separate and deliberate identity move (the 2026-09-23
         // re-pin note in `shipped_presets_have_pinned_fingerprints`), so the root is held equal to
@@ -19691,7 +19691,10 @@ mod consensus_params_id_tests {
                 // testnet-12 and unsyncable past DAA 7,219 by a correct validator in any case
                 // (`docs/testnet-12-regenesis-2026-09-23.md`). The previous pin was not deployed.
                 // Previous: 79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640.
-                "33bdff0bf072c57fd27853899ae28a79b4bb8b43980a634c070257d9802bd634",
+                // **And again the same day, for the economic audit's state schema v21**
+                // (`PALW_STATE_V2_VERSION` 20 -> 21, hashed into the bundle; `palw_audit_2026_09_23`
+                // itself is Some-only and dormant here). Previous: 33bdff0b….
+                "c99bb4f43891dc637e4d5634816c46b33d89f07a381875e2ce54bd3ef80ac74a",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -19720,7 +19723,8 @@ mod consensus_params_id_tests {
             // …and once more on 2026-09-23 for the fifth RC family (`PALW-QWEN36-V6`): the drill
             // preset carries the RC court root through the same bundle builder, so it moves with it.
             // Previous: 61286b15588eb253b9a7f64997935c919b604b07d1973d4d2366084f06f524f5.
-            ("devnet", DEVNET_PARAMS, "3894d83e4062c8fd611e35a972d361be9346b3f5fc0259baa0145b7e0a08e7a2"),
+            // …and once more the same day for the economic audit's state schema v21. Previous: 3894d83e….
+            ("devnet", DEVNET_PARAMS, "9acd42be5357a25ee08c1c7037d1610ef00107e8bd47eb59e6c6a6f91c31f502"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

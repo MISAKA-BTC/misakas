@@ -35198,7 +35198,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&20u16.to_le_bytes()); // version_le(2) = 20, restated from the ADR (ADR-0082 C-5: the class record's `fused_attention`)
+            s.update(&21u16.to_le_bytes()); // version_le(2) = 21, restated from the ADR (20 was ADR-0082 C-5's `fused_attention`; 21 is the 2026-09-23 audit's settled-finals counter and the settled-at fields on the retiring bond, the slashable lock and the panel liability)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -35655,15 +35655,22 @@ pub(crate) mod tests {
     /// still owes a root claim. The empty root moves for the version alone; the inhabited root
     /// moves for the version and for the class record's own new byte, with one class each way so
     /// the value is pinned as well as the field.
+    /// A ninth, for the 2026-09-23 economic audit (`palw_audit_2026_09_23`): `PALW_STATE_V2_VERSION`
+    /// 20 -> 21 because the state gains the rooted `settled_attempt_finals` counter and three records
+    /// gain a settled-at field the carriage serializes (`PalwBondStatusV2::Retiring.settled_at_since`,
+    /// `PalwSlashableLockV1.settled_at_final`, `PalwPanelLiabilityRecordV1.settled_at_final`). The
+    /// empty root moves for the version and for the counter, which is hashed at zero; a root that
+    /// stayed byte-identical at zero was never available, because a v20 carriage cannot decode under
+    /// v21 whatever the counter does. The v20 pair was empty `966bae07…`, inhabited `a0b711e1…`.
     #[test]
-    fn the_version_20_state_root_golden_vectors() {
+    fn the_version_21_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
-        let want_empty = "966bae0706de192840d5a9697764071a065570cb2996d49c82ab6fe1a836afc99ab3fe725bc4387462c8e42bdfa242553f3c10cc435656e7fc2cccdbc52401d3";
-        let want_full = "a0b711e172687e0787d9d6f8307f306493749394caff80d5e24d4324453eea66f7a21c69892b5f9898c07c743601c1a9b86a496ee135f24e8829276566402315";
+        let want_empty = "d34ae7ed8a71a6269f19f4ca14d7b1c63cae3508b36f6e74d0ecf43e84a8af79333723fec55c8d3e6eab5a9bbc6e4818faf39dbfe675f8967c715fd3b1d94f9e";
+        let want_full = "51a8ddd5b1fb3d5975a2b35c020e56aa6082c93166350b9c4d2f9dbcdb8f34a3c33d74cd900d38114d370683c648b8091b256fade57944371e8c9186008b11f2";
         assert!(
             empty == want_empty && full == want_full,
-            "a version-20 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
+            "a version-21 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
         );
     }
 

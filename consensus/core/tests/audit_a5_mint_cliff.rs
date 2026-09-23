@@ -37,6 +37,7 @@ fn one_final(credit: u64) -> PalwExecFinalV1 {
 }
 
 #[test]
+#[ignore = "MEASUREMENT, not a guard: measures the C-2 cliff on the unbounded PRE-FENCE mint up to 136,000 tickets (10+ minutes at 100% CPU). The live guard on the bounded mint is audit_repro_01's repro_06."]
 fn the_round_assignment_cliff_is_at_131_071_tickets() {
     let q = u128::from(PALW_EXECUTION_QUANTUM_V1);
     let seed = h(99);
