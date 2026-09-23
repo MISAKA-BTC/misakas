@@ -263,8 +263,12 @@ pub struct Args {
     pub palw_register_class: Option<String>,
     pub palw_register_bond: bool,
     pub palw_dump_classes: bool,
-    /// ADR-0067: arm the chain-registered-class arm (the fence's node half).
-    pub palw_chain_classes: bool,
+    /// ADR-0067: arm the chain-registered-class arm (the fence's node half). `None` = the network's
+    /// default ([`palw_chain_classes_default`]: ON where the permissionless model registry is in force
+    /// from genesis — testnet-12 — OFF elsewhere, testnet-11 included); `Some` is what the operator
+    /// said, `--palw-chain-classes` / `--palw-chain-classes=true` or `--palw-chain-classes=false`.
+    /// Read it through [`Args::palw_chain_classes_for`].
+    pub palw_chain_classes: Option<bool>,
     /// ADR-0151 follow-up: recompute every class manifest at startup and REFUSE TO START on any
     /// disagreement. Off by default because the recomputation is 135 s an artifact at a 2M context;
     /// on for any node whose sidecars it did not write itself.
@@ -481,7 +485,7 @@ impl Default for Args {
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
-            palw_chain_classes: false,
+            palw_chain_classes: None,
             palw_verify_class_manifest: false,
             palw_class_carriage: Vec::new(),
             palw_bond_collateral: None,
@@ -1039,6 +1043,12 @@ impl Args {
             .collect()
     }
 
+    /// **Whether this node arms the chain-registered-class arm** (`--palw-chain-classes`): what the
+    /// operator said, else the network's default ([`palw_chain_classes_default`]).
+    pub fn palw_chain_classes_for(&self, params: &kaspa_consensus_core::config::params::Params) -> bool {
+        self.palw_chain_classes.unwrap_or_else(|| palw_chain_classes_default(params))
+    }
+
     pub fn network(&self) -> NetworkId {
         match (self.testnet, self.devnet, self.simnet) {
             (false, false, false) => NetworkId::new(NetworkType::Mainnet),
@@ -1464,13 +1474,20 @@ pub fn cli() -> Command {
         .arg(
             Arg::new("palw-chain-classes")
                 .long("palw-chain-classes")
-                .action(ArgAction::SetTrue)
+                .num_args(0..=1)
+                .require_equals(true)
+                .default_missing_value("true")
+                .value_parser(clap::value_parser!(bool))
+                .value_name("true|false")
                 .help(
                     "MISAKA PALW (ADR-0067): ARM the chain-registered-class arm — serve classes whose declaration \
                      the chain carries even when this build's tables never heard of them, executing FROM the \
-                     registered profile. Off by default (the fence): arming accepts interpreted execution for \
-                     stranger classes this operator's artifacts can pair with. Registration never obligates \
-                     possession — a class is served only if its artifact is loaded via --palw-class-artifact.",
+                     registered profile. Default: ON on a network whose permissionless model registry is in \
+                     force from genesis (testnet-12, where a model arrives by registration), OFF elsewhere \
+                     (testnet-11: the fence). `--palw-chain-classes=false` turns it off anywhere. Arming \
+                     accepts interpreted execution for stranger classes this operator's artifacts can pair \
+                     with. Registration never obligates possession — a class is served only if its artifact is \
+                     loaded via --palw-class-artifact.",
                 ),
         )
         .arg(
@@ -2068,6 +2085,17 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
     cmd
 }
 
+/// **The network's default for `--palw-chain-classes`** (user decision, 2026-09-24): ON where the
+/// permissionless model registry (ADR-0135, `Params::palw_model_registry`) is in force from genesis —
+/// testnet-12, where every model after the genesis card arrives as a chain registration and a node
+/// that does not serve chain-registered classes cannot produce for them — and OFF elsewhere.
+/// testnet-11 arms the same registry, but at a flag day (6,001) on a chain whose classes are this
+/// build's tables, so it keeps the fence's default: off. A node's own choice
+/// (`--palw-chain-classes=true|false`) always wins.
+pub fn palw_chain_classes_default(params: &kaspa_consensus_core::config::params::Params) -> bool {
+    params.palw_model_registry_at(0)
+}
+
 pub fn parse_args() -> Args {
     match Args::parse(std::env::args_os()) {
         Ok(args) => args,
@@ -2177,7 +2205,7 @@ impl Args {
             palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),
-            palw_chain_classes: arg_match_unwrap_or::<bool>(&m, "palw-chain-classes", defaults.palw_chain_classes),
+            palw_chain_classes: m.get_one::<bool>("palw-chain-classes").copied().or(defaults.palw_chain_classes),
             palw_verify_class_manifest: arg_match_unwrap_or::<bool>(
                 &m,
                 "palw-verify-class-manifest",
@@ -2598,6 +2626,53 @@ mod execution_lane_devnet_tests {
         let mut argv = vec!["kaspad"];
         argv.extend_from_slice(extra);
         Args::parse(argv).expect("args parse")
+    }
+}
+
+#[cfg(test)]
+mod palw_chain_classes_tests {
+    use super::*;
+    use kaspa_consensus_core::config::params::Params;
+
+    fn parse(extra: &[&str]) -> Args {
+        let mut argv = vec!["kaspad"];
+        argv.extend_from_slice(extra);
+        Args::parse(argv).expect("args parse")
+    }
+
+    /// **`--palw-chain-classes` defaults ON where the permissionless registry is armed from genesis
+    /// (testnet-12) and OFF elsewhere (testnet-11), and the operator's word wins both ways.**
+    #[test]
+    fn chain_classes_default_on_testnet_12_off_elsewhere_and_an_explicit_value_wins() {
+        let t12 = parse(&["--testnet", "--netsuffix=12"]);
+        let t11 = parse(&["--testnet", "--netsuffix=11"]);
+        assert_eq!(t12.network(), NetworkId::with_suffix(NetworkType::Testnet, 12));
+        assert_eq!(t11.network(), NetworkId::with_suffix(NetworkType::Testnet, 11));
+        let (t12_params, t11_params): (Params, Params) = (t12.network().into(), t11.network().into());
+        assert_eq!(t12.palw_chain_classes, None, "unstated");
+        assert!(t12.palw_chain_classes_for(&t12_params), "testnet-12: ON by default");
+        assert!(!t11.palw_chain_classes_for(&t11_params), "testnet-11: OFF by default");
+        for (name, params) in [
+            ("mainnet", Params::from(NetworkId::new(NetworkType::Mainnet))),
+            ("devnet", Params::from(NetworkId::new(NetworkType::Devnet))),
+            ("testnet-10", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10))),
+        ] {
+            assert!(!palw_chain_classes_default(&params), "{name}: OFF by default");
+        }
+
+        // Explicit values win on either network.
+        for (argv, want) in [
+            (vec!["--testnet", "--netsuffix=12", "--palw-chain-classes=false"], false),
+            (vec!["--testnet", "--netsuffix=12", "--palw-chain-classes"], true),
+            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes"], true),
+            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes=true"], true),
+            (vec!["--testnet", "--netsuffix=11", "--palw-chain-classes=false"], false),
+        ] {
+            let args = parse(&argv);
+            let params: Params = args.network().into();
+            assert_eq!(args.palw_chain_classes, Some(want), "{argv:?}");
+            assert_eq!(args.palw_chain_classes_for(&params), want, "{argv:?}");
+        }
     }
 }
 

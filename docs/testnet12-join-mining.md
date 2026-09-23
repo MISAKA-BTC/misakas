@@ -254,8 +254,10 @@ permits grant this bond. `mining start` passes it for a miner.
    to start on a mismatch. That costs about 135 s per artifact at 2M, and less at 8k.
 4. **A class that is registered after your build.** The genesis rows are in this build's tables.
    Serving a class that was registered permissionlessly and that this build has never heard of needs
-   **`--palw-chain-classes`**. With that flag the node executes from the registered profile, and the
-   panel's readiness proofs resolve through the chain's registration.
+   the chain-registered-class arm, **`--palw-chain-classes`**. On testnet-12 it is **on by default**
+   (the permissionless model registry is in force from genesis there); testnet-11 keeps it off. With
+   it the node executes from the registered profile, and the panel's readiness proofs resolve through
+   the chain's registration. Pass `--palw-chain-classes=false` to turn it off.
 
 **A producer refuses to start for a class it cannot produce.** For example, when no loaded artifact
 matches the registered root, the node prints `--palw-producer-class: … This node will not start as a
