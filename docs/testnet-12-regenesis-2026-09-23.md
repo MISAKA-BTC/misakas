@@ -7,7 +7,7 @@
 >
 > 対処（項目 1〜5 完了、6 進行中）: inventory root の streaming 化（`216641a4`）／`ArtifactDigest`・`InventoryRoot`・`ClassId` の型分離＋`.palwmanifest`＋`palw-class manifest`（`ea7ad7df`）／runtime が sidecar を読み `--palw-verify-class-manifest` で fail-closed（`26030bc1`、`2f588a58`）／genesis の手書き定数を廃止し commit した manifest を `const fn` で読む（`077d4c7f`、root `b5baca63…`→`f63af2c4…`）／per-host メモリ予算 `--palw-host-memory-budget` / `--palw-host-node-count`（`a0350833`）／phase 別メモリ分解＋60 s 周期行（`b9b5ed07`、`e40dfcd2`）／1-seat acceptance が暴いた OOM 経路 3 つの修正（`427a1b8d`、`e40dfcd2`）。
 >
-> **genesis ブロックは不変**（root は PALW bundle の `genesis_objects` にあり header/premine に入らない）。params fingerprint は `fb8f378d…` → `c746f07c…`（担保）→ `30848c6b…`（root）→ **`bcfbf2a3…`**（t11 で genesis 有効だった `palw_unavailable_abstains` が t12 で dormant に退行していたのを武装、`t12_arms_every_fence_t11_armed` が台帳として常駐）。fence schedule は `1000` の 1 本のまま。
+> **genesis ブロックは不変**（root は PALW bundle の `genesis_objects` にあり header/premine に入らない）。params fingerprint は `fb8f378d…` → `c746f07c…`（担保）→ `30848c6b…`（root）→ `bcfbf2a3…`（t11 で genesis 有効だった `palw_unavailable_abstains` が t12 で dormant に退行していたのを武装、`t12_arms_every_fence_t11_armed` が台帳として常駐）→ **`f66bf139…`**（RC family 5 本目 `PALW-QWEN36-V6` — held hybrid 行（graph-v7 = graph-v6 の held 合成、kernel は同じ 22）を両 lane で被覆する fixture drill。それまで t12 の genesis hybrid class `e108e736…` は `PALW-QWEN36` に 2 kernel（fused attention `09b81d17…`、per-token lift `d07e92e1…`）足りず、post-genesis の held hybrid 登録は weightless しか無理だった。合わせて t12 の genesis fp 認定集合を「card が登録した class」から導出（mainnet 則）— 旧集合は t11 の graph-v3/graph-v2 行を名指し、held 2 行を落としていた。`court_e2e_root` は全 RC bundle に入るので **t11 の fingerprint も `33bdff0b…` へ動く**（t11 は superseded、DAA 7,219 以降は正しい validator では同期不能）。fence schedule は `1000` の 1 本のまま。
 >
 > **engine 側（`feat/kv-codec` を `5451aac2` で merge、fingerprint 不変）**: K/V は実測で全要素が ±32,767 内（`clamp16` の帰結）なので **A16-KV-i16 は無損失**の再パックとして出荷既定に。i8 は 89% が再量子化＝クラス変更で名指し拒否。2M attempt の working set 14.84 → 7.84 GiB、fleet 上では +file 2.67 +rope 1.07 で ~11.6 GiB — 等分 share には収まらず paged KV（未着手）が要る。役割別 resource profile（producer/full/partial を 1 導出から）、node-local 予約台帳（RAII・拒否は保持者を名指し）、S1 partial seat の prefix 再実行、telemetry（RPC/CLI）。seat ホストの非対称トポロジ（producer 1 + panel 3）向けに `--palw-host-memory-share`（`4e05f85d`）で per-process share を明示可能。merge 後の全スイート緑（base0 475 / consensus-core 2,582 / kaspad 122 / sdk 35 / rpc-core 199）。
 >
@@ -20,7 +20,7 @@ Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12
 | | |
 |---|---|
 | genesis hash | `a8cabac47b96fe30d9675ce08a355f62e6d57aac84865b0d6295c024c6d8ff61fb2d93943952e8da4c36ff87ea7f17f6c8de643fa7b02ecf7512892d590777dd` |
-| params fingerprint | `fb8f378df6373455e0c14d08c835184b86717ae3fc983039f9ded633be7fa38d` — **初回配備時。現在は `bcfbf2a3874c4630cc45f6e1d375f2b261873143bdc942ac6ba78ca16e0c104d`**（上の状態欄） |
+| params fingerprint | `fb8f378df6373455e0c14d08c835184b86717ae3fc983039f9ded633be7fa38d` — **初回配備時。現在は `f66bf139ceb0a4f95a5ee3031f7938d7faeae10f899a21fba8c0305661ec5d4f`**（上の状態欄） |
 | fence schedule | **`1000`** — one height, ADR-0065 D1's bond-maturity window (t11's was `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`) |
 | rule manifest | `… palw_work_target=1 palw_independence=1` (digest `9def81a1…`) |
 | premine | 33 outputs, exactly 10B MSK: 8 collateral + 8 fee floats + **16 community (758M)** + main wallet |

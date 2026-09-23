@@ -14013,6 +14013,15 @@ pub fn palw_t12_shipped_params() -> Params {
     // A card that is set and does not assemble is a binary that would boot a network its own genesis
     // gate refuses; failing at startup with the gate's own message is the only honest outcome.
     .unwrap_or_else(|e| panic!("the testnet-12 genesis card does not assemble: {e}"));
+    // **A card certifies the free-prompt lane of the classes it REGISTERS** — the mainnet rule
+    // (`mainnet_certify_registered_classes_v1`), applied to this card too (2026-09-23). Without it the
+    // shared assembly installed testnet-11's set, which names the graph-v3 hybrid and the graph-v2
+    // dense rows this card does not register and omits the two held rows it does: the genesis hybrid
+    // and dense classes had no free-prompt lane at all. testnet-11 keeps its set because its bundle
+    // is a live identity; this one is minted fresh, so it derives the set from its own objects —
+    // which is only non-empty for the held rows because the families that cover them
+    // (`PALW-QWEN25-A16-V5`, `PALW-QWEN36-V6`) are drilled on both lanes.
+    let params = mainnet_certify_registered_classes_v1(params);
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -17691,6 +17700,16 @@ mod consensus_params_id_tests {
     /// fence, so without the normalisation the scheduling build would announce a different network.
     /// Four facts: the horizon really does widen, the identity does not move, the fingerprint and
     /// the schedule id do, and a court armed at GENESIS separates identities as it must.
+    /// The attempt-lane e2e root the testnet-11 fleet's build carried: the four-family set (BASE-0,
+    /// QWEN36, QWEN25-A16, QWEN25-A16-V5), i.e. `PALW_RC_COURT_E2E_ROOT_BYTES` as pinned from
+    /// ADR-0082's fused graph until the fifth family landed on 2026-09-23.
+    const PALW_RC_FOUR_FAMILY_COURT_E2E_ROOT_BYTES: [u8; 64] = [
+        0xe6, 0x49, 0xe7, 0xc0, 0x8d, 0xe4, 0xe1, 0xdc, 0x3a, 0xbc, 0x3c, 0xa3, 0xb5, 0xab, 0x8e, 0x50, 0x3f, 0x2d, 0x64, 0xb9, 0xfa,
+        0x1e, 0x90, 0x9b, 0xfd, 0x7b, 0xaa, 0x18, 0xaf, 0xbf, 0xa6, 0x51, 0x97, 0x11, 0xf7, 0x72, 0x3b, 0xce, 0xa5, 0x35, 0x23, 0xbd,
+        0xdc, 0xc8, 0xa5, 0x69, 0x0a, 0xd7, 0x0a, 0x9b, 0x3a, 0xa3, 0x9c, 0xe9, 0x8d, 0x07, 0xd9, 0xc0, 0x39, 0x1d, 0xee, 0x31, 0xde,
+        0x4a,
+    ];
+
     #[test]
     fn scheduling_the_da_court_moves_the_fingerprint_and_leaves_the_identity_alone() {
         let shipped = palw_rc_shipped_params();
@@ -17723,6 +17742,13 @@ mod consensus_params_id_tests {
         previous.palw_court_ladder = None;
         // …and the 6,001 flag day (ADR-0124, 0125, 0126, 0128), later again.
         palw_rc_clear_flag_day_6001_for_tests(&mut previous);
+        // **The fleet build pinned the FOUR-family court** (`PALW-QWEN25-A16-V5` the last). The fifth
+        // family (`PALW-QWEN36-V6`, 2026-09-23) moved `palw_rc_court_e2e_root_v1` and with it every RC
+        // bundle, so the reconstruction states the root that build carried — the bytes the pin held
+        // until that day — rather than reading the current pin and drifting with it.
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut previous.palw_consensus_mode {
+            bundle.court_e2e_root = crate::Hash64::from_bytes(PALW_RC_FOUR_FAMILY_COURT_E2E_ROOT_BYTES);
+        }
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
         previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
 
@@ -17735,6 +17761,13 @@ mod consensus_params_id_tests {
             "71b35c250d01598ee8925146e66e8200945503ce2de1030bfd167e799b2498e9",
             "the reconstruction is not the running fleet's ruleset"
         );
+        // From here the claims are about the court FENCE: that scheduling it leaves the identity
+        // alone. The family set's move is a separate and deliberate identity move (the 2026-09-23
+        // re-pin note in `shipped_presets_have_pinned_fingerprints`), so the root is held equal to
+        // the shipped one below — otherwise the assertion would measure the family set, not the fence.
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut previous.palw_consensus_mode {
+            bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_rc_court_e2e_root_v1();
+        }
         assert!(
             shipped.blockrate.pruning_depth > previous.blockrate.pruning_depth,
             "the premise: scheduling the court widens the horizon ({} vs {})",
@@ -19456,7 +19489,14 @@ mod consensus_params_id_tests {
                 // instead of asking a seven-bond network for 9,992 ready seats. The schedule gains a
                 // height; the identity does not move.
                 // Previous: 8854b190978bbabd92381810a3183eb1c74864c97011b2adcda7ac714f625e23.
-                "79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640",
+                // **Re-pinned 2026-09-23: the fifth RC family** (`PALW-QWEN36-V6`, the hybrid lineage's
+                // fused, per-token-lift graph — the kernel set of every HELD hybrid row). The root of
+                // the certified family set is inside every RC bundle, so testnet-11's fingerprint AND
+                // identity move: no node on this build can rejoin testnet-11, which is superseded by
+                // testnet-12 and unsyncable past DAA 7,219 by a correct validator in any case
+                // (`docs/testnet-12-regenesis-2026-09-23.md`). The previous pin was not deployed.
+                // Previous: 79b49c238c46b0d97ab9b46d79fd5f85f8b50da623921a53f0af361515d50640.
+                "33bdff0bf072c57fd27853899ae28a79b4bb8b43980a634c070257d9802bd634",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -19482,7 +19522,10 @@ mod consensus_params_id_tests {
             // is a deliberate no-op there and the interval is `bits`' job — so what this buys is
             // the ROOM above the floor that a model tier registering later needs, which is the
             // same reason mainnet's floor-only mint is seeded rather than left at half the space.
-            ("devnet", DEVNET_PARAMS, "61286b15588eb253b9a7f64997935c919b604b07d1973d4d2366084f06f524f5"),
+            // …and once more on 2026-09-23 for the fifth RC family (`PALW-QWEN36-V6`): the drill
+            // preset carries the RC court root through the same bundle builder, so it moves with it.
+            // Previous: 61286b15588eb253b9a7f64997935c919b604b07d1973d4d2366084f06f524f5.
+            ("devnet", DEVNET_PARAMS, "3894d83e4062c8fd611e35a972d361be9346b3f5fc0259baa0145b7e0a08e7a2"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

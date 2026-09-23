@@ -59,7 +59,12 @@ pub fn check_lineage_v1(lineage: &dyn PalwModelLineageV1, court: &PalwCourtParam
         // re-executes — through the gate's own constructor, so "we checked coverage" and "a
         // certificate exists" stay one fact. Both halves: the id set AND the per-node shape
         // service (the strong gate audit H-02 found uncalled).
-        let kernel_ids = reachable_kernels_v1(&entry.profile);
+        // The catalog's rule, not a second spelling of it: fenced kernels (token lift, the Kimi
+        // table) are outside the catalog root by design and stripped before asking — exactly as
+        // `verify_against_catalog` strips them at genesis. Over the raw set this refused
+        // testnet-12's own genesis hybrid class.
+        let reachable: std::collections::BTreeSet<_> = reachable_kernels_v1(&entry.profile).into_iter().collect();
+        let kernel_ids = kaspa_consensus_core::palw_catalog_coverage::catalog_covered_kernels_v1(&reachable);
         verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: entry.class_id(), kernel_ids })
             .map_err(|e| format!("{who}: a reachable kernel is uncatalogued: {e:?}"))?;
         verify_profile_coverage_v1(&entry.profile).map_err(|e| format!("{who}: a node's shape is not servable: {e:?}"))?;

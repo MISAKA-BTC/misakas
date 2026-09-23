@@ -154,6 +154,10 @@ pub const A16_GRAPH_V5_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v5@512";
 /// The explicit 2M held-context identity.  The width is part of the name and the profile uses
 /// graph-v7, so a 2M artifact cannot be accidentally paired with the dormant graph-v5 row.
 pub const A16_GRAPH_V7_2M_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v7@2097152";
+/// The held Qwen3.6 rows, by context width — the spelling the registrar's `--palw-register-class`
+/// takes and `palw-class manifest` prints.
+pub const QWEN36_GRAPH_V7_512_MODEL_ID: &str = "Qwen3.6-35B-A3B/graph-v7@512";
+pub const QWEN36_GRAPH_V7_2M_MODEL_ID: &str = "Qwen3.6-35B-A3B/graph-v7@2097152";
 
 /// Every class this build can supply.
 ///
@@ -721,6 +725,11 @@ impl Qwen36CanonicalClassV1 {
     pub fn profile(&self) -> Result<PalwShapeProfileV3, kaspa_consensus_core::palw_step::PalwStepError> {
         match self.graph_version {
             1 => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v1(self.geometry),
+            // The HELD rows (ADR-0103's map at the row's own `n_ctx`) — the projection the genesis
+            // card registers through `qwen36_held_registration_v1`, so a row here and a class on the
+            // chain derive one id. testnet-12's `e108e736…` (held @512) had no row in this table at
+            // all, which is why no node on the fleet could pair an artifact with it.
+            7 => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v7(self.geometry),
             _ => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(self.geometry),
         }
     }
@@ -852,6 +861,37 @@ pub fn qwen36_canonical_classes_v1() -> Vec<Qwen36CanonicalClassV1> {
             ),
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
             graph_version: 3,
+        },
+        // --- graph-v7: the HELD rows, one per context width (ADR-0103 / ADR-0119) ---------------------
+        //
+        // A held row is the v7 graph over the eps-corrected geometry at an explicit `n_ctx`; its id
+        // is `qwen36_profile_v7(qwen36_geometry_artifact_eps(geometry { n_ctx }))` and NOTHING else,
+        // which is the same expression `qwen36_held_registration_v1` evaluates when a genesis card
+        // registers it. The 512 row IS testnet-12's genesis class `e108e736…`; the 2,097,152 row is
+        // the one a `--palw-register-class` registration adds past genesis, over an artifact
+        // converted with `qwen36-convert --context 2097152`. Its canonical job is the held one
+        // (`qwen36_held_canonical_v1`), not the RC pair, for the same reason the A16 2M row's is.
+        Qwen36CanonicalClassV1 {
+            model_id: QWEN36_GRAPH_V7_512_MODEL_ID,
+            geometry: kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+                    n_ctx: 512,
+                    ..kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B
+                },
+            ),
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::qwen36_held_canonical_v1(512),
+            graph_version: 7,
+        },
+        Qwen36CanonicalClassV1 {
+            model_id: QWEN36_GRAPH_V7_2M_MODEL_ID,
+            geometry: kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+                    n_ctx: 2_097_152,
+                    ..kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B
+                },
+            ),
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::qwen36_held_canonical_v1(2_097_152),
+            graph_version: 7,
         },
     ]
 }
@@ -1204,7 +1244,7 @@ mod tests {
         // added without reading this test is still a row added on purpose. The second trio is
         // graph-v3 (2026-09-01), the corrected node tables and epsilon over the SAME weights, and
         // the whole point of the pairing is that each is a different class than its v1 twin.
-        assert_eq!(table.len(), 7);
+        assert_eq!(table.len(), 9, "three v1 rows, four graph-v3 rows, and the two HELD graph-v7 rows (512 and 2M) added 2026-09-23");
         let hybrid = &table[0];
         let coder = &table[1];
         let dense = &table[2];
@@ -1214,6 +1254,14 @@ mod tests {
         assert_eq!(table[4].model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3");
         assert_eq!(table[5].model_id, "Qwen/Qwen3.5-2B/graph-v3");
         assert_eq!(table[6].model_id, "Qwen/Qwen3.8-27B/graph-v3");
+        // The held pair sits at the END so the indices above never move: the 512 row is
+        // testnet-12's genesis class, the 2M row is the one a registration adds past genesis.
+        assert_eq!(table[7].model_id, QWEN36_GRAPH_V7_512_MODEL_ID);
+        assert_eq!(table[8].model_id, QWEN36_GRAPH_V7_2M_MODEL_ID);
+        assert_eq!(table[7].graph_version, 7);
+        assert_eq!(table[8].graph_version, 7);
+        assert_eq!(table[7].geometry.n_ctx, 512);
+        assert_eq!(table[8].geometry.n_ctx, 2_097_152);
         let mut ids = Vec::new();
         for row in &table {
             ids.push(row.class_id().expect("every row projects"));

@@ -226,7 +226,11 @@ pub fn rendered_output_hash_for_family(family: PalwRcFamilyV1, output_token_ids:
         // ADR-0078 X6 over the floor class: BASE-0 renders nothing, and the empty rendering is
         // the honest statement of that (the same call `misaka_palw_base0::produce` makes).
         PalwRcFamilyV1::Base0 => rendered_output_hash_v2(&[]),
-        PalwRcFamilyV1::Qwen36 => misaka_palw_base0::qwen36_backend::rendered_output_hash_v1(output_token_ids),
+        // …and the same split for the hybrid pair (2026-09-23): `Qwen36V6` is the fused,
+        // per-token-lift GRAPH over the same vocabulary, so it renders exactly as `Qwen36` does.
+        PalwRcFamilyV1::Qwen36 | PalwRcFamilyV1::Qwen36V6 => {
+            misaka_palw_base0::qwen36_backend::rendered_output_hash_v1(output_token_ids)
+        }
         // **The fused graph renders exactly as the unfused one does**, and that is a fact about
         // what a family is rather than a convenience. `PalwRcFamilyV1` distinguishes GRAPHS,
         // because a class is its graph and the court must know which one it is trying. Rendering
@@ -804,6 +808,11 @@ mod tests {
         assert_ne!(
             rendered_output_hash_for_family(PalwRcFamilyV1::Qwen36, &ids),
             rendered_output_hash_for_family(PalwRcFamilyV1::Qwen25A16, &ids)
+        );
+        // The hybrid's fused graph renders as its unfused one, as the dense pair does.
+        assert_eq!(
+            rendered_output_hash_for_family(PalwRcFamilyV1::Qwen36V6, &ids),
+            rendered_output_hash_for_family(PalwRcFamilyV1::Qwen36, &ids)
         );
     }
 

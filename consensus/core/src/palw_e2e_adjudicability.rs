@@ -649,17 +649,24 @@ pub fn palw_rc_court_e2e_root_v1() -> Hash64 {
 /// The pinned value's bytes. Replaced whenever the certified family set changes — which is an
 /// activation, never a silent edit: the root is inside every RC network's `consensus_params_id`.
 ///
-/// **Moved for ADR-0082's fused graph** (`PALW-QWEN25-A16-V5`, the fourth family). Measured
+/// **Moved for the hybrid lineage's fused graph** (`PALW-QWEN36-V6`, the fifth family,
+/// 2026-09-23): the root of the five-family set, measured by `misaka-palw-base0`'s drill
+/// (`the_pinned_rc_e2e_root_is_what_this_build_certifies`). It is inside every RC network's
+/// `consensus_params_id`, so testnet-11's fingerprint moves with it — testnet-11 is superseded by
+/// testnet-12 (its chain past DAA 7,219 is unsyncable by a correct validator, see
+/// `docs/testnet-12-regenesis-2026-09-23.md`), and testnet-12 re-mints its genesis with this root.
+///
+/// **Moved before that for ADR-0082's fused graph** (`PALW-QWEN25-A16-V5`, the fourth family). Measured
 /// consequence, because the two halves of this doc are easy to read apart: adding the family alone
 /// does NOT move `consensus_params_id` — it moves this constant's COMPUTED twin, and the params id
 /// reads the pin. So the fingerprint is unchanged right up until this array is updated, and then
 /// it moves. Anyone measuring "does a fourth family move the fingerprint" without also updating
 /// the pin measures a build that is not self-consistent and gets "no".
 const PALW_RC_COURT_E2E_ROOT_BYTES: [u8; 64] = [
-    0xe6, 0x49, 0xe7, 0xc0, 0x8d, 0xe4, 0xe1, 0xdc, 0x3a, 0xbc, 0x3c, 0xa3, 0xb5, 0xab, 0x8e, 0x50, 0x3f, 0x2d, 0x64, 0xb9, 0xfa,
-    0x1e, 0x90, 0x9b, 0xfd, 0x7b, 0xaa, 0x18, 0xaf, 0xbf, 0xa6, 0x51, 0x97, 0x11, 0xf7, 0x72, 0x3b, 0xce, 0xa5, 0x35, 0x23, 0xbd,
-    0xdc, 0xc8, 0xa5, 0x69, 0x0a, 0xd7, 0x0a, 0x9b, 0x3a, 0xa3, 0x9c, 0xe9, 0x8d, 0x07, 0xd9, 0xc0, 0x39, 0x1d, 0xee, 0x31, 0xde,
-    0x4a,
+    0x9a, 0xfb, 0xd2, 0xda, 0xb5, 0x0a, 0x08, 0x3e, 0x8e, 0x2b, 0x7c, 0xa8, 0xd8, 0xe3, 0xaa, 0xd2, 0x7f, 0xd4, 0x32, 0x7a, 0xf7,
+    0x8a, 0x51, 0xfa, 0x84, 0xce, 0xac, 0x6c, 0xab, 0x13, 0x9f, 0x4e, 0xf6, 0x54, 0x6a, 0x63, 0x21, 0x09, 0xad, 0xea, 0x67, 0xa6,
+    0x5c, 0x73, 0xff, 0x2d, 0x89, 0xab, 0xa7, 0xbe, 0x3e, 0x20, 0x0f, 0x29, 0x99, 0x73, 0x5f, 0xff, 0xc4, 0xf4, 0xcb, 0x7f, 0xb6,
+    0xe0,
 ];
 
 /// **The certified family set this network COMMITS to — readable without a model runtime.**
@@ -686,7 +693,7 @@ const PALW_RC_COURT_E2E_ROOT_BYTES: [u8; 64] = [
 pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
     // **`drilled_kernel_ids` is what THIS build's drill planted, measured (2026-09-04): every family
     // drills every kernel it declares — BASE-0 10/10 over 14 leaves, QWEN36 23/23 over 29, A16
-    // 12/12 over 16, A16-V5 10/10 over 14 — under the minimal cover (`select_candidates_v1`: one
+    // 12/12 over 16, A16-V5 10/10 over 14, and (2026-09-23) QWEN36-V6 22/22 over 28 — under the minimal cover (`select_candidates_v1`: one
     // leaf per (table, call class) for the court, then one per declared kernel not yet carried;
     // 5e's per-kernel purpose, an enumeration that stays under `PALW_CERTIFICATION_MAX_VECTORS` and
     // the carriage ceiling, which the (table, kernel, call class) triple did not on QWEN36: 74).
@@ -709,10 +716,10 @@ pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
         convicted_leaves,
         malformed_refused: true,
     };
-    // Four families are pushed below, so the reservation is four. It said three while the body
+    // Five families are pushed below, so the reservation is five. It said three while the body
     // pushed four — harmless, a Vec grows, and worth fixing because a capacity is the cheapest
     // statement of how many things the author believed were here, and it disagreed with them.
-    let mut out = Vec::with_capacity(4);
+    let mut out = Vec::with_capacity(5);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         out.push(PalwE2eFamilyV1 {
             family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
@@ -756,6 +763,26 @@ pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             covering: full(false, 14, crate::palw_class_admission_v2::reachable_kernels_v1(&fused)),
         });
     }
+    // **The hybrid lineage's fused, per-token-lift graph is a FIFTH family** (2026-09-23), for the
+    // reason the dense lineage's fused graph is a fourth: `graph-v6` replaces the scores/softmax/
+    // values kernels with the fused one and the lane-sliced lift with the by-token one, so no
+    // profile reaches both `PALW-QWEN36`'s set and this one. Every HELD hybrid row — `graph-v7`,
+    // graph-v6 under the held composition, which adds no kernel — is covered by this family and
+    // by nothing else: testnet-12's genesis hybrid class (`Qwen3.6-35B-A3B/graph-v7@512`) and the
+    // `@2097152` row the registry adds were two kernels short of `PALW-QWEN36` on both lanes, so
+    // registrable only weightless and free-prompt-certifiable never. `kernel_ids` is read off the
+    // PRODUCTION geometry's projection; `misaka-palw-base0`'s drill measures that its fixture
+    // (`qwen36_v6_fixture_v1`, the dev shape with a calibrated lift store) reaches the same set.
+    if let Ok(fused_hybrid) = crate::palw_qwen36_profile::qwen36_profile_v6(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+        crate::palw_qwen36_profile::QWEN36_35B_A3B,
+    )) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN36-V6"),
+            drilled_class_id: Hash64::from_bytes(QWEN36_V6_DRILLED_CLASS_ID),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&fused_hybrid),
+            covering: full(true, 28, crate::palw_class_admission_v2::reachable_kernels_v1(&fused_hybrid)),
+        });
+    }
     out
 }
 
@@ -792,6 +819,16 @@ pub fn palw_e2e_family_id_v1(name: &str) -> Hash64 {
 
 /// The fixture graphs the two model tiers were drilled on. Facts about a drill, not values anything
 /// here recomputes — see [`palw_rc_certified_families_v1`].
+/// The class `misaka-palw-base0::e2e_drill::qwen36_v6_fixture_v1` registers: the `graph-v6`
+/// projection of the hybrid dev fixture (4 layers, 8 experts, an 8-position table) with a
+/// calibrated per-token lift store. A fact about a drill, pinned; the drill asserts it.
+const QWEN36_V6_DRILLED_CLASS_ID: [u8; 64] = [
+    0xe5, 0x9b, 0xe2, 0xc9, 0xe1, 0xcd, 0xd9, 0xe7, 0x70, 0x43, 0x80, 0x93, 0x37, 0x7b, 0xc1, 0x87, 0x32, 0xa3, 0x28, 0x7e, 0x3e,
+    0x12, 0xbe, 0x39, 0xcf, 0x40, 0xcf, 0x50, 0x9c, 0x17, 0xec, 0x5e, 0x81, 0x64, 0x4c, 0x6e, 0xc7, 0x4d, 0x92, 0xfa, 0x39, 0x53,
+    0xf9, 0x2d, 0xef, 0x13, 0x47, 0xa9, 0xde, 0x9c, 0x5d, 0xdd, 0x59, 0x53, 0x9a, 0x31, 0x9a, 0x0a, 0xc4, 0x68, 0xcd, 0xfe, 0x0e,
+    0x02,
+];
+
 const QWEN36_DRILLED_CLASS_ID: [u8; 64] = [
     0xdd, 0x99, 0x86, 0x33, 0x45, 0x98, 0xca, 0xea, 0xe5, 0xae, 0x2e, 0x1c, 0xea, 0xc7, 0xe3, 0xdb, 0x0a, 0x3b, 0xd9, 0xfb, 0xdf,
     0x38, 0x2a, 0xdd, 0xb1, 0x81, 0x5a, 0x7e, 0x4b, 0x4b, 0xf2, 0xe2, 0x89, 0x91, 0xa3, 0x66, 0x19, 0xea, 0xbc, 0x76, 0xf8, 0xa1,
@@ -959,7 +996,7 @@ pub fn certify_e2e_free_prompt_lane_v1(
 pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
     // **`drilled_kernel_ids` is what THIS build's drill planted, measured (2026-09-04): every family
     // drills every kernel it declares — BASE-0 10/10 over 14 leaves, QWEN36 23/23 over 29, A16
-    // 12/12 over 16, A16-V5 10/10 over 14 — under the minimal cover (`select_candidates_v1`: one
+    // 12/12 over 16, A16-V5 10/10 over 14, and (2026-09-23) QWEN36-V6 22/22 over 28 — under the minimal cover (`select_candidates_v1`: one
     // leaf per (table, call class) for the court, then one per declared kernel not yet carried;
     // 5e's per-kernel purpose, an enumeration that stays under `PALW_CERTIFICATION_MAX_VECTORS` and
     // the carriage ceiling, which the (table, kernel, call class) triple did not on QWEN36: 74).
@@ -982,10 +1019,10 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
         convicted_leaves,
         malformed_refused: true,
     };
-    // Four families are pushed below, so the reservation is four. It said three while the body
+    // Five families are pushed below, so the reservation is five. It said three while the body
     // pushed four — harmless, a Vec grows, and worth fixing because a capacity is the cheapest
     // statement of how many things the author believed were here, and it disagreed with them.
-    let mut out = Vec::with_capacity(4);
+    let mut out = Vec::with_capacity(5);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         out.push(PalwE2eFamilyV1 {
             family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
@@ -1024,6 +1061,26 @@ pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
             drilled_class_id: fused.shape_profile_id(),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&fused),
             covering: full(false, 14, crate::palw_class_admission_v2::reachable_kernels_v1(&fused)),
+        });
+    }
+    // **The hybrid lineage's fused, per-token-lift graph is a FIFTH family** (2026-09-23), for the
+    // reason the dense lineage's fused graph is a fourth: `graph-v6` replaces the scores/softmax/
+    // values kernels with the fused one and the lane-sliced lift with the by-token one, so no
+    // profile reaches both `PALW-QWEN36`'s set and this one. Every HELD hybrid row — `graph-v7`,
+    // graph-v6 under the held composition, which adds no kernel — is covered by this family and
+    // by nothing else: testnet-12's genesis hybrid class (`Qwen3.6-35B-A3B/graph-v7@512`) and the
+    // `@2097152` row the registry adds were two kernels short of `PALW-QWEN36` on both lanes, so
+    // registrable only weightless and free-prompt-certifiable never. `kernel_ids` is read off the
+    // PRODUCTION geometry's projection; `misaka-palw-base0`'s drill measures that its fixture
+    // (`qwen36_v6_fixture_v1`, the dev shape with a calibrated lift store) reaches the same set.
+    if let Ok(fused_hybrid) = crate::palw_qwen36_profile::qwen36_profile_v6(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+        crate::palw_qwen36_profile::QWEN36_35B_A3B,
+    )) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN36-V6"),
+            drilled_class_id: Hash64::from_bytes(QWEN36_V6_DRILLED_CLASS_ID),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&fused_hybrid),
+            covering: full(true, 28, crate::palw_class_admission_v2::reachable_kernels_v1(&fused_hybrid)),
         });
     }
     out

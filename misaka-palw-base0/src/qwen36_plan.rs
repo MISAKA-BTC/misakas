@@ -2103,6 +2103,10 @@ mod tests {
         }
         // Four since 2026-09-04: Qwen3.8-27B (graph-v3 only, no v1 row) planned and its planned
         // and compiled forward passes agreed — the row is servable, which is what this counts.
-        assert_eq!(served, 4, "the four graph-v3 rows are the servable half of the ledger");
+        // Six since 2026-09-23: the two HELD graph-v7 rows (Qwen3.6-35B-A3B @512 — testnet-12's
+        // genesis hybrid class — and @2,097,152, the one the registry adds) plan and serve too,
+        // which is the fact this count exists to notice: a held row is not a graph-v3 row with a
+        // wider table, it is the by-token requantize and the tiled map, and the interpreter runs it.
+        assert_eq!(served, 6, "the four graph-v3 rows and the two held graph-v7 rows are the servable half of the ledger");
     }
 }

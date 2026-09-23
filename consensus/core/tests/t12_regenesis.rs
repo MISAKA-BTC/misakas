@@ -358,3 +358,54 @@ fn t12_arms_every_fence_t11_armed() {
     assert!(armed_on_t11 >= 36, "the t11 ledger has {armed_on_t11} armed fences; the table this was written against had 36");
     assert!(regressions.is_empty(), "fences testnet-11 armed that testnet-12 does not arm from genesis:\n  {}", regressions.join("\n  "));
 }
+
+/// **The genesis free-prompt gate names exactly the classes the card registers** (the mainnet rule,
+/// applied to this card on 2026-09-23), and every one of them is covered on BOTH lanes by a family
+/// this build drills. Before this the shared assembly installed testnet-11's set — the graph-v3
+/// hybrid and the graph-v2 dense rows, neither registered here — and the two held rows the card DOES
+/// register were two kernels short of any family: no free-prompt lane, and no way to add a held
+/// hybrid row past genesis except weightless.
+#[test]
+fn t12_certifies_both_lanes_of_the_classes_it_registers() {
+    use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
+    use kaspa_consensus_core::palw_e2e_adjudicability::{
+        palw_rc_certified_families_v1, palw_rc_court_e2e_root_v1, palw_rc_fp_certified_families_v1,
+    };
+    let p = Params::from(t12());
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!() };
+    let registered: std::collections::BTreeSet<_> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered { class_id, .. } => Some(*class_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(registered.len(), 3, "the floor and the two held rows");
+    assert_eq!(
+        bundle.state.fp_certified_classes(),
+        Some(&registered),
+        "the free-prompt gate is the registered set — not testnet-11's, which names classes this card does not register"
+    );
+    // The commitment the registration gate checks the certified set against is this build's pin.
+    assert_eq!(bundle.court_e2e_root, palw_rc_court_e2e_root_v1());
+    // And the coverage is real on both lanes, per registered profile: the held hybrid row by
+    // `PALW-QWEN36-V6`, the held dense row by `PALW-QWEN25-A16-V5`, the floor by `PALW-BASE-0`.
+    let attempt = palw_rc_certified_families_v1();
+    let fp = palw_rc_fp_certified_families_v1();
+    assert_eq!(attempt.len(), 5, "five families since 2026-09-23");
+    assert_eq!(fp.len(), 5);
+    let mut covered = 0;
+    for o in &bundle.genesis_objects {
+        let PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } = o else { continue };
+        let reachable = reachable_kernels_v1(&carriage.profile);
+        for (lane, families) in [("attempt", &attempt), ("free-prompt", &fp)] {
+            assert!(
+                families.iter().any(|f| reachable.is_subset(&f.kernel_ids)),
+                "genesis class {class_id} is covered by no {lane}-lane family"
+            );
+        }
+        covered += 1;
+    }
+    assert_eq!(covered, 2, "both held rows carry a profile and are covered");
+}

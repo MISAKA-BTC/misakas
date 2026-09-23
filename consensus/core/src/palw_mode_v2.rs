@@ -1559,14 +1559,9 @@ impl PalwConsensusParamsV2 {
         // has no `Params`, and `Params::validate_palw_v2` refuses a genesis set reaching either
         // fenced table unless the matching fence (`palw_token_lift`, `palw_kimi_k3`) is armed from
         // genesis. One question each, asked where its answer lives.
-        let fenced = crate::palw_step_refute::fenced_kernel_ids_v1();
-        let kimi_fenced = crate::palw_step_refute::kimi_fenced_kernel_ids_v1();
         for entry in catalog.entries() {
-            let kernel_ids: std::collections::BTreeSet<Hash64> =
-                entry.reachable_kernels.difference(&fenced).copied().collect::<std::collections::BTreeSet<_>>()
-                    .difference(&kimi_fenced)
-                    .copied()
-                    .collect();
+            // One predicate with the SDK's conformance battery: `catalog_covered_kernels_v1`.
+            let kernel_ids = crate::palw_catalog_coverage::catalog_covered_kernels_v1(&entry.reachable_kernels);
             let reachable =
                 crate::palw_catalog_coverage::PalwReachableKernelSetV1 { execution_class_id: entry.class_id, kernel_ids };
             crate::palw_catalog_coverage::verify_catalog_coverage_v1(&reachable)
