@@ -5,6 +5,16 @@ graph reaches (ADR-0069). Since ADR-0075 that family, and the free-prompt certif
 class, are chain state carried by ordinary transactions. Nobody's permission is involved: the
 court grades the evidence in the transition, and the transaction fee is the rent.
 
+## Which families this build can drill
+
+`palw-certify drill --family <base0|qwen36|a16|a16-v5|qwen36-v6>`, or `--model-id` to let the tool
+pick the family whose drilled kernel set covers the row. Two of the five exist because a class IS
+its graph: `a16-v5` is the dense lineage's fused graph (ADR-0082) and `qwen36-v6` (2026-09-23) is
+the hybrid lineage's fused, per-token-lift graph — the kernel set of every HELD hybrid row
+(`Qwen3.6-35B-A3B/graph-v7@<n_ctx>`, ADR-0103's map over graph-v6). A held hybrid row is two
+kernels outside `qwen36` (the fused attention and the by-token lift), so before `qwen36-v6` no
+family covered it: it could register only weightless and never carry a free-prompt certification.
+
 ## What you need
 
 * A node of this build synced to the network (`kaspad`), with a funded key file for fees.
