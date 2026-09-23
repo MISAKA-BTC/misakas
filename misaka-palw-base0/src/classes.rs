@@ -154,6 +154,18 @@ pub const A16_GRAPH_V5_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v5@512";
 /// The explicit 2M held-context identity.  The width is part of the name and the profile uses
 /// graph-v7, so a 2M artifact cannot be accidentally paired with the dormant graph-v5 row.
 pub const A16_GRAPH_V7_2M_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v7@2097152";
+/// The held rows at the ladder's LOWER rungs (`PALW_CONTEXT_LADDER_ROWS` = 512, 2,048, 8,192).
+///
+/// Held is not a property of being wide: `palw_a16_context_row_profile_v7` projects at every rung and
+/// `palw_profile_is_held_v4` is true at all of them. What the width changes is the canonical job —
+/// `n_ctx / 8 - 1` prefill positions, so 255 at 2,048 and 1,023 at 8,192 against the 2M row's 262,143
+/// — and therefore whether a class can be run, drilled and MINED on ordinary hardware at all. The 2M
+/// row was the only held dense row this catalog tabled, and a single attempt of it is days of compute
+/// on a 23 GiB 8-core host (measured 2026-09-23): a build that can only express the unrunnable end of
+/// its own ladder cannot demonstrate the held regime, and every fix to it had to be argued from unit
+/// tests. These two rungs are the runnable end of the same ladder, same graph, same converter.
+pub const A16_GRAPH_V7_2K_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v7@2048";
+pub const A16_GRAPH_V7_8K_MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v7@8192";
 /// The held Qwen3.6 rows, by context width — the spelling the registrar's `--palw-register-class`
 /// takes and `palw-class manifest` prints.
 pub const QWEN36_GRAPH_V7_512_MODEL_ID: &str = "Qwen3.6-35B-A3B/graph-v7@512";
@@ -318,6 +330,12 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     if let Some(row) = a16_graph_v7_2m_row_v1() {
         out.push(row);
     }
+    // The ladder's runnable rungs, same graph and same converter as the 2M row above.
+    for (n_ctx, model_id) in [(2_048u32, A16_GRAPH_V7_2K_MODEL_ID), (8_192, A16_GRAPH_V7_8K_MODEL_ID)] {
+        if let Some(row) = a16_graph_v7_row_v1(n_ctx, model_id) {
+            out.push(row);
+        }
+    }
     out
 }
 
@@ -325,15 +343,21 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
 /// This is deliberately a catalog row, not a projection performed by certification: the class
 /// id is the canonical graph-v7 profile and the artifact header must state the same 2M span.
 pub fn a16_graph_v7_2m_row_v1() -> Option<CanonicalClassV1> {
+    a16_graph_v7_row_v1(2_097_152, A16_GRAPH_V7_2M_MODEL_ID)
+}
+
+/// **One held dense row, at one ladder rung** — the 2M row's own body, with the width and the name as
+/// parameters so a rung cannot be tabled with a name that says a different width. Every field but
+/// those two is derived from the width, which is what makes a new rung a call rather than a copy.
+pub fn a16_graph_v7_row_v1(n_ctx: u32, model_id: &'static str) -> Option<CanonicalClassV1> {
     use kaspa_consensus_core::palw_context_ladder::palw_canonical_footprint_floor_v1;
-    let n_ctx = 2_097_152u32;
     let g = kaspa_consensus_core::palw_qwen25_profile::qwen25_geometry_artifact_eps(PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B });
     let profile = qwen25_a16_artifact_row_profile_v7(g).ok()?;
     let decode = QWEN25_A16_CANONICAL.1.max(1);
     let floor = u32::try_from(palw_canonical_footprint_floor_v1(n_ctx)).ok()?;
     let prefill = floor.checked_add(1)?.checked_sub(decode)?;
     Some(CanonicalClassV1 {
-        model_id: A16_GRAPH_V7_2M_MODEL_ID,
+        model_id,
         profile,
         artifact_shape: Base0ShapeV1 {
             n_layers: g.layer_count as usize,

@@ -1293,7 +1293,15 @@ mod tests {
             // branch (a Some-only fence adds its sentinel to the fingerprint — the same move that re-pinned
             // t11's schedule id). No root, count, size or verdict changed: `vector.*`, `consensus.commit.*`
             // and `consensus.court.*` are the values the previous pin was taken over.
-            "42a38f48dd37d7f47a55b99d14de92e84092e07c5933b17ee80d329bea249b46e5ac56c9107af9f379aefed5371cb40059dad4415ca14e7e9ef70a82f5e667f1",
+            //
+            // **Re-pinned again the same day, for the FIFTH certified family** (`PALW-QWEN36-V6`, the hybrid
+            // lineage's fused per-token-lift graph — the kernel set of every held hybrid row). The e2e root
+            // of the certified set sits inside every V2 bundle, `devnet-held` included, so its
+            // `consensus_params_id` moved `665e87fa…` and the document id with it. Again nothing the
+            // document says about the EXECUTION moved: the same roots, the same 51,180 leaves, the same
+            // verdicts, the same bytes — this vector is a dense graph-v7 row and the new family is a hybrid
+            // one, which is exactly why only the ruleset field changed.
+            "d2803bc852aedc3a3417dddf94b833534752db66ad96446922e287cd7cf980f6c048090d76f54b509f1a381068162518dddb23bd630a397ce56584814234a6c4",
         );
     }
 
