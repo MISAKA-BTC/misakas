@@ -2025,6 +2025,22 @@ Do you confirm? (y/n)";
     // delta from the startup baseline is what the node cost itself before it saw a block. The phases
     // after this one belong to the class artifacts (`load_class_holdings_v1`) and to the producer.
     crate::palw_backends::log_memory_phase_v1("palw-host", "every store open and every service built", args.ram_scale);
+    // **And then every minute**, because the three fixed phases bracket construction and nothing
+    // else: the item 6 acceptance run grew ~3 GiB a block AFTER them, on heartbeats alone, and the
+    // only reading between "artifacts loaded" and the OOM kill was dmesg. A periodic line is what
+    // turns "it grew" into "it grew between these two minutes, while the log shows this".
+    {
+        let scale = args.ram_scale;
+        std::thread::Builder::new()
+            .name("palw-memory-phase".to_string())
+            .spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(60));
+                    crate::palw_backends::log_memory_phase_v1("palw-host", "periodic", scale);
+                }
+            })
+            .expect("a thread for one log line a minute");
+    }
 
     (core, rpc_core_service)
 }

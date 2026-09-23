@@ -102,10 +102,30 @@ impl PalwBackendRegistry {
     /// always-set was already in RSS. A page-cache or dense holding still reports the file, which
     /// is what a replay will fault in.
     pub fn incremental_replay_bytes_for_v1(&self, class_id: Hash64, artifact_root: Hash64) -> Option<u64> {
-        self.holdings
+        // **Memoized, because this is the panel's PER-TICK pre-check and a resolve constructs a
+        // backend.** Every tick, before deciding whether a readiness proof is affordable, the panel
+        // asked this, and this resolved the class against each holding — compiling the class's plan
+        // and hashing the artifact each time. The figure is a function of (which holdings, class,
+        // root) and none of those change for the life of this registry, so it is computed once.
+        let key = (
+            self.holdings.iter().map(|h| h.path.clone().unwrap_or_default()).collect::<Vec<_>>(),
+            class_id,
+            artifact_root,
+        );
+        if let Ok(memo) = replay_bytes_memo_v1().lock() {
+            if let Some(hit) = memo.get(&key) {
+                return *hit;
+            }
+        }
+        let figure = self
+            .holdings
             .iter()
             .find(|holding| self.sdk.resolve(class_id, artifact_root, std::slice::from_ref(holding)).is_ok())
-            .and_then(incremental_replay_bytes_v1)
+            .and_then(incremental_replay_bytes_v1);
+        if let Ok(mut memo) = replay_bytes_memo_v1().lock() {
+            memo.insert(key, figure);
+        }
+        figure
     }
 
     /// **Resolve through the tables, then — armed — through the chain's own registration**
@@ -465,6 +485,13 @@ pub fn arm_class_manifest_verification_v1(on: bool) {
 
 fn class_manifest_verification_armed_v1() -> bool {
     *VERIFY_CLASS_MANIFESTS.get().unwrap_or(&false)
+}
+
+/// The per-(holdings, class, root) replay-bytes figures — see `incremental_replay_bytes_for_v1`.
+fn replay_bytes_memo_v1() -> &'static std::sync::Mutex<std::collections::HashMap<(Vec<PathBuf>, Hash64, Hash64), Option<u64>>> {
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<(Vec<PathBuf>, Hash64, Hash64), Option<u64>>>> =
+        std::sync::OnceLock::new();
+    MEMO.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 pub fn verify_class_manifests_v1(sdk: &PalwClassSdk, holdings: &[PalwLoadedArtifactV1]) -> Result<usize, String> {

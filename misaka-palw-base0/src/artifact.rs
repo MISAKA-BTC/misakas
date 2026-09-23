@@ -801,7 +801,9 @@ impl Base0ArtifactV1 {
     pub fn artifact_digest(&self) -> Hash64 {
         let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_ARTIFACT_DOMAIN).to_state();
         state.update(&self.shape.digest_bytes());
-        state.update(&self.rope.digest_bytes());
+        // Streamed: the table's bytes go into the hasher as they are produced. At a 2M context the
+        // vector this replaced was 2.1 GiB, per call, and this is called per class resolve.
+        self.rope.digest_into(&mut state);
         // The tokenizer, inside the identity: two classes with identical weights and different
         // tokenizers compute different things while agreeing on every arithmetic step.
         state.update(self.tokenizer_commitment.as_byte_slice());

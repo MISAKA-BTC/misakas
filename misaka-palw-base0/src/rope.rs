@@ -225,17 +225,44 @@ impl RopeTableV1 {
         Some((&self.cos_q[lo..hi], &self.sin_q[lo..hi]))
     }
 
-    /// Bytes fed to the artifact digest. Little-endian and length-prefixed so two tables of
-    /// different shapes can never produce the same bytes.
+    /// **The digest stream, fed straight into the hasher.** Little-endian and length-prefixed so
+    /// two tables of different shapes can never produce the same bytes.
+    ///
+    /// This used to be [`Self::digest_bytes`] — a `Vec` of the whole stream — and at a 2,097,152
+    /// position table with 64 pairs a position that is 134,217,728 pairs × 8 bytes (two `i32`s) =
+    /// 1.07 GiB, per call. `artifact_digest()` asked for it on every call, and every class resolve,
+    /// every inventory cache key and every manifest check asks for that — from the producer, the
+    /// panel and the round producer at once. The item 6 acceptance run measured a 2M seat growing
+    /// ~3 GiB per block on nothing but heartbeats and the panel's pre-checks, to 23.7 GiB, killed
+    /// twice. This is one of the allocations under that; the per-tick resolve that asked for it is
+    /// the other, and is memoized beside it.
+    ///
+    /// Length-prefix the entries, and prefix BOTH lengths. `zip` stops at the shorter of the two
+    /// vectors, so a table whose `cos_q` and `sin_q` disagree in length would otherwise hash the
+    /// same bytes as a correctly-sized shorter table — the truncated tail simply vanishes from the
+    /// digest. The class id must distinguish those: a malformed artifact has to be a DIFFERENT
+    /// class, not an alias of a well-formed one (mainnet-readiness audit 2.4).
+    pub fn digest_into(&self, state: &mut blake2b_simd::State) {
+        state.update(&(self.d_head as u64).to_le_bytes());
+        state.update(&(self.max_position as u64).to_le_bytes());
+        state.update(&(self.cos_q.len() as u64).to_le_bytes());
+        state.update(&(self.sin_q.len() as u64).to_le_bytes());
+        // One pair at a time through a stack buffer — two little-endian `i32`s, 8 bytes, exactly
+        // the vector's layout. `digest_bytes_is_the_streamed_bytes` holds the two byte-identical.
+        let mut pair = [0u8; 8];
+        for (c, s) in self.cos_q.iter().zip(self.sin_q.iter()) {
+            pair[..4].copy_from_slice(&c.to_le_bytes());
+            pair[4..].copy_from_slice(&s.to_le_bytes());
+            state.update(&pair);
+        }
+    }
+
+    /// The same stream as a `Vec`, for callers that want bytes rather than a hash. Kept for its
+    /// tests and for small tables; the artifact digest no longer goes through it.
     pub fn digest_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(24 + 8 * self.cos_q.len());
+        let mut out = Vec::with_capacity(32 + 8 * self.cos_q.len().min(self.sin_q.len()));
         out.extend_from_slice(&(self.d_head as u64).to_le_bytes());
         out.extend_from_slice(&(self.max_position as u64).to_le_bytes());
-        // Length-prefix the entries, and prefix BOTH lengths. `zip` stops at the shorter of the two
-        // vectors, so a table whose `cos_q` and `sin_q` disagree in length would otherwise hash the
-        // same bytes as a correctly-sized shorter table — the truncated tail simply vanishes from
-        // the digest. The class id must distinguish those: a malformed artifact has to be a
-        // DIFFERENT class, not an alias of a well-formed one (mainnet-readiness audit 2.4).
         out.extend_from_slice(&(self.cos_q.len() as u64).to_le_bytes());
         out.extend_from_slice(&(self.sin_q.len() as u64).to_le_bytes());
         for (c, s) in self.cos_q.iter().zip(self.sin_q.iter()) {
@@ -248,6 +275,18 @@ impl RopeTableV1 {
 
 #[cfg(test)]
 mod tests {
+    /// **The streamed digest is the vector's digest, byte for byte** — the artifact digest must not
+    /// move when the allocation goes, because a moved digest is a different class id for every
+    /// artifact on every network.
+    #[test]
+    fn digest_bytes_is_the_streamed_bytes() {
+        let table = super::RopeTableV1::generate(8, 37, super::super::artifact::LN_THETA_10000_GEN_Q).expect("a small table");
+        let mut streamed = blake2b_simd::Params::new().hash_length(64).to_state();
+        table.digest_into(&mut streamed);
+        let vec = blake2b_simd::Params::new().hash_length(64).hash(&table.digest_bytes());
+        assert_eq!(streamed.finalize().as_bytes(), vec.as_bytes(), "one stream, two spellings");
+    }
+
     use super::*;
 
     const LN_10000_GEN_Q: i128 = 2_592_480_341_699_211;
