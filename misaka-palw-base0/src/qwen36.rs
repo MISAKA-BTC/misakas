@@ -1011,6 +1011,16 @@ impl Qwen36Cache {
         self.keys.iter().map(|k| k.len()).max().unwrap_or(0)
     }
 
+    /// **Bytes this cache holds** — the recurrence states, the convolution windows and the
+    /// attention rows, `i32` each, plus a row vector's header per row — the figure the attempt's
+    /// memory brackets print beside the process's own (`memory_phase`).
+    pub fn resident_bytes_v1(&self) -> u64 {
+        let states: u64 = self.gdn.iter().flatten().map(|s| s.s.capacity() as u64 * 4 + 24).sum();
+        let conv: u64 = self.conv.iter().flatten().map(|r| r.capacity() as u64 * 4 + 24).sum();
+        let rows: u64 = self.keys.iter().chain(self.values.iter()).flatten().map(|r| r.capacity() as u64 * 4 + 24).sum();
+        states + conv + rows
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
