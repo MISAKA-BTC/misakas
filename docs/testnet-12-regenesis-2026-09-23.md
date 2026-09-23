@@ -1,5 +1,16 @@
 # testnet-12 regenesis — deployment record, 2026-09-23
 
+> **状態（2026-09-23 更新）: 起動は保留中。** 初回配備の直後に 2 つの欠陥が見つかり、運用者の指示で再配備を止めて設計から直している。
+>
+> 1. **担保の単位** — genesis の carve が「クラス自身の declared leaves」単位、runtime の予約は「floor 正規化後の導出値」で 44.25× 差。全 producer が `holding: the bond's exposure ceiling leaves no room for another claim` で `produced=0`。担保 60,088.18 → 516,429.80 MSK/seat（`2bd134ec`）。
+> 2. **class root** — pin した値が operand-inventory root ではなく flat `artifact_digest`（t11 と同じ事故の再発）。全 seat が `holds no artifact whose registered root form is b5baca63…`。
+>
+> 対処（項目 1〜5 完了、6 進行中）: inventory root の streaming 化（`216641a4`）／`ArtifactDigest`・`InventoryRoot`・`ClassId` の型分離＋`.palwmanifest`＋`palw-class manifest`（`ea7ad7df`）／runtime が sidecar を読み `--palw-verify-class-manifest` で fail-closed（`26030bc1`、`2f588a58`）／genesis の手書き定数を廃止し commit した manifest を `const fn` で読む（`077d4c7f`、root `b5baca63…`→`f63af2c4…`）／per-host メモリ予算 `--palw-host-memory-budget` / `--palw-host-node-count`（`a0350833`）／phase 別メモリ分解＋60 s 周期行（`b9b5ed07`、`e40dfcd2`）／1-seat acceptance が暴いた OOM 経路 3 つの修正（`427a1b8d`、`e40dfcd2`）。
+>
+> **genesis ブロックは不変**（root は PALW bundle の `genesis_objects` にあり header/premine に入らない）。params fingerprint は `fb8f378d…` → `c746f07c…`（担保）→ **`30848c6b…`**（root）。fence schedule は `1000` の 1 本のまま。
+>
+> 現在のフリート: 5.104.81.23 の 4 seat は**停止**（unit は残置、script は宣言予算に置換済）、.113 と ibm の public node は旧 fingerprint `c746f07c` で稼働中（heartbeat のみ）、seeder 4 本稼働。**再起動は項目 6（1 seat → 2 → 4 の acceptance と PSS 線形性）完了後、drill → 4 ホスト配備 → seeder 切替の順。** 以下は初回配備時点の記録。
+
 Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12-regenesis`.
 
 ## The network
@@ -7,7 +18,7 @@ Build `de857a71` (`kaspad v1.1.0-de857a71`), a release build of `feat/testnet-12
 | | |
 |---|---|
 | genesis hash | `a8cabac47b96fe30d9675ce08a355f62e6d57aac84865b0d6295c024c6d8ff61fb2d93943952e8da4c36ff87ea7f17f6c8de643fa7b02ecf7512892d590777dd` |
-| params fingerprint | `fb8f378df6373455e0c14d08c835184b86717ae3fc983039f9ded633be7fa38d` |
+| params fingerprint | `fb8f378df6373455e0c14d08c835184b86717ae3fc983039f9ded633be7fa38d` — **初回配備時。現在は `30848c6ba19f8d5cf2a1c5ba2a273e425df2f6c81cedc2c8a45bb4d64178ee31`**（上の状態欄） |
 | fence schedule | **`1000`** — one height, ADR-0065 D1's bond-maturity window (t11's was `1150, 1900, 2150, 2400, 3500, 4000, 6900, 7100, 7101, 7200, 7301, 8000, 2125000`) |
 | rule manifest | `… palw_work_target=1 palw_independence=1` (digest `9def81a1…`) |
 | premine | 33 outputs, exactly 10B MSK: 8 collateral + 8 fee floats + **16 community (758M)** + main wallet |
