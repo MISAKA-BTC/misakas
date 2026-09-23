@@ -19074,6 +19074,33 @@ mod consensus_params_id_tests {
         assert_ne!(other.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
     }
 
+    /// **The 2026-09-23 audit fence is testnet-12's alone** (the 2026-09-23 Position route matrix).
+    /// Every fix that fence carries (P-B4's sell payee, P-B3's lifecycle gate, P-B1's refunds, …)
+    /// claims "inert on testnet-11" by reading this fence; this pins the premise at the params
+    /// level, over the networks as a node resolves them from their id, not only the constants: a
+    /// preset that armed it — even at `always()`, which the fork-id gate-set golden cannot tell from
+    /// a new height — fails here.
+    #[test]
+    fn the_2026_09_23_audit_fence_is_armed_on_testnet_12_and_nowhere_else() {
+        for (name, params) in [
+            ("testnet-11", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
+            ("testnet-11 shipped", palw_rc_shipped_params()),
+            ("testnet-10", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 10))),
+            ("devnet", Params::from(NetworkId::new(NetworkType::Devnet))),
+            ("devnet shipped", devnet_shipped_params()),
+            ("mainnet", Params::from(NetworkId::new(NetworkType::Mainnet))),
+            ("mainnet shipped", mainnet_shipped_params()),
+            ("simnet", Params::from(NetworkId::new(NetworkType::Simnet))),
+        ] {
+            assert!(params.palw_audit_2026_09_23.is_none(), "{name}: palw_audit_2026_09_23 must stay unset");
+            assert!(params.palw_audit_2026_09_23_fence().is_none(), "{name}: no resolved fence");
+            assert!(!params.palw_audit_2026_09_23_active_at(0), "{name}: not in force at genesis");
+            assert!(!params.palw_audit_2026_09_23_active_at(u64::MAX), "{name}: never in force");
+        }
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        assert!(t12.palw_audit_2026_09_23_active_at(0), "testnet-12 arms it from genesis");
+    }
+
     /// **ADR-0088 Decision 11's fence has the same contract as ADR-0087's** and is independent of it.
     #[test]
     fn the_model_lines_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is() {

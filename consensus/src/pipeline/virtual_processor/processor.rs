@@ -6398,7 +6398,9 @@ impl VirtualStateProcessor {
                 }
                 // ADR-0087 Decision 6: the market's two moves exist only past the fence, refused by
                 // name before it (the drop-not-invalidate shape). A sell is signed by the key whose
-                // payload is the holder (M8), checked here where the verifier lives.
+                // id is the holder (M8), checked here where the verifier lives. The id is not the
+                // payee: past the 2026-09-23 fence the fold pays the key's own address payload
+                // (the 2026-09-23 Position route matrix, P-B4).
                 Obj::ModelBuy { line_id, .. } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
                         return Err(format!("a model buy of line {line_id} on a chain where the model market is not in force"));

@@ -1796,6 +1796,70 @@ mod bitcoind_tests {
         vm.execute().expect("ML-DSA-87 P2PKH spend should verify");
     }
 
+    /// **A model sell's net leg is spendable by the seller's key, and the lock it had before the
+    /// 2026-09-23 fence is not** (the 2026-09-23 Position route matrix, P-B4).
+    ///
+    /// Past the fence the fold writes the sell-net payout with `palw_model_sell_net_payload_v1`
+    /// over the sell's key (pinned in `palw_state_v2`'s model-market tests), and the coinbase turns
+    /// every payout row into `p2pkh_mldsa87_spk(payload)` (`palw_v2_payout_outputs`). This builds
+    /// that exact output for a real ML-DSA-87 key, signs a spend of it the way the wallet does and
+    /// runs the script engine, which accepts it. The same spend of the pre-fence lock,
+    /// `p2pkh_mldsa87_spk` over the holder id, is refused: `OP_BLAKE2B_512` recomputes the keyed
+    /// payload and the holder id is the unkeyed hash, so `OP_EQUALVERIFY` fails.
+    #[test]
+    fn a_model_sell_net_payout_is_spendable_by_the_sellers_key() {
+        use crate::standard::pay_to_address_script;
+        use kaspa_addresses::{Address, Prefix, Version};
+        use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+        use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
+        use kaspa_consensus_core::palw_model_market_v1::{palw_model_holder_of_pubkey_v1, palw_model_sell_net_payload_v1};
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        let keypair = mldsa::generate_key_pair([0x5eu8; 32]);
+        let pk = keypair.verification_key.as_ref();
+        // Sign a spend of `lock` with this key under SIG_HASH_ALL and run it: the wallet's path.
+        let spend = |lock: ScriptPublicKey| -> Result<(), TxScriptError> {
+            let entry = UtxoEntry::new(0, lock.clone(), 0, true);
+            let unsigned = create_spending_transaction(Vec::new(), lock.clone());
+            let populated = PopulatedTransaction::new(&unsigned, vec![entry.clone()]);
+            let reused_mldsa = kaspa_consensus_core::hashing::sighash::Mldsa87SigHashReusedValuesUnsync::new();
+            let sig_hash =
+                kaspa_consensus_core::hashing::sighash::calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused_mldsa);
+            let signature = mldsa::sign(&keypair.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x6fu8; 32])
+                .expect("ML-DSA-87 sign should succeed on the 64-byte sighash");
+            let mut sig_item = signature.as_ref().to_vec();
+            sig_item.push(SIG_HASH_ALL.to_u8());
+            let mut builder = script_builder::ScriptBuilder::new();
+            builder.add_data(&sig_item).expect("signature push fits");
+            builder.add_data(pk.as_slice()).expect("public-key push fits");
+            let signed = create_spending_transaction(builder.script().to_vec(), lock);
+            let populated = PopulatedTransaction::new(&signed, vec![entry]);
+            let sig_cache = Cache::new(10_000);
+            let reused = SigHashReusedValuesUnsync::new();
+            TxScriptEngine::from_transaction_input(
+                &populated,
+                &populated.tx().inputs[0],
+                0,
+                &populated.entries[0],
+                &reused,
+                &sig_cache,
+            )
+            .execute()
+        };
+
+        // The output the coinbase writes for an armed sell-net row, which is the lock the wallet
+        // builds for this key's own address.
+        let paid = p2pkh_mldsa87_spk(&palw_model_sell_net_payload_v1(pk).as_bytes());
+        let address =
+            Address::new(Prefix::Testnet, Version::PubKeyHashMlDsa87, &kaspa_hashes::blake2b_512_address_payload(pk).as_bytes());
+        assert_eq!(paid, pay_to_address_script(&address), "the net leg lands on the seller's wallet address");
+        spend(paid).expect("the seller's key spends its sell-net payout");
+
+        // The pre-fence lock, over the holder id: the same key and the same signing path, refused.
+        let before = p2pkh_mldsa87_spk(&palw_model_holder_of_pubkey_v1(pk).as_bytes());
+        assert_eq!(spend(before), Err(TxScriptError::VerifyError), "no key spends an output locked to the holder id");
+    }
+
     /// kaspa-pq Phase 10: the standalone `verify_mldsa87_with_context` used by
     /// the DNS overlay (attestation / takeover-token signatures). Exercises a
     /// real libcrux sign/verify roundtrip and the critical domain-separation

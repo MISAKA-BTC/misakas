@@ -890,7 +890,7 @@ pub(crate) async fn position_buy(
     crate::palw_model::buy(&ctx, &key_source(&profile)?, line, msk_text, min_positions, yes).await
 }
 
-/// `misaka position sell <line> --positions N [--slippage 1%] [--yes]`.
+/// `misaka position sell <line> --positions N [--slippage 1%] [--yes] [--accept-burned-proceeds]`.
 pub(crate) async fn position_sell(
     ctx: &crate::node::Ctx,
     profile: Profile,
@@ -898,6 +898,7 @@ pub(crate) async fn position_sell(
     positions: u64,
     slippage: &str,
     yes: bool,
+    accept_burned_proceeds: bool,
 ) -> CliResult {
     let slip = parse_slippage(slippage)?;
     let ctx = ctx_for(ctx, &profile);
@@ -918,7 +919,8 @@ pub(crate) async fn position_sell(
     if ctx.output != OutputFormat::Json {
         println!("slippage {} → at least {}, or the chain refuses the move", pct(slip), msk(min_msk));
     }
-    crate::palw_model::sell(&ctx, &key_source(&profile)?, line, positions, Some(format!("{min_msk}sompi")), yes).await
+    let floor = Some(format!("{min_msk}sompi"));
+    crate::palw_model::sell(&ctx, &key_source(&profile)?, line, positions, floor, yes, accept_burned_proceeds).await
 }
 
 #[cfg(test)]

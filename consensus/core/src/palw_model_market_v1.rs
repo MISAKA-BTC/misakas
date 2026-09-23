@@ -188,7 +188,7 @@ pub struct PalwModelMarketV1 {
     /// under (with every position back in the curve the product puts the reserve at the seed or
     /// above), and the number the site shows as "locked".
     pub seed_sompi: u64,
-    /// ADR-0090 Decision 3: who paid the seed — a payout payload kept for the record only; the
+    /// ADR-0090 Decision 3: who paid the seed — a holder id kept for the record only; the
     /// seeder holds nothing and can move nothing. ADR-0094 Decision 3: with the seed paid in
     /// instalments this is the FIRST payer, the one who opened the pledge.
     pub seeded_by: Hash64,
@@ -498,10 +498,33 @@ pub fn palw_model_sink_class_v1(spk: &ScriptPublicKey) -> Option<Hash64> {
     Some(Hash64::from_bytes(id))
 }
 
-/// **The holder is its payout payload** (M8): the 64-byte BLAKE2b of the ML-DSA-87 public key,
-/// the same identity a bond pays and `p2pkh_mldsa87_spk` locks to.
+/// **The holder is its key's id, and that id is not a payout payload** (M8): the 64-byte *unkeyed*
+/// BLAKE2b of the ML-DSA-87 public key (`mldsa87_key_id`). It keys the holder's positions
+/// (`(line, holder)`) and is what a sell's signature is checked against, and it stays exactly this
+/// on every network, so no position, RPC query or signed sell changes meaning.
+///
+/// This used to say the id was "the same identity a bond pays and `p2pkh_mldsa87_spk` locks to". It
+/// is not, and the difference is money: `OP_BLAKE2B_512` recomputes the *keyed* address payload at
+/// spend time, so an output locked to this id is one no key can spend (the 2026-09-23 Position
+/// route matrix, P-B4). What a sell pays to is [`palw_model_sell_net_payload_v1`].
 pub fn palw_model_holder_of_pubkey_v1(pubkey: &[u8]) -> Hash64 {
     crate::mldsa87_primitives::mldsa87_key_id(pubkey)
+}
+
+/// **Where a carrier sell's net leg is paid: the seller's own P2PKH-ML-DSA-87 address** (the
+/// 2026-09-23 Position route matrix, P-B4).
+///
+/// The keyed BLAKE2b-512 address payload of the key that signed the sell
+/// (`kaspa_hashes::blake2b_512_address_payload`) — the payload the wallet puts in that key's
+/// address, the one `OP_BLAKE2B_512` recomputes when the output is spent, and the kind of value a
+/// bond's `payout_payload` already is. The fold pays this past `Params::palw_audit_2026_09_23`;
+/// below it the net leg keeps its old payee, [`palw_model_holder_of_pubkey_v1`], byte for byte,
+/// because testnet-11 armed the market before the fence existed.
+///
+/// Kept apart from the holder id on purpose. The id keys positions and the payload receives money,
+/// and the two were one name for two hashes: that is the whole of P-B4.
+pub fn palw_model_sell_net_payload_v1(pubkey: &[u8]) -> Hash64 {
+    kaspa_hashes::blake2b_512_address_payload(pubkey)
 }
 
 /// The message a sell is signed over: the tag, **the network**, the line, the holder, the units,
@@ -952,5 +975,25 @@ mod tests {
             "sold out: the curve plus the retired is the supply"
         );
         assert!(palw_model_sell_quote_v1(&s.after, 1).is_none(), "and nothing can sell a retired position back: the curve is full");
+    }
+
+    /// **The sell-net payee is the key's spendable payload, and the holder id is left as it was**
+    /// (the 2026-09-23 Position route matrix, P-B4). A testnet-12 genesis bond card's
+    /// `payout_payload` is a keyed address payload that genesis already pays, so it is the known
+    /// spendable value for that card's key. The sell-net payload must be that value, and the holder
+    /// id must not be: an output locked to the id is one `OP_BLAKE2B_512` never matches.
+    #[test]
+    fn the_sell_net_payload_is_the_keys_address_and_the_holder_id_is_not() {
+        use crate::mldsa87_primitives::{mldsa87_key_id, p2pkh_mldsa87_spk};
+        assert!(!crate::config::params::PALW_T12_GENESIS_BONDS.is_empty());
+        for (n, card) in crate::config::params::PALW_T12_GENESIS_BONDS.iter().enumerate() {
+            let paid = palw_model_sell_net_payload_v1(card.bond_pubkey);
+            let holder = palw_model_holder_of_pubkey_v1(card.bond_pubkey);
+            assert_eq!(paid.as_bytes(), card.payout_payload, "card {n}: the net leg goes where this key's bond is already paid");
+            assert_eq!(paid, kaspa_hashes::blake2b_512_address_payload(card.bond_pubkey), "card {n}: the wallet's address payload");
+            assert_eq!(holder, mldsa87_key_id(card.bond_pubkey), "card {n}: the holder id (the position key) did not move");
+            assert_ne!(holder, paid, "card {n}: the id is not the payload");
+            assert_ne!(p2pkh_mldsa87_spk(&holder.as_bytes()), p2pkh_mldsa87_spk(&paid.as_bytes()), "card {n}: two different locks");
+        }
     }
 }

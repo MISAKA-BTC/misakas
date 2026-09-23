@@ -3,7 +3,8 @@
 //!
 //! `show` and `positions` are reads of the tip (`getPalwModelMarket`, `getPalwModelPositions`);
 //! `buy` files a `ModelBuy` in a carrier whose output 1 pays the class's sink; `sell` files a
-//! `ModelSell` signed by the key whose payout payload is the holder. A quote is printed before
+//! `ModelSell` signed by the key whose id is the holder (`palw_model_holder_of_pubkey_v1`, the
+//! key's unkeyed id — not its address payload). A quote is printed before
 //! anything is sent and nothing is sent without `--yes`. The arithmetic is the chain's own
 //! (`kaspa_consensus_core::palw_model_market_v1`), so the quote is what the fold will compute
 //! against the market as this node holds it — a move that lands after another move fills at the
@@ -500,7 +501,26 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     out
 }
 
-/// `misaka palw model-sell --line <id> --positions <n> [--min-msk <amount>] --key … [--yes]`.
+/// **Whether this chain pays a carrier sell's net leg where the seller can spend it** (the
+/// 2026-09-23 Position route matrix, P-B4). Past `Params::palw_audit_2026_09_23` the fold pays the
+/// seller's own address payload; below it (testnet-11) it pays the holder id, the key's unkeyed
+/// hash, and the coinbase output locked to that is one no key can spend — the proceeds are burned.
+/// So below the fence the tool refuses to sign unless the seller named the burn with
+/// `--accept-burned-proceeds`. `None` is "sign".
+pub(crate) fn sell_payee_refusal(fence_active: bool, accept_burned_proceeds: bool) -> Option<String> {
+    if fence_active || accept_burned_proceeds {
+        return None;
+    }
+    Some(
+        "this chain pays a sell's proceeds to the holder id, an output no key can spend (the 2026-09-23 Position route \
+         matrix, P-B4; fixed only past the 2026-09-23 audit fence, which this network does not arm), so the proceeds \
+         would be burned. Nothing was signed. Pass --accept-burned-proceeds to sell anyway and burn them."
+            .to_string(),
+    )
+}
+
+/// `misaka palw model-sell --line <id> --positions <n> [--min-msk <amount>] --key … [--yes]
+/// [--accept-burned-proceeds]`.
 pub async fn sell(
     ctx: &Ctx,
     ks: &crate::keys::KeySource,
@@ -508,6 +528,7 @@ pub async fn sell(
     positions: u64,
     min_msk_text: Option<String>,
     yes: bool,
+    accept_burned_proceeds: bool,
 ) -> CliResult {
     let line = parse_line(line_id)?;
     let units_in = positions
@@ -531,6 +552,12 @@ pub async fn sell(
     let key = ks.load_key()?;
     let holder = palw_model_holder_of_pubkey_v1(key.public_key());
     let nv = connect(ctx).await?;
+    // P-B4: on a chain that pays the net leg to the holder id, refuse before anything is signed.
+    let fence_active = nv.params.palw_audit_2026_09_23_active_at(nv.virtual_daa);
+    if let Some(why) = sell_payee_refusal(fence_active, accept_burned_proceeds) {
+        let _ = nv.client.disconnect().await;
+        return Err(CliError::new(exit::GENERIC, why));
+    }
     let r = nv
         .client
         .get_palw_model_market(line.to_string())
@@ -597,6 +624,14 @@ pub async fn sell(
         println!("  burn {:<9} {}", pct(r.burn_permille), msk(quote.fees.burn));
         println!("  owner {:<8} {}", pct(r.leg_permille), msk(quote.fees.registrant));
         println!("  paid to you    {} (coinbase payout), at least {}", msk(quote.fees.net), msk(min_msk_out));
+        // **Where the net leg lands** (the 2026-09-23 Position route matrix, P-B4). Past the
+        // 2026-09-23 fence the chain pays this key's own address; below it, the holder id, and an
+        // output locked to the holder id is one no key can spend. The seller is told which.
+        if fence_active {
+            println!("  paid to        {addr}");
+        } else {
+            println!("  BURNED         the net leg goes to the holder id, which no key can spend (--accept-burned-proceeds)");
+        }
         println!("  price after    {} per position", msk(quote.after.price_sompi_per_position_v1()));
     }
     let what = format!("ModelSell {positions} positions of line {line}");
@@ -608,6 +643,18 @@ pub async fn sell(
 #[cfg(test)]
 mod tests {
     use super::parse_msk_amount;
+
+    /// **P-B4: below the 2026-09-23 fence a sell burns its proceeds, so the tool refuses to sign
+    /// unless the seller names the burn.** Past the fence it signs with or without the flag.
+    #[test]
+    fn a_sell_whose_proceeds_would_burn_is_refused_unless_the_burn_is_named() {
+        use super::sell_payee_refusal;
+        let refusal = sell_payee_refusal(false, false).expect("testnet-11 shape: no fence, no override → refused");
+        assert!(refusal.contains("--accept-burned-proceeds") && refusal.contains("burned"), "{refusal}");
+        assert_eq!(sell_payee_refusal(false, true), None, "the override signs, and burns");
+        assert_eq!(sell_payee_refusal(true, false), None, "testnet-12 shape: the fence pays the seller's address");
+        assert_eq!(sell_payee_refusal(true, true), None);
+    }
 
     #[test]
     fn msk_amounts_parse_to_sompi() {

@@ -3785,16 +3785,20 @@ pub enum PalwConsensusObjectV2 {
     ModelBuy {
         /// ADR-0088 Decision 9: a LINE id; a class's founding line has the class id.
         line_id: Hash64,
-        /// The holder's payout payload — the identity a bond pays (M8).
+        /// The holder's key id, `palw_model_holder_of_pubkey_v1` (M8): the key the position is
+        /// held under, not a payout payload (the 2026-09-23 Position route matrix, P-B4).
         holder: Hash64,
         msk_in: u64,
         min_units_out: u64,
         sink_index: u32,
     },
-    /// **ADR-0087 Decision 3: a sell**, signed by the key whose payload is `holder` over
+    /// **ADR-0087 Decision 3: a sell**, signed by the key whose id is `holder` over
     /// `palw_model_sell_message_v1` under `PALW_MODEL_SELL_MLDSA87_CONTEXT`. The fold debits
-    /// `units_in`, pays the net leg to `holder` through the coinbase, refusing when under
-    /// `min_msk_out`. Refused below `Params::palw_model_market`.
+    /// `units_in` and pays the net leg through the coinbase, refusing when under `min_msk_out`.
+    /// Refused below `Params::palw_model_market`. **Past `Params::palw_audit_2026_09_23` the net
+    /// leg is paid to `pubkey`'s address payload** (`palw_model_sell_net_payload_v1`), which the
+    /// seller's key can spend; below it, to `holder`, which no key can (the 2026-09-23 Position
+    /// route matrix, P-B4).
     /// **`held_units` and `not_after_daa` are what make the signature single-use and mortal**
     /// (mainnet audit 2026-09-06, M-11). ADR-0087 M8 is "no other key can sell it"; without these
     /// two a stranger re-fired the holder's own public payload whenever the holder held enough
@@ -5448,6 +5452,12 @@ pub enum PalwStateV2Error {
     ModelSellPaysNothing(Hash64),
     #[error("the sell would pay {got} sompi, under its floor of {want}")]
     ModelSellBelowFloor { want: u64, got: u64 },
+    /// **Past the 2026-09-23 fence a sell's key is the one its net leg pays, so the fold binds that
+    /// key to the holder itself** (the 2026-09-23 Position route matrix, P-B4). Acceptance already
+    /// refuses the mismatch before the fold sees it; this is the second lock on that door, because
+    /// a pubkey the fold did not check would now be a payee nobody checked.
+    #[error("a model sell of line {0} carries a key that is not its holder's, and past the fence that key is the payee")]
+    ModelSellKeyIsNotTheHolders(Hash64),
     // ADR-0090, the seed.
     #[error("line {0} already has a seeded market")]
     ModelMarketAlreadySeeded(Hash64),
@@ -15522,8 +15532,23 @@ fn apply_object(
         PalwConsensusObjectV2::ModelBuy { line_id, holder, msk_in, min_units_out, sink_index: _ } => {
             model_buy_v1(builder, ctx, line_id, holder, *msk_in, *min_units_out)?;
         }
-        PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, held_units, .. } => {
-            model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, true, Some(*held_units))?;
+        PalwConsensusObjectV2::ModelSell { line_id, holder, units_in, min_msk_out, held_units, pubkey, .. } => {
+            // **Past the 2026-09-23 fence the net leg is paid where the seller's key can spend it**
+            // (the 2026-09-23 Position route matrix, P-B4). It used to be paid to `holder`, the
+            // key's unkeyed id, and the coinbase locks a payout with `p2pkh_mldsa87_spk(payload)`,
+            // whose `OP_BLAKE2B_512` recomputes the KEYED address payload at spend time: the id
+            // never matches, so every sell's proceeds were an output no key could spend. The
+            // position stays keyed by `holder`; only the payee changes. Below the fence the old
+            // payee stands byte for byte, because testnet-11 armed the market before this fence.
+            let net_payload = if builder.extras.audit_2026_09_23_active {
+                if crate::palw_model_market_v1::palw_model_holder_of_pubkey_v1(pubkey) != *holder {
+                    return Err(PalwStateV2Error::ModelSellKeyIsNotTheHolders(*line_id));
+                }
+                crate::palw_model_market_v1::palw_model_sell_net_payload_v1(pubkey)
+            } else {
+                *holder
+            };
+            model_sell_v1(builder, ctx, line_id, holder, *units_in, *min_msk_out, Some(net_payload), Some(*held_units))?;
         }
         // **ADR-0099 Decision 5, built by ADR-0100: the one-move court.** Fence first; then the
         // claim (live, its executor and roots the object's); then the accuser (not the producer,
@@ -18811,9 +18836,9 @@ fn model_buy_v1(
     Ok(crate::palw_model_market_v1::PalwModelBuyQuoteV1 { after, ..quote })
 }
 
-/// **ADR-0087 Decision 3's sell, as one function.** `pay_net_via_coinbase` is the carrier's
-/// way (a `PalwPayoutV2` the coinbase honours); the EVM path passes `false` and credits the net
-/// leg through its settlement instead (ADR-0089 Decision 6).
+/// **ADR-0087 Decision 3's sell, as one function.** `pay_net_via_coinbase: Some(payee)` is the
+/// carrier's way (a `PalwPayoutV2` to `payee` the coinbase honours); the EVM path passes `None`
+/// and credits the net leg through its settlement instead (ADR-0089 Decision 6).
 fn model_sell_v1(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -18821,7 +18846,13 @@ fn model_sell_v1(
     holder: &Hash64,
     units_in: u64,
     min_msk_out: u64,
-    pay_net_via_coinbase: bool,
+    // **The payee of the carrier's net leg, named by the caller** (the 2026-09-23 Position route
+    // matrix, P-B4). `Some(payload)` is the carrier's way; the EVM lane passes `None` and is paid
+    // through its settlement. This was a `bool`, and the payee was always `holder`: the key's
+    // unkeyed id, which keys the position but is not an address payload, so no spend ever matched
+    // it. Past the 2026-09-23 fence the carrier arm names the seller's keyed address payload;
+    // below it, `holder` as before.
+    pay_net_via_coinbase: Option<Hash64>,
     // **ADR-0087 M8 (audit M-11): the position the holder's signature was made against.**
     // `Some` on the carrier lane, where a detached ML-DSA-87 message is what authorises the move;
     // `None` on the ADR-0089 EVM lane, where the authority is the EVM transaction's own signature
@@ -18834,7 +18865,7 @@ fn model_sell_v1(
     // rows in `pending_payouts`, which is in the state-root preimage, and this is the only bound on
     // how many of them a block may add. Refused, never truncated — a truncated fee leg is a payee
     // silently not paid.
-    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(pay_net_via_coinbase, false))?;
+    builder.check_model_payout_room(TransitionBuilder::model_payout_rows_would_add(pay_net_via_coinbase.is_some(), false))?;
     let market = *builder.state.model_markets.get(line_id).ok_or(PalwStateV2Error::ModelMarketMissing(*line_id))?;
     // ADR-0094 Decision 2: a row that is still collecting its floor has no positions and no price.
     // A trader is told the same thing they are told for a line nobody has paid into at all.
@@ -18870,8 +18901,10 @@ fn model_sell_v1(
             after.burned_sompi = after.burned_sompi.saturating_add(quote.fees.registrant);
         }
     }
-    if pay_net_via_coinbase {
-        builder.write_model_fee(ctx, line_id, holder, b"sell-net", Some(*holder), quote.fees.net);
+    // The row's KEY still hashes `holder`, so which row a sell writes is unchanged; its payload is
+    // the payee the caller chose (P-B4).
+    if let Some(payload) = pay_net_via_coinbase {
+        builder.write_model_fee(ctx, line_id, holder, b"sell-net", Some(payload), quote.fees.net);
     }
     after.closed_to_buys = !(class_active && line.as_ref().is_some_and(|l| l.is_active()));
     builder.write_model_market(*line_id, Some(after));
@@ -18932,7 +18965,7 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
                 }
             }
             PalwEvmMarketActionKindV1::Sell { units_in, min_msk_out_sompi } => {
-                match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, false, None) {
+                match model_sell_v1(builder, ctx, &action.line_id, &holder, units_in, min_msk_out_sompi, None, None) {
                     Ok(quote) => (
                         0,
                         PalwEvmSettlementOutcomeV1::Filled {
@@ -40614,6 +40647,78 @@ pub(crate) mod tests {
             assert!(s4.pending_payouts_iter().all(|(_, p)| p.payload == holder(1)), "…to the holder's own payload (M8)");
             assert!(m4.price_sompi_per_position_v1() < m3.price_sompi_per_position_v1(), "M4: selling lowers the price");
             invariants(&s4, class, 2_000 * MSK);
+        }
+
+        /// **Past the 2026-09-23 fence a carrier sell's net leg is paid to the seller's address;
+        /// below it, to the holder id, byte for byte** (the 2026-09-23 Position route matrix,
+        /// P-B4). The seller is a testnet-12 genesis bond key. That card's `payout_payload` is the
+        /// keyed address payload genesis already pays, so it is the known-spendable value for the
+        /// key. Before the fix the armed row named the holder id, the unkeyed hash no spend
+        /// recomputes, and the first assertion on `armed` failed. The position, the market row and
+        /// the payout row's key are the same on both sides of the fence; only the payee moves.
+        #[test]
+        fn past_the_2026_09_23_fence_a_sell_pays_the_sellers_address_and_below_it_nothing_moves() {
+            use crate::palw_model_market_v1::{palw_model_holder_of_pubkey_v1, palw_model_sell_net_payload_v1};
+            let p = params();
+            let class = h64(1);
+            let card = &crate::config::params::PALW_T12_GENESIS_BONDS[0];
+            let key = card.bond_pubkey;
+            let who = palw_model_holder_of_pubkey_v1(key);
+            let (s0, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let (s1, _) = apply(&s0, &p, &ctx(2, 101, 2), &[seed(class, holder(9), SEED)], None);
+            let (s2, _) = apply(&s1, &p, &ctx(3, 102, 3), &[buy(class, who, 1_000 * MSK, 0)], None);
+            let held = s2.model_position(&class, &who);
+            assert!(held > 0, "the seller holds what it bought");
+            let net = palw_model_sell_quote_v1(s2.model_market(&class).unwrap(), held).unwrap().fees.net;
+            let sell = |pubkey: &[u8]| PalwConsensusObjectV2::ModelSell {
+                line_id: class,
+                holder: who,
+                units_in: held,
+                min_msk_out: 0,
+                held_units: held,
+                not_after_daa: u64::MAX,
+                pubkey: pubkey.to_vec(),
+                signature: vec![1],
+            };
+            let at = |audit: bool, pubkey: &[u8]| {
+                let e = PalwTransitionExtrasV1 { audit_2026_09_23_active: audit, ..Default::default() };
+                apply_palw_transition_v2_with_extras(&s2, &p, &ctx(4, 103, 4), &[sell(pubkey)], None, false, false, false, false, &e)
+            };
+            let rows = |s: &PalwChainStateV2| s.pending_payouts_iter().map(|(k, row)| (*k, *row)).collect::<Vec<_>>();
+
+            // Below the fence (testnet-11): the old payee, and the same bytes the no-extras entry
+            // point every other test here uses produces.
+            let (t11, _) = at(false, key).expect("the sell applies below the fence");
+            let t11_rows = rows(&t11);
+            assert_eq!(t11_rows.len(), 1, "a registrant-less class: the net leg is the only row");
+            assert_eq!((t11_rows[0].1.payload, t11_rows[0].1.amount), (who, net), "below the fence the net leg names the holder id");
+            let (plain, _) = apply(&s2, &p, &ctx(4, 103, 4), &[sell(key)], None);
+            assert_eq!(rows(&plain), t11_rows, "testnet-11's row is unchanged");
+
+            // Past it (testnet-12): the seller's own address.
+            let (armed, _) = at(true, key).expect("the sell applies past the fence");
+            armed.assert_internal_consistency(&p).expect("internal consistency after the armed sell");
+            let armed_rows = rows(&armed);
+            assert_eq!(armed_rows.len(), 1, "still one row");
+            let paid = armed_rows[0].1.payload;
+            assert_eq!(paid.as_bytes(), card.payout_payload, "the net leg is paid where genesis already pays this key");
+            assert_eq!(paid, palw_model_sell_net_payload_v1(key), "which is the key's address payload");
+            assert_ne!(paid, who, "and not the holder id");
+            assert_eq!(armed_rows[0].1.amount, net, "the same amount");
+            assert_eq!(armed_rows[0].0, t11_rows[0].0, "the same row key");
+            assert_eq!(armed.model_position(&class, &who), 0, "sold out, under the same holder id");
+            assert_eq!(armed.model_market(&class), t11.model_market(&class), "the curve moved as it does below the fence");
+
+            // Past the fence the key is the payee, so the fold binds it to the holder itself. Below
+            // the fence the fold never read the key (acceptance refuses the mismatch there), and
+            // it still does not.
+            let stranger = crate::config::params::PALW_T12_GENESIS_BONDS[1].bond_pubkey;
+            assert!(
+                matches!(at(true, stranger), Err(PalwStateV2Error::ModelSellKeyIsNotTheHolders(line)) if line == class),
+                "past the fence a key that is not the holder's pays nobody"
+            );
+            let (loose, _) = at(false, stranger).expect("below the fence the fold does not read the key");
+            assert_eq!(rows(&loose), t11_rows, "and pays the holder id as before");
         }
 
         /// **ADR-0120: past the fence the floor is one million MSK, and nothing paid before it is

@@ -639,7 +639,8 @@ enum MarketCmd {
 enum PositionCmd {
     /// What this key holds, and what a sell would pay now.
     List {
-        /// Another holder (its 128-hex payout payload) instead of the key's own.
+        /// Another holder (its 128-hex holder id, the unkeyed BLAKE2b-512 of its ML-DSA-87 public
+        /// key — not its address payload) instead of the key's own.
         #[arg(long)]
         holder: Option<String>,
         #[command(flatten)]
@@ -669,6 +670,8 @@ enum PositionCmd {
         profile: ProfileArgs,
     },
     /// Sell positions: the floor is the quote less --slippage (default 1 %). Dry run unless --yes.
+    /// Refused on a chain without the 2026-09-23 audit fence (testnet-11), where the proceeds
+    /// would be paid to an output no key can spend, unless --accept-burned-proceeds.
     Sell {
         line: String,
         #[arg(long)]
@@ -677,6 +680,10 @@ enum PositionCmd {
         slippage: String,
         #[arg(long)]
         yes: bool,
+        /// Sell anyway on a chain that pays the proceeds to the holder id, which no key can spend:
+        /// the proceeds are burned (the 2026-09-23 Position route matrix, P-B4).
+        #[arg(long)]
+        accept_burned_proceeds: bool,
         #[command(flatten)]
         profile: ProfileArgs,
     },
@@ -1282,10 +1289,11 @@ enum PalwCmd {
         #[arg(long)]
         json: bool,
     },
-    /// **ADR-0087: every position a holder has**, by line. The holder is its payout payload —
-    /// name it, or name the key it is derived from.
+    /// **ADR-0087: every position a holder has**, by line. The holder is its key's id, not its
+    /// address payload — name it, or name the key it is derived from.
     ModelPositions {
-        /// 128-hex holder (the BLAKE2b-512 of an ML-DSA-87 public key).
+        /// 128-hex holder id (the unkeyed BLAKE2b-512 of an ML-DSA-87 public key,
+        /// `palw_model_holder_of_pubkey_v1`; not the payload in the key's address).
         #[arg(long)]
         holder: Option<String>,
         #[command(flatten)]
@@ -1393,7 +1401,7 @@ enum PalwCmd {
     /// **ADR-0087: buy positions of a line from its curve.** The carrier pays `--msk` into the
     /// line's sink; the fold credits the net leg to the curve (5 % burned, and 1 % to the line's
     /// owner — 5 % past ADR-0114's fence; the preview prints the schedule the node serves) and
-    /// the curve's positions to the key's payout payload. Refused on chain when fewer than
+    /// the curve's positions to the key's holder id. Refused on chain when fewer than
     /// `--min-positions` would be released.
     ModelBuy {
         #[command(flatten)]
@@ -1411,9 +1419,12 @@ enum PalwCmd {
         #[arg(long)]
         yes: bool,
     },
-    /// **ADR-0087: sell positions back to the curve.** Signed by the key whose payout payload
-    /// holds them; the net leg (94 % of what the curve pays, 90 % past ADR-0114) reaches the same payload through the
-    /// coinbase. Refused on chain when the net would be under `--min-msk`.
+    /// **ADR-0087: sell positions back to the curve.** Signed by the key whose id holds them; the
+    /// net leg (94 % of what the curve pays, 90 % past ADR-0114) is paid through the coinbase to
+    /// that key's own address where the 2026-09-23 audit fence is active. Where it is not
+    /// (testnet-11) the chain pays the holder id, which no key can spend, so the command refuses
+    /// to sign unless `--accept-burned-proceeds`. Refused on chain when the net would be under
+    /// `--min-msk`.
     ModelSell {
         #[command(flatten)]
         key: KeyArgs,
@@ -1429,6 +1440,10 @@ enum PalwCmd {
         /// Actually broadcast (otherwise a dry-run preview with the quote).
         #[arg(long)]
         yes: bool,
+        /// Sell anyway on a chain that pays the net leg to the holder id, which no key can spend:
+        /// the proceeds are burned (the 2026-09-23 Position route matrix, P-B4).
+        #[arg(long)]
+        accept_burned_proceeds: bool,
     },
     /// **ADR-0088: a line** as the tip holds it — owner, developer, maintainer (and their payout
     /// payloads), the current and preview versions, the roots in force for its class. A class id
@@ -2517,10 +2532,12 @@ async fn main() -> std::process::ExitCode {
             Ok(p) => operator::market::position_buy(&ctx, p, &line, &msk, &slippage, yes).await,
             Err(e) => Err(e),
         },
-        Command::Position(PositionCmd::Sell { line, positions, slippage, yes, profile: args }) => match profile(&args) {
-            Ok(p) => operator::market::position_sell(&ctx, p, &line, positions, &slippage, yes).await,
-            Err(e) => Err(e),
-        },
+        Command::Position(PositionCmd::Sell { line, positions, slippage, yes, accept_burned_proceeds, profile: args }) => {
+            match profile(&args) {
+                Ok(p) => operator::market::position_sell(&ctx, p, &line, positions, &slippage, yes, accept_burned_proceeds).await,
+                Err(e) => Err(e),
+            }
+        }
         Command::Logs(args) => match profile(&args.profile) {
             Ok(p) => operator::logs::run(p, &args.components, args.work.as_deref(), args.events, args.follow, args.lines).await,
             Err(e) => Err(e),
@@ -2659,8 +2676,8 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, yes }) => {
             palw_model::buy(&ctx, &key.source(), &line, &msk, min_positions, yes).await
         }
-        Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes }) => {
-            palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes).await
+        Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes, accept_burned_proceeds }) => {
+            palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes, accept_burned_proceeds).await
         }
         Command::Palw(PalwCmd::LineShow { line_id, json }) => palw_line::line_show(&ctx, &line_id, json).await,
         Command::Palw(PalwCmd::LineLog { line_id, json }) => palw_line::line_log(&ctx, &line_id, json).await,
