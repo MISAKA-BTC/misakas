@@ -339,10 +339,13 @@ boundary:
 A class that drops below 5 ready seats (no panel can be drawn), or that overloads its receipt window,
 goes to `Held`.
 
-* **The admission audit runs once every 1,000 DAA on testnet-12**: the epoch length divided by
-  `span_daa = 1`, which is about 33 hours. A class registered just after an audit waits almost the
-  whole period, even if its seats were ready within minutes. That is by design (ADR-0147). A lottery
-  that could be re-drawn every span would be passed by waiting. There is no flag to shorten it.
+* **The admission audit runs once every 100 DAA on testnet-12** (`Params::palw_admission_audit_period_daa`
+  = `PALW_ADMISSION_AUDIT_PERIOD_DAA_STANDARD`; with `span_daa = 1` that is every 100th span), which
+  is about 3 hours 20 minutes at the 120-second cadence. ADR-0147's own default was one epoch
+  (1,000 DAA, about 33 hours); 100 DAA is the standard since 2026-09-23. A class registered just
+  after an audit waits up to that period, even if its seats were ready within minutes. That is by
+  design (ADR-0147): a lottery that could be re-drawn every span would be passed by waiting. There is
+  no flag to shorten it.
 * **The genesis rows** (8k `ebf44d0a…` and 2M `74c67e63…`) skip `Candidate`. They open at
   `Prefetching` and reach `Probation` on any span once 7 seats are ready. The registry starts
   counting at DAA 30 (its readiness grace). With 8 genesis cards, the 8k row needs 7 of them, or
