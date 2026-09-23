@@ -11893,6 +11893,351 @@ async fn palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read() {
     );
 }
 
+/// **The 2026-09-23 Position route matrix, P-B1: a carrier buy the chain refuses is paid back to the
+/// payer, end to end — never kept in the sink.**
+///
+/// The route matrix measured the defect in-process (P8): the carrier is accepted, its `OP_RETURN`
+/// sink holds the MSK, the fold drops the object, and nothing pays anything back. This drives a
+/// REAL 0x4b `ModelBuy` carrier — funded from a matured coinbase, ML-DSA-87-signed, change at
+/// output 0 and the sink at output 1 exactly as `misaka palw model-buy` builds it — onto a line
+/// that has no market, through `validate_and_insert_block`, and follows the money: past
+/// `palw_audit_2026_09_23` the object walk names the payer, the filter records the refund, the
+/// transition writes the row, and a later coinbase pays the sink's value to the change script the
+/// payer signed. Below the fence — testnet-11's shape — the same carrier is folded exactly as
+/// before: no row and no payment.
+///
+/// It also checks the filter's bookkeeping on the order it cares about: a refund is owed by the
+/// objects acceptance DROPPED, and never by one it applied.
+#[tokio::test]
+async fn palw_v2_a_refused_carrier_market_move_is_paid_back_to_its_payer() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+
+    /// `(the refund row the tip state holds for the carrier, whether a coinbase paid it to the payer,
+    /// the payer's change payload)`.
+    async fn run(audit: Option<ForkActivation>) -> (Option<(kaspa_hashes::Hash64, u64)>, bool, kaspa_hashes::Hash64) {
+        use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
+        use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+        use kaspa_consensus_core::mass::MassCalculator;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+        use kaspa_consensus_core::palw_model_market_v1::palw_model_sink_spk_v1;
+        use kaspa_consensus_core::palw_state_v2::{PalwCarrierRefundV1, PalwConsensusObjectV2, palw_model_refund_payout_key_v1};
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        use kaspa_consensus_core::tx::{PopulatedTransaction, TransactionInput, TransactionOutput, UtxoEntry};
+        use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        kaspa_core::log::try_init_logger("info");
+        let catalog = palw_v2_test_catalog();
+        let mut bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+        // Past the 2026-09-23 audit a claim reserves its ESCROW on its bond (option A), which the
+        // `pwu`-priced fixture above does not cover; fund the bonds for the unit the fence prices in,
+        // so the harness's own attempt blocks stay admissible on both sides of the comparison.
+        for object in bundle.genesis_objects.iter_mut() {
+            if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
+                *collateral = 10_000_000 * 100_000_000;
+            }
+        }
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params({
+                let bundle = bundle.clone();
+                move |p| {
+                    p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                    p.palw_model_market = Some(ForkActivation::always());
+                    p.palw_audit_2026_09_23 = audit;
+                    // testnet-12 arms the 2026-09-11 audit from genesis too, and with it the
+                    // acceptance rehearsal that folds the real step 3 — the one whose queue count
+                    // the P-B1 refund accounting reads exactly. The unarmed run keeps testnet-11's
+                    // pre-fence shape.
+                    if audit.is_some() {
+                        p.palw_audit_2026_09_11 = Some(ForkActivation::always());
+                    }
+                    p.coinbase_maturity = 2;
+                    *p = p.clone().with_palw_v2_cadence();
+                    p.sync_palw_escrow_backed_exposure();
+                }
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        let state_params = match &ctx.consensus.params().palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) => bundle.state.clone(),
+            _ => unreachable!("the fixture is ConsensusV2"),
+        };
+
+        // The harness's miner, as in the rent test above: the template declares algo-6 and the
+        // harness stands in for the producer.
+        async fn mine(ctx: &mut TestContext, miner: MinerData, txs: Vec<Transaction>) -> Block {
+            ctx.simulated_time += ctx.consensus.params().target_time_per_block();
+            let mut t =
+                ctx.consensus.build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard).unwrap();
+            t.block.header.timestamp = ctx.simulated_time;
+            t.block.header.nonce = ctx.simulated_time;
+            if t.block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+                t.block.header.palw_commitment = ctx.consensus.palw_v2_test_carriage(&t.block.header);
+            }
+            t.block.header.finalize();
+            let block = t.block.to_immutable();
+            ctx.validate_and_insert_block(block.clone()).await;
+            block
+        }
+
+        // The payer: a key whose coinbase this test can spend, funded by a two-wide row (see the
+        // rent test above for why a linear V2 chain pays nobody).
+        let kp = mldsa::generate_key_pair([0x8Cu8; 32]);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let address_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&address_payload);
+        ctx.miner_data = MinerData::new(spk.clone(), vec![]);
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await;
+        let harvest = mine(&mut ctx, new_miner_data(), vec![]).await;
+        let coinbase = &harvest.transactions[0];
+        let (index, out) = coinbase
+            .outputs
+            .iter()
+            .enumerate()
+            .find(|(_, o)| o.script_public_key == spk)
+            .expect("the block merging the row pays the sibling's miner");
+        let funding = TransactionOutpoint::new(coinbase.id(), index as u32);
+        let value = out.value;
+        let funding_daa = harvest.header.daa_score;
+        for _ in 0..4 {
+            mine(&mut ctx, new_miner_data(), vec![]).await;
+        }
+
+        // A buy of a line nobody has seeded: the fold refuses it on every build (ADR-0090 Decision 2
+        // — no market opens by a buy), so its carrier is accepted and its object is not.
+        let vp = ctx.consensus.virtual_processor();
+        let (_, tip) = vp.palw_state_v2_store.read().load_tip(&state_params).unwrap().expect("the tip loads");
+        let line = *tip.classes_iter().map(|(id, _)| id).next().expect("the catalog registers a class");
+        assert!(tip.model_market(&line).is_none(), "the fixture's line has no market");
+        let paid = value / 4;
+        let fee = 1_000_000;
+        let storage_mass_parameter = ctx.consensus.params().storage_mass_parameter;
+        // A funded, signed 0x4b carrier of a `ModelBuy` paying `paid` into the line's sink, change at
+        // output 0 back to the payer's own script — exactly as `misaka palw model-buy` builds it.
+        let carrier_of = |funding: TransactionOutpoint, value: u64, funding_daa: u64, from_coinbase: bool, paid: u64| {
+            let object = PalwConsensusObjectV2::ModelBuy {
+                line_id: line,
+                holder: kaspa_hashes::Hash64::from_u64_word(0xB0B),
+                msk_in: paid,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+                .expect("the lifecycle payload serializes");
+            let mut tx = Transaction::new(
+                crate::constants::TX_VERSION,
+                vec![TransactionInput::new(funding, vec![], 0, 1)],
+                vec![
+                    TransactionOutput::new(value - paid - fee, spk.clone()),
+                    TransactionOutput::new(paid, palw_model_sink_spk_v1(&line)),
+                ],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                payload,
+            );
+            let utxo = UtxoEntry::new(value, spk.clone(), funding_daa, from_coinbase);
+            let storage_mass = MassCalculator::new(0, 0, 0, storage_mass_parameter)
+                .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+                .expect("contextual mass is computable for the funded carrier")
+                .storage_mass;
+            tx.set_mass(storage_mass);
+            let reused = Mldsa87SigHashReusedValuesUnsync::new();
+            let sig_hash = {
+                let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+                calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+            };
+            let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x8Cu8; 32])
+                .expect("ML-DSA-87 sign on the 64-byte sighash");
+            let mut sig_item = sig.as_ref().to_vec();
+            sig_item.push(SIG_HASH_ALL.to_u8());
+            tx.inputs[0].signature_script = ScriptBuilder::new()
+                .add_data(&sig_item)
+                .expect("the signature push fits")
+                .add_data(&pubkey)
+                .expect("the public-key push fits")
+                .drain();
+            tx
+        };
+        let tx = carrier_of(funding, value, funding_daa, true, paid);
+        let carrier_id = tx.id();
+
+        let carrier_block = mine(&mut ctx, new_miner_data(), vec![tx]).await;
+        let carrier_daa = carrier_block.header.daa_score;
+        assert!(carrier_block.transactions.iter().any(|t| t.id() == carrier_id), "the carrier reached the block");
+        assert_eq!(ctx.consensus.block_status(carrier_block.header.hash), BlockStatus::StatusUTXOValid);
+        // One more block, so the carrier block's acceptance is folded into the tip state.
+        mine(&mut ctx, new_miner_data(), vec![]).await;
+        let vp = ctx.consensus.virtual_processor();
+        let (_, tip) = vp.palw_state_v2_store.read().load_tip(&state_params).unwrap().expect("the tip loads");
+        let key = palw_model_refund_payout_key_v1(&carrier_id);
+        let row = tip.pending_payouts_iter().find(|(k, _)| **k == key).map(|(_, row)| (row.payload, row.amount));
+
+        // The filter's bookkeeping, on the tip: a refund is owed by the objects acceptance dropped
+        // — before and after one it applied — and never by the one it applied.
+        if audit.is_some() {
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: ctx.consensus.get_sink(),
+                daa_score: ctx.consensus.get_virtual_daa_score(),
+                blue_score: vp.headers_store.get_header(ctx.consensus.get_sink()).unwrap().blue_score + 1,
+                subsidy: 0,
+            };
+            let owed = |carrier: u64, amount: u64| PalwCarrierRefundV1 {
+                carrier: kaspa_consensus_core::tx::TransactionId::from_u64_word(carrier),
+                line_id: line,
+                payee: kaspa_hashes::Hash64::from_u64_word(0xFA),
+                amount,
+            };
+            let buy = |min_units_out: u64| PalwConsensusObjectV2::ModelBuy {
+                line_id: line,
+                holder: kaspa_hashes::Hash64::from_u64_word(0xB0B),
+                msk_in: 1_000_000,
+                min_units_out,
+                sink_index: 1,
+            };
+            let seed = PalwConsensusObjectV2::ModelSeed {
+                line_id: line,
+                seeder: kaspa_hashes::Hash64::from_u64_word(0x5EED),
+                msk_seed: kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1,
+                sink_index: 1,
+            };
+            let vp = ctx.consensus.virtual_processor();
+            let (accepted, _, refunds) = vp.palw_v2_accepted_refundable_objects_for_tests(
+                &tip,
+                &state_params,
+                &point,
+                vec![
+                    (buy(0), Some(owed(1, 1_000_000))),
+                    (seed.clone(), Some(owed(2, kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_SEED_MIN_SOMPI_V1))),
+                    (buy(u64::MAX), Some(owed(3, 1_000_000))),
+                ],
+                point.block,
+            );
+            assert_eq!(accepted, vec![seed.clone()], "the seed opens the pair; both buys are refused");
+            assert_eq!(refunds, vec![owed(1, 1_000_000), owed(3, 1_000_000)], "the two refused carriers are owed, the seed is not");
+            let folded = vp
+                .palw_v2_block_fold_with_refunds_for_tests(&tip, &state_params, &point, &accepted, refunds.clone())
+                .expect("what the filter returns, the transition applies");
+            for refund in &refunds {
+                let key = palw_model_refund_payout_key_v1(&refund.carrier);
+                assert!(
+                    folded
+                        .pending_payouts_iter()
+                        .any(|(k, row)| *k == key && row.payload == refund.payee && row.amount == refund.amount)
+                );
+            }
+
+            // ---- Refunds COUNT against the cap (user decision on the P-B1 review) ----------------
+            use kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS as CAP;
+            // A queue filled to the cap by refunds alone: the cap holds with refunds, whatever the
+            // list handed to the fold.
+            let flood = |from: u64, n: usize| (0..n as u64).map(|i| owed(from + i, 1_000)).collect::<Vec<_>>();
+            let full = vp
+                .palw_v2_block_fold_with_refunds_for_tests(&tip, &state_params, &point, &[], flood(0x40_0000, CAP + 16))
+                .expect("a block of refunds folds");
+            assert_eq!(full.pending_payouts_iter().count(), CAP, "the cap holds with refunds");
+
+            // **Refused buys cannot starve a valid move in the same block.** The next block drains
+            // eight rows first, so it has eight. A cheap refused buy (`min_units_out = u64::MAX`)
+            // used to promise its two fee rows and then write none — six of them took twelve phantom
+            // rows and the valid buy behind them was dropped. Now a refused buy takes exactly the one
+            // row its refund really needs, reserved: six refunds and the valid buy's two legs fit.
+            let next = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: kaspa_hashes::Hash64::from_u64_word(0x9E47),
+                daa_score: point.daa_score + 1,
+                blue_score: point.blue_score + 1,
+                subsidy: 0,
+            };
+            let valid = PalwConsensusObjectV2::ModelBuy {
+                line_id: line,
+                holder: kaspa_hashes::Hash64::from_u64_word(0xB0B),
+                msk_in: 1_000 * 100_000_000,
+                min_units_out: 0,
+                sink_index: 1,
+            };
+            let mut carried = vec![(seed.clone(), None)];
+            carried.extend((0..6u64).map(|i| (buy(u64::MAX), Some(owed(0x50_0000 + i, 1_000_000)))));
+            carried.push((valid.clone(), Some(owed(0x50_0100, 1_000 * 100_000_000))));
+            let (accepted, _, refunds) =
+                vp.palw_v2_accepted_refundable_objects_for_tests(&full, &state_params, &next, carried, next.block);
+            assert_eq!(accepted, vec![seed.clone(), valid], "the valid buy behind six refused ones is not starved");
+            assert_eq!(refunds.len(), 6, "each refused buy owes, and reserves, one row");
+            let after = vp
+                .palw_v2_block_fold_with_refunds_for_tests(&full, &state_params, &next, &accepted, refunds)
+                .expect("what the filter returns, the transition applies");
+            assert!(after.pending_payouts_iter().count() <= CAP, "and the block's refunds keep the cap");
+
+            // **A full queue refuses a market carrier at the mempool and at the template** — it
+            // is neither relayed nor mined, so nothing it pays can burn. The tip is swapped for the
+            // full state (test-only), a second real carrier is offered from the first one's change,
+            // and the real tip is put back afterwards.
+            let sink = ctx.consensus.get_sink();
+            let (_, real_tip) = vp.palw_state_v2_store.read().load_tip(&state_params).unwrap().expect("the tip loads");
+            let second = carrier_of(TransactionOutpoint::new(carrier_id, 0), value - paid - fee, carrier_daa, false, paid / 2);
+            let mempool = |tx: &Transaction| {
+                let mut mutable = kaspa_consensus_core::tx::MutableTransaction::from_tx(tx.clone());
+                ctx.consensus.validate_mempool_transaction(&mut mutable, &Default::default())
+            };
+            mempool(&second).expect("with room, the carrier is admitted");
+            vp.palw_state_v2_store.write().set_tip_for_tests(sink, &full).expect("the full queue becomes the tip");
+            match mempool(&second) {
+                Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(why)) => {
+                    assert!(why.contains("payout queue"), "{why}")
+                }
+                other => panic!("a full queue must refuse the carrier at the mempool, got {other:?}"),
+            }
+            let template = ctx.consensus.build_block_template(
+                new_miner_data(),
+                Box::new(OnetimeTxSelector::new(vec![second.clone()])),
+                TemplateBuildMode::Standard,
+            );
+            match template {
+                Err(crate::errors::RuleError::InvalidTransactionsInNewBlock(invalid)) => assert!(
+                    matches!(
+                        invalid.get(&second.id()),
+                        Some(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(_))
+                    ),
+                    "the template refuses the carrier on the queue: {invalid:?}"
+                ),
+                other => {
+                    panic!("a full queue must keep the carrier out of the template, got {:?}", other.map(|t| t.block.header.hash))
+                }
+            }
+            vp.palw_state_v2_store.write().set_tip_for_tests(sink, &real_tip).expect("the real tip is restored");
+            mempool(&second).expect("room again: the same carrier is admitted");
+        }
+
+        // Follow the row to a coinbase: it drains after the claim and seat rows, which on this
+        // short chain are few.
+        let mut paid_back = false;
+        for _ in 0..12 {
+            let block = mine(&mut ctx, new_miner_data(), vec![]).await;
+            if block.transactions[0].outputs.iter().any(|o| o.script_public_key == spk && o.value == paid) {
+                assert_eq!(
+                    ctx.consensus.block_status(block.header.hash),
+                    BlockStatus::StatusUTXOValid,
+                    "the coinbase that pays the refund is the one validation expects (construction == validation)"
+                );
+                paid_back = true;
+                break;
+            }
+        }
+        (row, paid_back, kaspa_hashes::Hash64::from_bytes(address_payload))
+    }
+
+    let (row, paid_back, payer) = run(Some(ForkActivation::always())).await;
+    let Some((payee, amount)) = row else { panic!("past the fence the refused carrier is owed a refund row") };
+    assert_eq!(payee, payer, "the refund pays the change script the payer signed — a key it can spend");
+    assert!(amount > 0);
+    assert!(paid_back, "and a coinbase pays it to that script");
+
+    let (row, paid_back, _) = run(None).await;
+    assert_eq!(row, None, "below the fence (testnet-11's shape) a refused carrier is folded exactly as before");
+    assert!(!paid_back);
+}
+
 /// **A candidate this consensus cannot REACH is an absent opinion, not a dead node** (audit
 /// 2026-09-02).
 ///

@@ -43,6 +43,27 @@ pub fn p2pkh_mldsa87_spk(payload: &[u8; 64]) -> ScriptPublicKey {
     ScriptPublicKey::new(0, ScriptVec::from_slice(&script))
 }
 
+/// **The payload a P2PKH-ML-DSA-87 script pays, or `None` when `spk` is not one** — the exact
+/// inverse of [`p2pkh_mldsa87_spk`], so a payload read off an output and paid back through
+/// `p2pkh_mldsa87_spk` lands on the very script it was read from.
+///
+/// The 2026-09-23 Position route matrix, P-B1: a refused carrier market move is refunded to the
+/// script its own carrier's change output pays, and the payout plumbing can only pay a payload.
+/// Everything else — the sink's `OP_RETURN`, a P2SH, a script of another version — is `None`.
+pub fn p2pkh_mldsa87_payload(spk: &ScriptPublicKey) -> Option<Hash64> {
+    let script = spk.script();
+    if spk.version() != 0 || script.len() != 69 {
+        return None;
+    }
+    // `OpDup ‖ OpBlake2b512 ‖ OpData64 ‖ <payload64> ‖ OpEqualVerify ‖ OpCheckSigMlDsa87`.
+    if script[0] != 0x76 || script[1] != 0xc4 || script[2] != 0x40 || script[67] != 0x88 || script[68] != 0xa6 {
+        return None;
+    }
+    let mut payload = [0u8; 64];
+    payload.copy_from_slice(&script[3..67]);
+    Some(Hash64::from_bytes(payload))
+}
+
 /// **A key's 64-byte id**: the unkeyed BLAKE2b-512 of the verification key. Unkeyed because the
 /// input is a fixed-length key, not a multi-field structure.
 pub fn mldsa87_key_id(pubkey: &[u8]) -> Hash64 {
@@ -64,5 +85,19 @@ mod tests {
         assert_eq!(crate::dns_finality::p2pkh_mldsa87_spk(&payload), p2pkh_mldsa87_spk(&payload));
         assert_eq!(p2pkh_mldsa87_spk(&payload).script().len(), 69);
         assert_eq!(crate::dns_finality::validator_id_from_pubkey(&[7u8; 32]), mldsa87_key_id(&[7u8; 32]));
+    }
+
+    /// P-B1: reading a payload back off its own script is the identity, and nothing else reads as one.
+    #[test]
+    fn a_payload_reads_back_off_its_own_script_and_nothing_else_does() {
+        let payload = [0x5Au8; 64];
+        assert_eq!(p2pkh_mldsa87_payload(&p2pkh_mldsa87_spk(&payload)), Some(Hash64::from_bytes(payload)));
+        let sink = crate::palw_model_market_v1::palw_model_sink_spk_v1(&Hash64::from_bytes(payload));
+        assert_eq!(p2pkh_mldsa87_payload(&sink), None, "a market sink is an OP_RETURN, not a payee");
+        let other_version = ScriptPublicKey::new(1, ScriptVec::from_slice(p2pkh_mldsa87_spk(&payload).script()));
+        assert_eq!(p2pkh_mldsa87_payload(&other_version), None);
+        let mut bytes = p2pkh_mldsa87_spk(&payload).script().to_vec();
+        bytes[68] = 0xac;
+        assert_eq!(p2pkh_mldsa87_payload(&ScriptPublicKey::new(0, ScriptVec::from_slice(&bytes))), None);
     }
 }

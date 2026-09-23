@@ -757,6 +757,25 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     pub(super) carrier_fee: u64,
+    /// **The 2026-09-23 Position route matrix, P-B1: what this object's carrier is owed if acceptance
+    /// refuses it.** `Some` only for a carrier-borne `ModelBuy`/`ModelSeed` past
+    /// `palw_audit_2026_09_23`, resolved in `palw_v2_objects_of_block` where the carrier is in hand;
+    /// `None` for everything else and everywhere below the fence, where a refused move's payment
+    /// stays in its sink exactly as before.
+    pub(super) refund: Option<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    /// P-B1: a carrier-borne `ModelBuy`/`ModelSeed` past the fence whose carrier pays no
+    /// P2PKH-ML-DSA-87 output — nobody the chain could refund. `Some(carrier)` so a refusal of it is
+    /// LOGGED as the burn it still is (the review: "nothing is logged"); `None` for everything else.
+    pub(super) unrefundable: Option<TransactionId>,
+}
+
+/// P-B1: the object the acceptance filter is judging, as far as a refund is concerned — how many
+/// objects were accepted before it (it is refused iff that count has not grown when the next is
+/// judged), and what its carrier is owed or why nobody can be paid.
+pub(super) struct PalwPendingCarrierRefundV1 {
+    accepted_before: usize,
+    refund: Option<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    unrefundable: Option<TransactionId>,
 }
 
 /// ADR-0058: one mergeset blue's admitted PALW work, held by value between assembly (against
@@ -1177,15 +1196,42 @@ impl VirtualStateProcessor {
         }
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
-        kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(&state, state_params, tx, || {
-            self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                block: chain_point,
-                daa_score: virtual_daa_score,
-                blue_score: 0,
-                subsidy: 0,
+        if let Some(refusal) =
+            kaspa_consensus_core::palw_state_v2::palw_model_market_carrier_refusal_v1(&state, state_params, tx, || {
+                self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: chain_point,
+                    daa_score: virtual_daa_score,
+                    blue_score: 0,
+                    subsidy: 0,
+                })
             })
+        {
+            return Some(refusal.to_string());
+        }
+        // **P-B1 (refunds count against the cap): a carrier whose move or refund the payout queue
+        // could not take is refused too**, so it is neither relayed nor mined while the queue is
+        // full — the fold would refuse it and have no row to pay it back from, and its MSK would stay
+        // in the sink. A fresh budget: this one carrier against the room the next block leaves. The
+        // template carries one budget across its carriers as well (`palw_template_market_budget`).
+        kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state).admit(tx).err().map(|full| {
+            format!("{full}: its move or its refund would overflow the payout queue (P-B1: refunds count against the cap)")
         })
-        .map(|refusal| refusal.to_string())
+    }
+
+    /// **P-B1 at the template: one payout-queue budget across every market carrier the template
+    /// selects**, so two carriers that each fit the room alone but not together are not both mined —
+    /// the second stays in the pool for a later template. `None` below `palw_audit_2026_09_23`
+    /// (testnet-11) and off ConsensusV2, where no budget is kept. Node-local.
+    fn palw_template_market_budget(
+        &self,
+        virtual_daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1> {
+        if !self.palw_audit_2026_09_23_at(virtual_daa_score) {
+            return None;
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state))
     }
 
     /// ADR-0109 Decision 3: the PALW bonds the registry holds locked at the virtual tip — the set the
@@ -1906,7 +1952,13 @@ impl VirtualStateProcessor {
                                 // (state, params, point, object), so every node drops the same
                                 // ones. A dropped object simply does not fold, which is what "the
                                 // transaction was invalid" ought to mean.
-                                let (objects, folded) = self.palw_v2_accepted_objects(state, state_params, &point, objects, current);
+                                //
+                                // **Except that a dropped market move's carrier stays accepted with
+                                // its MSK in the sink** (the 2026-09-23 Position route matrix,
+                                // P-B1), so past `palw_audit_2026_09_23` the filter also names what
+                                // each such carrier is owed and the transition pays it back.
+                                let (objects, folded, carrier_refunds) =
+                                    self.palw_v2_accepted_objects_and_refunds(state, state_params, &point, objects, current);
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
@@ -2062,6 +2114,9 @@ impl VirtualStateProcessor {
                                         if let Some(staged) = evm_staged.as_ref() {
                                             extras.evm_actions = staged.result.market_actions.clone();
                                         }
+                                        // P-B1: what the filter above refused and owes back. Empty
+                                        // below `palw_audit_2026_09_23`, and the fold checks again.
+                                        extras.carrier_market_refunds = carrier_refunds;
                                         // ADR-0125: the permits this block accepted, as decided above.
                                         if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                                             extras.round_permit_uses = verdicts.uses.clone();
@@ -5199,7 +5254,10 @@ impl VirtualStateProcessor {
     pub(super) fn unpriced_for_tests(
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
     ) -> Vec<PalwCarriedObjectV1> {
-        objects.into_iter().map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED }).collect()
+        objects
+            .into_iter()
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund: None, unrefundable: None })
+            .collect()
     }
 
     /// The same filter, with the state it folded to — ADR-0064's half. The bootstrap lookup reads
@@ -5230,8 +5288,37 @@ impl VirtualStateProcessor {
         objects: Vec<(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, u64)>,
         block: BlockHash,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
-        let objects = objects.into_iter().map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee }).collect();
+        let objects = objects
+            .into_iter()
+            .map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee, refund: None, unrefundable: None })
+            .collect();
         self.palw_v2_accepted_objects(state, state_params, point, objects, block)
+    }
+
+    /// [`Self::palw_v2_accepted_objects_and_refunds`] with each object's refund spelled out — the
+    /// 2026-09-23 Position route matrix, P-B1 — so the sibling test module can check the filter
+    /// pays back exactly the carriers it refused.
+    #[cfg(test)]
+    pub(super) fn palw_v2_accepted_refundable_objects_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<(
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+            Option<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+        )>,
+        block: BlockHash,
+    ) -> (
+        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    ) {
+        let objects = objects
+            .into_iter()
+            .map(|(object, refund)| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund, unrefundable: None })
+            .collect();
+        self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block)
     }
 
     /// **The REAL one-shot block fold, over the whole accepted list, using the same fences the
@@ -5262,6 +5349,34 @@ impl VirtualStateProcessor {
             self.palw_uncertified_weightless_at(point.daa_score),
             self.palw_da_court_at(point.daa_score),
             &self.palw_transition_extras_for(point),
+        )
+        .map(|(state, _delta)| state)
+    }
+
+    /// [`Self::palw_v2_block_fold_for_tests`] carrying the refunds the filter returned, the way the
+    /// chain walk hands them to the transition (the 2026-09-23 Position route matrix, P-B1).
+    #[cfg(test)]
+    pub(super) fn palw_v2_block_fold_with_refunds_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2],
+        refunds: Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+        let mut extras = self.palw_transition_extras_for(point);
+        extras.carrier_market_refunds = refunds;
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
+            state,
+            state_params,
+            point,
+            objects,
+            None,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &extras,
         )
         .map(|(state, _delta)| state)
     }
@@ -5312,6 +5427,9 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// [`Self::palw_v2_accepted_objects_and_refunds`] without the refunds — every caller but the
+    /// chain walk, which is the only one that hands refunds to the transition.
+    #[cfg(test)]
     fn palw_v2_accepted_objects(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -5320,6 +5438,24 @@ impl VirtualStateProcessor {
         objects: Vec<PalwCarriedObjectV1>,
         block: BlockHash,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
+        let (accepted, folded, _refunds) = self.palw_v2_accepted_objects_and_refunds(state, state_params, point, objects, block);
+        (accepted, folded)
+    }
+
+    /// The acceptance filter, and — the 2026-09-23 Position route matrix, P-B1 — the refunds owed to
+    /// the carrier-borne market moves it refused, in acceptance order.
+    fn palw_v2_accepted_objects_and_refunds(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<PalwCarriedObjectV1>,
+        block: BlockHash,
+    ) -> (
+        Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+    ) {
         // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
         //
         // Validating every object against the parent state alone is wrong in exactly the way the
@@ -5383,13 +5519,34 @@ impl VirtualStateProcessor {
                     info!(
                         "Block {block}: no PALW object is accepted; the pre-object fold fails and the block will be disqualified: {why}"
                     );
-                    return (Vec::new(), state.clone());
+                    return (Vec::new(), state.clone(), Vec::new());
                 }
             }
         } else {
             state.clone()
         };
         let mut accepted = Vec::with_capacity(objects.len());
+        // **The 2026-09-23 Position route matrix, P-B1: a refused carrier buy or seed is owed its
+        // MSK back.** Its carrier is already accepted and its sink already holds the payment, so a
+        // drop here used to be a burn. Every drop path below ends the iteration without reaching
+        // `accepted.push`, so "refused" is read the one way that cannot miss a path: an object that
+        // carried a refund is owed it iff `accepted` is no longer after it than it was before it.
+        // Only objects past `palw_audit_2026_09_23` carry one (`palw_v2_objects_of_block`).
+        let mut refunds: Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1> = Vec::new();
+        let mut refund_owed: Option<PalwPendingCarrierRefundV1> = None;
+        // **Refunds COUNT against `PALW_V2_MAX_PENDING_PAYOUTS`** (user decision on the P-B1
+        // review). Each refund this filter owes takes one queue row at step 3′, after every object,
+        // so its row is RESERVED here the moment it is owed: a later move is measured against the
+        // queue plus the reserved rows, and cannot take the row a refund was promised. A refund the
+        // queue has no room for is not owed (its MSK stays in the sink, logged); the node's mempool
+        // and template refuse such a carrier, so an honest node never mines one.
+        let mut refund_rows_reserved = 0usize;
+        // Past the 2026-09-23 fence (on a chain past the 2026-09-11 audit, whose rehearsal folds
+        // the real step 3 so `folded` counts every row an accepted move wrote) the queue is counted
+        // EXACTLY: accepted moves' rows are in `folded`, owed refunds are reserved, and a refused
+        // move promises nothing — the review's starvation, where a cheap refused buy took two
+        // phantom rows from the valid moves after it, is gone. Below it, the old promise counter.
+        let exact_queue = audit_active && self.palw_audit_2026_09_23_at(point.daa_score);
         let mut certifications_graded = 0usize;
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
         let mut court_closes_completed = 0usize;
@@ -5416,7 +5573,20 @@ impl VirtualStateProcessor {
         // the grader to walk, refused or accepted. Dormant it is never read and never written.
         let mut vectors_graded = 0usize;
         for carried in objects {
-            let PalwCarriedObjectV1 { object, carrier_fee } = carried;
+            Self::palw_v2_settle_carrier_refund(
+                &mut refund_owed,
+                accepted.len(),
+                folded.pending_payouts_iter().count().saturating_add(model_payout_rows_promised),
+                &mut refund_rows_reserved,
+                &mut refunds,
+                block,
+            );
+            let PalwCarriedObjectV1 { object, carrier_fee, refund, unrefundable } = carried;
+            refund_owed = (refund.is_some() || unrefundable.is_some()).then_some(PalwPendingCarrierRefundV1 {
+                accepted_before: accepted.len(),
+                refund,
+                unrefundable,
+            });
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
             //
             // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` rows in the state root for up to
@@ -5749,15 +5919,18 @@ impl VirtualStateProcessor {
                 if rows > 0 {
                     let held = folded.pending_payouts_iter().count();
                     let cap = kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS;
-                    if held.saturating_add(model_payout_rows_promised).saturating_add(rows) > cap {
+                    let promised = model_payout_rows_promised.saturating_add(refund_rows_reserved);
+                    if held.saturating_add(promised).saturating_add(rows) > cap {
                         info!(
                             "Block {block}: a model-market move was dropped, and the block stands: the payout queue holds {held} \
-                             rows and this block has already promised {model_payout_rows_promised} more, against a cap of {cap} \
+                             rows and this block has already promised {promised} more, against a cap of {cap} \
                              (PALW_V2_MAX_PENDING_PAYOUTS)"
                         );
                         continue;
                     }
-                    model_payout_rows_promised += rows;
+                    if !exact_queue {
+                        model_payout_rows_promised += rows;
+                    }
                 }
             }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
@@ -5881,6 +6054,14 @@ impl VirtualStateProcessor {
                 }
             }
         }
+        Self::palw_v2_settle_carrier_refund(
+            &mut refund_owed,
+            accepted.len(),
+            folded.pending_payouts_iter().count().saturating_add(model_payout_rows_promised),
+            &mut refund_rows_reserved,
+            &mut refunds,
+            block,
+        );
         // **What this block actually carried.** A dropped object says so; an ACCEPTED one said
         // nothing at all, so "the chain is not carrying courts" and "the chain is carrying courts
         // and something later discards them" looked identical from every log on every node. On the
@@ -5904,7 +6085,55 @@ impl VirtualStateProcessor {
         // defect ADR-0064 exists to remove. Only bond records are read out of it: every field of
         // one is a function of the objects and `daa_score`, never of the synthetic blue score the
         // rehearsal advances.
-        (accepted, folded)
+        (accepted, folded, refunds)
+    }
+
+    /// P-B1's bookkeeping for [`Self::palw_v2_accepted_objects_and_refunds`]: the previous object's
+    /// refund is owed iff `accepted` did not grow while that object was being judged — AND the
+    /// queue has a row for it (refunds count against the cap): `queue_held` is the rows the queue
+    /// will hold before step 3′ as counted so far (the folded state plus any older promise), and
+    /// `reserved` the refund rows already owed. An owed refund reserves its row. A refusal that
+    /// cannot be paid back — no room, or a carrier with no P2PKH-ML-DSA-87 output — is logged as the
+    /// burn it is.
+    fn palw_v2_settle_carrier_refund(
+        refund_owed: &mut Option<PalwPendingCarrierRefundV1>,
+        accepted_now: usize,
+        queue_held: usize,
+        reserved: &mut usize,
+        refunds: &mut Vec<kaspa_consensus_core::palw_state_v2::PalwCarrierRefundV1>,
+        block: BlockHash,
+    ) {
+        let Some(pending) = refund_owed.take() else { return };
+        if accepted_now != pending.accepted_before {
+            return;
+        }
+        let cap = kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS;
+        match (pending.refund, pending.unrefundable) {
+            (Some(refund), _) => {
+                let held = queue_held.saturating_add(*reserved);
+                if held < cap {
+                    info!(
+                        "Block {block}: the refused market move of carrier {} on line {} is paid back — {} sompi to {} (P-B1)",
+                        refund.carrier, refund.line_id, refund.amount, refund.payee
+                    );
+                    *reserved += 1;
+                    refunds.push(refund);
+                } else {
+                    warn!(
+                        "Block {block}: the refused market move of carrier {} on line {} CANNOT be paid back: the payout queue \
+                         holds {held} of {cap} rows with this block's refunds (PALW_V2_MAX_PENDING_PAYOUTS; refunds count \
+                         against it), so its {} sompi stay in the sink. A node refuses such a carrier at its mempool and \
+                         template; this one was mined anyway (P-B1)",
+                        refund.carrier, refund.line_id, refund.amount
+                    );
+                }
+            }
+            (None, Some(carrier)) => warn!(
+                "Block {block}: the refused market move of carrier {carrier} CANNOT be paid back: the carrier pays no \
+                 P2PKH-ML-DSA-87 output to refund to, so its MSK stays in the sink (P-B1)"
+            ),
+            (None, None) => {}
+        }
     }
 
     /// **Assemble the largest lifecycle object this node's receipt pool supports** (launch
@@ -8573,6 +8802,9 @@ impl VirtualStateProcessor {
             verification_s2_active: self.palw_verification_s2_at(daa_score),
             readiness_v2_active: self.palw_readiness_v2_at(daa_score),
             evm_actions: Vec::new(),
+            // P-B1: the chain walk is the only caller holding the filter's verdicts, and adds them
+            // itself, exactly as it adds the EVM's actions above.
+            carrier_market_refunds: Vec::new(),
             // ADR-0093 Decision 8: which form of move 1 opens a phase. Written explicitly for the
             // reason the lines above give — an unwritten default here would refuse, or admit, a
             // responder's whole defense by omission.
@@ -9943,22 +10175,47 @@ impl VirtualStateProcessor {
         let fee_of = |carrier: TransactionId| {
             if priced { carrier_fees.get(&carrier).copied().unwrap_or(0) } else { PALW_RENT_UNPRICED }
         };
+        // **The 2026-09-23 Position route matrix, P-B1: a carrier-borne buy or seed names, here, who
+        // it is paid back to if acceptance refuses it** — the one place the carrier transaction is
+        // still in hand. Past `palw_audit_2026_09_23` only; below it no object carries a refund and
+        // the whole P-B1 path is absent.
+        let refunds_armed = self.palw_audit_2026_09_23_at(block_daa);
+        // The object's kind first, so the carrier is looked up only for a paid market move (the
+        // review: the lookup ran for every lifecycle object). `(refund, unrefundable)`: a buy or seed
+        // whose carrier pays no P2PKH-ML-DSA-87 output is named, so its refusal is logged.
+        let refund_of = |carried: &kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleCarrierV2| {
+            use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as MObj;
+            let paid = match &carried.object {
+                MObj::ModelBuy { msk_in, .. } => *msk_in,
+                MObj::ModelSeed { msk_seed, .. } => *msk_seed,
+                _ => 0,
+            };
+            if !refunds_armed || paid == 0 {
+                return (None, None);
+            }
+            match txs
+                .iter()
+                .find(|tx| tx.id() == carried.carrier)
+                .and_then(|tx| kaspa_consensus_core::palw_lifecycle_objects_v2::palw_model_carrier_refund_v1(tx, &carried.object))
+            {
+                Some(refund) => (Some(refund), None),
+                None => (None, Some(carried.carrier)),
+            }
+        };
         self.palw_v2_derived_panel_bindings(state, block, block_daa)
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
-            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED })
-            .chain(
-                extraction
-                    .objects
-                    .into_iter()
-                    .map(|carried| PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), object: carried.object }),
-            )
-            .chain(
-                lifecycle
-                    .objects
-                    .into_iter()
-                    .map(|carried| PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), object: carried.object }),
-            )
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, refund: None, unrefundable: None })
+            .chain(extraction.objects.into_iter().map(|carried| PalwCarriedObjectV1 {
+                carrier_fee: fee_of(carried.carrier),
+                object: carried.object,
+                refund: None,
+                unrefundable: None,
+            }))
+            .chain(lifecycle.objects.into_iter().map(|carried| {
+                let (refund, unrefundable) = refund_of(&carried);
+                PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), refund, unrefundable, object: carried.object }
+            }))
             .collect()
     }
 
@@ -12443,6 +12700,20 @@ impl VirtualStateProcessor {
         // dropped-but-valid shard is a refill, not a template failure.
         let mut dropped_shard_ids: std::collections::HashSet<kaspa_consensus_core::tx::TransactionId> =
             std::collections::HashSet::new();
+        // **P-B1: one payout-queue budget across the template's market carriers.** A carrier that
+        // does not fit alone was refused by `validate_block_template_transaction` (and is evicted);
+        // one that fits alone but not after the carriers already kept is only deferred: its slot is
+        // freed for the refill and it stays in the pool for a later template. `None` below the fence.
+        let mut market_budget = self.palw_template_market_budget(virtual_state.daa_score);
+        let mut market_deferred = 0usize;
+        let mut market_deferred_ids: std::collections::HashSet<kaspa_consensus_core::tx::TransactionId> =
+            std::collections::HashSet::new();
+        let mut market_room_for = |tx: &Transaction| -> bool {
+            match market_budget.as_mut() {
+                Some(budget) => budget.admit(tx).is_ok(),
+                None => true,
+            }
+        };
         let results = self.validate_block_template_transactions_in_parallel(&txs, &virtual_state, &virtual_utxo_view);
         for (tx, res) in txs.iter().zip(results) {
             match res {
@@ -12451,7 +12722,11 @@ impl VirtualStateProcessor {
                     tx_selector.reject_selection(tx.id());
                 }
                 Ok(fee) => {
-                    if classify_keep(
+                    if !market_room_for(tx) {
+                        market_deferred += 1;
+                        market_deferred_ids.insert(tx.id());
+                        tx_selector.reject_selection_for_refill(tx.id());
+                    } else if classify_keep(
                         self,
                         tx,
                         &mut shards_seen,
@@ -12474,9 +12749,13 @@ impl VirtualStateProcessor {
             }
         }
 
-        let mut has_rejections = !invalid_transactions.is_empty() || !dropped_shard_ids.is_empty();
+        let mut has_rejections = !invalid_transactions.is_empty() || !dropped_shard_ids.is_empty() || !market_deferred_ids.is_empty();
         if has_rejections {
-            txs.retain(|tx| !invalid_transactions.contains_key(&tx.id()) && !dropped_shard_ids.contains(&tx.id()));
+            txs.retain(|tx| {
+                !invalid_transactions.contains_key(&tx.id())
+                    && !dropped_shard_ids.contains(&tx.id())
+                    && !market_deferred_ids.contains(&tx.id())
+            });
         }
 
         while has_rejections {
@@ -12492,7 +12771,12 @@ impl VirtualStateProcessor {
                         has_rejections = true;
                     }
                     Ok(fee) => {
-                        if classify_keep(
+                        if !market_room_for(&tx) {
+                            // P-B1: deferred to a later template, not refused (see above).
+                            market_deferred += 1;
+                            tx_selector.reject_selection_for_refill(tx.id());
+                            has_rejections = true;
+                        } else if classify_keep(
                             self,
                             &tx,
                             &mut shards_seen,
@@ -12516,6 +12800,12 @@ impl VirtualStateProcessor {
             }
         }
 
+        if market_deferred > 0 {
+            debug!(
+                "[palw-market] {market_deferred} market carrier(s) deferred from this template: the payout queue has no room left \
+                 for their moves or refunds after the ones it already carries (P-B1)"
+            );
+        }
         // kaspa-pq DNS-finality (§6.5): emit the attestation-template diagnostics once
         // per build when any shard was seen (kept or dropped). Inert (no log) on a chain
         // with no attestation traffic / overlay dormant.

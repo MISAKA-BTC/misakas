@@ -470,6 +470,7 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
         println!(
             "  LOCKED FOR GOOD: no object pays a seed out; only a holder's sell moves MSK out of the curve, and never below the seed."
         );
+        println!("{}", refusal_line(&nv, msk_seed, &addr));
     }
     let what = format!("ModelSeed {} into line {}", msk(msk_seed), line);
     let out = submit_move(ctx, &nv, tx, fee, &what, yes).await;
@@ -477,8 +478,92 @@ pub async fn seed(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_tex
     out
 }
 
-/// `misaka palw model-buy --line <id> --msk <amount> [--min-positions <n>] --key … [--yes]`.
-pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text: &str, min_positions: u64, yes: bool) -> CliResult {
+/// **What a buy insists on** (the 2026-09-23 Position route matrix, P-B1): a floor the buyer
+/// stated, a slippage under the quote the node serves now, or nothing stated — which is the quote
+/// less [`DEFAULT_BUY_SLIPPAGE_PERMILLE`] where the chain pays a refused carrier back, and a refusal
+/// to guess where it does not. The old default, no floor at all, was a buy at any price.
+pub(crate) enum BuyFloor {
+    /// Whole positions (`--min-positions`).
+    Positions(u64),
+    /// Permille under the quote, rounded down to whole positions (`--slippage`, `misaka position
+    /// buy`'s rule).
+    SlippagePermille(u64),
+    /// Neither flag.
+    Unstated,
+}
+
+/// The slippage an unstated floor sits at on a chain that refunds a refused carrier — the same
+/// 1 % `misaka position buy` defaults to.
+pub(crate) const DEFAULT_BUY_SLIPPAGE_PERMILLE: u64 = 10;
+
+impl BuyFloor {
+    /// The whole positions the buy insists on, given the curve's quote and whether this chain pays
+    /// a refused carrier back.
+    ///
+    /// **Unstated on a chain that keeps a refused carrier's MSK, nothing is guessed.** A floor there
+    /// is a bet the whole payment on the price holding until inclusion, and no floor is a buy at any
+    /// price; both are the buyer's call, so the tool asks for one — as `model-sell` asks for
+    /// `--min-msk`.
+    pub(crate) fn min_positions(&self, quoted_units: u64, refused_is_refunded: bool) -> Result<u64, CliError> {
+        let slippage = match *self {
+            BuyFloor::Positions(positions) => return Ok(positions),
+            BuyFloor::SlippagePermille(permille) => permille,
+            BuyFloor::Unstated if refused_is_refunded => DEFAULT_BUY_SLIPPAGE_PERMILLE,
+            BuyFloor::Unstated => {
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    "state --min-positions <n> or --slippage <p%>: this chain keeps a refused carrier's MSK in the line's sink, \
+                     so a floor risks the whole payment on the price holding until the carrier is accepted, and \
+                     --min-positions 0 buys at any price"
+                        .to_string(),
+                ));
+            }
+        };
+        Ok(crate::operator::market::floor_after(quoted_units, slippage) / PALW_MODEL_POSITION_UNITS_V1)
+    }
+}
+
+/// **Whether this chain pays a refused carrier back** (P-B1): past `palw_audit_2026_09_23` at the
+/// tip the node reported, the sink's MSK is paid back to the carrier's change address.
+fn refused_is_refunded(nv: &crate::wallet::NodeView) -> bool {
+    nv.params.palw_audit_2026_09_23_active_at(nv.virtual_daa)
+}
+
+/// **What a refused carrier costs on this chain**, printed before anything is signed, because a
+/// floor is only as safe as its refusal.
+fn refusal_line(nv: &crate::wallet::NodeView, amount: u64, change_to: &impl std::fmt::Display) -> String {
+    if refused_is_refunded(nv) {
+        format!(
+            "  if refused     {} is paid back to {change_to} through the coinbase (a node will not relay or mine this carrier \
+             while the payout queue has no row left for its refund)",
+            msk(amount)
+        )
+    } else {
+        format!("  if refused     {} STAYS IN THE SINK: this chain does not pay a refused carrier back", msk(amount))
+    }
+}
+
+#[cfg(test)]
+mod buy_floor_tests {
+    use super::{BuyFloor, DEFAULT_BUY_SLIPPAGE_PERMILLE};
+    use kaspa_consensus_core::palw_model_market_v1::PALW_MODEL_POSITION_UNITS_V1;
+
+    /// P-B1: an unstated floor is the quote less 1 % in whole positions where a refusal is paid
+    /// back, and an error where it is kept; a stated one is what was stated.
+    #[test]
+    fn an_unstated_buy_floor_is_a_slippage_only_where_a_refusal_is_refunded() {
+        let quoted = 1_000 * PALW_MODEL_POSITION_UNITS_V1 + PALW_MODEL_POSITION_UNITS_V1 / 2;
+        assert_eq!(DEFAULT_BUY_SLIPPAGE_PERMILLE, 10);
+        assert_eq!(BuyFloor::Unstated.min_positions(quoted, true).unwrap(), 990, "1,000.5 less 1 %, rounded down");
+        assert!(BuyFloor::Unstated.min_positions(quoted, false).is_err(), "no guess where a refusal burns the payment");
+        assert_eq!(BuyFloor::SlippagePermille(50).min_positions(quoted, false).unwrap(), 950);
+        assert_eq!(BuyFloor::Positions(0).min_positions(quoted, false).unwrap(), 0, "0 is still sayable, out loud");
+        assert_eq!(BuyFloor::Positions(7).min_positions(quoted, true).unwrap(), 7);
+    }
+}
+
+/// `misaka palw model-buy --line <id> --msk <amount> [--min-positions <n> | --slippage <p%>] --key … [--yes]`.
+pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text: &str, floor: BuyFloor, yes: bool) -> CliResult {
     let line = parse_line(line_id)?;
     let msk_in = parse_msk_amount(msk_text)?;
     let key = ks.load_key()?;
@@ -500,6 +585,7 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
     let Some(quote) = palw_model_buy_quote_with(&market, msk_in, served_schedule(&r)) else {
         return Err(CliError::new(exit::GENERIC, format!("a buy of {} releases nothing (closed to buys, or too small)", msk(msk_in))));
     };
+    let min_positions = floor.min_positions(quote.units_out, refused_is_refunded(&nv))?;
     let min_units_out = min_positions.saturating_mul(PALW_MODEL_POSITION_UNITS_V1);
     if quote.units_out < min_units_out {
         return Err(CliError::new(
@@ -531,6 +617,7 @@ pub async fn buy(ctx: &Ctx, ks: &crate::keys::KeySource, line_id: &str, msk_text
             quote.units_out
         );
         println!("  price after    {} per position", msk(quote.after.price_sompi_per_position_v1()));
+        println!("{}", refusal_line(&nv, msk_in, &addr));
     }
     let what = format!("ModelBuy {} of line {}", msk(msk_in), line);
     let out = submit_move(ctx, &nv, tx, fee, &what, yes).await;

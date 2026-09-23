@@ -260,7 +260,9 @@ pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/opera
 /// rather than an assumption by [`PALW_V2_MAX_PENDING_PAYOUTS`] below: the queue has a ceiling and a
 /// market move that would breach it is refused, so the map cannot grow without limit whatever the
 /// market does, and claim rows drain ahead of market rows (see
-/// [`PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX`]).
+/// [`PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX`]). Past `Params::palw_audit_2026_09_23` the market's
+/// third kind of row — a refused carrier buy's or seed's refund (the 2026-09-23 Position route
+/// matrix, P-B1) — is measured against the same ceiling, so the bound still holds.
 pub const PALW_V2_MAX_PAYOUTS_PER_BLOCK: usize = 8;
 
 /// **The ceiling on the payout queue itself** (mainnet audit 2026-09-06, M-10).
@@ -273,10 +275,16 @@ pub const PALW_V2_MAX_PAYOUTS_PER_BLOCK: usize = 8;
 /// 1,024 = 128 blocks of drain: a market payout that queues behind a full table waits at most that
 /// long, and the table costs at most 1,024 × ~72 bytes ≈ 74 KB of state-root preimage.
 ///
-/// **Only market moves are measured against it.** A claim payout is never refused: ADR-0042
-/// Decision 10's escrow release is the worker's own reward and refusing it would burn it. What
-/// keeps claims safe is that market rows sort after claim rows and the market's own ceiling leaves
-/// the drain's whole prefix available to them.
+/// **Only market rows are measured against it** — the moves' fee legs and, past
+/// `Params::palw_audit_2026_09_23`, a refused carrier buy's or seed's refund (the 2026-09-23 Position
+/// route matrix, P-B1; user decision: refunds COUNT against the cap). A refund the queue has no
+/// room for is not written, so its MSK stays in the sink; a node therefore refuses, at its mempool
+/// and again at its template, a market carrier whose move or refund the queue could not take
+/// ([`PalwModelCarrierBudgetV1`]), and the acceptance filter reserves each refund's row before a
+/// later move may take it. A claim payout is never refused: ADR-0042 Decision 10's escrow release
+/// is the worker's own reward and refusing it would burn it. What keeps claims safe is that market
+/// rows sort after claim rows and the market's own ceiling leaves the drain's whole prefix
+/// available to them.
 pub const PALW_V2_MAX_PENDING_PAYOUTS: usize = 1_024;
 
 /// **The first byte of every model-market payout key** (mainnet audit 2026-09-06, M-10).
@@ -848,6 +856,11 @@ pub const PALW_STATE_V2_DOMAIN_COURT_CLOSE_CHUNK: &[u8] = b"misaka-palw/state-v2
 /// ADR-0087: the key of a model-market payout in `pending_payouts` — a function of the move, so
 /// two moves in one block cannot share a row.
 pub const PALW_STATE_V2_DOMAIN_MODEL_PAYOUT: &[u8] = b"misaka-palw/state-v2/model-payout/v1";
+/// The 2026-09-23 Position route matrix, P-B1: the key of a refused carrier market move's refund
+/// in `pending_payouts` — a function of the CARRIER, which a chain accepts once, so two refunds
+/// cannot share a row. A row key, kept out of [`PALW_STATE_V2_ALL_DOMAINS`] exactly as the market
+/// payout's key above it is, so nothing a live network already derives from that list moves.
+pub const PALW_STATE_V2_DOMAIN_MODEL_REFUND: &[u8] = b"misaka-palw/state-v2/model-refund/v1";
 /// ADR-0124 Decision 1: the domain of a panel seat's payout key.
 pub const PALW_STATE_V2_DOMAIN_PANEL_PAYOUT: &[u8] = b"misaka-palw/state-v2/panel-payout/v1";
 
@@ -9062,6 +9075,83 @@ pub fn palw_evm_market_refused_classes_v1(
     state.classes.keys().filter(|class_id| palw_model_market_admits_v1(state, params, extras, class_id).is_err()).copied().collect()
 }
 
+/// **How many `pending_payouts` rows a carrier-borne market move needs, whichever way the fold
+/// answers it** (the 2026-09-23 Position route matrix, P-B1: refunds count against the cap).
+///
+///   * a buy: its two fee legs if it fills, its one refund row if it is refused  → 2
+///   * a seed: no leg if it fills (ADR-0090 Decision 2), its refund if refused    → 1
+///   * a carrier sell: the two legs and `sell-net`; a refused sell pays nothing   → 3
+///
+/// `None` for every other transaction and for a payload that does not decode at the current wire
+/// version (the extraction walk skips it, so it moves nothing).
+pub fn palw_model_carrier_payout_rows_v1(tx: &crate::tx::Transaction) -> Option<usize> {
+    use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return None;
+    }
+    let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
+    if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
+        return None;
+    }
+    match payload.object {
+        PalwConsensusObjectV2::ModelBuy { .. } => Some(TransitionBuilder::model_payout_rows_would_add(false, false).max(1)),
+        PalwConsensusObjectV2::ModelSeed { .. } => Some(TransitionBuilder::model_payout_rows_would_add(false, true).max(1)),
+        PalwConsensusObjectV2::ModelSell { .. } => Some(TransitionBuilder::model_payout_rows_would_add(true, false)),
+        _ => None,
+    }
+}
+
+/// **The payout-queue rows a node lets the market carriers of its next block take, read at
+/// `state`**: the ceiling less what the queue holds at the tip. No credit is taken for the next
+/// block's drain (step 1b frees up to [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows before any object
+/// applies): those rows are the margin for the claim and seat rows that block may write, which the
+/// market never refuses, so that what a node mined as fitting is not later refused for want of a
+/// refund row by the acceptance filter, which counts them.
+pub fn palw_model_payout_room_v1(state: &PalwChainStateV2) -> usize {
+    PALW_V2_MAX_PENDING_PAYOUTS.saturating_sub(state.pending_payouts.len())
+}
+
+/// **A node's budget of payout-queue rows for the market carriers it relays or mines next** (the
+/// 2026-09-23 Position route matrix, P-B1; user decision: refunds count against the cap, and a
+/// carrier whose move or refund would overflow it is refused at the mempool and at the template, so
+/// it is never mined and nothing burns).
+///
+/// Node-local policy, never a block rule: the fold alone judges a block another node mined. The
+/// mempool asks a fresh budget per carrier; a template carries ONE budget across every carrier it
+/// selects, in order, so two carriers that each fit but not together do not both ride (the second
+/// is left in the pool for a later template). It reads the tip: parallel blocks that each spend the
+/// whole room can still overfill a merging block's queue, and the fold then refuses — and refunds
+/// while room remains — in transaction order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwModelCarrierBudgetV1 {
+    room: usize,
+    used: usize,
+}
+
+impl PalwModelCarrierBudgetV1 {
+    /// The room the next block leaves at `state` ([`palw_model_payout_room_v1`]), none spent yet.
+    pub fn at_tip(state: &PalwChainStateV2) -> Self {
+        Self { room: palw_model_payout_room_v1(state), used: 0 }
+    }
+
+    /// A budget of `room` rows — for a caller that computed the room itself (tests).
+    pub fn with_room(room: usize) -> Self {
+        Self { room, used: 0 }
+    }
+
+    /// Take `tx`'s rows from the budget, or refuse it with the fold's own error when they do not
+    /// fit. Every transaction that is not a market carrier is `Ok` and takes nothing.
+    pub fn admit(&mut self, tx: &crate::tx::Transaction) -> Result<(), PalwStateV2Error> {
+        let Some(rows) = palw_model_carrier_payout_rows_v1(tx) else { return Ok(()) };
+        if self.used.saturating_add(rows) > self.room {
+            let held = PALW_V2_MAX_PENDING_PAYOUTS.saturating_sub(self.room).saturating_add(self.used);
+            return Err(PalwStateV2Error::ModelPayoutQueueFull { held, want: rows, cap: PALW_V2_MAX_PENDING_PAYOUTS });
+        }
+        self.used += rows;
+        Ok(())
+    }
+}
+
 /// **The same gate for a carrier before it is mined** (the 2026-09-23 Position route matrix, P-B3):
 /// the refusal the fold would give the `ModelSeed` or `ModelBuy` that `tx` carries, on its class's
 /// registry lifecycle. The mempool asks it, because a carried refusal is a dropped object and a kept
@@ -13136,8 +13226,9 @@ pub fn apply_palw_transition_v7(
     //     **The second writer** (mainnet audit 2026-09-06, M-10): ADR-0087's market writes fee legs
     //     into this same map from two lanes, so "at most one new claim per block" is no longer the
     //     whole story. What holds the sentence up now is `PALW_V2_MAX_PENDING_PAYOUTS` — every
-    //     market move is measured against it and refused by it — and market keys are minted in the
-    //     top 1/256 of the key space, so this prefix still belongs to the claims it was sized for.
+    //     market move is measured against it and refused by it, and past the 2026-09-23 audit fence
+    //     so is every carrier refund (P-B1) — and market keys are minted in the top 1/256 of the key
+    //     space, so this prefix still belongs to the claims it was sized for.
     for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
     }
@@ -13198,6 +13289,11 @@ pub fn apply_palw_transition_v7(
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
     }
+    // 3′. The 2026-09-23 Position route matrix, P-B1: the carrier-borne market moves acceptance
+    //     refused are paid back — after every object, so no object of this block is quoted against
+    //     a queue its own refunds changed (the acceptance rehearsal folds objects only, and must
+    //     agree with this), and before the EVM's actions, which see the queue as it then stands.
+    apply_carrier_market_refunds(&mut builder)?;
     // 3c. ADR-0089 Decision 6: the EVM's actions, after every carrier-borne object, in sequence
     //     order — each quoted on the row as it then stands, refused rather than failing the block,
     //     and each answered with a settlement the selected child will carry.
@@ -18409,6 +18505,41 @@ pub struct PalwEconomicSafetyFoldV1 {
     pub permit_value_sompi: u64,
 }
 
+/// **A carrier-borne market move this block refused, and the payer its MSK goes back to** (the
+/// 2026-09-23 Position route matrix, P-B1).
+///
+/// A `ModelBuy` or `ModelSeed` rides a transaction whose sink output is an `OP_RETURN`: the
+/// transaction is accepted, and the sompi in the sink are out of circulation, before any rule that
+/// reads state has spoken. Every refusal after that point — a stale price under `min_units_out`, a
+/// second seed of an open market, a closed line, a full payout queue — used to drop the object and
+/// keep the payment, which the EVM lane never did (a refused action's escrow is its settlement).
+/// Refusing the carrier itself is not available: the refusal is a fold over the whole accepted
+/// set, which UTXO acceptance does not have and a block template cannot rehearse. So the MSK is
+/// paid back the way every other sompi the fold owes somebody is paid, through `pending_payouts`.
+///
+/// Built by the processor, never by a carrier: `payee` is read off the carrier's own outputs
+/// (`palw_model_carrier_refund_v1`), `amount` is the sink value the carrier binding already pinned.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwCarrierRefundV1 {
+    /// The carrier; keys the refund row ([`palw_model_refund_payout_key_v1`]).
+    pub carrier: crate::tx::TransactionId,
+    pub line_id: Hash64,
+    /// The P2PKH-ML-DSA-87 payload the carrier's own change pays.
+    pub payee: Hash64,
+    pub amount: u64,
+}
+
+/// **The refund row's key**: the carrier under [`PALW_STATE_V2_DOMAIN_MODEL_REFUND`], minted in the
+/// market's top 1/256 of the key space ([`PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX`]) so a refund
+/// drains after every claim row and every seat row, as every other market row does.
+pub fn palw_model_refund_payout_key_v1(carrier: &crate::tx::TransactionId) -> Hash64 {
+    let mut h = keyed(PALW_STATE_V2_DOMAIN_MODEL_REFUND);
+    h.update(&carrier.as_bytes());
+    let mut key_bytes = finish(h).as_bytes();
+    key_bytes[0] = PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX;
+    Hash64::from_bytes(key_bytes)
+}
+
 /// **ADR-0088 / ADR-0089: what a block's transition is told beyond its objects and its work.**
 /// `Default` is every shipped preset — every fence dormant — and is byte-identical to the
 /// transition before the struct existed.
@@ -18513,6 +18644,12 @@ pub struct PalwTransitionExtrasV1 {
     /// ADR-0089 Decision 6: the actions the block's EVM execution queued, in sequence order —
     /// applied after every carrier-borne object, each quoted on the row as it then stands.
     pub evm_actions: Vec<crate::evm::model_market::PalwEvmMarketActionV1>,
+    /// **The 2026-09-23 Position route matrix, P-B1: the carrier-borne market moves this block's
+    /// acceptance refused, with the payer each one's MSK goes back to** — paid after every object
+    /// and before the EVM's actions, and only where `audit_2026_09_23_active`. Empty by `Default`
+    /// and on every network below that fence, where a refused carrier's payment stays in its sink
+    /// exactly as before; the processor is the only writer.
+    pub carrier_market_refunds: Vec<PalwCarrierRefundV1>,
     /// `Params::palw_court_responder_coverage` resolved at the block's DAA (mainnet audit
     /// 2026-09-06, C-2/H-5). Below it a fused terminal's silence convicts the responder exactly as
     /// it does today; past it that one ending routes to `rearm_after_unanswered_opening` instead.
@@ -19148,6 +19285,48 @@ fn apply_evm_market_actions(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlock
                 outcome,
             }),
         );
+    }
+    Ok(())
+}
+
+/// **The 2026-09-23 Position route matrix, P-B1: a refused carrier buy or seed is paid back, not
+/// kept.** One `pending_payouts` row per refused carrier, `amount` to `payee`, keyed by the carrier
+/// ([`palw_model_refund_payout_key_v1`]) and drained through the coinbase like every market row —
+/// so a reorg that takes the block back takes the row back with it (`PalwDeltaEntryV2::Payout`).
+///
+/// **Measured against [`PALW_V2_MAX_PENDING_PAYOUTS`] like every other market row** (user
+/// decision on the P-B1 review: refunds COUNT against the cap). An uncapped refund was a cheap
+/// market freeze and an unbounded writer into a hashed table: a deliberately refused carrier costs
+/// only its fee once its principal comes back, and each one added a row. So a refund the queue has
+/// no room for is not written — its MSK stays in the sink, as every refused carrier's did before
+/// P-B1 — and what keeps that from happening to an honest payer is upstream of the fold: the
+/// acceptance filter reserves each refund's row before a later move may take it, and a node refuses
+/// at its mempool and again at its template a market carrier whose move or refund the queue could
+/// not take ([`PalwModelCarrierBudgetV1`]), so it is not relayed or mined while the queue is full.
+/// The market key prefix keeps every refund behind every claim and seat row in the drain.
+///
+/// Inert below `audit_2026_09_23_active` whatever the list holds — the processor fills it only past
+/// that fence, and this check makes a stray caller unable to move a live network's root.
+fn apply_carrier_market_refunds(builder: &mut TransitionBuilder<'_>) -> Result<(), PalwStateV2Error> {
+    if !builder.extras.audit_2026_09_23_active {
+        return Ok(());
+    }
+    let refunds = builder.extras.carrier_market_refunds.clone();
+    for refund in refunds {
+        if refund.amount == 0 {
+            continue;
+        }
+        let key = palw_model_refund_payout_key_v1(&refund.carrier);
+        // The cap holds with refunds: a new row the queue has no room for is not written. The
+        // acceptance filter lists only refunds it reserved room for, so on a block this node's
+        // filter judged this never fires; it is the fold's own guarantee that the table is bounded.
+        if !builder.state.pending_payouts.contains_key(&key) && builder.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS {
+            continue;
+        }
+        // Absent on every chain: a carrier is accepted once, and a reorg reverts its row first.
+        let held = builder.state.pending_payouts.get(&key).map(|row| row.amount).unwrap_or(0);
+        let amount = held.checked_add(refund.amount).ok_or(PalwStateV2Error::Overflow("carrier market refund"))?;
+        builder.write_payout(key, Some(PalwPayoutV2 { payload: refund.payee, amount }));
     }
     Ok(())
 }
@@ -43174,6 +43353,7 @@ pub(crate) mod tests {
                 model_leg_v2_active: false,
                 model_seed_v2_active: false,
                 evm_actions: actions,
+                carrier_market_refunds: Vec::new(),
                 model_registry: None,
                 economic_payout: None,
                 court_responder_coverage_active: false,
@@ -43415,6 +43595,7 @@ pub(crate) mod tests {
                 model_leg_v2_active: false,
                 model_seed_v2_active: false,
                 evm_actions: vec![buy(0, 1, class, MSK, 0)],
+                carrier_market_refunds: Vec::new(),
                 model_registry: None,
                 economic_payout: None,
                 court_responder_coverage_active: false,
@@ -43459,6 +43640,211 @@ pub(crate) mod tests {
             assert!(decoded4.evm_settlements.is_empty());
             assert_eq!(apply_delta_v2(&s, &d3, &p).unwrap().state_root(), s3.state_root());
             assert_eq!(revert_delta_v2(&s3, &d3, &p).unwrap().state_root(), s.state_root());
+        }
+    }
+
+    // ---- The 2026-09-23 Position route matrix, P-B1: a refused carrier move is paid back -----
+    mod carrier_refund {
+        use super::*;
+
+        const MSK: u64 = 100_000_000;
+
+        fn extras(audit_2026_09_23_active: bool, refunds: Vec<PalwCarrierRefundV1>) -> PalwTransitionExtrasV1 {
+            PalwTransitionExtrasV1 { audit_2026_09_23_active, carrier_market_refunds: refunds, ..Default::default() }
+        }
+
+        fn refund(carrier: u64, payee: u64, amount: u64) -> PalwCarrierRefundV1 {
+            PalwCarrierRefundV1 { carrier: TransactionId::from_u64_word(carrier), line_id: h64(2), payee: h64(payee), amount }
+        }
+
+        fn fold(
+            parent: &PalwChainStateV2,
+            p: &PalwStateParamsV2,
+            extras: &PalwTransitionExtrasV1,
+        ) -> (PalwChainStateV2, PalwStateDeltaV2) {
+            apply_palw_transition_v2_with_extras(parent, p, &ctx(2, 101, 2), &[], None, false, false, false, false, extras)
+                .expect("the block folds")
+        }
+
+        /// Past the fence each refund is one payout row — its carrier's key, its payee, its amount —
+        /// in the market's band of the key space, and a reorg takes it back bit for bit. Below the
+        /// fence (testnet-11, and every network that has not armed the audit) the same list moves
+        /// nothing: the root is the one a block with no list folds to.
+        #[test]
+        fn a_refund_is_a_payout_row_past_the_fence_and_nothing_below_it() {
+            let p = economy_params();
+            let (s1, _) = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(),
+                &p,
+                &ctx(1, 100, 1),
+                &register_class_and_bond(),
+                None,
+                false,
+                false,
+                false,
+                false,
+                &PalwTransitionExtrasV1::default(),
+            )
+            .expect("genesis folds");
+            let refunds = vec![refund(0xC1, 0xA1, 7 * MSK), refund(0xC2, 0xA2, 3 * MSK), refund(0xC3, 0xA3, 0)];
+
+            // Below the fence: byte-identical to a block that was handed nothing.
+            let (quiet, quiet_delta) = fold(&s1, &p, &extras(false, refunds.clone()));
+            let (plain, plain_delta) = fold(&s1, &p, &extras(false, Vec::new()));
+            assert_eq!(quiet.state_root(), plain.state_root(), "an unarmed network's root does not move");
+            assert_eq!(quiet_delta, plain_delta);
+            assert_eq!(quiet.pending_payouts_iter().count(), s1.pending_payouts_iter().count());
+
+            // Past it: one row per refund with an amount, paying exactly the payee.
+            let (baseline, _) = fold(&s1, &p, &extras(true, Vec::new()));
+            let (paid, delta) = fold(&s1, &p, &extras(true, refunds.clone()));
+            assert_eq!(
+                paid.pending_payouts_iter().count(),
+                baseline.pending_payouts_iter().count() + 2,
+                "a zero refund writes no row"
+            );
+            for r in &refunds[..2] {
+                let key = palw_model_refund_payout_key_v1(&r.carrier);
+                assert_eq!(key.as_byte_slice()[0], PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX, "drains after every claim and seat row");
+                let row = paid.pending_payouts_iter().find(|(k, _)| **k == key).map(|(_, row)| *row).expect("the refund row");
+                assert_eq!(row, PalwPayoutV2 { payload: r.payee, amount: r.amount });
+            }
+            assert_ne!(palw_model_refund_payout_key_v1(&refunds[0].carrier), palw_model_refund_payout_key_v1(&refunds[1].carrier));
+
+            // A reorg takes the rows back with the block; replaying the delta puts them back.
+            assert_eq!(revert_delta_v2(&paid, &delta, &p).unwrap().state_root(), s1.state_root());
+            assert_eq!(apply_delta_v2(&s1, &delta, &p).unwrap().state_root(), paid.state_root());
+        }
+
+        /// **The cap holds with refunds** (user decision on the P-B1 review: refunds COUNT against
+        /// `PALW_V2_MAX_PENDING_PAYOUTS`). A block handed more refunds than the queue has room for
+        /// writes them in order until the queue is full and no further — the table stays bounded
+        /// whatever the list holds — and the next block, after its drain, has exactly the drain's
+        /// room again. (The processor never hands the fold a refund it did not reserve room for;
+        /// this is the fold's own guarantee.)
+        #[test]
+        fn the_cap_holds_with_refunds() {
+            let p = economy_params();
+            let (s1, _) = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(),
+                &p,
+                &ctx(1, 100, 1),
+                &register_class_and_bond(),
+                None,
+                false,
+                false,
+                false,
+                false,
+                &PalwTransitionExtrasV1::default(),
+            )
+            .expect("genesis folds");
+            let many: Vec<PalwCarrierRefundV1> =
+                (0..(PALW_V2_MAX_PENDING_PAYOUTS as u64 + 3)).map(|i| refund(0x10_0000 + i, 0xB0 + (i % 5), MSK)).collect();
+            let (full, delta) = fold(&s1, &p, &extras(true, many.clone()));
+            assert_eq!(full.pending_payouts_iter().count(), PALW_V2_MAX_PENDING_PAYOUTS, "filled to the cap and not past it");
+            let written = full.pending_payouts_iter().filter(|(_, row)| row.amount == MSK).count();
+            let room = PALW_V2_MAX_PENDING_PAYOUTS - fold(&s1, &p, &extras(true, Vec::new())).0.pending_payouts_iter().count();
+            assert_eq!(written, room, "exactly the room the queue had");
+            for (i, r) in many.iter().enumerate() {
+                let present = full.pending_payouts_iter().any(|(k, _)| *k == palw_model_refund_payout_key_v1(&r.carrier));
+                assert_eq!(present, i < room, "refund {i}: written in list order while room remains, and not after");
+            }
+            assert_eq!(revert_delta_v2(&full, &delta, &p).unwrap().state_root(), s1.state_root(), "and a reorg takes them back");
+            // The next block drains its eight, then takes at most eight more refunds.
+            let more = extras(true, (0..20u64).map(|i| refund(0x20_0000 + i, 0xB0, MSK)).collect());
+            let (next, _) =
+                apply_palw_transition_v2_with_extras(&full, &p, &ctx(3, 102, 3), &[], None, false, false, false, false, &more)
+                    .expect("the next block folds");
+            assert_eq!(next.pending_payouts_iter().count(), PALW_V2_MAX_PENDING_PAYOUTS, "the cap holds block after block");
+            assert_eq!(palw_model_payout_room_v1(&full), 0, "a full queue leaves a node's next carriers no room");
+        }
+
+        /// **The node's carrier budget: a market carrier takes the rows its move or its refund needs,
+        /// and one that would overflow the room is refused** — at the mempool (a fresh budget per
+        /// carrier) and at the template (one budget across the carriers it selects), so it is never
+        /// mined into a refusal the queue cannot refund. A buy takes 2, a seed 1 (its refund), a sell
+        /// 3; every other transaction takes nothing.
+        #[test]
+        fn a_market_carrier_is_refused_when_the_queue_has_no_room_for_its_move_or_its_refund() {
+            let carrier = |object: PalwConsensusObjectV2| {
+                let payload = borsh::to_vec(&crate::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+                    version: crate::palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
+                    object,
+                })
+                .expect("a lifecycle payload serializes");
+                crate::tx::Transaction::new(0, Vec::new(), Vec::new(), 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload)
+            };
+            let line = h64(2);
+            let buy = carrier(PalwConsensusObjectV2::ModelBuy {
+                line_id: line,
+                holder: h64(9),
+                msk_in: MSK,
+                min_units_out: 0,
+                sink_index: 1,
+            });
+            let seed = carrier(PalwConsensusObjectV2::ModelSeed { line_id: line, seeder: h64(9), msk_seed: MSK, sink_index: 1 });
+            let sell = carrier(PalwConsensusObjectV2::ModelSell {
+                line_id: line,
+                holder: h64(9),
+                units_in: 1,
+                min_msk_out: 0,
+                held_units: 1,
+                not_after_daa: u64::MAX,
+                pubkey: vec![1],
+                signature: vec![1],
+            });
+            let plain = crate::tx::Transaction::new(0, Vec::new(), Vec::new(), 0, crate::subnets::SUBNETWORK_ID_NATIVE, 0, Vec::new());
+            assert_eq!(
+                [&buy, &seed, &sell, &plain].map(palw_model_carrier_payout_rows_v1),
+                [Some(2), Some(1), Some(3), None],
+                "a buy's legs (≥ its refund), a seed's refund, a sell's three, and nothing for the rest"
+            );
+
+            // The mempool's question: a queue eight rows short of full leaves eight.
+            let p = economy_params();
+            let (s1, _) = apply_palw_transition_v2_with_extras(
+                &PalwChainStateV2::genesis(),
+                &p,
+                &ctx(1, 100, 1),
+                &register_class_and_bond(),
+                None,
+                false,
+                false,
+                false,
+                false,
+                &PalwTransitionExtrasV1::default(),
+            )
+            .expect("genesis folds");
+            let baseline = fold(&s1, &p, &extras(true, Vec::new())).0.pending_payouts_iter().count();
+            let flood = |n: usize| (0..n as u64).map(|i| refund(0x30_0000 + i, 0xB0, MSK)).collect::<Vec<_>>();
+            let (short, _) = fold(&s1, &p, &extras(true, flood(PALW_V2_MAX_PENDING_PAYOUTS - 8 - baseline)));
+            assert_eq!(palw_model_payout_room_v1(&short), 8);
+            let fresh = || PalwModelCarrierBudgetV1::at_tip(&short);
+            assert!(fresh().admit(&plain).is_ok());
+            assert!(fresh().admit(&buy).is_ok() && fresh().admit(&sell).is_ok(), "eight rows fit a buy, and a sell");
+
+            // At the cap the mempool refuses every market carrier: even a seed's refund has no row.
+            let (full, _) = fold(&s1, &p, &extras(true, flood(PALW_V2_MAX_PENDING_PAYOUTS + 8)));
+            for (name, tx) in [("buy", &buy), ("seed", &seed), ("sell", &sell)] {
+                assert!(
+                    matches!(PalwModelCarrierBudgetV1::at_tip(&full).admit(tx), Err(PalwStateV2Error::ModelPayoutQueueFull { .. })),
+                    "a {name} carrier at a full queue is refused before it is relayed or mined"
+                );
+            }
+            assert!(PalwModelCarrierBudgetV1::at_tip(&full).admit(&plain).is_ok(), "and nothing else is");
+
+            // One template, one budget: the eighth row is the last.
+            let mut template = fresh();
+            assert!(template.admit(&sell).is_ok(), "3 of 8");
+            assert!(template.admit(&buy).is_ok(), "5 of 8");
+            assert!(template.admit(&buy).is_ok(), "7 of 8");
+            assert!(template.admit(&seed).is_ok(), "8 of 8: the seed's refund row");
+            assert!(
+                matches!(template.admit(&seed), Err(PalwStateV2Error::ModelPayoutQueueFull { want: 1, cap, .. }) if cap == PALW_V2_MAX_PENDING_PAYOUTS),
+                "a ninth row is refused — the carrier is not mined, so nothing it paid can burn"
+            );
+            assert!(template.admit(&plain).is_ok(), "and nothing else is touched by the budget");
+            assert!(PalwModelCarrierBudgetV1::with_room(0).admit(&seed).is_err(), "no room: even a seed's refund does not fit");
         }
     }
 

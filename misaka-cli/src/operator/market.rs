@@ -906,7 +906,8 @@ pub(crate) async fn position_buy(
             crate::operator::status::group(min_positions)
         );
     }
-    crate::palw_model::buy(&ctx, &key_source(&profile)?, line, msk_text, min_positions, yes).await
+    let floor = crate::palw_model::BuyFloor::Positions(min_positions);
+    crate::palw_model::buy(&ctx, &key_source(&profile)?, line, msk_text, floor, yes).await
 }
 
 /// `misaka position sell <line> --positions N [--slippage 1%] [--yes] [--accept-burned-proceeds]`.

@@ -1413,8 +1413,14 @@ enum PalwCmd {
         #[arg(long)]
         msk: String,
         /// The fewest positions to accept; the move is refused, never partially filled, below it.
-        #[arg(long, default_value_t = 0)]
-        min_positions: u64,
+        #[arg(long, conflicts_with = "slippage")]
+        min_positions: Option<u64>,
+        /// The floor as a slippage under the quote (e.g. `1%`). With neither flag the floor is the
+        /// quote less 1 % on a chain that pays a refused carrier back, and the command asks for
+        /// one on a chain that keeps it (the 2026-09-23 Position route matrix, P-B1: the old
+        /// default, 0, was a buy at any price).
+        #[arg(long)]
+        slippage: Option<String>,
         /// Actually broadcast (otherwise a dry-run preview with the quote).
         #[arg(long)]
         yes: bool,
@@ -2673,8 +2679,16 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::ModelEvmSeed { key, line, msk, gas_limit, max_fee, nonce, yes, wait }) => {
             evm_send::model_evm_seed(&ctx, &key.source(), &line, &msk, gas_limit, max_fee, nonce, yes, wait)
         }
-        Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, yes }) => {
-            palw_model::buy(&ctx, &key.source(), &line, &msk, min_positions, yes).await
+        Command::Palw(PalwCmd::ModelBuy { key, line, msk, min_positions, slippage, yes }) => {
+            let floor = match (min_positions, slippage) {
+                (Some(positions), _) => Ok(palw_model::BuyFloor::Positions(positions)),
+                (None, Some(slippage)) => operator::market::parse_slippage(&slippage).map(palw_model::BuyFloor::SlippagePermille),
+                (None, None) => Ok(palw_model::BuyFloor::Unstated),
+            };
+            match floor {
+                Ok(floor) => palw_model::buy(&ctx, &key.source(), &line, &msk, floor, yes).await,
+                Err(e) => Err(e),
+            }
         }
         Command::Palw(PalwCmd::ModelSell { key, line, positions, min_msk, yes, accept_burned_proceeds }) => {
             palw_model::sell(&ctx, &key.source(), &line, positions, min_msk, yes, accept_burned_proceeds).await

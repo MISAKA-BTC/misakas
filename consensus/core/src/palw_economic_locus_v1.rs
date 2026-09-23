@@ -57,7 +57,10 @@
 //!
 //! The argument it owes, now that it has one: the queue's growth is bounded by
 //! [`crate::palw_state_v2::PALW_V2_MAX_PENDING_PAYOUTS`], which every market move is measured
-//! against and refused by; and market rows are minted in the top 1/256 of the key space
+//! against and refused by — and, past `Params::palw_audit_2026_09_23`, every refund of a refused
+//! carrier buy or seed as well (the 2026-09-23 Position route matrix, P-B1: a refund the queue has
+//! no room for is not written, and a node refuses such a carrier at its mempool and template so it
+//! is not mined); and market rows are minted in the top 1/256 of the key space
 //! ([`crate::palw_state_v2::PALW_STATE_V2_MODEL_PAYOUT_KEY_PREFIX`]) so they sort AFTER claim rows,
 //! which returns the drain's latency guarantee to the claims it was sized for. Neither the drain
 //! rate nor the coinbase output cap moved; the writer was bounded instead.

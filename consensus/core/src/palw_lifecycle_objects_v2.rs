@@ -546,6 +546,36 @@ pub fn palw_model_buy_binds_its_carrier_v1(tx: &Transaction, object: &PalwConsen
     Ok(())
 }
 
+/// **The 2026-09-23 Position route matrix, P-B1: who a refused carrier buy or seed is paid back
+/// to** — the P2PKH-ML-DSA-87 payload of the carrier's first output that pays one, and `None` for
+/// any other object, a zero amount, or a carrier with no such output.
+///
+/// The EVM lane refunds the account that signed the action; the carrier lane's equivalent is the
+/// script the payer's own signature sent the change to. Every carrier the shipped tools build puts
+/// that change at output 0, to the first input's script (`build_palw_lifecycle_tx_with_outputs`,
+/// `build_palw_lifecycle_tx_multi`), and the sink is an `OP_RETURN` that can never read as a payee.
+/// It is read off the OUTPUTS, which every input signs under `SIG_HASH_ALL`, rather than off the
+/// object's `holder` or `seeder`: those name who the move was FOR — a buy may be a gift — and a
+/// relay cannot change either the outputs or who signed them.
+///
+/// Called only where the object already rode: the carrier binding above pinned `amount` to the
+/// sink output, so the refund is exactly the sompi the sink took.
+pub fn palw_model_carrier_refund_v1(
+    tx: &Transaction,
+    object: &PalwConsensusObjectV2,
+) -> Option<crate::palw_state_v2::PalwCarrierRefundV1> {
+    let (line_id, amount) = match object {
+        PalwConsensusObjectV2::ModelBuy { line_id, msk_in, .. } => (*line_id, *msk_in),
+        PalwConsensusObjectV2::ModelSeed { line_id, msk_seed, .. } => (*line_id, *msk_seed),
+        _ => return None,
+    };
+    if amount == 0 {
+        return None;
+    }
+    let payee = tx.outputs.iter().find_map(|output| crate::mldsa87_primitives::p2pkh_mldsa87_payload(&output.script_public_key))?;
+    Some(crate::palw_state_v2::PalwCarrierRefundV1 { carrier: tx.id(), line_id, payee, amount })
+}
+
 pub fn palw_bond_registration_signed_key_v2(bond: &crate::palw_state_v2::PalwBondKeyV2) -> crate::palw_state_v2::PalwBondKeyV2 {
     crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(TransactionId::default(), bond.0.index))
 }
