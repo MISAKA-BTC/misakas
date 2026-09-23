@@ -63,7 +63,7 @@ misaka --network testnet-11 model add <catalog-model> --artifact <file>
 
 No argument lists the current catalog. The command resumes registration/family/lane certification from chain state. A model absent from the catalog requires a reviewed canonical profile, deterministic converter/runtime, complete reachable-kernel adjudication and conformance tests; copying a GGUF or safetensors file into the node does not register a class.
 
-See [palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md).
+See [palw-model-onboarding-sdk.md](palw-model-onboarding-sdk.md), and the end-to-end operator runbook (convert → inspect → sidecar → register → certify → seats): [palw-add-a-model-runbook.md](palw-add-a-model-runbook.md).
 
 ## Panel/verifier
 
