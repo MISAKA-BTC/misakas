@@ -9030,6 +9030,39 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
 /// fleet's update window, and every validator/miner binary inside the fleet BEFORE it.
 pub const TESTNET_VLT_SHADOW_FORK_DAA_SCORE: u64 = 0;
 
+/// **testnet-12's DNS-finality set: mainnet-assumed validators** (user decision, 2026-09-24).
+///
+/// Derived from [`PRODUCTION_DNS_PARAMS`] — the mainnet set, which is left untouched because
+/// mainnet's params hash it — through [`DnsParams::at_two_minute_cadence`], the same conversion that
+/// gives testnet-11 its 120 s windows (so, e.g., `unbonding_period_blocks` is 14 days at t12's
+/// 120 s blocks plus the reorg horizon: 10,083 blocks, not 14 days of 10 bps blocks), and then:
+///
+/// * **`min_active_validators` = 6** (production: 12);
+/// * **`min_bond_amount_sompi` = 20,000,000 MSK**;
+/// * **`min_active_stake_sompi` = 6 × 20,000,000 = 120,000,000 MSK** — production's
+///   validators × bond relation, kept;
+/// * **`coinbase_settlement_long_maturity_daa` = testnet-11's 600 DAA** — production's 0 would drop
+///   the long fallback, and the user's Decision A makes coinbase spendability exactly that
+///   DAA-based maturity (or DNS-final early release);
+/// * **`required_work_depth` = testnet-11's**, the one testnet-only value the chain needs to stay
+///   coherent: production's is a 10 bps kHeavyHash blue-work depth that a PALW chain at the easiest
+///   header target would take years to accumulate, so DNS confirmation could never flip.
+///
+/// Everything else is production's: `required_stake_depth` (ten epochs at full participation —
+/// what production calibrates for a 20M-scale set), `min_anchor_attesters` = 2, the reward params,
+/// the stake preference off, and the compute overlay inert (`VltParams::INERT`; ADR-0134 retired
+/// it). `validate_palw_v2` and the v3 anchor invariants accept the set (pinned in
+/// `the_testnet_12_dns_set_is_mainnet_assumed_and_nobody_elses_moved`).
+pub const PALW_T12_DNS_PARAMS: DnsParams = {
+    let mut dns = PRODUCTION_DNS_PARAMS.at_two_minute_cadence();
+    dns.min_active_validators = 6;
+    dns.min_bond_amount_sompi = 20_000_000 * SOMPI_PER_KASPA;
+    dns.min_active_stake_sompi = 6 * 20_000_000 * SOMPI_PER_KASPA;
+    dns.coinbase_settlement_long_maturity_daa = TESTNET_DNS_PARAMS.coinbase_settlement_long_maturity_daa;
+    dns.required_work_depth = TESTNET_DNS_PARAMS.required_work_depth;
+    dns
+};
+
 // SCHEDULED 2026-08-11. Live tip measured at 29_981_862 (`/info/blockdag` on the public
 // explorer, cross-checked by a P2P handshake with the fleet). t10 runs at 1 bps, so the margin is
 // ~2.5 days — twice the end-to-end duration of the 2026-08-10 flag day, so an operator who starts
@@ -10620,8 +10653,10 @@ pub fn palw_v2_params_with_class_rows_v1(
         )
             .max(crate::config::premine::PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI)
     } else {
+        // What this network's premine carves a seat (`genesis_bond_collateral_for`): testnet-11's
+        // 10,000 MSK byte for byte, and a mainnet card's producer floor (13,000 MSK).
         crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
-            .max(crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI)
+            .max(crate::config::premine::genesis_bond_collateral_for(params.net))
     };
     // **And the registry has to be able to JUDGE the tiers this card funds** (ADR-0071
     // Decision 3).
@@ -15098,6 +15133,9 @@ pub fn palw_t12_base_params() -> Params {
     let mut params = palw_rc_base_params();
     params.net = NetworkId::with_suffix(NetworkType::Testnet, 12);
     params.genesis = crate::config::genesis::PALW_T12_GENESIS;
+    // Mainnet-assumed DNS-finality validators (user decision 2026-09-24) — before the arming walk,
+    // exactly where testnet-11's table sat, so the walk treats both the same.
+    params.dns_params = Some(PALW_T12_DNS_PARAMS);
     palw_t12_arm_every_rule_from_genesis(&mut params);
     params
 }
@@ -15480,10 +15518,13 @@ pub fn palw_v2_params_on_base(
     } else {
         &crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1
     };
-    // **ADR-0124 §9 / the operator's mainnet numbers: a card's producer floor is 10,000 MSK**, so
-    // Decision 4's seat floor is 100,000 MSK. Chosen by network like the windows above: testnet-11
-    // and devnet keep the policy floor, and their bundles and fingerprints do not move.
-    let min_collateral = if base.net.network_type == crate::network::NetworkType::Mainnet {
+    // **ADR-0124 §9 / the operator's mainnet numbers: a card's producer floor is 13,000 MSK**, so
+    // Decision 4's seat floor is 130,000 MSK. testnet-12 runs the mainnet-assumed bonds too (user
+    // decision 2026-09-24). Chosen by network like the windows above: testnet-11 and devnet keep the
+    // policy floor, and their bundles and fingerprints do not move.
+    let min_collateral = if base.net.network_type == crate::network::NetworkType::Mainnet
+        || (base.net.network_type == crate::network::NetworkType::Testnet && base.net.suffix == Some(12))
+    {
         crate::palw_fp_devnet_v3::PALW_MAINNET_MIN_COLLATERAL_SOMPI
     } else {
         crate::palw_fp_devnet_v3::PALW_POLICY_MIN_COLLATERAL_SOMPI
@@ -19112,6 +19153,68 @@ mod consensus_params_id_tests {
         assert!(t12.palw_audit_2026_09_23_active_at(0), "testnet-12 arms it from genesis");
     }
 
+    /// **testnet-12's DNS-finality set is the mainnet-assumed one, and nobody else's moved** (user
+    /// decision, 2026-09-24): ≥ 6 validators, a 20,000,000 MSK bond each and 120,000,000 MSK of active
+    /// stake (production's validators × bond relation), the windows at t12's own 120 s cadence
+    /// (fourteen days of unbonding in wall time, not fourteen days of 10 bps blocks), testnet-11's
+    /// 600-DAA coinbase long maturity kept, and a set `validate_palw_v2` and the v3 anchor invariants
+    /// accept. `PRODUCTION_DNS_PARAMS` (hashed by mainnet) and testnet-11's table are unchanged.
+    #[test]
+    fn the_testnet_12_dns_set_is_mainnet_assumed_and_nobody_elses_moved() {
+        use crate::constants::SOMPI_PER_KASPA;
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let dns = t12.dns_params.as_ref().expect("testnet-12 runs the DNS overlay");
+        assert_eq!(dns, &PALW_T12_DNS_PARAMS);
+        assert_eq!(dns.min_active_validators, 6);
+        assert_eq!(dns.min_bond_amount_sompi, 20_000_000 * SOMPI_PER_KASPA);
+        assert_eq!(dns.min_active_stake_sompi, 120_000_000 * SOMPI_PER_KASPA);
+        assert_eq!(dns.min_active_stake_sompi, dns.min_bond_amount_sompi * dns.min_active_validators as u64, "validators × bond");
+        assert_eq!(dns.coinbase_settlement_long_maturity_daa, 600, "Decision A: the DAA fallback stays");
+        // The cadence fields are testnet-11's 120 s table, i.e. production's at two-minute cadence.
+        let cadence = PRODUCTION_DNS_PARAMS.at_two_minute_cadence();
+        for (name, got, want) in [
+            ("epoch_length_blocks", dns.epoch_length_blocks, cadence.epoch_length_blocks),
+            ("max_reorg_horizon_blocks", dns.max_reorg_horizon_blocks, cadence.max_reorg_horizon_blocks),
+            ("evidence_window_blocks", dns.evidence_window_blocks, cadence.evidence_window_blocks),
+            ("unbonding_period_blocks", dns.unbonding_period_blocks, cadence.unbonding_period_blocks),
+            ("dns_gate_horizon_blocks", dns.dns_gate_horizon_blocks, cadence.dns_gate_horizon_blocks),
+            ("dns_veto_ttl_daa_score", dns.dns_veto_ttl_daa_score, cadence.dns_veto_ttl_daa_score),
+            (
+                "attestation_epoch_length_blue_score",
+                dns.attestation_epoch_length_blue_score,
+                cadence.attestation_epoch_length_blue_score,
+            ),
+            ("attestation_lag_blue_score", dns.attestation_lag_blue_score, cadence.attestation_lag_blue_score),
+            ("stake_score_window_blue_score", dns.stake_score_window_blue_score, cadence.stake_score_window_blue_score),
+        ] {
+            assert_eq!(got, want, "{name}");
+        }
+        // Fourteen days of evidence and unbonding in WALL time at testnet-12's block time.
+        let fourteen_days_ms = 14 * 24 * 3_600 * 1_000;
+        assert_eq!(t12.target_time_per_block(), 120_000);
+        assert_eq!(dns.evidence_window_blocks * t12.target_time_per_block(), fourteen_days_ms);
+        assert_eq!(dns.unbonding_period_blocks, dns.evidence_window_blocks + dns.max_reorg_horizon_blocks, "U = E + R");
+        assert_eq!(dns.required_work_depth, TESTNET_DNS_PARAMS.required_work_depth, "reachable on a PALW chain");
+        assert!(dns.dns_v3_params_consistent(), "the v3 anchor invariants hold");
+        t12.validate_palw_v2().expect("testnet-12's ruleset, DNS set included, validates");
+
+        // Nobody else moved: mainnet hashes PRODUCTION as it was; testnet-11 keeps its table.
+        assert_eq!(PRODUCTION_DNS_PARAMS.min_active_validators, 12);
+        assert_eq!(PRODUCTION_DNS_PARAMS.min_bond_amount_sompi, 10_000 * SOMPI_PER_KASPA);
+        assert_eq!(PRODUCTION_DNS_PARAMS.min_active_stake_sompi, 120_000 * SOMPI_PER_KASPA);
+        assert_eq!(Params::from(NetworkId::new(NetworkType::Mainnet)).dns_params, Some(PRODUCTION_DNS_PARAMS));
+        let t11 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        // (The materialized table carries the registered models' VLT cost table, which
+        // `with_registered_models` attaches; every other field is the const's.)
+        let mut t11_dns = t11.dns_params.clone().expect("testnet-11 runs the DNS overlay");
+        t11_dns.vlt.model_cost_table = TESTNET_DNS_PARAMS.vlt.model_cost_table;
+        assert_eq!(t11_dns, TESTNET_DNS_PARAMS, "testnet-11's DNS table did not move");
+        assert_eq!(
+            t11.dns_params.as_ref().map(|d| (d.min_active_validators, d.min_bond_amount_sompi)),
+            Some((1, 10 * SOMPI_PER_KASPA))
+        );
+    }
+
     /// **ADR-0088 Decision 11's fence has the same contract as ADR-0087's** and is independent of it.
     #[test]
     fn the_model_lines_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is() {
@@ -22071,15 +22174,15 @@ mod consensus_params_id_tests {
         assert_eq!(card.palw_panel_economy, Some(ForkActivation::always()));
         assert_eq!(card.palw_work_priced_reward, Some(ForkActivation::always()));
 
-        // And a card's producer floor is 10,000 MSK, so its seat floor is 100,000 MSK — the
+        // And a card's producer floor is 13,000 MSK, so its seat floor is 130,000 MSK — the
         // operator's mainnet numbers — while the RC's bundle keeps its policy floor (0.004 MSK).
         let carded = mainnet_card_fixture_v1(false);
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(card_bundle) = &carded.palw_consensus_mode else { unreachable!() };
         assert_eq!(card_bundle.state.min_collateral_sompi(), crate::palw_fp_devnet_v3::PALW_MAINNET_MIN_COLLATERAL_SOMPI);
-        assert_eq!(card_bundle.state.min_collateral_sompi(), 10_000 * crate::constants::SOMPI_PER_KASPA);
+        assert_eq!(card_bundle.state.min_collateral_sompi(), 13_000 * crate::constants::SOMPI_PER_KASPA);
         assert_eq!(
             carded.palw_seat_economy_at(0).expect("a card states the economy").panel_floor_sompi,
-            100_000 * crate::constants::SOMPI_PER_KASPA
+            130_000 * crate::constants::SOMPI_PER_KASPA
         );
         assert_eq!(bundle.state.min_collateral_sompi(), crate::palw_fp_devnet_v3::PALW_POLICY_MIN_COLLATERAL_SOMPI);
         assert_eq!(bundle.state.min_collateral_sompi(), 400_000, "testnet-11's floor and fingerprint do not move");

@@ -154,10 +154,17 @@ pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 /// any drift, which is the discipline the genesis hash pins already live under.
 pub const PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI: u64 = 93_906_321_001_040;
 
-/// The genesis-bond collateral `net` carves, per seat.
-fn genesis_bond_collateral_for(net: NetworkId) -> u64 {
+/// The genesis-bond collateral `net` carves, per seat. **A mainnet card carves its producer floor**
+/// (`PALW_MAINNET_MIN_COLLATERAL_SOMPI`, 13,000 MSK since 2026-09-24): a card seat's output must
+/// cover the floor its bundle states, and mainnet's premine carries no card today
+/// (`PALW_MAINNET_GENESIS_BONDS` is empty), so its genesis does not move. testnet-11 and devnet keep
+/// [`GENESIS_BOND_COLLATERAL_SOMPI`] byte for byte.
+pub fn genesis_bond_collateral_for(net: NetworkId) -> u64 {
     if net.network_type == NetworkType::Testnet && net.suffix == Some(12) {
         return PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI;
+    }
+    if net.network_type == NetworkType::Mainnet {
+        return crate::palw_fp_devnet_v3::PALW_MAINNET_MIN_COLLATERAL_SOMPI;
     }
     GENESIS_BOND_COLLATERAL_SOMPI
 }

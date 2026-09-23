@@ -891,14 +891,15 @@ pub fn palw_fp_bundle_with_windows_v3(
     )
 }
 
-/// **The producer floor a mainnet card states: 10,000 MSK** (ADR-0124 §9, the operator's
-/// "mainnet では Miner 10000 MSK"). With ADR-0124 Decision 4's seat floor at ten producer floors,
-/// a card draws its panel from bonds holding 100,000 MSK. A card's genesis bonds already declare
-/// `max(derived, GENESIS_BOND_COLLATERAL_SOMPI)` — the 10,000 MSK outputs ADR-0061 carves — so
-/// the floor is met by every bond the card seats. Every other network keeps
+/// **The producer floor a mainnet card states: 13,000 MSK** (ADR-0124 §9; the operator's mainnet
+/// value, raised from 10,000 on 2026-09-24). With ADR-0124 Decision 4's seat floor at ten producer
+/// floors, a card draws its panel from bonds holding 130,000 MSK. testnet-12 states it too
+/// (mainnet-assumed bonds, user decision 2026-09-24): a 13,000 MSK bond there has room for exactly
+/// one concurrent floor claim at the 500 ‰ exposure ceiling. Every other network keeps
 /// [`MIN_COLLATERAL_SOMPI`]: testnet-11's and devnet's bundles, and their fingerprints, are
-/// byte-identical.
-pub const PALW_MAINNET_MIN_COLLATERAL_SOMPI: u64 = 10_000 * crate::constants::SOMPI_PER_KASPA;
+/// byte-identical — and mainnet's, because its params assemble no PALW card while
+/// `PALW_MAINNET_GENESIS_ARTIFACT_ROOT` is zero.
+pub const PALW_MAINNET_MIN_COLLATERAL_SOMPI: u64 = 13_000 * crate::constants::SOMPI_PER_KASPA;
 
 /// The policy floor every non-mainnet bundle states — [`MIN_COLLATERAL_SOMPI`], named for the one
 /// caller that chooses a floor by network.

@@ -106,18 +106,28 @@ operator's decision. The setup wizard has a faucet hint for testnet-11 only, so 
 prints none. Once someone has funds, `misaka --network testnet-12 wallet send --key-file <k> --to
 <addr> --amount <MSK> --yes` moves them.
 
+**testnet-12 runs the mainnet-assumed bonds** (decided 2026-09-24): a producer bond needs at least
+**13,000 MSK** (the producer floor), a panel seat at least **130,000 MSK** (ten producer floors), and
+a DNS-finality validator bond at least **20,000,000 MSK** (below).
+
 What each role needs, from §5:
 
 | role | bond collateral | also |
 |---|---|---|
-| panel seat on the floor only (`misaka verifier`) | at least the floor claim's `Valid` lock free, **about 112.56 MSK** from the route-matrix analysis; more to sit on several panels at once | a fee float at the key's address (≥ 0.1 MSK) |
-| floor producer | **about 6,402 MSK for each floor claim held at once**. 100,000 MSK holds 15 | the fee float |
+| panel seat on the floor only (`misaka verifier`) | **at least 130,000 MSK** (the seat floor); a seat must also hold the floor claim's `Valid` lock free (about 112.56 MSK) for each panel it sits on | a fee float at the key's address (≥ 0.1 MSK) |
+| floor producer | **at least 13,000 MSK** (the producer floor), and **about 6,402 MSK for each floor claim held at once**: 13,000 MSK holds 2, 100,000 MSK holds 15 | the fee float |
 | `Qwen2.5 graph-v7@8192` producer | **about 6,452 MSK for each 8k claim held at once** | the artifact, and memory (§6) |
 | `Qwen2.5 graph-v7@2097152` producer | **about 125,888 MSK for each claim held at once** | about 11.6 GiB per attempt, and a week of CPU per attempt on a fleet host |
 
 The fee float pays the lifecycle carriers: registrations, receipts, readiness proofs and court
 answers. Change returns to the same address, so one funding lasts for many carriers. The float must
 be a different output from the bond collateral.
+
+**DNS-finality validators** (`misaka validator`) stake a separate bond of **at least 20,000,000 MSK**.
+DNS finality activates only once **at least 6 validators** are active with **at least 120,000,000
+MSK** of active stake between them; until then no anchor is DNS-confirmed and a coinbase matures on
+the 600-DAA fallback alone (about 20 hours). The unbonding period is 10,083 blocks, **about 14 days
+and 6 minutes** at the 120-second cadence (14 days of evidence window plus the reorg horizon).
 
 ## 5. Register a bond
 

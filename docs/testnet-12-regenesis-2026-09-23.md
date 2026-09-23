@@ -102,6 +102,26 @@ float は card 7 に署名する鍵で使える。testnet-11 の table には手
 
 bond と float の対応は `premine_outpoint(i)` ↔ `41 + i` のまま（card 0 ↔ 41 … card 7 ↔ 48）。
 
+## mainnet 想定の bond（2026-09-24、ユーザー決定）
+
+| | testnet-12 | 備考 |
+|---|---|---|
+| producer（miner）floor | **13,000 MSK**（`PALW_MAINNET_MIN_COLLATERAL_SOMPI`。mainnet の値も 10,000 → 13,000） | bundle の `min_collateral_sompi`。testnet-11 と devnet は 0.004 MSK のまま |
+| panel seat floor | **130,000 MSK**（producer floor の 10 倍、`palw_panel_collateral_floor_v1`） | |
+| readiness に要る空き担保 | 39,000 MSK（floor × 3） | genesis card 939,063.21 MSK はすべての floor を満たす |
+| option A での floor claim 1 本の予約 | **3,200.95 MSK**（escrow 3,200.85 + weight 0.11） | 13,000 MSK の bond（上限 500 ‰ = 6,500 MSK）には **2 本**入り、3 本は入らない。依頼時の想定は「ちょうど 1 本」だったが、実測では 2 本（ちょうど 1 本にするには floor を 6,401.91〜12,803.82 MSK 未満にする必要がある）。`t12_mainnet_assumed_bonds.rs` が実測値を固定 |
+| DNS validator bond | **20,000,000 MSK 以上** | `PALW_T12_DNS_PARAMS`（`PRODUCTION_DNS_PARAMS` から導出。production 自体は不変） |
+| DNS finality の起動条件 | **validator 6 以上、active stake 120,000,000 MSK 以上** | production は 12 validator。validator 数 × bond の関係は production と同じ |
+| unbonding period | 10,083 block = **約 14 日 6 分**（120 s cadence） | `at_two_minute_cadence` で変換。10 bps の 14 日ではない |
+| coinbase の long maturity | 600 DAA（約 20 時間） | Decision A（coinbase は DAA だけで成熟）のため testnet-11 の値を維持 |
+
+DNS set は production から次の点だけ変えている。validator 数・bond・stake の 3 値、120 s cadence への
+窓の変換、coinbase long maturity（600）、それに `required_work_depth`（testnet-11 の値。production の
+値は 10 bps の kHeavyHash 用で、PALW chain では何年も届かず DNS 確認が永久に起きないため）。
+それ以外（`required_stake_depth`、`min_anchor_attesters` = 2、報酬、stake preference 無効、VLT inert）は
+production のまま。testnet-11・mainnet・devnet の fingerprint は動かない（`palw_the_release_did_not_move` と
+preset の fingerprint pin で確認）。
+
 ## 担保: option A（監査 U2 に対する運用者の決定）
 
 ConsensusV2 の preset はすべて `deflationary_phase_daa_score = 0` なので、genesis 期の claim の
