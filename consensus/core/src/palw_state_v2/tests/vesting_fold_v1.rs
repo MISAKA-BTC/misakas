@@ -171,7 +171,10 @@ fn non_market(s: &PalwChainStateV2) -> usize {
 /// Three, not two: past `palw_rcore_plus` S-3's quorum door licenses only on
 /// `PALW_PANEL_COLLUDING_QUORUM_V1` (3) BACKED `Valid` signers (SR-6, `license_rcore_v1`), and a
 /// set short of it is inert — the claim stays `PanelBound`. Each of the three backs its lock
-/// (`lock_3` = 94 on a 1,000-sompi bond, committed 66–266, under the 500‰ ceiling).
+/// (`lock_3` = 94 on a 1,000-sompi bond, committed 66–266, under the 500‰ ceiling). So this
+/// three-seat panel cannot leave a seat silent: the silent seat that is not a leg is pinned on
+/// testnet-12's five-seat floor panel, three of five signing, by `rcore_s3_one_ledger`'s
+/// `t13_three_of_five_license_and_the_row_vests_only_the_credited_signers`.
 fn economy_licensed(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64) {
     let (s3, claim_id) = economy_bound(p);
     let receipts: Vec<_> = (1..=3u64).map(|n| receipt_at(claim_id, bond_key(n), true, 103)).collect();
