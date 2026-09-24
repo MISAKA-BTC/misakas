@@ -4989,6 +4989,103 @@ pub fn base0_fp_leaf_refutation_from_fold_v1<K: Base0FpIntervalKernelsV1>(
     })
 }
 
+/// **ADR-0152 §4-ter N1: committed leaves opened out of the executor's own fold** — the tile and
+/// its path, for each of `leaves`, built the way [`base0_fp_leaf_refutation_from_fold_v1`] builds a
+/// refutation's output opening (ADR-0121 D2) and without its inputs: the replay runs from the
+/// anchor before the first block a leaf is in to the end of the last one, keeps only the wanted
+/// tiles and those blocks' leaves, and folds every block it completes against the node the executor
+/// retained — a replay that is not the committed execution is refused before a path is built. What
+/// it holds is a few blocks of leaf hashes, whatever the job's size: a held fused site's out tile and
+/// query row are two leaves of one position.
+#[allow(clippy::too_many_arguments)]
+pub fn base0_fp_leaf_openings_from_fold_v1<K: Base0FpIntervalKernelsV1>(
+    material: &crate::produce::Base0FpMaterialV2,
+    leaves: &[u64],
+    prompt_token_ids: &[u32],
+    family_checkpoint_interval: u32,
+    max_step_leaf_count: u64,
+    kernels: &K,
+    anchor_state_for: Base0FpAnchorStateForV1<'_>,
+    prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<Vec<(PalwStepTileLeafV1, kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1)>, Base0FpIntervalError> {
+    use kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1;
+    let binding = &material.binding;
+    let profile = &binding.shape_profile;
+    let ctx = &binding.job_context;
+    if !kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_match_v1(
+        prompt_ids_form,
+        prompt_token_ids,
+        &ctx.prompt_token_ids_hash,
+    ) {
+        return Err(Base0FpIntervalError::PromptIdsAreNotTheJobs);
+    }
+    let step_leaf_count = base0_fp_binding_step_space_v1(binding, max_step_leaf_count)?;
+    let geometry = Base0FpIntervalGeometryV1::from_binding_capped_v1(binding, family_checkpoint_interval, max_step_leaf_count)?;
+    let tree = &material.step_tree;
+    if tree.leaf_count() != binding.step_leaf_count || tree.root()? != binding.step_merkle_root {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
+    if leaves.iter().any(|leaf| *leaf >= step_leaf_count) || leaves.is_empty() {
+        return Err(Base0FpIntervalError::StepSpace("a leaf outside the job".to_string()));
+    }
+    let block = 1u64 << tree.retain_level();
+    let needed: std::collections::BTreeSet<u64> = leaves.iter().copied().collect();
+    let blocks: std::collections::BTreeSet<u64> = needed.iter().map(|index| index / block).collect();
+    let (Some(&first_block), Some(&last_block)) = (blocks.first(), blocks.last()) else {
+        return Err(Base0FpIntervalError::StepSpace("no leaf to open".to_string()));
+    };
+    let (span_first, span_end) = (first_block * block, ((last_block + 1) * block).min(step_leaf_count));
+    let retained = tree.retained_nodes();
+    let mut tiles: std::collections::BTreeMap<u64, PalwStepTileLeafV1> = std::collections::BTreeMap::new();
+    let mut block_leaves: std::collections::BTreeMap<u64, Vec<Hash64>> = std::collections::BTreeMap::new();
+    let mut current: Vec<Hash64> = Vec::with_capacity(block as usize);
+    let mut diverged = false;
+    base0_replay_span_into_v1(
+        kernels,
+        binding,
+        &material.checkpoint_chunks,
+        &material.generated_token_ids,
+        prompt_token_ids,
+        &geometry,
+        span_first,
+        span_end,
+        anchor_state_for,
+        &mut |index, hash, tile| {
+            if needed.contains(&index) {
+                tiles.insert(index, tile.clone());
+            }
+            current.push(hash);
+            let block_first = (index / block) * block;
+            if index + 1 == (block_first + block).min(step_leaf_count) {
+                let leaves = std::mem::take(&mut current);
+                if retained.get((block_first / block) as usize).copied()
+                    != crate::fp_capture::base0_fold_block_digest_v1(block_first, &leaves)
+                {
+                    diverged = true;
+                }
+                if blocks.contains(&(block_first / block)) {
+                    block_leaves.insert(block_first / block, leaves);
+                }
+            }
+            Ok(())
+        },
+    )?;
+    if diverged {
+        return Err(Base0FpIntervalError::CaptureIsNotTheBindings);
+    }
+    let hash_of = |tile: &PalwStepTileLeafV1| step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), tile);
+    leaves
+        .iter()
+        .map(|&leaf| {
+            let tile = tiles.get(&leaf).cloned().ok_or(Base0FpIntervalError::CaptureHasNoTile { index: leaf })?;
+            let k = leaf / block;
+            let edge = block_leaves.get(&k).ok_or(Base0FpIntervalError::CaptureHasNoTile { index: k * block })?;
+            let siblings = tree.range_siblings_from_edges_v1(&[(k * block, edge.as_slice())], leaf, 1)?;
+            Ok((tile.clone(), PalwStepOpeningV1 { leaf_index: leaf, leaf_hash: hash_of(&tile), siblings }))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -154,6 +154,10 @@ pub struct Qwen36Backend {
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     /// This instance's seat state and walk; nothing outside the instance reaches it.
     seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
+    /// **ADR-0152 §4-ter N4's selector**, as the dense tier's
+    /// (`Qwen25A16Backend::with_offence_attribution_v1`): past `palw_offence_attribution` a held
+    /// class this family serves answers a dissection only inside the answerable context.
+    offence_attribution: bool,
 }
 
 impl Qwen36Backend {
@@ -246,6 +250,7 @@ impl Qwen36Backend {
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            offence_attribution: false,
         }
     }
 
@@ -254,6 +259,13 @@ impl Qwen36Backend {
     /// which is what every shipped preset froze.
     pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
         self.network_ladder = max_step_leaf_count;
+        self
+    }
+
+    /// **ADR-0152 §4-ter N4: whether the chain this backend serves is past
+    /// `palw_offence_attribution`** — the node's `palw_offence_attribution_fence().is_some()`.
+    pub fn with_offence_attribution_v1(mut self, active: bool) -> Self {
+        self.offence_attribution = active;
         self
     }
 
@@ -321,6 +333,7 @@ impl Qwen36Backend {
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            offence_attribution: false,
         }
     }
 
@@ -364,6 +377,7 @@ impl Qwen36Backend {
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            offence_attribution: false,
         })
     }
 
@@ -2674,9 +2688,18 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         .map_err(|e| crate::attn_responder::base0_attn_name_the_missing_anchor_v1(e, filing))
     }
 
+    /// **ADR-0152 §4-ter N4, as the dense tier's:** past `palw_offence_attribution` a held class
+    /// past `PALW_HELD_ANSWERABLE_N_CTX_V1` says `false` — this family has no windowed builder, and
+    /// its dense one answers a held job only under the materialization cap. Below the fence, byte
+    /// for byte what it was.
     fn supports_dissection(&self) -> bool {
         self.plan.is_some()
             && self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1)
+            && !(self.offence_attribution
+                && self.profile.as_ref().is_some_and(|profile| {
+                    kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(profile)
+                        && profile.n_ctx > kaspa_consensus_core::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1
+                }))
     }
 
     fn has_fused_site(&self) -> bool {

@@ -177,8 +177,38 @@ struct LayerParams {
     ffn_residual: A16QuantParams,
 }
 
+/// **DRILL ONLY: an attention output this engine lies about, and computes downstream FROM**
+/// (ADR-0152 §4-ter N5, `PalwDrillFaultV1::AttnOutput { follow: true }`): the fused attention site
+/// of `layer` at cache position `position` commits lane `lane` of its output row moved by `delta`,
+/// and every node after it — the rest of the layer, every later layer, every later position through
+/// the cache — reads the moved row. The consistent forger 4-ter F9 names: its checkpoints after the
+/// lie hold rows the lie fed. `None` on every engine but a drill's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct A16DrillAttnLieV1 {
+    pub layer: usize,
+    pub position: usize,
+    pub lane: usize,
+    pub delta: i32,
+}
+
+impl A16DrillAttnLieV1 {
+    /// The moved code, kept inside the A16 range the next kernel reads (the lie goes the other way
+    /// when `delta` would leave it).
+    fn apply(&self, row: &mut [i32]) {
+        if let Some(value) = row.get_mut(self.lane) {
+            let up = value.saturating_add(self.delta);
+            *value = if (-32_767..=32_767).contains(&up) { up } else { value.saturating_sub(self.delta) };
+        }
+    }
+}
+
 pub struct A16Engine<'a> {
     pub artifact: &'a Base0ArtifactV1,
+    /// DRILL ONLY — see [`A16DrillAttnLieV1`]. `None` everywhere else.
+    drill_attn: Option<A16DrillAttnLieV1>,
+    /// The cache position the stepped walk is at, for [`A16DrillAttnLieV1`] (the table walk does not
+    /// otherwise carry it). An atomic because the one-pass prefill runs a layer's positions on the pool.
+    walk_position: std::sync::atomic::AtomicUsize,
     /// Whether the two projections run through `kernels` or through the catalog ops directly.
     /// Both produce the same bits — that is what `A16Engine::new_reference` exists to keep true —
     /// and the catalog path is roughly thirteen times slower, so it is a test instrument rather
@@ -746,6 +776,8 @@ impl<'a> A16Engine<'a> {
         }
         Ok(Self {
             artifact,
+            drill_attn: None,
+            walk_position: std::sync::atomic::AtomicUsize::new(0),
             fast: true,
             embed_lift: one("embed_lift.a16", None, "embed_lift")?,
             final_norm: many("final_norm.a16", None, d, "final_norm")?,
@@ -941,6 +973,24 @@ impl<'a> A16Engine<'a> {
     /// fast kernels. Only a test builds one: it is the other side of the differential.
     pub fn new_reference(artifact: &'a Base0ArtifactV1) -> Result<Self, A16EngineError> {
         Ok(Self { fast: false, ..Self::new(artifact)? })
+    }
+
+    /// DRILL ONLY: this engine, lying at `lie` (see [`A16DrillAttnLieV1`]); `None` is the honest
+    /// engine every other caller builds.
+    pub fn with_drill_attn_lie_v1(mut self, lie: Option<A16DrillAttnLieV1>) -> Self {
+        self.drill_attn = lie;
+        self
+    }
+
+    /// The drill's lie on a fused site's row of layer `li` at cache position `position`, if it is
+    /// this one — a no-op on every honest engine.
+    fn drill_attn_at(&self, li: usize, position: usize, row: &mut [i32]) {
+        if let Some(lie) = self.drill_attn
+            && lie.layer == li
+            && lie.position == position
+        {
+            lie.apply(row);
+        }
     }
 
     /// One token; returns the COMMITTED logit row: i16 codes in i32 lanes. Ties in any argmax
@@ -1809,6 +1859,7 @@ impl<'a> A16Engine<'a> {
         let (cos_row, sin_row) = self.artifact.rope.row(position).ok_or(A16EngineError::PositionOutOfRange)?;
         let sink = position == 0;
         let mut trace = A16TraceV1::default();
+        self.walk_position.store(position, std::sync::atomic::Ordering::Relaxed);
 
         let mut h: Vec<i32> = Vec::new();
         // ---- pre --------------------------------------------------------------------------
@@ -2059,6 +2110,12 @@ impl<'a> A16Engine<'a> {
                     })
                     .collect::<Result<_, _>>()?,
             };
+            let mut outs = outs;
+            if matches!(node.op, PlanOp::AttnFused) {
+                for (i, out) in outs.iter_mut().enumerate() {
+                    self.drill_attn_at(li, first_position + i, out);
+                }
+            }
             match node.role {
                 Role::KCacheWrite => {
                     for out in &outs {
@@ -2109,8 +2166,11 @@ impl<'a> A16Engine<'a> {
             // same history the compiled engine hands the kernels — as a slice of the storage.
             let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
             let kv = layer.as_ref().map(|(li, cache)| (cache.keys(*li), cache.values(*li)));
-            let out =
+            let mut out =
                 self.eval_node(node, &|k| resolve(&node.inputs[k], &rows), kv, token_id, sink, cos_row, sin_row, li, attn_history)?;
+            if layer.is_some() && matches!(node.op, PlanOp::AttnFused) {
+                self.drill_attn_at(li, self.walk_position.load(std::sync::atomic::Ordering::Relaxed), &mut out);
+            }
 
             // The declared cache write, honored where declared — the ROTATED key and the raw V
             // are conventions of the DECLARATION (the IR carries the role on those nodes), so a

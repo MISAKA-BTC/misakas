@@ -433,6 +433,43 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family cannot read a fused site out of a filing".to_string())
     }
 
+    /// **ADR-0152 §4-ter N1/N2: a HELD class's fused site, windowed** — the one builder both parties
+    /// of a held dissection call, past `palw_offence_attribution` (N3 routes a held class here).
+    ///
+    /// [`Self::attn_site_evidence`] re-executes the job densely and holds every tile, which a held
+    /// class's canonical job is past at 8k (≈ 10^8 leaves against the `2^26` materialization cap).
+    /// Nothing the court asks needs the tiles: the site reads the query slice at its position and
+    /// layer ℓ's K and V over the history, and the bottom reads the checkpoint after the position
+    /// (`covered = p + 1`), whose state holds exactly those rows. So the evidence is one plain
+    /// forward to the anchor — `O(state)` — plus two committed leaves opened:
+    ///
+    /// * `filing = None` — **the RESPONDER** (the accused executor): `material` is its own
+    ///   retention. The out tile and the query row are opened out of its fold (a block replayed from
+    ///   the interval's anchor, the path from the digests it retained), the anchor is its own
+    ///   retained checkpoint leaf, and the slice sub-roots it files are its own state's. What
+    ///   [`crate::palw_attn_responder_v1::PalwAttnHeldEvidenceV1::root_claim_held_v1`] turns into
+    ///   the `CourtAttnRootClaimedHeld` it must file (tag 57).
+    /// * `filing = Some(..)` — **a CHALLENGER**: `material` is not read (pass `&[]`). The out tile,
+    ///   the anchor and the sub-roots are the accused's, off its held root claim
+    ///   ([`crate::palw_attn_responder_v1::PalwAttnHeldFilingV1::from_object_v1`]); the query row is
+    ///   opened against the accused's step root from a stream of this node's own honest leaves
+    ///   before the disputed one (`PalwStepPrefixStreamV1`, a frontier per level); the state is this
+    ///   node's own, whose slice `(K|V, ℓ)` precedes any lie at the site. When this node's sub-root
+    ///   of that slice is not the filed one the bottom cannot be built from the filing, and
+    ///   `fallback_v1` names the slice (4-ter.3 step 6: the held-DA `StateChunk` route).
+    ///
+    /// `carried_prompt` is as [`Self::attn_site_evidence`] takes it. `Err` by default: a family
+    /// without the windowed builder says so through [`Self::supports_dissection`] for a held class.
+    fn attn_site_evidence_held_v1(
+        &self,
+        _material: &[u8],
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _filing: Option<&crate::palw_attn_responder_v1::PalwAttnHeldFilingV1>,
+    ) -> Result<crate::palw_attn_responder_v1::PalwAttnHeldEvidenceV1, String> {
+        Err("this family has no windowed builder for a held fused site".to_string())
+    }
+
     /// **Can this backend take a FUSED dissection's turn?** — deliberately not
     /// [`Self::supports_court`], which is a different turn.
     ///
@@ -1101,6 +1138,41 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<PalwFpRunV1, String> {
         Err("this backend has no free-prompt drill fault".to_string())
     }
+
+    /// **The free-prompt drill, with the lie named** (ADR-0152 §4-ter N5) — `fault` is either the
+    /// shipped tile lie ([`PalwDrillFaultV1::Leaf`], what [`Self::execute_free_prompt_with_injected_fault`]
+    /// makes) or a lie in a fused attention output, followed downstream or not
+    /// ([`PalwDrillFaultV1::AttnOutput`]). What this instance serves for the job afterwards replays
+    /// the same lie. Same rule as every drill verb: callers refuse to reach it on a network carrying
+    /// value.
+    fn execute_free_prompt_with_drill_fault_v2(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+        _fault: PalwDrillFaultV1,
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt drill fault".to_string())
+    }
+}
+
+/// **DRILL ONLY: the lie a drill run commits** (ADR-0152 §4-ter N5; the trait's contract: never on a
+/// network carrying value).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillFaultV1 {
+    /// The committed tile at `leaf` with its first lane moved by one; the execution honest — the
+    /// shipped drill.
+    Leaf { leaf: u64 },
+    /// **A lie in a fused attention output.** Layer `layer`'s fused site at the canonical
+    /// coordinate `(call, position)` (a decode call `c > 0` is position 0 of its call), lane
+    /// `head · d_head + lane` of its output row, moved by `delta`.
+    ///
+    /// `follow = false`: only the committed row moves and every row after it is the honest
+    /// execution's — the inconsistent forger, whose next checkpoint convicts it. `follow = true`:
+    /// the engine computes everything after it FROM the lie — the rest of the layer, every later
+    /// layer, every later position through the cache — so the checkpoints after it hold rows the
+    /// lie fed: the consistent forger 4-ter F9 names, whose anchor an honest challenger reaches only
+    /// through the filed slice sub-roots.
+    AttnOutput { call: u32, layer: u16, position: u32, head: u16, lane: u16, delta: i32, follow: bool },
 }
 
 /// **ADR-0085's path to a leaf's refutation, for a family's own retention**: the leaf's interval
