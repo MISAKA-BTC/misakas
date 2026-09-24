@@ -252,11 +252,28 @@ fn beside_it_the_2m_row_is_still_held_to_final_at_its_cap_of_one() {
 
 /// The short row's empty-panel room is its rate capacity past eight ready seats: its static cap of
 /// 5 is not read past the fence. (Holding the row to its cap, as f8c91f19 did, read 5/5/5 here.)
+///
+/// **ADR-0152 SW-9 (M4):** the capacity is read at the room's ready count — the bond count on the
+/// fence-off twin (8 / 12 / 16), and on testnet-12 as shipped `ready_eff` over the operators' capped
+/// weights: the eight genesis seats (939,063 MSK) and 10M bonds capped at 1,000,000 give 8, 11 and 15.
 #[test]
 fn the_short_rows_empty_panel_room_past_eight_ready_seats_is_its_capacity_not_its_cap() {
     let p = t12();
     let b = bundle(&p);
-    let sp = b.state.clone();
+    let armed = b.state.clone();
+    let off = armed.clone().with_rcore_plus_mirrors(None, 0, Vec::new());
+    for (sp, expected) in [(off, vec![(8, 5, 5), (12, 8, 8), (16, 11, 11)]), (armed, vec![(8, 5, 5), (12, 7, 7), (16, 10, 10)])] {
+        the_short_rows_empty_panel_room(&p, &b, &sp, expected);
+    }
+}
+
+fn the_short_rows_empty_panel_room(
+    p: &kaspa_consensus_core::config::params::Params,
+    b: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    sp: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+    expected: Vec<(usize, u64, u64)>,
+) {
+    let (p, sp) = (p.clone(), sp.clone());
     let (short, _) = model_classes(&p);
     let now = 1_000u64;
     let globals = registry_fold(&p, now).expect("t12 arms the registry").globals;
@@ -282,7 +299,15 @@ fn the_short_rows_empty_panel_room_past_eight_ready_seats_is_its_capacity_not_it
         let read = op186(&p, &sp, &s, short, now);
         assert_eq!(read.ready_seats_now, n as u32);
         let row = s.model_lifecycle(&short).unwrap();
-        let per_span = n as u128 * globals.reference_work_per_span * (globals.utilization_permille.min(1_000) as u128) / 1_000;
+        // The room's ready count (ADR-0152 SW-9): bonds, or `ready_eff` past `palw_rcore_plus`.
+        let ready = kaspa_consensus_core::palw_state_v2::palw_panel_room_ready_count_v1(
+            &sp,
+            row,
+            now,
+            seat_count as u64,
+            keys[..n].iter().map(|k| s.bond(k).expect("a ready bond")),
+        ) as u128;
+        let per_span = ready * globals.reference_work_per_span * (globals.utilization_permille.min(1_000) as u128) / 1_000;
         let capacity = palw_panel_capacity_by_rate_v1(
             per_span,
             0,
@@ -292,5 +317,5 @@ fn the_short_rows_empty_panel_room_past_eight_ready_seats_is_its_capacity_not_it
         rooms.push((n, read.panel_room, capacity));
     }
     println!("(ready seats, short room, short capacity): {rooms:?}");
-    assert_eq!(rooms, vec![(8, 5, 5), (12, 8, 8), (16, 11, 11)], "the room is the capacity, past the cap of 5");
+    assert_eq!(rooms, expected, "the room is the capacity, past the cap of 5");
 }

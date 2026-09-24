@@ -9967,7 +9967,8 @@ impl PalwFoldReadV1<'_> {
             },
             None => inflight_replay,
         };
-        let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
+        // ADR-0152 SW-9: past `palw_rcore_plus`, a class outside C7 counts effective ready operators.
+        let ready = self.model_registry_room_ready_v1(class_id, row, now_daa, fold) as u128;
         let per_span =
             ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
         let budget = per_span.saturating_mul(horizon as u128);
@@ -10017,7 +10018,9 @@ impl PalwFoldReadV1<'_> {
             let terms = palw_panel_terms_v1(self.state, seat_count, &owed);
             (owed, terms)
         });
-        let ready = self.model_registry_ready_seats(class_id, now_daa, fold) as u128;
+        // ADR-0152 SW-9 (T-2(a) amended): past `palw_rcore_plus`, a class outside C7 counts
+        // effective ready operators over capped weights — the capacity the stake draw leaves it.
+        let ready = self.model_registry_room_ready_v1(class_id, row, now_daa, fold) as u128;
         let per_span =
             ready.saturating_mul(g.reference_work_per_span).saturating_mul(g.utilization_permille.min(1_000) as u128) / 1_000;
         PalwPanelRateV1::read(
@@ -10043,6 +10046,29 @@ impl PalwFoldReadV1<'_> {
             .filter(|(bond_key, bond)| self.model_registry_seat_is_ready(bond_key, bond, class_id, now_daa, fold))
             .count();
         ready.min(u32::MAX as usize) as u32
+    }
+
+    /// **ADR-0152 SW-9: the ready count the panel room reads** — [`Self::model_registry_ready_seats`]'s
+    /// bonds, handed to [`palw_panel_room_ready_count_v1`], which counts them as bonds (below
+    /// `palw_rcore_plus`, and for a C7 class past it) or as `ready_eff` over their operators' capped
+    /// weights (past it, outside C7). The readiness predicate is the fold's own, so the room and the
+    /// `NoCapablePanel` test ([`Self::model_registry_ready_seats`], which stays a bond count: it asks
+    /// whether a panel can be FILLED, and `ready_eff >= seat_count` iff the operators can) read one
+    /// set of ready seats.
+    fn model_registry_room_ready_v1(
+        &self,
+        class_id: &Hash64,
+        row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+        now_daa: u64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+    ) -> u32 {
+        let ready = self
+            .state
+            .bonds
+            .iter()
+            .filter(|(bond_key, bond)| self.model_registry_seat_is_ready(bond_key, bond, class_id, now_daa, fold))
+            .map(|(_, bond)| bond);
+        palw_panel_room_ready_count_v1(self.params, row, now_daa, fold.globals.seat_count as u64, ready)
     }
 
     fn model_registry_seat_is_ready(
@@ -10096,6 +10122,54 @@ impl PalwFoldReadV1<'_> {
                 read(index)
             }
             None => read(&build()),
+        }
+    }
+}
+
+/// **ADR-0152 SW-9: whether a class's rate room counts effective ready operators, and on which
+/// terms** — `Some(PalwPanelStakeDrawV1::V1)` iff `palw_rcore_plus` is in force at `now_daa` (the
+/// bundle's mirror, `PalwStateParamsV2::rcore_plus_active_at`) and the class is NOT held to Final
+/// ([`crate::palw_work_target_v1::palw_panel_held_to_final_v1`], ADR-0152's C7, which its static cap
+/// `max_inflight_claims` governs: c_2M = 1, T-2(b)); `None` everywhere else, where the room counts
+/// ready bonds exactly as before.
+///
+/// Why the room moves at all: under the stake-weighted draw (§3.14) the replay load lands on the
+/// heaviest operators, so with equal compute per operator the class's capacity is set by the largest
+/// inclusion probability, `π_max ≤ min(1, seat_count · W_max / ΣW)`, not by how many bonds are ready
+/// — `ready_eff` is the lower bound that gives (the room errs toward refusing, never over-admits).
+/// The floor (the base class) is never gated by the room, so its row never reaches this.
+///
+/// The ONE decision: the fold's `panel_rate_v1` / `panel_room_v1` and op 186
+/// (`palw_model_registry_room_ready_v1`) all ask it, so they cannot disagree about which classes
+/// count this way (T91).
+pub fn palw_panel_room_ready_eff_terms_v1(
+    params: &PalwStateParamsV2,
+    row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+    now_daa: u64,
+) -> Option<crate::palw_panel_v2::PalwPanelStakeDrawV1> {
+    (params.rcore_plus_active_at(now_daa) && !crate::palw_work_target_v1::palw_panel_held_to_final_v1(row))
+        .then_some(crate::palw_panel_v2::PalwPanelStakeDrawV1::V1)
+}
+
+/// **ADR-0152 SW-9: the ready count a class's panel room reads**, from the bonds the caller's
+/// readiness predicate calls ready: their number where [`palw_panel_room_ready_eff_terms_v1`] is
+/// `None` (byte for byte the count before SW-9), else
+/// [`crate::palw_panel_v2::palw_panel_ready_eff_of_bonds_v1`] —
+/// `min(ready operators, max(seat_count, ⌊ΣW / W_max⌋))` over SW-2's capped weights. Examples (T91):
+/// the eight genesis seats give 8; beside 40 × 130k they give 13 of 48; one ready 20M operator more
+/// still gives 13 (capped at 1,000,000 MSK); 40 × 130k alone give 40, and one ready operator at the
+/// cap beside them cuts it to 6 (SW-A6's named residual — a throughput cost, never an over-admission).
+pub fn palw_panel_room_ready_count_v1<'a>(
+    params: &PalwStateParamsV2,
+    row: &crate::palw_model_registry_v1::PalwModelLifecycleRowV1,
+    now_daa: u64,
+    seat_count: u64,
+    ready_bonds: impl Iterator<Item = &'a PalwBondStateV2>,
+) -> u32 {
+    match palw_panel_room_ready_eff_terms_v1(params, row, now_daa) {
+        None => ready_bonds.count().min(u32::MAX as usize) as u32,
+        Some(stake) => {
+            crate::palw_panel_v2::palw_panel_ready_eff_of_bonds_v1(ready_bonds, seat_count, &stake).min(u32::MAX as u64) as u32
         }
     }
 }
@@ -15601,6 +15675,24 @@ pub fn apply_palw_transition_v7(
         }
     }
 
+    // 4c. **ADR-0152 SW-8 / DL-1 (M4): a claim not bound in its anchor block is due `BindTimeout`
+    //     AT that block.** Past `palw_rcore_plus` a panel binds only in its anchor block — the first
+    //     anchor-lane block (an attempt block) of the claim's chain at or past `bind_base_daa() +
+    //     anchor_delay` — so a claim still `Provisional` when such a block at or past its slot has
+    //     folded its objects (the chain's own derived bindings among them, which lead them) was
+    //     refused there, by the draw (`InsufficientEligibleStake`, SW-10), the gate or the fold, and
+    //     no later block may bind it. Holding it to `bind_base + window_bind` (580 DAA past the slot
+    //     on the RC lattice) would keep its producer's reservation, its class's in-flight count (C7's
+    //     static cap included) and its rate-room demand for nothing. Here, after the block's own
+    //     work and the merged works (no claim they create has reached its slot: `anchor_delay ≥ 1`,
+    //     and a redraw this block revived is re-based on this block), and before the frontier reads
+    //     what is resolved. `sw8_anchor_delay` is `Some` only on a block that may anchor a panel past
+    //     the fence; `None` — every other block, every network but testnet-12, and testnet-12 with
+    //     the fence off — never reaches it, so those claims wait out the bind window as before.
+    if let Some(anchor_delay) = extras.sw8_anchor_delay {
+        palw_void_claims_unbound_in_their_anchor_block_v1(&mut builder, ctx, anchor_delay)?;
+    }
+
     // 5. Frontier observation — the definition `palw_fork_choice` states and this used to miss:
     //    **the deepest block on this chain whose PALW work is `Final`, with nothing unresolved
     //    below it.**
@@ -17740,6 +17832,55 @@ fn sweep_panel_obligations(builder: &mut TransitionBuilder<'_>, parent: &PalwCha
     for claim_id in pruned_liabilities {
         builder.write_panel_liability(claim_id, None);
     }
+}
+
+/// **ADR-0152 SW-8 (M4): the claims `state` holds `Provisional` whose anchor slot
+/// `bind_base_daa() + anchor_delay` is at or below `daa_score`**, in claim-id order. Pure. Past
+/// `palw_rcore_plus` an anchor-lane block at `daa_score` is the anchor block of exactly these (every
+/// earlier anchor block voided its own at step 4c), so the fold voids them there
+/// ([`palw_void_claims_unbound_in_their_anchor_block_v1`]) and the processor's derivation asks it
+/// first, on the parent state, whether the block can bind anything at all (M4 review finding 6).
+pub fn palw_claims_provisional_past_their_anchor_slot_v1(state: &PalwChainStateV2, daa_score: u64, anchor_delay: u64) -> Vec<Hash64> {
+    state
+        .claims
+        .iter()
+        .filter(|(_, claim)| {
+            matches!(claim.phase, PalwClaimPhaseV2::Provisional) && claim.bind_base_daa().saturating_add(anchor_delay) <= daa_score
+        })
+        .map(|(claim_id, _)| *claim_id)
+        .collect()
+}
+
+/// **ADR-0152 SW-8 / DL-1 (M4): step 4c** — void, as the bind window's own lapse would
+/// (`bind_timeout_reason`: `BindTimeout`, or `NoCapablePanel` for a rowed class that cannot seat a
+/// panel), every `Provisional` claim whose anchor slot this attempt block has reached
+/// ([`palw_claims_provisional_past_their_anchor_slot_v1`]). The caller runs it only on a block that
+/// may anchor a panel past `palw_rcore_plus` (`PalwTransitionExtrasV1::sw8_anchor_delay`), where
+/// the chain's anchor for a slot is the first such block at or past it, so each claim voided here
+/// is one its anchor block (this one) did not bind.
+///
+/// **The exact void DAA DL-1 leaves to M4** is therefore the anchor block's own DAA, and the claim
+/// is terminal from that block on. S0: nothing is forfeited — `void_claim` releases the producer's
+/// reservation (the claim never bound, so no seat is on duty for it), and a free-prompt claim
+/// starts its abandon hold here (SR-1), from `voided_daa`. Nothing new is stored: the deadline
+/// index still holds `bind_base + window_bind` for a `Provisional` claim (the backstop, reached only
+/// when no attempt block arrives in the window), and a voided claim's deadlines are derived from its
+/// record as they always were, so `rebuild_deadline_index_v2`, `expected_deadline` and
+/// `assert_deadline_consistency` reproduce this transition's result unchanged. S's
+/// `palw_rcore_deadline_v1` (DL-1, owner A) needs no row for it.
+///
+/// Claim-id order, over the list taken before the first void (voiding writes only the voided claim).
+fn palw_void_claims_unbound_in_their_anchor_block_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    anchor_delay: u64,
+) -> Result<(), PalwStateV2Error> {
+    for claim_id in palw_claims_provisional_past_their_anchor_slot_v1(&builder.state, ctx.daa_score, anchor_delay) {
+        let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+        let reason = builder.bind_timeout_reason(&claim, ctx);
+        builder.void_claim(claim_id, &claim, ctx.daa_score, reason)?;
+    }
+    Ok(())
 }
 
 fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
@@ -21174,6 +21315,20 @@ pub struct PalwTransitionExtrasV1 {
     /// real fold's step 3 and the block with it. Read ONLY by that rehearsal, and only past
     /// `palw_audit_2026_09_23`; `None` by `Default`.
     pub own_attempt_class: Option<Hash64>,
+    /// **ADR-0152 SW-8 / DL-1 (M4): the panel's `anchor_delay`, on a block that may anchor a panel
+    /// where a claim binds only in its anchor block** — `Some(PalwPanelParamsV2::anchor_delay())`
+    /// iff `Params::palw_rcore_plus` is active at the block AND the block's lane may anchor a panel
+    /// (the processor's `palw_block_may_anchor_a_panel_v1`, the one predicate its anchor walk reads:
+    /// the attempt lanes past the fence), resolved by `palw_transition_extras_for` from the block's
+    /// header; `None` everywhere else and by `Default`. Where it is `Some`, the block voids every
+    /// claim still `Provisional` whose anchor slot `bind_base_daa() + anchor_delay` it has reached, at
+    /// the end of its own fold (step 4c, [`palw_void_claims_unbound_in_their_anchor_block_v1`]): the
+    /// chain's anchor for such a slot is this block or an earlier one, and the claim did not bind
+    /// there, so no block ever will. The deadline index keeps `bind_base + window_bind` as the
+    /// backstop for a slot no anchor-lane block reaches in time, so the rebuild and
+    /// `assert_deadline_consistency` are unchanged. Carrying the lane's answer here, rather than
+    /// asking the block's work, keeps the fold on whatever lane rule the walk reads.
+    pub sw8_anchor_delay: Option<u64>,
 }
 
 /// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
@@ -46721,6 +46876,7 @@ pub(crate) mod tests {
                 admission_independence_daa: None,
                 seat_gate_possession_daa: None,
                 own_attempt_class: None,
+                sw8_anchor_delay: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -46967,6 +47123,7 @@ pub(crate) mod tests {
                 admission_independence_daa: None,
                 seat_gate_possession_daa: None,
                 own_attempt_class: None,
+                sw8_anchor_delay: None,
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,

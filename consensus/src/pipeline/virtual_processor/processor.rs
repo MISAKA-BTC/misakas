@@ -563,6 +563,13 @@ pub struct VirtualStateProcessor {
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
     /// the other way.
     pub(super) palw_offence_attribution: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// **ADR-0152 R-core+: `Params::palw_rcore_plus`** (`Some(0)` on testnet-12 alone; genesis-only
+    /// by `validate_palw_rcore_plus_v1`), resolved once in [`Self::palw_rcore_plus_at`]. M4 reads it
+    /// at a claim's ANCHOR for the stake-weighted draw (`palw_panel_draw_policy_at`, SW-1) and at the
+    /// BLOCK for the one-state derivation (`palw_v2_derived_panel_bindings`, SW-8); the fold reads the
+    /// bundle's mirror (`PalwStateParamsV2::rcore_plus_active_at`), which `validate_palw_rcore_plus_v1`
+    /// keeps equal to it.
+    pub(super) palw_rcore_plus: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -1053,6 +1060,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
+            palw_rcore_plus: params.palw_rcore_plus_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -1965,13 +1973,7 @@ impl VirtualStateProcessor {
                                 // The class of this block's own attempt, read off its header, for the
                                 // rehearsal's reservation (2026-09-24 DoS audit review of #11). An
                                 // undecodable commitment reserves nothing — admission refuses it below.
-                                let own_attempt_class = kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
-                                    .then(|| {
-                                        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
-                                            .ok()
-                                            .map(|envelope| envelope.attempt.class_id)
-                                    })
-                                    .flatten();
+                                let own_attempt_class = Self::palw_own_attempt_class_of_header_v1(&header);
                                 //
                                 // **Except that a dropped market move's carrier stays accepted with
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
@@ -5309,6 +5311,20 @@ impl VirtualStateProcessor {
         block: BlockHash,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block, None).0
+    }
+
+    /// [`Self::palw_v2_derived_panel_bindings`] — the chain's own derivation of the bindings `block`
+    /// owes on the parent `state` — reachable from the sibling test module, so ADR-0152 T89 can hold
+    /// build (this), accept (`palw_v2_accepted_objects_for_tests`) and fold (the stored panel) to one
+    /// answer on a real chain.
+    #[cfg(test)]
+    pub(super) fn palw_v2_derived_panel_bindings_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block: BlockHash,
+        block_daa: u64,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.palw_v2_derived_panel_bindings(state, block, block_daa)
     }
 
     /// The fold the pipeline runs over a candidate's accepted objects — no attempt, no merged work —
@@ -8934,19 +8950,7 @@ impl VirtualStateProcessor {
             let header = self.headers_store.get_header(block).ok()?;
             let daa = header.daa_score;
             if daa >= slot {
-                // **The anchor has to cost an inference to move.**
-                //
-                // This block's hash is one of the two randomness inputs the panel draw runs on, so
-                // whoever can cheaply produce blocks at the anchor slot can re-roll the panel that
-                // will judge them. Every lane was eligible, and the receipt lane is precisely the
-                // one whose headers cost nothing to re-produce — a producer could mint algo-7
-                // blocks until one landed at the slot with a hash whose draw it liked.
-                //
-                // Restricting the anchor to the attempt lane prices that grind at one full
-                // inference per try, which is the same charge the job anchor makes for the same
-                // reason. Skipping over a receipt block only delays the anchor to the next attempt
-                // block, and the attempt lane is the main lane on a V2 network.
-                if !kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id) {
+                if self.palw_block_may_anchor_a_panel_v1(header.pow_algo_id, slot) {
                     candidate = Some((block, daa));
                 }
                 continue;
@@ -8958,6 +8962,63 @@ impl VirtualStateProcessor {
         }
         let (anchor_block, anchor_daa) = candidate?;
         Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: 0 })
+    }
+
+    /// **Which chain blocks may be a panel's anchor** — the one predicate the anchor walk
+    /// ([`Self::palw_v2_anchor_fact_of_candidate`], so the chain's derivation and the acceptance gate
+    /// alike) reads, resolved for a claim whose slot is `slot`.
+    ///
+    /// **The anchor has to cost an inference to move.** The anchor block's hash is one of the two
+    /// randomness inputs the panel draw runs on, so whoever can cheaply produce blocks at the anchor
+    /// slot can re-roll the panel that will judge them.
+    ///
+    /// * **Below `palw_rcore_plus`: every lane but the receipt-V3 and round lanes**
+    ///   (`algo_id_carries_no_chain_position`), byte for byte the walk it always was. That excludes
+    ///   the lanes whose headers cost nothing to re-produce (a producer could otherwise mint algo-7
+    ///   blocks until one landed at the slot with a hash whose draw it liked) — but NOT the
+    ///   heartbeat lane (algo 8, ADR-0066), whose target is the network constant `2⁻²⁴`: a couple of
+    ///   seconds of one CPU per try. The comment that stood here said the walk was restricted to the
+    ///   attempt lane; it never was, and on a network whose DAA clock ticks on heartbeats (testnet-12,
+    ///   ADR-0138/0142) almost every anchor is one.
+    /// * **Past `palw_rcore_plus`: the attempt lanes only** (`is_palw_attempt_algo_id`: algo 6 and 9)
+    ///   (M4 review, 2026-09-24, finding 2). Under the stake-weighted draw a panel binds only in its
+    ///   anchor block (SW-8), so the anchor re-roll is the ONE post-seed lever left, and ADR-0152
+    ///   prices it at one block's work per try; an attempt's execution commits to its header's
+    ///   pre-PoW hash (`execution_anchor_v3`), so every other header — and so every other anchor —
+    ///   costs one more inference, the charge the job anchor makes for the same reason. What this
+    ///   costs is waiting: the anchor is the first ATTEMPT block at or past the slot, which
+    ///   `PalwConsensusParamsV2::validate` already holds to `anchor_delay + max_beacon_gap <
+    ///   window_bind` (ADR-0077's lattice promise, written for this reading; 20 + 400 < 600 on the
+    ///   RC lattice); a slot no attempt block reaches before the bind window lapses voids
+    ///   `BindTimeout` at the window's backstop, without forfeit (S0), and a network with no attempts
+    ///   has no claims to bind. The fold's step 4c voids a claim its anchor block did not bind at
+    ///   that block, on this same lane rule ([`Self::palw_sw8_anchor_delay_for`]).
+    ///
+    /// The fence is resolved at the SLOT: `palw_rcore_plus` is genesis-only
+    /// (`validate_palw_rcore_plus_v1`), so the slot, the anchor and the block give one answer on every
+    /// chain that can run.
+    pub(super) fn palw_block_may_anchor_a_panel_v1(&self, pow_algo_id: u8, slot: u64) -> bool {
+        if self.palw_rcore_plus_at(slot) {
+            kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
+        } else {
+            !kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(pow_algo_id)
+        }
+    }
+
+    /// **ADR-0152 SW-8 / DL-1 (M4): `PalwTransitionExtrasV1::sw8_anchor_delay` for the block `point`
+    /// names** — the panel's `anchor_delay` iff `palw_rcore_plus` is active at the block and the
+    /// block's own lane may anchor a panel ([`Self::palw_block_may_anchor_a_panel_v1`], read off its
+    /// header: the same predicate the anchor walk reads, at the same fence), `None` otherwise. So the
+    /// fold's step 4c voids, in a block, exactly the claims whose anchor block it is by the walk's
+    /// own rule and which it did not bind. A block whose header the store does not hold (none that
+    /// the pipeline folds) answers `None`: its claims wait out the bind window's backstop.
+    pub(super) fn palw_sw8_anchor_delay_for(&self, point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2) -> Option<u64> {
+        if !self.palw_rcore_plus_at(point.daa_score) {
+            return None;
+        }
+        let panel = self.palw_panel_params_v2.as_ref()?;
+        let header = self.headers_store.get_header(point.block).ok()?;
+        self.palw_block_may_anchor_a_panel_v1(header.pow_algo_id, point.daa_score).then(|| panel.anchor_delay())
     }
 
     /// **ADR-0065 D4, resolved in exactly one place.** Every consumer — the receipt tally, the
@@ -9211,6 +9272,42 @@ impl VirtualStateProcessor {
     /// **ADR-0124's draw policy at a claim's anchor** — the deep fence's weighting and the panel
     /// economy's floor and ceiling, resolved at ONE point so the assembler and the acceptance layer
     /// recompute one identical panel. `economy` is `None` while the fence is dormant at the anchor.
+    ///
+    /// **ADR-0152 SW-1 (M4): `stake` is `Some(PalwPanelStakeDrawV1::V1)` iff `palw_rcore_plus` is
+    /// active at THIS anchor's DAA** — the one resolver, so the chain's derivation, the acceptance
+    /// gate and every shadow reader draw one panel. It weights exactly two draws, the flat class draw
+    /// and ADR-0147's outsider seat (SW-5); **the admission jury never reads it** (SW-A4:
+    /// `palw_admission_jury_v1` / `admission_jury_seated` stay ADR-0147's unweighted ticket, past the
+    /// fence and below it). Where it is `Some` the draw also refuses under SW-10's eligible-stake floor
+    /// (`InsufficientEligibleStake`), a panel binds only in its own anchor block (SW-8,
+    /// `validate_panel_bound_v2_with_policy`), that anchor is an attempt block
+    /// (`palw_block_may_anchor_a_panel_v1`), and a claim the anchor block does not bind voids there
+    /// (the fold's step 4c); `None` — testnet-11, devnet, mainnet, and testnet-12 with the fence off —
+    /// is ADR-0130's operator lottery and ADR-0147's outsider ticket, byte for byte (T88).
+    ///
+    /// **What arming it leans on (the pure half's review, 2026-09-24).** SW-10 counts every seat the
+    /// one ledger has filled as saturated, and the ledger does not ask WHY a seat is full: an honest
+    /// seat's own work — its locks, its duties, its own claims' reservations — counts exactly as an
+    /// attacker's load does. So how much of a seat one duty takes decides whether the floor ever
+    /// fires on an honest network, and that price is S's, not this draw's: **S-3's A-4 duty pricing**
+    /// (the one-ledger committed amount a seat's duty on a claim reserves; S-SPEC §3.3 L-4b adds the
+    /// one-ledger eligibility to `PalwPanelValidLockV1`). Without A-4, a 2M duty priced at the claim's
+    /// full exposure (~179k MSK) leaves every 130k operator in the 2M base but never eligible, and a
+    /// 2M class held by such operators beside the genesis seats would refuse every draw on the floor.
+    ///
+    /// **The margin on testnet-12 (M4 review finding 1).** testnet-12's producers are its eight
+    /// genesis cards, so a floor claim's executor is one of the eight and may not sit. SW-10 counts
+    /// the executor's own capped weight on both sides of the floor where it could sit but for being
+    /// the executor (`palw_panel_stake_executor_bonds_judging_v1`), so a genesis card's claim is
+    /// measured over all eight: with the other seven unloaded it binds at 8/8; with ONE other seat
+    /// saturated (or the executor itself — the busiest producer — its load unread) at 7/8 = 875‰; with
+    /// two other seats saturated it refuses (6/8). Without the term the seven alone would refuse at
+    /// one (6/7 = 857‰), and one working card would halt every other card's binding. At genesis
+    /// nothing is loaded and the 2M class is C7-held to one claim, which
+    /// `t12_genesis_binds_under_the_stake_draw` pins on a real chain and the pure half's
+    /// `t94_a_genesis_executor_keeps_the_one_saturated_seat_tolerance` pins at the draw; the day S-3
+    /// lands A-4, its duty price is what moves SW-10's margin, and T94's saturation cases must be
+    /// re-read under it.
     pub(super) fn palw_panel_draw_policy_at(&self, anchor_daa: u64) -> kaspa_consensus_core::palw_panel_v2::PalwPanelDrawPolicyV1 {
         let economy = if self.palw_panel_economy_active_at(anchor_daa) {
             self.palw_state_params_v2.as_ref().map(|state| kaspa_consensus_core::palw_panel_economy_v1::PalwSeatEconomyV1 {
@@ -9242,9 +9339,9 @@ impl VirtualStateProcessor {
             },
             // Per claim, at the binding block: `palw_panel_valid_lock_of_v1` fills it where armed.
             valid_lock: None,
-            // ADR-0152 SW: `Some(PalwPanelStakeDrawV1::V1)` past `palw_rcore_plus` at THIS anchor's
-            // DAA — filled with the stake-weighted draw (M4); `None` until then.
-            stake: None,
+            // ADR-0152 SW-1: the stake-weighted draw's terms past `palw_rcore_plus` at THIS anchor's
+            // DAA (the 1,000,000 MSK cap and the 875‰ floor); `None` everywhere else.
+            stake: self.palw_rcore_plus_at(anchor_daa).then_some(kaspa_consensus_core::palw_panel_v2::PalwPanelStakeDrawV1::V1),
         }
     }
 
@@ -9433,6 +9530,11 @@ impl VirtualStateProcessor {
             // Only the acceptance rehearsal sets it, from the block's header
             // (`palw_v2_accepted_objects`); the fold takes it from the block's work.
             own_attempt_class: None,
+            // **ADR-0152 SW-8 / DL-1 (M4): step 4c's anchor delay**, on a block that may anchor a
+            // panel past `palw_rcore_plus`. Written explicitly for the reason every line above
+            // gives: an unwritten default here would leave a refused claim holding its reservation
+            // for the whole bind window.
+            sw8_anchor_delay: self.palw_sw8_anchor_delay_for(point),
         }
     }
 
@@ -9651,6 +9753,14 @@ impl VirtualStateProcessor {
     /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
     fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
         self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0152 R-core+, resolved in exactly one place.** `false` on every network but
+    /// testnet-12, where it is armed at genesis (a crossing is refused at startup), so "at the anchor"
+    /// and "at the block" give one answer on every chain that can run; the callers still name the
+    /// DAA the rule is resolved at (SW-1: the anchor's; SW-8's one-state derivation: the block's).
+    pub(super) fn palw_rcore_plus_at(&self, daa_score: u64) -> bool {
+        self.palw_rcore_plus.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.
@@ -10610,7 +10720,6 @@ impl VirtualStateProcessor {
         block: BlockHash,
         block_daa: u64,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
         let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return Vec::new() };
         // The seat-eligibility floor is the registry's own, so the derivation here and the one the
         // acceptance layer runs read the same number (see `palw_bond_may_take_work_v2`).
@@ -10621,6 +10730,11 @@ impl VirtualStateProcessor {
         // Log only, and before the loop so it is reported even on a block that binds no panel —
         // "no claims advanced" is exactly what a stalled chain looks like from here.
         self.palw_warn_if_maturity_outruns_the_registry(state, block_daa, min_collateral, panel_params);
+        // **ADR-0152 SW-8: past `palw_rcore_plus`, one state.** See
+        // [`Self::palw_v2_derived_panel_bindings_on_one_state_v1`].
+        if self.palw_panel_one_state_at(block_daa) {
+            return self.palw_v2_derived_panel_bindings_on_one_state_v1(state, block, block_daa, panel_params, min_collateral);
+        }
         // The binding block's fold inputs, for the bind's Valid-lock question (route-matrix #3). The
         // lock reads none of the context's blue score or subsidy.
         let binding_extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
@@ -10631,71 +10745,294 @@ impl VirtualStateProcessor {
         });
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
-            if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
-                continue;
+            if let Ok(object) = self.palw_v2_derive_panel_binding_v1(
+                state,
+                block,
+                block_daa,
+                &binding_extras,
+                panel_params,
+                min_collateral,
+                claim_id,
+                claim,
+            ) {
+                out.push(object);
             }
-            // The anchor is the first chain block at or past `accepted_daa + anchor_delay`. Until
-            // one exists the claim simply waits — that delay is what stops a producer from
-            // mining until it likes its own jury.
-            // Same base as the validator's, for the same reason — see the sibling call site.
-            let Some(anchor) = self.palw_v2_anchor_fact_of_candidate(block, claim.bind_base_daa(), panel_params) else {
-                continue;
-            };
-            // A registry too small to seat a panel yields nothing rather than a short one: a
-            // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
-            // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
-            // uses, through the same one-place subtraction.
-            let maturity_floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
-                anchor.anchor_daa,
-                self.palw_bond_maturity_window_at(state, anchor.anchor_daa),
-            );
-            // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
-            let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
-            // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
-            // same anchor as the acceptance layer's sibling call — so this assembler builds the
-            // exact panel that layer recomputes.
-            let mut policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
-            if let Some(state_params) = self.palw_state_params_v2.as_ref() {
-                policy.valid_lock = Self::palw_panel_valid_lock_of_v1(state, state_params, &binding_extras, claim, block_daa);
-            }
-            // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
-            // panel of a sharded class would ask shard seats to judge a whole model.
-            let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
-                Some(shard_count) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
-                    state,
-                    panel_params,
-                    claim_id,
-                    anchor.anchor_block,
-                    min_collateral,
-                    maturity_floor,
-                    capability_bound,
-                    shard_count,
-                ),
-                None => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_policy(
-                    state,
-                    panel_params,
-                    claim_id,
-                    anchor.anchor_block,
-                    min_collateral,
-                    maturity_floor,
-                    capability_bound,
-                    policy,
-                ),
-            };
-            let Ok(seats) = drawn else {
-                continue;
-            };
-            // ADR-0147: nothing to ask here. The outsider is IN the derived panel — the draw policy
-            // carries the fence — and the acceptance layer demands that panel exactly, so a node
-            // proposes only what its own fold will take. The identity test that stood here
-            // compared fields a registrant writes for itself, and is gone with the rule it served.
-            out.push(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
-                claim: *claim_id,
-                anchor: anchor.anchor_block,
-                seats,
-            });
         }
         out
+    }
+
+    /// **ADR-0152 SW-8: does the chain derive this block's panels on ONE state?** Past
+    /// `palw_rcore_plus` at the BLOCK's DAA, on a chain whose acceptance walk folds the real step 3
+    /// (the 2026-09-11 audit's A-1, `palw_audit_2026_09_11`: the pre-object base the gate validates
+    /// against). testnet-12 arms both at genesis; everywhere else this is `false` and the derivation
+    /// reads the parent state exactly as it always did. `validate_palw_rcore_plus_v1` refuses
+    /// `palw_rcore_plus` without `palw_audit_2026_09_11` at or below it (M4 review finding 4), so on
+    /// any ruleset a node can run the second conjunct is implied by the first; it stays spelled here
+    /// because without it the walk rehearses each object through a whole-block transition while the
+    /// derivation would read a different state, and a binding bound only in its anchor block could
+    /// then be dropped with no retry.
+    fn palw_panel_one_state_at(&self, block_daa: u64) -> bool {
+        self.palw_rcore_plus_at(block_daa) && self.palw_audit_2026_09_11_at(block_daa)
+    }
+
+    /// **ADR-0152 SW-8: the derived bindings on the ONE state acceptance reads.**
+    ///
+    /// Below the fence the chain derived every binding on the PARENT state while the acceptance walk
+    /// validated each against the fold's pre-object base (`palw_v2_pre_object_base_v1`: the parent
+    /// after this block's step 2 — its payouts, sweeps, retargets and redraws) advanced by the
+    /// objects accepted before it. Where the two differed — a sweep that moved a seat's load, a
+    /// binding earlier in the block that reserved a seat's duty — the derived panel met
+    /// `PanelMismatch`, was dropped, and was re-derived by a later block on a later state: a second
+    /// draw of the same seed, on a state an attacker had time to shape (the draft's retry path).
+    ///
+    /// Here the derivation starts from that same base, at the same chain point the walk uses (the
+    /// block's own blue score and subsidy, read off its header), and advances it binding by binding
+    /// in claim-id order exactly as the walk will: each derived `PanelBound` meets the gate
+    /// (`palw_v2_validate_objects`) and then the fold's one object (`palw_v2_apply_one_object_v1`,
+    /// with this block's own-attempt reservation), and only a binding both take is emitted and folded
+    /// in before the next claim is drawn. The derived bindings lead the block's objects, so the walk
+    /// meets them first, on the same base, in the same order — build = accept = fold (T89) — and the
+    /// second claim bound in a block sees the first one's duties.
+    ///
+    /// Together with the stake draw's bind-only-in-the-anchor-block rule (the policy's `stake`, see
+    /// [`Self::palw_v2_derive_panel_binding_v1`]), no later state exists on which a failed or
+    /// dropped draw could be retried: a claim this block does not bind voids `BindTimeout` at the end
+    /// of this very block (the fold's step 4c, `PalwTransitionExtrasV1::sw8_anchor_delay`; S0: no
+    /// forfeit; a free-prompt claim starts its abandon hold there).
+    ///
+    /// **Most blocks bind nothing, and cost nothing here** (M4 review finding 6). Past
+    /// `palw_rcore_plus` a panel anchors only on an attempt block
+    /// ([`Self::palw_block_may_anchor_a_panel_v1`]), and step 2 cannot make a claim this block's
+    /// anchor (a redraw re-bases on this block, so its slot is later; the sweeps only remove claims),
+    /// so a block binds only claims its PARENT already holds `Provisional` with their slot at or
+    /// below this block's DAA (`palw_claims_provisional_past_their_anchor_slot_v1`). The pre-object
+    /// base — a state clone and step 2 — is built only when this is an attempt block with such a
+    /// claim; the candidates are then re-read on the base, which is what the loop draws.
+    ///
+    /// The cost is one more pre-object base and one more rehearsal per binding than the walk alone
+    /// pays, on testnet-12's anchor blocks only; the walk still validates every binding itself, so a
+    /// node whose derivation ever disagreed with its walk would drop the binding rather than
+    /// disqualify a block — and say so, since under SW-8 the claim's only chance to bind has passed.
+    fn palw_v2_derived_panel_bindings_on_one_state_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block: BlockHash,
+        block_daa: u64,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        min_collateral: u64,
+    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_state_v2::palw_claims_provisional_past_their_anchor_slot_v1;
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Ok(header) = self.headers_store.get_header(block) else {
+            // Unreachable for a block under validation (its header is stored before its body is
+            // processed); a node that cannot read it derives nothing rather than guessing a point.
+            return Vec::new();
+        };
+        // Finding 6's pre-check, on the parent: an anchor-lane block with a claim whose slot it
+        // reaches, or nothing to derive. Resolved at the block's DAA, which is every candidate's
+        // anchor DAA (the candidates' slots are at or below it and the block is their anchor).
+        let anchor_delay = panel_params.anchor_delay();
+        if !self.palw_block_may_anchor_a_panel_v1(header.pow_algo_id, block_daa)
+            || palw_claims_provisional_past_their_anchor_slot_v1(state, block_daa, anchor_delay).is_empty()
+        {
+            return Vec::new();
+        }
+        // The walk's chain point, spelled as the pipeline spells it for this block.
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block,
+            daa_score: block_daa,
+            blue_score: header.blue_score,
+            subsidy: self.coinbase_manager.calc_block_subsidy(block_daa),
+        };
+        let own_attempt_class = Self::palw_own_attempt_class_of_header_v1(&header);
+        let extras = self.palw_transition_extras_for(&point);
+        let mut folded = match kaspa_consensus_core::palw_state_v2::palw_v2_pre_object_base_v1(
+            state,
+            state_params,
+            &point,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &extras,
+        ) {
+            Ok(base) => base,
+            // The walk accepts nothing on a block whose pre-object fold fails (the block is
+            // disqualified whatever it carries), so there is nothing to bind here either.
+            Err(_) => return Vec::new(),
+        };
+        // Claim-id order, over the claims the base holds `Provisional` with their slot at or below
+        // this block (a binding moves only its own claim, so the list cannot change under the loop;
+        // every other `Provisional` claim's anchor is a later block, so it could not bind here).
+        let provisional = palw_claims_provisional_past_their_anchor_slot_v1(&folded, block_daa, anchor_delay);
+        let mut out = Vec::new();
+        for claim_id in provisional {
+            let Some(claim) = folded.claim(&claim_id) else { continue };
+            let object = match self.palw_v2_derive_panel_binding_v1(
+                &folded,
+                block,
+                block_daa,
+                &extras,
+                panel_params,
+                min_collateral,
+                &claim_id,
+                claim,
+            ) {
+                Ok(object) => object,
+                // SW-8/SW-10: a draw refused IN its anchor block is final for this panel — say so, since
+                // the claim now voids `BindTimeout` at the end of this block (step 4c) and an operator
+                // should see why.
+                Err(Some(why)) => {
+                    info!(
+                        "Block {block}: claim {claim_id}'s panel is not bound — its draw refused in its anchor block ({why}); \
+                         under the stake-weighted draw a claim binds only there, so it voids BindTimeout in this block, \
+                         without forfeit (ADR-0152 SW-8/SW-10)"
+                    );
+                    continue;
+                }
+                Err(None) => continue,
+            };
+            // Finding 5: under SW-8 this block is the claim's one chance to bind, so a derived
+            // binding the gate or the fold refuses is reported as the draw's refusal is — the claim
+            // voids at the end of this block (step 4c), and an operator should see why.
+            if let Err(why) = self.palw_v2_validate_objects(&folded, state_params, &point, std::slice::from_ref(&object)) {
+                info!(
+                    "Block {block}: claim {claim_id}'s panel is not bound — its derived binding was refused by the gate in its \
+                     anchor block ({why}); under the stake-weighted draw a claim binds only there, so it voids BindTimeout in \
+                     this block, without forfeit (ADR-0152 SW-8)"
+                );
+                continue;
+            }
+            let applied = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+                &folded,
+                state_params,
+                &point,
+                &object,
+                self.palw_unavailable_abstains_at(point.daa_score),
+                self.palw_capability_bound_at(point.daa_score),
+                self.palw_uncertified_weightless_at(point.daa_score),
+                self.palw_da_court_at(point.daa_score),
+                &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                    own_attempt_class,
+                    ..self.palw_transition_extras_for(&point)
+                },
+            );
+            match applied {
+                Ok(next) => {
+                    folded = next;
+                    out.push(object);
+                }
+                Err(why) => info!(
+                    "Block {block}: claim {claim_id}'s panel is not bound — its derived binding was refused by the fold in its \
+                     anchor block ({why}); under the stake-weighted draw a claim binds only there, so it voids BindTimeout in \
+                     this block, without forfeit (ADR-0152 SW-8)"
+                ),
+            }
+        }
+        out
+    }
+
+    /// **This block's own attempt's class, read off its header** (2026-09-24 DoS audit review of #11):
+    /// the class the fold reserves one claim of on the room while step 3 folds the block's objects.
+    /// `None` for a block that carries no attempt or an undecodable one (admission refuses that).
+    /// The one spelling the block pipeline and the one-state derivation (SW-8) both read.
+    fn palw_own_attempt_class_of_header_v1(header: &Header) -> Option<kaspa_hashes::Hash64> {
+        kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
+            .then(|| {
+                kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+                    .ok()
+                    .map(|envelope| envelope.attempt.class_id)
+            })
+            .flatten()
+    }
+
+    /// **One claim's derived binding at `block`**, on `state` — the per-claim body both derivations
+    /// share (the parent-state one below `palw_rcore_plus`, the one-state one past it), so the two
+    /// cannot differ in anything but the state they read.
+    ///
+    /// `Err(None)`: nothing to bind here (not `Provisional`, no anchor yet, or — under the stake
+    /// draw — this block is not the claim's anchor block). `Err(Some(why))`: the claim's anchor block
+    /// is this one and its draw refused (`why`); only the stake draw reports it, since below it the
+    /// claim simply tries again at the next block.
+    #[allow(clippy::too_many_arguments)]
+    fn palw_v2_derive_panel_binding_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        block: BlockHash,
+        block_daa: u64,
+        binding_extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        min_collateral: u64,
+        claim_id: &kaspa_hashes::Hash64,
+        claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, Option<String>> {
+        use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+        if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
+            return Err(None);
+        }
+        // The anchor is the first chain block at or past `accepted_daa + anchor_delay`. Until
+        // one exists the claim simply waits — that delay is what stops a producer from
+        // mining until it likes its own jury.
+        // Same base as the validator's, for the same reason — see the sibling call site.
+        let Some(anchor) = self.palw_v2_anchor_fact_of_candidate(block, claim.bind_base_daa(), panel_params) else {
+            return Err(None);
+        };
+        // C-02 (deep fence) and ADR-0124 (the panel economy): the whole draw policy, from the
+        // same anchor as the acceptance layer's sibling call — so this assembler builds the
+        // exact panel that layer recomputes.
+        let mut policy = self.palw_panel_draw_policy_at(anchor.anchor_daa);
+        // **ADR-0152 SW-8: under the stake draw a panel binds only in its own anchor block**
+        // (`validate_panel_bound_v2_with_policy` refuses any other), so no later block draws it again.
+        if policy.stake.is_some() && anchor.anchor_block != block {
+            return Err(None);
+        }
+        if let Some(state_params) = self.palw_state_params_v2.as_ref() {
+            policy.valid_lock = Self::palw_panel_valid_lock_of_v1(state, state_params, binding_extras, claim, block_daa);
+        }
+        // A registry too small to seat a panel yields nothing rather than a short one: a
+        // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
+        // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
+        // uses, through the same one-place subtraction.
+        let maturity_floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
+            anchor.anchor_daa,
+            self.palw_bond_maturity_window_at(state, anchor.anchor_daa),
+        );
+        // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
+        let capability_bound = self.palw_capability_bound_at(anchor.anchor_daa);
+        // ADR-0100 Decision 4: a class with a plan draws per shard, or not at all — a flat
+        // panel of a sharded class would ask shard seats to judge a whole model.
+        let drawn = match self.palw_stratified_shard_count(state, &claim.class_id, anchor.anchor_daa) {
+            Some(shard_count) => kaspa_consensus_core::palw_panel_v2::derive_stratified_panel_v2(
+                state,
+                panel_params,
+                claim_id,
+                anchor.anchor_block,
+                min_collateral,
+                maturity_floor,
+                capability_bound,
+                shard_count,
+            ),
+            None => kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_policy(
+                state,
+                panel_params,
+                claim_id,
+                anchor.anchor_block,
+                min_collateral,
+                maturity_floor,
+                capability_bound,
+                policy,
+            ),
+        };
+        let seats = drawn.map_err(|why| policy.stake.map(|_| why.to_string()))?;
+        // ADR-0147: nothing to ask here. The outsider is IN the derived panel — the draw policy
+        // carries the fence — and the acceptance layer demands that panel exactly, so a node
+        // proposes only what its own fold will take. The identity test that stood here
+        // compared fields a registrant writes for itself, and is gone with the rule it served.
+        Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {
+            claim: *claim_id,
+            anchor: anchor.anchor_block,
+            seats,
+        })
     }
 
     fn palw_v2_objects_of_block(

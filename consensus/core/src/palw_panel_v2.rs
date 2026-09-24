@@ -787,7 +787,7 @@ pub fn palw_panel_eligible_bonds_judging_v1<'a>(
         readiness,
         economy,
         seat_count,
-        true,
+        PalwPanelPopulationV1::Eligible,
     )
 }
 
@@ -827,14 +827,87 @@ pub fn palw_panel_stake_base_bonds_judging_v1<'a>(
         readiness,
         economy,
         seat_count,
-        false,
+        PalwPanelPopulationV1::StakeBase,
     )
 }
 
+/// **ADR-0152 SW-10's executor term** (M4 review, 2026-09-24, finding 1): the claim's executor
+/// OPERATOR's own bonds under the base population's structural predicates — `Active` at the floor,
+/// registered by the maturity floor, able to run the judged class — with the executor clause
+/// inverted: exactly the bonds [`palw_panel_stake_base_bonds_judging_v1`] drops for being the
+/// executor's operator, and only those. Empty where the executor could not sit even if it were not
+/// the executor (below the panel floor, unregistered by the floor, incapable of the class), which
+/// is every harness executor below the panel floor and every producer at the producer floor alone.
+///
+/// **Why the draw reads it.** SW-10 was priced on a population of eight (`v31_review_numbers.py`,
+/// §3.14's table: "an honest-only 8-seat population still binds with one seat saturated, 7 of 8
+/// is exactly 875‰"), and that holds only for an executor OUTSIDE the population. testnet-12's
+/// producers are its eight genesis cards, so a genesis card's claim draws from the other seven:
+/// one of them saturated leaves `6/7 = 857‰ < 875‰`, the draw refuses `InsufficientEligibleStake`,
+/// and — a panel binding only in its anchor block (SW-8) — the claim voids. The busiest producer's
+/// own claims fill its own headroom first, so one working card could halt every other card's
+/// binding. [`derive_panel_v2_with_policy`] adds this term's capped weight to BOTH sides of the
+/// floor (`(E + X) · 1000 ≥ (B + X) · 875`), which is SW-10 computed over the population the draw
+/// would have if the executor were not excluded, the executor counted eligible: it cannot sit on
+/// its own panel, so its load says nothing about who does. A genesis executor is back at 8 with one
+/// other seat saturated (7/8 binds, 6/8 refuses); an executor outside the population adds nothing.
+///
+/// **What it gives an attacker.** `X` is the executor operator's SW-2 weight, capped at
+/// `weight_cap_msk` (1,000,000 MSK), and it relaxes the floor exactly as the same capital posted as
+/// an idle Sybil would (`E` and `B` both rise by it) while buying no seat, so in TOTAL attacker
+/// capital no §4.3 threshold moves. Counted in Sybil stake alone (§4.3's unit) a floor-bound row
+/// falls by at most `X`: the worst admitted state for P2 with filing stays 12.74M (k = 6 is bound
+/// by the race, not the floor; k = 5's floor, 116 operators / 15.08M, still needs 108 / 14.04M
+/// beside a capped executor), but P2 with a free redraw at 6 of 8 eligible — floor-bound at 58
+/// operators / 7.54M, the race alone needing 5.98M — falls to 51 / 6.63M beside an executor bond
+/// posted at the cap, below that row's stated worst of 7.15M (7 of 8). ADR-0152 §3.14 SW-10 and
+/// §4.3 are B's to amend (A reviews): the executor term in SW-10's rule, and every floor-bound row
+/// re-run through `v31_review_numbers.py` with `X` up to the cap (the free-redraw worst above is
+/// the one this arithmetic finds moving); the code does not edit the ADR.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_panel_stake_executor_bonds_judging_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: &Hash64,
+    judged_class: &Hash64,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+    readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
+    economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
+    seat_count: u16,
+) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    palw_panel_bonds_judging_v1(
+        state,
+        claim_id,
+        judged_class,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        readiness,
+        economy,
+        seat_count,
+        PalwPanelPopulationV1::StakeExecutor,
+    )
+}
+
+/// Which list [`palw_panel_bonds_judging_v1`] returns — the three populations one spelling of the
+/// seat predicates serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PalwPanelPopulationV1 {
+    /// Every seat predicate: the draw's eligible list, byte for byte the list it always returned.
+    Eligible,
+    /// SW-10's base: every predicate but the one-ledger headroom.
+    StakeBase,
+    /// SW-10's executor term: the base's structural predicates over the executor operator's own
+    /// bonds (the executor clause inverted), headroom unread.
+    StakeExecutor,
+}
+
 /// The one spelling of the seat predicates behind [`palw_panel_eligible_bonds_judging_v1`]
-/// (`headroom: true`, byte for byte the list it always returned) and SW-10's
-/// [`palw_panel_stake_base_bonds_judging_v1`] (`headroom: false`), so the base and the eligible
-/// population cannot drift apart in anything but the one filter that separates them.
+/// (`Eligible`, byte for byte the list it always returned), SW-10's
+/// [`palw_panel_stake_base_bonds_judging_v1`] (`StakeBase`: no headroom) and its executor term
+/// [`palw_panel_stake_executor_bonds_judging_v1`] (`StakeExecutor`: no headroom, the executor clause
+/// inverted), so the three cannot drift apart in anything but the filters that separate them.
 #[allow(clippy::too_many_arguments)]
 fn palw_panel_bonds_judging_v1<'a>(
     state: &'a PalwChainStateV2,
@@ -846,8 +919,9 @@ fn palw_panel_bonds_judging_v1<'a>(
     readiness: Option<crate::palw_model_registry_v1::PalwReadinessPolicyV1>,
     economy: Option<crate::palw_panel_economy_v1::PalwSeatEconomyV1>,
     seat_count: u16,
-    headroom: bool,
+    population: PalwPanelPopulationV1,
 ) -> Result<Vec<(&'a PalwBondKeyV2, &'a PalwBondStateV2)>, PalwPanelV2Error> {
+    let headroom = population == PalwPanelPopulationV1::Eligible;
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
@@ -888,8 +962,19 @@ fn palw_panel_bonds_judging_v1<'a>(
         if registered_by_daa.is_some_and(|by| bond.registered_daa > by) {
             continue;
         }
-        if *bond_key == executor_bond || bond.operator_id == executor_operator || bond.pubkey == executor_key {
-            continue;
+        match population {
+            PalwPanelPopulationV1::Eligible | PalwPanelPopulationV1::StakeBase => {
+                if *bond_key == executor_bond || bond.operator_id == executor_operator || bond.pubkey == executor_key {
+                    continue;
+                }
+            }
+            // SW-10's executor term: only the executor operator's own bonds, which the two lists
+            // above drop for exactly that reason.
+            PalwPanelPopulationV1::StakeExecutor => {
+                if bond.operator_id != executor_operator {
+                    continue;
+                }
+            }
         }
         // **ADR-0071 Decision 3: a seat must be able to RUN the class it is drawn to judge.**
         //
@@ -1036,7 +1121,21 @@ pub fn derive_panel_v2_with_policy(
             Some(outsider) => base.into_iter().filter(|(_, bond)| bond.operator_id != outsider.operator_id).collect(),
             None => base,
         };
-        palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, &eligible, &base, &stake, outsider_floor)?
+        // SW-10's executor term (M4 review finding 1): the executor operator's capped weight where
+        // it could sit on this class but for being the executor, on both sides of the floor.
+        let executor = palw_panel_stake_executor_bonds_judging_v1(
+            state,
+            claim_id,
+            &claim.class_id,
+            min_collateral_sompi,
+            registered_by_daa,
+            capability_proof,
+            policy.readiness,
+            policy.economy,
+            params.seat_count,
+        )?;
+        let executor_weight = palw_panel_stake_weight_v1(&executor, &stake);
+        palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, &eligible, &base, executor_weight, &stake, outsider_floor)?
     } else if policy.economy.is_some() {
         palw_panel_operator_lottery_of_v1(needed, claim_id, anchor_block, &eligible)?
     } else {
@@ -1230,7 +1329,31 @@ fn palw_panel_outsider_draw_v1(
     .into_iter()
     .filter(not_registrant)
     .collect();
-    Ok((seat, Some((palw_panel_stake_weight_v1(&population, &stake), palw_panel_stake_weight_v1(&base, &stake)))))
+    // SW-10's executor term over the same population (M4 review finding 1): the executor operator's
+    // base-class bonds, minus the registrant as the lists above are — so a genesis card's claim on
+    // a bought class keeps the outsider population's tolerance of one saturated seat too.
+    let executor = palw_panel_stake_executor_bonds_judging_v1(
+        state,
+        claim_id,
+        &independence.base_class_id,
+        min_collateral_sompi,
+        registered_by_daa,
+        capability_proof,
+        policy.readiness,
+        policy.economy,
+        params.seat_count,
+    )?
+    .into_iter()
+    .filter(not_registrant)
+    .collect::<Vec<_>>();
+    let executor_weight = palw_panel_stake_weight_v1(&executor, &stake);
+    Ok((
+        seat,
+        Some((
+            palw_panel_stake_weight_v1(&population, &stake).saturating_add(executor_weight),
+            palw_panel_stake_weight_v1(&base, &stake).saturating_add(executor_weight),
+        )),
+    ))
 }
 
 /// **ADR-0147: an operator's ticket on a `Candidate` class's admission jury** —
@@ -1573,7 +1696,9 @@ pub fn palw_panel_stake_weight_v1(population: &[(&PalwBondKeyV2, &PalwBondStateV
 /// **ADR-0152 SW-10: the eligible-stake floor**, `1000 · eligible ≥ floor‰ · base`, else
 /// `InsufficientEligibleStake`. Exactly at the floor binds: seven of the eight genesis seats
 /// eligible is `7/8 = 875‰`, which the review's numbers keep binding (one honest seat may be
-/// saturated or offline; two may not).
+/// saturated or offline; two may not). The draw passes both weights with SW-10's executor term
+/// already added ([`palw_panel_stake_executor_bonds_judging_v1`]), so a genesis card's own claim is
+/// measured over the eight as well, not over the seven that may sit.
 pub fn palw_panel_stake_floor_v1(eligible: u128, base: u128, floor_permille: u16) -> Result<(), PalwPanelV2Error> {
     if eligible.saturating_mul(1000) >= base.saturating_mul(floor_permille as u128) {
         Ok(())
@@ -1600,17 +1725,22 @@ pub fn palw_panel_stake_race_of_v1(
     base: &[(&PalwBondKeyV2, &PalwBondStateV2)],
     stake: &PalwPanelStakeDrawV1,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
-    palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, eligible, base, stake, None)
+    palw_panel_stake_race_with_v1(needed, claim_id, anchor_block, eligible, base, 0, stake, None)
 }
 
 /// [`palw_panel_stake_race_of_v1`] with an outsider's floor `(eligible, base)` checked between the
-/// operator count and the class's own floor.
+/// operator count and the class's own floor, and SW-10's executor term `executor_weight`
+/// ([`palw_panel_stake_executor_bonds_judging_v1`]'s capped weight, `0` where the executor could not
+/// sit) added to both sides of the class's floor — the reported `InsufficientEligibleStake` weights
+/// include it.
+#[allow(clippy::too_many_arguments)]
 fn palw_panel_stake_race_with_v1(
     needed: u16,
     claim_id: &Hash64,
     anchor_block: BlockHash,
     eligible: &[(&PalwBondKeyV2, &PalwBondStateV2)],
     base: &[(&PalwBondKeyV2, &PalwBondStateV2)],
+    executor_weight: u128,
     stake: &PalwPanelStakeDrawV1,
     outsider_floor: Option<(u128, u128)>,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
@@ -1622,8 +1752,8 @@ fn palw_panel_stake_race_with_v1(
         palw_panel_stake_floor_v1(outsider_eligible, outsider_base, stake.eligible_floor_permille)?;
     }
     palw_panel_stake_floor_v1(
-        palw_panel_stake_weight_v1(eligible, stake),
-        palw_panel_stake_weight_v1(base, stake),
+        palw_panel_stake_weight_v1(eligible, stake).saturating_add(executor_weight),
+        palw_panel_stake_weight_v1(base, stake).saturating_add(executor_weight),
         stake.eligible_floor_permille,
     )?;
     Ok(entries
@@ -1640,8 +1770,10 @@ fn palw_panel_stake_race_with_v1(
 /// Under the stake draw the replay load lands on the heaviest operators: with equal compute per
 /// operator, capacity is set by the largest inclusion probability, and under successive sampling
 /// `π_max ≤ min(1, seat_count · W_max / ΣW)`, so `ΣW / W_max` operators' worth of capacity is a
-/// lower bound (the room errs toward refusing). Pure, and not yet wired: the fold's
-/// `panel_rate_v1` / `panel_room_v1` and op 186 read it past `palw_rcore_plus` in M4 (T91).
+/// lower bound (the room errs toward refusing). Wired by M4: the fold's `panel_rate_v1` /
+/// `panel_room_v1` and op 186 read it past `palw_rcore_plus` for every class outside C7, through
+/// [`palw_panel_ready_eff_of_bonds_v1`] and [`crate::palw_state_v2::palw_panel_room_ready_count_v1`]
+/// (T91).
 /// Counting operators also removes the over-count of an operator's several ready bonds.
 ///
 /// The cap is what bounds the lever SW-A6 found: uncapped, one ready 20M operator beside the eight
@@ -1655,6 +1787,31 @@ pub fn palw_panel_ready_eff_v1(ready_operator_weights: &[u64], seat_count: u64) 
     // Weights are >= 1 by SW-2; a list of zeros is read as equal weights rather than divided by.
     let spread = if heaviest == 0 { ready } else { (total / heaviest as u128).min(ready as u128) as u64 };
     ready.min(seat_count.max(spread))
+}
+
+/// **ADR-0152 SW-9 (M4): [`palw_panel_ready_eff_v1`] over a class's ready BONDS** — grouped by
+/// operator, each operator's whole-MSK posted collateral summed over its ready bonds and capped by
+/// SW-2's [`palw_draw_operator_weight_msk_v1`] (the weight the draw keys on, so the room and the draw
+/// cannot weigh one operator two ways), then `min(ready operators, max(seat_count, ⌊ΣW / W_max⌋))`.
+///
+/// The caller hands in the bonds its own readiness predicate calls ready — the fold's
+/// (`model_registry_seat_is_ready`) or op 186's (`palw_model_registry_room_ready_v1`) — and decides
+/// WHETHER to count this way at all through
+/// [`crate::palw_state_v2::palw_panel_room_ready_count_v1`]; this function only counts. On
+/// testnet-12 an operator is one bond (`palw_operator_id_unique`), so the grouping only removes the
+/// over-count where ids are not unique.
+pub fn palw_panel_ready_eff_of_bonds_v1<'a>(
+    ready_bonds: impl IntoIterator<Item = &'a PalwBondStateV2>,
+    seat_count: u64,
+    stake: &PalwPanelStakeDrawV1,
+) -> u64 {
+    let mut posted: std::collections::BTreeMap<Hash64, u128> = std::collections::BTreeMap::new();
+    for bond in ready_bonds {
+        let sum = posted.entry(bond.operator_id).or_insert(0);
+        *sum = sum.saturating_add((bond.collateral / crate::constants::SOMPI_PER_KASPA) as u128);
+    }
+    let weights: Vec<u64> = posted.into_values().map(|sum| palw_draw_operator_weight_msk_v1(sum, stake.weight_cap_msk)).collect();
+    palw_panel_ready_eff_v1(&weights, seat_count)
 }
 
 /// May THIS `PanelBound` object be accepted at THIS chain point? Everything is recomputed:
@@ -1838,6 +1995,22 @@ pub fn validate_panel_bound_v2_with_policy(
         .ok_or(PalwPanelV2Error::BindOutsideWindow("bind deadline overflows the DAA score"))?;
     if ctx.daa_score > deadline {
         return Err(PalwPanelV2Error::BindOutsideWindow("the bind window has already lapsed"));
+    }
+    // **ADR-0152 SW-8: under the stake draw a panel binds only in its own anchor block** (a
+    // redraw's panel in the redraw's anchor block). The draw's inputs are the ONE state the anchor
+    // block's acceptance reads — its pre-object base, advanced by its earlier bindings in claim-id
+    // order — so a `PanelBound` carried by any later block would be a second draw of the same seed on
+    // a state someone had time to shape: the retry path (a failed or dropped draw re-derived after
+    // the attacker retired its own seated Sybil, the draft's relabelled 8.97M) that this rule closes.
+    // A claim not bound here stays `Provisional` and voids `BindTimeout` at its bind deadline (S0: no
+    // forfeit; a free-prompt claim keeps its abandon hold). Keyed on `policy.stake`, which the
+    // processor's one resolver (`palw_panel_draw_policy_at`) sets iff `palw_rcore_plus` is active at
+    // the ANCHOR, like every other draw rule; `None` — testnet-11, devnet, mainnet and testnet-12 with
+    // the fence off — never reaches this test, so their windows are the ones above, byte for byte.
+    if policy.stake.is_some() && ctx.block != anchor.anchor_block {
+        return Err(PalwPanelV2Error::BindOutsideWindow(
+            "under the stake-weighted draw a panel binds only in its own anchor block (ADR-0152 SW-8)",
+        ));
     }
 
     let registered_by_daa = palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa);
@@ -6331,26 +6504,26 @@ mod tests {
                 for i in 0..48u64 {
                     let at = anchor(i);
                     let fact = PalwAnchorFactV2 { anchor_block: at, anchor_daa: slot, predecessor_daa: slot - 1 };
-                    let validate = |seats: &[PalwPanelSeatV2], policy| {
+                    // SW-8 (M4): the binding block IS the anchor block — `anchor(i)`'s own word.
+                    let in_anchor = ctx(0x5700_0000 + i, slot, 9_000);
+                    let later = ctx(9_000, slot + 1, 9_000);
+                    let validate_at = |at_block: &PalwBlockContextV2, seats: &[PalwPanelSeatV2], policy| {
                         validate_panel_bound_v2_with_policy(
-                            state,
-                            params,
-                            &sp,
-                            &ctx(9_000, slot + 1, 9_000),
-                            claim_id,
-                            &fact,
-                            at,
-                            seats,
-                            None,
-                            false,
-                            policy,
-                            None,
+                            state, params, &sp, at_block, claim_id, &fact, at, seats, None, false, policy, None,
                         )
                     };
+                    let validate = |seats: &[PalwPanelSeatV2], policy| validate_at(&in_anchor, seats, policy);
                     let raced = derive_panel_v2_with_policy(state, params, claim_id, at, 100, None, false, stake_policy).unwrap();
                     let drawn = derive_panel_v2_with_policy(state, params, claim_id, at, 100, None, false, lottery).unwrap();
                     assert_eq!(validate(&raced, stake_policy), Ok(()), "anchor {i}: the race's panel is accepted under its policy");
                     assert_eq!(validate(&drawn, lottery), Ok(()), "anchor {i}: and the lottery's under its own");
+                    // SW-8: a block after the anchor block — inside the bind window — may carry the
+                    // lottery's panel as it always could, and never the race's.
+                    assert!(
+                        matches!(validate_at(&later, &raced, stake_policy), Err(PalwPanelV2Error::BindOutsideWindow(_))),
+                        "anchor {i}: under the stake draw a later block cannot bind the claim"
+                    );
+                    assert_eq!(validate_at(&later, &drawn, lottery), Ok(()), "anchor {i}: stake None keeps today's window");
                     if raced != drawn {
                         differs += 1;
                         assert_eq!(validate(&drawn, stake_policy), Err(PalwPanelV2Error::PanelMismatch), "anchor {i}");
@@ -6661,6 +6834,9 @@ mod tests {
                             amount: (GENESIS_SEAT - 50_000 * MSK) as u128,
                             expiry_daa: 1_000_000,
                             settled_at_final: 0,
+                            // The v22 skeleton's fields (71748a97): unwritten until S-3.
+                            attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                            segments: 0,
                         },
                     );
                 }
@@ -6709,10 +6885,12 @@ mod tests {
         /// **SW-10 for the outsider, and the refusal order.** The outsider's population is the
         /// floor's minus the registrant: honest operators of 130k and the registrant's Sybils of
         /// 939k. A Valid lock of 500,000 MSK drops every honest bond (posted below it), which leaves
-        /// the outsider's eligible weight at `4 × 939,063` of a base of `4 × 939,063 + 8 × 130,000`
-        /// (783‰): refused, where the lottery seats an outsider. And the class's operator count is
-        /// checked before either floor, so a short class is `InsufficientEligibleBonds` whatever the
-        /// floors say.
+        /// the outsider's eligible weight at `4 × 939,063` of a base of `4 × 939,063 + 8 × 130,000`;
+        /// the executor (bond 1, a 939k floor seat) adds its own term to both sides (M4 review
+        /// finding 1), so the floor compares `5 × 939,063` with `5 × 939,063 + 8 × 130,000` (818‰):
+        /// refused, where the lottery seats an outsider. And the class's operator count is checked
+        /// before either floor, so a short class is `InsufficientEligibleBonds` whatever the floors
+        /// say.
         #[test]
         fn sw10_the_outsider_floor_and_the_refusal_order() {
             let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
@@ -6731,13 +6909,13 @@ mod tests {
                 let three = PalwPanelParamsV2::new(3, 2, 4).unwrap();
                 assert_eq!(
                     derive_panel_v2_with_policy(&state, &three, &claim_id, anchor(i), 100, None, false, raced),
-                    Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 4 * g, base: 4 * g + 8 * 130_000 }),
-                    "anchor {i}: the outsider's floor refuses"
+                    Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 5 * g, base: 5 * g + 8 * 130_000 }),
+                    "anchor {i}: the outsider's floor refuses, the executor's term on both sides"
                 );
                 assert!(derive_panel_v2_with_policy(&state, &three, &claim_id, anchor(i), 100, None, false, lottery).is_ok());
                 assert_eq!(
                     palw_panel_outsider_seat_v1(&state, &three, &claim_id, anchor(i), 100, Some(149), false, &raced, &independence),
-                    Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 4 * g, base: 4 * g + 8 * 130_000 }),
+                    Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 5 * g, base: 5 * g + 8 * 130_000 }),
                     "the public outsider seat applies its own floor"
                 );
             }
@@ -6746,11 +6924,11 @@ mod tests {
             let (eligible, base) = populations(&plain, &plain_claim);
             let stake = PalwPanelStakeDrawV1::V1;
             assert_eq!(
-                palw_panel_stake_race_with_v1(9, &plain_claim, anchor(0), &eligible, &base, &stake, Some((0, 1))),
+                palw_panel_stake_race_with_v1(9, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1))),
                 Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: 9, available: 8 })
             );
             assert_eq!(
-                palw_panel_stake_race_with_v1(5, &plain_claim, anchor(0), &eligible, &base, &stake, Some((0, 1))),
+                palw_panel_stake_race_with_v1(5, &plain_claim, anchor(0), &eligible, &base, 0, &stake, Some((0, 1))),
                 Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 0, base: 1 })
             );
         }
@@ -6792,6 +6970,651 @@ mod tests {
             assert_eq!(palw_panel_ready_eff_v1(&smalls_whale, 5), 6, "SW-A6's residual: 40 → 6");
             assert_eq!(palw_panel_ready_eff_v1(&[], 5), 0, "no ready operator");
             assert_eq!(palw_panel_ready_eff_v1(&[w(130_000); 3], 5), 3, "never more than the ready operators");
+        }
+
+        // ---- M4: the integration (ADR-0152 §3.14 SW-1, SW-8, SW-9, SW-10 at the fold) ----------
+
+        /// **ADR-0152 M4's core half** — the stake draw where the processor wires it: one state per
+        /// block (SW-8), bind only in the anchor block (SW-8), the room's `ready_eff` (SW-9), and the
+        /// fold's side of SW-10's halt. The processor half (the resolver, the chain's derivation on a
+        /// real testnet-12 chain) is `consensus/src/pipeline/virtual_processor/tests/
+        /// t12_stake_draw_integration.rs`; the room through the fold and op 186 on testnet-12's rows is
+        /// `consensus/core/tests/adr0152_sw9_ready_eff_room.rs`.
+        mod m4 {
+            use super::*;
+            use crate::palw_state_v2::{
+                PalwBondStatusV2, PalwClaimPhaseV2, PalwStateCarriageV2, PalwTransitionExtrasV1, PalwVoidReasonV2,
+                apply_palw_transition_v2_with_extras, palw_v2_apply_one_object_v1, palw_v2_pre_object_base_v1, revert_delta_v2,
+            };
+
+            fn key(b: u64) -> PalwBondKeyV2 {
+                PalwBondKeyV2(bond_outpoint(b))
+            }
+
+            /// The fold's extras past the panel economy (seats go on duty and hold their exposure),
+            /// everything else dormant — enough for a binding to load the seats it seats.
+            fn duty_extras() -> PalwTransitionExtrasV1 {
+                PalwTransitionExtrasV1 { panel_economy_active: true, ..Default::default() }
+            }
+
+            /// A block that is `word`'s own anchor at `daa`: the anchor fact every claim anchored there
+            /// reads (its predecessor below both slots), and the chain point that binds in it.
+            fn anchored_at(word: u64, daa: u64, predecessor_daa: u64) -> (PalwAnchorFactV2, PalwBlockContextV2) {
+                (
+                    PalwAnchorFactV2 { anchor_block: BlockHash::from_u64_word(word), anchor_daa: daa, predecessor_daa },
+                    ctx(word, daa, daa),
+                )
+            }
+
+            #[allow(clippy::too_many_arguments)]
+            fn validate(
+                state: &PalwChainStateV2,
+                sp: &PalwStateParamsV2,
+                point: &PalwBlockContextV2,
+                claim_id: &Hash64,
+                fact: &PalwAnchorFactV2,
+                proposed_anchor: Hash64,
+                seats: &[PalwPanelSeatV2],
+                policy: PalwPanelDrawPolicyV1,
+            ) -> Result<(), PalwPanelV2Error> {
+                validate_panel_bound_v2_with_policy(
+                    state,
+                    &five(),
+                    sp,
+                    point,
+                    claim_id,
+                    fact,
+                    proposed_anchor,
+                    seats,
+                    None,
+                    false,
+                    policy,
+                    None,
+                )
+            }
+
+            fn draw(
+                state: &PalwChainStateV2,
+                claim_id: &Hash64,
+                at: BlockHash,
+                policy: PalwPanelDrawPolicyV1,
+            ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+                derive_panel_v2_with_policy(state, &five(), claim_id, at, 100, None, false, policy)
+            }
+
+            /// **T91 through the counting function (SW-9):** `palw_panel_ready_eff_of_bonds_v1` over
+            /// the bonds of a registry reproduces §3.14's examples from the bonds' own posted
+            /// collateral, grouped per operator: 8 genesis seats → 8; with forty 130k operators, 13 of
+            /// 48; one 20M operator more, still 13 (capped); one 20M operator beside the genesis seats,
+            /// 8; forty 130k alone, 40, and one at the cap beside them, 6. One operator's two bonds are
+            /// ONE ready operator whose weight sums before the cap.
+            #[test]
+            fn t91_ready_eff_counts_ready_operators_over_capped_weights() {
+                let mut rows = genesis_and_small(40);
+                rows.push((60, 0x90, 20_000_000 * MSK));
+                rows.push((61, 0x91, 1_000_000 * MSK));
+                rows.push((62, 0x92, 600_000 * MSK));
+                rows.push((63, 0x92, 600_000 * MSK));
+                let (state, _) = sw_state(&rows, &[]);
+                let eff = |bonds: &[u64]| {
+                    palw_panel_ready_eff_of_bonds_v1(
+                        bonds.iter().map(|b| state.bond(&key(*b)).expect("registered")),
+                        5,
+                        &PalwPanelStakeDrawV1::V1,
+                    )
+                };
+                let genesis: Vec<u64> = (2..=9).collect();
+                let smalls: Vec<u64> = (10..50).collect();
+                let with = |a: &[u64], b: &[u64]| [a, b].concat();
+                assert_eq!(eff(&genesis), 8, "8 genesis seats");
+                assert_eq!(eff(&with(&genesis, &smalls)), 13, "8 genesis + 40 × 130k: 13 of 48");
+                assert_eq!(eff(&with(&with(&genesis, &smalls), &[60])), 13, "one ready 20M operator more: still 13 (capped)");
+                assert_eq!(eff(&with(&[60], &genesis)), 8, "one 20M operator + 8 genesis: 8 (5 uncapped)");
+                assert_eq!(eff(&smalls), 40, "40 × 130k");
+                assert_eq!(eff(&with(&smalls, &[61])), 6, "SW-A6's residual: one operator at the cap cuts 40 to 6");
+                assert_eq!(
+                    eff(&with(&smalls, &[62, 63])),
+                    6,
+                    "one operator's two 600k bonds: one ready operator, 1.2M summed and capped at 1M"
+                );
+                assert_eq!(eff(&[]), 0);
+            }
+
+            /// **T89 (SW-8): two claims bound in one block — the second sees the first's duties.**
+            /// Nine operators of equal weight beside the executor; one of them ("thin", bond 2) has
+            /// one-ledger headroom for exactly ONE seat of these claims. Both claims anchor at the same
+            /// block. The processor derives them the way the acceptance walk validates them: on the
+            /// block's pre-object base, advanced by the first binding in claim-id order. Wherever thin
+            /// sits on the first panel, it is not eligible for the second (its duty took its
+            /// headroom), and:
+            ///
+            /// * build = accept: the second panel derived on the advanced state is what the gate
+            ///   accepts there (and the first on the base);
+            /// * the parent-state derivation the chain ran before SW-8 draws thin onto the second panel
+            ///   at some anchors, and the gate refuses that panel on the state it actually reads
+            ///   (`PanelMismatch`) — the drop that used to send the claim to a later block's retry;
+            /// * fold: the block folding both bindings stores exactly the two derived panels.
+            #[test]
+            fn t89_two_claims_in_one_block_the_second_sees_the_first_s_duties() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let mut rows: Vec<(u64, u64, u64)> = (3..=10u64).map(|b| (b, 0x20 + b, 1_000_000)).collect();
+                rows.insert(0, (2, 0x22, 2_000));
+                let (s0, first_claim) = sw_state(&rows, &[]);
+                let (s0, second_claim) = fold_attempt(&s0, &sp, 102, 1, 7, 0x21, h64(1), h64(11), 40);
+                assert_ne!(first_claim, second_claim, "two claims");
+                let (a, b) = if first_claim < second_claim { (first_claim, second_claim) } else { (second_claim, first_claim) };
+                let economy = Some(t88_economy(1_000, 500, 0));
+                let policy = PalwPanelDrawPolicyV1 { economy, stake: Some(PalwPanelStakeDrawV1::V1), ..Default::default() };
+                let thin = key(2);
+                let (mut thin_first, mut legacy_refused) = (0usize, 0usize);
+                for i in 0..48u64 {
+                    let word = 0x5A00_0000 + i;
+                    // Both claims' slots (105, 106) lie behind one anchor at 106.
+                    let (fact, point) = anchored_at(word, 106, 104);
+                    let at = fact.anchor_block;
+                    let base = palw_v2_pre_object_base_v1(&s0, &sp, &point, false, false, false, false, &duty_extras()).unwrap();
+                    let p1 = draw(&base, &a, at, policy).unwrap();
+                    assert_eq!(validate(&base, &sp, &point, &a, &fact, at, &p1, policy), Ok(()), "anchor {i}: build = accept, first");
+                    let first = PalwConsensusObjectV2::PanelBound { claim: a, anchor: at, seats: p1.clone() };
+                    let advanced = palw_v2_apply_one_object_v1(&base, &sp, &point, &first, false, false, false, false, &duty_extras())
+                        .expect("the first binding folds");
+                    let p2 = draw(&advanced, &b, at, policy).unwrap();
+                    assert_eq!(
+                        validate(&advanced, &sp, &point, &b, &fact, at, &p2, policy),
+                        Ok(()),
+                        "anchor {i}: build = accept, second, on the advanced state"
+                    );
+                    if p1.iter().any(|s| s.bond == thin) {
+                        thin_first += 1;
+                        assert!(
+                            advanced.reserved_exposure(&thin) > base.reserved_exposure(&thin),
+                            "the first panel's duty loads thin"
+                        );
+                        assert!(!p2.iter().any(|s| s.bond == thin), "anchor {i}: thin has no headroom left for the second");
+                        let legacy = draw(&base, &b, at, policy).unwrap();
+                        if legacy != p2 {
+                            legacy_refused += 1;
+                            assert_eq!(
+                                validate(&advanced, &sp, &point, &b, &fact, at, &legacy, policy),
+                                Err(PalwPanelV2Error::PanelMismatch),
+                                "anchor {i}: the parent-state panel is refused on the state acceptance reads"
+                            );
+                        }
+                    }
+                    // Fold: the block folding both stores both derived panels.
+                    let second = PalwConsensusObjectV2::PanelBound { claim: b, anchor: at, seats: p2.clone() };
+                    let (folded, _) = apply_palw_transition_v2_with_extras(
+                        &s0,
+                        &sp,
+                        &point,
+                        &[first, second],
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &duty_extras(),
+                    )
+                    .expect("the block folds both bindings");
+                    assert_eq!(folded.panel(&a).map(|p| &p.seats), Some(&p1), "anchor {i}: fold = build, first");
+                    assert_eq!(folded.panel(&b).map(|p| &p.seats), Some(&p2), "anchor {i}: fold = build, second");
+                }
+                assert!(
+                    thin_first > 0 && legacy_refused > 0,
+                    "the premise must occur: thin first {thin_first}, legacy refused {legacy_refused}"
+                );
+            }
+
+            /// **T89 (SW-8): the Valid-lock filter excludes a bond, build = accept = fold.** A live
+            /// lock leaves genesis seat 2 unable to post the bind's Valid lock; the draw skips it, the
+            /// gate accepts the panel under the same policy, and the fold binds it. (T94's twin in the
+            /// pure half shows the base keeps the seat for SW-10.)
+            #[test]
+            fn t89_the_valid_lock_filter_excludes_a_bond_build_accept_fold() {
+                use crate::palw_panel_var_v1::PalwSlashableLockV1;
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (unlocked, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let mut carriage = PalwStateCarriageV2::from_state(&unlocked);
+                carriage.slashable_locks.insert(
+                    (key(2), h64(0x10C4)),
+                    PalwSlashableLockV1 {
+                        claim: h64(0x10C4),
+                        amount: (GENESIS_SEAT - 50_000 * MSK) as u128,
+                        expiry_daa: 1_000_000,
+                        settled_at_final: 0,
+                        attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                        segments: 0,
+                    },
+                );
+                let state = carriage.into_state(&sp, None).expect("consistent");
+                let lock = PalwPanelValidLockV1 {
+                    required: 100_000 * MSK as u128,
+                    now_daa: 103,
+                    settled_anchor_depth: None,
+                    window_court: sp.window_court(),
+                };
+                assert!(!lock.admits(&state, &key(2)) && lock.admits(&state, &key(3)));
+                let policy = PalwPanelDrawPolicyV1 { valid_lock: Some(lock), ..sw_policy() };
+                let slot = state.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                for i in 0..24u64 {
+                    let (fact, point) = anchored_at(0x5B00_0000 + i, slot, slot - 1);
+                    let seats = draw(&state, &claim_id, fact.anchor_block, policy).expect("7 of 8 genesis weight stays eligible");
+                    assert!(!seats.iter().any(|s| s.bond == key(2)), "anchor {i}: the locked seat never sits");
+                    assert_eq!(validate(&state, &sp, &point, &claim_id, &fact, fact.anchor_block, &seats, policy), Ok(()));
+                    let object =
+                        PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact.anchor_block, seats: seats.clone() };
+                    let (folded, _) = apply_palw_transition_v2_with_extras(
+                        &state,
+                        &sp,
+                        &point,
+                        &[object],
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &duty_extras(),
+                    )
+                    .unwrap();
+                    assert_eq!(folded.panel(&claim_id).map(|p| &p.seats), Some(&seats), "anchor {i}: fold = build");
+                }
+            }
+
+            /// **T89 (SW-8): a redraw binds in the REDRAW's anchor block, and only there.** A bound
+            /// panel whose receipt window closes with no conclusion is revived once (`rebound_daa`),
+            /// and its second panel anchors on the sweep. The gate accepts the second panel at the
+            /// redraw's anchor block, refuses it at any later block inside the redraw's bind window
+            /// (`BindOutsideWindow`, SW-8) and at the FIRST panel's anchor (whose slot the claim has
+            /// left); under `stake: None` the later block still binds, as it always could.
+            #[test]
+            fn t89_a_redraw_binds_only_in_the_redraw_s_anchor_block() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let slot = s0.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                let (fact1, point1) = anchored_at(0x5C00_0001, slot, slot - 1);
+                let p1 = draw(&s0, &claim_id, fact1.anchor_block, sw_policy()).unwrap();
+                let (s1, _) = apply_palw_transition_v2_with_extras(
+                    &s0,
+                    &sp,
+                    &point1,
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact1.anchor_block, seats: p1 }],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                // The receipt window closes with no conclusion: the sweep revives the claim once.
+                let sweep = slot + sp.window_receipt() + 1;
+                let (s2, _) = apply_palw_transition_v2_with_extras(
+                    &s1,
+                    &sp,
+                    &ctx(0x5C00_0002, sweep, sweep),
+                    &[],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                let revived = s2.claim(&claim_id).unwrap();
+                assert!(matches!(revived.phase, PalwClaimPhaseV2::Provisional), "{:?}", revived.phase);
+                assert_eq!(revived.rebound_daa, Some(sweep));
+                let slot2 = sweep + five().anchor_delay();
+                let (fact2, point2) = anchored_at(0x5C00_0003, slot2, slot2 - 1);
+                let p2 = draw(&s2, &claim_id, fact2.anchor_block, sw_policy()).unwrap();
+                assert_eq!(validate(&s2, &sp, &point2, &claim_id, &fact2, fact2.anchor_block, &p2, sw_policy()), Ok(()));
+                let later = ctx(0x5C00_0004, slot2 + 1, slot2 + 1);
+                assert!(matches!(
+                    validate(&s2, &sp, &later, &claim_id, &fact2, fact2.anchor_block, &p2, sw_policy()),
+                    Err(PalwPanelV2Error::BindOutsideWindow(_))
+                ));
+                assert!(
+                    matches!(
+                        validate(&s2, &sp, &point1, &claim_id, &fact1, fact1.anchor_block, &p2, sw_policy()),
+                        Err(PalwPanelV2Error::AnchorMismatch(_) | PalwPanelV2Error::BindOutsideWindow(_))
+                    ),
+                    "the first panel's anchor is not the redraw's"
+                );
+                let lottery = draw(&s2, &claim_id, fact2.anchor_block, lottery_policy()).unwrap();
+                assert_eq!(validate(&s2, &sp, &later, &claim_id, &fact2, fact2.anchor_block, &lottery, lottery_policy()), Ok(()));
+            }
+
+            /// **T89 (SW-8): a reorg across the bind.** The bind folded at anchor A reverts to the
+            /// exact parent state; the competing chain's anchor B (the first block at the same slot on
+            /// that chain) draws on the same one state, and its gate refuses A's panel (the object
+            /// names A) and accepts B's. Nothing about A's draw survives on B's chain.
+            #[test]
+            fn t89_a_reorg_across_the_bind_re_derives_on_the_new_chain() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let slot = s0.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                let (fact_a, point_a) = anchored_at(0x5D00_000A, slot, slot - 1);
+                let (fact_b, point_b) = anchored_at(0x5D00_000B, slot, slot - 1);
+                let pa = draw(&s0, &claim_id, fact_a.anchor_block, sw_policy()).unwrap();
+                let bound_a = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact_a.anchor_block, seats: pa.clone() };
+                let (sa, delta) = apply_palw_transition_v2_with_extras(
+                    &s0,
+                    &sp,
+                    &point_a,
+                    &[bound_a],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                assert!(matches!(sa.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }));
+                let back = revert_delta_v2(&sa, &delta, &sp).unwrap();
+                assert_eq!(back.state_root(), s0.state_root(), "the reorg restores the parent state exactly");
+                let pb = draw(&back, &claim_id, fact_b.anchor_block, sw_policy()).unwrap();
+                assert_eq!(pb, draw(&s0, &claim_id, fact_b.anchor_block, sw_policy()).unwrap());
+                assert!(matches!(
+                    validate(&back, &sp, &point_b, &claim_id, &fact_b, fact_a.anchor_block, &pa, sw_policy()),
+                    Err(PalwPanelV2Error::AnchorMismatch(_))
+                ));
+                assert_eq!(validate(&back, &sp, &point_b, &claim_id, &fact_b, fact_b.anchor_block, &pb, sw_policy()), Ok(()));
+                let bound_b = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: fact_b.anchor_block, seats: pb.clone() };
+                let (sb, _) = apply_palw_transition_v2_with_extras(
+                    &back,
+                    &sp,
+                    &point_b,
+                    &[bound_b],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                assert_eq!(sb.panel(&claim_id).map(|p| &p.seats), Some(&pb));
+            }
+
+            /// **T93 at the fold (SW-8): nothing after the anchor moves a bound panel, and nothing
+            /// after it can bind an unbound one.** A panel is derived and folded in its anchor block.
+            /// Then, on the chain after it: the attacker's own claims (a Sybil's attempts), a carried
+            /// licence's lock on a seat, and a slash of an unrelated bond. The stored panel never
+            /// changes, and every operator's key (`L`, `W`) but the slashed one's is what it was — the
+            /// one ledger moves eligibility, a slash moves only its own bond's weight. And for a claim
+            /// whose draw did NOT bind in its anchor block, the attacker retiring its own seated
+            /// Sybil afterwards buys nothing: the panel re-derived on the later state differs, and
+            /// the gate refuses it at every later block (`BindOutsideWindow`) — no retry exists.
+            #[test]
+            fn t93_nothing_after_the_anchor_moves_the_panel() {
+                use crate::palw_panel_var_v1::PalwSlashableLockV1;
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(5), &[]);
+                let slot = s0.claim(&claim_id).unwrap().bind_base_daa() + five().anchor_delay();
+                let (fact, point) = anchored_at(0x5E00_0001, slot, slot - 1);
+                let at = fact.anchor_block;
+                let panel = draw(&s0, &claim_id, at, sw_policy()).unwrap();
+                let (bound, _) = apply_palw_transition_v2_with_extras(
+                    &s0,
+                    &sp,
+                    &point,
+                    &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: at, seats: panel.clone() }],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &duty_extras(),
+                )
+                .unwrap();
+                let keys_of = |state: &PalwChainStateV2| {
+                    let (eligible, _) = populations(state, &claim_id);
+                    palw_panel_stake_entries_v1(&claim_id, at, &eligible, &PalwPanelStakeDrawV1::V1)
+                        .into_iter()
+                        .map(|e| (e.operator_id, (e.neg_log2_q64, e.weight_msk)))
+                        .collect::<std::collections::BTreeMap<_, _>>()
+                };
+                let keys0 = keys_of(&s0);
+                // The attacker's own claims: a floor-sized Sybil (bond 10, operator 0x4A) produces.
+                let (after_claims, _) = fold_attempt(&bound, &sp, slot + 1, 10, 40, 0x4A, h64(1), h64(11), 40);
+                // A carried licence's Valid lock on the first seat.
+                let seat = panel[0].bond;
+                let mut carriage = PalwStateCarriageV2::from_state(&after_claims);
+                carriage.slashable_locks.insert(
+                    (seat, h64(0x93A1)),
+                    PalwSlashableLockV1 {
+                        claim: h64(0x93A1),
+                        amount: 10_000 * MSK as u128,
+                        expiry_daa: 1_000_000,
+                        settled_at_final: 0,
+                        attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                        segments: 0,
+                    },
+                );
+                // A slash of an unrelated bond: one that does not sit on this panel.
+                let unrelated =
+                    (2..=14u64).map(key).find(|k| !panel.iter().any(|s| s.bond == *k)).expect("thirteen bonds, five seats");
+                let slashed_operator = carriage.bonds.get(&unrelated).unwrap().operator_id;
+                {
+                    let bond = carriage.bonds.get_mut(&unrelated).unwrap();
+                    bond.collateral -= 400_000 * MSK;
+                    bond.slashed += 400_000 * MSK;
+                }
+                let later = carriage.into_state(&sp, None).expect("consistent");
+                for (label, state) in [("the attacker's claims", &after_claims), ("a lock and a slash", &later)] {
+                    assert_eq!(state.panel(&claim_id).map(|p| &p.seats), Some(&panel), "{label}: the bound panel stands");
+                    assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "{label}");
+                }
+                let keys1 = keys_of(&later);
+                for (operator, k) in &keys0 {
+                    if *operator == slashed_operator {
+                        assert_eq!(keys1[operator].0, k.0, "the slashed operator's L is its seed's");
+                        continue;
+                    }
+                    assert_eq!(keys1.get(operator), Some(k), "no other operator's key moved");
+                }
+
+                // The retry path: a draw that did not bind in its anchor block. The attacker retires
+                // its own seated Sybil after seeing the anchor; the re-derived panel on the later
+                // state differs, and no later block may carry it.
+                let mut retry_blocked = 0usize;
+                for i in 0..32u64 {
+                    let (fact, point) = anchored_at(0x5E10_0000 + i, slot, slot - 1);
+                    let first = draw(&s0, &claim_id, fact.anchor_block, sw_policy()).unwrap();
+                    let Some(own) = first.iter().find(|s| (10..=14u64).map(key).any(|k| k == s.bond)) else { continue };
+                    let mut c = PalwStateCarriageV2::from_state(&s0);
+                    c.bonds.get_mut(&own.bond).unwrap().status = PalwBondStatusV2::Retiring { since_daa: slot, settled_at_since: 0 };
+                    let retired = c.into_state(&sp, None).expect("consistent");
+                    let redrawn = draw(&retired, &claim_id, fact.anchor_block, sw_policy()).unwrap();
+                    assert_ne!(redrawn, first, "anchor {i}: the retirement moved the panel it would re-derive");
+                    let after = ctx(0x5E20_0000 + i, slot + 1, slot + 1);
+                    assert!(
+                        matches!(
+                            validate(&retired, &sp, &after, &claim_id, &fact, fact.anchor_block, &redrawn, sw_policy()),
+                            Err(PalwPanelV2Error::BindOutsideWindow(_))
+                        ),
+                        "anchor {i}: a later block cannot carry the retry"
+                    );
+                    // The anchor block itself reads the state before the retirement.
+                    assert_eq!(validate(&s0, &sp, &point, &claim_id, &fact, fact.anchor_block, &first, sw_policy()), Ok(()));
+                    retry_blocked += 1;
+                }
+                assert!(retry_blocked > 0, "a Sybil must have sat somewhere, or the retry case is vacuous");
+            }
+
+            /// **T94 at the fold (SW-10 + SW-8): `InsufficientEligibleStake` halts binding, and the
+            /// claim voids `BindTimeout` without forfeit — AT its anchor block.** Two of the eight
+            /// genesis seats saturated (6/8, 750‰): the draw refuses in the anchor block, and the gate
+            /// refuses ANY proposed panel there with the same error (build = accept on the refusal —
+            /// the lottery's panel included). Nothing binds, and past `palw_rcore_plus` the anchor
+            /// block's own fold voids the claim `BindTimeout` at its step 4c (M4 review finding 3,
+            /// DL-1's exact void DAA: the anchor block's), not 600 DAA later at the window: no bond is
+            /// slashed, no collateral moves, the executor's reservation is released, and the deadline
+            /// index, the carriage rebuild and a revert all agree with it. A block before the slot, or
+            /// one past it that may not anchor (`sw8_anchor_delay` `None`: a heartbeat), voids nothing.
+            /// The fence-off twin (`None` everywhere) keeps the claim until the bind window's sweep.
+            /// `stake: None` binds the same claim.
+            #[test]
+            fn t94_a_refused_draw_binds_nothing_and_the_claim_voids_bind_timeout_without_forfeit() {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let (s0, claim_id) = sw_state(&genesis_and_small(0), &[2, 3]);
+                let claim = s0.claim(&claim_id).unwrap().clone();
+                let slot = claim.bind_base_daa() + five().anchor_delay();
+                let (fact, point) = anchored_at(0x5F00_0001, slot, slot - 1);
+                let g = 939_063u128;
+                let refusal = PalwPanelV2Error::InsufficientEligibleStake { eligible: 6 * g, base: 8 * g };
+                assert_eq!(draw(&s0, &claim_id, fact.anchor_block, sw_policy()), Err(refusal.clone()));
+                let lottery = draw(&s0, &claim_id, fact.anchor_block, lottery_policy()).expect("stake None never refuses for stake");
+                assert_eq!(
+                    validate(&s0, &sp, &point, &claim_id, &fact, fact.anchor_block, &lottery, sw_policy()),
+                    Err(refusal),
+                    "the gate refuses on the same state for the same reason"
+                );
+                let fold = |at: &PalwBlockContextV2, extras: &PalwTransitionExtrasV1| {
+                    apply_palw_transition_v2_with_extras(&s0, &sp, at, &[], None, false, false, false, false, extras).unwrap()
+                };
+                let phase = |state: &PalwChainStateV2| state.claim(&claim_id).unwrap().phase.clone();
+                let executor_reserved = s0.reserved_exposure(&key(1));
+                let no_forfeit = |after: &PalwChainStateV2, label: &str| {
+                    assert!(after.panel(&claim_id).is_none(), "{label}: no panel was ever bound");
+                    for (k, bond) in s0.bonds_iter() {
+                        let now = after.bond(k).unwrap();
+                        assert_eq!((now.collateral, now.slashed), (bond.collateral, bond.slashed), "{label}: S0, no forfeit on {k:?}");
+                    }
+                    assert!(after.reserved_exposure(&key(1)) < executor_reserved, "{label}: the executor's reservation is released");
+                };
+
+                // Past the fence, on a block that may anchor a panel.
+                let armed = PalwTransitionExtrasV1 { sw8_anchor_delay: Some(five().anchor_delay()), ..duty_extras() };
+                let (before, _) = fold(&ctx(0x5F00_0003, slot - 1, slot - 1), &armed);
+                assert_eq!(phase(&before), PalwClaimPhaseV2::Provisional, "a block below the slot is not the claim's anchor");
+                let (heartbeat, _) = fold(&ctx(0x5F00_0004, slot + 1, slot + 1), &duty_extras());
+                assert_eq!(phase(&heartbeat), PalwClaimPhaseV2::Provisional, "a block that may not anchor voids nothing");
+                let (voided, delta) = fold(&point, &armed);
+                assert_eq!(
+                    phase(&voided),
+                    PalwClaimPhaseV2::Voided { voided_daa: slot, reason: PalwVoidReasonV2::BindTimeout },
+                    "the anchor block voids the claim it did not bind, at its own DAA"
+                );
+                no_forfeit(&voided, "step 4c");
+                voided.assert_deadline_consistency(&sp).expect("the deadline index is the claims' recomputed deadlines");
+                let rebuilt = PalwStateCarriageV2::from_state(&voided).into_state(&sp, None).expect("the carriage rebuild accepts it");
+                assert_eq!(rebuilt.state_root(), voided.state_root(), "a restart reproduces the void");
+                assert_eq!(revert_delta_v2(&voided, &delta, &sp).unwrap().state_root(), s0.state_root(), "a reorg undoes it");
+
+                // The fence-off twin: nothing voids the claim at its anchor; the window's sweep does.
+                let (twin_at_anchor, _) = fold(&point, &duty_extras());
+                assert_eq!(phase(&twin_at_anchor), PalwClaimPhaseV2::Provisional, "fence off: the claim waits");
+                let deadline = claim.bind_base_daa() + sp.window_bind();
+                let (swept, _) = fold(&ctx(0x5F00_0002, deadline + 1, deadline + 1), &duty_extras());
+                assert!(
+                    matches!(phase(&swept), PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }),
+                    "{:?}",
+                    phase(&swept)
+                );
+                no_forfeit(&swept, "the window's sweep");
+            }
+
+            /// `sw_state` with the executor ONE OF the eight genesis seats — testnet-12's shape, where
+            /// every producer is a genesis card: bond 1 (key 7, operator 0x21) posts a genesis seat's
+            /// collateral beside the seven others (bonds 2..=8). `saturate` as `sw_state`'s, bond 1
+            /// included (the executor's own heavy claim fills its own headroom).
+            fn genesis_executor_state(saturate: &[u64]) -> (PalwChainStateV2, Hash64) {
+                let sp = state_params().with_fp_exposure_ceiling(500).unwrap();
+                let rows: Vec<(u64, u64, u64)> = (2..=8u64).map(|b| (b, 0x40 + b, GENESIS_SEAT)).collect();
+                let mut objects = vec![adr0130_class(), heavy_class(), adr0130_bond(1, 7, 0x21, GENESIS_SEAT)];
+                objects.extend(rows.iter().map(|(b, op, c)| adr0130_bond(*b, 30 + *b as u8, *op, *c)));
+                let (mut state, _) =
+                    apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+                let mut daa = 101;
+                for b in saturate {
+                    let (pk, op) = if *b == 1 { (7, 0x21) } else { (30 + *b as u8, rows.iter().find(|row| row.0 == *b).unwrap().1) };
+                    state = fold_attempt(&state, &sp, daa, *b, pk, op, h64(3), h64(13), HEAVY_PWU).0;
+                    daa += 1;
+                }
+                fold_attempt(&state, &sp, daa, 1, 7, 0x21, h64(1), h64(11), 40)
+            }
+
+            /// **T94, the M4 review's finding 1: a genesis card's own claim keeps SW-10's one-seat
+            /// tolerance.** On testnet-12 the executor is one of the eight genesis seats and may not
+            /// sit, so the seven others are the whole population; with one of them saturated they are
+            /// `6/7 = 857‰`, which alone would refuse. SW-10's executor term counts the executor's own
+            /// capped weight on both sides (`palw_panel_stake_executor_bonds_judging_v1`), so the claim
+            /// is measured over the eight:
+            ///
+            /// * one other seat saturated: `7/8 = 875‰`, the draw binds (and never seats the executor
+            ///   or the saturated seat);
+            /// * the executor saturated as well — the busiest producer, its own claims filling its own
+            ///   headroom — still `7/8`: its load is unread, it cannot sit anyway;
+            /// * two other seats saturated: `6/8`, `InsufficientEligibleStake { 6g, 8g }` — the ADR's
+            ///   "refuses with two", reported with the term on both sides;
+            /// * an executor outside the population (`sw_state`'s, below the panel floor) adds nothing,
+            ///   and eight genesis seats with one saturated bind at `7/8` as the pure half pinned;
+            /// * `stake: None` binds every one of them (no stake floor).
+            #[test]
+            fn t94_a_genesis_executor_keeps_the_one_saturated_seat_tolerance() {
+                let g = 939_063u128;
+                let stake = PalwPanelStakeDrawV1::V1;
+                let weight = |list: &[(&PalwBondKeyV2, &PalwBondStateV2)]| palw_panel_stake_weight_v1(list, &stake);
+                let executor_weight = |state: &PalwChainStateV2, claim: &Hash64| {
+                    weight(
+                        &palw_panel_stake_executor_bonds_judging_v1(
+                            state,
+                            claim,
+                            &h64(1),
+                            100,
+                            None,
+                            false,
+                            None,
+                            Some(sw_economy()),
+                            5,
+                        )
+                        .unwrap(),
+                    )
+                };
+
+                let (one, c1) = genesis_executor_state(&[2]);
+                let (eligible, base) = populations(&one, &c1);
+                assert_eq!((weight(&eligible), weight(&base)), (6 * g, 7 * g), "the seven others, one saturated");
+                assert!(
+                    matches!(palw_panel_stake_floor_v1(6 * g, 7 * g, 875), Err(PalwPanelV2Error::InsufficientEligibleStake { .. })),
+                    "the premise: the seven alone refuse at 857‰"
+                );
+                assert_eq!(executor_weight(&one, &c1), g, "the executor is a genesis seat");
+
+                let (busy, cb) = genesis_executor_state(&[1, 2]);
+                assert!(
+                    busy.reserved_exposure(&key(1)) > one.reserved_exposure(&key(1)),
+                    "the busy executor's own heavy claim loads it"
+                );
+                assert_eq!(executor_weight(&busy, &cb), g, "the executor term reads no headroom");
+
+                for i in 0..24u64 {
+                    for (label, state, claim) in [("one saturated", &one, &c1), ("and the executor busy", &busy, &cb)] {
+                        let seats =
+                            draw(state, claim, anchor(i), sw_policy()).unwrap_or_else(|e| panic!("{label}, anchor {i}: {e:?}"));
+                        assert_eq!(seats.len(), 5, "{label}: a full jury");
+                        assert!(!seats.iter().any(|s| s.bond == key(1) || s.bond == key(2)), "{label}, anchor {i}: {seats:?}");
+                    }
+                }
+
+                let (two, c2) = genesis_executor_state(&[2, 3]);
+                for i in 0..8u64 {
+                    assert_eq!(
+                        draw(&two, &c2, anchor(i), sw_policy()),
+                        Err(PalwPanelV2Error::InsufficientEligibleStake { eligible: 6 * g, base: 8 * g }),
+                        "two other seats saturated: 6/8 refuses"
+                    );
+                }
+                for (state, claim) in [(&one, &c1), (&busy, &cb), (&two, &c2)] {
+                    assert!(draw(state, claim, anchor(0), lottery_policy()).is_ok(), "stake None has no stake floor");
+                }
+
+                let (outside, co) = sw_state(&genesis_and_small(0), &[2]);
+                assert_eq!(executor_weight(&outside, &co), 0, "an executor below the panel floor could not sit: no term");
+                assert!(draw(&outside, &co, anchor(0), sw_policy()).is_ok(), "eight genesis seats, one saturated: 7/8 binds");
+            }
         }
     }
 }

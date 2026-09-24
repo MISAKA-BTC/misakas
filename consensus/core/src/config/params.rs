@@ -5274,7 +5274,7 @@ impl Params {
         let armed_below =
             |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
         // ADR §6 "Prerequisites (X15, F20)", one refusal each so T24 can name the one it removed.
-        let prerequisites: [(bool, &'static str); 13] = [
+        let prerequisites: [(bool, &'static str); 14] = [
             (
                 armed_below(self.palw_offence_attribution),
                 "palw_rcore_plus is armed without palw_offence_attribution at or below it: R-core+'s tiers read F1/F2's records",
@@ -5286,6 +5286,16 @@ impl Params {
             (
                 armed_below(self.palw_audit_2026_09_23),
                 "palw_rcore_plus is armed without palw_audit_2026_09_23 at or below it: the one ledger extends its rate room",
+            ),
+            // ADR-0152 SW-8 (M4 review finding 4): the stake draw binds a panel only in its anchor
+            // block, on the pre-object base the acceptance walk validates against — a state the walk
+            // folds object by object only past the 2026-09-11 audit's A-1. Below it the walk
+            // rehearses each object through a whole-block transition while the derivation reads
+            // another state, and a binding it dropped could never be retried.
+            (
+                armed_below(self.palw_audit_2026_09_11),
+                "palw_rcore_plus is armed without palw_audit_2026_09_11 at or below it: SW-8's one state is the walk's \
+                 object-by-object pre-object base",
             ),
             (armed_below(self.palw_economic_safety), "palw_rcore_plus is armed without palw_economic_safety at or below it"),
             (
