@@ -2248,6 +2248,15 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_reporter_filing_read_v1_impl(offence_key, commitment, reporter, gated)
     }
 
+    fn palw_da_step_leaf_demand_check_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        self.virtual_processor.palw_da_step_leaf_demand_check_v1_impl(claim, accuser, leaf)
+    }
+
     fn palw_claim_readers_v2(&self, claim: kaspa_consensus_core::Hash64) -> Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }

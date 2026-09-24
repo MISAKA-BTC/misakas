@@ -5224,3 +5224,8 @@ mod t46_p2_8_reporter_filer;
 /// claims** — a child of this suite, so it runs on this harness, these doors and these assertions.
 #[path = "t54d_false_valid_filer.rs"]
 mod t54d_false_valid_filer;
+
+/// **ADR-0152 v3.1 Phase 2, P2-8b / P2-8d (T54f's processor half)** — the replay filer's ONE builder on
+/// this suite's real claims, every object it leads to through this suite's doors; a child, like T47.
+#[path = "t54f_replay_filer.rs"]
+mod t54f_replay_filer;

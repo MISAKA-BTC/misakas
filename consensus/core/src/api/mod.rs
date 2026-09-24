@@ -927,6 +927,18 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 DA-3 / J-6 (Phase 2, P2-8d): what a `StepLeaf` demand of `claim` by `accuser`
+    /// comes to** at the tip, for the DAA the virtual's next block folds at — the fold's own gates for
+    /// the named leaf (`palw_producer_v2::palw_da_step_leaf_demand_check_v1`). `None` off `ConsensusV2`.
+    fn palw_da_step_leaf_demand_check_v1(
+        &self,
+        _claim: crate::Hash64,
+        _accuser: crate::palw_state_v2::PalwBondKeyV2,
+        _leaf: u64,
+    ) -> Option<crate::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        None
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {

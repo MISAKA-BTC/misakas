@@ -4162,6 +4162,56 @@ impl VirtualStateProcessor {
         Some(read)
     }
 
+    /// **ADR-0152 DA-3 / J-6 (Phase 2, P2-8d): what a `StepLeaf` demand of `claim` by `accuser`
+    /// comes to** — at the tip, for the DAA the virtual's next block folds at, under that block's
+    /// extras, exactly as [`Self::palw_da_accusation_check_v1_impl`] reads P2-6's accusation. `None`
+    /// with no tip state.
+    pub fn palw_da_step_leaf_demand_check_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let candidate_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        Some(self.palw_da_step_leaf_demand_check_v1_at(&state, chain_point, candidate_daa, &claim, &accuser, leaf))
+    }
+
+    /// [`Self::palw_da_step_leaf_demand_check_v1_impl`] on a given state, for the block at `now_daa`
+    /// on `chain_point` (the real-claim tests call it on the state they folded). No state params: the
+    /// court is dormant.
+    pub(crate) fn palw_da_step_leaf_demand_check_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        chain_point: kaspa_consensus_core::BlockHash,
+        now_daa: u64,
+        claim: &kaspa_consensus_core::Hash64,
+        accuser: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1::Refused(
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::DaCourtDormant,
+            );
+        };
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: now_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        kaspa_consensus_core::palw_producer_v2::palw_da_step_leaf_demand_check_v1(
+            state,
+            state_params,
+            &extras,
+            claim,
+            accuser,
+            leaf,
+            now_daa,
+        )
+    }
+
     /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
     /// transport half) — see `PalwChainStateV2::claim_readers_v2`.
     pub fn palw_claim_readers_v2_impl(
