@@ -108,6 +108,7 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_anchor_clock" => params.palw_anchor_clock = Some(at),
         "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
         "palw_clock_floor" => params.palw_clock_floor = Some(at),
+        "palw_offence_attribution" => params.palw_offence_attribution = Some(at),
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),

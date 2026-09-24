@@ -293,6 +293,10 @@ pub mod palw_model_market_v1;
 pub mod palw_model_registry_v1;
 /// Model-add tracking: machine-readable refusal codes and the constructed→folded pipeline.
 pub mod palw_model_registration_v1;
+/// ADR-0152 v2 F2: one adjudicator for a false `Valid`, bound to the claim's committed root —
+/// called by the processor and the fold alike. Consensus-inert until
+/// `Params::palw_offence_attribution` is Some.
+pub mod palw_offence_attribution_v1;
 /// ADR-0144 §9: objective-offence identity, PanelFalseValid payloads, and the processor's
 /// cryptographic gate. Consensus-inert until `Params::palw_objective_offence` is Some.
 pub mod palw_offence_v1;

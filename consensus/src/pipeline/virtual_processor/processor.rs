@@ -9139,6 +9139,13 @@ impl VirtualStateProcessor {
             audit_2026_09_11_deep_active: self.palw_audit_2026_09_11_deep_at(daa_score),
             audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
             settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
+            // TODO(adr0152-f2-processor): resolve `Params::palw_offence_attribution` here —
+            // `self.palw_offence_attribution_at(daa_score)`, with the processor field beside
+            // `palw_objective_offence`, its initialisation from `params`, and the helper beside
+            // `palw_audit_2026_09_23_at` — in the same change as the kind 1/3 routing of the
+            // `Obj::ObjectiveOffence` gate (spec §3.4). Until then every block folds the fence
+            // dormant: `PanelFalseValidV2` is refused and the V1 kind is consumed as below it.
+            offence_attribution_active: false,
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.

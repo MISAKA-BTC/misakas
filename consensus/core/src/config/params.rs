@@ -1320,6 +1320,23 @@ pub struct Params {
     /// Refines the cursor, so `validate_palw_v2` refuses it without `palw_clock_cursor` armed at or
     /// below its height. `Some(0)` on testnet-12 only; `None` elsewhere; hashed Some-only.
     pub palw_clock_floor: Option<ForkActivation>,
+    /// **ADR-0152 v2, stage F2: a false `Valid` is judged by one adjudicator bound to the claim's
+    /// committed root.** Past it the V1 `PanelFalseValid` is refused by name — its
+    /// `job_id == claim_id` check is a fixed point no real block-lane or free-prompt claim can
+    /// satisfy, and the V1 licence path lets a hand-signed V2 receipt clear it for the state-bound
+    /// kinds — and `PanelFalseValidV2` is admitted in its place: the receipt the chain licensed on
+    /// (full or segmented, under the chain's own domain), the contradiction pinned to the claim's
+    /// `execution_root`, and the seat liable only for the segments its mask attested
+    /// ([`crate::palw_offence_attribution_v1::palw_check_panel_false_valid_v2`]). An
+    /// execution-proving conviction before `Final` voids the claim `CourtFraud` and slashes its
+    /// executor; after `Final` it reverses the `Final`.
+    ///
+    /// Genesis-only, and refused without `palw_objective_offence`, `palw_audit_2026_09_23`,
+    /// `palw_verification_v2` and `palw_economic_safety` armed at or below it: the rule is a
+    /// conviction route of the ledger the first arms, and it reads the locks, liability rows and
+    /// forfeiture the other three define. `Some(0)` on testnet-12 only; `None` elsewhere; hashed
+    /// Some-only, so every other preset fingerprints byte-identically to a build without it.
+    pub palw_offence_attribution: Option<ForkActivation>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -2862,6 +2879,37 @@ impl Params {
                 "palw_audit_2026_09_23 may only be armed at genesis (DAA 0): a later crossing starts the anchor ring empty \
                  under a counter that pre-fence Finals already moved",
             ));
+        }
+        // **ADR-0152 v2 F2: the offence-attribution fence is armed at genesis or not at all.** Past
+        // it the V1 `PanelFalseValid` is refused and a kind the chain never consumed before is; a
+        // later crossing would leave pre-fence V1 rows beside V2 rows keyed differently for the
+        // same (seat, claim), and one Valid could then be paid for twice. And it is a conviction
+        // route of machinery four other fences define — the ledger (`palw_objective_offence`), the
+        // lock unit and liability pruning (`palw_audit_2026_09_23`), the segmented receipt it
+        // accepts (`palw_verification_v2`) and the forfeiture it records
+        // (`palw_economic_safety`) — so each must be armed at or below it.
+        if let Some(fence) = self.palw_offence_attribution
+            && fence != ForkActivation::never()
+        {
+            if fence.daa_score() != 0 {
+                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                    "palw_offence_attribution may only be armed at genesis (DAA 0): a later crossing keys one seat's false \
+                     Valid on one claim under two ledgers",
+                ));
+            }
+            let armed_below =
+                |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
+            if !(armed_below(self.palw_objective_offence)
+                && armed_below(self.palw_audit_2026_09_23)
+                && armed_below(self.palw_verification_v2)
+                && armed_below(self.palw_economic_safety))
+            {
+                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                    "palw_offence_attribution is armed without palw_objective_offence, palw_audit_2026_09_23, \
+                     palw_verification_v2 and palw_economic_safety all armed at or below it: the rule convicts through the \
+                     ledger, the locks, the segmented receipts and the forfeiture those fences define",
+                ));
+            }
         }
         // ADR-0089 Decision 9's two preconditions: an EVM face of a market that does not exist,
         // or on a lane that is inert, is a design that has not been armed.
@@ -4625,6 +4673,10 @@ impl Params {
         if self.palw_clock_floor == Some(ForkActivation::never()) {
             self.palw_clock_floor = None;
         }
+        // ADR-0152 v2 F2's attribution fence: Some-only hashed, so the same collapse.
+        if self.palw_offence_attribution == Some(ForkActivation::never()) {
+            self.palw_offence_attribution = None;
+        }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
         }
@@ -5691,6 +5743,14 @@ impl Params {
         }
     }
 
+    /// ADR-0152 v2 F2's offence-attribution fence, resolved off a ConsensusV2 ruleset.
+    pub fn palw_offence_attribution_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_offence_attribution) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
     pub fn palw_held_context_active_at(&self, daa_score: u64) -> bool {
         self.palw_held_context_fence().is_some_and(|f| f.is_active(daa_score))
     }
@@ -5720,6 +5780,13 @@ impl Params {
 
     pub fn palw_audit_2026_09_23_active_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_23_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// Whether a false `Valid` is judged by `palw_check_panel_false_valid_v2` at `daa_score`
+    /// (`PalwTransitionExtrasV1::offence_attribution_active`): the V1 kind refused, the V2 kind
+    /// admitted. `false` on every preset but testnet-12.
+    pub fn palw_offence_attribution_active_at(&self, daa_score: u64) -> bool {
+        self.palw_offence_attribution_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -5842,6 +5909,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_clock_floor,
+            palw_offence_attribution,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -5940,6 +6008,7 @@ impl Params {
             ("palw_anchor_clock", *palw_anchor_clock),
             ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_clock_floor", *palw_clock_floor),
+            ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -6290,6 +6359,12 @@ impl Params {
             h.write(b"palw_clock_floor");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0152 v2 F2's attribution fence, NAMED: it changes which objective offences a block may
+        // carry and what one convicts, so an operator reading the schedule must see it. Some-only.
+        if let Some(activation) = self.palw_offence_attribution {
+            h.write(b"palw_offence_attribution");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -6481,6 +6556,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_clock_floor,
+            palw_offence_attribution,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6780,6 +6856,10 @@ impl Params {
         // The clock floor (H3/H5). SOME-ONLY, unlike the cursor above: a `None` visited as a
         // sentinel would put a new value into every preset's schedule id, testnet-11's included.
         if let Some(activation) = palw_clock_floor.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0152 v2 F2's attribution fence: SOME-ONLY, as the floor above and for its reason.
+        if let Some(activation) = palw_offence_attribution.as_mut() {
             fork(activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
@@ -7363,6 +7443,7 @@ impl Params {
             palw_anchor_clock,
             palw_clock_cursor,
             palw_clock_floor,
+            palw_offence_attribution,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7639,6 +7720,11 @@ impl Params {
         // — all but testnet-12 — fingerprints byte-identically to a build without the field.
         if let Some(activation) = palw_clock_floor {
             h.write(b"palw_clock_floor");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0152 v2 F2's attribution fence: the height only, Some-only, for the floor's reason.
+        if let Some(activation) = palw_offence_attribution {
+            h.write(b"palw_offence_attribution");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
@@ -8392,6 +8478,9 @@ impl Params {
             // Rides with the cursor it refines: an override that drops the cursor drops the floor,
             // or `validate_palw_v2` would refuse the result.
             palw_clock_floor: None,
+            // Rides with `palw_economic_safety`, which an override drops below: armed without it,
+            // `validate_palw_v2` would refuse the result.
+            palw_offence_attribution: None,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -9391,6 +9480,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_offence_attribution: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -9606,6 +9696,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_offence_attribution: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -9803,6 +9894,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_offence_attribution: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -15422,6 +15514,11 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // a step is stamped at or past the cursor, and the reference is the earliest tied step. The
     // cursor it refines is armed by pass 2 (testnet-11 schedules it; the walk moves it to 0).
     params.palw_clock_floor = Some(at);
+    // **ADR-0152 v2 F2** (`Params::palw_offence_attribution`): a false `Valid` is judged by one
+    // adjudicator bound to the claim's committed root, on the receipt form the chain licensed, and
+    // the V1 payload whose job-id check no real claim can pass is refused. The objective-offence
+    // ledger and Verification V2 it rides on are testnet-11's heights, moved to 0 by pass 2.
+    params.palw_offence_attribution = Some(at);
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -15930,6 +16027,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_anchor_clock: None,
     palw_clock_cursor: None,
     palw_clock_floor: None,
+    palw_offence_attribution: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -16071,6 +16169,56 @@ mod consensus_params_id_tests {
             matches!(refused, Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why)) if why.contains("only be armed at genesis")),
             "{refused:?}"
         );
+    }
+
+    /// **ADR-0152 v2 F2's attribution fence is armed at genesis, on the four fences it convicts
+    /// through, or refused** — testnet-12 alone arms it, at DAA 0, and validates; the card with the
+    /// fence at a later height, or with any of the four taken away, is refused by name; `never()`
+    /// collapses to `None` so it cannot write bytes a build without the field never writes.
+    #[test]
+    fn the_offence_attribution_fence_is_genesis_only_and_rides_its_four_fences() {
+        let t12 = Params::from(crate::network::NetworkId::with_suffix(crate::network::NetworkType::Testnet, 12));
+        assert_eq!(t12.palw_offence_attribution, Some(ForkActivation::always()), "testnet-12 arms it from genesis");
+        assert!(t12.palw_offence_attribution_active_at(0));
+        t12.validate_palw_v2().expect("testnet-12 validates with the fence");
+        for (name, p) in
+            [("mainnet", mainnet_shipped_params()), ("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params())]
+        {
+            assert_eq!(p.palw_offence_attribution, None, "{name}: dormant");
+            assert!(!p.palw_offence_attribution_active_at(u64::MAX), "{name}: never in force");
+        }
+        let refused_with = |edit: &dyn Fn(&mut Params), needle: &str| {
+            let mut p = t12.clone();
+            edit(&mut p);
+            let refused = p.validate_palw_v2();
+            assert!(
+                matches!(&refused, Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why)) if why.contains(needle)),
+                "{refused:?}"
+            );
+        };
+        refused_with(
+            &|p| p.palw_offence_attribution = Some(ForkActivation::new(1)),
+            "palw_offence_attribution may only be armed at genesis",
+        );
+        refused_with(&|p| p.palw_objective_offence = None, "palw_offence_attribution is armed without");
+        refused_with(&|p| p.palw_verification_v2 = Some(ForkActivation::new(5)), "palw_offence_attribution is armed without");
+        refused_with(&|p| p.palw_economic_safety = None, "palw_offence_attribution is armed without");
+        let mut without = t12.clone();
+        without.palw_offence_attribution = None;
+        let mut never_armed = t12.clone();
+        never_armed.palw_offence_attribution = Some(ForkActivation::never());
+        assert_eq!(
+            never_armed.consensus_identity_id(),
+            without.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+        let mut scheduled = without.clone();
+        scheduled.palw_offence_attribution = Some(ForkActivation::new(1_000));
+        assert_eq!(scheduled.consensus_identity_id(), without.consensus_identity_id(), "a future height is not yet a rule");
+        assert_ne!(scheduled.consensus_schedule_id(), without.consensus_schedule_id(), "but the schedule names it");
+        assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one separates identities");
+        assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "testnet-12's ruleset names the fence");
+        assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and so does its schedule");
     }
 
     #[test]

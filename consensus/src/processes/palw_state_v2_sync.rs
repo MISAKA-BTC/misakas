@@ -300,6 +300,13 @@ impl PalwStateSyncV2 {
                         .objective_offence
                         .filter(|fence| *fence != kaspa_consensus_core::config::params::ForkActivation::never())
                         .map(|fence| fence.daa_score()),
+                    // **ADR-0152 v2 F2's `palw_offence_attribution` is NOT threaded here**, and folds
+                    // as dormant: `PanelFalseValidV2` is refused and the V1 kind consumed as below
+                    // the fence. On testnet-12, which arms it from genesis, a sync walk would then
+                    // fold an offence object differently from the processor. No production caller
+                    // walks this path today (`processes/mod.rs` declares it and nothing calls it);
+                    // arming it means one constructor field, resolved per step like the audit fence.
+                    offence_attribution_active: false,
                     // The model-registry and EVM fences are NOT resolved here, and that is the
                     // pre-existing behaviour rather than a decision taken with this patch: this
                     // walk passed `PalwTransitionExtrasV1::default()` before it, and it is a REAL

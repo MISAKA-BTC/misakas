@@ -99,6 +99,13 @@ pub fn extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
         audit_2026_09_11_deep_active: p.palw_audit_2026_09_11_deep_active_at(daa),
         audit_2026_09_23_active: p.palw_audit_2026_09_23_active_at(daa),
         settled_anchor_depth: if p.palw_audit_2026_09_23_active_at(daa) { p.palw_settled_anchor_depth } else { None },
+        // **ADR-0152 v2 F2's `palw_offence_attribution` is held dormant here, deliberately.** The
+        // suites that include this fixture file the V1 `PanelFalseValid` on testnet-12 to pin the
+        // 2026-09-24 audit's fixes to the V1 route (#7, #8, the forged equivocation, the whole-
+        // collateral branch) — the fold BELOW that fence, byte for byte — and past it the V1 kind
+        // is refused by name. F2's own suites arm it explicitly
+        // (`p.palw_offence_attribution_active_at(daa)`), which is what the processor resolves.
+        offence_attribution_active: false,
         objective_offence_daa: p.palw_objective_offence_daa(),
         seat_gate_possession_daa: p.palw_seat_gate_possession_daa(),
         model_registry: registry_fold(p, daa),
