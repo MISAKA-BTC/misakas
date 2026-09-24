@@ -151,6 +151,18 @@ pub enum PalwShardCourtError {
     ArtifactOpenings(String),
     #[error("the refutation is malformed: {0:?}")]
     Refutation(PalwStepRefuteError),
+    // ---- appended by the bound verdict (`palw_one_move_verdict_bound_v2`); every one refuses ----
+    #[error("the refutation's binding commits to execution root {binding} and the claim to {claim}")]
+    NotTheClaimsExecution { binding: Hash64, claim: Hash64 },
+    #[error("the refutation's binding does not recompute its committed execution root: {0}")]
+    BindingDoesNotAuthenticate(crate::palw_step_leg::PalwStepLegError),
+    #[error("the named leaf's output tile does not open under the claim's committed step root: {0}")]
+    OutputTileNotCommitted(crate::palw_step_leg::PalwStepLegError),
+    #[error(
+        "leaf {leaf} is a fused-attention site: its history is the dissection's to carry, and the accusation carries \
+         {input_rows} input row(s) and {anchors} checkpoint anchor(s)"
+    )]
+    FusedLeafCarriesTheHistory { leaf: u64, input_rows: usize, anchors: usize },
 }
 
 impl PalwShardCourtAccusationV1 {
@@ -267,6 +279,157 @@ pub fn palw_one_move_verdict_v1(
     }
 }
 
+/// **The claim a one-move verdict is bound to** — read off the chain by the caller (the claim's
+/// record and its class's), never off the accusation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwOneMoveClaimV2 {
+    /// The claim's committed `execution_root`: the refutation's binding must RECOMPUTE to it.
+    pub execution_root: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    // HOOK(F1): the claim's job anchor joins here when F1 lands, and the marked check in
+    // `palw_one_move_verdict_bound_v2` compares `binding.job_context.job_id` to it. This tree's
+    // claim record carries no anchor, and this struct does not invent one.
+}
+
+/// Is `leaf` a fused-attention site of the job `binding` commits? One spelling for the bound
+/// verdict and for the filer that strips a fused accusation's history
+/// ([`PalwLeafEvidenceV1::for_the_one_move_v2`]).
+pub fn palw_leaf_is_fused_v2(binding: &crate::palw_step_leg::PalwStepBindingV2, leaf: u64) -> bool {
+    canonical_step_coordinates(&binding.shape_profile, &binding.job_context, leaf)
+        .and_then(|coord| binding.shape_profile.resolve_node_slot(coord.node_slot))
+        .is_some_and(|(node, _)| node.op_kind == PalwStepOpKindV1::AttnFused)
+}
+
+/// **A refutation as the one move carries it under the bound verdict**: at a fused site its history
+/// (the input rows and the checkpoint anchor) is taken out — the dissection carries that, and the
+/// bound verdict refuses it here — and at every other leaf it is returned untouched.
+pub fn palw_one_move_refutation_v2(mut refutation: PalwExecutionStepRefutationV1) -> PalwExecutionStepRefutationV1 {
+    if palw_leaf_is_fused_v2(&refutation.binding, refutation.output_opening.leaf_index) {
+        refutation.inputs.clear();
+        refutation.kv_checkpoint = None;
+    }
+    refutation
+}
+
+/// **The one move, bound to the claim before anything is deferred** (t12, `palw_audit_2026_09_23`).
+///
+/// [`palw_one_move_verdict_v1`] answered `NeedsDissection` for a fused site after checking only
+/// that the carried profile hashed to the class — before the binding was recomputed, before the
+/// output tile was opened, before the artifact rows were proved. The carried job context decided
+/// which node the leaf was, and nothing tied that context to the claim but an echoed root, so any
+/// bond could open a held dissection on any claim with a hand-built object. Here every check that
+/// does not need the dissection runs first, in this order:
+///
+/// 1. the leaf is inside the ladder and is the one the refutation opens;
+/// 2. the carried profile is the claim's class; the leaf has coordinates;
+/// 3. the binding's root is the claim's, and the binding RECOMPUTES to it (`verify_binding_v1`) —
+///    from here the job context, and so which node the leaf is, is the claim's;
+/// 4. (HOOK F1) the job is the claim's anchor's;
+/// 5. the artifact openings prove against the class root (all or nothing);
+/// 6. at a non-fused leaf: [`check_execution_step_refutation_opened_capped_v1`], exactly as
+///    [`palw_one_move_verdict_v1`] runs it — so the non-fused verdict is v1's on every accusation
+///    whose roots are the claim's;
+/// 7. at a fused leaf: the structural pass at the named leaf (the output tile opened under the
+///    committed step root, its preimage the leaf's, the binding's and the tile's shape rules — a
+///    fault there convicts, exactly as it does at any other leaf); then the history is ABSENT (the
+///    input rows and the checkpoint anchor are what the dissection replaces: the one move cannot
+///    derive a fused site's canonical set without walking the history, and evidence it cannot
+///    check it must not carry); then the id carriages against the binding. Only then
+///    `NeedsDissection` — the one question left, whether the committed tile recomputes over the
+///    history, which is the dissection's.
+pub fn palw_one_move_verdict_bound_v2(
+    refutation: &PalwExecutionStepRefutationV1,
+    artifact_openings: &[PalwArtifactOpeningV1],
+    prompt_ids_opening: Option<&PalwPromptIdsOpeningV1>,
+    leaf_index: u64,
+    claim: &PalwOneMoveClaimV2,
+    ladder: u64,
+) -> Result<PalwShardCourtVerdictV1, PalwShardCourtError> {
+    if leaf_index >= ladder {
+        return Err(PalwShardCourtError::LeafPastTheLadder { leaf: leaf_index, ladder });
+    }
+    if refutation.output_opening.leaf_index != leaf_index {
+        return Err(PalwShardCourtError::RefutationNamesAnotherLeaf {
+            named: leaf_index,
+            refuted: refutation.output_opening.leaf_index,
+        });
+    }
+    let binding = &refutation.binding;
+    let profile = &binding.shape_profile;
+    let declared = profile.shape_profile_id();
+    if declared != claim.class_id {
+        return Err(PalwShardCourtError::ClassMismatch { declared, class: claim.class_id });
+    }
+    let coord = canonical_step_coordinates(profile, &binding.job_context, leaf_index)
+        .ok_or(PalwShardCourtError::LeafHasNoCoordinates { leaf: leaf_index })?;
+    if binding.committed_execution_root != claim.execution_root {
+        return Err(PalwShardCourtError::NotTheClaimsExecution {
+            binding: binding.committed_execution_root,
+            claim: claim.execution_root,
+        });
+    }
+    crate::palw_step_leg::verify_binding_v1(binding).map_err(PalwShardCourtError::BindingDoesNotAuthenticate)?;
+    // HOOK(F1): `binding.job_context.job_id == claim.job_anchor` goes HERE — after the binding
+    // authenticates (so the job id is the claim's committed one) and before any leaf is read.
+    let proven = PalwProvenOperandsV1::from_openings_v1(artifact_openings, claim.artifact_root)
+        .map_err(|e| PalwShardCourtError::ArtifactOpenings(format!("{e:?}")))?;
+    let fused = profile.resolve_node_slot(coord.node_slot).is_some_and(|(node, _)| node.op_kind == PalwStepOpKindV1::AttnFused);
+    if !fused {
+        return match check_execution_step_refutation_opened_capped_v1(refutation, &proven, prompt_ids_opening, ladder) {
+            Ok(_) => Ok(PalwShardCourtVerdictV1::ExecutorGuilty),
+            Err(PalwStepRefuteError::NoFaultFound) => Ok(PalwShardCourtVerdictV1::FalseAccusation),
+            Err(other) => Err(PalwShardCourtError::Refutation(other)),
+        };
+    }
+    // The fused site: everything but the recomputation.
+    let structural = crate::palw_step_leg::PalwStepRefutationV1 {
+        binding: binding.clone(),
+        evidence: crate::palw_step_leg::PalwStepEvidenceV1::StepTile {
+            opening: refutation.output_opening.clone(),
+            preimage: refutation.output_preimage.clone(),
+        },
+    };
+    match crate::palw_step_leg::check_step_refutation_capped_v1(&structural, ladder) {
+        Ok(_) => return Ok(PalwShardCourtVerdictV1::ExecutorGuilty),
+        Err(crate::palw_step_leg::PalwStepLegError::NoFaultFound) => {}
+        Err(e) => return Err(PalwShardCourtError::OutputTileNotCommitted(e)),
+    }
+    if !refutation.inputs.is_empty() || refutation.kv_checkpoint.is_some() {
+        return Err(PalwShardCourtError::FusedLeafCarriesTheHistory {
+            leaf: leaf_index,
+            input_rows: refutation.inputs.len(),
+            anchors: usize::from(refutation.kv_checkpoint.is_some()),
+        });
+    }
+    crate::palw_step_refute::check_refutation_id_carriage_v1(refutation, prompt_ids_opening)
+        .map_err(PalwShardCourtError::Refutation)?;
+    Ok(PalwShardCourtVerdictV1::NeedsDissection)
+}
+
+/// **The one-move verdict at the rule in force** — `bound` is `palw_audit_2026_09_23` at the
+/// caller's DAA (the processor's, the fold's extras, a seat's params). Below it,
+/// [`palw_shard_court_verdict_v1`], byte for byte.
+pub fn palw_shard_court_verdict_at_v2(
+    accusation: &PalwShardCourtAccusationV1,
+    claim: &PalwOneMoveClaimV2,
+    ladder: u64,
+    bound: bool,
+) -> Result<PalwShardCourtVerdictV1, PalwShardCourtError> {
+    if !bound {
+        return palw_shard_court_verdict_v1(accusation, claim.class_id, claim.artifact_root, ladder);
+    }
+    accusation.validate_shape(ladder)?;
+    palw_one_move_verdict_bound_v2(
+        &accusation.refutation,
+        &accusation.artifact_openings,
+        accusation.prompt_ids_opening.as_ref(),
+        accusation.leaf_index,
+        claim,
+        ladder,
+    )
+}
+
 /// **A leaf's evidence** (ADR-0111 Decision 1) — a `ShardCourtAccused` accusation's content
 /// without the accuser: the refutation's committed half (the output tile and its opening, the
 /// canonical input rows, the KV anchor and the decode pin where the leaf reads them), the artifact
@@ -302,6 +465,36 @@ impl PalwLeafEvidenceV1 {
             artifact_root,
             ladder,
         )
+    }
+
+    /// [`Self::verdict_v1`] at the rule in force — see [`palw_shard_court_verdict_at_v2`].
+    pub fn verdict_at_v2(
+        &self,
+        claim: &PalwOneMoveClaimV2,
+        ladder: u64,
+        bound: bool,
+    ) -> Result<PalwShardCourtVerdictV1, PalwShardCourtError> {
+        if !bound {
+            return self.verdict_v1(claim.class_id, claim.artifact_root, ladder);
+        }
+        palw_one_move_verdict_bound_v2(
+            &self.refutation,
+            &self.artifact_openings,
+            self.prompt_ids_opening.as_ref(),
+            self.leaf_index(),
+            claim,
+            ladder,
+        )
+    }
+
+    /// **What a filer carries into the one move at a fused site, under the bound verdict: the leaf
+    /// and not its history.** The input rows and the checkpoint anchor are what the dissection
+    /// exists to replace — the bound verdict refuses them there (`FusedLeafCarriesTheHistory`), and
+    /// at a held class's positions the anchor alone is past every close ceiling. Every other leaf's
+    /// evidence is returned untouched.
+    pub fn for_the_one_move_v2(mut self) -> Self {
+        self.refutation = palw_one_move_refutation_v2(self.refutation);
+        self
     }
 
     /// The accusation a seat files from this evidence: every content field is the evidence's.
@@ -356,4 +549,224 @@ pub fn palw_shard_court_leaf_is_the_shards_v1(
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palw_checkpoint_court_v1::tests::{HeldFixture, fixture_prompt_ids, held_fixture};
+    use crate::palw_step::{PalwStepCoordinateV1, PalwStepOutLenV1, PalwStepTableV1, canonical_step_leaf_index};
+    use crate::palw_step_leg::{PalwStepLegError, PalwStepOpeningV1, PalwStepTileLeafV1};
+
+    const LADDER: u64 = 1 << 26;
+    const ARTIFACT_ROOT: u64 = 0xA7;
+
+    fn h64(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    /// Layer 1's fused site at prefill position 12, and its canonical tile-0 width.
+    fn fused_site(fx: &HeldFixture) -> (PalwStepCoordinateV1, u32) {
+        let profile = &fx.binding.shape_profile;
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(PalwStepTableV1::Attn, 1, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fused site commits a fixed row") };
+        (PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 12, tile_index: 0 }, elements.min(node.tile_len))
+    }
+
+    /// The fixture with a tile committed at the fused site (canonical unless `count` says otherwise).
+    fn fused_fixture(count: Option<u32>) -> (HeldFixture, u64) {
+        let fx = held_fixture(true, 20, None);
+        let (coord, canonical) = fused_site(&fx);
+        let count = count.unwrap_or(canonical);
+        let fx = fx.with_committed_tile(coord, count, vec![0u8; 4 * count as usize]);
+        let leaf = canonical_step_leaf_index(&fx.binding.shape_profile, &fx.binding.job_context, &coord).expect("a leaf");
+        (fx, leaf)
+    }
+
+    fn claim_of(fx: &HeldFixture) -> PalwOneMoveClaimV2 {
+        PalwOneMoveClaimV2 {
+            execution_root: fx.binding.committed_execution_root,
+            class_id: fx.class_id(),
+            artifact_root: h64(ARTIFACT_ROOT),
+        }
+    }
+
+    /// The honest fused accusation's content: the claim's binding, the committed tile and its path,
+    /// the prompt's tile at the leaf's position, no history, no rows.
+    fn honest_evidence(fx: &HeldFixture, leaf: u64) -> PalwLeafEvidenceV1 {
+        let preimage = fx.preimages.get(&leaf).expect("the committed tile").clone();
+        let position = preimage.coord.position;
+        PalwLeafEvidenceV1 {
+            refutation: PalwExecutionStepRefutationV1 {
+                binding: fx.binding.clone(),
+                output_opening: fx.opening(leaf),
+                output_preimage: preimage,
+                inputs: vec![],
+                prompt_token_ids: vec![],
+                decode_tokens: None,
+                kv_checkpoint: None,
+            },
+            artifact_openings: vec![],
+            prompt_ids_opening: Some(
+                crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&fixture_prompt_ids(20), position).expect("the tile"),
+            ),
+        }
+    }
+
+    fn accusation(fx: &HeldFixture, evidence: PalwLeafEvidenceV1) -> PalwShardCourtAccusationV1 {
+        let bond = |v: u64| {
+            PalwBondKeyV2(crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_u64_word(v), index: 0 })
+        };
+        let mut a = evidence.into_accusation_v1(h64(0xC1), fx.binding.committed_execution_root, h64(0x7A), bond(1), bond(2));
+        a.signature = vec![9; 8];
+        a
+    }
+
+    /// **The hole, closed: a fused accusation is bound to the claim before it is deferred.** Each
+    /// row is one way the pre-fence verdict let an unbound object open a held dissection; bound, each
+    /// is refused by name, and the honest object still defers.
+    #[test]
+    fn a_fused_accusation_is_bound_to_the_claim_before_it_is_deferred() {
+        let (fx, leaf) = fused_fixture(None);
+        let claim = claim_of(&fx);
+        let v1 = |a: &PalwShardCourtAccusationV1| palw_shard_court_verdict_v1(a, claim.class_id, claim.artifact_root, LADDER);
+        let v2 = |a: &PalwShardCourtAccusationV1| palw_shard_court_verdict_at_v2(a, &claim, LADDER, true);
+
+        let honest = accusation(&fx, honest_evidence(&fx, leaf));
+        assert_eq!(v2(&honest), Ok(PalwShardCourtVerdictV1::NeedsDissection), "the honest object still opens the dissection");
+        assert_eq!(v1(&honest), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+
+        // The grief as filed: the claim's own binding, a tile and a path that are nothing.
+        let mut garbage = honest.clone();
+        garbage.refutation.output_opening.siblings.clear();
+        garbage.refutation.output_preimage =
+            PalwStepTileLeafV1 { version: 1, coord: garbage.refutation.output_preimage.coord, value_count: 0, values_le: vec![] };
+        garbage.prompt_ids_opening = None;
+        assert_eq!(v1(&garbage), Ok(PalwShardCourtVerdictV1::NeedsDissection), "pre-fence: the hole");
+        assert!(matches!(v2(&garbage), Err(PalwShardCourtError::OutputTileNotCommitted(_))), "{:?}", v2(&garbage));
+
+        // A binding that echoes the claim's root and commits to nothing.
+        let mut unbound = honest.clone();
+        unbound.refutation.binding.step_merkle_root = h64(0xDEAD);
+        assert_eq!(v1(&unbound), Ok(PalwShardCourtVerdictV1::NeedsDissection), "pre-fence: the hole");
+        assert_eq!(v2(&unbound), Err(PalwShardCourtError::BindingDoesNotAuthenticate(PalwStepLegError::CommittedRootMismatch)));
+
+        // A context of the attacker's choosing (another job over the same class), root echoed.
+        let mut forged_job = honest.clone();
+        forged_job.refutation.binding.job_context.job_id = h64(0xBAD);
+        assert!(matches!(v2(&forged_job), Err(PalwShardCourtError::BindingDoesNotAuthenticate(_))), "{:?}", v2(&forged_job));
+
+        // Another execution's authentic binding: not the claim's.
+        let other = held_fixture(true, 19, None);
+        let mut elsewhere = honest_evidence(&fx, leaf);
+        elsewhere.refutation.binding = other.binding.clone();
+        assert!(matches!(elsewhere.verdict_at_v2(&claim, LADDER, true), Err(PalwShardCourtError::NotTheClaimsExecution { .. })));
+
+        // A row that does not prove against the class.
+        let mut rows = honest.clone();
+        rows.artifact_openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {
+            operand: crate::palw_artifact::PalwArtifactOperandV1 {
+                tensor_name: "blk.1.attn_softmax".into(),
+                layer: Some(1),
+                row_start: 0,
+                bytes: vec![1],
+            },
+            leaf_index: 0,
+            leaf_count: 2,
+            path: vec![h64(3)],
+        }];
+        assert!(matches!(v2(&rows), Err(PalwShardCourtError::ArtifactOpenings(_))), "{:?}", v2(&rows));
+
+        // A prompt tile of another prompt.
+        let mut tile = honest.clone();
+        let mut ids = fixture_prompt_ids(20);
+        ids[12] ^= 1;
+        tile.prompt_ids_opening = Some(crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&ids, 12).expect("a tile"));
+        assert!(
+            matches!(v2(&tile), Err(PalwShardCourtError::Refutation(PalwStepRefuteError::InputSetNotCanonical(_)))),
+            "{:?}",
+            v2(&tile)
+        );
+
+        // The history rides with the dissection, not the accusation — and the filer's strip is the cure.
+        let mut history = honest_evidence(&fx, leaf);
+        history.refutation.inputs = vec![crate::palw_step_refute::PalwStepInputRowV1 { preimages: vec![], run_siblings: vec![] }];
+        assert!(matches!(
+            history.verdict_at_v2(&claim, LADDER, true),
+            Err(PalwShardCourtError::FusedLeafCarriesTheHistory { input_rows: 1, anchors: 0, .. })
+        ));
+        assert_eq!(
+            history.clone().for_the_one_move_v2().verdict_at_v2(&claim, LADDER, true),
+            Ok(PalwShardCourtVerdictV1::NeedsDissection)
+        );
+
+        // The class, unchanged.
+        assert!(matches!(
+            palw_shard_court_verdict_at_v2(&honest, &PalwOneMoveClaimV2 { class_id: h64(77), ..claim }, LADDER, true),
+            Err(PalwShardCourtError::ClassMismatch { .. })
+        ));
+
+        // Below the fence every one of these is v1's, byte for byte.
+        for a in [&honest, &garbage, &unbound, &forged_job, &rows, &tile] {
+            assert_eq!(palw_shard_court_verdict_at_v2(a, &claim, LADDER, false), v1(a));
+        }
+    }
+
+    /// **A fault the claim committed at a fused site's TILE needs no dissection**: the structural
+    /// pass runs at every leaf, and a tile of the wrong width is the executor's on its own root.
+    #[test]
+    fn a_malformed_tile_committed_at_a_fused_site_convicts_in_one_move() {
+        let (fx, leaf) = fused_fixture(Some(1));
+        let claim = claim_of(&fx);
+        let a = accusation(&fx, honest_evidence(&fx, leaf));
+        assert_eq!(palw_shard_court_verdict_at_v2(&a, &claim, LADDER, true), Ok(PalwShardCourtVerdictV1::ExecutorGuilty));
+        assert_eq!(palw_shard_court_verdict_at_v2(&a, &claim, LADDER, false), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+    }
+
+    /// **The non-fused verdict is v1's.** A cache-write leaf (real tile, real path): its canonical
+    /// inputs are not carried, so both read the same refusal; a malformed committed tile convicts in
+    /// both; a garbage path is refused in both.
+    #[test]
+    fn a_non_fused_leaf_reads_the_same_verdict_either_side_of_the_fence() {
+        let fx = held_fixture(true, 20, None);
+        let claim = claim_of(&fx);
+        let (&leaf, preimage) = fx.preimages.iter().next().expect("a cache-write tile");
+        assert!(!palw_leaf_is_fused_v2(&fx.binding, leaf));
+        let evidence = |fx: &HeldFixture, leaf: u64, preimage: PalwStepTileLeafV1| PalwLeafEvidenceV1 {
+            refutation: PalwExecutionStepRefutationV1 {
+                binding: fx.binding.clone(),
+                output_opening: fx.opening(leaf),
+                output_preimage: preimage,
+                inputs: vec![],
+                prompt_token_ids: vec![],
+                decode_tokens: None,
+                kv_checkpoint: None,
+            },
+            artifact_openings: vec![],
+            prompt_ids_opening: None,
+        };
+        let same = |a: &PalwShardCourtAccusationV1, claim: &PalwOneMoveClaimV2| {
+            let (one, two) = (
+                palw_shard_court_verdict_v1(a, claim.class_id, claim.artifact_root, LADDER),
+                palw_shard_court_verdict_at_v2(a, claim, LADDER, true),
+            );
+            assert_eq!(one.is_ok(), two.is_ok(), "{one:?} / {two:?}");
+            if let (Ok(one), Ok(two)) = (&one, &two) {
+                assert_eq!(one, two);
+            }
+            two
+        };
+        let a = accusation(&fx, evidence(&fx, leaf, preimage.clone()));
+        assert!(same(&a, &claim).is_err(), "no inputs carried: refused on both sides");
+        let mut garbage = a.clone();
+        garbage.refutation.output_opening = PalwStepOpeningV1 { siblings: vec![], ..garbage.refutation.output_opening };
+        assert!(same(&garbage, &claim).is_err());
+        // A malformed tile the claim committed at a non-fused leaf convicts on both sides.
+        let bad = held_fixture(true, 20, None).with_committed_tile(preimage.coord, 1, vec![0; 4]);
+        let bad_claim = claim_of(&bad);
+        let a = accusation(&bad, evidence(&bad, leaf, bad.preimages[&leaf].clone()));
+        assert_eq!(same(&a, &bad_claim), Ok(PalwShardCourtVerdictV1::ExecutorGuilty));
+    }
 }
