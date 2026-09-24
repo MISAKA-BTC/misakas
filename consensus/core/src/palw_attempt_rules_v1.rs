@@ -304,6 +304,52 @@ pub fn palw_attempt_prompt_root_v1(
     crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &ids).ok()
 }
 
+/// **[`palw_attempt_prompt_root_v1`], remembered** (ADR-0152 v3.1 addendum §4-bis.3; the Phase 3
+/// review's heavy-budget finding). A `PromptNotAnchored { Whole }` recomputes an anchor's whole
+/// prompt root — 13.6 ms at 2M — and one block asks it of the processor's gate, the acceptance walk's
+/// rehearsal and the fold, and of every Whole on the same claim. The block's heavy budget charges a
+/// claim ONCE, so a second Whole on it must cost nothing, and that is only true if the root is not
+/// recomputed. The function is pure, so the memo changes no answer, only the time: keyed by
+/// everything the root is a function of (the profile's id, the anchor, the prefill, the class's
+/// form), bounded to [`PALW_PROMPT_ROOT_MEMO_ENTRIES_V1`] entries (a block's budget computes at most
+/// one 2M root, so a handful covers every block a node folds twice).
+pub fn palw_attempt_prompt_root_memo_v1(
+    profile: &PalwShapeProfileV3,
+    anchor: &Hash64,
+    prefill: u32,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Option<Hash64> {
+    use std::sync::{Mutex, OnceLock};
+    type Key = (Hash64, Hash64, u32, Hash64);
+    static MEMO: OnceLock<Mutex<std::collections::VecDeque<(Key, Hash64)>>> = OnceLock::new();
+    let form = crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, profile);
+    let key: Key = (profile.shape_profile_id(), *anchor, prefill, crate::palw_prompt_ids_v1::prompt_ids_form_id_v1(form));
+    let memo = MEMO.get_or_init(|| Mutex::new(std::collections::VecDeque::new()));
+    if let Ok(entries) = memo.lock()
+        && let Some((_, root)) = entries.iter().find(|(k, _)| *k == key)
+    {
+        return Some(*root);
+    }
+    let root = palw_attempt_prompt_root_v1(profile, anchor, prefill, network_form)?;
+    if let Ok(mut entries) = memo.lock() {
+        if entries.len() >= PALW_PROMPT_ROOT_MEMO_ENTRIES_V1 {
+            entries.pop_front();
+        }
+        entries.push_back((key, root));
+    }
+    Some(root)
+}
+
+/// How many whole prompt roots [`palw_attempt_prompt_root_memo_v1`] remembers.
+pub const PALW_PROMPT_ROOT_MEMO_ENTRIES_V1: usize = 8;
+
+/// **The mass a `PromptNotAnchored { Whole }` carrier is priced at, per prompt id** (the Phase 3
+/// review's heavy-budget finding): four — the bytes the flat form would have carried for the same
+/// prompt. The Whole form replaces carrying the prompt with recomputing it, so it pays what carrying
+/// it would have cost; the relay rate turns that into the carrier's burned rent
+/// (`palw_object_rent_ceiling_v2`). At 2M that is 1,048,572 mass.
+pub const PALW_WHOLE_PROMPT_MASS_PER_ID_V1: u64 = 4;
+
 /// **F1's floor rule, whole** (SPEC §4.3 J5): the context and the prompt a floor attempt anchored at
 /// `anchor` must run — [`palw_attempt_context_v1`] over [`palw_attempt_prompt_root_v1`] at the
 /// canonical job, at the block's draw rule. The seats' own rule (`verify_material`), in core.

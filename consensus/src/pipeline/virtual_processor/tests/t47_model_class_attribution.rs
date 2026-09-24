@@ -842,3 +842,93 @@ async fn t18u_a_block_recomputes_one_whole_2m_prompt() {
     let point = walk.next();
     assert_eq!(h.accepted(&walk.state, &point, &[w3.clone(), w4]), vec![w3], "a kind-3 Whole after a kind-4 one is dropped");
 }
+
+/// **T18u′ (the Phase 3 review's heavy-budget finding): holding the slot costs what it consumes.**
+/// On 2M-sized claims — `X` a relabel an honest filer convicts, `Y` an honest claim:
+///
+/// * **Same claim.** An attacker's Whole on `X` that reaches the recompute and then fails (a kind-3
+///   `Valid` receipt of a bond the panel does not seat) precedes the honest kind-4 Whole on `X`: the
+///   claim was charged once, the root is remembered, and the honest conviction lands in the same
+///   block.
+/// * **Junk costs nothing.** A Whole naming a claim the chain does not have, or accusing a bond that
+///   is not the claim's executor, fails before the recompute and is never charged: the honest Whole
+///   after it lands.
+/// * **Another claim pays.** An attacker's Whole on `Y` (its prompt is honest: `PromptHolds`) is
+///   priced at its prompt's carriage (`palw_object_rent_ceiling_v2`): underpaid, the walk drops it and
+///   the honest Whole on `X` lands; paid in full, it holds the slot — and the attacker paid the relay
+///   rate for 4 bytes a prompt id, 1,048,572 mass at 2M, burned.
+#[tokio::test]
+async fn t18u_holding_the_heavy_slot_costs_what_it_consumes() {
+    use kaspa_consensus_core::palw_state_v2::{palw_object_rent_ceiling_v1, palw_object_rent_ceiling_v2, palw_relay_fee_for_mass_v1};
+    let h = harness(true);
+    let profile = wide_profile();
+    let mut walk = h.genesis_walk();
+    seed_profile(&h, &mut walk, "2M-sized", &profile, Hash64::from_u64_word(WIDE_ARTIFACT_ROOT));
+    let x = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0A11)), bucket(1));
+    let y = open_wide_claim(&h, &mut walk, &profile, None, bucket(2));
+    let honest = h.refuted(x.claim_id, x.whole());
+
+    // Same claim: a stranger's kind-3 Whole on X reaches the recompute (it is well-formed and names
+    // X), then fails; the honest kind-4 on X is not charged again.
+    let mask = PalwSegmentMaskV2::full(4);
+    let stranger =
+        h.v2(BYSTANDER, x.claim_id, h.v3_verdict(BYSTANDER, x.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask), x.whole());
+    assert!(h.validate(&walk.state, &walk.next(), &stranger).is_err(), "the stranger's Whole fails");
+    let point = walk.next();
+    assert_eq!(h.accepted(&walk.state, &point, &[stranger.clone(), honest.clone()]), vec![honest.clone()], "the honest Whole lands");
+
+    // Junk costs nothing: a claim the chain does not have, an accused that is not the executor.
+    let mut unknown_payload = h.refuted_payload(x.claim_id, x.whole());
+    unknown_payload.claim_id = Hash64::from_u64_word(0xDEAD_C1A1);
+    let unknown = offence(PalwOffenceKindV1::ExecutorRefuted, h.cards[EXECUTOR], borsh::to_vec(&unknown_payload).unwrap());
+    let wrong_accused = h.refuted_by(BYSTANDER, y.claim_id, y.whole());
+    let point = walk.next();
+    assert_eq!(
+        h.accepted(&walk.state, &point, &[unknown, wrong_accused, honest.clone()]),
+        vec![honest.clone()],
+        "junk that fails before the recompute is never charged"
+    );
+
+    // Another claim pays for the slot it takes.
+    let attacker = h.refuted(y.claim_id, y.whole());
+    h.refused(&walk, &attacker, &E::PromptHolds.to_string());
+    let rent = palw_object_rent_ceiling_v2(&attacker, true);
+    assert_eq!(
+        rent,
+        palw_relay_fee_for_mass_v1(262_143 * kaspa_consensus_core::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)
+    );
+    assert_eq!(rent, palw_object_rent_ceiling_v2(&honest, true), "the honest filer pays the same carriage");
+    let priced = |objects: Vec<(Obj, u64)>| {
+        let point = walk.next();
+        h.vp().palw_v2_accepted_priced_objects_for_tests(&walk.state, h.sp(), &point, objects, point.block).0
+    };
+    assert_eq!(priced(vec![(attacker.clone(), rent - 1), (honest.clone(), rent)]), vec![honest.clone()], "underpaid: dropped");
+    assert_eq!(priced(vec![(attacker.clone(), rent), (honest.clone(), rent)]), Vec::<Obj>::new(), "paid in full, it holds the slot");
+    assert_eq!(priced(vec![(honest.clone(), rent - 1)]), Vec::<Obj>::new(), "and the honest filer pays it too");
+
+    // Fence-off parity: below `palw_offence_attribution` the rent is the v1 rent (nothing).
+    assert_eq!(palw_object_rent_ceiling_v2(&attacker, false), palw_object_rent_ceiling_v1(&attacker));
+    assert_eq!(palw_object_rent_ceiling_v1(&attacker), 0);
+    let tile = h.refuted(x.claim_id, x.tile(3));
+    assert_eq!(palw_object_rent_ceiling_v2(&tile, true), 0, "a Tile recomputes nothing");
+
+    // And the honest conviction folds.
+    let (before, _) = h.carry(&mut walk, vec![honest]);
+    assert_refuted_before_final(&h, &before, &walk.state, x.claim_id, walk.daa, Hash64::default());
+
+    // The walk and the fold charge alike: two Wholes on ONE licensed claim — the executor refuted by
+    // kind 4 and the full seat by kind 3 — both ride one block and both fold (the claim is charged
+    // once), where two Wholes on two claims do not (`t18u_a_block_recomputes_one_whole_2m_prompt`).
+    let z = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0A12)), bucket(3));
+    h.bind(&mut walk, z.claim_id);
+    let licence = h.license_v2(&mut walk, z.claim_id);
+    let full = licence.full_card();
+    let (licensed, _) =
+        h.carry(&mut walk, vec![h.v2(full, z.claim_id, licence.segmented(full), z.whole()), h.refuted(z.claim_id, z.whole())]);
+    assert!(walk.state.slashable_lock(h.cards[full], z.claim_id).is_none(), "the full seat is convicted");
+    assert!(
+        walk.state.consumed_offence(&palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &z.claim_id)).is_some(),
+        "and the executor refuted, in the same block"
+    );
+    assert!(licensed.bond(&h.cards[full]).unwrap().collateral > walk.state.bond(&h.cards[full]).unwrap().collateral);
+}

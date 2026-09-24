@@ -1130,21 +1130,49 @@ pub fn palw_logits_not_step_output_fault_v1(
 /// J5b recomputes it inline); the class's form is `MerkleV1`. Then `Tile`: the opening verifies
 /// against the binding's prompt root and its ids are not the anchor's at that range
 /// (`palw_attempt_prompt_ids_range_v1`, ~10 µs); `Whole`: the anchor's root recomputed
-/// (`palw_attempt_prompt_root_v1`, 13.6 ms at 2M) is not the binding's — the caller charges the
-/// prefill against the block's heavy budget BEFORE this runs ([`palw_offence_heavy_prompt_ids_v1`]).
+/// (`palw_attempt_prompt_root_v1`, 13.6 ms at 2M, remembered per claim) is not the binding's — the
+/// caller charges the prefill against the block's heavy budget BEFORE this runs, once per claim
+/// ([`palw_offence_heavy_prompt_charge_v1`]).
 pub fn palw_prompt_not_anchored_fault_v1(
     target: &PalwOffenceTargetV1,
     binding: &crate::palw_step_leg::PalwStepBindingV2,
     proof: &crate::palw_offence_v1::PalwPromptProofV1,
     rules: PalwIdentityRulesV1,
 ) -> Result<bool, PalwOffenceVerifyError> {
-    use crate::palw_attempt_rules_v1::{
-        PALW_J5_INLINE_PROMPT_IDS_V1, palw_attempt_canonical_v1, palw_attempt_prompt_ids_range_v1, palw_attempt_prompt_root_v1,
-    };
+    use crate::palw_attempt_rules_v1::{palw_attempt_prompt_ids_range_v1, palw_attempt_prompt_root_memo_v1};
     use crate::palw_offence_v1::PalwPromptProofV1 as P;
+    let prefill = palw_prompt_not_anchored_admit_v1(target, binding, rules)?;
+    let (profile, ctx, identity) = (&binding.shape_profile, &binding.job_context, target.job_identity);
+    match proof {
+        P::Tile(opening) => {
+            crate::palw_prompt_ids_v1::verify_prompt_ids_opening_v1(&ctx.prompt_token_ids_hash, prefill, opening)
+                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            let start = u64::from(opening.tile_index) * u64::from(crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN);
+            let anchored =
+                palw_attempt_prompt_ids_range_v1(&identity, u64::from(profile.vocab_size), start, opening.tile_ids.len() as u64);
+            Ok(opening.tile_ids != anchored)
+        }
+        P::Whole => {
+            // Remembered: a second Whole on this claim in the block recomputes nothing (the heavy
+            // budget charges a claim once).
+            let root = palw_attempt_prompt_root_memo_v1(profile, &identity, prefill, rules.prompt_ids_form)
+                .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            Ok(ctx.prompt_token_ids_hash != root)
+        }
+    }
+}
+
+/// **Everything `PromptNotAnchored` (13) asks before it reads a prompt id** — the cheap half, which
+/// also decides whether a `Whole` will recompute and so what the heavy budget charges
+/// ([`palw_offence_heavy_prompt_charge_v1`]). Returns the canonical prefill.
+pub fn palw_prompt_not_anchored_admit_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    rules: PalwIdentityRulesV1,
+) -> Result<u32, PalwOffenceVerifyError> {
+    use crate::palw_attempt_rules_v1::{PALW_J5_INLINE_PROMPT_IDS_V1, palw_attempt_canonical_v1};
     palw_claims_own_binding_v1(target, binding)?;
-    let identity = target.job_identity;
-    if identity == Hash64::default() {
+    if target.job_identity == Hash64::default() {
         return Err(PalwOffenceVerifyError::IdentityNotRecorded);
     }
     if target.lane.ok_or(PalwOffenceVerifyError::LaneUnknown)? != PalwClaimSourceKindV1::Attempt {
@@ -1167,28 +1195,14 @@ pub fn palw_prompt_not_anchored_fault_v1(
     if form != crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 {
         return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("PromptNotAnchored opens a Merkle prompt root"));
     }
-    match proof {
-        P::Tile(opening) => {
-            crate::palw_prompt_ids_v1::verify_prompt_ids_opening_v1(&ctx.prompt_token_ids_hash, canonical.0, opening)
-                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
-            let start = u64::from(opening.tile_index) * u64::from(crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN);
-            let anchored =
-                palw_attempt_prompt_ids_range_v1(&identity, u64::from(profile.vocab_size), start, opening.tile_ids.len() as u64);
-            Ok(opening.tile_ids != anchored)
-        }
-        P::Whole => {
-            let root = palw_attempt_prompt_root_v1(profile, &identity, canonical.0, rules.prompt_ids_form)
-                .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
-            Ok(ctx.prompt_token_ids_hash != root)
-        }
-    }
+    Ok(canonical.0)
 }
 
-/// **The prompt ids a kind-3 or kind-4 object asks a node to recompute whole**: the binding's
+/// **The prompt ids a kind-3 or kind-4 object DECLARES it will have recomputed whole**: the binding's
 /// declared prefill for a `PromptNotAnchored { proof: Whole }` (13) that decodes, and 0 for
-/// everything else (a malformed object costs its decode alone). What the processor's acceptance walk
-/// and the fold charge against [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`]
-/// BEFORE the adjudicator runs — one 2M check per block (addendum §4-bis.3).
+/// everything else. Read from the object alone — no state — because it prices the carrier's rent
+/// (`palw_object_rent_ceiling_v2`), which is read where no state is in hand; what the heavy budget
+/// CHARGES is [`palw_offence_heavy_prompt_charge_v1`], which asks whether the recompute will run.
 pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> u64 {
     use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
@@ -1205,6 +1219,73 @@ pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenc
         }
         _ => 0,
     }
+}
+
+/// **A `Whole` 13 the block would recompute**: the claim whose anchor's prompt root it asks for,
+/// and how many ids that is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwHeavyPromptChargeV1 {
+    pub claim_id: Hash64,
+    pub prompt_ids: u64,
+}
+
+/// **What the heavy budget charges for this object, in this state** (addendum §4-bis.3; the Phase 3
+/// review's heavy-budget finding) — one reading for the processor's acceptance walk and the fold,
+/// so the two charge identically.
+///
+/// `Some` only for a kind-3 or kind-4 `PromptNotAnchored { Whole }` that will REACH the recompute:
+/// it decodes at its version, it names this accused (kind 3: the seat its `Valid` receipt names;
+/// kind 4: the claim's executor), the target resolves, and the binding clears every cheap check 13
+/// asks first ([`palw_prompt_not_anchored_admit_v1`]). An object refused before the recompute costs
+/// the budget nothing, so junk that fails early cannot fill the block's one slot. The charge is per
+/// CLAIM: the caller charges a claim once per block and the recompute is remembered
+/// ([`crate::palw_attempt_rules_v1::palw_attempt_prompt_root_memo_v1`]), so a failing Whole ahead of
+/// an honest one on the same claim does not cost it the slot. What is left — a Whole that reaches the
+/// recompute on ANOTHER claim — pays for it: its carrier's rent is the carriage of the prompt it
+/// recomputes (`palw_object_rent_ceiling_v2`).
+pub fn palw_offence_heavy_prompt_charge_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    evidence: &[u8],
+    rules: PalwIdentityRulesV1,
+) -> Option<PalwHeavyPromptChargeV1> {
+    use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
+    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+        return None;
+    }
+    let (claim_id, contradiction, executor_only) = match kind {
+        K::PanelFalseValidV2 => {
+            let payload = borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok()?;
+            let inner = payload.receipt.inner();
+            if payload.version != PALW_PANEL_FALSE_VALID_VERSION_V2
+                || payload.accused_seat != accused.0
+                || inner.seat_bond.0 != accused.0
+                || inner.claim != payload.claim_id
+                || !matches!(inner.verdict, PalwReceiptVerdictV2::Valid)
+            {
+                return None;
+            }
+            (payload.claim_id, payload.contradiction, false)
+        }
+        K::ExecutorRefuted => {
+            let payload = borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok()?;
+            if payload.version != PALW_EXECUTOR_REFUTED_VERSION_V1 {
+                return None;
+            }
+            (payload.claim_id, payload.contradiction, true)
+        }
+        _ => return None,
+    };
+    let PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole } = contradiction else {
+        return None;
+    };
+    let target = palw_offence_target_v1(state, &claim_id)?;
+    if executor_only && *accused != target.executor_bond {
+        return None;
+    }
+    let prefill = palw_prompt_not_anchored_admit_v1(&target, &binding, rules).ok()?;
+    Some(PalwHeavyPromptChargeV1 { claim_id: target.claim_id, prompt_ids: u64::from(prefill) })
 }
 
 /// **What a claim-proving contradiction (9, 10, 13) proves about `target`**, or the refusal. The
@@ -2844,6 +2925,28 @@ mod f1c_tests {
         assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, b"junk"), 0);
         assert!(262_143 <= crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, "one 2M check a block");
         assert!(2 * 262_143 > crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, "and not two");
+    }
+
+    /// **The remembered root is the root** (the Phase 3 review's heavy-budget finding): the memo a
+    /// second Whole on the same claim reads answers exactly what the recompute does, for several
+    /// anchors, and evicts without changing an answer.
+    #[test]
+    fn the_remembered_prompt_root_is_the_computed_one() {
+        use crate::palw_attempt_rules_v1::{
+            PALW_PROMPT_ROOT_MEMO_ENTRIES_V1, palw_attempt_prompt_root_memo_v1, palw_attempt_prompt_root_v1,
+        };
+        let profile =
+            crate::palw_attempt_rules_v1::model_binding_for_tests_v1(&h64(1), 65_536, PalwPromptIdsFormV1::MerkleV1).shape_profile;
+        for round in 0..2 {
+            for n in 0..(PALW_PROMPT_ROOT_MEMO_ENTRIES_V1 as u64 + 3) {
+                let anchor = h64(0x3E30_0000 + n);
+                assert_eq!(
+                    palw_attempt_prompt_root_memo_v1(&profile, &anchor, 8_191, PalwPromptIdsFormV1::MerkleV1),
+                    palw_attempt_prompt_root_v1(&profile, &anchor, 8_191, PalwPromptIdsFormV1::MerkleV1),
+                    "round {round}, anchor {n}"
+                );
+            }
+        }
     }
 
     /// **The site table** (addendum §4-bis.7; the user's decision of 2026-09-24): 9's job faults

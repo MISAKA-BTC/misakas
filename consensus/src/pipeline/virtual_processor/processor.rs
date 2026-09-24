@@ -5826,8 +5826,10 @@ impl VirtualStateProcessor {
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
-        // ADR-0152 v3.1 addendum §4-bis.3: prompt ids charged for whole-prompt recomputations.
+        // ADR-0152 v3.1 addendum §4-bis.3: prompt ids charged for whole-prompt recomputations, and
+        // the claims already charged (a claim is charged once per block).
         let mut heavy_prompt_ids_charged = 0u64;
+        let mut heavy_prompt_claims: std::collections::BTreeSet<kaspa_hashes::Hash64> = std::collections::BTreeSet::new();
         // Review of #12: the registrant bonds whose charged registration the gate then refused in
         // this block. Each takes no further slot this block (see the charging site).
         let mut class_registrants_refused: std::collections::BTreeSet<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> =
@@ -6304,18 +6306,44 @@ impl VirtualStateProcessor {
                 }
                 class_registrations_charged += 1;
             }
-            // **ADR-0152 v3.1 addendum §4-bis.3: the heavy prompt budget.** A `PromptNotAnchored
-            // { Whole }` (13) asks every node to recompute its binding's whole prefill (13.6 ms at
-            // 2M); a block holds `PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1` of them — one 2M check. Charged
-            // HERE, before the gate computes anything, and kept when the gate then refuses, like the
-            // registration slot above; the object that would breach it is dropped and the block
-            // stands. The fold holds the same number as its second lock.
-            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { kind, evidence, .. } = &object
+            // **ADR-0152 v3.1 addendum §4-bis.3: the heavy prompt budget, and what holding it costs.**
+            // A `PromptNotAnchored { Whole }` (13) asks every node to recompute an anchor's whole
+            // prompt root (13.6 ms at 2M); a block holds `PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1` of them
+            // — one 2M check. Three rules keep a failing Whole from taking that slot for a fee (the
+            // Phase 3 review):
+            //   * its carrier pays the prompt's carriage as burned rent (`palw_object_rent_ceiling_v2`,
+            //     dropped here when underpaid, as the other rents are);
+            //   * it is charged only if it will REACH the recompute
+            //     (`palw_offence_heavy_prompt_charge_v1`: decoded, the accused named, the target
+            //     resolved, every cheap check of 13 passed) — junk that fails early costs nothing;
+            //   * a claim is charged ONCE per block (the root is remembered), so a failing Whole on a
+            //     claim never costs an honest one on the same claim the slot.
+            // Charged before the gate computes and kept when the gate then refuses; the object that
+            // would breach the budget is dropped and the block stands. The fold charges by the same
+            // function as its second lock.
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence, .. } =
+                &object
                 && self.palw_offence_attribution_at(point.daa_score)
             {
-                let heavy = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(*kind, evidence);
-                if heavy > 0 {
-                    let budget = kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1;
+                if rent_armed {
+                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(&object, true);
+                    if carrier_fee < owed {
+                        info!(
+                            "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier paid \
+                             {carrier_fee} sompi and recomputing its prompt rents for {owed}"
+                        );
+                        continue;
+                    }
+                }
+                if let Some(charge) = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_v1(
+                    &folded,
+                    accused,
+                    *kind,
+                    evidence,
+                    self.palw_identity_rules_v1(point.daa_score),
+                ) && !heavy_prompt_claims.contains(&charge.claim_id)
+                {
+                    let (heavy, budget) = (charge.prompt_ids, kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1);
                     if heavy_prompt_ids_charged.saturating_add(heavy) > budget {
                         info!(
                             "Block {block}: a whole-prompt PromptNotAnchored ({heavy} ids) was dropped before it was computed, and \
@@ -6325,6 +6353,7 @@ impl VirtualStateProcessor {
                         continue;
                     }
                     heavy_prompt_ids_charged += heavy;
+                    heavy_prompt_claims.insert(charge.claim_id);
                 }
             }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
@@ -9848,7 +9877,7 @@ impl VirtualStateProcessor {
     /// false `Valid` takes — the V1 `PanelFalseValid` or `PanelFalseValidV2` — is decided by the
     /// object gate and again by the fold, and the two must read one answer: a gate that admitted
     /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
-    fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
+    pub(super) fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
         self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
     }
 

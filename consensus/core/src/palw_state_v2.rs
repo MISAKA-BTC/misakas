@@ -4963,6 +4963,32 @@ pub fn palw_object_rent_ceiling_v1(object: &PalwConsensusObjectV2) -> u64 {
     }
 }
 
+/// **[`palw_object_rent_ceiling_v1`] past `palw_offence_attribution`** (ADR-0152 v3.1 addendum
+/// §4-bis.3; the Phase 3 review's heavy-budget finding): the same prices, and one more — a kind-3 or
+/// kind-4 `PromptNotAnchored { Whole }` pays the carriage of the prompt it asks every node to
+/// recompute ([`crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1`] per id, at the
+/// relay rate). A block's heavy budget is ONE 2M recompute; without a price a failing Whole on
+/// another claim took that slot for a fee, block after block, and delayed an honest conviction past
+/// the maturity window where the by-claim forfeit misses the mint. With it, holding the slot costs
+/// what it consumes, and the rent is burned like every other (`utxo_validation`), so a miner filling
+/// it pays too.
+///
+/// `offence_attribution` is the fence at the block's DAA — `false` answers exactly
+/// [`palw_object_rent_ceiling_v1`], so no network without the fence burns a sompi more. Read from the
+/// object alone (the rent is read where no state is in hand): every Whole pays, including one the
+/// heavy budget will not charge because it fails early.
+pub fn palw_object_rent_ceiling_v2(object: &PalwConsensusObjectV2, offence_attribution: bool) -> u64 {
+    if offence_attribution
+        && let PalwConsensusObjectV2::ObjectiveOffence { kind, evidence, .. } = object
+    {
+        let ids = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(*kind, evidence);
+        if ids > 0 {
+            return palw_relay_fee_for_mass_v1(ids.saturating_mul(crate::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1));
+        }
+    }
+    palw_object_rent_ceiling_v1(object)
+}
+
 pub fn palw_object_chunk_group_id_v1(object_bytes: &[u8]) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP);
     state.update(&(object_bytes.len() as u64).to_le_bytes());
@@ -10435,6 +10461,10 @@ struct TransitionBuilder<'a> {
     /// acceptance walk holds the same budget and drops the object that would breach it with the
     /// block standing, so this is the second lock; not state, like the counter above.
     heavy_prompt_ids_charged: u64,
+    /// The claims whose whole prompt this builder has already charged — a claim is charged once
+    /// per block (the recompute is remembered), so a failing Whole on a claim does not cost an
+    /// honest one on the same claim the slot (the Phase 3 review's heavy-budget finding).
+    heavy_prompt_claims: BTreeSet<Hash64>,
 }
 
 /// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its
@@ -10824,6 +10854,7 @@ impl<'a> TransitionBuilder<'a> {
             room_exempt_class: None,
             class_registrations: 0,
             heavy_prompt_ids_charged: 0,
+            heavy_prompt_claims: BTreeSet::new(),
         }
     }
 
@@ -12092,7 +12123,7 @@ impl<'a> TransitionBuilder<'a> {
                 "evidence_id is not the digest of the evidence bytes".into(),
             ));
         }
-        self.charge_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
+        self.charge_heavy_prompt_ids_v1(&accused, PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
         let finding = palw_check_panel_false_valid_v2(
             &self.state,
@@ -12177,19 +12208,32 @@ impl<'a> TransitionBuilder<'a> {
     /// The identity rules the attribution adjudicators read: the network's prompt-id form and the
     /// base class (F1's J5 derives the base class's canonical job).
     /// **The heavy prompt budget, charged before the adjudicator computes** (addendum §4-bis.3): a
-    /// `PromptNotAnchored { Whole }` recomputes its binding's whole prefill, and a block holds
-    /// [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`] of them — one 2M check.
-    /// Refused (`HeavyBudgetExhausted`) without computing past it; everything else is free here.
+    /// `PromptNotAnchored { Whole }` that will reach the recompute
+    /// ([`crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_v1`], the acceptance
+    /// walk's own reading) charges its claim's prefill once per block against
+    /// [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`] — one 2M check. Refused
+    /// (`HeavyBudgetExhausted`) without computing past it; a claim already charged, and everything
+    /// else, is free here.
     fn charge_heavy_prompt_ids_v1(
         &mut self,
+        accused: &PalwBondKeyV2,
         kind: crate::palw_offence_v1::PalwOffenceKindV1,
         evidence_id: Hash64,
         evidence: &[u8],
     ) -> Result<(), PalwStateV2Error> {
-        let heavy = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(kind, evidence);
-        if heavy == 0 {
+        let Some(charge) = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_v1(
+            &self.state,
+            accused,
+            kind,
+            evidence,
+            self.identity_rules_v1(),
+        ) else {
+            return Ok(());
+        };
+        if self.heavy_prompt_claims.contains(&charge.claim_id) {
             return Ok(());
         }
+        let heavy = charge.prompt_ids;
         let charged = self.heavy_prompt_ids_charged.saturating_add(heavy);
         if charged > crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1 {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
@@ -12198,6 +12242,7 @@ impl<'a> TransitionBuilder<'a> {
             ));
         }
         self.heavy_prompt_ids_charged = charged;
+        self.heavy_prompt_claims.insert(charge.claim_id);
         Ok(())
     }
 
@@ -12301,7 +12346,7 @@ impl<'a> TransitionBuilder<'a> {
                 "evidence_id is not the digest of the evidence bytes".into(),
             ));
         }
-        self.charge_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, evidence_id, evidence)?;
+        self.charge_heavy_prompt_ids_v1(&accused, PalwOffenceKindV1::ExecutorRefuted, evidence_id, evidence)?;
         let finding = palw_check_executor_refuted_v1(
             &self.state,
             &accused,
