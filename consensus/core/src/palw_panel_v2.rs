@@ -1852,9 +1852,10 @@ where
 /// A sound receipt added to a sound set never takes coverage away — it adds a `Valid` or an
 /// abstention, and nothing past the quorum is refused for being too many — so the largest sound set
 /// is `Licensed` exactly when some set of these receipts is. It is offered when it is, and when
-/// `licenses` (the fold's answer: `palw_v2_object_licenses_claim_v1` past the audit fence, where a
-/// set a seat cannot back is inert) agrees. This door is tried first, so offering an inert set here
-/// would keep the optimistic door from ever being tried.
+/// `licenses` (the fold's answer, `palw_v2_object_licenses_claim_v1`: a set carrying a `Valid` whose
+/// seat cannot post its lock licenses nothing — inert past the audit fence, refused below it)
+/// agrees. This door is tried first, so offering such a set here would keep the optimistic door
+/// from ever being tried.
 pub fn palw_select_coverage_licence_v2<C, F>(
     candidates: &[PalwSeatReceiptV3],
     coverage: C,
@@ -1875,16 +1876,19 @@ where
 ///
 /// The door takes a set with the full-replay seat's `Valid` whose coverage verdict is `Ok` or
 /// `NoQuorum` ([`crate::palw_optimistic_licence_v2::palw_optimistic_licence_admits_v2`], the
-/// predicate its acceptance arm calls). So a licence exists exactly when the full seat's `Valid` is
-/// sound — that receipt alone is a set the door takes — and the selection offers the first of these
+/// predicate its acceptance arm calls). So the door has a set exactly when the full seat's `Valid`
+/// is sound — that receipt alone is one — and a licence exists when `licenses` (the fold) takes one
+/// too: with the objective-offence ledger armed, only when the full seat can post the door's
+/// whole-gain lock and every other `Valid` of the set its quorum-price lock (and, on an
+/// outsider-judged claim, the outsider's `Valid` rides). The selection offers the first of these
 /// that the door takes and `licenses` agrees to:
 ///
 /// 1. every sound receipt — all five `Valid`s when all five validated, which cover;
-/// 2. the full seat's `Valid`, then each other sound receipt in order that the door still takes
-///    beside what is kept — on the shipped panel one more `Valid` (the next is `CoverageShort`) and
-///    any other verdicts;
-/// 3. the full seat's `Valid` alone, for a rider the fold will not license (a seat that cannot post
-///    its lock).
+/// 2. the full seat's `Valid`, then each other sound receipt in order that the door still takes and
+///    `licenses` still agrees to beside what is kept — on the shipped panel one more `Valid` (the
+///    next is `CoverageShort`), passing over a seat that cannot post its lock, and any other
+///    verdicts;
+/// 3. the full seat's `Valid` alone.
 ///
 /// Never a set the door refuses: not three or four `Valid`s short of coverage, and not a set
 /// without the full seat's `Valid`, wherever in the pool it arrived.
@@ -1921,27 +1925,26 @@ where
     if sound_verdict.as_ref().is_some_and(|verdict| admits(&sound, verdict)) && licenses(&sound) {
         return Some(sound);
     }
-    // 2. The full seat, and each rider the door still takes. `kept` is `sound` in its own order with
-    //    riders left out, so it is `sound` again only when none was — already refused above.
+    // 2. The full seat, and each rider the door and the fold still take beside what is kept. The
+    //    fold is asked only of a set the door takes, so on the shipped panel it is asked of each
+    //    `Valid` until one is kept, and of the other verdicts. The full seat starts the set even
+    //    when the fold refuses it alone: an outsider-judged claim licenses only once its outsider's
+    //    `Valid` rides (ADR-0147), and the order puts that rider next.
     let alone = vec![head];
-    let alone_verdict = coverage(&alone);
-    let (mut kept, mut kept_verdict) = (alone.clone(), alone_verdict.clone());
+    let mut kept = alone.clone();
     for rider in &sound[1..] {
         let mut attempt = kept.clone();
         attempt.push(rider.clone());
-        let verdict = coverage(&attempt);
-        if admits(&attempt, &verdict) {
-            (kept, kept_verdict) = (attempt, verdict);
+        if admits(&attempt, &coverage(&attempt)) && licenses(&attempt) {
+            kept = attempt;
         }
     }
-    if kept.len() < sound.len() && admits(&kept, &kept_verdict) && licenses(&kept) {
+    // Each rider kept was taken by the door and the fold with everything kept before it.
+    if kept.len() > 1 {
         return Some(kept);
     }
-    // 3. The full seat alone, unless it was one of the sets already refused.
-    if kept.len() > 1 && admits(&alone, &alone_verdict) && licenses(&alone) {
-        return Some(alone);
-    }
-    None
+    // 3. The full seat alone, unless it was the whole sound set, already refused above.
+    (sound.len() > 1 && admits(&alone, &coverage(&alone)) && licenses(&alone)).then_some(alone)
 }
 
 pub fn validate_supplementary_receipts_v1<V>(
@@ -3857,6 +3860,24 @@ mod tests {
     /// The shipped panel: five seats, quorum three. `populated_state` has only three eligible
     /// operators, so the five-seat coverage test registers its own spare operators.
     fn five_seat_licensed_fixture() -> (PalwChainStateV2, Hash64, PalwStateParamsV2, PalwPanelParamsV2, Hash64, Vec<PalwPanelSeatV2>) {
+        five_seat_licensed_fixture_posting(40, |_| 1_000_000)
+    }
+
+    /// [`five_seat_licensed_fixture`] for a `pwu` claim, each bond posting `collateral(bond)` — what
+    /// the objective-offence ledger's lock prices are measured against. The draw is unweighted, so
+    /// the seats and the full seat are the same whatever the bonds post.
+    #[allow(clippy::type_complexity)]
+    fn five_seat_licensed_fixture_posting(
+        pwu: u64,
+        collateral: impl Fn(PalwBondKeyV2) -> u64,
+    ) -> (PalwChainStateV2, Hash64, PalwStateParamsV2, PalwPanelParamsV2, Hash64, Vec<PalwPanelSeatV2>) {
+        let register = |bond: u64, pubkey: u8, operator: u64| {
+            let mut object = register(bond, pubkey, operator);
+            if let PalwConsensusObjectV2::BondRegistered { bond, collateral: posted, .. } = &mut object {
+                *posted = collateral(*bond);
+            }
+            object
+        };
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
@@ -3878,7 +3899,7 @@ mod tests {
         ];
         let (s1, _) =
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
-        let env = attempt(40, 1);
+        let env = attempt(pwu, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (state, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
         let p = PalwPanelParamsV2::new(
@@ -4115,13 +4136,30 @@ mod tests {
         anchor: Hash64,
         full_seat: usize,
         by_duty: Vec<PalwSeatReceiptV3>,
+        /// The objective-offence ledger's height in the fold's extras: `None` prices no lock.
+        objective_offence_daa: Option<u64>,
     }
 
     impl LicenceSelectionFixture {
         const SIGNED_DAA: u64 = 108;
 
         fn new() -> Self {
-            let (state, claim_id, sp, p, net, seats) = five_seat_licensed_fixture();
+            Self::from_fixture(five_seat_licensed_fixture(), None)
+        }
+
+        /// A `pwu` claim whose bonds post `collateral(bond)`, folded with the lock ledger armed from
+        /// genesis — testnet-12's `palw_objective_offence` — so each `Valid` must be backed at its
+        /// door's price.
+        fn posting(pwu: u64, collateral: impl Fn(PalwBondKeyV2) -> u64) -> Self {
+            Self::from_fixture(five_seat_licensed_fixture_posting(pwu, collateral), Some(0))
+        }
+
+        #[allow(clippy::type_complexity)]
+        fn from_fixture(
+            fixture: (PalwChainStateV2, Hash64, PalwStateParamsV2, PalwPanelParamsV2, Hash64, Vec<PalwPanelSeatV2>),
+            objective_offence_daa: Option<u64>,
+        ) -> Self {
+            let (state, claim_id, sp, p, net, seats) = fixture;
             let panel = state.panel(&claim_id).unwrap();
             let bonds: Vec<PalwBondKeyV2> = panel.seats.iter().map(|seat| seat.bond).collect();
             let anchor = panel.anchor;
@@ -4140,7 +4178,7 @@ mod tests {
                     segments: a.mask_of(i as u16),
                 })
                 .collect();
-            Self { state, claim_id, sp, p, net, seats, bonds, anchor, full_seat: a.full_seat as usize, by_duty }
+            Self { state, claim_id, sp, p, net, seats, bonds, anchor, full_seat: a.full_seat as usize, by_duty, objective_offence_daa }
         }
 
         fn check(&self, receipts: &[PalwSeatReceiptV3]) -> PalwCoverageVerdictV2 {
@@ -4176,6 +4214,7 @@ mod tests {
                 verification_v2_active: true,
                 verification_s2_active: true,
                 audit_2026_09_23_active: audit,
+                objective_offence_daa: self.objective_offence_daa,
                 ..Default::default()
             };
             crate::palw_state_v2::palw_v2_object_licenses_claim_v1(
@@ -4207,7 +4246,29 @@ mod tests {
         }
 
         fn coverage(&self, pool: &[PalwSeatReceiptV3]) -> Option<Vec<PalwSeatReceiptV3>> {
-            palw_select_coverage_licence_v2(pool, |r: &[PalwSeatReceiptV3]| self.check(r), |_: &[PalwSeatReceiptV3]| true)
+            self.coverage_with(pool, |_| true)
+        }
+
+        fn coverage_with<F: Fn(&[PalwSeatReceiptV3]) -> bool>(
+            &self,
+            pool: &[PalwSeatReceiptV3],
+            licenses: F,
+        ) -> Option<Vec<PalwSeatReceiptV3>> {
+            palw_select_coverage_licence_v2(pool, |r: &[PalwSeatReceiptV3]| self.check(r), licenses)
+        }
+
+        /// `licenses` as the processor binds it for the optimistic door: the fold, asked of the object.
+        fn folds_optimistic(&self, audit: bool) -> impl Fn(&[PalwSeatReceiptV3]) -> bool + '_ {
+            move |receipts: &[PalwSeatReceiptV3]| {
+                self.folds(PalwConsensusObjectV2::OptimisticLicensed { claim: self.claim_id, receipts: receipts.to_vec() }, audit)
+            }
+        }
+
+        /// …and for the coverage door.
+        fn folds_coverage(&self, audit: bool) -> impl Fn(&[PalwSeatReceiptV3]) -> bool + '_ {
+            move |receipts: &[PalwSeatReceiptV3]| {
+                self.folds(PalwConsensusObjectV2::ReceiptLicensedV2 { claim: self.claim_id, receipts: receipts.to_vec() }, audit)
+            }
         }
 
         fn valid_count(receipts: &[PalwSeatReceiptV3]) -> usize {
@@ -4370,9 +4431,10 @@ mod tests {
         assert!(matches!(f.check(&coverage), Ok(PalwReceiptQuorumV2::Licensed { valid: 5 })));
     }
 
-    /// **A rider the fold will not license does not cost the claim its licence** — past the audit
-    /// fence a `Valid` whose seat cannot post its lock makes the whole set inert. The selection falls
-    /// back to the full seat alone, and offers nothing only when the fold refuses that too.
+    /// **A rider the fold will not license does not cost the claim its licence** — a `Valid` whose
+    /// seat cannot post its lock makes the whole set license nothing. The selection passes over it
+    /// to the next rider, falls back to the full seat alone when there is none, and offers nothing
+    /// only when the fold refuses that too.
     #[test]
     fn the_optimistic_selection_falls_back_past_a_rider_the_fold_refuses() {
         let f = LicenceSelectionFixture::new();
@@ -4381,19 +4443,124 @@ mod tests {
         let unbacked = partials[0].receipt.seat_bond;
         let fold = |set: &[PalwSeatReceiptV3]| set.iter().all(|r| r.receipt.seat_bond != unbacked);
 
-        // Three `Valid`s (the full seat and two partials): the greedy set rides the unbacked seat.
+        // Three `Valid`s (the full seat and two partials), the unbacked seat first to arrive: the
+        // next partial rides instead.
         let pool = vec![partials[0].clone(), partials[1].clone(), full.clone()];
+        assert_eq!(f.optimistic(&pool, fold), Some(vec![full.clone(), partials[1].clone()]));
+        // The unbacked seat the only partial: the full seat alone.
+        let pool = vec![partials[0].clone(), full.clone()];
         assert_eq!(f.optimistic(&pool, fold), Some(vec![full.clone()]));
-        // The whole panel: all five are refused by the fold, then {full, the unbacked seat}.
+        // The whole panel: all five are refused by the fold, then {full, the unbacked seat}, then
+        // {full, the next partial} is taken.
         let mut whole = partials.clone();
         whole.push(full.clone());
-        assert_eq!(f.optimistic(&whole, fold), Some(vec![full.clone()]));
+        assert_eq!(f.optimistic(&whole, fold), Some(vec![full.clone(), partials[1].clone()]));
         // A rider the fold takes is kept.
         let pool = vec![partials[1].clone(), full.clone()];
         assert_eq!(f.optimistic(&pool, fold), Some(vec![full.clone(), partials[1].clone()]));
         // A full seat the fold refuses (it cannot post the whole gain): nothing is offered, so the
         // collector falls through to the next door.
         assert_eq!(f.optimistic(&whole, |_| false), None);
+    }
+
+    /// **With the lock ledger armed, each `Valid` must be backed at its door's price — and the
+    /// selection offers exactly what the door and the real fold both take** (the review of the
+    /// licence-stall fix). testnet-12 arms `palw_objective_offence` at genesis. On a 400-pwu claim
+    /// the optimistic door prices the full seat at the whole gain and every other `Valid` at the
+    /// quorum price, and the coverage door prices every `Valid` at the quorum price. Every arrival
+    /// order of every subset of the five duty receipts, for six postings, is checked against a
+    /// brute force over every subset of the pool with the door predicates and the fold, on both
+    /// sides of the audit fence (such a set is inert past it and refused below it, and neither
+    /// licenses).
+    ///
+    /// What it pins past the fence: a full seat that can bind but cannot post the whole gain gets
+    /// no optimistic licence in any arrival order, so its claim licenses through coverage with all
+    /// five or not at all. A rider that cannot post the quorum price is passed over for the next.
+    #[test]
+    fn the_licence_selection_prices_each_valid_at_its_door_with_the_lock_ledger_armed() {
+        const PWU: u64 = 400;
+        let generous = 1_000_000u64;
+        let probe = LicenceSelectionFixture::posting(PWU, |_| generous);
+        let claim = probe.state.claim(&probe.claim_id).unwrap();
+        let facts = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim(claim, 5);
+        let pre_fence = crate::palw_panel_var_v1::PalwClaimFraudFactsV1::from_claim_pre_2026_09_23(claim, 5);
+        let quorum_price = crate::palw_panel_var_v1::palw_panel_seat_required_v1(&facts)
+            .max(crate::palw_panel_var_v1::palw_panel_seat_required_v1(&pre_fence));
+        let full_price = crate::palw_offence_v1::palw_min_slashable_per_colluding_seat_v1(
+            crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&facts),
+            1,
+        );
+        // `binds` backs the quorum price and not the whole gain; `floor`, the registry's minimum,
+        // backs neither.
+        let (binds, floor) = (quorum_price as u64 * 3 / 2, probe.sp.min_collateral_sompi());
+        assert!(
+            u128::from(floor) < quorum_price && quorum_price < u128::from(binds) && u128::from(binds) < full_price,
+            "the postings straddle the prices: floor {floor}, quorum {quorum_price}, binds {binds}, whole gain {full_price}"
+        );
+        let full = probe.bonds[probe.full_seat];
+        let partials: Vec<PalwBondKeyV2> = probe.bonds.iter().copied().filter(|b| *b != full).collect();
+        let postings: Vec<(&str, Vec<(PalwBondKeyV2, u64)>)> = vec![
+            ("every seat generous", vec![]),
+            ("the full seat binds but cannot post the whole gain", vec![(full, binds)]),
+            ("the full seat at the floor", vec![(full, floor)]),
+            ("one partial at the floor", vec![(partials[0], floor)]),
+            ("two partials at the floor", vec![(partials[0], floor), (partials[1], floor)]),
+            ("the full seat binds, one partial at the floor", vec![(full, binds), (partials[0], floor)]),
+        ];
+        for (name, short) in &postings {
+            let f = LicenceSelectionFixture::posting(PWU, |bond| short.iter().find(|(b, _)| *b == bond).map_or(generous, |(_, c)| *c));
+            assert_eq!((f.bonds.clone(), f.full_seat), (probe.bonds.clone(), probe.full_seat), "{name}: the draw is unweighted");
+            for audit in [false, true] {
+                let (fold_optimistic, fold_coverage) = (f.folds_optimistic(audit), f.folds_coverage(audit));
+                for mask in 1u32..(1 << 5) {
+                    let members: Vec<usize> = (0..5).filter(|i| mask & (1 << i) != 0).collect();
+                    let pick = |sub: u32| -> Vec<PalwSeatReceiptV3> {
+                        (0..5).filter(|i| sub & (1 << i) != 0).map(|i| f.by_duty[i].clone()).collect()
+                    };
+                    let subsets = || (1u32..(1 << 5)).filter(move |sub| sub & !mask == 0);
+                    let optimistic_exists = subsets().any(|sub| f.door(&pick(sub)) && fold_optimistic(&pick(sub)));
+                    let coverage_exists = subsets().any(|sub| {
+                        matches!(f.check(&pick(sub)), Ok(PalwReceiptQuorumV2::Licensed { .. })) && fold_coverage(&pick(sub))
+                    });
+                    for order in permutations(&members) {
+                        let pool: Vec<PalwSeatReceiptV3> = order.iter().map(|i| f.by_duty[*i].clone()).collect();
+                        let optimistic = f.optimistic(&pool, &fold_optimistic);
+                        assert_eq!(optimistic.is_some(), optimistic_exists, "{name}, audit {audit}, {order:?}");
+                        if let Some(set) = &optimistic {
+                            assert!(f.door(set) && fold_optimistic(set), "{name}, audit {audit}, {order:?}: door and fold");
+                        }
+                        let coverage = f.coverage_with(&pool, &fold_coverage);
+                        assert_eq!(coverage.is_some(), coverage_exists, "{name}, audit {audit}, {order:?}");
+                        if let Some(set) = &coverage {
+                            assert!(matches!(f.check(set), Ok(PalwReceiptQuorumV2::Licensed { valid: 5 })) && fold_coverage(set));
+                        }
+                    }
+                }
+            }
+        }
+
+        // The cases by name, past the fence.
+        let posting = |short: Vec<(PalwBondKeyV2, u64)>| {
+            LicenceSelectionFixture::posting(PWU, move |bond| short.iter().find(|(b, _)| *b == bond).map_or(generous, |(_, c)| *c))
+        };
+        let receipt_of =
+            |f: &LicenceSelectionFixture, bond: PalwBondKeyV2| f.by_duty.iter().find(|r| r.receipt.seat_bond == bond).unwrap().clone();
+        // A full seat that binds but cannot post the whole gain: no optimistic licence from any
+        // pool, and the whole panel licenses through coverage.
+        let f = posting(vec![(full, binds)]);
+        let whole: Vec<PalwSeatReceiptV3> = f.by_duty.clone();
+        assert_eq!(f.optimistic(&whole, f.folds_optimistic(true)), None);
+        assert_eq!(f.optimistic(&whole[..2], f.folds_optimistic(true)), None);
+        assert_eq!(f.coverage_with(&whole, f.folds_coverage(true)).map(|set| set.len()), Some(5));
+        // Below the fence every door is the quorum price, which the same seat does post.
+        assert_eq!(f.optimistic(&whole, f.folds_optimistic(false)).map(|set| set.len()), Some(5));
+        // A partial at the floor, first to arrive: the next partial rides; alone beside the full
+        // seat, the full seat licenses alone; and coverage, which needs it, does not form.
+        let f = posting(vec![(partials[0], floor)]);
+        let (fr, p0, p1) = (receipt_of(&f, full), receipt_of(&f, partials[0]), receipt_of(&f, partials[1]));
+        assert_eq!(f.optimistic(&[p0.clone(), p1.clone(), fr.clone()], f.folds_optimistic(true)), Some(vec![fr.clone(), p1.clone()]));
+        assert_eq!(f.optimistic(&[p0.clone(), fr.clone()], f.folds_optimistic(true)), Some(vec![fr.clone()]));
+        assert_eq!(f.coverage_with(&f.by_duty, f.folds_coverage(true)), None);
     }
 
     /// **The order is the selection's one policy**: the full seat's `Valid`, the outsider's `Valid`,

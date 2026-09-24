@@ -11095,8 +11095,8 @@ impl<'a> TransitionBuilder<'a> {
     /// the fence its refusal (`SeatValidLockRefused`) propagated as the transition's error and
     /// disqualified the block that carried the receipt set — one over-committed seat's signature,
     /// for a relay fee. Past the fence a set with any such seat is INERT: the claim stays
-    /// `PanelBound`, the S2 assembler offers only a set the fold licenses
-    /// (`palw_v2_object_licenses_claim_v1`, so kaspad falls through to the V1 quorum), and
+    /// `PanelBound`, the assemblers offer only a set the fold licenses
+    /// (`palw_v2_object_licenses_claim_v1`, so kaspad falls through to its next door), and
     /// otherwise the receipt window voids the claim as if no quorum had signed.
     ///
     /// **Audit #6:** each seat is asked for the price of the `door` the set arrives through
@@ -46901,7 +46901,7 @@ pub(crate) mod tests {
         assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the claim stays bound");
         assert!(s3.slashable_lock(full, claim_id).is_none() && s3.slashable_lock(auditor, claim_id).is_none());
         // 2026-09-24 DoS audit review of #6: the assembler's question, answered by the fold — the
-        // inert set licenses nothing (so the node falls through to the V1 quorum), while the same
+        // inert set licenses nothing (so the node falls through to its next door), while the same
         // set on the generously collateralised twin does.
         let optimistic = optimistic_object(claim_id, &[full, auditor]);
         let licenses = |state: &PalwChainStateV2| {

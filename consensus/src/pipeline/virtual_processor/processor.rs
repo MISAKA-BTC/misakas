@@ -6626,8 +6626,8 @@ impl VirtualStateProcessor {
     ///
     /// The set is chosen by `palw_select_optimistic_licence_v2` (the 2026-09-24 licence-stall fix):
     /// the full seat's `Valid` first wherever it arrived, then only the riders the door still takes
-    /// (`palw_optimistic_licence_admits_v2`, the predicate the acceptance arm calls), or all five
-    /// when all five validated. The greedy loop this replaced added receipts in arrival order and
+    /// (`palw_optimistic_licence_admits_v2`, the predicate the acceptance arm calls) and the fold
+    /// licenses, or all five when all five validated. The greedy loop this replaced added receipts in arrival order and
     /// dropped the full seat's `Valid` whenever two `Valid`s had arrived before it.
     pub fn palw_v2_optimistic_assemble_impl(
         &self,
@@ -6689,15 +6689,24 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed { claim, receipts })
     }
 
-    /// **2026-09-24 DoS audit review of #6: offer only a set the fold will license.** Past the
-    /// audit fence a licence set whose `Valid` signer cannot post its door's price is INERT — it
-    /// folds, and the claim stays `PanelBound` (an S2 set whose full-replay seat cannot post the
-    /// whole-gain price is the case the review found). kaspad asks coverage, then optimistic, then
-    /// the V1 quorum (`.or_else` in `palw_panel.rs`), so an inert set offered by an earlier door kept
-    /// the later ones from ever being tried: the node resubmitted it every replan until the receipt
-    /// window voided a claim another door would have licensed. The fold is asked directly
-    /// (`palw_v2_object_licenses_claim_v1`), so this is the fold's predicate, not a second copy of
-    /// it. Below the fence every set the acceptance takes is offered, as before.
+    /// **2026-09-24 DoS audit review of #6: offer only a set the fold will license.** A licence set
+    /// whose `Valid` signer cannot post its door's price licenses nothing: past the audit fence it
+    /// is INERT — it folds, and the claim stays `PanelBound` (an S2 set whose full-replay seat
+    /// cannot post the whole-gain price is the case the review found) — and below it the fold
+    /// refuses it (`SeatValidLockRefused`) and the rehearsal drops the object. kaspad asks coverage,
+    /// then optimistic (`.or_else` in `palw_panel.rs`), so a set the first door offered and the fold
+    /// did not take kept the second from ever being tried: the node resubmitted it every replan
+    /// until the receipt window voided a claim the other door would have licensed.
+    ///
+    /// On a Verification V2 chain those two are the only doors kaspad can form. Its V1 pool holds
+    /// the inner halves of its V3 receipts, signed over the V3 message, and the V1 quorum and
+    /// supplementary validators check the V2 message — so nothing falls through past optimistic,
+    /// and a seat the licence did not carry is not credited later.
+    ///
+    /// The fold is asked directly (`palw_v2_object_licenses_claim_v1`), so this is the fold's
+    /// predicate, not a second copy of it. It is asked on every network: it decides only which set
+    /// this node offers, never what a block accepts, and it declines only a set the fold refuses or
+    /// leaves inert on the state the node would carry it into — on either side of the fence.
     fn palw_v2_offered_licence_licenses_v1(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -6705,18 +6714,17 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
     ) -> bool {
-        !self.palw_audit_2026_09_23_at(point.daa_score)
-            || kaspa_consensus_core::palw_state_v2::palw_v2_object_licenses_claim_v1(
-                state,
-                state_params,
-                point,
-                object,
-                self.palw_unavailable_abstains_at(point.daa_score),
-                self.palw_capability_bound_at(point.daa_score),
-                self.palw_uncertified_weightless_at(point.daa_score),
-                self.palw_da_court_at(point.daa_score),
-                &self.palw_transition_extras_for(point),
-            )
+        kaspa_consensus_core::palw_state_v2::palw_v2_object_licenses_claim_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )
     }
 
     /// **The ladder this network froze, ADR-0084 U-08's one accessor.** `max_step_leaf_count` is a
