@@ -112,7 +112,7 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
     let pace = r.measured_ms_per_daa.map(|ms| format!(" · {:.1} s/DAA measured", ms as f64 / 1000.0)).unwrap_or_default();
     out.push_str(&format!("VESTING · next block at DAA {} (tip {}){pace}\n", group(r.next_daa), group(r.tip_daa)));
     out.push_str(&format!(
-        "  chain     {} row(s) live, {} latched ({} behind an unlatched head) · {} MSK vesting, {} latched\n",
+        "  chain     {} row(s) live, {} latched ({} behind an unlatched head) · {} vesting, {} latched\n",
         r.live_rows,
         r.latched_rows,
         r.latched_behind_head,
@@ -120,7 +120,7 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
         msk(u128_of(&r.latched_sompi))
     ));
     out.push_str(&format!(
-        "            since genesis: created {} · minted {} · burned by convictions {} MSK\n",
+        "            since genesis: created {} · moved to the payout queue {} (each minted by the block after its move) · burned by convictions {}\n",
         msk(u128_of(&r.created_sompi)),
         msk(u128_of(&r.moved_sompi)),
         msk(u128_of(&r.burned_sompi))
@@ -128,12 +128,16 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
     let clock = match (r.second_clock_depth, r.halted) {
         (None, _) => "no second clock on this network: rows mature on the DAA clock alone".to_string(),
         (Some(_), true) => "HALTED — no anchor has settled for 2 × window_court: nothing latches until one does".to_string(),
-        (Some(depth), false) => format!("second clock: a row also waits for {depth} settled anchor(s) past its Final (now {})", r.settled_anchors),
+        (Some(depth), false) => {
+            format!("second clock: a row also waits for {depth} settled anchor(s) past its Final (now {})", r.settled_anchors)
+        }
     };
     out.push_str(&format!("            {clock}\n"));
     let stop = match r.next_block_stopped.as_str() {
         "not_latched" => format!(", then stops at {} (not latched: stop, never skip)", short(&r.next_block_stopped_at)),
-        "budget_full" => format!(", then stops at {} (the block's budget of new payout keys is spent — V-7)", short(&r.next_block_stopped_at)),
+        "budget_full" => {
+            format!(", then stops at {} (the block's budget of new payout keys is spent — V-7)", short(&r.next_block_stopped_at))
+        }
         _ => String::new(),
     };
     out.push_str(&format!(
@@ -142,6 +146,12 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
         r.next_block_legs,
         r.next_block_new_keys
     ));
+    if r.backlog_keys > 0 {
+        out.push_str(&format!(
+            "            latched backlog: {} payout key(s), ≈ {} block(s) at eight keys a block once no unlatched row stands in front\n",
+            r.backlog_keys, r.backlog_blocks_est
+        ));
+    }
     if !r.licence_histogram.is_empty() {
         let doors: Vec<String> = r.licence_histogram.iter().map(|d| format!("{} {}", d.door, d.rows)).collect();
         out.push_str(&format!("            rows by licence door: {}\n", doors.join(" · ")));
@@ -157,11 +167,23 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
     };
     if let Some(who) = who {
         out.push_str(&format!(
-            "  {who}\n            {} row(s) · vesting {} MSK · latched {} MSK\n",
+            "  {who}\n            {} row(s) · vesting {} · latched {}\n",
             r.rows_total,
             msk(u128_of(&r.maturing_sompi)),
             msk(u128_of(&r.query_latched_sompi))
         ));
+        if !r.claim_id.is_empty() && r.rows.is_empty() {
+            let stage = match r.claim_stage.as_str() {
+                "moved" => {
+                    "its row MOVED to the payout queue: the block after the move minted it (spendable after the coinbase maturity)"
+                }
+                _ => {
+                    "no vesting row: the claim did not vest (not Final, no escrow, or below the fence), was voided — a Final \
+                      convicted while it vested burned its row — or retired after its row moved"
+                }
+            };
+            out.push_str(&format!("            {stage}\n"));
+        }
         if !r.bond.is_empty() && !r.bond_known {
             out.push_str("            the registry holds no bond at this outpoint\n");
         }
@@ -173,11 +195,11 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
         }
     }
     if !r.rows.is_empty() {
-        out.push_str(&format!("  {:<10}{:<10}{:>16}  {}\n", "CLAIM", "STAGE", "MSK", "WHERE IT STANDS"));
+        out.push_str(&format!("  {:<10}{:<10}{:>20}  {}\n", "CLAIM", "STAGE", "AMOUNT", "WHERE IT STANDS"));
         for row in &r.rows {
             let amount = if who_is_payee(r) { row.legs_sompi } else { row.total_sompi };
             out.push_str(&format!(
-                "  {:<10}{:<10}{:>16}  {}\n",
+                "  {:<10}{:<10}{:>20}  {}\n",
                 short(&row.claim_id),
                 row.stage,
                 msk(amount as u128),
@@ -194,7 +216,7 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
             (_, _) if reward.in_next_block => "awarded — moves in the next block".to_string(),
             _ => "awarded — waits its turn at the head of the queue".to_string(),
         };
-        out.push_str(&format!("  reporter  {:<10}{:>16}  {state}\n", short(&reward.offence_key), msk(reward.sompi as u128)));
+        out.push_str(&format!("  reporter  {:<10}{:>20}  {state}\n", short(&reward.offence_key), msk(reward.sompi as u128)));
     }
     out.push_str(&format!(
         "  a moved row is minted by the next coinbase; that output is spendable {spend_after} DAA after its block (the wallet's gate)\n"
@@ -272,11 +294,22 @@ mod tests {
         assert!(text.contains("the DAA clock to DAA 9,000 (≈ 1d 9h)"), "{text}");
         assert!(text.contains("18 more licence(s) of 30, released by DAA 15,000 at the latest"), "{text}");
         assert!(text.contains("moves ≥ DAA 9,000"), "{text}");
-        let halted = row_status(&RpcPalwVestingRow { daa_clock_met: true, licences_since_final: 30, ..row("maturing") }, 9_100, true, None);
+        let halted =
+            row_status(&RpcPalwVestingRow { daa_clock_met: true, licences_since_final: 30, ..row("maturing") }, 9_100, true, None);
         assert!(halted.contains("licence halt") && !halted.contains("DAA clock"), "{halted}");
-        let next = row_status(&RpcPalwVestingRow { in_next_block: true, eta_daa: 9_101, eta_estimated: false, ..row("latched") }, 9_101, false, None);
+        let next = row_status(
+            &RpcPalwVestingRow { in_next_block: true, eta_daa: 9_101, eta_estimated: false, ..row("latched") },
+            9_101,
+            false,
+            None,
+        );
         assert_eq!(next, "moves in the next block (DAA 9,101); minted by the block after");
-        let latched = row_status(&RpcPalwVestingRow { matured_at: Some(9_050), moves_ahead: Some(4), eta_daa: 9_102, ..row("latched") }, 9_101, false, None);
+        let latched = row_status(
+            &RpcPalwVestingRow { matured_at: Some(9_050), moves_ahead: Some(4), eta_daa: 9_102, ..row("latched") },
+            9_101,
+            false,
+            None,
+        );
         assert!(latched.contains("latched at DAA 9,050; waits its turn, 4 move(s) ahead"), "{latched}");
     }
 
@@ -313,17 +346,34 @@ mod tests {
         };
         let text = render(&r, 600);
         assert!(text.contains("burned by convictions 25.00 MSK"), "{text}");
+        assert!(text.contains("moved to the payout queue 1,000.00"), "moved is not minted yet: {text}");
+        assert!(!text.contains("latched backlog"), "no backlog, no line: {text}");
+        let backlog = render(&GetPalwVestingResponse { backlog_keys: 21, backlog_blocks_est: 3, ..r.clone() }, 600);
+        assert!(backlog.contains("latched backlog: 21 payout key(s), ≈ 3 block(s)"), "{backlog}");
         assert!(text.contains("B-3: this bond's collateral is LOCKED"), "{text}");
         assert!(
-            text.contains("5.00  vesting: held") && !text.contains("10.00  vesting"),
+            text.contains("5.00 MSK  vesting: held") && !text.contains("10.00 MSK  vesting"),
             "a payee read prints the payee's legs (5 MSK), not the row (10): {text}"
         );
+        assert!(!text.contains("MSK MSK"), "{text}");
         assert!(text.contains("awarded — moves in the next block"), "{text}");
         assert!(text.contains("spendable 600 DAA after its block"), "{text}");
         let halted = render(&GetPalwVestingResponse { halted: true, ..r.clone() }, 600);
         assert!(halted.contains("HALTED"), "{halted}");
         let dormant = render(&GetPalwVestingResponse { rcore_plus_active: false, ..r }, 600);
         assert!(dormant.starts_with("nothing vests on this network"), "{dormant}");
+    }
+
+    /// A claim read whose row has left says where the reward went: moved (minted by the next
+    /// block), or never a row at all.
+    #[test]
+    fn a_claim_read_with_no_row_names_its_stage() {
+        let base =
+            GetPalwVestingResponse { available: true, rcore_plus_active: true, claim_id: "ab".repeat(64), ..Default::default() };
+        let moved = render(&GetPalwVestingResponse { claim_stage: "moved".into(), ..base.clone() }, 600);
+        assert!(moved.contains("its row MOVED to the payout queue"), "{moved}");
+        let none = render(&base, 600);
+        assert!(none.contains("no vesting row: the claim did not vest"), "{none}");
     }
 
     /// **T51/T52: an old node drops the unknown op and the probe says so** — a dropped connection is

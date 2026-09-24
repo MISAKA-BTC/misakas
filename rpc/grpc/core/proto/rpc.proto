@@ -2684,6 +2684,7 @@ message RpcPalwVestingRow {
   bool etaEstimated = 25;
   repeated RpcPalwVestingLeg legs = 26;
   uint64 legsSompi = 27;
+  bool lockLive = 28;
 }
 
 message RpcPalwReporterReward {
@@ -2746,5 +2747,8 @@ message GetPalwVestingResponseMessage {
   string maturingSompi = 34;
   string queryLatchedSompi = 35;
   repeated RpcPalwReporterReward reporterRewards = 36;
+  uint64 backlogKeys = 37;
+  uint64 backlogBlocksEst = 38;
+  string claimStage = 39;
   RPCError error = 1000;
 }

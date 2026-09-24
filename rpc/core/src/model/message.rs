@@ -7341,6 +7341,10 @@ pub struct RpcPalwVestingRow {
     pub da_session_open: bool,
     /// V-4 holds at the next block, or the row is latched.
     pub mature_now: bool,
+    /// **V-4(a) alone: the row is still unmatured** — unlatched, its DAA clock or its second clock
+    /// still running. While it is, B-3 locks the collateral of every bond it pays. Not
+    /// `!matureNow`: a halt or a DA session keeps a row from maturing without holding its payees.
+    pub lock_live: bool,
     /// `(moves, keys)` ahead of it in V-7's order.
     pub moves_ahead: Option<u64>,
     pub keys_ahead: Option<u64>,
@@ -7378,6 +7382,7 @@ impl Serializer for RpcPalwVestingRow {
         store!(Option<u64>, &self.second_clock_bound_daa, writer)?;
         store!(bool, &self.da_session_open, writer)?;
         store!(bool, &self.mature_now, writer)?;
+        store!(bool, &self.lock_live, writer)?;
         store!(Option<u64>, &self.moves_ahead, writer)?;
         store!(Option<u64>, &self.keys_ahead, writer)?;
         store!(bool, &self.in_next_block, writer)?;
@@ -7413,6 +7418,7 @@ impl Deserializer for RpcPalwVestingRow {
             second_clock_bound_daa: load!(Option<u64>, reader)?,
             da_session_open: load!(bool, reader)?,
             mature_now: load!(bool, reader)?,
+            lock_live: load!(bool, reader)?,
             moves_ahead: load!(Option<u64>, reader)?,
             keys_ahead: load!(Option<u64>, reader)?,
             in_next_block: load!(bool, reader)?,
@@ -7571,11 +7577,22 @@ pub struct GetPalwVestingResponse {
     pub next_block_new_keys: u32,
     pub next_block_stopped: String,
     pub next_block_stopped_at: String,
+    /// The latched backlog in payout keys — every awarded reporter reward and every latched row
+    /// (behind an unlatched head included) at its cost as a block's first move — and the blocks it
+    /// takes at V-7's full width of eight keys: an estimate (the market's reserve narrows a block
+    /// to six; seat payees shared in one block widen it).
+    pub backlog_keys: u64,
+    pub backlog_blocks_est: u64,
     pub licence_histogram: Vec<RpcPalwVestingDoorCount>,
     /// The query, echoed.
     pub bond: String,
     pub payout_address: String,
     pub claim_id: String,
+    /// A claim query's stage: `maturing` or `latched` while its row lives, `moved` once a vested
+    /// Final's row left for the payout queue (minted by the block after the move), empty for a
+    /// claim that did not vest, was voided — a convicted Final included, its row burned — or
+    /// retired with no row left. Empty for other queries.
+    pub claim_stage: String,
     /// The bond is in the registry (true for other queries).
     pub bond_known: bool,
     /// **B-3**: the bond is payee of a row still unmatured by V-4(a), so its collateral is locked.
@@ -7618,10 +7635,13 @@ impl Serializer for GetPalwVestingResponse {
         store!(u32, &self.next_block_new_keys, writer)?;
         store!(String, &self.next_block_stopped, writer)?;
         store!(String, &self.next_block_stopped_at, writer)?;
+        store!(u64, &self.backlog_keys, writer)?;
+        store!(u64, &self.backlog_blocks_est, writer)?;
         serialize!(Vec<RpcPalwVestingDoorCount>, &self.licence_histogram, writer)?;
         store!(String, &self.bond, writer)?;
         store!(String, &self.payout_address, writer)?;
         store!(String, &self.claim_id, writer)?;
+        store!(String, &self.claim_stage, writer)?;
         store!(bool, &self.bond_known, writer)?;
         store!(bool, &self.payee_holds_collateral, writer)?;
         serialize!(Vec<RpcPalwVestingRow>, &self.rows, writer)?;
@@ -7662,10 +7682,13 @@ impl Deserializer for GetPalwVestingResponse {
             next_block_new_keys: load!(u32, reader)?,
             next_block_stopped: load!(String, reader)?,
             next_block_stopped_at: load!(String, reader)?,
+            backlog_keys: load!(u64, reader)?,
+            backlog_blocks_est: load!(u64, reader)?,
             licence_histogram: deserialize!(Vec<RpcPalwVestingDoorCount>, reader)?,
             bond: load!(String, reader)?,
             payout_address: load!(String, reader)?,
             claim_id: load!(String, reader)?,
+            claim_stage: load!(String, reader)?,
             bond_known: load!(bool, reader)?,
             payee_holds_collateral: load!(bool, reader)?,
             rows: deserialize!(Vec<RpcPalwVestingRow>, reader)?,

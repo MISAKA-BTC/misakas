@@ -181,7 +181,12 @@ pub(crate) async fn rewards(ctx: &crate::node::Ctx, profile: Profile) -> CliResu
                 r.vesting_claims.to_string(),
                 "this bond's share of Finals still vesting: minted only once each row matures (misaka palw vesting)",
             );
-            line("minted", msk(r.minted_sompi), r.minted_claims.to_string(), "escrow of vested Finals a coinbase minted (in the wallet above)");
+            line(
+                "minted",
+                msk(r.minted_sompi),
+                r.minted_claims.to_string(),
+                "escrow of vested Finals a coinbase minted (in the wallet above)",
+            );
         }
         line("paid", msk(r.paid_sompi), r.paid_claims.to_string(), "escrow of final claims that left the queue (in the wallet above)");
         if let Some(v) = snap.wallet.as_ref().and_then(|w| w.as_ref().ok()).and_then(|w| w.vesting.as_ref()) {
@@ -200,7 +205,9 @@ pub(crate) async fn rewards(ctx: &crate::node::Ctx, profile: Profile) -> CliResu
             if v.bond_held == Some(true) {
                 println!(
                     "  {}",
-                    paint::yellow("B-3: the bond's collateral stays locked while it is payee of a row the conviction window still holds")
+                    paint::yellow(
+                        "B-3: the bond's collateral stays locked while it is payee of a row the conviction window still holds"
+                    )
                 );
             }
             if v.halted {
@@ -366,7 +373,9 @@ mod tests {
     /// paid, voided is forfeited — and a row whose escrow nobody served counts in none of them.
     #[test]
     fn the_reward_track_splits_the_way_the_chain_pays() {
-        let e = |escrow, pending| Some(ClaimExtra { deadline_daa: None, escrow_sompi: escrow, payout_pending_sompi: pending, vesting: None });
+        let e = |escrow, pending| {
+            Some(ClaimExtra { deadline_daa: None, escrow_sompi: escrow, payout_pending_sompi: pending, vesting: None })
+        };
         let works = vec![
             row(Lane::Block, WorkState::WaitingReceipts, e(100, None)),
             row(Lane::Block, WorkState::RewardPending, e(200, Some(200))),
@@ -396,7 +405,8 @@ mod tests {
             eta_daa: Some(12_000),
             eta_estimated: true,
         };
-        let e = |pending, vesting| Some(ClaimExtra { deadline_daa: None, escrow_sompi: 1_000, payout_pending_sompi: pending, vesting });
+        let e =
+            |pending, vesting| Some(ClaimExtra { deadline_daa: None, escrow_sompi: 1_000, payout_pending_sompi: pending, vesting });
         let works = vec![
             row(Lane::Block, WorkState::RewardPending, e(None, Some(v(VestingStage::Maturing, 400)))),
             row(Lane::Block, WorkState::RewardPending, e(None, Some(v(VestingStage::Latched, 300)))),

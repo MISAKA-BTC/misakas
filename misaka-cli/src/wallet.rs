@@ -146,8 +146,9 @@ impl NodeView {
 pub(crate) struct UtxoVesting {
     /// `getPalwVesting` for the address's payload.
     pub(crate) by_address: kaspa_rpc_core::GetPalwVestingResponse,
-    /// The address's bonded outputs B-3 holds: `(outpoint, unlatched rows it is payee of on the
-    /// page read, the latest DAA clock among them)`.
+    /// The address's bonded outputs B-3 holds: `(outpoint, the unmatured rows the bond is payee of
+    /// on the page read — the node's `lockLive`, B-3's own row term — and the latest DAA clock
+    /// among them)`.
     pub(crate) held: Vec<(TransactionOutpoint, u64, Option<u64>)>,
 }
 
@@ -164,7 +165,9 @@ impl UtxoVesting {
         if v.rows_total > 0 || !v.reporter_rewards.is_empty() {
             let next = v.rows.iter().map(|row| row.eta_daa).min().map(|daa| format!(", next moves ≥ DAA {daa}")).unwrap_or_default();
             out.push(format!(
-                "  vesting    : {} row(s)  ({} MSK; {} latched){next}  [PALW rewards not minted yet — rows, not outputs: never selectable;                  each is minted when its row matures, then spendable {spend_after} DAA after that coinbase; a conviction first burns it]",
+                "  vesting    : {} row(s)  ({} MSK; {} latched){next}  [PALW rewards not minted yet — rows, not outputs: never \
+                 selectable; each is minted when its row matures, then spendable {spend_after} DAA after that coinbase; a \
+                 conviction first burns it]",
                 v.rows_total,
                 sompi_to_msk(vesting.saturating_add(latched)),
                 sompi_to_msk(latched)
@@ -186,6 +189,16 @@ impl UtxoVesting {
         out
     }
 
+    /// **The mark an output gets in the newest-outputs list when B-3 holds it**: a bonded output
+    /// the bond's own collateral, locked for one more reason than its bond status — the bond is
+    /// payee of rows the conviction window still holds. `None` for every other output.
+    pub(crate) fn held_mark(&self, outpoint: &TransactionOutpoint) -> Option<String> {
+        self.held
+            .iter()
+            .find(|(held, ..)| held == outpoint)
+            .map(|(_, rows, _)| format!("held by B-3: payee of {rows} unmatured vesting row(s)"))
+    }
+
     pub(crate) fn json(&self) -> serde_json::Value {
         let v = &self.by_address;
         json!({
@@ -201,6 +214,17 @@ impl UtxoVesting {
             })).collect::<Vec<_>>(),
         })
     }
+}
+
+/// One [`UtxoVesting::held`] entry from the bond's `getPalwVesting` answer: the rows whose lock the
+/// node calls live (`lockLive`, the per-row term of the B-3 walk that set `payeeHoldsCollateral`),
+/// and the latest DAA clock among them.
+fn b3_held_entry(
+    outpoint: TransactionOutpoint,
+    by_bond: &kaspa_rpc_core::GetPalwVestingResponse,
+) -> (TransactionOutpoint, u64, Option<u64>) {
+    let unmatured: Vec<&kaspa_rpc_core::RpcPalwVestingRow> = by_bond.rows.iter().filter(|row| row.lock_live).collect();
+    (outpoint, unmatured.len() as u64, unmatured.iter().map(|row| row.expiry_daa).max())
 }
 
 /// [`UtxoVesting`] for `address`, or `None` when the node cannot answer op 199 (a node older than
@@ -229,8 +253,7 @@ async fn utxo_vesting(nv: &NodeView, address: &Address, utxos: &[Funding]) -> Op
             break;
         };
         if by_bond.payee_holds_collateral {
-            let unlatched: Vec<&kaspa_rpc_core::RpcPalwVestingRow> = by_bond.rows.iter().filter(|row| row.matured_at.is_none()).collect();
-            held.push((u.outpoint, unlatched.len() as u64, unlatched.iter().map(|row| row.expiry_daa).max()));
+            held.push(b3_held_entry(u.outpoint, &by_bond));
         }
     }
     Some(UtxoVesting { by_address, held })
@@ -549,6 +572,14 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
             }
         }
     }
+    // A newest output's JSON row, marked when B-3 holds it (ADR-0152).
+    let recent_json = |u: &Funding| {
+        let mut row = recent_output_json(u, depths.as_ref());
+        if vesting.as_ref().is_some_and(|v| v.held_mark(&u.outpoint).is_some()) {
+            row["heldByVesting"] = json!(true);
+        }
+        row
+    };
     match ctx.output {
         OutputFormat::Json => println!(
             "{}",
@@ -559,7 +590,7 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
                     "reserved": { "count": reserved_n, "sompi": reserved_sum },
                     "settlementAvailable": depths.is_some(),
                     "vesting": vesting.as_ref().map(UtxoVesting::json),
-                    "recent": newest.iter().map(|u| recent_output_json(u, depths.as_ref())).collect::<Vec<_>>() })
+                    "recent": newest.iter().copied().map(&recent_json).collect::<Vec<_>>() })
         ),
         OutputFormat::Human => {
             println!("Address      : {addr}");
@@ -606,7 +637,12 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource, recent:
                     if depths.is_some() { " (settlement depth in PALW anchors)" } else { "" }
                 );
                 for u in &newest {
-                    println!("  {}", recent_output_line(u, depths.as_ref()));
+                    // ADR-0152 B-3: a bonded output also held because its bond is a vesting
+                    // payee says so on its own line, beside the `bonded` mark.
+                    match vesting.as_ref().and_then(|v| v.held_mark(&u.outpoint)) {
+                        Some(mark) => println!("  {}  [{mark}]", recent_output_line(u, depths.as_ref())),
+                        None => println!("  {}", recent_output_line(u, depths.as_ref())),
+                    }
                 }
                 if depths.is_none() {
                     println!(
@@ -1086,7 +1122,10 @@ mod locked_outpoint_tests {
                 rows_total: 2,
                 maturing_sompi: "30000000000".into(),
                 query_latched_sompi: "10000000000".into(),
-                rows: vec![RpcPalwVestingRow { eta_daa: 9_000, ..Default::default() }, RpcPalwVestingRow { eta_daa: 9_500, ..Default::default() }],
+                rows: vec![
+                    RpcPalwVestingRow { eta_daa: 9_000, ..Default::default() },
+                    RpcPalwVestingRow { eta_daa: 9_500, ..Default::default() },
+                ],
                 reporter_rewards: vec![RpcPalwReporterReward { sompi: 100_000_000, ..Default::default() }],
                 ..Default::default()
             },
@@ -1096,11 +1135,32 @@ mod locked_outpoint_tests {
         assert!(lines.contains("vesting    : 2 row(s)  (400.00000000 MSK; 100.00000000 latched), next moves ≥ DAA 9000"), "{lines}");
         assert!(lines.contains("never selectable") && lines.contains("spendable 600 DAA after that coinbase"), "{lines}");
         assert!(lines.contains("reporter rewards to this address: 1.00000000 MSK"), "{lines}");
-        assert!(lines.contains(&format!("held (B-3) : {}", bond.outpoint)) && lines.contains("the last DAA clock runs to 12000"), "{lines}");
+        assert!(
+            lines.contains(&format!("held (B-3) : {}", bond.outpoint)) && lines.contains("the last DAA clock runs to 12000"),
+            "{lines}"
+        );
         let doc = v.json();
-        assert_eq!((doc["selectable"].clone(), doc["rows"].clone(), doc["nextMoveDaa"].clone()), (json!(false), json!(2), json!(9_000)));
+        assert_eq!(
+            (doc["selectable"].clone(), doc["rows"].clone(), doc["nextMoveDaa"].clone()),
+            (json!(false), json!(2), json!(9_000))
+        );
+        assert_eq!(v.held_mark(&bond.outpoint).as_deref(), Some("held by B-3: payee of 1 unmatured vesting row(s)"));
+        assert_eq!(v.held_mark(&op(0x6d69, 8)), None, "only the held bond is marked");
         let none = UtxoVesting { by_address: GetPalwVestingResponse::default(), held: Vec::new() };
         assert!(none.lines(600).is_empty(), "nothing vesting prints nothing");
+        // The held entry counts the rows the node calls unmatured (`lockLive`, B-3's own row term):
+        // a latched row, or one past both its clocks, does not hold the bond.
+        let by_bond = GetPalwVestingResponse {
+            payee_holds_collateral: true,
+            rows: vec![
+                RpcPalwVestingRow { lock_live: true, expiry_daa: 12_000, ..Default::default() },
+                RpcPalwVestingRow { lock_live: true, expiry_daa: 11_000, ..Default::default() },
+                RpcPalwVestingRow { lock_live: false, expiry_daa: 13_000, matured_at: Some(13_000), ..Default::default() },
+                RpcPalwVestingRow { lock_live: false, expiry_daa: 14_000, ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(b3_held_entry(bond.outpoint, &by_bond), (bond.outpoint, 2, Some(12_000)));
     }
 
     /// A reservation is marked as one and held back from a spender that moves value away.

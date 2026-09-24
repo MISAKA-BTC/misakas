@@ -104,7 +104,10 @@ pub(crate) struct VestingFacts {
 
 impl VestingFacts {
     /// From `getPalwVesting` for the pay address (and, for B-3, the bond's answer).
-    pub(crate) fn of(by_address: &kaspa_rpc_core::GetPalwVestingResponse, by_bond: Option<&kaspa_rpc_core::GetPalwVestingResponse>) -> Self {
+    pub(crate) fn of(
+        by_address: &kaspa_rpc_core::GetPalwVestingResponse,
+        by_bond: Option<&kaspa_rpc_core::GetPalwVestingResponse>,
+    ) -> Self {
         let sompi = |text: &str| u64::try_from(text.parse::<u128>().unwrap_or(0)).unwrap_or(u64::MAX);
         let reporter = |stage: &str| {
             by_address.reporter_rewards.iter().filter(|r| r.stage == stage).fold(0u64, |sum, r| sum.saturating_add(r.sompi))
@@ -217,6 +220,20 @@ fn log_liveness(log: &Result<NodeLog, String>, profile: &Profile, node_ok: bool)
     }
 }
 
+/// One wRPC Borsh connection to `url`, connected or refused within `timeout`.
+async fn open_client(url: &str, timeout: Duration) -> Result<KaspaRpcClient, (String, String)> {
+    let client =
+        KaspaRpcClient::new(WrpcEncoding::Borsh, Some(url), None, None, None).map_err(|e| (url.to_string(), e.to_string()))?;
+    let options = ConnectOptions {
+        block_async_connect: true,
+        connect_timeout: Some(timeout),
+        strategy: ConnectStrategy::Fallback,
+        ..Default::default()
+    };
+    client.connect(Some(options)).await.map_err(|e| (url.to_string(), e.to_string()))?;
+    Ok(client)
+}
+
 /// Open the node's wRPC Borsh connection for `profile`, and read its identity and peers.
 pub(crate) async fn connect(profile: &Profile, timeout: Duration) -> Result<NodeRead, (String, String)> {
     connect_to(&profile.network, profile.rpc.as_deref(), timeout).await
@@ -228,18 +245,7 @@ pub(crate) async fn connect_to(network: &str, rpc: Option<&str>, timeout: Durati
     let registry = misaka_endpoints::EndpointRegistry::load(network);
     let hostport = misaka_endpoints::resolve(&net, EndpointKind::NodeWrpcBorsh, rpc, registry.as_ref());
     let url = format!("ws://{hostport}");
-    let open = || async {
-        let client =
-            KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None).map_err(|e| (url.clone(), e.to_string()))?;
-        let options = ConnectOptions {
-            block_async_connect: true,
-            connect_timeout: Some(timeout),
-            strategy: ConnectStrategy::Fallback,
-            ..Default::default()
-        };
-        client.connect(Some(options)).await.map_err(|e| (url.clone(), e.to_string()))?;
-        Ok::<KaspaRpcClient, (String, String)>(client)
-    };
+    let open = || open_client(&url, timeout);
     let mut client = open().await?;
     let server = client.get_server_info().await.map_err(|e| (url.clone(), format!("getServerInfo: {e}")))?;
     let (node_status, ops_0122) = match client.get_palw_node_status().await {
@@ -331,32 +337,36 @@ impl Snapshot {
             snap.round_lane = Some(node.client().get_palw_round_lane().await.map_err(|e| format!("getPalwRoundLane: {e}")));
         }
         // ADR-0152 P2-11: what vests toward the pay address, and whether B-3 holds the bond — asked
-        // only where this CLI's ruleset vests, and after everything else: a node built before op
-        // 199 drops the connection on it, and then only this read is lost.
+        // only where this CLI's ruleset vests, and on a connection of its own: a node built before
+        // op 199 drops the connection on it, and the screens that read on after `gather` (the
+        // verifier's duties, the doctor's fee funding) must keep theirs.
         if params.palw_rcore_plus.is_some()
             && let Some(Ok(wallet)) = snap.wallet.as_mut()
         {
-            wallet.vesting = vesting_facts(node, &wallet.address, snap.profile.bond.as_deref()).await;
+            wallet.vesting = vesting_facts(&node.url, timeout, &wallet.address, snap.profile.bond.as_deref()).await;
         }
         snap
     }
 }
 
-/// [`VestingFacts`] for `address` (and `bond`'s B-3 hold): `None` when the node cannot answer op
-/// 199 — a node that predates it drops the connection, and then the bond is not asked either.
-async fn vesting_facts(node: &NodeRead, address: &str, bond: Option<&str>) -> Option<VestingFacts> {
+/// [`VestingFacts`] for `address` (and `bond`'s B-3 hold), read on a connection of its own to
+/// `url` and closed after: `None` when the node cannot answer op 199 — a node that predates it
+/// drops the connection, and then the bond is not asked either.
+async fn vesting_facts(url: &str, timeout: Duration, address: &str, bond: Option<&str>) -> Option<VestingFacts> {
     let request = |bond: &str, address: &str| kaspa_rpc_core::GetPalwVestingRequest {
         bond: bond.to_string(),
         payout_address: address.to_string(),
         limit: 50,
         ..Default::default()
     };
-    let by_address = node.client().get_palw_vesting(request("", address)).await.ok().filter(|r| r.available && r.rcore_plus_active)?;
-    let by_bond = match bond {
-        Some(bond) => node.client().get_palw_vesting(request(bond, "")).await.ok(),
-        None => None,
+    let client = open_client(url, timeout).await.ok()?;
+    let by_address = client.get_palw_vesting(request("", address)).await.ok().filter(|r| r.available && r.rcore_plus_active);
+    let by_bond = match (&by_address, bond) {
+        (Some(_), Some(bond)) => client.get_palw_vesting(request(bond, "")).await.ok(),
+        _ => None,
     };
-    Some(VestingFacts::of(&by_address, by_bond.as_ref()))
+    let _ = client.disconnect().await;
+    Some(VestingFacts::of(&by_address?, by_bond.as_ref()))
 }
 
 async fn wallet_facts(node: &NodeRead, address: &str) -> Result<WalletFacts, String> {

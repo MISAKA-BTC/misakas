@@ -1570,11 +1570,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             .iter()
             .map(|only| {
                 let stage = kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingV1 {
-                    stage: if only.row.matured_at.is_some() {
-                        kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::Latched
-                    } else {
-                        kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::Maturing
-                    },
+                    stage: kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::of_live_row(&only.row),
                     read: Some(only.clone()),
                 };
                 RpcPalwClaimRow {
@@ -2784,7 +2780,9 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let source_named = |source: &kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1| match source {
             kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Row { claim_id } => ("row", claim_id.to_string()),
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Reporter { offence_id } => ("reporter", offence_id.to_string()),
+            kaspa_consensus_core::palw_vesting_v1::PalwVestingSourceV1::Reporter { offence_id } => {
+                ("reporter", offence_id.to_string())
+            }
         };
         Ok(GetPalwVestingResponse {
             available: true,
@@ -2812,17 +2810,15 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 .iter()
                 .map(|next| {
                     let (source, id) = source_named(&next.source);
-                    RpcPalwVestingMove {
-                        source: source.to_string(),
-                        id,
-                        legs: next.legs.iter().map(rpc_palw_vesting_leg).collect(),
-                    }
+                    RpcPalwVestingMove { source: source.to_string(), id, legs: next.legs.iter().map(rpc_palw_vesting_leg).collect() }
                 })
                 .collect(),
             next_block_legs: read.next_block.legs as u32,
             next_block_new_keys: read.next_block.new_keys as u32,
             next_block_stopped: stopped.to_string(),
             next_block_stopped_at: read.next_block.stopped_at.as_ref().map(|source| source_named(source).1).unwrap_or_default(),
+            backlog_keys: read.backlog_keys as u64,
+            backlog_blocks_est: read.backlog_blocks_est,
             licence_histogram: read
                 .licence_histogram
                 .iter()
@@ -2833,6 +2829,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     sompi: count.sompi.to_string(),
                 })
                 .collect(),
+            claim_stage: read.claim_stage.map(|stage| stage.name().to_string()).unwrap_or_default(),
             bond_known: read.bond_known,
             payee_holds_collateral: read.payee_holds_collateral,
             rows: read.rows.iter().map(rpc_palw_vesting_row).collect(),
@@ -2851,7 +2848,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                     }
                     .to_string(),
                     reporter_bond: reward.reporter.as_ref().map(outpoint).unwrap_or_default(),
-                    payload: if reward.payload == kaspa_hashes::Hash64::default() { String::new() } else { reward.payload.to_string() },
+                    payload: if reward.payload == kaspa_hashes::Hash64::default() {
+                        String::new()
+                    } else {
+                        reward.payload.to_string()
+                    },
                     sompi: reward.amount,
                     reveal_until: reward.reveal_until,
                     in_next_block: reward.in_next_block,
@@ -4562,13 +4563,14 @@ fn rpc_palw_vesting_row(read: &kaspa_consensus_core::palw_vesting_read_v1::PalwV
         expiry_daa: row.expiry_daa,
         settled_at_final: row.settled_at_final,
         matured_at: row.matured_at,
-        stage: if row.matured_at.is_some() { "latched" } else { "maturing" }.to_string(),
+        stage: kaspa_consensus_core::palw_vesting_read_v1::PalwClaimVestingStageV1::of_live_row(row).name().to_string(),
         daa_clock_met: m.daa_clock_met,
         licences_since_final: m.licences_since_final,
         licences_needed: m.licences_needed,
         second_clock_bound_daa: m.second_clock_bound_daa,
         da_session_open: m.da_session_open,
         mature_now: m.mature_now,
+        lock_live: read.lock_live,
         moves_ahead: read.position.map(|(moves, _)| moves as u64),
         keys_ahead: read.position.map(|(_, keys)| keys as u64),
         in_next_block: read.in_next_block,
@@ -4590,8 +4592,14 @@ fn palw_claim_row_vesting_fields(
     let mut out = RpcPalwClaimRow { vesting_stage: vesting.stage.name().to_string(), ..Default::default() };
     if let Some(read) = &vesting.read {
         out.vesting_sompi = read.row.total_sompi();
-        out.vesting_payee_sompi =
-            read.legs.iter().filter(|leg| leg.payee_bond == Some(*bond)).fold(0u64, |sum, leg| sum.saturating_add(leg.amount));
+        // The legs that pay `bond` — the read's own selector, so claim row v3 and `getPalwVesting`
+        // name the same legs.
+        out.vesting_payee_sompi = kaspa_consensus_core::palw_vesting_read_v1::palw_vesting_legs_paying_v1(
+            &read.row,
+            &kaspa_consensus_core::palw_vesting_read_v1::PalwVestingPayeeV1::Bond(*bond),
+        )
+        .iter()
+        .fold(0u64, |sum, leg| sum.saturating_add(leg.amount));
         out.vesting_expiry_daa = Some(read.row.expiry_daa);
         out.vesting_licences_since_final = read.maturity.licences_since_final;
         out.vesting_licences_needed = read.maturity.licences_needed;

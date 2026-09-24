@@ -20,8 +20,8 @@
 //!
 //! **Nothing on the block path reads this module**, and it writes nothing. It is bounded: a page of
 //! rows (at most [`PALW_VESTING_READ_ROW_CAP_V1`]) gets its positions in one walk of V-7's order,
-//! and the chain-wide totals are one walk of the rows with no hashing (≤ 9,121 rows at the T-3b
-//! bound, phase2-plan §5.7).
+//! and the chain-wide totals are one walk of the rows that keys only the latched ones (≤ 9,121 rows
+//! at the T-3b bound, phase2-plan §5.7).
 //!
 //! **What it cannot report, and says so.** A row that BURNED leaves no row and no mark on a claim a
 //! reader can tell from a pre-Final void (a convicted Final is `Voided { CourtFraud }` like any other
@@ -39,9 +39,9 @@ use crate::palw_state_v2::{
     palw_second_clock_depth_v1,
 };
 use crate::palw_vesting_v1::{
-    PalwVestingCountersV1, PalwVestingLegKindV1, PalwVestingLegV1, PalwVestingMaturityV1, PalwVestingMintPlanV1, PalwVestingRowV1,
-    PalwVestingSourceV1, palw_chain_vesting_halted_v1, palw_vesting_mint_positions_v1, palw_vesting_next_block_plan_v1,
-    palw_vesting_row_maturity_v1,
+    PALW_V2_VESTING_LEGS_PER_BLOCK, PalwVestingCountersV1, PalwVestingLegKindV1, PalwVestingLegV1, PalwVestingMaturityV1,
+    PalwVestingMintPlanV1, PalwVestingRowV1, PalwVestingSourceV1, palw_chain_vesting_halted_v1, palw_vesting_lock_is_live_v1,
+    palw_vesting_mint_positions_v1, palw_vesting_next_block_plan_v1, palw_vesting_row_maturity_v1,
 };
 
 /// The most rows one read returns (phase2-plan §5.7: a payee of a busy class can be named in
@@ -87,6 +87,12 @@ pub struct PalwVestingRowReadV1 {
     pub row: PalwVestingRowV1,
     /// V-4 at the next block's DAA and raw depth ([`palw_vesting_row_maturity_v1`]).
     pub maturity: PalwVestingMaturityV1,
+    /// **V-4(a) alone: the row is still UNMATURED** — unlatched, and the lock predicate over its two
+    /// clocks ([`palw_vesting_lock_is_live_v1`], at the escaped depth) still holds. This is the
+    /// per-row term of B-3's hold ([`palw_bond_is_payee_of_unmatured_row_v1`] walks exactly these
+    /// rows): while it is `true`, every bond the row pays has its collateral locked. It is not
+    /// `!mature_now` — a halt or a DA session keeps a row from maturing without holding its payees.
+    pub lock_live: bool,
     /// The legs the query is about: the payee's own (a producer that also sat is named twice), or
     /// every leg for a claim or chain read.
     pub legs: Vec<PalwVestingLegV1>,
@@ -169,9 +175,23 @@ pub struct PalwVestingReadV1 {
     pub reporter_awarded_rows: usize,
     /// What the next block's step 3d moves ([`palw_vesting_next_block_plan_v1`]).
     pub next_block: PalwVestingMintPlanV1,
+    /// **The latched backlog, in queue keys**: every awarded reporter reward (one key each) and
+    /// every latched row at its cost as a block's first move ([`PalwVestingRowV1::key_count`]) —
+    /// what must still drain through step 3d, latched rows held behind an unlatched head included.
+    /// An upper bound on the keys (rows sharing a seat payee in one block share its key).
+    pub backlog_keys: usize,
+    /// `⌈backlog_keys / PALW_V2_VESTING_LEGS_PER_BLOCK⌉`: the blocks the backlog takes at V-7's full
+    /// width once nothing unlatched stands in front of it — an ESTIMATE (the market's reserve narrows
+    /// a block to six keys; shared seat keys widen it), for T10's drain reading, never a promise.
+    pub backlog_blocks_est: u64,
     /// Live rows by the door of their Final-basis licence set, keyed by
     /// [`palw_licence_door_name_v1`].
     pub licence_histogram: BTreeMap<&'static str, PalwVestingDoorCountV1>,
+    /// A claim query's stage ([`PalwVestingReaderV1::claim_stage`]): `Maturing` / `Latched` while
+    /// its row lives, `Moved` for a vested Final whose row has left the table, `None` for a claim
+    /// that did not vest, was voided (a convicted Final included) or has retired with no row.
+    /// `None` for other queries.
+    pub claim_stage: Option<PalwClaimVestingStageV1>,
     /// The query's bond is in the registry (always `true` for other queries).
     pub bond_known: bool,
     /// **B-3**: the bond is payee of a row still unmatured by V-4(a), so its collateral is locked
@@ -186,7 +206,8 @@ pub struct PalwVestingReadV1 {
     /// Σ of the query's legs over EVERY matched row (not just the page): unlatched, then latched.
     pub maturing_sompi: u128,
     pub latched_sompi_of_query: u128,
-    /// The payee's reporter rewards (empty for other queries).
+    /// The payee's reporter rewards, pending then awarded, at most [`PALW_VESTING_READ_ROW_CAP_V1`]
+    /// (empty for other queries).
     pub reporter_rewards: Vec<PalwReporterRewardReadV1>,
 }
 
@@ -207,6 +228,9 @@ pub struct PalwVestingReaderV1<'s> {
     params: &'s PalwStateParamsV2,
     next_daa: u64,
     raw_depth: Option<u64>,
+    /// The second clock's depth after the liveness escape at `next_daa` — the depth V-4(a) and
+    /// B-3 read ([`palw_second_clock_depth_v1`]).
+    escaped_depth: Option<u64>,
     plan: PalwVestingMintPlanV1,
     planned_rows: BTreeSet<Hash64>,
     planned_reporters: BTreeSet<Hash64>,
@@ -225,7 +249,8 @@ impl<'s> PalwVestingReaderV1<'s> {
                 PalwVestingSourceV1::Reporter { offence_id } => planned_reporters.insert(*offence_id),
             };
         }
-        Self { state, params, next_daa, raw_depth, plan, planned_rows, planned_reporters }
+        let escaped_depth = palw_second_clock_depth_v1(raw_depth, state.recent_anchor_daas(), next_daa, params.window_court());
+        Self { state, params, next_daa, raw_depth, escaped_depth, plan, planned_rows, planned_reporters }
     }
 
     pub fn plan(&self) -> &PalwVestingMintPlanV1 {
@@ -239,6 +264,20 @@ impl<'s> PalwVestingReaderV1<'s> {
     /// V-4 for `row` at the next block ([`palw_vesting_row_maturity_v1`]).
     pub fn maturity(&self, row: &PalwVestingRowV1) -> PalwVestingMaturityV1 {
         palw_vesting_row_maturity_v1(self.state, self.params, row, self.next_daa, self.raw_depth)
+    }
+
+    /// V-4(a) for `row` at the next block: unlatched, and its lock predicate still live at the
+    /// escaped depth — the row term B-3's walk tests ([`PalwVestingRowReadV1::lock_live`]).
+    pub fn lock_live(&self, row: &PalwVestingRowV1) -> bool {
+        row.matured_at.is_none()
+            && palw_vesting_lock_is_live_v1(
+                row.expiry_daa,
+                row.settled_at_final,
+                self.next_daa,
+                self.state.settled_attempt_finals(),
+                self.escaped_depth,
+                self.params.window_court(),
+            )
     }
 
     /// **[`PalwVestingEtaV1`] for a row**, from its maturity and whether the plan takes it: the
@@ -271,6 +310,7 @@ impl<'s> PalwVestingReaderV1<'s> {
                 PalwVestingRowReadV1 {
                     row: (*row).clone(),
                     maturity,
+                    lock_live: self.lock_live(row),
                     legs: legs_of(row),
                     position: positions.get(&row.claim_id).copied(),
                     in_next_block: self.planned_rows.contains(&row.claim_id),
@@ -299,9 +339,7 @@ impl<'s> PalwVestingReaderV1<'s> {
             .read_rows(&rows, |row| row.legs().collect())
             .into_iter()
             .map(|read| {
-                let stage =
-                    if read.row.matured_at.is_some() { PalwClaimVestingStageV1::Latched } else { PalwClaimVestingStageV1::Maturing };
-                (read.row.claim_id, PalwClaimVestingV1 { stage, read: Some(read) })
+                (read.row.claim_id, PalwClaimVestingV1 { stage: PalwClaimVestingStageV1::of_live_row(&read.row), read: Some(read) })
             })
             .collect();
         for (claim_id, claim) in claims {
@@ -331,6 +369,11 @@ pub enum PalwClaimVestingStageV1 {
 }
 
 impl PalwClaimVestingStageV1 {
+    /// The stage of a row that still lives: latched or not (`Moved` has no row).
+    pub fn of_live_row(row: &PalwVestingRowV1) -> Self {
+        if row.matured_at.is_some() { Self::Latched } else { Self::Maturing }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::Maturing => "maturing",
@@ -378,13 +421,15 @@ pub fn palw_vesting_read_v1(
         n => n.min(PALW_VESTING_READ_ROW_CAP_V1),
     };
 
-    // The chain-wide totals: one walk, no hashing.
+    // The chain-wide totals: one walk; only the latched rows are keyed (the backlog), so an
+    // unlatched table costs no hashing.
     let mut live_rows = 0usize;
     let mut latched_rows = 0usize;
     let mut live_sompi = 0u128;
     let mut latched_sompi = 0u128;
     let mut latched_behind_head = 0usize;
     let mut head_seen = false;
+    let mut backlog_keys = state.reporter_rewards_iter().filter(|(_, payout)| payout.amount > 0).count();
     let mut licence_histogram: BTreeMap<&'static str, PalwVestingDoorCountV1> = BTreeMap::new();
     for row in state.vesting_iter_by_expiry() {
         let total = row.total_sompi_u128();
@@ -397,6 +442,7 @@ pub fn palw_vesting_read_v1(
             latched_rows += 1;
             latched_sompi += total;
             door.latched_rows += 1;
+            backlog_keys += row.key_count();
             if head_seen {
                 latched_behind_head += 1;
             }
@@ -487,7 +533,14 @@ pub fn palw_vesting_read_v1(
             }
         }
     }
+    // Bounded like the rows: R-3 caps a reporter's open commitments, but the read does not lean on
+    // a cap it does not own.
+    reporter_rewards.truncate(PALW_VESTING_READ_ROW_CAP_V1);
 
+    let claim_stage = match query {
+        PalwVestingQueryV1::Claim(claim_id) => reader.claim_stage(claim_id, state.claim(claim_id)).map(|vesting| vesting.stage),
+        _ => None,
+    };
     let (bond_known, payee_holds_collateral) = match payee {
         Some(PalwVestingPayeeV1::Bond(bond)) => {
             (state.bond(&bond).is_some(), palw_bond_is_payee_of_unmatured_row_v1(state, params, &bond, next_daa, raw_depth))
@@ -501,7 +554,7 @@ pub fn palw_vesting_read_v1(
         rcore_plus_active: params.rcore_plus_active_at(next_daa),
         halted: palw_chain_vesting_halted_v1(state, raw_depth, next_daa, window_court),
         raw_depth,
-        escaped_depth: palw_second_clock_depth_v1(raw_depth, state.recent_anchor_daas(), next_daa, window_court),
+        escaped_depth: reader.escaped_depth,
         settled_now: state.settled_attempt_finals(),
         counters: state.vesting_counters(),
         live_rows,
@@ -512,7 +565,10 @@ pub fn palw_vesting_read_v1(
         reporter_pending_rows: state.reward_pending_iter().count(),
         reporter_awarded_rows: state.reporter_rewards_iter().count(),
         next_block: reader.plan.clone(),
+        backlog_keys,
+        backlog_blocks_est: backlog_keys.div_ceil(PALW_V2_VESTING_LEGS_PER_BLOCK) as u64,
         licence_histogram,
+        claim_stage,
         bond_known,
         payee_holds_collateral,
         rows,
@@ -573,11 +629,20 @@ mod tests {
         h(0x9A00 + n)
     }
 
-    /// The window the fixtures' params carry (`window_court`), so a row's expiry is `final + 20`.
+    /// R-core+ from genesis, as testnet-12. `window_court` is 500 (the fifth argument), so the
+    /// second clock's escape needs 1,000 DAA with no anchor settled; the rows are hand-built, so
+    /// each fixture sets its `expiry_daa` directly.
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(1), 4, 1000, 100, 800, 0)
-            .unwrap()
-            .with_rcore_plus_mirrors(Some(0), 0, Vec::new())
+        params_from(Some(0))
+    }
+
+    /// [`params`] with R-core+ from `from` (`None`: never — the fence-off twin).
+    fn params_from(from: Option<u64>) -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(1), 4, 1000, 100, 800, 0).unwrap().with_rcore_plus_mirrors(
+            from,
+            0,
+            Vec::new(),
+        )
     }
 
     fn row(claim: u64, producer: u64, seats: &[u64], expiry_daa: u64, matured_at: Option<u64>) -> PalwVestingRowV1 {
@@ -622,6 +687,11 @@ mod tests {
     /// best reveal is bond 7 — installed through one delta, so the derived indexes are the delta
     /// path's.
     fn seeded(rows: &[PalwVestingRowV1]) -> PalwChainStateV2 {
+        seeded_with(rows, Vec::new(), &params())
+    }
+
+    /// [`seeded`] plus `extra` entries (claim records, queued payouts), folded under `p`.
+    fn seeded_with(rows: &[PalwVestingRowV1], extra: Vec<PalwDeltaEntryV2>, p: &PalwStateParamsV2) -> PalwChainStateV2 {
         let mut entries: Vec<PalwDeltaEntryV2> =
             [2u64, 3, 4, 7].iter().map(|n| PalwDeltaEntryV2::Bond { key: bond_key(*n), old: None, new: Some(bond(*n)) }).collect();
         entries.extend(rows.iter().map(|r| PalwDeltaEntryV2::Vesting { key: r.claim_id, old: None, new: Some(r.clone()) }));
@@ -645,8 +715,41 @@ mod tests {
                 best: Some(PalwRewardWinnerV1 { committed_daa: 5, commitment: h(0xC0), reporter: bond_key(7), payload: payload(7) }),
             }),
         });
+        entries.extend(extra);
         let point = PalwBlockContextV2 { block: h(0xB1), daa_score: 10, blue_score: 10, subsidy: 0 };
-        apply_delta_v2(&PalwChainStateV2::genesis(), &PalwStateDeltaV2 { point, entries }, &params()).unwrap()
+        apply_delta_v2(&PalwChainStateV2::genesis(), &PalwStateDeltaV2 { point, entries }, p).unwrap()
+    }
+
+    /// A claim record of `producer`'s in `phase`, holding `escrow`.
+    fn claim(producer: u64, phase: PalwClaimPhaseV2, escrow: u64) -> PalwClaimStateV2 {
+        PalwClaimStateV2 {
+            source: crate::palw_state_v2::PalwClaimSourceV2::Attempt,
+            class_id: h(1),
+            bond: bond_key(producer),
+            pwu: 100,
+            accepted_daa: 5,
+            rebound_daa: None,
+            accepted_blue_score: 5,
+            accepted_block: h(0xB0),
+            trace_root: h(0x71),
+            output_root: h(0x72),
+            execution_root: h(0xE0),
+            trace_chunk_count: 4,
+            trace_retention_daa: 700,
+            reserved: 1_000,
+            immature_contribution: 0,
+            escrowed_reward: escrow,
+            work_leaves: 0,
+            work_id: None,
+            phase,
+            rights_reserved: 0,
+            job_identity: Hash64::default(),
+            rcore: crate::palw_state_v2::PalwClaimRcoreV1::default(),
+        }
+    }
+
+    fn claim_entry(id: u64, record: PalwClaimStateV2) -> PalwDeltaEntryV2 {
+        PalwDeltaEntryV2::Claim { key: h(id), old: None, new: Some(record) }
     }
 
     /// **T51 (read half): per producer, per seat payee, per payout address, per claim** — each names
@@ -662,7 +765,8 @@ mod tests {
         let state = seeded(&rows);
         let p = params();
         // Producer and seat: bond 2 produced 0x10 and 0x12 and sat on 0x11.
-        let read = palw_vesting_read_v1(&state, &p, 55, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))), 0, None);
+        let read =
+            palw_vesting_read_v1(&state, &p, 55, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))), 0, None);
         assert_eq!(read.rows.iter().map(|r| r.row.claim_id).collect::<Vec<_>>(), vec![h(0x10), h(0x11), h(0x12)]);
         assert_eq!(read.rows[0].legs.iter().map(|l| l.kind).collect::<Vec<_>>(), vec![PalwVestingLegKindV1::Producer]);
         assert_eq!(read.rows[1].legs.iter().map(|l| (l.kind, l.amount)).collect::<Vec<_>>(), vec![(PalwVestingLegKindV1::Seat, 100)]);
@@ -676,7 +780,8 @@ mod tests {
         let stages: Vec<_> = by_address.reporter_rewards.iter().map(|r| (r.stage, r.amount)).collect();
         assert_eq!(stages, vec![(PalwReporterRewardStageV1::Pending, 44), (PalwReporterRewardStageV1::Awarded, 33)]);
         // The bond view of bond 7 finds the same rewards, pending by its reveal, awarded by its payload.
-        let by_bond = palw_vesting_read_v1(&state, &p, 55, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(7))), 0, None);
+        let by_bond =
+            palw_vesting_read_v1(&state, &p, 55, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(7))), 0, None);
         assert_eq!(by_bond.reporter_rewards.len(), 2);
         // A claim read: every leg, reserve included.
         let one = palw_vesting_read_v1(&state, &p, 55, None, &PalwVestingQueryV1::Claim(h(0x12)), 0, None);
@@ -696,11 +801,7 @@ mod tests {
     /// function's, and B-3's hold is the fold's predicate.
     #[test]
     fn t51_the_eta_is_the_planners_answer_where_it_has_one() {
-        let rows = [
-            row(0x20, 2, &[3], 50, Some(45)),
-            row(0x21, 3, &[2], 55, None),
-            row(0x22, 2, &[3, 4], 90, None),
-        ];
+        let rows = [row(0x20, 2, &[3], 50, Some(45)), row(0x21, 3, &[2], 55, None), row(0x22, 2, &[3, 4], 90, None)];
         let state = seeded(&rows);
         let p = params();
         let next = 60;
@@ -722,10 +823,12 @@ mod tests {
         assert_eq!(plan.moves.len(), 3);
         assert_eq!(read.rows[2].eta.daa, 90, "a row whose DAA clock runs is dated by its expiry");
         // B-3: bond 2 is payee of 0x22, still unmatured by V-4(a) — the fold's own predicate.
-        let bond2 = palw_vesting_read_v1(&state, &p, next, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))), 0, None);
+        let bond2 =
+            palw_vesting_read_v1(&state, &p, next, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))), 0, None);
         assert!(bond2.payee_holds_collateral);
         assert_eq!(bond2.payee_holds_collateral, palw_bond_is_payee_of_unmatured_row_v1(&state, &p, &bond_key(2), next, None));
-        let late = palw_vesting_read_v1(&state, &p, 95, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))), 0, None);
+        let late =
+            palw_vesting_read_v1(&state, &p, 95, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))), 0, None);
         assert!(!late.payee_holds_collateral, "past every expiry with no second clock, nothing holds it");
     }
 
@@ -746,8 +849,14 @@ mod tests {
             }
         }
         assert!(!palw_vesting_read_v1(&state, &p, 60, None, &PalwVestingQueryV1::Chain, 0, None).halted, "F11");
-        assert!(!palw_vesting_read_v1(&state, &p, 60, Some(3), &PalwVestingQueryV1::Chain, 0, None).halted, "the second clock holds; no halt");
-        assert!(palw_vesting_read_v1(&state, &p, 1_200, Some(3), &PalwVestingQueryV1::Chain, 0, None).halted, "no anchor ever settled");
+        assert!(
+            !palw_vesting_read_v1(&state, &p, 60, Some(3), &PalwVestingQueryV1::Chain, 0, None).halted,
+            "the second clock holds; no halt"
+        );
+        assert!(
+            palw_vesting_read_v1(&state, &p, 1_200, Some(3), &PalwVestingQueryV1::Chain, 0, None).halted,
+            "no anchor ever settled"
+        );
     }
 
     /// Paging: `limit` rows, a cursor after the last, and the next page resumes there; the sums
@@ -778,5 +887,142 @@ mod tests {
         assert_eq!(reader.claim_stage(&h(0x50), None).map(|s| s.stage), Some(PalwClaimVestingStageV1::Maturing));
         assert_eq!(reader.claim_stage(&h(0x51), None).map(|s| s.stage), Some(PalwClaimVestingStageV1::Latched));
         assert_eq!(reader.claim_stage(&h(0x52), None), None, "no row and no claim record");
+    }
+
+    /// **B-3's hold, row by row: a payee read's `lock_live` rows are exactly why the bond is held**
+    /// — `payee_holds_collateral` (the fold's walk) is true iff one of the rows paying the bond is
+    /// unlatched with its lock predicate live, on the DAA clock, on the second clock, and once the
+    /// escape has lifted it; a latched row never holds.
+    #[test]
+    fn t51_the_rows_lock_term_is_b3s_hold() {
+        let rows = [
+            row(0x70, 2, &[3], 50, Some(45)),
+            row(0x71, 3, &[2], 55, None),
+            row(0x72, 2, &[3, 4], 90, None),
+            row(0x73, 4, &[], 120, None),
+        ];
+        let state = seeded(&rows);
+        let p = params();
+        let mut seen = BTreeSet::new();
+        // No second clock; then a configured depth of 3 that no anchor has met (it holds to
+        // expiry + 1,000), and past its escape at 1,000 DAA with no anchor settled.
+        for (raw, daa) in [(None, 40), (None, 60), (None, 100), (None, 130), (Some(3), 60), (Some(3), 130), (Some(3), 1_200)] {
+            for bond in [2u64, 3, 4] {
+                let read = palw_vesting_read_v1(
+                    &state,
+                    &p,
+                    daa,
+                    raw,
+                    &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(bond))),
+                    0,
+                    None,
+                );
+                let held_by_rows = read.rows.iter().any(|r| r.lock_live);
+                assert_eq!(read.payee_holds_collateral, held_by_rows, "bond {bond} at {daa} with raw depth {raw:?}");
+                assert!(read.rows.iter().all(|r| !(r.lock_live && r.row.matured_at.is_some())), "a latched row never holds");
+                seen.insert(held_by_rows);
+            }
+        }
+        assert_eq!(seen.len(), 2, "the grid holds and releases");
+        // The second clock holds a row whose DAA clock ran; the escape releases it.
+        let bond3 = |raw, daa| {
+            palw_vesting_read_v1(&state, &p, daa, raw, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(3))), 0, None)
+                .payee_holds_collateral
+        };
+        assert!(!bond3(None, 130) && bond3(Some(3), 130) && !bond3(Some(3), 1_200));
+    }
+
+    /// **The backlog is the latched rows' keys and the awarded reporter rewards'**, at V-7's full
+    /// width — latched rows held behind an unlatched head included.
+    #[test]
+    fn t51_the_backlog_counts_the_latched_keys() {
+        // Five latched rows of four keys each (a producer and three distinct seat payees), one
+        // unlatched head in front of the last two, and the fixture's one awarded reporter reward.
+        let mut rows: Vec<PalwVestingRowV1> = (0..3).map(|i| row(0x80 + i, 2, &[3, 4, 7], 50 + i, Some(49))).collect();
+        rows.push(row(0x83, 3, &[], 60, None));
+        rows.extend((0..2).map(|i| row(0x84 + i, 4, &[2, 3, 7], 70 + i, Some(65))));
+        let state = seeded(&rows);
+        let read = palw_vesting_read_v1(&state, &params(), 66, None, &PalwVestingQueryV1::Chain, 0, None);
+        assert_eq!((read.latched_rows, read.latched_behind_head), (5, 2));
+        assert_eq!(read.backlog_keys, 1 + 5 * 4);
+        assert_eq!(read.backlog_blocks_est, 3, "21 keys at eight a block");
+        assert_eq!(
+            read.backlog_keys,
+            rows.iter().filter(|r| r.matured_at.is_some()).map(PalwVestingRowV1::key_count).sum::<usize>() + 1
+        );
+        // Nothing latched and nothing awarded: no backlog.
+        let quiet =
+            palw_vesting_read_v1(&seeded(&[row(0x90, 2, &[], 90, None)]), &params(), 10, None, &PalwVestingQueryV1::Chain, 0, None);
+        assert_eq!((quiet.backlog_keys, quiet.backlog_blocks_est), (1, 1), "only the fixture's awarded reporter reward");
+    }
+
+    /// **T51: claim row v3 — each claim's vesting, and the rows of the claims that retired**
+    /// (phase2-plan §1.6, `palw_bond_claims_v1`). A vested Final with a row reads `maturing` /
+    /// `latched`; a vested Final whose row left reads `moved`, and its queued leg is found under
+    /// the A-KEY key, never the raw claim id; a void and a Final that held no escrow have no stage;
+    /// and a row whose claim record retired is listed for its producer (executor view) and its
+    /// credited seats (seat view) — only when terminal claims are asked for.
+    #[test]
+    fn t51_claim_row_v3_names_each_claims_vesting_and_the_retired_rows() {
+        use crate::palw_producer_v2::{PalwClaimRoleV1, palw_bond_claims_v1};
+        use crate::palw_state_v2::PalwVoidReasonV2;
+        use crate::palw_vesting_v1::palw_vesting_payout_key_v1;
+        let final_at = |daa| PalwClaimPhaseV2::Final { final_daa: daa };
+        let rows = [
+            row(0x60, 2, &[3], 60, None),     // live claim, maturing
+            row(0x64, 2, &[3], 45, Some(46)), // retired, latched: bond 2 produced it
+            row(0x65, 3, &[2], 80, None),     // retired: bond 2 sat on it
+        ];
+        let extra = || {
+            vec![
+                claim_entry(0x60, claim(2, final_at(30), 1_000)),
+                claim_entry(0x61, claim(2, final_at(40), 1_000)),
+                claim_entry(0x62, claim(2, PalwClaimPhaseV2::Voided { voided_daa: 41, reason: PalwVoidReasonV2::CourtFraud }, 1_000)),
+                claim_entry(0x63, claim(2, final_at(42), 0)),
+                // 0x61's producer leg, moved by the last step 3d and not minted yet, under its
+                // A-KEY key; a stray payout under the raw claim id must not be read for it.
+                PalwDeltaEntryV2::Payout {
+                    key: palw_vesting_payout_key_v1(&h(0x61)),
+                    old: None,
+                    new: Some(PalwPayoutV2 { payload: payload(2), amount: 500 }),
+                },
+                PalwDeltaEntryV2::Payout { key: h(0x61), old: None, new: Some(PalwPayoutV2 { payload: payload(2), amount: 9 }) },
+            ]
+        };
+        let p = params();
+        let state = seeded_with(&rows, extra(), &p);
+        let read = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Executor, true, 0, 50, None);
+        let ids: BTreeSet<Hash64> = read.rows.iter().map(|r| r.claim_id).collect();
+        assert_eq!(ids, BTreeSet::from([h(0x60), h(0x61), h(0x62), h(0x63)]));
+        let stage = |id| read.vesting.get(&h(id)).map(|v| v.stage);
+        assert_eq!(stage(0x60), Some(PalwClaimVestingStageV1::Maturing));
+        assert_eq!(stage(0x61), Some(PalwClaimVestingStageV1::Moved));
+        assert_eq!((stage(0x62), stage(0x63)), (None, None), "a void, and a Final that held no escrow");
+        assert_eq!(read.vesting[&h(0x60)].read.as_ref().map(|r| r.row.expiry_daa), Some(60));
+        let pending = |id| read.rows.iter().find(|r| r.claim_id == h(id)).and_then(|r| r.payout_pending);
+        assert_eq!(pending(0x61), Some(500), "the moved producer leg, under its A-KEY key");
+        // The retired rows: the executor view lists what bond 2 produced, the seat view where it sat.
+        assert_eq!(read.vesting_only.iter().map(|r| r.row.claim_id).collect::<Vec<_>>(), vec![h(0x64)]);
+        assert!(read.vesting_only[0].row.matured_at.is_some() && !read.vesting_only_truncated);
+        let seat = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Seat, true, 0, 50, None);
+        assert_eq!(seat.vesting_only.iter().map(|r| r.row.claim_id).collect::<Vec<_>>(), vec![h(0x65)]);
+        let live_only = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Executor, false, 0, 50, None);
+        assert!(live_only.vesting_only.is_empty() && live_only.vesting.is_empty(), "no terminal claims asked, none listed");
+        // `getPalwVesting` on the moved claim: no row, and the stage says where the reward went.
+        let moved = palw_vesting_read_v1(&state, &p, 50, None, &PalwVestingQueryV1::Claim(h(0x61)), 0, None);
+        assert_eq!((moved.rows.len(), moved.claim_stage), (0, Some(PalwClaimVestingStageV1::Moved)));
+        let live = palw_vesting_read_v1(&state, &p, 50, None, &PalwVestingQueryV1::Claim(h(0x60)), 0, None);
+        assert_eq!((live.rows.len(), live.claim_stage), (1, Some(PalwClaimVestingStageV1::Maturing)));
+
+        // **The fence-off twin**: nothing vests below `palw_rcore_plus`, so no Final has a stage,
+        // the queued payout is the one keyed by the raw claim id (as before the fence), and the
+        // read says R-core+ is not in force and plans nothing.
+        let off = params_from(None);
+        let state = seeded_with(&[], extra(), &off);
+        let read = palw_bond_claims_v1(&state, &off, &bond_key(2), PalwClaimRoleV1::Executor, true, 0, 50, None);
+        assert!(read.vesting.is_empty() && read.vesting_only.is_empty());
+        assert_eq!(read.rows.iter().find(|r| r.claim_id == h(0x61)).and_then(|r| r.payout_pending), Some(9));
+        let chain = palw_vesting_read_v1(&state, &off, 50, None, &PalwVestingQueryV1::Claim(h(0x61)), 0, None);
+        assert!(!chain.rcore_plus_active && chain.next_block.moves.is_empty() && chain.claim_stage.is_none());
     }
 }

@@ -50,11 +50,11 @@ mod palw_panel;
 mod palw_registry;
 mod palw_service;
 mod palw_settlement;
-/// ADR-0152 P2-11: `palw vesting` — where a vested reward stands (op 199).
-mod palw_vesting;
 mod palw_shard_court;
 mod palw_shard_licensing;
 mod palw_verify_context;
+/// ADR-0152 P2-11: `palw vesting` — where a vested reward stands (op 199).
+mod palw_vesting;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.

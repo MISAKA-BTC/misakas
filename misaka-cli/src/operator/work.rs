@@ -494,7 +494,12 @@ pub(crate) fn refine(lane: Lane, mut reading: Reading, extra: &ClaimExtra) -> Re
         // once the row moved a coinbase minted it.
         match extra.vesting {
             Some(v @ VestingExtra { stage: VestingStage::Maturing | VestingStage::Latched, .. }) => {
-                return Reading { state: RewardPending, detail: vesting_detail(&v), deadline_daa: v.eta_daa, estimated: v.eta_estimated };
+                return Reading {
+                    state: RewardPending,
+                    detail: vesting_detail(&v),
+                    deadline_daa: v.eta_daa,
+                    estimated: v.eta_estimated,
+                };
             }
             Some(v @ VestingExtra { stage: VestingStage::Moved, .. }) => {
                 return Reading { state: Rewarded, detail: vesting_detail(&v), deadline_daa: None, estimated: false };
@@ -598,7 +603,8 @@ fn rewarded(lane: Lane, r: &GetPalwFreePromptClaimResponse, w: Option<&Windows>,
                 Reading::new(
                     WorkState::RewardPending,
                     format!(
-                        "final at DAA {at}; its reward vests — minted no earlier than DAA {expiry}{}, spendable {coinbase_maturity} DAA                          after the minting block; a conviction before then burns it",
+                        "final at DAA {at}; its reward vests — moves no earlier than DAA {expiry}{} and is minted by the \
+                         block after, spendable {coinbase_maturity} DAA after that; a conviction before then burns it",
                         if w.second_clock { format!(" (the second clock may hold it to DAA {latest})") } else { String::new() }
                     ),
                 )
@@ -901,7 +907,9 @@ mod tests {
         let w = t12();
         let fin = classify(Lane::Block, None, None, Some(&claim("final", NOW - 10)), false, Some(&w), 600, NOW);
         assert_eq!((fin.state, fin.deadline_daa, fin.estimated), (WorkState::RewardPending, Some(NOW - 10 + 3_000), true));
-        assert!(fin.detail.contains("its reward vests — minted no earlier than DAA 12990"), "{}", fin.detail);
+        assert!(fin.detail.contains("its reward vests — moves no earlier than DAA 12990"), "{}", fin.detail);
+        assert!(fin.detail.contains("(the second clock may hold it to DAA 18990)"), "{}", fin.detail);
+        assert!(!fin.detail.contains("  "), "one sentence, no stray gap: {}", fin.detail);
         let maturing = VestingExtra {
             stage: VestingStage::Maturing,
             payee_sompi: 50_000_000_000,
@@ -914,8 +922,17 @@ mod tests {
         };
         let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(maturing), ..Default::default() });
         assert_eq!((r.state, r.deadline_daa, r.estimated), (WorkState::RewardPending, Some(12_990), true));
-        assert_eq!(r.detail, "reward 500.00 MSK vesting until ≈ DAA 12990 (DAA clock) and 26 more licence(s) — a conviction before then burns it");
-        let latched = VestingExtra { stage: VestingStage::Latched, matured_at: Some(13_000), eta_daa: Some(13_001), eta_estimated: false, ..maturing };
+        assert_eq!(
+            r.detail,
+            "reward 500.00 MSK vesting until ≈ DAA 12990 (DAA clock) and 26 more licence(s) — a conviction before then burns it"
+        );
+        let latched = VestingExtra {
+            stage: VestingStage::Latched,
+            matured_at: Some(13_000),
+            eta_daa: Some(13_001),
+            eta_estimated: false,
+            ..maturing
+        };
         let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(latched), ..Default::default() });
         assert_eq!((r.state, r.deadline_daa, r.estimated), (WorkState::RewardPending, Some(13_001), false));
         assert!(r.detail.contains("matured at DAA 13000, waiting its turn to be minted; moves at DAA 13001"), "{}", r.detail);
@@ -923,7 +940,11 @@ mod tests {
         let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(moved), ..Default::default() });
         assert_eq!(r.state, WorkState::Rewarded);
         assert!(r.detail.starts_with("vested and minted"), "{}", r.detail);
-        let queued = refine(Lane::Block, fin, &ClaimExtra { escrow_sompi: 1, payout_pending_sompi: Some(7), vesting: Some(moved), ..Default::default() });
+        let queued = refine(
+            Lane::Block,
+            fin,
+            &ClaimExtra { escrow_sompi: 1, payout_pending_sompi: Some(7), vesting: Some(moved), ..Default::default() },
+        );
         assert!(queued.detail.contains("queued for the next coinbase"), "the move's block: the next coinbase mints it");
         // Where nothing vests, the old date stands.
         let unvested = classify(Lane::Block, None, None, Some(&claim("final", NOW - 10)), false, Some(&t11()), 600, NOW);
