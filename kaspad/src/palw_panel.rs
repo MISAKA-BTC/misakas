@@ -810,6 +810,24 @@ impl PalwPanelService {
         ladder
     }
 
+    /// **The ladder the chain adjudicates a one-move accusation of `class_id` at**, as a seat must
+    /// shape and check it before filing: `refutation_cap` (the network's
+    /// `palw_refutation_leaf_cap_v2` at this DAA) for every class, and — past
+    /// `palw_offence_attribution` (ADR-0152 §4-ter, the launch line only) — the class's own held
+    /// ladder for a held class, which is what the chain reads (`class_step_ladder_v1`, 2^40).
+    /// Below the fence the network's cap as before, so the live fleet files exactly what it did: an
+    /// 8k held claim (≈ 2^26.7 leaves) sat above the network's 2^26 and was "recorded, not accused",
+    /// so no seat could ever open the held dissection A-held convicts through.
+    fn seat_refutation_ladder_v1(&self, class_id: Hash64, refutation_cap: u64, current_daa: u64) -> u64 {
+        if !self.consensus_config.params.palw_offence_attribution_active_at(current_daa) {
+            return refutation_cap;
+        }
+        // `class_step_ladder` is the network ladder for every class but a held one, whose ladder is
+        // the regime's (`palw_class_step_ladder_v1`); only the held raise is taken from it.
+        let class = self.class_step_ladder(class_id);
+        if class > self.config.court.max_step_leaf_count() { class.max(refutation_cap) } else { refutation_cap }
+    }
+
     /// The form of the class a free-prompt payload's job names (`palw_fp_class_id_peek_v1`), for
     /// the readers that decode a payload before anything else has said which class it is.
     fn payload_prompt_ids_form(&self, bytes: &[u8]) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
@@ -5236,6 +5254,8 @@ impl PalwPanelService {
                                                     .palw_court_ladder
                                                     .is_some_and(|f| f.is_active(current_daa)),
                                             );
+                                            // ADR-0152 §4-ter: the CLASS's ladder past the fence.
+                                            let ladder = self.seat_refutation_ladder_v1(duty.class_id, ladder, current_daa);
                                             // The chain adjudicates at ITS refutation ladder (2^22
                                             // where `palw_court_ladder` is dormant), and this seat
                                             // sampled at the bundle's; a claim above the chain's
@@ -5243,7 +5263,7 @@ impl PalwPanelService {
                                             // it is recorded (above) and not filed into a drop.
                                             if refutation.binding.step_leaf_count > ladder {
                                                 warn!(
-                                                    "[{PALW_PANEL}] claim {}: {} leaves is above this network's refutation ladder of {ladder}; the fault is recorded, not accused",
+                                                    "[{PALW_PANEL}] claim {}: {} leaves is above the refutation ladder the chain tries this class at ({ladder}); the fault is recorded, not accused",
                                                     duty.claim_id, refutation.binding.step_leaf_count
                                                 );
                                                 break 'verdict None;
@@ -8281,6 +8301,8 @@ impl PalwPanelService {
             &self.config.court,
             self.consensus_config.params.palw_court_ladder.is_some_and(|f| f.is_active(current_daa)),
         );
+        // ADR-0152 §4-ter: the CLASS's ladder past the fence (see `seat_refutation_ladder_v1`).
+        let ladder = self.seat_refutation_ladder_v1(duty.class_id, ladder, current_daa);
         let domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.consensus_config.params.net.to_string().as_bytes(),
             Some(self.consensus_config.genesis.hash),
@@ -9100,6 +9122,34 @@ mod tests {
             "the release is the court arm's own, just before its reservation"
         );
         assert!(!production.contains("base0_fp_seat_state_forget_v1("), "no production path clears another instance's memo");
+    }
+
+    /// **ADR-0152 §4-ter (the shard-court addendum): a seat shapes its one-move accusation at the
+    /// ladder the chain tries the CLASS at.** Both filing sites — the capture sampler's fault and the
+    /// named leaf's pursuit — took the network's refutation cap, so an 8k held claim (≈ 2^26.7
+    /// leaves, above t12's 2^26) was "recorded, not accused" and no seat could open the held
+    /// dissection A-held convicts through. Past `palw_offence_attribution` each reads the class's
+    /// ladder through `seat_refutation_ladder_v1`; below it the helper returns the network's cap,
+    /// so the live fleet files exactly what it did.
+    #[test]
+    fn every_one_move_filing_site_reads_the_class_ladder_past_the_fence() {
+        let whole = include_str!("palw_panel.rs");
+        let production = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the test module")];
+        let caps: Vec<usize> = production.match_indices("palw_court_v2::palw_refutation_leaf_cap_v2(").map(|(at, _)| at).collect();
+        assert_eq!(caps.len(), 2, "the two one-move filing sites");
+        for at in caps {
+            let after = &production[at..at + 900.min(production.len() - at)];
+            assert!(
+                after.contains("let ladder = self.seat_refutation_ladder_v1(duty.class_id, ladder, current_daa);"),
+                "a filing site shapes at the network cap alone: {}",
+                &after[..200]
+            );
+        }
+        let helper = &production[production.find("    fn seat_refutation_ladder_v1(").expect("the helper")..];
+        let helper = &helper[..helper.find("\n    }\n").expect("its end")];
+        assert!(helper.contains("palw_offence_attribution_active_at(current_daa)"), "fenced on the attribution fence");
+        assert!(helper.contains("return refutation_cap;"), "below it, the network's cap unchanged");
+        assert!(helper.contains("self.class_step_ladder(class_id)"), "past it, the class's own ladder");
     }
 }
 

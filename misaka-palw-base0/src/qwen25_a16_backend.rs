@@ -6047,6 +6047,121 @@ mod held_real_row_probe {
         assert!(cleared > 0, "some honest non-fused leaf clears, so the parity is not only over refusals");
     }
 
+    /// **The fused-leaf sweep** (the shard-court addendum to 8be0f661; ADR-0152 §4-ter): the bound
+    /// verdict on the executor's own evidence at EVERY fused leaf of a held job — both layers, every
+    /// prefill position (the first, whose history is one row, included), every decode call, every
+    /// output tile — not one sampled leaf. At each: the builder's object is refused only for the
+    /// history it carries; stripped (what a seat files) it is `NeedsDissection`, never a conviction
+    /// and never a refusal of an honest executor's own tile; below the fence v1 reads
+    /// `NeedsDissection` on both; and the stripped object is under the close ceiling. A fused leaf
+    /// the sweep found convicting, or refusing, honest evidence would be one where a seat's
+    /// accusation of an 8k claim convicts the honest producer in one move or never reaches its
+    /// dissection.
+    #[test]
+    fn every_fused_leaf_of_a_held_job_defers_to_its_dissection_on_honest_evidence() {
+        use kaspa_consensus_core::palw_shard_court_v1::{
+            PalwOneMoveClaimV2, PalwShardCourtError, PalwShardCourtVerdictV1, palw_leaf_evidence_bytes_v1,
+        };
+        let (artifact, profile) = fixture();
+        let backend = fixture_backend(&artifact, &profile);
+        let form = backend.prompt_ids_form();
+        let vocab = artifact.shape.vocab;
+        let positions = 12u32;
+        let decode = 3u32;
+        let prompt: Vec<usize> = (0..positions as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5B; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(form, &ids).expect("the ids commit"),
+            prompt_tokens: positions,
+            decode_token_limit: decode,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
+        let leaves = run.facts.step_leaf_count;
+        let capture = run.outcome.material.clone();
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+        };
+        let binding = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes").binding().clone();
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let bound_to =
+            PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: profile.shape_profile_id(), artifact_root: root };
+        let ladder = PALW_HELD_STEP_LADDER_V1;
+        let fused: Vec<(u64, PalwStepCoordinateV1)> = (0..leaves)
+            .filter_map(|leaf| {
+                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &binding.job_context, leaf).map(|c| (leaf, c))
+            })
+            .filter(|(_, c)| profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind == PalwStepOpKindV1::AttnFused))
+            .collect();
+        let (mut layers, mut prefill_positions, mut decode_calls, mut tiles) = (
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+        );
+        let mut largest = 0u64;
+        for (leaf, coord) in &fused {
+            let evidence = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+                &backend, &capture, &ids, claim, leaves, *leaf, form,
+            )
+            .unwrap_or_else(|e| panic!("leaf {leaf} {coord:?}: the executor builds its own evidence: {e}"));
+            assert_eq!(evidence.verdict_at_v2(&bound_to, ladder, false), Ok(PalwShardCourtVerdictV1::NeedsDissection), "leaf {leaf}");
+            assert_eq!(evidence.verdict_v1(bound_to.class_id, root, ladder), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+            let carried = !evidence.refutation.inputs.is_empty() || evidence.refutation.kv_checkpoint.is_some();
+            match evidence.verdict_at_v2(&bound_to, ladder, true) {
+                Err(PalwShardCourtError::FusedLeafCarriesTheHistory { .. }) => assert!(carried, "leaf {leaf}"),
+                Ok(PalwShardCourtVerdictV1::NeedsDissection) => assert!(!carried, "leaf {leaf}"),
+                other => panic!("leaf {leaf} {coord:?}: the builder's own object reads {other:?}"),
+            }
+            let stripped = evidence.for_the_one_move_v2();
+            assert_eq!(
+                stripped.verdict_at_v2(&bound_to, ladder, true),
+                Ok(PalwShardCourtVerdictV1::NeedsDissection),
+                "leaf {leaf} {coord:?}: the seat's object defers to the dissection"
+            );
+            let bytes = palw_leaf_evidence_bytes_v1(&stripped);
+            assert!(bytes <= kaspa_consensus_core::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, "leaf {leaf}: {bytes} B");
+            largest = largest.max(bytes);
+            let (_, layer) = profile.resolve_node_slot(coord.node_slot).expect("the node");
+            layers.insert(layer);
+            if coord.call_index == 0 {
+                prefill_positions.insert(coord.position);
+            } else {
+                decode_calls.insert(coord.call_index);
+            }
+            tiles.insert(coord.tile_index);
+        }
+        eprintln!(
+            "{} fused leaves swept of {leaves}: layers {layers:?}, {} prefill positions, decode calls {decode_calls:?}, tiles {tiles:?}, \
+             largest stripped object {largest} B",
+            fused.len(),
+            prefill_positions.len()
+        );
+        assert_eq!(layers.len(), profile.layer_count as usize, "every layer's fused site");
+        assert_eq!(prefill_positions.len(), positions as usize, "every prefill position, the first included");
+        let calls = binding.job_context.exact_decode_tokens.saturating_sub(1) as usize;
+        assert!(calls >= 1, "the job decodes past its first token, so decode positions are swept too");
+        assert_eq!(decode_calls.len(), calls, "every decode call");
+        assert!(tiles.len() > 1, "every output tile of the site, not the first alone");
+    }
+
     /// **ADR-0121 §7: a lie in a block that straddles an interval's edge is named from the edges.**
     /// Such a block is whole in neither interval, so no opening digests it and the block naming
     /// refuses it; the edges are served as their leaves and checked by the range's root walk. The

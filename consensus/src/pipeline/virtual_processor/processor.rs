@@ -8597,8 +8597,22 @@ impl VirtualStateProcessor {
                             if !self.palw_held_context_at(point.daa_score) =>
                         {
                             return Err(format!(
-                                "claim {claim_id}: leaf {} is a fused-attention site; its terminal is the dissection, not one move",
+                                "claim {claim_id}: leaf {} is a fused-attention site, which one move cannot try, and this network \
+                                 opens no held dissection at a named leaf",
                                 accusation.leaf_index
+                            ));
+                        }
+                        // ADR-0152 §4-ter (A-held): past `palw_offence_attribution` a held class no
+                        // honest party can dissect inside a turn (the 2M row) opens no session — the
+                        // fold refuses it (`ShardCourtHeldSiteUnanswerable`) off the same mirror.
+                        Ok(kaspa_consensus_core::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection)
+                            if self.palw_offence_attribution_at(point.daa_score)
+                                && state_params.held_class_is_unanswerable_v1(&claim.class_id) =>
+                        {
+                            return Err(format!(
+                                "claim {claim_id}: leaf {} is a fused-attention site of held class {}, whose dissection no honest \
+                                 party can play inside a turn: refused, not opened (ADR-0152 §4-ter)",
+                                accusation.leaf_index, claim.class_id
                             ));
                         }
                         Ok(_) => {}

@@ -4476,8 +4476,10 @@ impl Params {
                 ));
             }
         }
-        // ADR-0152 R-core+, last (see the non-V2 return above).
-        self.validate_palw_rcore_plus_v1()
+        // ADR-0152 R-core+ (see the non-V2 return above), and then — after every fence's own
+        // refusal, so a missing prerequisite names itself first — the §4-ter answerability mirror.
+        self.validate_palw_rcore_plus_v1()?;
+        self.validate_palw_held_answerability_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -5247,6 +5249,47 @@ impl Params {
             let delay = if from_daa.is_some() { palw_v2_bond_withdrawal_delay_at_v1(bundle, da_court, 0) } else { 0 };
             bundle.state = bundle.state.clone().with_rcore_plus_mirrors(from_daa, delay, classes);
         }
+        // Every caller that re-mirrors R-core+ after moving a fence re-mirrors this one too: it reads
+        // `palw_offence_attribution`, R-core+'s own prerequisite.
+        self.sync_palw_held_answerability();
+    }
+
+    /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
+    /// [`crate::palw_state_v2::palw_held_unanswerable_classes_of_v1`] over the bundle's genesis rows
+    /// where `palw_offence_attribution` is armed, empty everywhere else (every preset but testnet-12).
+    pub fn palw_held_unanswerable_classes_v1(&self) -> Vec<crate::Hash64> {
+        let armed = self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never());
+        match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if armed => {
+                crate::palw_state_v2::palw_held_unanswerable_classes_of_v1(&bundle.genesis_objects)
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// **ADR-0152 §4-ter (A-held): mirror [`Self::palw_held_unanswerable_classes_v1`] into the V2
+    /// bundle** — the `#[borsh(skip)]` copy on `PalwStateParamsV2` the fold's mercy and one-move
+    /// refusal read (the fold holds no `Params`). Called by `sync_palw_rcore_plus`, so every site
+    /// that assembles or re-fences a bundle re-mirrors it; `validate_palw_v2` refuses a ruleset whose
+    /// copy disagrees, so a missed call is a startup refusal, never a 2M class read as answerable.
+    pub fn sync_palw_held_answerability(&mut self) {
+        let classes = self.palw_held_unanswerable_classes_v1();
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            bundle.state = bundle.state.clone().with_held_unanswerable_classes(classes);
+        }
+    }
+
+    /// **ADR-0152 §4-ter (A-held): the answerability mirror is the derivation, byte for byte.**
+    pub fn validate_palw_held_answerability_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.held_unanswerable_classes() != self.palw_held_unanswerable_classes_v1().as_slice()
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "the V2 bundle's held_unanswerable_classes disagrees with its genesis held rows under palw_offence_attribution: \
+                 mirror it with Params::sync_palw_held_answerability after the bundle is assembled (ADR-0152 §4-ter)",
+            ));
+        }
+        Ok(())
     }
 
     /// **ADR-0152 v3.1 §6: what `palw_rcore_plus` refuses** (T24's fence part). Called by
@@ -11176,6 +11219,9 @@ pub fn palw_v2_params_with_class_rows_v1(
         ));
     }
 
+    // ADR-0152 §4-ter: the answerability mirror is a function of the genesis rows this function
+    // just installed, so it is re-mirrored here, after them — the base's own sync saw the base's rows.
+    params.sync_palw_held_answerability();
     // Both gates again, from scratch, over the network actually being shipped.
     params.validate_palw_v2()?;
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {

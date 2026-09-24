@@ -1271,6 +1271,18 @@ pub struct PalwStateParamsV2 {
     /// Unread by the fold until S-2.
     #[borsh(skip)]
     rcore_conservative_classes: Vec<Hash64>,
+    /// **ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn** —
+    /// the genesis held rows whose `n_ctx` exceeds [`PALW_HELD_ANSWERABLE_N_CTX_V1`] (testnet-12: the
+    /// 2M row), written by `Params::sync_palw_held_answerability` where `palw_offence_attribution` is
+    /// armed and empty everywhere else. Derived, not hashed: the rows are inside the ruleset id
+    /// already, and `validate_palw_v2` refuses a bundle whose copy disagrees with the derivation, so a
+    /// missed sync is a startup refusal rather than a 2M class quietly read as answerable. Read only
+    /// past the fence: a fused accusation of such a class is refused rather than parked on a
+    /// dissection nobody can finish, and its responder keeps the mercy (C1). Not S's
+    /// `rcore_conservative_classes`, which means "charged to Final" — the same class on t12, a
+    /// different question.
+    #[borsh(skip)]
+    held_unanswerable_classes: Vec<Hash64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1287,6 +1299,39 @@ pub struct PalwClassReceiptWindowV1 {
 /// ADR-0132 §7.6: the challenge window, in DAA, for a claim licensed past
 /// `Params::palw_short_challenge_window` (`6fdf6ba7`'s 120, as a fence).
 pub const PALW_SHORT_CHALLENGE_WINDOW_DAA_V1: u64 = 120;
+
+/// **ADR-0152 §4-ter (A-held): the widest held context an honest party can dissect inside a turn.**
+///
+/// A held class at or below it is ANSWERABLE: its responder rebuilds the fused site's evidence from
+/// one plain forward to the site (≈ 8,192 positions; ADR-0121's measured 91 s at 1,024 puts the
+/// whole replay inside a 42-DAA turn) and files the root claim and every round, and a challenger
+/// recomputes the same triples — so past `palw_offence_attribution` its dissection is played and a
+/// silence at it is a default. Above it (testnet-12's 2M row, 2^21 positions) neither party can
+/// compute an honest move inside a turn — a reference replay is days — so the class keeps the mercy,
+/// a fused accusation of it is refused, and a registration of such a class is refused (C5).
+pub const PALW_HELD_ANSWERABLE_N_CTX_V1: u32 = 8_192;
+
+/// **The held classes a bundle's genesis registers above [`PALW_HELD_ANSWERABLE_N_CTX_V1`]** — the
+/// one derivation `Params::sync_palw_held_answerability` writes into the mirror and
+/// `validate_palw_v2` checks it against: every genesis `ClassRegistered` whose published profile
+/// registers a held (v4) map and whose `n_ctx` is past the bound, by class id, ascending.
+pub fn palw_held_unanswerable_classes_of_v1(genesis_objects: &[PalwConsensusObjectV2]) -> Vec<Hash64> {
+    let mut classes: Vec<Hash64> = genesis_objects
+        .iter()
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. }
+                if crate::palw_state_chunk_map::palw_profile_is_held_v4(&carriage.profile)
+                    && carriage.profile.n_ctx > PALW_HELD_ANSWERABLE_N_CTX_V1 =>
+            {
+                Some(*class_id)
+            }
+            _ => None,
+        })
+        .collect();
+    classes.sort();
+    classes.dedup();
+    classes
+}
 
 impl PalwStateParamsV2 {
     /// The challenge window for a claim licensed at `daa_score`: `window_challenge`, or
@@ -1395,6 +1440,7 @@ impl PalwStateParamsV2 {
             rcore_plus_from_daa: None,
             withdrawal_delay_daa: 0,
             rcore_conservative_classes: Vec::new(),
+            held_unanswerable_classes: Vec::new(),
         })
     }
 
@@ -1776,6 +1822,29 @@ impl PalwStateParamsV2 {
         self.rcore_plus_from_daa = from_daa;
         self.withdrawal_delay_daa = withdrawal_delay_daa;
         self.rcore_conservative_classes = conservative_classes;
+        self
+    }
+
+    /// ADR-0152 §4-ter (A-held): the held classes no honest party can dissect inside a turn (the
+    /// mirror; empty where `palw_offence_attribution` is not armed).
+    pub fn held_unanswerable_classes(&self) -> &[Hash64] {
+        &self.held_unanswerable_classes
+    }
+
+    /// ADR-0152 §4-ter (A-held): is `class_id` one no honest party can dissect inside a turn? Asked
+    /// only past `palw_offence_attribution` — below it every held class keeps the mercy and the
+    /// one-move court's `NeedsDissection` is what it was.
+    pub fn held_class_is_unanswerable_v1(&self, class_id: &Hash64) -> bool {
+        self.held_unanswerable_classes.binary_search(class_id).is_ok()
+    }
+
+    /// ADR-0152 §4-ter (A-held): the mirror's setter, written by
+    /// `Params::sync_palw_held_answerability` and by nothing else. Sorted here, so the lookup above
+    /// is a search whatever order the caller derived the list in.
+    pub fn with_held_unanswerable_classes(mut self, mut classes: Vec<Hash64>) -> Self {
+        classes.sort();
+        classes.dedup();
+        self.held_unanswerable_classes = classes;
         self
     }
 
@@ -6675,7 +6744,10 @@ pub enum PalwStateV2Error {
     ShardCourtAccuserIsTheProducer(PalwBondKeyV2),
     #[error("claim {claim} is under court session {session}; one court at a time")]
     ShardCourtClaimUnderSession { claim: Hash64, session: Hash64 },
-    #[error("leaf {leaf} of claim {claim} is a fused site: its terminal is the dissection, not one move")]
+    #[error(
+        "leaf {leaf} of claim {claim} is a fused-attention site, which one move cannot try, and this network opens no held \
+         dissection at a named leaf: refused (only a bisection's own dissection reaches it)"
+    )]
     ShardCourtNeedsDissection { claim: Hash64, leaf: u64 },
     #[error("the accusation does not adjudicate: {0}")]
     ShardCourt(String),
@@ -6798,8 +6870,8 @@ pub enum PalwStateV2Error {
     #[error("bond {accuser:?} cannot open another data-availability session on claim {claim}: {why} (DA-8)")]
     DaSessionBudgetExhausted { claim: Hash64, accuser: PalwBondKeyV2, why: &'static str },
     #[error(
-        "leaf {leaf} of claim {claim} is a fused-attention site: its terminal is a held dissection, never a \
-         data-availability unit (DA-3)"
+        "leaf {leaf} of claim {claim} is a fused-attention site: never a data-availability unit (DA-3) — it is tried by a \
+         held dissection where its class is answerable, and not at all where it is not (ADR-0152 §4-ter)"
     )]
     DaUnitNeedsDissection { claim: Hash64, leaf: u64 },
     #[error(
@@ -6817,6 +6889,13 @@ pub enum PalwStateV2Error {
     DaAnswerMalformed { claim: Hash64, why: &'static str },
     #[error("{0} is retired past palw_rcore_plus: MaterialDisclosedV2 (tag 55) answers every data-availability session there (DA-1)")]
     DaV1AnswerRetired(&'static str),
+    // ---- ADR-0152 §4-ter (A-held): attention attribution for held classes ----
+    #[error(
+        "leaf {leaf} of claim {claim} is a fused-attention site of held class {class}, whose dissection no honest party can \
+         play inside a turn (n_ctx past PALW_HELD_ANSWERABLE_N_CTX_V1): refused, not opened — the class is held to Final \
+         and capped instead (ADR-0152 §4-ter)"
+    )]
+    ShardCourtHeldSiteUnanswerable { claim: Hash64, leaf: u64, class: Hash64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -20621,9 +20700,11 @@ fn apply_object(
         // not privileged); then one court at a time on a claim; then the verdict, derived HERE at
         // the ladder the block's extras carry, and applied: a fault voids the claim and slashes
         // `claim.reserved` (Decision 8's `CourtFraud`, never the whole bond), a refutation that
-        // proves none charges the accuser what it staked. A fused site convicts nobody and is
-        // refused; the acceptance layer already refused the object, so this arm is the second
-        // lock on that door.
+        // proves none charges the accuser what it staked. A fused site is never tried in one move:
+        // under the held regime it opens a held dissection at the named leaf (ADR-0103 Decision 5);
+        // below it, and past `palw_offence_attribution` for a held class no honest party can dissect
+        // inside a turn (ADR-0152 §4-ter), it is refused — the acceptance layer refuses it first,
+        // and this arm is the second lock on that door.
         PalwConsensusObjectV2::ShardCourtAccused { accusation } => {
             let Some(ladder) = builder.extras.shard_court_ladder else {
                 return Err(PalwStateV2Error::ShardCourtDormant);
@@ -20691,6 +20772,19 @@ fn apply_object(
                     // with every rule of it unchanged. Dormant, it is the refusal it always was.
                     if builder.extras.held_context_ladder.is_none() {
                         return Err(PalwStateV2Error::ShardCourtNeedsDissection { claim: claim_id, leaf: accusation.leaf_index });
+                    }
+                    // **ADR-0152 §4-ter (A-held): a dissection nobody can play is not opened.** Past
+                    // `palw_offence_attribution` a held class above `PALW_HELD_ANSWERABLE_N_CTX_V1`
+                    // (testnet-12's 2M row) has no honest move inside a turn on either side, so its
+                    // session could only freeze the claim's `Final` for a window and end in the
+                    // mercy: the accusation is refused, and the class's residual is (C)'s bound (held
+                    // to Final, `c_2M = 1`, RT#2). The answerable held class (8k) opens as before.
+                    if builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id) {
+                        return Err(PalwStateV2Error::ShardCourtHeldSiteUnanswerable {
+                            claim: claim_id,
+                            leaf: accusation.leaf_index,
+                            class: claim.class_id,
+                        });
                     }
                     open_held_dissection_v1(builder, ctx, claim_id, &claim, accusation, ladder)?;
                 }
@@ -44389,6 +44483,111 @@ pub(crate) mod tests {
         let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[object(garbage_refutation, false)], None, &held_extras())
             .expect("pre-fence: the dissection opens");
         assert!(s4.court_sessions.values().any(|x| x.claim == claim_id));
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // ADR-0152 §4-ter (A-held) — attention attribution for held classes
+    // ---------------------------------------------------------------------------------------------
+
+    /// **A held fixture claim with a canonical tile committed at `layer`'s fused site, prefill
+    /// `position`** — `held_setup`'s claim on that execution, and the fused leaf's index.
+    fn held_fused_claim(
+        layer: u16,
+        position: u32,
+    ) -> (crate::palw_checkpoint_court_v1::tests::HeldFixture, PalwStateParamsV2, PalwChainStateV2, Hash64, u64) {
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_leaf_index};
+        let base = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let profile = base.binding.shape_profile.clone();
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, layer, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fused site commits a fixed row") };
+        let width = elements.min(node.tile_len);
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position, tile_index: 0 };
+        let fx = base.with_committed_tile(coord, width, vec![0; 4 * width as usize]);
+        let leaf = canonical_step_leaf_index(&profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let (p, s3, claim_id) = held_setup(&fx);
+        (fx, p, s3, claim_id, leaf)
+    }
+
+    /// **The honest one-move accusation of a committed fused leaf** (the claim's binding, the tile and
+    /// its path, the prompt tile, no history), from `accuser`.
+    fn honest_fused_accusation(
+        fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture,
+        claim_id: Hash64,
+        leaf: u64,
+        accuser: PalwBondKeyV2,
+    ) -> PalwConsensusObjectV2 {
+        let preimage = fx.preimages[&leaf].clone();
+        let position = preimage.coord.position;
+        PalwConsensusObjectV2::ShardCourtAccused {
+            accusation: Box::new(crate::palw_shard_court_v1::PalwShardCourtAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                execution_root: fx.binding.committed_execution_root,
+                trace_root: h64(HELD_TRACE_ROOT),
+                executor_bond: bond_key(1),
+                accuser_bond: accuser,
+                leaf_index: leaf,
+                refutation: crate::palw_step_refute::PalwExecutionStepRefutationV1 {
+                    binding: fx.binding.clone(),
+                    output_opening: fx.opening(leaf),
+                    output_preimage: preimage,
+                    inputs: vec![],
+                    prompt_token_ids: vec![],
+                    decode_tokens: None,
+                    kv_checkpoint: None,
+                },
+                artifact_openings: vec![],
+                prompt_ids_opening: Some(
+                    crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                        &crate::palw_checkpoint_court_v1::tests::fixture_prompt_ids(20),
+                        position,
+                    )
+                    .expect("the tile"),
+                ),
+                signature: vec![9; 8],
+            }),
+        }
+    }
+
+    /// The launch line's extras: the held regime, the 2026-09-23 audit fence and F2's
+    /// `palw_offence_attribution` — the fence every A-held rule rides.
+    fn attribution_extras() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { audit_2026_09_23_active: true, offence_attribution_active: true, ..held_extras() }
+    }
+
+    /// **The shard-court addendum (ADR-0152 §4-ter): past `palw_offence_attribution` a fused
+    /// accusation of a held class no honest party can dissect inside a turn is refused, not opened**
+    /// — by name, with no session, no reservation and no disarmed deadline — while the answerable
+    /// held class opens its dissection exactly as before, and below the fence a class the mirror
+    /// lists opens as it always did (the live chain's rule, byte for byte).
+    #[test]
+    fn past_the_attribution_fence_an_unanswerable_held_class_opens_no_dissection() {
+        let (fx, p, s3, claim_id, leaf) = held_fused_claim(1, 12);
+        let accuse = honest_fused_accusation(&fx, claim_id, leaf, bond_key(2));
+        let unanswerable = p.clone().with_held_unanswerable_classes(vec![fx.class_id()]);
+        assert!(unanswerable.held_class_is_unanswerable_v1(&fx.class_id()) && !p.held_class_is_unanswerable_v1(&fx.class_id()));
+        let refused = held_apply(&s3, &unanswerable, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &attribution_extras())
+            .expect_err("an unanswerable held class opens no dissection");
+        assert_eq!(refused, PalwStateV2Error::ShardCourtHeldSiteUnanswerable { claim: claim_id, leaf, class: fx.class_id() });
+        let text = refused.to_string();
+        assert!(text.contains("no honest party can") && !text.contains("its terminal is"), "the refusal says why: {text}");
+        assert!(s3.court_sessions.values().all(|x| x.claim != claim_id), "no court on the claim");
+
+        // The answerable held class (the 8k row's case): the dissection opens at the leaf.
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &attribution_extras())
+            .expect("the answerable held class opens its dissection");
+        let (_, session) = s4.court_sessions.iter().find(|(_, x)| x.claim == claim_id).expect("a session on the claim");
+        assert_eq!(session.ladder.terminal_index(), Some(leaf));
+
+        // Below the fence: the mirror is never read, and the class opens as it always did.
+        let below = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..held_extras() };
+        let (s4_below, _) = held_apply(&s3, &unanswerable, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &below)
+            .expect("below the fence the unanswerable class opens as before");
+        let (s4_plain, _) =
+            held_apply(&s3, &p, &ctx(4, 110, 4), std::slice::from_ref(&accuse), None, &below).expect("and so does any");
+        assert_eq!(s4_below.state_root(), s4_plain.state_root(), "below the fence the mirror moves nothing");
     }
 
     fn held_da_accusation(

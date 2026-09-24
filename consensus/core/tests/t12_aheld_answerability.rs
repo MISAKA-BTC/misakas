@@ -1,0 +1,125 @@
+//! **ADR-0152 §4-ter (A-held): which held classes an honest party can dissect inside a turn.**
+//!
+//! `PALW_HELD_ANSWERABLE_N_CTX_V1` (8,192) splits testnet-12's two genesis held rows: the 8k row is
+//! answerable — its dissection is played, a fused accusation of it opens a held session — and the 2M
+//! row is not: no honest move fits a 42-DAA turn on either side, so a fused accusation of it is
+//! refused (the shard-court addendum) and its responder keeps the mercy (C1). The fold holds no
+//! `Params`, so the split rides the V2 bundle as a `#[borsh(skip)]` mirror
+//! (`PalwStateParamsV2::held_unanswerable_classes`), written by `Params::sync_palw_held_answerability`
+//! and checked by `validate_palw_v2`. These tests pin: testnet-12's mirror is exactly the 2M row;
+//! every other preset's is empty; a disagreeing mirror is a startup refusal; the fence taken away
+//! empties it; and nothing about it moves an id (it is derived, never hashed).
+
+use kaspa_consensus_core::config::params::{
+    ForkActivation, PALW_T12_RCORE_CONSERVATIVE_CLASSES, Params, devnet_shipped_params, mainnet_shipped_params,
+    palw_rc_shipped_params, palw_t12_genesis_held_class_ids_v1, palw_t12_shipped_params,
+};
+use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+use kaspa_consensus_core::palw_state_v2::{PALW_HELD_ANSWERABLE_N_CTX_V1, PalwConsensusObjectV2};
+
+fn bundle_state(p: &Params) -> kaspa_consensus_core::palw_state_v2::PalwStateParamsV2 {
+    match &p.palw_consensus_mode {
+        PalwConsensusMode::ConsensusV2(bundle) => bundle.state.clone(),
+        _ => panic!("a ConsensusV2 preset"),
+    }
+}
+
+/// testnet-12's genesis held rows at their widths: `(class id, n_ctx)`, read off the bundle's own
+/// genesis registrations — the same rows the mirror is derived from.
+fn t12_held_rows(p: &Params) -> Vec<(kaspa_consensus_core::Hash64, u32)> {
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
+    bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|object| match object {
+            PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(c), .. }
+                if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&c.profile) =>
+            {
+                Some((*class_id, c.profile.n_ctx))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn testnet12s_unanswerable_held_classes_are_the_2m_row_alone() {
+    let t12 = palw_t12_shipped_params();
+    assert_eq!(PALW_HELD_ANSWERABLE_N_CTX_V1, 8_192, "the bound §4-ter derives: the 8k row's own width");
+    let rows = t12_held_rows(&t12);
+    let mut ids: Vec<_> = rows.iter().map(|(id, _)| *id).collect();
+    ids.sort();
+    let mut shipped = palw_t12_genesis_held_class_ids_v1();
+    shipped.sort();
+    assert_eq!(ids, shipped, "the bundle registers exactly the two genesis held rows");
+    let (eight_k, _) = *rows.iter().find(|(_, n_ctx)| *n_ctx == 8_192).expect("the 8k row");
+    let (two_m, n_ctx) = *rows.iter().find(|(_, n_ctx)| *n_ctx > 8_192).expect("the 2M row");
+    assert_eq!(n_ctx, 2_097_152);
+    let mirror = bundle_state(&t12);
+    assert_eq!(mirror.held_unanswerable_classes(), &[two_m], "the mirror is the 2M row");
+    assert_eq!(mirror.held_unanswerable_classes(), PALW_T12_RCORE_CONSERVATIVE_CLASSES.as_slice(), "the same class C7 holds");
+    assert!(mirror.held_class_is_unanswerable_v1(&two_m));
+    assert!(!mirror.held_class_is_unanswerable_v1(&eight_k), "the 8k row is answerable: its dissection is played");
+    assert_eq!(t12.palw_held_unanswerable_classes_v1(), vec![two_m], "the derivation the mirror is checked against");
+    t12.validate_palw_v2().expect("testnet-12 as shipped validates");
+}
+
+#[test]
+fn every_other_preset_has_no_unanswerable_class() {
+    for (name, p) in
+        [("testnet-11", palw_rc_shipped_params()), ("devnet", devnet_shipped_params()), ("mainnet", mainnet_shipped_params())]
+    {
+        assert!(p.palw_offence_attribution_fence().is_none(), "{name}: the fence is testnet-12's alone");
+        assert!(p.palw_held_unanswerable_classes_v1().is_empty(), "{name}: nothing derives without the fence");
+        if let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode {
+            assert!(bundle.state.held_unanswerable_classes().is_empty(), "{name}: the mirror is empty");
+        }
+    }
+}
+
+/// **A missed sync is a startup refusal**, never a 2M class quietly read as answerable (whose honest
+/// producers the lifted mercy would then convict for a move nobody can make).
+#[test]
+fn a_mirror_that_disagrees_with_its_rows_is_refused_at_startup() {
+    let t12 = palw_t12_shipped_params();
+    let mut blank = t12.clone();
+    if let PalwConsensusMode::ConsensusV2(bundle) = &mut blank.palw_consensus_mode {
+        bundle.state = bundle.state.clone().with_held_unanswerable_classes(Vec::new());
+    }
+    let refused = blank.validate_palw_v2().expect_err("an empty mirror under the fence reads the 2M row as answerable");
+    assert!(format!("{refused:?}").contains("held_unanswerable_classes"), "{refused:?}");
+    blank.sync_palw_held_answerability();
+    blank.validate_palw_v2().expect("re-synced, it validates");
+    assert_eq!(bundle_state(&blank), bundle_state(&t12));
+
+    let mut widened = t12.clone();
+    let rows = t12_held_rows(&t12);
+    if let PalwConsensusMode::ConsensusV2(bundle) = &mut widened.palw_consensus_mode {
+        bundle.state = bundle.state.clone().with_held_unanswerable_classes(rows.iter().map(|(id, _)| *id).collect());
+    }
+    assert!(widened.validate_palw_v2().is_err(), "a mirror naming the 8k row too is refused (it would keep the 8k mercy)");
+}
+
+/// **The fence taken away empties the mirror**, and the ids never read it: it is derived from rows
+/// already inside the ruleset id, and borsh-skipped.
+#[test]
+fn the_mirror_follows_the_fence_and_moves_no_id() {
+    let t12 = palw_t12_shipped_params();
+    let mut never = t12.clone();
+    never.palw_offence_attribution = Some(ForkActivation::never());
+    never.palw_rcore_plus = None;
+    never.palw_rcore_conservative_classes = &[];
+    never.sync_palw_rcore_plus();
+    assert!(bundle_state(&never).held_unanswerable_classes().is_empty(), "no fence, no unanswerable class");
+    never.validate_palw_v2().expect("absence validates");
+
+    let mut cleared = t12.clone();
+    if let PalwConsensusMode::ConsensusV2(bundle) = &mut cleared.palw_consensus_mode {
+        bundle.state = bundle.state.clone().with_held_unanswerable_classes(Vec::new());
+    }
+    assert_eq!(cleared.consensus_params_id(), t12.consensus_params_id(), "the mirror is not in the ruleset id");
+    assert_eq!(cleared.consensus_identity_id(), t12.consensus_identity_id());
+    assert_eq!(cleared.consensus_schedule_id(), t12.consensus_schedule_id());
+    let bytes = |p: &Params| borsh::to_vec(&bundle_state(p)).expect("borsh");
+    assert_eq!(bytes(&cleared), bytes(&t12), "borsh-skipped: the bundle's bytes do not carry it");
+}

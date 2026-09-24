@@ -14565,6 +14565,35 @@ fn the_one_move_acceptance_arm_derives_the_bound_verdict_at_the_fence() {
     assert!(!arm.contains("palw_shard_court_verdict_v1("), "never the unfenced verdict directly");
 }
 
+/// **ADR-0152 §4-ter (the shard-court addendum): the acceptance layer refuses a held class's
+/// `NeedsDissection` where the fold does** — past `palw_offence_attribution` at the block's own DAA,
+/// for a class the bundle's answerability mirror lists (the 2M row), and only there: the arm reads
+/// the same mirror and the same fence the fold refuses `ShardCourtHeldSiteUnanswerable` under, so
+/// the gate and the fold cannot disagree about which fused accusation opens a session.
+#[test]
+fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold_does() {
+    let source = include_str!("processor.rs");
+    let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
+    let end = at + source[at..].find("\n                Obj::").expect("the next arm");
+    let arm = &source[at..end];
+    let refusal = arm.find("state_params.held_class_is_unanswerable_v1(&claim.class_id)").expect("the mirror is read");
+    let guard = &arm[refusal.saturating_sub(160)..refusal];
+    assert!(
+        guard.contains("if self.palw_offence_attribution_at(point.daa_score)") && guard.contains("NeedsDissection)"),
+        "at the fence"
+    );
+    assert!(arm[refusal..].contains("return Err("), "and refused");
+    let fold = include_str!("../../../core/src/palw_state_v2.rs");
+    let fold_at = fold.find("PalwConsensusObjectV2::ShardCourtAccused { accusation } => {").expect("the fold's arm");
+    let fold_arm =
+        &fold[fold_at..fold_at + fold[fold_at..].find("PalwConsensusObjectV2::CheckpointAccused { accusation } => {").unwrap()];
+    assert!(
+        fold_arm
+            .contains("builder.extras.offence_attribution_active && builder.params.held_class_is_unanswerable_v1(&claim.class_id)"),
+        "the fold refuses under the same fence and mirror"
+    );
+}
+
 // ---- ADR-0125: the execution lane through the real pipeline ----------------------------------
 
 /// A network with the round lane open from genesis, two permits a round, and one schedule span far

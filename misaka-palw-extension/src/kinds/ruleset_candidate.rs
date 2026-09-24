@@ -108,7 +108,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_anchor_clock" => params.palw_anchor_clock = Some(at),
         "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
         "palw_clock_floor" => params.palw_clock_floor = Some(at),
-        "palw_offence_attribution" => params.palw_offence_attribution = Some(at),
+        // ADR-0152 §4-ter: the V2 bundle mirrors the held classes this fence makes unanswerable, and
+        // `validate_palw_v2` refuses the two apart — set together.
+        "palw_offence_attribution" => {
+            params.palw_offence_attribution = Some(at);
+            params.sync_palw_held_answerability();
+        }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),
