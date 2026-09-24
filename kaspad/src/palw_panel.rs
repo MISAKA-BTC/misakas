@@ -69,9 +69,21 @@ const PALW_PANEL: &str = "palw-panel";
 /// phase differs from the one `seen` last recorded, in the operator's stage names. A claim seen for
 /// the first time prints its current stage; a claim that retired from the state leaves `seen`
 /// quietly. Pure over the rows, so the node's log and a test agree on what a transition is.
+#[cfg(test)]
 pub(crate) fn own_claim_events_v1(
     seen: &mut std::collections::HashMap<kaspa_hashes::Hash64, String>,
     rows: &[kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1],
+) -> Vec<String> {
+    own_claim_events_at_v1(seen, rows, |row| row.deadline_daa)
+}
+
+/// [`own_claim_events_v1`] with the deadline each line prints read by `deadline_of` — past SEAT-R a
+/// `PanelBound` claim's is the chain's per-claim receipt deadline, `bound + W_r(c)`
+/// ([`palw_seat_claim_receipt_window_v1`]), where the row carries the global window's.
+pub(crate) fn own_claim_events_at_v1(
+    seen: &mut std::collections::HashMap<kaspa_hashes::Hash64, String>,
+    rows: &[kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1],
+    deadline_of: impl Fn(&kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1) -> Option<u64>,
 ) -> Vec<String> {
     use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwVoidReasonV2 as R};
     let mut out = Vec::new();
@@ -99,7 +111,7 @@ pub(crate) fn own_claim_events_v1(
         if seen.get(&row.claim_id) != Some(&key) {
             let id = row.claim_id.to_string();
             let lane = if row.free_prompt { "prompt" } else { "block" };
-            let deadline = row.deadline_daa.map(|d| format!(" deadline_daa={d}")).unwrap_or_default();
+            let deadline = deadline_of(row).map(|d| format!(" deadline_daa={d}")).unwrap_or_default();
             out.push(format!(
                 "event work={} lane={lane} stage={stage} phase_daa={phase_daa}{extra}{deadline}",
                 &id[..16.min(id.len())]
@@ -150,15 +162,16 @@ pub fn replay_licenses_v1(
 /// **The rule, per mask** (the audit's F2 review): a V3 `Valid` with mask `m` is signed only after
 /// the seat itself recomputed every leaf in `m` and matched it against hashes bound to the claim's
 /// `execution_root`. F2 convicts the full-mask seat for every site, and a partial seat for a
-/// leaf-sited fault in its segment. Only a replay of the claim's whole job meets it (both roots —
-/// the execution root commits every leg). The S1 resume does not yet: its opening's leaf hashes and
-/// checkpoint are the served bytes' word, bound to nothing the claim committed (SEAT-S4, base0's),
-/// and S3 samples sites of a mask it never recomputes. So a seat licenses from its own replay
-/// alone: the full seat always, and — the liveness fallback until SEAT-S4, agreed with the audit —
-/// a partial seat on a class outside C7, and the ADR-0147 outsider on any class, which run the same
-/// replay (`PalwSeatRRoleV1`). A partial seat on a C7 class that is not the outsider files nothing.
-/// Every other arm still keeps and pools the material and still finds faults; none ends a verdict
-/// with `Valid`.
+/// leaf-sited fault in its segment. A replay of the claim's whole job meets it (both roots — the
+/// execution root commits every leg), and so does SEAT-S4's resume of the seat's own mask: its served
+/// opening is authenticated against the claim's roots and the seat's own segment before a step runs,
+/// and every leaf of the segment is the seat's own, rooted under the opening's path to the claim's
+/// step root. The S1 resume below the fence is not (its opening was the served bytes' word), and S3
+/// samples sites of a mask it never recomputes. So a seat licenses from its own replay — the full
+/// seat always, and a partial seat on a class outside C7 and the ADR-0147 outsider on any class,
+/// which run the same replay — and a partial seat on a C7 class that is not the outsider from its
+/// verified resume, for its own mask's V3 alone (`PalwSeatRRoleV1`). Every other arm still keeps and
+/// pools the material and still finds faults; none ends a verdict with `Valid`.
 ///
 /// **In force from Verification V2 wherever F2's fence is scheduled, not from F2's height** (the
 /// SEAT-R review, LOW). F2 judges a `Valid` at the DAA of the block that carries the accusation
@@ -185,9 +198,15 @@ pub(crate) enum PalwSeatArmV1 {
     AttemptReplay,
     /// A seat's replay of a free-prompt claim's job (FP-R6), under the same roles.
     FreePromptReplay,
-    /// A partial seat's resume of its assigned segments (ADR-0133 S1, and S3 inside it). Past SEAT-R
-    /// it licenses nothing until it is verified against the claim (SEAT-S4).
+    /// A partial seat's resume of its assigned segments (ADR-0133 S1, and S3 inside it) — the path
+    /// below SEAT-R, whose served opening and pooled capture are bound to nothing the claim
+    /// committed. Past SEAT-R it licenses nothing.
     SegmentResume,
+    /// **SEAT-S4's resume past SEAT-R** (`PalwSeatRRoleV1::PartialResumes`): every segment of the
+    /// seat's mask replayed off the loop from a served opening the family authenticated against the
+    /// claim, and every leaf of the mask recomputed and rooted to the claim's step root. It licenses
+    /// the seat's own-mask V3 `Valid` and nothing wider (never the whole-job V2).
+    VerifiedSegmentResume,
     /// A pooled whole material whose roots reproduce the claim's (the attempt lane).
     AttemptMaterial,
     /// This node's own retention, verified the same way (audit M2-21).
@@ -202,10 +221,11 @@ pub(crate) enum PalwSeatArmV1 {
 
 impl PalwSeatArmV1 {
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::AttemptReplay,
         Self::FreePromptReplay,
         Self::SegmentResume,
+        Self::VerifiedSegmentResume,
         Self::AttemptMaterial,
         Self::RetainedMaterial,
         Self::FreePromptInterval,
@@ -215,10 +235,11 @@ impl PalwSeatArmV1 {
 }
 
 /// **Whether `arm` may end a verdict with `Valid`** — every arm below SEAT-R, and past it only the
-/// replays of the claim's whole job.
+/// replays of the claim's whole job and SEAT-S4's verified resume of the seat's own mask (which files
+/// that mask's V3 alone, `palw_seat_receipt_forms_v1`).
 pub(crate) fn palw_seat_arm_licenses_v1(seat_r: bool, arm: PalwSeatArmV1) -> bool {
     use PalwSeatArmV1::*;
-    !seat_r || matches!(arm, AttemptReplay | FreePromptReplay)
+    !seat_r || matches!(arm, AttemptReplay | FreePromptReplay | VerifiedSegmentResume)
 }
 
 /// What one whole material of an attempt claim makes of the seat's verdict.
@@ -252,11 +273,11 @@ pub(crate) fn palw_attempt_material_arm_v1(
 
 /// **What a seat does about a claim past SEAT-R**, by its place on the panel and the claim's class.
 ///
-/// The full seat replays the claim's job. A partial seat has no licence of its own until SEAT-S4
-/// binds its S1 resume to the claim, so, until then, a partial seat on a class the panel room
-/// releases at licence (outside ADR-0152's C7: on testnet-12 the floor and the 8k row) runs the
-/// SAME replay the full seat runs, and on a match files the whole-job V2 `Valid` and its V3 `Valid`
-/// over its assigned mask. The replay recomputed every leaf of the job against the claim's
+/// The full seat replays the claim's job. A partial seat on a class the panel room releases at
+/// licence (outside ADR-0152's C7: on testnet-12 the floor and the 8k row) runs the SAME replay the
+/// full seat runs — the liveness fallback the audit agreed before SEAT-S4, kept because it also
+/// carries the V1 door — and on a match files the whole-job V2 `Valid` and its V3 `Valid` over its
+/// assigned mask. The replay recomputed every leaf of the job against the claim's
 /// execution root, so both meet the per-mask rule: F2 (the audit's F-4) judges the V2 as a
 /// whole-mask signer's, and the V3 as its segment's. Three V2s open the V1 door (`ReceiptLicensed`,
 /// which takes a V2 receipt from any seat of the bound panel whatever its S1 role); the V3s reopen
@@ -266,9 +287,10 @@ pub(crate) fn palw_attempt_material_arm_v1(
 /// claim licenses through no door without the outsider's `Valid` — panel seat 0,
 /// `palw_licence_names_its_outsider_v1` — and the outsider is a partial seat four panels in five. On
 /// a C7 class (the 2M row) a partial seat's replay is the class's whole verification window of
-/// work, so a partial seat that is not the outsider keeps abstaining and the full seat's `Valid`
-/// (with the outsider's, where the claim has one) is the class's one route: the optimistic door.
-/// A class this seat could not read is treated as C7: a replay is never started on a guess about
+/// work, so a partial seat that is not the outsider resumes its own mask instead (SEAT-S4, re-enabled
+/// past SEAT-R by the audit's SEAT-S review: `PalwSeatResumesV1`) and files that mask's V3 — the
+/// coverage door, beside the full seat's and the outsider's `Valid` on the optimistic one. A class
+/// this seat could not read files nothing: neither a replay nor a resume is started on a guess about
 /// its size.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwSeatRRoleV1 {
@@ -278,20 +300,37 @@ pub(crate) enum PalwSeatRRoleV1 {
     /// A partial seat outside C7, or the claim's outsider on any class: the full seat's replay, and
     /// on a match the whole-job V2 `Valid` beside its V3 `Valid` over its assigned mask.
     PartialReplays,
-    /// A partial seat on a C7 class that is not the claim's outsider, or on a class this seat has not
-    /// read: files nothing.
+    /// **A partial seat on a C7 class that is not the claim's outsider** (SEAT-S4 re-enabled past
+    /// SEAT-R): it resumes its own mask's segments from served openings the family authenticates
+    /// against the claim, off the loop, and on every segment rooting to the claim's step root files
+    /// its own-mask V3 `Valid` — never the whole-job V2 (`PalwSeatArmV1::VerifiedSegmentResume`).
+    PartialResumes,
+    /// A partial seat on a class this seat has not read: files nothing.
     PartialAbstains,
 }
 
 /// [`PalwSeatRRoleV1`], from whether this seat is the panel's full seat, whether the panel room
-/// holds the claim's class to Final (`None`: not read), and whether this seat is the claim's
-/// ADR-0147 outsider ([`palw_seat_is_outsider_v1`]).
-pub(crate) fn palw_seat_r_role_v1(full_seat: bool, held_to_final: Option<bool>, outsider: bool) -> PalwSeatRRoleV1 {
+/// holds the claim's class to Final (`None`: not read), whether this seat is the claim's ADR-0147
+/// outsider ([`palw_seat_is_outsider_v1`]), and whether its assigned mask is the whole job.
+///
+/// **A partial seat whose mask is full replays in full** (the audit's SEAT-S review, L1): a panel of
+/// two or fewer seats cuts one segment, and a partial seat's mask is then the whole job — its
+/// "resume" would be a whole replay through an opening, so it takes the whole replay's path (its V2
+/// and V3 are the full seat's). Never on a class this seat has not read. No effect on testnet-12's
+/// five-seat panels.
+pub(crate) fn palw_seat_r_role_v1(
+    full_seat: bool,
+    held_to_final: Option<bool>,
+    outsider: bool,
+    mask_is_full: bool,
+) -> PalwSeatRRoleV1 {
     match (full_seat, held_to_final) {
         (true, _) => PalwSeatRRoleV1::FullSeat,
+        (false, Some(_)) if mask_is_full => PalwSeatRRoleV1::PartialReplays,
         (false, Some(false)) => PalwSeatRRoleV1::PartialReplays,
         (false, Some(true)) if outsider => PalwSeatRRoleV1::PartialReplays,
-        (false, _) => PalwSeatRRoleV1::PartialAbstains,
+        (false, Some(true)) => PalwSeatRRoleV1::PartialResumes,
+        (false, None) => PalwSeatRRoleV1::PartialAbstains,
     }
 }
 
@@ -344,6 +383,8 @@ pub(crate) fn palw_seat_receipt_forms_v1(
     }
     match role {
         PalwSeatRRoleV1::FullSeat | PalwSeatRRoleV1::PartialReplays => PalwSeatReceiptFormsV1 { segments: Some(mask), whole: true },
+        // SEAT-S4: the resume recomputed the mask's leaves, not the job — its V3 alone.
+        PalwSeatRRoleV1::PartialResumes => PalwSeatReceiptFormsV1 { segments: Some(mask), whole: false },
         PalwSeatRRoleV1::PartialAbstains => PalwSeatReceiptFormsV1 { segments: None, whole: false },
     }
 }
@@ -492,6 +533,16 @@ pub(crate) fn palw_seat_receipt_deadline_v1(
         .map_or(duty.receipt_deadline, |window| duty.bound_daa.saturating_add(window))
 }
 
+/// **N-5's seam for Phase 2 (P2-6): whether a duty this seat was never served ended in a licence** —
+/// the claim's phase once the duty is gone (`None`: the chain no longer lists it). `ReceiptLicensed`,
+/// and `Final` (which only a licence reaches), is a licence that landed on a claim that did not serve
+/// this seat; `PanelBound` (a redraw that moved the seat), a data-availability dispute, `Voided` and an
+/// unlisted claim are not. P2-6 files the `DefaultAccused` here.
+pub(crate) fn palw_seat_unserved_licence_v1(phase: Option<&kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2>) -> bool {
+    use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2 as P;
+    matches!(phase, Some(P::ReceiptLicensed { .. } | P::Final { .. }))
+}
+
 /// **The order the duty loop answers its duties in**: the chain's below SEAT-R; past it, by the
 /// receipt deadline, soonest first (the claim id breaks ties), so a replay slot freed this tick goes
 /// to the duty whose window closes first — never to whichever claim the chain happened to list
@@ -546,17 +597,106 @@ pub(crate) enum PalwSeatReplayPollV1 {
 
 type PalwSeatReplayResultV1 = Result<kaspa_consensus_core::palw_backend::PalwReplayRootsV1, String>;
 
+/// What one SEAT-S4 segment task returns: whether the seat's own leaves of the segment root, under
+/// the served opening's path, to the claim's step root (`Ok(true)`), do not (`Ok(false)`), or why it
+/// came to neither ([`PalwSeatSegmentRefusalV1`]).
+pub(crate) type PalwSeatSegmentResultV1 = Result<bool, PalwSeatSegmentRefusalV1>;
+
+/// **Why a SEAT-S4 segment task came to no verdict — and whose that is** (the SEAT-S review's second
+/// pass, finding 1). Every `Err` used to read as "not the claim's opening": the bytes were dropped
+/// from the pool, the transport's relay-once memory made the producer's identical re-send a
+/// `Duplicate`, and a seat whose own task panicked or whose kernel failed after the opening had
+/// authenticated was left unserved — N-5 then accused an honest producer at `X_ASK`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwSeatSegmentRefusalV1 {
+    /// The family refused the served bytes as not this claim's segment opening — a link of the
+    /// authentication failed before a step replayed. Nothing was served: the bytes leave the pool,
+    /// cost none of the segment's bound, and the opening is asked for again.
+    NotTheClaims(String),
+    /// This host did not finish the segment: a kernel error after the opening authenticated, a
+    /// family that cannot resume here, a task that did not finish. Never the producer's: the bytes
+    /// stay in the pool and are tried again within the segment's bound, and the seat counts as
+    /// served — it accuses nobody for its own failure.
+    Local(String),
+}
+
+impl std::fmt::Display for PalwSeatSegmentRefusalV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotTheClaims(why) | Self::Local(why) => f.write_str(why),
+        }
+    }
+}
+
+/// **The links of a segment opening's authentication, as the family names them** — every
+/// [`misaka_palw_base0::segment_opening::Base0SegmentRefusalV1`] but `Replay`, which is a replay that
+/// failed after them. All three families that resume a segment (the floor, A16, Qwen3.6) refuse
+/// through that one type, and the backend seam carries its `Display`.
+const PALW_SEAT_S4_AUTHENTICATION_REFUSALS_V1: [misaka_palw_base0::segment_opening::Base0SegmentRefusalV1; 21] = {
+    use misaka_palw_base0::segment_opening::Base0SegmentRefusalV1 as R;
+    [
+        R::NotAnOpening,
+        R::BindingDoesNotVerify,
+        R::NotTheClaimsExecution,
+        R::NotTheClaimsTrace,
+        R::NotTheSeatsJob,
+        R::NotThisClass,
+        R::PriceIsNotTheGeometrys,
+        R::NotTheSeatsSegment,
+        R::NotTheSegmentsRange,
+        R::ProofNotTheSegments,
+        R::ProofPathNotTheRanges,
+        R::NotMainStepLeaves,
+        R::AnchorNotCommitted,
+        R::AnchorNotCanonical,
+        R::AnchorCarriesNoState,
+        R::AnchorNotAResumePoint,
+        R::AnchorPastTheRange,
+        R::SeedPinMissing,
+        R::SeedPinNotCommitted,
+        R::SeedPinUnexpected,
+        R::PromptNotTheJobs,
+    ]
+};
+
+/// **Whose a segment replay's `Err` is** (finding 1): a refusal the family names as a link of the
+/// opening's authentication is [`PalwSeatSegmentRefusalV1::NotTheClaims`]; anything else — the
+/// family's `Replay`, an error this build does not know — is [`PalwSeatSegmentRefusalV1::Local`]. An
+/// unknown error errs toward silence: a seat that cannot tell keeps the bytes and accuses nobody.
+pub(crate) fn palw_seat_s4_refusal_v1(why: String) -> PalwSeatSegmentRefusalV1 {
+    if PALW_SEAT_S4_AUTHENTICATION_REFUSALS_V1.iter().any(|link| link.to_string() == why) {
+        PalwSeatSegmentRefusalV1::NotTheClaims(why)
+    } else {
+        PalwSeatSegmentRefusalV1::Local(why)
+    }
+}
+
+/// What a task in the replay slots returns: a whole-job replay's roots, or one segment's verdict.
+#[derive(Clone)]
+enum PalwSeatTaskOutV1 {
+    Replay(PalwSeatReplayResultV1),
+    Segment(PalwSeatSegmentResultV1),
+}
+
 struct PalwSeatReplayRunV1 {
-    handle: tokio::task::JoinHandle<PalwSeatReplayResultV1>,
+    handle: tokio::task::JoinHandle<PalwSeatTaskOutV1>,
     class: Hash64,
     started_daa: u64,
     heavy: bool,
 }
 
 struct PalwSeatReplayDoneV1 {
-    result: PalwSeatReplayResultV1,
+    result: PalwSeatTaskOutV1,
     started_daa: u64,
     finished_daa: u64,
+}
+
+/// What a segment task this seat started has come to ([`PalwSeatReplaysV1::poll_segment`]).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum PalwSeatSegmentPollV1 {
+    Absent,
+    Running,
+    Done { result: PalwSeatSegmentResultV1, fresh: bool },
 }
 
 /// **SEAT-R's replays, off the panel's loop.**
@@ -613,8 +753,42 @@ impl PalwSeatReplaysV1 {
     pub(crate) const HEAVY_IN_FLIGHT: usize = 1;
 
     pub(crate) async fn poll(&mut self, key: &PalwSeatReplayKeyV1, now_daa: u64) -> PalwSeatReplayPollV1 {
+        match self.poll_task(key, now_daa, true).await {
+            None => PalwSeatReplayPollV1::Absent,
+            Some(None) => PalwSeatReplayPollV1::Running,
+            Some(Some((PalwSeatTaskOutV1::Replay(result), fresh))) => PalwSeatReplayPollV1::Done { result, fresh },
+            Some(Some((PalwSeatTaskOutV1::Segment(_), fresh))) => {
+                PalwSeatReplayPollV1::Done { result: Err("a segment task under a replay's key".into()), fresh }
+            }
+        }
+    }
+
+    /// [`Self::poll`] for a SEAT-S4 segment task ([`Self::start_segment`]).
+    pub(crate) async fn poll_segment(&mut self, key: &PalwSeatReplayKeyV1, now_daa: u64) -> PalwSeatSegmentPollV1 {
+        match self.poll_task(key, now_daa, false).await {
+            None => PalwSeatSegmentPollV1::Absent,
+            Some(None) => PalwSeatSegmentPollV1::Running,
+            Some(Some((PalwSeatTaskOutV1::Segment(result), fresh))) => PalwSeatSegmentPollV1::Done { result, fresh },
+            Some(Some((PalwSeatTaskOutV1::Replay(_), fresh))) => {
+                PalwSeatSegmentPollV1::Done {
+                    result: Err(PalwSeatSegmentRefusalV1::Local("a replay under a segment task's key".into())),
+                    fresh,
+                }
+            }
+        }
+    }
+
+    /// `None`: absent; `Some(None)`: running; `Some(Some((out, fresh)))`: done. A whole-job replay
+    /// that returned roots times its class (`timed`); a segment task times nothing — its window is
+    /// not the class's job.
+    async fn poll_task(
+        &mut self,
+        key: &PalwSeatReplayKeyV1,
+        now_daa: u64,
+        panicked_as_replay: bool,
+    ) -> Option<Option<(PalwSeatTaskOutV1, bool)>> {
         if let Some(done) = self.done.get(key) {
-            return PalwSeatReplayPollV1::Done { result: done.result.clone(), fresh: false };
+            return Some(Some((done.result.clone(), false)));
         }
         // A replay detached while its claim was away is this claim's again. A heavy one was counted
         // as held while detached, so taking it back never puts a second C7 replay in a slot.
@@ -622,19 +796,27 @@ impl PalwSeatReplaysV1 {
             self.running.insert(*key, run);
         }
         match self.running.get(key) {
-            None => PalwSeatReplayPollV1::Absent,
-            Some(run) if !run.handle.is_finished() => PalwSeatReplayPollV1::Running,
+            None => None,
+            Some(run) if !run.handle.is_finished() => Some(None),
             Some(_) => {
                 let run = self.running.remove(key).expect("held above");
-                let result = run.handle.await.unwrap_or_else(|e| Err(format!("the replay task did not finish: {e}")));
-                if result.is_ok() {
+                let result = run.handle.await.unwrap_or_else(|e| {
+                    let why = format!("the replay task did not finish: {e}");
+                    // A segment task that did not finish is this host's, never the served opening's.
+                    if panicked_as_replay {
+                        PalwSeatTaskOutV1::Replay(Err(why))
+                    } else {
+                        PalwSeatTaskOutV1::Segment(Err(PalwSeatSegmentRefusalV1::Local(why)))
+                    }
+                });
+                if matches!(result, PalwSeatTaskOutV1::Replay(Ok(_))) {
                     self.timed.insert(run.class, now_daa.saturating_sub(run.started_daa));
                 }
                 self.done.insert(
                     *key,
                     PalwSeatReplayDoneV1 { result: result.clone(), started_daa: run.started_daa, finished_daa: now_daa },
                 );
-                PalwSeatReplayPollV1::Done { result, fresh: true }
+                Some(Some((result, true)))
             }
         }
     }
@@ -672,7 +854,33 @@ impl PalwSeatReplaysV1 {
     {
         let handle = tokio::task::spawn_blocking(move || {
             let _held_for_the_replay = reservation;
-            work(backend.as_ref())
+            PalwSeatTaskOutV1::Replay(work(backend.as_ref()))
+        });
+        self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy });
+    }
+
+    /// **Start one SEAT-S4 segment task in the same slots** (the audit's SEAT-S review, H2): a held
+    /// partial seat replays from the prompt to its segment's end — up to the whole job — so it runs
+    /// off the panel's loop exactly as the full seat's replay does, holding `reservation` for its
+    /// life, counted by [`Self::has_room`] beside the replays (`heavy` for a C7 class), detached with
+    /// its claim, and polled by [`Self::poll_segment`]. A segment's window is not the class's job,
+    /// so it times nothing and is never retried here: the caller tries the next served opening.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_segment<W>(
+        &mut self,
+        key: PalwSeatReplayKeyV1,
+        class: Hash64,
+        heavy: bool,
+        now_daa: u64,
+        reservation: Option<crate::palw_memory_ledger::PalwMemoryReservationV1>,
+        backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+        work: W,
+    ) where
+        W: FnOnce(&dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1) -> PalwSeatSegmentResultV1 + Send + 'static,
+    {
+        let handle = tokio::task::spawn_blocking(move || {
+            let _held_for_the_segment = reservation;
+            PalwSeatTaskOutV1::Segment(work(backend.as_ref()))
         });
         self.running.insert(key, PalwSeatReplayRunV1 { handle, class, started_daa: now_daa, heavy });
     }
@@ -684,7 +892,7 @@ impl PalwSeatReplaysV1 {
     /// receipt.
     pub(crate) fn retry_refused(&mut self, key: &PalwSeatReplayKeyV1, now_daa: u64, deadline: u64) -> bool {
         let Some(done) = self.done.get(key) else { return false };
-        if done.result.is_ok() || self.retried.contains(key) {
+        if !matches!(done.result, PalwSeatTaskOutV1::Replay(Err(_))) || self.retried.contains(key) {
             return false;
         }
         if now_daa.saturating_add(done.finished_daa.saturating_sub(done.started_daa)) > deadline {
@@ -709,6 +917,16 @@ impl PalwSeatReplaysV1 {
     /// Record [`Self::own_job`]'s answer.
     pub(crate) fn note_own_job(&mut self, key: PalwSeatReplayKeyV1, own: bool, payloads: usize) {
         self.own_jobs.insert(key, (own, payloads));
+    }
+
+    /// **Forget a segment task's verdict**, so the next poll of `key` is `Absent` and the same served
+    /// bytes can be started again — for a verdict that was this host's failure
+    /// ([`PalwSeatSegmentRefusalV1::Local`]), never the opening's (finding 1). A whole-job replay's
+    /// verdict is left alone: its retry is [`Self::retry_refused`]'s.
+    pub(crate) fn forget_segment(&mut self, key: &PalwSeatReplayKeyV1) {
+        if self.done.get(key).is_some_and(|done| matches!(done.result, PalwSeatTaskOutV1::Segment(_))) {
+            self.done.remove(key);
+        }
     }
 
     /// Whether a replay for `claim` is running (or detached) or has returned — the duty loop's memory
@@ -754,20 +972,58 @@ pub(crate) enum PalwSeatReplayStepV1 {
 
 /// **What a returned replay makes of the seat's verdict** — the one rule both lanes read:
 /// `Licensed` exactly when [`replay_licenses_v1`] says so (both roots, and the work when the claim
-/// prices it), `Refuted` when the replay ran and does not reproduce them, `NoVerdict` when it did not
-/// run.
+/// prices it) AND the replay's answer is the claim's ([`palw_replay_answer_v1`], SEAT-S2), `Refuted`
+/// when the replay ran and reproduces either of them wrongly, `NoVerdict` when it did not run or
+/// names no answer to compare.
+///
+/// **SEAT-S2's comparison** (the audit's review, M2). The roots say the arithmetic is the claim's;
+/// they do not say the ANSWER is: a claim whose roots are the honest run's and whose committed
+/// `output_root` names other tokens was licensed by every seat that replayed it. Every family's
+/// replay now returns the output root its producer commits (`PalwReplayRootsV1::output_root`), and a
+/// seat licensing by replay compares it with the claim's. Read past SEAT-R only — the one caller is
+/// the off-loop replays' poll — so below it every verdict is what it was.
 pub(crate) fn palw_seat_replay_step_v1(
     result: &PalwSeatReplayResultV1,
     claimed_execution_root: Hash64,
     claimed_trace_root: Hash64,
     priced_work_leaves: u64,
+    claimed_output_root: Hash64,
 ) -> PalwSeatReplayStepV1 {
     match result {
-        Ok(roots) if replay_licenses_v1(roots, claimed_execution_root, claimed_trace_root, priced_work_leaves) => {
-            PalwSeatReplayStepV1::Licensed
+        Ok(roots) if !replay_licenses_v1(roots, claimed_execution_root, claimed_trace_root, priced_work_leaves) => {
+            PalwSeatReplayStepV1::Refuted
         }
-        Ok(_) => PalwSeatReplayStepV1::Refuted,
+        Ok(roots) => match palw_replay_answer_v1(roots, claimed_output_root) {
+            PalwReplayAnswerV1::Reproduces => PalwSeatReplayStepV1::Licensed,
+            PalwReplayAnswerV1::Differs => PalwSeatReplayStepV1::Refuted,
+            PalwReplayAnswerV1::Unnamed => PalwSeatReplayStepV1::NoVerdict,
+        },
         Err(_) => PalwSeatReplayStepV1::NoVerdict,
+    }
+}
+
+/// Whether a replay's answer is the claim's (SEAT-S2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwReplayAnswerV1 {
+    /// The replay's output root is the claim's committed `output_root`.
+    Reproduces,
+    /// It names another: the claim's answer is not what its arithmetic generated. Terminal for
+    /// `Valid`; the full seat's fault finders run on.
+    Differs,
+    /// The family's replay names no output root. Nothing licenses from it, and nothing is refuted:
+    /// every shipped family names one, so this is a family that cannot judge the answer.
+    Unnamed,
+}
+
+/// **SEAT-S2: the replay's output root against the claim's committed one.**
+pub(crate) fn palw_replay_answer_v1(
+    roots: &kaspa_consensus_core::palw_backend::PalwReplayRootsV1,
+    claimed_output_root: Hash64,
+) -> PalwReplayAnswerV1 {
+    match roots.output_root {
+        Some(root) if root == claimed_output_root => PalwReplayAnswerV1::Reproduces,
+        Some(_) => PalwReplayAnswerV1::Differs,
+        None => PalwReplayAnswerV1::Unnamed,
     }
 }
 
@@ -778,6 +1034,273 @@ pub(crate) struct PalwSeatRDutyV1 {
     pub deadline: u64,
     pub role: PalwSeatRRoleV1,
     pub heavy: bool,
+}
+
+/// **How many served openings one segment of one claim is replayed from** before the seat stops
+/// trying it (the audit's SEAT-S review, H3's bound). Each is a replay up to the segment's end, and a
+/// forged opening, or a replay this host did not finish, costs one; junk refused before a step
+/// replays costs none, and the same bytes served again cost nothing (their verdict stands under
+/// [`palw_seat_s4_candidate_key_v1`]).
+///
+/// **Residual for the 2M flag day** (the second pass, finding 3). The family checks a served
+/// sibling path only after the replay (`matches` compares the fold's root with the binding's), so a
+/// holder of a genuine opening — the producer, or any peer that asked for it — can spend this bound
+/// with forged paths, each a whole replay to the segment's end in the one C7 slot; the seat then
+/// abstains in silence (served, never accusing). Under the authenticated checkpoint every candidate
+/// recomputes the same leaves, so the remedy is the family's: return the recomputed range fold, or
+/// take several paths, so further paths are checked without a replay. That is a base0/core change,
+/// and C7 is closed at testnet-12's launch.
+pub(crate) const PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1: u32 = 8;
+
+/// **The task a SEAT-S4 candidate runs under**: the claim, and a digest of the job, the cut, the
+/// segment and the served bytes — so the same bytes served again are the same task and their
+/// verdict stands (a junk opening re-served is dropped without a second replay), and no two
+/// segments, cuts or jobs share one. Never a whole-job replay's key: that one is the job's id.
+pub(crate) fn palw_seat_s4_candidate_key_v1(
+    claim: Hash64,
+    job_id: Hash64,
+    seat_count: u16,
+    segment: u16,
+    opening: &[u8],
+) -> PalwSeatReplayKeyV1 {
+    let mut data = Vec::with_capacity(64 + 4 + opening.len());
+    data.extend_from_slice(job_id.as_byte_slice());
+    data.extend_from_slice(&seat_count.to_le_bytes());
+    data.extend_from_slice(&segment.to_le_bytes());
+    data.extend_from_slice(opening);
+    (claim, kaspa_hashes::blake2b_512_keyed(b"MISAKA/palw-seat-s4-candidate/v1", &data))
+}
+
+/// The claim a SEAT-S4 resume is for, as [`PalwSeatResumesV1::step`] reads it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PalwSeatResumeClaimV1 {
+    pub claim: Hash64,
+    pub job_id: Hash64,
+    pub seat_count: u16,
+    /// The seat's assigned mask — the segments it recomputes and the V3 it files.
+    pub mask: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2,
+    pub now_daa: u64,
+}
+
+/// What one tick of SEAT-S4's resume came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwSeatResumeStepV1 {
+    /// Every segment of the mask rooted to the claim's step root: the mask's V3 `Valid`.
+    Licensed(kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2),
+    /// A segment's task runs, or a held candidate waits for a slot or the memory ledger: nothing is
+    /// filed, and this is never the material wait's `Unavailable` (N-5 does not fire while the seat
+    /// replays).
+    Waiting,
+    /// Nothing runs and a segment of the mask holds no candidate still to try: `missing` names the
+    /// openings to ask for (a segment whose candidates are spent is not asked again).
+    ///
+    /// `served`: some opening of this claim was AUTHENTICATED against it (`Ok` of either verdict) —
+    /// the claim's binding, checkpoint and cut, which only its producer's capture holds — or this
+    /// host failed to finish one ([`PalwSeatSegmentRefusalV1::Local`]), so the seat was served, and a
+    /// seat that was served accuses nobody of withholding: it abstains (N-5). A forged sibling path
+    /// is authenticated as readily as the honest one, so a jammer that spends a segment's bound on
+    /// forgeries leaves the seat silent, never accusing. `!served` is the seat holding no verified
+    /// material for the claim, which files at the material wait (N-5).
+    Starved { missing: Vec<u32>, served: bool },
+}
+
+/// **SEAT-S4's resume past SEAT-R, per claim** — the C7 partial seat's route to its own-mask V3
+/// (`PalwSeatRRoleV1::PartialResumes`), with the audit's SEAT-S review fixed in it:
+///
+/// * **C1.** No S3 site and no pooled capture: every candidate is a SERVED opening, which the family
+///   authenticates against the claim's roots and this seat's own segment before a step replays
+///   (`replay_segment_from_checkpoint_v1`, SEAT-S4). Nothing this seat holds is believed.
+/// * **H1.** Every served candidate of a segment is tried, one at a time; a refusal (`NotTheClaims`:
+///   not the claim's opening — five bytes of junk) and a mismatch (`Ok(false)`: from a served opening
+///   that is a forged sibling path as readily as a false claim) are both dropped from the pool, which
+///   frees the transport's slot for the next answer, and the opening is asked for again. A served
+///   opening never records a fault: only a capture that passed `verify_material` could, and this
+///   route holds none. A replay this host did not finish (`Local`: a task that did not finish, a
+///   kernel error after the opening authenticated) is neither: its bytes stay and are tried again
+///   within the bound, and the seat counts as served (the second pass, finding 1).
+/// * **H2.** Each candidate replays in the SEAT-R replay slots, off the loop
+///   ([`PalwSeatReplaysV1::start_segment`]); a tick only polls.
+/// * **H3.** The resume is asked again every tick until the mask is done or the duty ends, so an
+///   opening that arrives after the first ask is used; bounded by
+///   [`PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1`] replayed candidates a segment (a refusal replays
+///   nothing and is refunded) and by the deadline.
+///
+/// Verdicts are kept by candidate ([`palw_seat_s4_candidate_key_v1`]) in the replay slots, and the
+/// segments that rooted here, until the claim leaves this seat's duties ([`Self::retain_live`]).
+#[derive(Default)]
+pub(crate) struct PalwSeatResumesV1 {
+    started: HashMap<(Hash64, u16), u32>,
+    matched: HashSet<(Hash64, u16)>,
+    /// The candidate each segment has in flight, polled whatever the pool holds by then: a segment
+    /// whose replay runs is never read as unserved (N-5).
+    in_flight: HashMap<(Hash64, u16), PalwSeatReplayKeyV1>,
+    /// The claims this seat was served for (`Starved::served`): an opening authenticated against the
+    /// claim, or one this host did not finish replaying — its own failure is never the producer's.
+    served: HashSet<Hash64>,
+}
+
+impl PalwSeatResumesV1 {
+    /// **One tick of the resume.** `start` starts one candidate's segment replay in the slots and
+    /// answers whether it did (`false`: no slot, or the ledger refused — it waits for a later tick
+    /// and spends nothing).
+    pub(crate) async fn step(
+        &mut self,
+        claim: &PalwSeatResumeClaimV1,
+        openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        replays: &mut PalwSeatReplaysV1,
+        mut start: impl FnMut(&mut PalwSeatReplaysV1, PalwSeatReplayKeyV1, u16, Vec<u8>) -> bool,
+    ) -> PalwSeatResumeStepV1 {
+        use kaspa_consensus_core::palw_segment_resume_v1::palw_segment_opening_request_index_v1;
+        let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(claim.seat_count);
+        let mut waiting = false;
+        let mut missing = Vec::new();
+        for segment in (0..k).filter(|segment| claim.mask.covers(*segment)) {
+            if self.matched.contains(&(claim.claim, segment)) {
+                continue;
+            }
+            if let Some(key) = self.in_flight.get(&(claim.claim, segment)).copied() {
+                match replays.poll_segment(&key, claim.now_daa).await {
+                    PalwSeatSegmentPollV1::Running => {
+                        waiting = true;
+                        continue;
+                    }
+                    PalwSeatSegmentPollV1::Done { result: Ok(true), fresh } => {
+                        if fresh {
+                            info!(
+                                "[{PALW_PANEL}] claim {}: segment {segment} recomputed from its authenticated opening and rooted to \
+                                 the claim's step root (SEAT-S4)",
+                                claim.claim
+                            );
+                        }
+                        self.in_flight.remove(&(claim.claim, segment));
+                        self.matched.insert((claim.claim, segment));
+                        self.served.insert(claim.claim);
+                        continue;
+                    }
+                    PalwSeatSegmentPollV1::Done { result: Err(PalwSeatSegmentRefusalV1::Local(why)), fresh: true } => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: segment {segment}'s replay from a served opening did not finish on this host \
+                             ({why}) — the bytes are kept and tried again within the bound; this host's failure accuses nobody \
+                             (SEAT-S4)",
+                            claim.claim
+                        );
+                        self.in_flight.remove(&(claim.claim, segment));
+                        self.served.insert(claim.claim);
+                        // The start stays spent — it ran — and the verdict is forgotten, so the same bytes
+                        // are started again below while the bound lasts.
+                        replays.forget_segment(&key);
+                    }
+                    PalwSeatSegmentPollV1::Done { result: Err(PalwSeatSegmentRefusalV1::NotTheClaims(why)), fresh: true } => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: a served opening of segment {segment} is not the claim's ({why}) — dropped and \
+                             asked for again; a served opening is never a fault (SEAT-S4, H1)",
+                            claim.claim
+                        );
+                        self.in_flight.remove(&(claim.claim, segment));
+                        // Refused before a step replayed: it spent no replay, so it spends none of the
+                        // segment's bound either — junk cannot run a seat out of candidates.
+                        if let Some(started) = self.started.get_mut(&(claim.claim, segment)) {
+                            *started = started.saturating_sub(1);
+                        }
+                    }
+                    PalwSeatSegmentPollV1::Done { result: Ok(false), fresh: true } => {
+                        warn!(
+                            "[{PALW_PANEL}] claim {}: a served opening of segment {segment} did not root this seat's leaves to the \
+                             claim — dropped and asked for again; a served opening is never a fault (SEAT-S4, H1)",
+                            claim.claim
+                        );
+                        self.in_flight.remove(&(claim.claim, segment));
+                        self.served.insert(claim.claim);
+                    }
+                    PalwSeatSegmentPollV1::Done { .. } | PalwSeatSegmentPollV1::Absent => {
+                        self.in_flight.remove(&(claim.claim, segment));
+                    }
+                }
+            }
+            let request = palw_segment_opening_request_index_v1(claim.seat_count, segment);
+            let candidates = openings.get(&(claim.claim, request)).cloned().unwrap_or_default();
+            let (mut matched, mut in_flight) = (false, false);
+            let mut dropped: Vec<Vec<u8>> = Vec::new();
+            let mut untried: Option<(PalwSeatReplayKeyV1, Vec<u8>)> = None;
+            for bytes in candidates {
+                let key = palw_seat_s4_candidate_key_v1(claim.claim, claim.job_id, claim.seat_count, segment, &bytes);
+                // Every started candidate is `in_flight` until read above, which logged its verdict.
+                match replays.poll_segment(&key, claim.now_daa).await {
+                    PalwSeatSegmentPollV1::Done { result: Ok(true), .. } => {
+                        matched = true;
+                        break;
+                    }
+                    // This host's failure: the bytes stay, and are tried again while the bound lasts.
+                    PalwSeatSegmentPollV1::Done { result: Err(PalwSeatSegmentRefusalV1::Local(_)), .. } => {
+                        self.served.insert(claim.claim);
+                        replays.forget_segment(&key);
+                        if untried.is_none() {
+                            untried = Some((key, bytes));
+                        }
+                    }
+                    PalwSeatSegmentPollV1::Done { result, .. } => {
+                        if result.is_ok() {
+                            self.served.insert(claim.claim);
+                        }
+                        dropped.push(bytes);
+                    }
+                    PalwSeatSegmentPollV1::Running => in_flight = true,
+                    PalwSeatSegmentPollV1::Absent => {
+                        if untried.is_none() {
+                            untried = Some((key, bytes));
+                        }
+                    }
+                }
+            }
+            if !dropped.is_empty()
+                && let Some(slot) = openings.get_mut(&(claim.claim, request))
+            {
+                slot.retain(|bytes| !dropped.contains(bytes));
+                if slot.is_empty() {
+                    openings.remove(&(claim.claim, request));
+                }
+            }
+            if matched {
+                self.matched.insert((claim.claim, segment));
+                self.served.insert(claim.claim);
+                continue;
+            }
+            if in_flight {
+                waiting = true;
+                continue;
+            }
+            let spent = self.started.get(&(claim.claim, segment)).copied().unwrap_or(0) >= PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1;
+            match untried {
+                Some((key, bytes)) if !spent => {
+                    if start(replays, key, segment, bytes) {
+                        *self.started.entry((claim.claim, segment)).or_default() += 1;
+                        self.in_flight.insert((claim.claim, segment), key);
+                    }
+                    waiting = true;
+                }
+                // Spent: this seat has replayed its bound of candidates for the segment.
+                Some(_) => {}
+                None if spent => {}
+                None => missing.push(request),
+            }
+        }
+        let done = (0..k).filter(|segment| claim.mask.covers(*segment)).all(|segment| self.matched.contains(&(claim.claim, segment)));
+        if done && claim.mask.count(k) > 0 {
+            PalwSeatResumeStepV1::Licensed(claim.mask)
+        } else if waiting {
+            PalwSeatResumeStepV1::Waiting
+        } else {
+            PalwSeatResumeStepV1::Starved { missing, served: self.served.contains(&claim.claim) }
+        }
+    }
+
+    /// Forget every claim `live` refuses; its tasks' verdicts leave with the replay slots' own sweep.
+    pub(crate) fn retain_live(&mut self, live: impl Fn(&Hash64) -> bool) {
+        self.started.retain(|(claim, _), _| live(claim));
+        self.matched.retain(|(claim, _)| live(claim));
+        self.in_flight.retain(|(claim, _), _| live(claim));
+        self.served.retain(|claim| live(claim));
+    }
 }
 
 /// Distinct material payloads kept per claim (mirrors the gossip relay budget).
@@ -880,6 +1403,100 @@ fn prune_foreign_retention_v1(dir: &std::path::Path, pinned: &HashSet<Hash64>, n
     }
 }
 
+/// **How long this seat keeps what it verified or replayed for a claim** (ADR-0152's deadline design,
+/// 4-quater.8 and N-6's R2): the claim's `R_eff` — its own `trace_retention_daa` (the DAA through which
+/// its producer owes openings, and past which no accusation can ask), and for a long-D class (its
+/// canonical verification window `spans × span` past [`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`]) no earlier
+/// than `A + 2(W_bind + W_r(c)) + max(wc, 1) + W_court + W_disclose`, because the design lets such a
+/// claim wait on another seat's DA session to close before it Finals. No genesis class of testnet-12
+/// is long-D at launch (the 2M row is closed), so this is the claim's own retention there.
+///
+/// [`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`]: kaspa_consensus_core::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1
+pub(crate) fn palw_seat_retention_horizon_v1(
+    params: &kaspa_consensus_core::config::params::Params,
+    claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+    bound_daa: u64,
+    verification_window_spans: Option<u32>,
+) -> u64 {
+    use kaspa_consensus_core::palw_state_v2::{PALW_SHORT_CHALLENGE_WINDOW_DAA_V1, palw_da_disclose_window_daa_v1};
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return claim.trace_retention_daa;
+    };
+    let span = params.palw_execution_lane.map_or(1, |lane| lane.schedule_span_daa.max(1));
+    let canonical = verification_window_spans.map_or(0, |spans| u64::from(spans).saturating_mul(span));
+    if canonical <= PALW_SHORT_CHALLENGE_WINDOW_DAA_V1 {
+        return claim.trace_retention_daa;
+    }
+    let state = &bundle.state;
+    let receipt = palw_seat_claim_receipt_window_v1(params, verification_window_spans, bound_daa).unwrap_or(state.window_receipt());
+    let long = claim
+        .accepted_daa
+        .saturating_add(state.window_bind().saturating_add(receipt).saturating_mul(2))
+        .saturating_add(state.window_challenge().max(1))
+        .saturating_add(state.window_court())
+        .saturating_add(palw_da_disclose_window_daa_v1(state));
+    claim.trace_retention_daa.max(long)
+}
+
+/// Claims whose retention horizon this seat remembers at once ([`palw_seat_retention_pins_v1`]). The
+/// seat's own duties, one entry a claim, a few days of them; past it the soonest horizon goes first.
+pub(crate) const PALW_SEAT_RETENTION_LIABILITIES_MAX_V1: usize = 4_096;
+
+/// **Remember `claim`'s retention horizon, bounded** — at [`PALW_SEAT_RETENTION_LIABILITIES_MAX_V1`]
+/// the entry whose horizon comes soonest makes room.
+pub(crate) fn palw_seat_note_liability_v1(liabilities: &mut HashMap<Hash64, u64>, claim: Hash64, horizon: u64) {
+    if !liabilities.contains_key(&claim)
+        && liabilities.len() >= PALW_SEAT_RETENTION_LIABILITIES_MAX_V1
+        && let Some(soonest) = liabilities.iter().min_by_key(|(id, at)| (**at, **id)).map(|(id, _)| *id)
+    {
+        liabilities.remove(&soonest);
+    }
+    liabilities.insert(claim, horizon);
+}
+
+/// **Note a duty's retention horizon, once its class is read** (R2; the second pass, finding 5). A
+/// claim is read once — its record does not change — unless its class was still `Unread` then: its
+/// horizon is noted as the claim's own retention meanwhile (the registry has not said whether the
+/// class is long-D) and read again on each later call until the class reads, so a long-D claim first
+/// seen before its row answered still gets `R_eff`. `horizon` reads the claim's record and prices it
+/// at the class's spans; `None` (no record) notes nothing, and the next call asks again.
+pub(crate) fn palw_seat_note_duty_liability_v1(
+    liabilities: &mut HashMap<Hash64, u64>,
+    unread: &mut HashSet<Hash64>,
+    claim: Hash64,
+    class: PalwSeatClassReadV1,
+    horizon: impl FnOnce(Option<u32>) -> Option<u64>,
+) {
+    if liabilities.contains_key(&claim) && !unread.contains(&claim) {
+        return;
+    }
+    let spans = match class {
+        PalwSeatClassReadV1::Rowed { verification_window_spans, .. } => Some(verification_window_spans),
+        PalwSeatClassReadV1::Unrowed | PalwSeatClassReadV1::Unread => None,
+    };
+    let Some(horizon) = horizon(spans) else { return };
+    palw_seat_note_liability_v1(liabilities, claim, horizon);
+    if class == PalwSeatClassReadV1::Unread {
+        unread.insert(claim);
+    } else {
+        unread.remove(&claim);
+    }
+}
+
+/// **The claims the foreign retention keeps whatever their files' age** (R2): the panel's live claims
+/// — duties, court duties, disputes — and past SEAT-R every claim this seat held a duty on whose
+/// retention horizon ([`palw_seat_retention_horizon_v1`]) has not passed: a licence ends the duty, and
+/// the court window, the Valid lock and a DA accusation still ask about the claim after it. Bounded by
+/// the liabilities it reads ([`palw_seat_note_liability_v1`]), and the retention janitor's space rule
+/// still frees the volume under its floor.
+pub(crate) fn palw_seat_retention_pins_v1(
+    live: &HashSet<Hash64>,
+    liabilities: &HashMap<Hash64, u64>,
+    current_daa: u64,
+) -> HashSet<Hash64> {
+    live.iter().copied().chain(liabilities.iter().filter(|(_, horizon)| **horizon >= current_daa).map(|(claim, _)| *claim)).collect()
+}
+
 /// The family capture inside a pool payload: an `FPC1` payload's inner tuple (ADR-0073 Decision
 /// 1a), or the bytes themselves for an attempt's raw capture. What `verify_material` and the
 /// provers take — the pool and the retention keep the payload as it travelled.
@@ -950,6 +1567,80 @@ const COURT_MOVE_REPLAN_DAA: u64 = 10;
 /// seat whose one pull went unanswered accused without asking twice.
 fn seat_reask_daa_v1(receipt_window_daa: u64) -> u64 {
     (receipt_window_daa / 4).clamp(1, 25)
+}
+
+/// **The material wait's cap past SEAT-R** (ADR-0152's deadline design, 4-quater.5 N-5: `X_ASK`), in
+/// DAA after the bind.
+pub(crate) const PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1: u64 = 60;
+
+/// **When a seat holding no verified material for a duty files `Unavailable`** (N-5): half the
+/// receipt window after the bind, as it always was, and past SEAT-R no later than
+/// [`PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1`] after it — `min(W_r/2, X_ASK)`, where `W_r` is the chain's
+/// per-claim window the loop reads for the duty (`palw_seat_receipt_deadline_v1`). A 2M claim's
+/// half-window was 1,399 DAA of an honest seat sitting on a producer that never served it, and the
+/// design's INV-M pays the producer's late disclosure back to the claim, not to the seat's wait.
+///
+/// **Never while the seat replays.** The verdict block reaches the wait only when nothing of the
+/// claim's runs or waits for a slot here — a replay (`PalwSeatReplayStepV1::Waiting`) or a segment
+/// resume (`PalwSeatResumeStepV1::Waiting`) ends the verdict with nothing filed first — and only
+/// holding no material it verified (`evidence_kept`); pinned by `n5_*` in `seat_s_tests`.
+pub(crate) fn palw_seat_material_wait_until_v1(seat_r: bool, bound_daa: u64, deadline: u64) -> u64 {
+    let half = deadline.saturating_sub(bound_daa) / 2;
+    bound_daa.saturating_add(if seat_r { half.min(PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1) } else { half })
+}
+
+/// **Whether the material wait ends now** (N-5): at [`palw_seat_material_wait_until_v1`], and past
+/// SEAT-R at once when a licence already stands for the claim (the collector's doors answer over this
+/// node's pools, `palw_licence_stands_v1`). `licence_stands` is asked only when the time has not come.
+pub(crate) fn palw_seat_material_wait_ends_v1(
+    seat_r: bool,
+    bound_daa: u64,
+    deadline: u64,
+    current_daa: u64,
+    licence_stands: impl FnOnce() -> bool,
+) -> bool {
+    current_daa >= palw_seat_material_wait_until_v1(seat_r, bound_daa, deadline) || (seat_r && licence_stands())
+}
+
+/// What the verdict block's tail does for a seat that reached it holding no material it verified.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwSeatTailV1 {
+    /// Nothing is filed from the tail, now or later: the seat holds the claim's job and its own
+    /// replay came to nothing for its own reasons — not started in time (`fits`), refused twice, the
+    /// ledger — which no producer can answer by serving anything.
+    Silent,
+    /// The material wait runs ([`palw_seat_material_wait_ends_v1`]) and files `Unavailable` when it
+    /// ends; `unserved` names the claim for P2-6's `DefaultAccused` if a licence lands on it (N-5).
+    Waits { unserved: bool },
+}
+
+/// **Whom the tail's material wait may accuse past SEAT-R** (the SEAT-S review's second pass,
+/// finding 2): only a producer that served this seat no job for the claim. N-5's cap reached every
+/// full seat whose own replay never ran — not in time, or refused twice — and an honest producer that
+/// had served everything was accused at `bind + 60` instead of `W_r/2`:
+///
+/// * **The attempt lane** judges by replaying the anchor's job, which no producer serves and a held
+///   class's capture never travels to help: its absence of material accuses nobody. `Silent`.
+/// * **The free-prompt lane**'s job is served: a seat holding one of the claim's class and executor
+///   (`FPM1`, `FPA1` or `FPC1`, `holds_fp_job`) was served, and is `Silent` — as the replaying
+///   partial seat and the resuming seat already are; one holding none waits and notes the claim.
+/// * **A claim this seat's replay refuted** keeps its path: the wait runs, and the claim is the
+///   challenger's half's, never an unserved one.
+///
+/// Below SEAT-R the wait runs as it always did, and nothing is noted.
+pub(crate) fn palw_seat_tail_v1(
+    seat_r: bool,
+    free_prompt: bool,
+    refuted: bool,
+    holds_fp_job: impl FnOnce() -> bool,
+) -> PalwSeatTailV1 {
+    if !seat_r || refuted {
+        return PalwSeatTailV1::Waits { unserved: false };
+    }
+    if !free_prompt || holds_fp_job() {
+        return PalwSeatTailV1::Silent;
+    }
+    PalwSeatTailV1::Waits { unserved: true }
 }
 
 /// What [`seat_duty_panel_key_v1`] names a duty by: `(claim, bound_daa, anchor, seat_index,
@@ -2897,6 +3588,10 @@ impl PalwPanelService {
         let anchor = self
             .job_anchor_for_claim(session, backend.as_ref(), network_domain, accepted_block, class_id, executor_bond)
             .unwrap_or_default();
+        // `output_root: None` (the SEAT-S2 audit of every `None`): the DA and court duties that call
+        // this carry the two roots and no output root, and the question is whether these bytes are
+        // the claim's step leg — no family's `verify_material` reads the answer (SEAT-S2's comparison
+        // is the replay's, `palw_replay_answer_v1`).
         let roots = PalwClaimRootsV1 {
             execution_root,
             trace_root,
@@ -3794,6 +4489,17 @@ impl PalwPanelService {
         // a fault finder past SEAT-R, never a licence — does not re-run on every tick of a long
         // replay. Swept with `replayed`.
         let mut seat_replays = PalwSeatReplaysV1::default();
+        // SEAT-S4's resume of a C7 partial seat's mask (`PalwSeatResumesV1`), in the same slots.
+        let mut seat_resumes = PalwSeatResumesV1::default();
+        // N-5: the duties this seat reached the material wait on holding nothing it verified, with
+        // the DAA it first did — so a licence that lands on one is seen when its duty ends (the DA
+        // accusation that answers it is Phase 2's P2-6: `palw_seat_unserved_licence_v1`).
+        let mut unserved: HashMap<Hash64, u64> = HashMap::new();
+        // R2 past SEAT-R: every claim this seat held a duty on, with its retention horizon
+        // (`palw_seat_retention_horizon_v1`) — what the foreign retention keeps past the duty.
+        let mut retention_liabilities: HashMap<Hash64, u64> = HashMap::new();
+        // The liabilities noted while their class was still unread, read again once it is (finding 5).
+        let mut liabilities_unread: HashSet<Hash64> = HashSet::new();
         let mut seat_classes = PalwSeatClassRowsV1::default();
         let mut replay_refuted: HashSet<Hash64> = HashSet::new();
         let mut evidence_kept: HashSet<Hash64> = HashSet::new();
@@ -3967,7 +4673,41 @@ impl PalwPanelService {
                     })
                     .await;
                 if let Some(read) = rows {
-                    for line in own_claim_events_v1(&mut own_phases, &read.rows) {
+                    // Past SEAT-R a `PanelBound` claim's deadline is the chain's per-claim one, `bound +
+                    // W_r(c)`, read off the class's row; the row's own is the global window's.
+                    let per_claim = palw_seat_r_in_force_v1(&self.consensus_config.params, current_daa)
+                        && read
+                            .rows
+                            .iter()
+                            .any(|row| matches!(row.phase, kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::PanelBound { .. }));
+                    let spans: HashMap<Hash64, u32> = if per_claim {
+                        session
+                            .palw_model_registry_v1()
+                            .map(|read| {
+                                read.classes
+                                    .iter()
+                                    .filter_map(|class| {
+                                        class.row.as_ref().map(|row| (class.class_id, row.profile.verification_window_spans))
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        HashMap::new()
+                    };
+                    let deadline_of = |row: &kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1| match row.phase {
+                        kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::PanelBound { bound_daa } if per_claim => {
+                            palw_seat_claim_receipt_window_v1(
+                                &self.consensus_config.params,
+                                spans.get(&row.class_id).copied(),
+                                bound_daa,
+                            )
+                            .map(|window| bound_daa.saturating_add(window))
+                            .or(row.deadline_daa)
+                        }
+                        _ => row.deadline_daa,
+                    };
+                    for line in own_claim_events_at_v1(&mut own_phases, &read.rows, deadline_of) {
                         info!("[{PALW_PANEL}] {line}");
                     }
                 }
@@ -4374,6 +5114,9 @@ impl PalwPanelService {
                         )
                         .unwrap_or_default(),
                 };
+                // `output_root: None`: a court duty names the claim's two roots and no output root
+                // (`PalwCourtDutyV2`), and the court selects the step leg's evidence — the answer is
+                // not what it adjudicates here, and no family's `verify_material` reads it (SEAT-S2).
                 let roots = PalwClaimRootsV1 {
                     execution_root: duty.execution_root,
                     trace_root: duty.trace_root,
@@ -5063,8 +5806,6 @@ impl PalwPanelService {
                         // into the blocking task with a copy of the accused capture.
                         let carried_prompt: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
                         let roots_for_close = roots;
-                        let resume_accused = self.consensus_config.params.palw_verification_v2_at(current_daa);
-                        let accused_seats = duty.panel_seat_count;
                         // **The close's replay bytes are RESERVED** (ADR-0151 follow-up, item 3): a
                         // close that resumes a segment or opens a leaf re-executes the class, priced
                         // here as a full seat — an upper bound over what the resume and the leaf's
@@ -5090,33 +5831,12 @@ impl PalwPanelService {
                         };
                         let Ok((_backend, assembled)) = offload(backend, move |b| {
                             let _held_for_the_close = court_reserved;
-                            // ADR-0133 S1 (4): a close of an accused leaf resumes the V2 segment
-                            // that contains it from the published checkpoint, then still files the
-                            // per-leaf refutation the chain's close check reads.
-                            if resume_accused
-                                && accused_seats > 0
-                                && let CloseSource::Capture(accused_bytes) = &source
-                                && let Some(shape) = b.capture_shape(accused_bytes)
-                            {
-                                let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(accused_seats);
-                                if let Some(segment) = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(
-                                    shape.step_leaf_count,
-                                    k,
-                                    index,
-                                ) {
-                                    let prompt: Vec<usize> = carried_prompt
-                                        .as_ref()
-                                        .map(|ids| ids.iter().map(|t| *t as usize).collect())
-                                        .unwrap_or_default();
-                                    let _ = b.replay_accused_segment_v1(
-                                        accused_bytes,
-                                        accused_seats,
-                                        segment,
-                                        &shape.job_context,
-                                        &prompt,
-                                    );
-                                }
-                            }
+                            // **No segment resume before the refutation** (the audit's SEAT-S review,
+                            // M1). The close resumed the accused segment (ADR-0133 S1 (4),
+                            // `replay_accused_segment_v1`) and discarded what it found: nothing the
+                            // chain reads came of it, and past SEAT-S4 a held fold's segment resumes
+                            // from the prompt, so the close spent a whole replay before the per-leaf
+                            // refutation it files — which recomputes the accused leaf itself.
                             let refutation = match &source {
                                 CloseSource::Capture(accused_bytes) => match &carried_prompt {
                                     Some(ids) => b.refutation_for_free_prompt_index(accused_bytes, index, ids),
@@ -5472,17 +6192,20 @@ impl PalwPanelService {
                 .iter()
                 .map(|duty| {
                     let class = seat_classes.class(&duty.class_id);
-                    let full_seat = duty.seat_index as u16
-                        == kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
-                            duty.panel_anchor,
-                            duty.claim_id,
-                            duty.panel_seat_count.max(1),
-                        )
-                        .full_seat;
+                    let seats = duty.panel_seat_count.max(1);
+                    let assignment = kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                        duty.panel_anchor,
+                        duty.claim_id,
+                        seats,
+                    );
+                    let full_seat = duty.seat_index as u16 == assignment.full_seat;
+                    let mask_is_full = assignment
+                        .mask_of(duty.seat_index as u16)
+                        .is_full(kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats));
                     let outsider = palw_seat_is_outsider_v1(&self.consensus_config.params, duty, class);
                     PalwSeatRDutyV1 {
                         deadline: palw_seat_receipt_deadline_v1(&self.consensus_config.params, seat_r, duty, class),
-                        role: palw_seat_r_role_v1(full_seat, class.held_to_final(), outsider),
+                        role: palw_seat_r_role_v1(full_seat, class.held_to_final(), outsider, mask_is_full),
                         heavy: class.held_to_final() != Some(false),
                     }
                 })
@@ -5491,6 +6214,22 @@ impl PalwPanelService {
                 &duties.iter().zip(&seat_r_duties).map(|(duty, view)| (view.deadline, duty.claim_id)).collect::<Vec<_>>(),
                 seat_r,
             );
+            // R2: a duty's retention horizon, read from the claim's own record once per claim and
+            // class read (`palw_seat_note_duty_liability_v1`).
+            if seat_r {
+                for duty in &duties {
+                    palw_seat_note_duty_liability_v1(
+                        &mut retention_liabilities,
+                        &mut liabilities_unread,
+                        duty.claim_id,
+                        seat_classes.class(&duty.class_id),
+                        |spans| {
+                            let (claim, _, _) = session.palw_derived_artifacts_v1(duty.claim_id)?;
+                            Some(palw_seat_retention_horizon_v1(&self.consensus_config.params, &claim, duty.bound_daa, spans))
+                        },
+                    );
+                }
+            }
             for index in order {
                 let (duty, seat_r_duty) = (&duties[index], seat_r_duties[index]);
                 let deadline = seat_r_duty.deadline;
@@ -5503,8 +6242,12 @@ impl PalwPanelService {
                 // past its usable memory waits for a later tick instead of starting — swap is not
                 // capacity, and a host in swap finishes no replay at all. The deadline still runs;
                 // a seat that never fits answers nothing, which the quorum prices as silence. A SEAT-R
-                // replay that stands holds its own reservation, so polling it needs no second check.
-                if !(seat_r && seat_replays.holds_claim(&duty.claim_id))
+                // replay that stands holds its own reservation, so polling it needs no second check;
+                // and a SEAT-S4 resume reserves its own figure a segment at a time — the partial seat's
+                // streamed fold, never this check's whole-job full seat, which a host that fits the
+                // segment but not the whole replay could never pass (the second pass, finding 4).
+                if !(seat_r
+                    && (seat_replays.holds_claim(&duty.claim_id) || seat_r_duty.role == PalwSeatRRoleV1::PartialResumes))
                     && let Err(why) = self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))
                 {
                     crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
@@ -5516,6 +6259,9 @@ impl PalwPanelService {
                 // replays' `Licensed` arms and nowhere else, and read before anything is signed — past
                 // SEAT-R a `Valid` without it files nothing, in a release build as in a test.
                 let mut licensed_by_replay = false;
+                // Its SEAT-S4 twin: set by the verified resume's `Licensed` arms alone, for a
+                // `PartialResumes` seat's own-mask V3 (`PalwSeatArmV1::VerifiedSegmentResume`).
+                let mut licensed_by_verified_resume = false;
                 // A replay of the claim's own job that did not reproduce it: no replay runs again,
                 // nothing licenses it here, and the full seat's fault finders run on.
                 let refuted = seat_r && replay_refuted.contains(&duty.claim_id);
@@ -5598,13 +6344,95 @@ impl PalwPanelService {
                     // them off the duty) but so the common garbage fails before the expensive
                     // step.
                     if duty.free_prompt {
+                        // **SEAT-S4 past SEAT-R: a C7 partial seat resumes its own mask** (the review's
+                        // re-enable, `PalwSeatRRoleV1::PartialResumes`), off the loop, from served
+                        // openings authenticated against the claim — under the job and context the
+                        // claim's answer authenticates (L2, finding 1), never the job's ceiling nor a
+                        // held job nothing bound to the claim. Holding no answer yet it asks for the
+                        // claim's material (the answer envelope carries the ids); holding nothing to
+                        // try, it waits out the material wait (N-5).
+                        if seat_r && seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
+                            let held = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
+                            let job = self.resolve_backend(&session, duty.class_id, duty.artifact_root).ok().and_then(|resolved| {
+                                let (material, ctx) = self.fp_seat_job_v1(resolved.as_ref(), duty, &held)?;
+                                let form = self.class_prompt_ids_form(material.job.class_id);
+                                let prompt = Self::fp_prompt_for_job(resolved.as_ref(), &material, form)?;
+                                Some((ctx, prompt.iter().map(|t| *t as usize).collect::<Vec<usize>>()))
+                            });
+                            let step = match job {
+                                Some((ctx, prompt)) => {
+                                    self.seat_s4_resume_v1(
+                                        &session,
+                                        duty,
+                                        seat_r_duty,
+                                        current_daa,
+                                        network_domain,
+                                        &ctx,
+                                        &prompt,
+                                        &mut interval_openings,
+                                        &mut requested_intervals,
+                                        &mut seat_replays,
+                                        &mut seat_resumes,
+                                    )
+                                    .await
+                                }
+                                // No job the answer authenticated, so no context to authenticate an
+                                // opening under (finding 1). Served a job of the claim's class and executor
+                                // — the claim's or a stranger's, which only the answer tells apart — the
+                                // seat accuses nobody until one is authenticated; served none, it waits out
+                                // the material wait (N-5).
+                                None => {
+                                    let reask_daa = seat_reask_daa_v1(deadline.saturating_sub(duty.bound_daa));
+                                    if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(reask_daa)) {
+                                        requested.insert(duty.claim_id, current_daa);
+                                        self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
+                                    }
+                                    let served = self
+                                        .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &held)
+                                        .is_some();
+                                    PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }
+                                }
+                            };
+                            match step {
+                                PalwSeatResumeStepV1::Licensed(mask) => {
+                                    debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::VerifiedSegmentResume));
+                                    segments_attested = Some(mask);
+                                    licensed_by_verified_resume = true;
+                                    break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                                }
+                                PalwSeatResumeStepV1::Waiting => break 'verdict None,
+                                // Served, and nothing left to try: silent, never an accusation (N-5).
+                                PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,
+                                PalwSeatResumeStepV1::Starved { served: false, .. } => {
+                                    unserved.entry(duty.claim_id).or_insert(current_daa);
+                                    if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
+                                        Self::palw_licence_stands_v1(
+                                            &session,
+                                            duty.claim_id,
+                                            &receipt_pool_v2,
+                                            &receipt_pool_v3,
+                                            &receipt_facts,
+                                        )
+                                    }) {
+                                        break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
+                                            chunk_index: 0,
+                                            requested_daa: first_seen[&duty.claim_id].max(duty.bound_daa),
+                                        });
+                                    }
+                                    break 'verdict None;
+                                }
+                            }
+                        }
                         // **SEAT-R: a seat licenses by its own replay of the claim's job, run first and
                         // off the loop** (`fp_seat_replay_pass_v1`) — the full seat, and a replaying
                         // partial seat (`PalwSeatRRoleV1`). While it runs the seat files nothing;
                         // when no replay licenses, the full seat's arms below still run — the interval
                         // seat and the capture sampler find faults and accuse — and none of them signs
                         // `Valid`. A partial seat's path ends at its resume's `Abstain`.
-                        if seat_r && seat_r_duty.role != PalwSeatRRoleV1::PartialAbstains && !refuted {
+                        if seat_r
+                            && matches!(seat_r_duty.role, PalwSeatRRoleV1::FullSeat | PalwSeatRRoleV1::PartialReplays)
+                            && !refuted
+                        {
                             let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
                             match self
                                 .fp_seat_replay_pass_v1(&session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays)
@@ -5635,6 +6463,31 @@ impl PalwPanelService {
                                     if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(reask_daa)) {
                                         requested.insert(duty.claim_id, current_daa);
                                         self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
+                                    }
+                                    // N-5: served no job at all — nothing in the pool or this node's
+                                    // retention decodes as the claim's class and executor's job — it
+                                    // files its `Unavailable` at the material wait. One that holds a
+                                    // job it could not replay in time was served, and accuses nobody.
+                                    let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                                    if self
+                                        .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)
+                                        .is_none()
+                                    {
+                                        unserved.entry(duty.claim_id).or_insert(current_daa);
+                                        if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
+                                            Self::palw_licence_stands_v1(
+                                                &session,
+                                                duty.claim_id,
+                                                &receipt_pool_v2,
+                                                &receipt_pool_v3,
+                                                &receipt_facts,
+                                            )
+                                        }) {
+                                            break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
+                                                chunk_index: 0,
+                                                requested_daa: first_seen[&duty.claim_id].max(duty.bound_daa),
+                                            });
+                                        }
                                     }
                                     break 'verdict None;
                                 }
@@ -6278,15 +7131,63 @@ impl PalwPanelService {
                         let resolved = if seat_r {
                             // **SEAT-R: the replay is the seat's one route to `Valid`, so it starts at
                             // the bind.** The grace waited for a material that would license first,
-                            // and past the fence none does. A partial seat on a C7 class that is not
-                            // the claim's outsider (or on one this seat has not read) files nothing;
-                            // the full seat — and a replaying partial seat, the liveness fallback until
-                            // SEAT-S4 — replays off the loop (`PalwSeatRRoleV1`). The replay is not
+                            // and past the fence none does. A partial seat on a class this seat has
+                            // not read files nothing, and one on a C7 class that is not the claim's
+                            // outsider resumes its own mask (SEAT-S4); the full seat — and a replaying
+                            // partial seat — replays off the loop (`PalwSeatRRoleV1`). The replay is not
                             // spent by a tick that could not start it: `replayed` spent the one replay
                             // on a ledger refusal, which a material arm used to cover. A claim it has
                             // refuted is not replayed again: the full seat's fault finders run on.
                             if seat_r_duty.role == PalwSeatRRoleV1::PartialAbstains {
                                 break 'verdict None;
+                            }
+                            // SEAT-S4: a C7 partial seat resumes its own mask from the anchor's job
+                            // (`seat_s4_resume_v1`), and files that mask's V3 alone.
+                            if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
+                                match self
+                                    .seat_s4_resume_v1(
+                                        &session,
+                                        duty,
+                                        seat_r_duty,
+                                        current_daa,
+                                        network_domain,
+                                        &ctx,
+                                        &prompt,
+                                        &mut interval_openings,
+                                        &mut requested_intervals,
+                                        &mut seat_replays,
+                                        &mut seat_resumes,
+                                    )
+                                    .await
+                                {
+                                    PalwSeatResumeStepV1::Licensed(mask) => {
+                                        debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::VerifiedSegmentResume));
+                                        segments_attested = Some(mask);
+                                        licensed_by_verified_resume = true;
+                                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                                    }
+                                    PalwSeatResumeStepV1::Waiting => break 'verdict None,
+                                    // Served, and nothing left to try: silent, never an accusation (N-5).
+                                    PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,
+                                    PalwSeatResumeStepV1::Starved { served: false, .. } => {
+                                        unserved.entry(duty.claim_id).or_insert(current_daa);
+                                        if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
+                                            Self::palw_licence_stands_v1(
+                                                &session,
+                                                duty.claim_id,
+                                                &receipt_pool_v2,
+                                                &receipt_pool_v3,
+                                                &receipt_facts,
+                                            )
+                                        }) {
+                                            break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
+                                                chunk_index: 0,
+                                                requested_daa: first_seen[&duty.claim_id].max(duty.bound_daa),
+                                            });
+                                        }
+                                        break 'verdict None;
+                                    }
+                                }
                             }
                             if refuted {
                                 resolved
@@ -6517,8 +7418,27 @@ impl PalwPanelService {
                         self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
                     }
                     // Wait out half the window before accusing — gossip is not instant and an
-                    // early `Unavailable` is a false accusation with a signature on it.
-                    if current_daa >= duty.bound_daa.saturating_add(window / 2) {
+                    // early `Unavailable` is a false accusation with a signature on it. Past SEAT-R no
+                    // later than `X_ASK` after the bind, and at once when a licence already stands
+                    // (N-5, `palw_seat_material_wait_until_v1`); below it, half the window as always.
+                    // Past SEAT-R only a producer that served this seat no job waits to be accused
+                    // (`palw_seat_tail_v1`, finding 2): a seat whose own replay did not run in time, or
+                    // refused twice, is silent. A claim this seat's replay refuted — this tick or an
+                    // earlier one — keeps its path, and is the challenger's half's, not an unserved one.
+                    let refuted_here = refuted || replay_refuted.contains(&duty.claim_id);
+                    match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {
+                        let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                        self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled).is_some()
+                    }) {
+                        PalwSeatTailV1::Silent => break 'verdict None,
+                        PalwSeatTailV1::Waits { unserved: true } => {
+                            unserved.entry(duty.claim_id).or_insert(current_daa);
+                        }
+                        PalwSeatTailV1::Waits { unserved: false } => {}
+                    }
+                    if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
+                        Self::palw_licence_stands_v1(&session, duty.claim_id, &receipt_pool_v2, &receipt_pool_v3, &receipt_facts)
+                    }) {
                         break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
                             chunk_index: 0,
                             // Floored at THIS panel's `bound_daa`: `first_seen` dates the claim,
@@ -6535,10 +7455,28 @@ impl PalwPanelService {
                 // **SEAT-R, enforced where the receipt is signed**: past the fence a `Valid` that no
                 // off-loop replay licensed files nothing, whatever arm produced it — the source pin
                 // (`seat_r_tests`) and the `debug_assert!`s name the arms; this holds in a release build.
-                if seat_r && matches!(verdict, PalwReceiptVerdictV2::Valid) && !licensed_by_replay {
+                if seat_r && matches!(verdict, PalwReceiptVerdictV2::Valid) && !(licensed_by_replay || licensed_by_verified_resume) {
                     crate::palw_backends::note_throttled_v1("panel-seat-r-guard", || {
                         format!("[{PALW_PANEL}] claim {}: a Valid no replay licensed — nothing filed (SEAT-R)", duty.claim_id)
                     });
+                    continue;
+                }
+                // **SEAT-S4's licence is its own mask's V3, by a resuming seat, and nothing wider**: a
+                // verified resume that is not a `PartialResumes` seat's, or whose mask is not the one the
+                // assignment gave this seat, files nothing.
+                if licensed_by_verified_resume
+                    && (seat_r_duty.role != PalwSeatRRoleV1::PartialResumes
+                        || segments_attested
+                            != Some(
+                                kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(
+                                    duty.panel_anchor,
+                                    duty.claim_id,
+                                    duty.panel_seat_count.max(1),
+                                )
+                                .mask_of(duty.seat_index as u16),
+                            ))
+                {
+                    warn!("[{PALW_PANEL}] claim {}: a verified resume outside its own mask — nothing filed (SEAT-S4)", duty.claim_id);
                     continue;
                 }
                 // Inside what acceptance takes: at or after the bind, and at or before the deadline the
@@ -6653,6 +7591,9 @@ impl PalwPanelService {
                         own_filed.insert(key, filed(None));
                     }
                     self.flow_context.broadcast_palw_seat_receipt(bytes).await;
+                }
+                if valid {
+                    unserved.remove(&duty.claim_id);
                 }
                 answered.insert(key);
             }
@@ -7367,9 +8308,54 @@ impl PalwPanelService {
                 self.note_seat_fault_v1(*claim, 0, 0);
             }
             replay_refuted.retain(|claim| live.contains(claim));
+            seat_resumes.retain_live(|claim| duty_claims.contains(claim));
+            // N-5's second half, past SEAT-R: a duty this seat was never served that ended because a
+            // licence landed on it. The accusation that answers it (`DefaultAccused`) is Phase 2's
+            // P2-6; this names the claim where that filing goes (`palw_seat_unserved_licence_v1`).
+            let ended: Vec<(Hash64, u64)> =
+                unserved.iter().filter(|(claim, _)| !duty_claims.contains(*claim)).map(|(claim, at)| (*claim, *at)).collect();
+            if !ended.is_empty() {
+                let rows = self
+                    .consensus_manager
+                    .consensus()
+                    .unguarded_session()
+                    .spawn_blocking(move |c| {
+                        c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat, true, 500)
+                    })
+                    .await
+                    .map(|read| read.rows)
+                    .unwrap_or_default();
+                for (claim, since) in ended {
+                    let phase = rows.iter().find(|row| row.claim_id == claim).map(|row| &row.phase);
+                    if palw_seat_unserved_licence_v1(phase) {
+                        info!(
+                            "[{PALW_PANEL}] claim {claim}: licensed while this seat was never served its material (waiting since DAA \
+                             {since}) — the DefaultAccused filing that answers it is Phase 2's (P2-6); nothing filed (N-5)"
+                        );
+                    }
+                    unserved.remove(&claim);
+                }
+            }
             // The foreign retention keeps what a live claim may still ask for: a C7 claim's window
             // (2,799 DAA on testnet-12) outlives the directory's age bound.
-            *self.foreign_pinned.lock().unwrap() = live.clone();
+            // R2: past SEAT-R also every claim this seat held a duty on, until its retention horizon.
+            if seat_r {
+                retention_liabilities.retain(|_, horizon| *horizon >= current_daa);
+                liabilities_unread.retain(|claim| retention_liabilities.contains_key(claim));
+                *self.foreign_pinned.lock().unwrap() = palw_seat_retention_pins_v1(&live, &retention_liabilities, current_daa);
+            } else {
+                *self.foreign_pinned.lock().unwrap() = live.clone();
+            }
+            // H1's other half, past SEAT-R: the served openings of a claim no duty, court or dispute
+            // names any more leave the pool. It admits no new `(claim, interval)` pair past its ceiling
+            // and nothing else ever removed one, so a node stopped hearing openings — every re-ask of a
+            // jammed or refused one included — after a few hundred claims.
+            if seat_r {
+                interval_openings.retain(|(claim, _), _| live.contains(claim));
+                // And the asks' pacing beside them (the second pass, finding 6): one entry a `(claim,
+                // interval)` asked for, each C7 segment's included, and nothing else ever removed one.
+                requested_intervals.retain(|(claim, _), _| live.contains(claim));
+            }
             evidence_kept.retain(|claim| live.contains(claim));
             capture_sampled.retain(|claim| live.contains(claim));
             // A re-send is scheduled for exactly the duties `answered` remembers: one the chain has
@@ -8254,6 +9240,18 @@ impl PalwPanelService {
         duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
         pooled: &[Vec<u8>],
     ) -> Option<Vec<u32>> {
+        self.fp_committed_answer_v1(backend, duty, pooled).map(|(_, ids)| ids)
+    }
+
+    /// [`Self::fp_committed_output_ids_v1`] with the job the ids bound under — the claim's own job,
+    /// with certainty: the committed `output_root` is built over the job's context hash, so ids that
+    /// recompute it under a candidate's job name that job as the claim's.
+    fn fp_committed_answer_v1(
+        &self,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        pooled: &[Vec<u8>],
+    ) -> Option<(kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1, Vec<u32>)> {
         use kaspa_consensus_core::palw_freeprompt_v3::{palw_fp_committed_output_ids_decode_v1, palw_fp_job_material_decode_v1};
         let disk = self.fp_retained_payload_paths(&duty.claim_id).into_iter().filter_map(|path| std::fs::read(path).ok());
         let form = self.class_prompt_ids_form(duty.class_id);
@@ -8285,7 +9283,7 @@ impl PalwPanelService {
             if kaspa_consensus_core::palw_freeprompt_v3::palw_fp_answer_decode_v1(&bytes, form).is_some() {
                 self.persist_foreign_answer(&duty.claim_id, &bytes);
             }
-            Some(ids)
+            Some((material, ids))
         })
     }
 
@@ -8981,6 +9979,8 @@ impl PalwPanelService {
         let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
         let job = &payload.material.job;
         let (execution_root, trace_root, work_leaves) = session.palw_claim_roots_v2(claim).ok_or("the chain holds no such claim")?;
+        // `output_root: None`: the chain's roots read (`palw_claim_roots_v2`) carries no output root,
+        // and a leaf's evidence proves a step leaf against the execution root — not the answer.
         let roots = PalwClaimRootsV1 {
             execution_root,
             trace_root,
@@ -9341,7 +10341,7 @@ impl PalwPanelService {
         match poll {
             PalwSeatReplayPollV1::Running => (PalwSeatReplayStepV1::Waiting, None),
             PalwSeatReplayPollV1::Done { result, fresh } => {
-                let step = palw_seat_replay_step_v1(&result, duty.execution_root, duty.trace_root, duty.work_leaves);
+                let step = palw_seat_replay_step_v1(&result, duty.execution_root, duty.trace_root, duty.work_leaves, duty.output_root);
                 match (&result, &step) {
                     (Ok(roots), PalwSeatReplayStepV1::Licensed) if fresh => info!(
                         "[{PALW_PANEL}] claim {}: licensed by replay — the anchor's job reproduces the claim's roots ({} leaves \
@@ -9353,12 +10353,15 @@ impl PalwPanelService {
                     ),
                     (Ok(roots), _) if fresh => warn!(
                         "[{PALW_PANEL}] claim {}: the anchor's job does NOT reproduce the claim's roots (execution {} vs claimed {}, \
-                         trace {} vs {}, work {:?} vs priced {}) — nothing licenses it here; the full seat's fault finders run on (SEAT-R)",
+                         trace {} vs {}, output {:?} vs {}, work {:?} vs priced {}) — nothing licenses it here; the full seat's fault \
+                         finders run on (SEAT-R, SEAT-S2)",
                         duty.claim_id,
                         roots.execution_root,
                         duty.execution_root,
                         roots.trace_root,
                         duty.trace_root,
+                        roots.output_root,
+                        duty.output_root,
                         roots.work_leaves,
                         duty.work_leaves
                     ),
@@ -9490,6 +10493,7 @@ impl PalwPanelService {
                         trace_root: duty.trace_root,
                         anchor: *job_id,
                         attempt_draw: None,
+                        output_root: Some(duty.output_root),
                     };
                     let proof = payloads.iter().find(|bytes| {
                         palw_fp_capture_decode_v1(bytes, form).is_some_and(|payload| {
@@ -9538,13 +10542,18 @@ impl PalwPanelService {
             match poll {
                 PalwSeatReplayPollV1::Running => waiting |= decides,
                 PalwSeatReplayPollV1::Done { result: Ok(replayed), fresh } => {
-                    if palw_seat_replay_step_v1(&Ok(replayed), duty.execution_root, duty.trace_root, duty.work_leaves)
-                        == PalwSeatReplayStepV1::Licensed
-                    {
+                    let step = palw_seat_replay_step_v1(
+                        &Ok(replayed),
+                        duty.execution_root,
+                        duty.trace_root,
+                        duty.work_leaves,
+                        duty.output_root,
+                    );
+                    if step == PalwSeatReplayStepV1::Licensed {
                         if fresh {
                             info!(
-                                "[{PALW_PANEL}] claim {}: licensed by replay — the job reproduces the claim's roots at its price ({:?} \
-                                 leaves); a seat's one Valid route ({:?}, SEAT-R)",
+                                "[{PALW_PANEL}] claim {}: licensed by replay — the job reproduces the claim's roots and answer at its \
+                                 price ({:?} leaves); a seat's one Valid route ({:?}, SEAT-R)",
                                 duty.claim_id, replayed.work_leaves, seat_r_duty.role
                             );
                         }
@@ -9553,18 +10562,21 @@ impl PalwPanelService {
                     if fresh {
                         warn!(
                             "[{PALW_PANEL}] claim {}: a served job's replay does not reproduce the claim's roots (execution {} vs {}, \
-                             trace {} vs {}, work {:?} vs priced {}){}",
+                             trace {} vs {}, output {:?} vs {}, work {:?} vs priced {}){}",
                             duty.claim_id,
                             replayed.execution_root,
                             duty.execution_root,
                             replayed.trace_root,
                             duty.trace_root,
+                            replayed.output_root,
+                            duty.output_root,
                             replayed.work_leaves,
                             duty.work_leaves,
                             if is_own { " — it is the claim's own job: nothing licenses the claim here" } else { "" }
                         );
                     }
-                    if is_own {
+                    // SEAT-S2: an answer the replay cannot name refutes nothing.
+                    if is_own && step == PalwSeatReplayStepV1::Refuted {
                         return (PalwSeatReplayStepV1::Refuted, None);
                     }
                 }
@@ -9629,10 +10641,14 @@ impl PalwPanelService {
                     let job = material.job.clone();
                     let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
                     replays.start(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), backend, move |b| {
+                        // SEAT-S2: the free-prompt run's own output root — the family's rule over the ids
+                        // this replay generated, under the executed context (the one rule the lane's
+                        // commitment and `fp_committed_output_ids_v1` both use).
                         b.execute_free_prompt(&job, &prompt).map(|run| kaspa_consensus_core::palw_backend::PalwReplayRootsV1 {
                             execution_root: run.outcome.execution_root,
                             trace_root: run.facts.full_logits_trace_root,
                             work_leaves: Some(run.facts.step_leaf_count),
+                            output_root: Some(run.outcome.output_root),
                         })
                     });
                 }
@@ -9642,13 +10658,168 @@ impl PalwPanelService {
         if waiting { (PalwSeatReplayStepV1::Waiting, None) } else { (PalwSeatReplayStepV1::NoVerdict, None) }
     }
 
+    /// **SEAT-S4 past SEAT-R, one tick** ([`PalwSeatResumesV1`]): the C7 partial seat's resume of its
+    /// own mask from served openings, each replayed off the loop in the SEAT-R slots under its own
+    /// ledger reservation — the partial seat's figure priced as the streamed fold it is
+    /// (`palw_partial_seat_streamed_need_v1`, the review's M3) — and the named openings asked for
+    /// again at the tail's pace when a segment has none left to try.
+    #[allow(clippy::too_many_arguments)]
+    async fn seat_s4_resume_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        seat_r_duty: PalwSeatRDutyV1,
+        current_daa: u64,
+        network_domain: Hash64,
+        ctx: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        prompt: &[usize],
+        openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        requested_intervals: &mut HashMap<(Hash64, u32), u64>,
+        replays: &mut PalwSeatReplaysV1,
+        resumes: &mut PalwSeatResumesV1,
+    ) -> PalwSeatResumeStepV1 {
+        let seats = duty.panel_seat_count.max(1);
+        let assignment =
+            kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(duty.panel_anchor, duty.claim_id, seats);
+        let claim = PalwSeatResumeClaimV1 {
+            claim: duty.claim_id,
+            job_id: ctx.job_id,
+            seat_count: seats,
+            mask: assignment.mask_of(duty.seat_index as u16),
+            now_daa: current_daa,
+        };
+        let step = resumes
+            .step(&claim, openings, replays, |replays, key, segment, opening| {
+                // A segment is at most the whole job: one this host's last whole replay of the class
+                // says cannot return by the deadline is not started (it would hold the C7 slot, detached,
+                // long after the chain stopped taking the receipt).
+                if !replays.fits(&duty.class_id, current_daa, seat_r_duty.deadline) {
+                    crate::palw_backends::note_throttled_v1("panel-segment-late", || {
+                        format!(
+                            "[{PALW_PANEL}] claim {} segment {segment}: not started — this host's last replay of the class would \
+                             return after the receipt deadline (DAA {}, SEAT-S4)",
+                            duty.claim_id, seat_r_duty.deadline
+                        )
+                    });
+                    return false;
+                }
+                if !replays.has_room(seat_r_duty.heavy) {
+                    crate::palw_backends::note_throttled_v1("panel-segment-room", || {
+                        format!("[{PALW_PANEL}] claim {} segment {segment}: the resume waits — every replay slot is taken", duty.claim_id)
+                    });
+                    return false;
+                }
+                let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return false };
+                let need = crate::palw_backends::palw_partial_seat_streamed_need_v1(self.backends().role_memory_need_for_backend_or_chain_v1(
+                    backend.as_ref(),
+                    duty.class_id,
+                    duty.artifact_root,
+                    Some(ctx),
+                    kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment },
+                    |id| self.chain_carriage_v1(session, id),
+                ));
+                let reserved = match self.reserve_replay_v1("partial-seat", &need, duty.class_id, duty.claim_id) {
+                    Ok(reserved) => reserved,
+                    Err(why) => {
+                        crate::palw_backends::note_throttled_v1("panel-segment-ledger", || {
+                            format!("[{PALW_PANEL}] claim {} segment {segment}: the resume waits — {why}", duty.claim_id)
+                        });
+                        return false;
+                    }
+                };
+                info!(
+                    "[{PALW_PANEL}] claim {}: resuming segment {segment} off the loop from a served opening (SEAT-S4, deadline DAA {})",
+                    duty.claim_id, seat_r_duty.deadline
+                );
+                let segment_claim = kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1 {
+                    execution_root: duty.execution_root,
+                    trace_root: duty.trace_root,
+                    seat_count: seats,
+                    segment_index: segment,
+                };
+                let (ctx, prompt) = (ctx.clone(), prompt.to_vec());
+                replays.start_segment(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), backend, move |b| {
+                    // Whose an `Err` is — the opening's, or this host's (finding 1) — as the family names it.
+                    b.replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening, segment_claim)
+                        .map(|replay| replay.matches)
+                        .map_err(palw_seat_s4_refusal_v1)
+                });
+                true
+            })
+            .await;
+        if let PalwSeatResumeStepV1::Starved { missing, .. } = &step {
+            let reask_daa = seat_reask_daa_v1(seat_r_duty.deadline.saturating_sub(duty.bound_daa));
+            let fresh: Vec<u32> = missing
+                .iter()
+                .copied()
+                .filter(|i| requested_intervals.get(&(duty.claim_id, *i)).is_none_or(|at| current_daa >= at.saturating_add(reask_daa)))
+                .collect();
+            if !fresh.is_empty() {
+                for i in &fresh {
+                    requested_intervals.insert((duty.claim_id, *i), current_daa);
+                }
+                self.request_fp_interval_openings(network_domain, duty.claim_id, &fresh, current_daa).await;
+            }
+        }
+        step
+    }
+
+    /// **A free-prompt seat's job and context for the claim it judges** (the audit's SEAT-S review,
+    /// L2): the job the answer's ids bound under — the claim's own, with certainty, since the committed
+    /// `output_root` is built over the job's context — at the count the answer's length names
+    /// ([`Self::fp_committed_answer_v1`]). Never the job's ceiling, which is every early-stopping
+    /// claim's wrong context.
+    ///
+    /// **Only the answer's job** (the second pass, finding 1). A held job the answer did not
+    /// authenticate — the first pooled `FPM1` of the duty's class and executor, priced at the claim's
+    /// `work_leaves` — is anybody's to build from the duty's public fields and the claim's shape: under
+    /// a stranger's job the family refuses the producer's honest opening (`NotTheSeatsJob`), the route
+    /// dropped it and the seat, unserved, accused the producer at `X_ASK`. Holding no answer, the seat
+    /// asks for the claim's material (the answer envelope carries the ids) and resumes nothing.
+    fn fp_seat_job_v1(
+        &self,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        held: &[Vec<u8>],
+    ) -> Option<(kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
+        let (material, ids) = self.fp_committed_answer_v1(backend, duty, held)?;
+        let ctx = backend.fp_job_context_for_executed_v1(&material.job, ids.len().min(u32::MAX as usize) as u32)?;
+        Some((material, ctx))
+    }
+
+    /// **N-5: whether a licence already stands for `claim` in this node's receipt pools** — one of
+    /// the three doors the collector assembles (`palw_v2_receipt_coverage_assemble`,
+    /// `palw_v2_optimistic_assemble`, `palw_v2_receipt_quorum_assemble`) answering over what this
+    /// node holds. A seat holding no verified material then files its `Unavailable` at once rather
+    /// than at the material wait's cap: the claim is about to leave `PanelBound`, and with it the
+    /// duty that could carry the receipt. Asked only while such a seat waits, and only when the
+    /// pools hold two receipts or more.
+    fn palw_licence_stands_v1(
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        claim: Hash64,
+        v2: &crate::palw_receipt_pool::PalwReceiptPoolV1<PalwSeatReceiptV2>,
+        v3: &crate::palw_receipt_pool::PalwReceiptPoolV1<PalwSeatReceiptV3>,
+        facts: &crate::palw_receipt_pool::ReceiptChainFactsV1,
+    ) -> bool {
+        let (whole, segmented) = (v2.candidates(&claim, facts), v3.candidates(&claim, facts));
+        if whole.len() + segmented.len() < 2 {
+            return false;
+        }
+        session.palw_v2_receipt_coverage_assemble(claim, segmented.clone()).is_some()
+            || session.palw_v2_optimistic_assemble(claim, segmented).is_some()
+            || session.palw_v2_receipt_quorum_assemble(claim, whole).is_some()
+    }
+
     /// ADR-0133 S1/S3: a partial seat resumes assigned segments (or S3 sites) from published
     /// checkpoints. Only the designated full-replay seat returns `FullReplay`. A partial seat
     /// that cannot open waits; it does not walk the job from genesis.
     ///
-    /// **Past SEAT-R a partial seat's resume abstains** (`Abstain`), before S3 or S1 reads a byte:
-    /// neither recomputes its mask against hashes the claim committed ([`palw_seat_r_in_force_v1`]).
-    /// A replaying partial seat has already run the whole replay by then (`PalwSeatRRoleV1`).
+    /// **Past SEAT-R a partial seat's resume abstains here** (`Abstain`), before S3 or S1 reads a
+    /// byte — the audit's SEAT-S review, C1: S3 attested the whole mask from a pooled capture nothing
+    /// checked against the claim, and `replay_layer_site_v3` leaves that check to its caller. A
+    /// replaying partial seat has already run the whole replay by then, and a C7 partial seat takes
+    /// SEAT-S4's verified route (`seat_s4_resume_v1`), which reads no pooled capture and samples no
+    /// site. Below SEAT-R this path is what it was, byte for byte.
     #[allow(clippy::too_many_arguments)]
     async fn palw_v2_try_partial_resume_v1(
         &self,
@@ -9844,6 +11015,10 @@ impl PalwPanelService {
         }
     }
 }
+
+/// Where the production code ends: `seat_s_tests` pins read the source before it.
+#[cfg(test)]
+const MARKER_SEAT_S: &str = "mod tests {\n    use super::*;";
 
 #[cfg(test)]
 mod tests {
@@ -10688,7 +11863,9 @@ mod court_responder_coverage_pin {
         assert_eq!(gates.len(), 3, "three gates: before every arm, before the capture arm, before the tail");
         let replay = at(".interval_seat_outcome_v1(");
         let capture = at("palw_fp_capture_decode_v1(");
-        let tail = at("break 'verdict Some(PalwReceiptVerdictV2::Unavailable");
+        // The half-window tail is the block's last `Unavailable` (the SEAT-S4 route's material wait and
+        // the replaying partial seat's precede it, each past SEAT-R alone).
+        let tail = block.rfind("break 'verdict Some(PalwReceiptVerdictV2::Unavailable").expect("the tail");
         assert!(gates[0] < replay, "the first gate precedes the first replay");
         assert!(gates.iter().any(|g| *g > replay && *g < capture), "a gate between the interval arm and the capture arm");
         assert!(gates.iter().any(|g| *g > capture && *g < tail), "a gate before the half-window tail");
@@ -10786,15 +11963,19 @@ mod court_responder_coverage_pin {
     /// **ADR-0133 S1 (4), pinned where it lives: a court close of an accused leaf resumes the V2
     /// segment from its published checkpoint before assembling the per-leaf refutation.**
     #[test]
-    fn a_court_close_resumes_the_accused_segment_from_its_checkpoint() {
+    fn m1_a_court_close_spends_no_discarded_segment_resume() {
         const MARKER: &str = "mod court_responder_coverage_pin";
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
         let close = source.find("the close does not assemble from this capture").expect("the close arm");
-        let resume = source[..close].rfind("palw_verification_v2_at(current_daa)").expect("resume is past Verification V2");
-        let arm = &source[resume..close];
-        assert!(arm.contains("replay_accused_segment_v1"), "S1 court resume precedes the close");
-        assert!(arm.contains("palw_segment_index_of_leaf_v2"), "the accused leaf names the V2 segment that is resumed");
+        let reserve = source[..close].rfind("let court_reserved = match").expect("the close's reservation");
+        let arm = &source[reserve..close];
+        assert!(arm.contains("offload(backend, move |b|"), "the close still runs off the runtime");
+        assert!(!arm.contains(".replay_accused_segment_v1("), "M1: no whole-segment replay whose result nothing reads");
+        assert!(
+            arm.contains("refutation_for_free_prompt_index") && arm.contains("refutation_for_index"),
+            "the refutation is the close"
+        );
     }
 
     /// **ADR-0133 S1 (3), pinned where it lives: a free-prompt partial seat resumes assigned
@@ -11366,15 +12547,15 @@ mod seat_r_tests {
     }
 
     /// **The one rule, as a table.** Below SEAT-R every arm licenses; past it the two replays of the
-    /// claim's whole job alone — not the segment resume (SEAT-S4 is base0's, still open), not S3
-    /// inside it, not the material, the capture, or either interval arm.
+    /// claim's whole job, and SEAT-S4's verified resume of a seat's own mask — not the legacy segment
+    /// resume, not S3 inside it, not the material, the capture, or either interval arm.
     #[test]
     fn past_seat_r_only_the_replays_license() {
         for arm in PalwSeatArmV1::ALL {
             assert!(palw_seat_arm_licenses_v1(false, arm), "{arm:?} below the fences, as today");
             assert_eq!(
                 palw_seat_arm_licenses_v1(true, arm),
-                matches!(arm, PalwSeatArmV1::AttemptReplay | PalwSeatArmV1::FreePromptReplay),
+                matches!(arm, PalwSeatArmV1::AttemptReplay | PalwSeatArmV1::FreePromptReplay | PalwSeatArmV1::VerifiedSegmentResume),
                 "{arm:?} past the fences"
             );
         }
@@ -11399,29 +12580,42 @@ mod seat_r_tests {
     /// **(d) The roles, and the receipts each files for a replay's `Valid`.** The full seat replays
     /// on every class; a partial seat replays outside C7, and on a C7 class only as the claim's
     /// ADR-0147 outsider (the review, HIGH: every door of a bought class needs the outsider's
-    /// `Valid`, and the outsider is a partial seat four panels in five); on a C7 class otherwise — or
-    /// one this seat has not read — a partial seat files nothing. Every replaying seat files its V3
-    /// over its assigned mask beside the whole-job V2. The class reading is the registry's own — the
+    /// `Valid`, and the outsider is a partial seat four panels in five); on a C7 class otherwise it
+    /// resumes its own mask (SEAT-S4 re-enabled, `PartialResumes`), and on one this seat has not read
+    /// it files nothing. A partial seat whose mask is the whole job replays (L1). Every replaying
+    /// seat files its V3 over its assigned mask beside the whole-job V2. The class reading is the registry's own — the
     /// 8k row (3 spans) and the 2M row (2,799) through `palw_panel_held_to_final_v1` — with the class
     /// table's registration DAA for "bought"; a class the read does not list stays unread.
     #[test]
-    fn a_partial_seat_replays_outside_c7_and_abstains_on_it_past_seat_r() {
+    fn a_partial_seat_replays_outside_c7_and_resumes_on_it_past_seat_r() {
         use PalwSeatRRoleV1::*;
         for held in [Some(true), Some(false), None] {
             for outsider in [true, false] {
-                assert_eq!(palw_seat_r_role_v1(true, held, outsider), FullSeat, "the full seat replays whatever the class ({held:?})");
+                for full_mask in [true, false] {
+                    assert_eq!(
+                        palw_seat_r_role_v1(true, held, outsider, full_mask),
+                        FullSeat,
+                        "the full seat replays whatever the class ({held:?})"
+                    );
+                }
             }
         }
-        assert_eq!(palw_seat_r_role_v1(false, Some(false), false), PartialReplays, "outside C7: the liveness fallback");
-        assert_eq!(palw_seat_r_role_v1(false, Some(false), true), PartialReplays);
-        assert_eq!(palw_seat_r_role_v1(false, Some(true), false), PartialAbstains, "C7: its replay is the class's whole window");
-        assert_eq!(palw_seat_r_role_v1(false, Some(true), true), PartialReplays, "C7's outsider: no door opens without it");
+        assert_eq!(palw_seat_r_role_v1(false, Some(false), false, false), PartialReplays, "outside C7: the liveness fallback");
+        assert_eq!(palw_seat_r_role_v1(false, Some(false), true, false), PartialReplays);
+        assert_eq!(
+            palw_seat_r_role_v1(false, Some(true), false, false),
+            PartialResumes,
+            "C7: its replay is the class's whole window, so it resumes its own mask (SEAT-S4)"
+        );
+        assert_eq!(palw_seat_r_role_v1(false, Some(true), true, false), PartialReplays, "C7's outsider: no door opens without it");
         for outsider in [true, false] {
-            assert_eq!(
-                palw_seat_r_role_v1(false, None, outsider),
-                PartialAbstains,
-                "unread: no replay started on a guess about its size"
-            );
+            for full_mask in [true, false] {
+                assert_eq!(
+                    palw_seat_r_role_v1(false, None, outsider, full_mask),
+                    PartialAbstains,
+                    "unread: nothing started on a guess about its size"
+                );
+            }
         }
 
         // The registry's reading of testnet-12's two model rows, a bought 2M-sized row, an unrowed
@@ -11459,12 +12653,12 @@ mod seat_r_tests {
         assert_eq!(rows.class(&unrowed), PalwSeatClassReadV1::Unrowed);
         assert_eq!(rows.class(&stranger), PalwSeatClassReadV1::Unread, "an unrowed class nobody asked about is not kept");
         assert_eq!(rows.class(&raced), PalwSeatClassReadV1::Unread, "(the review, LOW) not listed: unread, never outside C7");
-        assert_eq!(palw_seat_r_role_v1(false, rows.class(&raced).held_to_final(), false), PartialAbstains);
+        assert_eq!(palw_seat_r_role_v1(false, rows.class(&raced).held_to_final(), false, false), PartialAbstains);
         assert_ne!(rows.class(&raced).held_to_final(), Some(false), "its replay would never take a light slot");
-        assert_eq!(palw_seat_r_role_v1(false, rows.class(&short).held_to_final(), false), PartialReplays);
-        assert_eq!(palw_seat_r_role_v1(false, rows.class(&heavy).held_to_final(), false), PartialAbstains);
+        assert_eq!(palw_seat_r_role_v1(false, rows.class(&short).held_to_final(), false, false), PartialReplays);
+        assert_eq!(palw_seat_r_role_v1(false, rows.class(&heavy).held_to_final(), false, false), PartialResumes);
         assert_eq!(
-            palw_seat_r_role_v1(false, rows.class(&unrowed).held_to_final(), false),
+            palw_seat_r_role_v1(false, rows.class(&unrowed).held_to_final(), false, false),
             PartialReplays,
             "no row: C7 cannot select it"
         );
@@ -11572,9 +12766,9 @@ mod seat_r_tests {
         let claim = backend.execute(&job, &prompt).expect("the producer's run");
         let replayed = backend.execute_for_verdict(&job, &prompt);
         assert_eq!(
-            palw_seat_replay_step_v1(&replayed, claim.execution_root, claim.trace_root, 0),
+            palw_seat_replay_step_v1(&replayed, claim.execution_root, claim.trace_root, 0, claim.output_root),
             PalwSeatReplayStepV1::Licensed,
-            "the replay licenses the honest floor claim"
+            "the replay licenses the honest floor claim — its roots and its answer (SEAT-S2)"
         );
 
         let chain = Chain::new();
@@ -11586,7 +12780,7 @@ mod seat_r_tests {
         // its V3 over its own mask.
         let floor = PalwSeatClassReadV1::Unrowed;
         for (index, _) in chain.seats.iter().enumerate() {
-            let role = palw_seat_r_role_v1(index as u16 == assignment.full_seat, floor.held_to_final(), index == 0);
+            let role = palw_seat_r_role_v1(index as u16 == assignment.full_seat, floor.held_to_final(), index == 0, false);
             let mask = assignment.mask_of(index as u16);
             let forms = palw_seat_receipt_forms_v1(true, true, true, role, mask);
             assert_eq!(forms, PalwSeatReceiptFormsV1 { segments: Some(mask), whole: true }, "seat {index}");
@@ -11749,8 +12943,13 @@ mod seat_r_tests {
         let (job, prompt) = backend.job_for_anchor(anchor).expect("job");
         let job = palw_attempt_job_v1(job, draw);
         let claim = backend.execute(&job, &prompt).expect("the producer's run");
-        let roots =
-            PalwClaimRootsV1 { execution_root: claim.execution_root, trace_root: claim.trace_root, anchor, attempt_draw: Some(draw) };
+        let roots = PalwClaimRootsV1 {
+            execution_root: claim.execution_root,
+            trace_root: claim.trace_root,
+            anchor,
+            attempt_draw: Some(draw),
+            output_root: Some(claim.output_root),
+        };
         for arm in [PalwSeatArmV1::AttemptMaterial, PalwSeatArmV1::RetainedMaterial] {
             assert_eq!(
                 palw_attempt_material_arm_v1(false, arm, &backend, &claim.material, roots),
@@ -11812,15 +13011,20 @@ mod seat_r_tests {
         .expect("one honest execution");
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let honest_bytes = base0_fp_material_encode_v2(&run, &ids).expect("fold");
-        let honest_roots =
-            PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor, attempt_draw: Some(draw) };
+        let honest_roots = PalwClaimRootsV1 {
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            anchor,
+            attempt_draw: Some(draw),
+            output_root: Some(run.output_root),
+        };
         let arm = |seat_r: bool, bytes: &[u8], roots: PalwClaimRootsV1| {
             palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, &backend, bytes, roots)
         };
         assert_eq!(arm(true, &honest_bytes, honest_roots), PalwMaterialArmV1::Evidence, "the honest fold is kept, and signs nothing");
         let replayed = backend.execute_for_verdict(&job, &prompt);
         assert_eq!(
-            palw_seat_replay_step_v1(&replayed, run.execution_root, run.trace_root, 0),
+            palw_seat_replay_step_v1(&replayed, run.execution_root, run.trace_root, 0, run.output_root),
             PalwSeatReplayStepV1::Licensed,
             "(a) the replay licenses the honest held claim"
         );
@@ -11844,12 +13048,13 @@ mod seat_r_tests {
                 trace_root: m.binding.full_logits_trace_root,
                 anchor,
                 attempt_draw: Some(draw),
+                output_root: Some(run.output_root),
             };
             assert_eq!(backend.verify_material(&bytes, roots), PalwMaterialVerdictV1::Matches, "bend #{bend}: the residual");
             assert_eq!(arm(false, &bytes, roots), PalwMaterialArmV1::Licenses, "bend #{bend}: below the fences, as today");
             assert_eq!(arm(true, &bytes, roots), PalwMaterialArmV1::Evidence, "bend #{bend}: past them, kept and unsigned");
             assert_eq!(
-                palw_seat_replay_step_v1(&replayed, roots.execution_root, roots.trace_root, 0),
+                palw_seat_replay_step_v1(&replayed, roots.execution_root, roots.trace_root, 0, run.output_root),
                 PalwSeatReplayStepV1::Refuted,
                 "bend #{bend}: (b) the replay refutes it — no Valid from this seat about it again"
             );
@@ -12026,7 +13231,7 @@ mod seat_r_tests {
         assert!(replays.fits(&two_m_class(), 0, 0), "a class not yet timed is started");
         let key = (h(0x2E), h(1));
         replays.start(key, two_m_class(), true, 100, None, Box::new(floor_backend()), |_| {
-            Ok(PalwReplayRootsV1 { execution_root: h(6), trace_root: h(7), work_leaves: None })
+            Ok(PalwReplayRootsV1 { execution_root: h(6), trace_root: h(7), work_leaves: None, output_root: Some(h(8)) })
         });
         assert!(returned(&mut replays, &key, 1_500).await.is_ok(), "it took 1,400 DAA");
         replays.retain_live(|_| false);
@@ -12079,10 +13284,13 @@ mod seat_r_tests {
     /// Every `break 'verdict` of the verdict block is one of six spellings, and every mention of
     /// `PalwReceiptVerdictV2::Valid` in it is a `Valid` exit or one of the two interval gates — so a
     /// `Valid` cannot leave the block by a spelling this pin does not see (the review, LOW). Every
-    /// `Valid` exit is attributed to the nearest arm named before it, eleven in all, in order. The two
+    /// `Valid` exit is attributed to the nearest arm named before it, thirteen in all, in order. The two
     /// replay exits past the fence are the `Licensed` arms of the two off-loop replays
-    /// (`fp_seat_replay_pass_v1`, `attempt_seat_replay_v1`), the only ones whose arm the rule admits
-    /// and the only lines that set `licensed_by_replay`; the two other replay exits — the free-prompt
+    /// (`fp_seat_replay_pass_v1`, `attempt_seat_replay_v1`), the only lines that set
+    /// `licensed_by_replay`; the two SEAT-S4 exits are the `Licensed` arms of the verified resume, one
+    /// a lane, the only lines that set `licensed_by_verified_resume` (for a `PartialResumes` seat's
+    /// own-mask V3 alone); those four are the only exits whose arm the rule admits. The two other
+    /// replay exits — the free-prompt
     /// `FPM1` replay and the awaited attempt replay — sit behind the fence's `continue` and the
     /// fence's `else`. Every material, retained, capture, interval and S1 exit consults the rule,
     /// which refuses them past the fence; S3 and S1 cannot reach a `Valid` because the partial resume
@@ -12140,6 +13348,7 @@ mod seat_r_tests {
         assert_eq!(
             exits.iter().map(|at| arm_before(*at).0).collect::<Vec<_>>(),
             vec![
+                VerifiedSegmentResume,
                 FreePromptReplay,
                 SegmentResume,
                 FreePromptInterval,
@@ -12147,6 +13356,7 @@ mod seat_r_tests {
                 FreePromptReplay,
                 AttemptMaterial,
                 RetainedMaterial,
+                VerifiedSegmentResume,
                 AttemptReplay,
                 SegmentResume,
                 AttemptReplay,
@@ -12184,6 +13394,18 @@ mod seat_r_tests {
             assert!(*at - licensed < 600, "inside the Licensed arm");
             assert!((fp_pass < licensed && licensed - fp_pass < 400) || (attempt_pass < licensed && licensed - attempt_pass < 900));
         }
+        // SEAT-S4's two writers: the verified resume's `Licensed` arms, one a lane, each just before
+        // its `Valid` and inside the arm of a `seat_s4_resume_v1` step.
+        const RESUMED: &str = "licensed_by_verified_resume = true;";
+        let resumers: Vec<usize> = block.match_indices(RESUMED).map(|(i, _)| i).collect();
+        assert_eq!(resumers.len(), 2, "two writers, and no other");
+        for at in &resumers {
+            assert!(block[at + RESUMED.len()..].trim_start().starts_with(VALID), "a writer is its exit's last line");
+            let licensed = block[..*at].rfind("PalwSeatResumeStepV1::Licensed(mask) => {").expect("a Licensed arm");
+            assert!(*at - licensed < 400, "inside the Licensed arm");
+            let resumed = block[..licensed].rfind(".seat_s4_resume_v1(").expect("the verified resume");
+            assert!(licensed - resumed < 2_600, "of a SEAT-S4 step");
+        }
         for (n, at) in exits.iter().enumerate() {
             let (arm, named_at) = arm_before(*at);
             let path = &block[named_at.saturating_sub(200)..*at];
@@ -12192,7 +13414,9 @@ mod seat_r_tests {
                     path.contains("debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::"),
                     "exit {n} ({arm:?}) states the rule"
                 );
-                // A replay exit past the fence is an off-loop replay's `Licensed`, or sits behind the fence.
+                // A replay exit past the fence is an off-loop replay's `Licensed` (a verified resume's,
+                // for its own arm), or sits behind the fence.
+                let writers = if arm == VerifiedSegmentResume { &resumers } else { &writers };
                 let off_loop = writers.iter().any(|w| *w < *at && *at - *w < 120);
                 let below_the_fence = (fpm1 < *at && *at < attempt_lane) || old_replay < *at;
                 assert!(
@@ -12211,21 +13435,30 @@ mod seat_r_tests {
         let filing = &source[source.find("let Some(verdict) = verdict else { continue };").expect("the filing")..];
         let filing = &filing[..filing.find("// --- the seat's re-send").expect("its end")];
         let guard = filing
-            .find("if seat_r && matches!(verdict, PalwReceiptVerdictV2::Valid) && !licensed_by_replay {")
+            .find("if seat_r && matches!(verdict, PalwReceiptVerdictV2::Valid) && !(licensed_by_replay || licensed_by_verified_resume) {")
             .expect("the run-time guard");
         assert!(filing[guard..].find("continue;").is_some_and(|c| c < 400), "it files nothing");
         assert!(guard < filing.find("let forms = palw_seat_receipt_forms_v1(").expect("the forms"));
         assert!(guard < filing.find("sign(").expect("the signing"));
-        let declared = source.find("let mut licensed_by_replay = false;").expect("declared false for every duty");
-        assert!(
-            declared < source.find("let verdict = 'verdict: {").expect("the block")
-                && declared > source.find("for index in order {").unwrap()
-        );
+        for flag in ["let mut licensed_by_replay = false;", "let mut licensed_by_verified_resume = false;"] {
+            let declared = source.find(flag).expect("declared false for every duty");
+            assert!(
+                declared < source.find("let verdict = 'verdict: {").expect("the block")
+                    && declared > source.find("for index in order {").unwrap()
+            );
+        }
+        // A verified resume files its own mask's V3 as a resuming seat, and nothing wider.
+        let own_mask = filing.find("if licensed_by_verified_resume\n").expect("the verified resume's guard");
+        assert!(filing[own_mask..].contains("seat_r_duty.role != PalwSeatRRoleV1::PartialResumes"));
+        assert!(filing[own_mask..].find("continue;").is_some_and(|c| c < 900), "it files nothing");
+        assert!(own_mask < filing.find("let forms = palw_seat_receipt_forms_v1(").expect("the forms"));
 
         // The two off-loop replays run only in a role that replays, and never again on a refuted claim.
+        let squeezed: String = block[..fp_pass].chars().filter(|c| !c.is_whitespace()).collect();
         assert!(
-            block[..fp_pass].contains("if seat_r && seat_r_duty.role != PalwSeatRRoleV1::PartialAbstains && !refuted {"),
-            "the FP pass"
+            squeezed
+                .contains("ifseat_r&&matches!(seat_r_duty.role,PalwSeatRRoleV1::FullSeat|PalwSeatRRoleV1::PartialReplays)&&!refuted{"),
+            "the FP pass: the replaying roles only"
         );
         let abstains = block[..attempt_pass]
             .rfind("if seat_r_duty.role == PalwSeatRRoleV1::PartialAbstains {\n                                break 'verdict None;");
@@ -12298,7 +13531,7 @@ mod seat_r_tests {
                 .contains("if capture_sampled.contains(&duty.claim_id) {\n                                        continue;")
         );
         // The tail: a seat holding the claim's verified material accuses nobody of withholding it.
-        let tail = block.find("break 'verdict Some(PalwReceiptVerdictV2::Unavailable").expect("the tail");
+        let tail = block.rfind("break 'verdict Some(PalwReceiptVerdictV2::Unavailable").expect("the tail");
         let evidence = block.find("if seat_r && evidence_kept.contains(&duty.claim_id) {").expect("the evidence gate");
         assert!(evidence < tail && block[..tail].contains("self.request_material_signed("), "before the pull and the accusation");
         assert!(
@@ -12339,7 +13572,9 @@ mod seat_r_tests {
         let fp = &fp[..fp.find("\n    }\n").expect("its end")];
         assert!(fp.contains("b.execute_free_prompt(&job, &prompt)"), "the whole served job");
         for (name, body) in [("attempt", attempt), ("free prompt", fp)] {
-            assert!(body.contains("palw_seat_replay_step_v1(&"), "{name}: the one replay rule");
+            let squeezed: String = body.chars().filter(|c| !c.is_whitespace()).collect();
+            assert!(squeezed.contains("palw_seat_replay_step_v1(&"), "{name}: the one replay rule");
+            assert!(squeezed.contains("duty.work_leaves,duty.output_root"), "{name}: and the claim's answer (SEAT-S2)");
             assert!(body.contains("self.reserve_replay_v1(\"full-seat\", &need,"), "{name}: reserved for its life");
             assert!(body.contains("replays.retry_refused(&key, current_daa, seat_r_duty.deadline)"), "{name}: retried once, in time");
             assert!(body.contains("replays.has_room(seat_r_duty.heavy)"), "{name}: a C7 replay takes the heavy slot");
@@ -12368,7 +13603,7 @@ mod seat_r_tests {
             "due until the loop's deadline"
         );
         // The roles read the outsider; the V1 door is offered its quorum past the fence only.
-        assert!(source.contains("role: palw_seat_r_role_v1(full_seat, class.held_to_final(), outsider),"));
+        assert!(source.contains("role: palw_seat_r_role_v1(full_seat, class.held_to_final(), outsider, mask_is_full),"));
         let collector = source.find("let mut through_v1 = false;").expect("the collector");
         let collector = &source[collector..collector + 900];
         assert!(collector.contains(
@@ -12380,19 +13615,23 @@ mod seat_r_tests {
         );
     }
 
-    /// **The one replay rule both lanes read**: `Licensed` only when both roots and the priced
-    /// work reproduce; a replay that ran and does not is `Refuted` (terminal for `Valid`); one that
-    /// did not run is `NoVerdict`, never a licence.
+    /// **The one replay rule both lanes read**: `Licensed` only when both roots, the priced work and
+    /// the answer reproduce (SEAT-S2); a replay that ran and does not is `Refuted` (terminal for
+    /// `Valid`); one that did not run, or names no answer, is `NoVerdict`, never a licence.
     #[test]
     fn a_returned_replay_licenses_refutes_or_says_nothing() {
         use PalwSeatReplayStepV1 as S;
-        let roots = |w: Option<u64>| Ok(PalwReplayRootsV1 { execution_root: h(0xE), trace_root: h(0x7), work_leaves: w });
-        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xE), h(0x7), 30), S::Licensed);
-        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xE), h(0x7), 0), S::Licensed, "an attempt prices nothing");
-        assert_eq!(palw_seat_replay_step_v1(&roots(Some(31)), h(0xE), h(0x7), 30), S::Refuted, "the work is not the claim's");
-        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xF), h(0x7), 30), S::Refuted, "another execution root");
-        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xE), h(0x8), 30), S::Refuted, "another trace root");
-        assert_eq!(palw_seat_replay_step_v1(&Err("refused".into()), h(0xE), h(0x7), 30), S::NoVerdict);
+        let (o, other) = (h(0x0A), h(0x0B));
+        let roots = |w: Option<u64>| {
+            Ok(PalwReplayRootsV1 { execution_root: h(0xE), trace_root: h(0x7), work_leaves: w, output_root: Some(h(0x0A)) })
+        };
+        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xE), h(0x7), 30, o), S::Licensed);
+        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xE), h(0x7), 0, o), S::Licensed, "an attempt prices nothing");
+        assert_eq!(palw_seat_replay_step_v1(&roots(Some(31)), h(0xE), h(0x7), 30, o), S::Refuted, "the work is not the claim's");
+        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xF), h(0x7), 30, o), S::Refuted, "another execution root");
+        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xE), h(0x8), 30, o), S::Refuted, "another trace root");
+        assert_eq!(palw_seat_replay_step_v1(&Err("refused".into()), h(0xE), h(0x7), 30, o), S::NoVerdict);
+        assert_eq!(palw_seat_replay_step_v1(&roots(Some(30)), h(0xE), h(0x7), 30, other), S::Refuted, "M2: another answer");
     }
 
     /// **The foreign retention never sweeps a live claim's file** (the review, LOW): a C7 claim's
@@ -12426,5 +13665,1034 @@ mod seat_r_tests {
         assert_eq!(left, 3, "the two live files, and one of the three others");
         assert!(dir.join(format!("{live}.material")).exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod seat_s_tests {
+    //! **The audit's SEAT-S review, fixed past SEAT-R and pinned by finding** (C1, H1–H3, M1–M3,
+    //! L1, L2), with the deadline design's N-5 (the material wait) and R2 (retention to `R_eff`), and
+    //! the re-enabled SEAT-S4 route: a C7 partial seat resumes its own mask from served openings the
+    //! family authenticates against the claim, off the loop, and files that mask's V3 alone. The
+    //! review's second pass is pinned as `f1_*`–`f6_*`. Below SEAT-R every path, form and deadline is
+    //! what it was.
+    use super::{
+        MARKER_SEAT_S, PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, PALW_SEAT_RETENTION_LIABILITIES_MAX_V1,
+        PALW_SEAT_S4_AUTHENTICATION_REFUSALS_V1, PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1, PalwReplayAnswerV1, PalwSeatArmV1,
+        PalwSeatClassReadV1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatReplayPollV1, PalwSeatReplayStepV1,
+        PalwSeatReplaysV1, PalwSeatResumeClaimV1, PalwSeatResumeStepV1, PalwSeatResumesV1, PalwSeatSegmentPollV1,
+        PalwSeatSegmentRefusalV1, PalwSeatTailV1, palw_replay_answer_v1, palw_seat_arm_licenses_v1,
+        palw_seat_material_wait_ends_v1, palw_seat_material_wait_until_v1, palw_seat_note_duty_liability_v1,
+        palw_seat_note_liability_v1, palw_seat_r_role_v1, palw_seat_receipt_forms_v1, palw_seat_replay_step_v1,
+        palw_seat_retention_horizon_v1, palw_seat_retention_pins_v1, palw_seat_s4_candidate_key_v1, palw_seat_s4_refusal_v1,
+        palw_seat_tail_v1, palw_seat_unserved_licence_v1, prune_foreign_retention_v1,
+    };
+    use kaspa_consensus_core::palw_backend::{PalwExecutionBackendV1, PalwReplayRootsV1};
+    use kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use kaspa_consensus_core::palw_segment_resume_v1::palw_segment_opening_request_index_v1;
+    use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
+    use kaspa_consensus_core::palw_verification_v2::{PalwSegmentMaskV2, palw_segment_assignment_v2, palw_segment_count_v2};
+    use kaspa_hashes::Hash64;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Arc;
+
+    fn h(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+
+    fn floor_backend() -> misaka_palw_base0::backend::Base0Backend {
+        use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("court");
+        let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("floor");
+        let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("root");
+        misaka_palw_base0::backend::Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("resolves"))
+            .with_step_ladder_cap(court.max_step_leaf_count())
+            .with_prompt_ids_form(PalwPromptIdsFormV1::MerkleV1)
+    }
+
+    /// The source before the first test module: what the pins read.
+    fn source() -> &'static str {
+        let whole = include_str!("palw_panel.rs");
+        &whole[..whole.find(MARKER_SEAT_S).expect("the production code ends before the tests")]
+    }
+
+    fn body_of<'a>(source: &'a str, head: &str) -> &'a str {
+        let from = source.find(head).unwrap_or_else(|| panic!("{head}"));
+        let rest = &source[from..];
+        &rest[..rest.find("\n    }\n").map(|end| end + 6).unwrap_or(rest.len())]
+    }
+
+    /// A free-prompt job of the floor's, greedy, five prompt ids and a seven-token ceiling, and the ids.
+    fn floor_fp_job(
+        backend: &misaka_palw_base0::backend::Base0Backend,
+    ) -> (kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<u32>) {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
+        };
+        let form = backend.prompt_ids_form();
+        let ids = vec![3u32, 1, 4, 1, 5];
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: h(0xD0),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint::new(
+                kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
+                0,
+            ),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: h(0x0B),
+            anchor_block: h(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &ids)
+                .expect("commits"),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 7,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        (job, ids)
+    }
+
+    /// A five-seat claim's partial seat and the one segment its mask covers.
+    fn partial_claim(now_daa: u64) -> (PalwSeatResumeClaimV1, u16, u32) {
+        let (anchor, claim, seats) = (h(0xA1), h(0xC1), 5u16);
+        let assignment = palw_segment_assignment_v2(anchor, claim, seats);
+        let seat = (0..seats).find(|s| *s != assignment.full_seat).expect("a partial seat");
+        let mask = assignment.mask_of(seat);
+        let k = palw_segment_count_v2(seats);
+        assert_eq!(mask.count(k), 1, "t12's five seats: one segment a partial seat");
+        let segment = (0..k).find(|i| mask.covers(*i)).expect("its segment");
+        (
+            PalwSeatResumeClaimV1 { claim, job_id: h(0x10B), seat_count: seats, mask, now_daa },
+            segment,
+            palw_segment_opening_request_index_v1(seats, segment),
+        )
+    }
+
+    /// A segment task that answers from the opening's bytes alone — `real` roots, `forged` (the
+    /// real binding with a sibling path of the forger's) does not, anything else is not an opening —
+    /// counting the starts.
+    fn fake_start(
+        starts: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> impl FnMut(&mut PalwSeatReplaysV1, (Hash64, Hash64), u16, Vec<u8>) -> bool {
+        let starts = starts.clone();
+        move |replays, key, _segment, opening| {
+            if !replays.has_room(true) {
+                return false;
+            }
+            starts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            replays.start_segment(key, h(0x2E), true, 0, None, Box::new(floor_backend()), move |_| match opening.as_slice() {
+                b"real" => Ok(true),
+                forged if forged.starts_with(b"forged") => Ok(false),
+                _ => Err(PalwSeatSegmentRefusalV1::NotTheClaims("NotAnOpening".into())),
+            });
+            true
+        }
+    }
+
+    /// Step until nothing runs: the verdict of the tick after every started task returned.
+    async fn settle(
+        resumes: &mut PalwSeatResumesV1,
+        claim: &PalwSeatResumeClaimV1,
+        openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        replays: &mut PalwSeatReplaysV1,
+        starts: &Arc<std::sync::atomic::AtomicUsize>,
+    ) -> PalwSeatResumeStepV1 {
+        for _ in 0..400 {
+            let step = resumes.step(claim, openings, replays, fake_start(starts)).await;
+            if step != PalwSeatResumeStepV1::Waiting {
+                return step;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("the resume never settled")
+    }
+
+    /// [`settle`] with the caller's own task.
+    async fn settle_with(
+        resumes: &mut PalwSeatResumesV1,
+        claim: &PalwSeatResumeClaimV1,
+        openings: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>,
+        replays: &mut PalwSeatReplaysV1,
+        mut start: impl FnMut(&mut PalwSeatReplaysV1, (Hash64, Hash64), u16, Vec<u8>) -> bool,
+    ) -> PalwSeatResumeStepV1 {
+        for _ in 0..2_000 {
+            let step = resumes.step(claim, openings, replays, &mut start).await;
+            if step != PalwSeatResumeStepV1::Waiting {
+                return step;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("the resume never settled")
+    }
+
+    /// **C1: past SEAT-R, S3 never attests, and no pooled capture is believed.** The legacy resume
+    /// abstains past the fence before it reads a byte (its own pin in `seat_r_tests`); the SEAT-S4
+    /// route reads no pooled capture, samples no site and records no fault from what it is served,
+    /// and the one arm past the fence that licenses a partial mask is its own.
+    #[test]
+    fn c1_s3_never_attests_past_the_fence_without_verify_material() {
+        let source = source();
+        let route = body_of(source, "    async fn seat_s4_resume_v1(");
+        let step = body_of(source, "    pub(crate) async fn step(");
+        for body in [route, step] {
+            for never in
+                ["replay_layer_site_v3", "open_segment_checkpoint_v1", "palw_layer_sample_v3", "note_seat_fault_v1", "materials"]
+            {
+                assert!(!body.contains(never), "the SEAT-S4 route reads no {never}");
+            }
+        }
+        assert!(route.contains(".replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening, segment_claim)"), "authenticated first");
+        assert!(route.contains("execution_root: duty.execution_root") && route.contains("trace_root: duty.trace_root"));
+        assert!(!palw_seat_arm_licenses_v1(true, PalwSeatArmV1::SegmentResume), "the legacy S1/S3 resume licenses nothing");
+        assert!(palw_seat_arm_licenses_v1(true, PalwSeatArmV1::VerifiedSegmentResume));
+        let legacy = body_of(source, "    async fn palw_v2_try_partial_resume_v1(");
+        let abstain = legacy.find("return PalwV2SeatPathV1::Abstain;").expect("the abstention");
+        assert!(abstain < legacy.find("palw_verification_s3_at(current_daa)").expect("S3"), "S3 is below the fence only");
+    }
+
+    /// **H1: a junk or forged opening neither stalls nor faults an honest claim.** Junk replies fill
+    /// the pair; every one is tried, refused, dropped from the pool (which frees the transport's
+    /// slot) and the opening asked for again — and junk alone is not being served (`served: false`,
+    /// the material wait's N-5 case). A forged sibling path (`Ok(false)` from an authenticated
+    /// opening) is dropped the same way and is never a fault; it was authenticated as the claim's, so
+    /// the seat counts as served and never accuses (`served: true`). Bytes re-served after a refusal
+    /// cost no second replay; and the real opening, arriving after them, licenses the mask.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn h1_a_junk_or_forged_opening_does_not_stall_or_fault_an_honest_claim() {
+        let (claim, _segment, request) = partial_claim(100);
+        let (mut resumes, mut replays) = (PalwSeatResumesV1::default(), PalwSeatReplaysV1::default());
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut openings: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+        openings.insert((claim.claim, request), vec![b"junk1".to_vec(), b"junk2".to_vec(), b"12345".to_vec()]);
+        let step = settle(&mut resumes, &claim, &mut openings, &mut replays, &starts).await;
+        assert_eq!(
+            step,
+            PalwSeatResumeStepV1::Starved { missing: vec![request], served: false },
+            "every junk candidate tried, then asked again; junk is not being served"
+        );
+        assert!(!openings.contains_key(&(claim.claim, request)), "the refused are dropped: the slot is free");
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 3, "each tried once");
+        openings.insert((claim.claim, request), vec![b"forged".to_vec(), b"junk4".to_vec()]);
+        let step = settle(&mut resumes, &claim, &mut openings, &mut replays, &starts).await;
+        assert_eq!(
+            step,
+            PalwSeatResumeStepV1::Starved { missing: vec![request], served: true },
+            "a forged sibling path is dropped, asked for again, and no accusation follows it"
+        );
+        assert!(!openings.contains_key(&(claim.claim, request)), "the forged is dropped too");
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 5);
+        // The same junk re-served: its verdict stands, no second replay.
+        openings.insert((claim.claim, request), vec![b"junk1".to_vec()]);
+        let step = settle(&mut resumes, &claim, &mut openings, &mut replays, &starts).await;
+        assert_eq!(step, PalwSeatResumeStepV1::Starved { missing: vec![request], served: true });
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 5, "no second replay of bytes already refused");
+        // The honest opening arrives behind them.
+        openings.insert((claim.claim, request), vec![b"junk3".to_vec(), b"real".to_vec()]);
+        let step = settle(&mut resumes, &claim, &mut openings, &mut replays, &starts).await;
+        assert_eq!(step, PalwSeatResumeStepV1::Licensed(claim.mask), "the mask's V3, from the one opening that roots");
+        assert_eq!(
+            palw_seat_receipt_forms_v1(true, true, true, PalwSeatRRoleV1::PartialResumes, claim.mask),
+            PalwSeatReceiptFormsV1 { segments: Some(claim.mask), whole: false },
+            "its own mask's V3 alone, never the whole-job V2"
+        );
+    }
+
+    /// **H1 through the floor's own family**: the route's task is `replay_segment_from_checkpoint_v1`
+    /// itself, and the pool holds five bytes of junk, the producer's real opening with one sibling of
+    /// its path forged, and — behind them — the real opening. The junk is refused (`Err`) and the
+    /// forged path authenticates and does not root (`Ok(false)`); both are dropped and neither is a
+    /// fault; the real opening licenses the seat's own mask. A claim whose roots are not the capture's
+    /// refuses the real opening too: no opening of another run's capture licenses anything.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn h1_the_floor_family_licenses_the_real_opening_behind_junk_and_a_forged_path() {
+        use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;
+        use kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1;
+        use misaka_palw_base0::segment_opening::Base0SegmentOpeningV2;
+        let backend = floor_backend();
+        let (job, prompt) = backend.job_for_anchor(h(0x00C0_FFEE)).expect("job");
+        let job = palw_attempt_job_v1(job, true);
+        let run = backend.execute(&job, &prompt).expect("the producer's run");
+        let (seats, claim_id, anchor) = (5u16, h(0xC5), h(0xA5));
+        let assignment = palw_segment_assignment_v2(anchor, claim_id, seats);
+        let seat = (0..seats).find(|s| *s != assignment.full_seat).expect("a partial seat");
+        let mask = assignment.mask_of(seat);
+        let k = palw_segment_count_v2(seats);
+        let segment = (0..k).find(|i| mask.covers(*i)).expect("its segment");
+        let request = palw_segment_opening_request_index_v1(seats, segment);
+        let real = backend.open_segment_checkpoint_v1(&run.material, seats, segment).expect("the producer opens its segment");
+        let mut forged = Base0SegmentOpeningV2::decode_v2(&real).expect("decodes");
+        assert!(!forged.proof.siblings.is_empty(), "a five-seat segment has a path to forge");
+        forged.proof.siblings[0] = h(0x5B);
+        let forged = forged.encode_v2().expect("encodes");
+        let claim = PalwSeatResumeClaimV1 { claim: claim_id, job_id: job.job_id, seat_count: seats, mask, now_daa: 100 };
+        let start_for = |execution_root: Hash64, trace_root: Hash64| {
+            let (job, prompt) = (job.clone(), prompt.clone());
+            move |replays: &mut PalwSeatReplaysV1, key, segment_index: u16, opening: Vec<u8>| {
+                if !replays.has_room(true) {
+                    return false;
+                }
+                let (job, prompt) = (job.clone(), prompt.clone());
+                let segment_claim = PalwSegmentClaimV1 { execution_root, trace_root, seat_count: seats, segment_index };
+                replays.start_segment(key, h(0x2E), true, 100, None, Box::new(floor_backend()), move |b| {
+                    b.replay_segment_from_checkpoint_v1(&job, &prompt, &opening, segment_claim)
+                        .map(|replay| replay.matches)
+                        .map_err(palw_seat_s4_refusal_v1)
+                });
+                true
+            }
+        };
+        let (mut resumes, mut replays) = (PalwSeatResumesV1::default(), PalwSeatReplaysV1::default());
+        let mut openings: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+        // A claim whose roots are not this capture's: the real opening is refused, and junk too.
+        let stranger = PalwSeatResumeClaimV1 { claim: h(0xC6), ..claim };
+        openings.insert((stranger.claim, request), vec![b"12345".to_vec(), real.clone()]);
+        assert_eq!(
+            settle_with(&mut resumes, &stranger, &mut openings, &mut replays, start_for(h(0xBAD), run.trace_root)).await,
+            PalwSeatResumeStepV1::Starved { missing: vec![request], served: false },
+            "an opening of another run's capture is not this claim's"
+        );
+        // The honest claim: junk, the forged path, then the real opening.
+        openings.insert((claim.claim, request), vec![b"12345".to_vec(), forged.clone()]);
+        assert_eq!(
+            settle_with(&mut resumes, &claim, &mut openings, &mut replays, start_for(run.execution_root, run.trace_root)).await,
+            PalwSeatResumeStepV1::Starved { missing: vec![request], served: true },
+            "the forged path authenticated, did not root, and was dropped — asked for again, and no accusation"
+        );
+        assert!(!openings.contains_key(&(claim.claim, request)));
+        openings.insert((claim.claim, request), vec![forged, real]);
+        assert_eq!(
+            settle_with(&mut resumes, &claim, &mut openings, &mut replays, start_for(run.execution_root, run.trace_root)).await,
+            PalwSeatResumeStepV1::Licensed(mask),
+            "the real opening, behind them, licenses the seat's own mask"
+        );
+    }
+
+    /// **H2: a held segment replay never blocks the loop.** A C7 segment task that runs for as long
+    /// as its gate holds is polled, not awaited: the tick returns at once with `Waiting`, the heavy
+    /// slot is held and a light replay still starts (a floor claim, a court turn's close and a
+    /// possession proof are the loop's, not the task's), and the verdict arrives on a later tick.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn h2_the_held_partial_replay_runs_off_the_loop() {
+        let (claim, _segment, request) = partial_claim(100);
+        let (mut resumes, mut replays) = (PalwSeatResumesV1::default(), PalwSeatReplaysV1::default());
+        let mut openings: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+        openings.insert((claim.claim, request), vec![b"real".to_vec()]);
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = Arc::new(std::sync::Mutex::new(gate));
+        let start = |replays: &mut PalwSeatReplaysV1, key, _segment, _opening: Vec<u8>| {
+            let gate = gate.clone();
+            replays.start_segment(key, h(0x2E), true, 0, None, Box::new(floor_backend()), move |_| {
+                gate.lock().unwrap().recv().map_err(|e| PalwSeatSegmentRefusalV1::Local(e.to_string()))?;
+                Ok(true)
+            });
+            true
+        };
+        let tick = tokio::time::timeout(std::time::Duration::from_secs(5), resumes.step(&claim, &mut openings, &mut replays, start))
+            .await
+            .expect("the tick returns while the replay runs");
+        assert_eq!(tick, PalwSeatResumeStepV1::Waiting, "nothing filed, and never the material wait's Unavailable");
+        assert!(!replays.has_room(true), "the C7 slot is held");
+        assert!(replays.has_room(false), "a light replay still starts beside it");
+        let again = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            resumes.step(&claim, &mut openings, &mut replays, |_: &mut PalwSeatReplaysV1, _, _, _| panic!("one candidate in flight")),
+        )
+        .await
+        .expect("polled, not awaited");
+        assert_eq!(again, PalwSeatResumeStepV1::Waiting);
+        release.send(()).unwrap();
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        assert_eq!(
+            settle(&mut resumes, &claim, &mut openings, &mut replays, &starts).await,
+            PalwSeatResumeStepV1::Licensed(claim.mask)
+        );
+        assert_eq!(starts.load(std::sync::atomic::Ordering::SeqCst), 0, "returned, not re-run");
+        // The route puts every segment replay in the slots and prices it as the streamed fold.
+        let route = body_of(source(), "    async fn seat_s4_resume_v1(");
+        assert!(route.contains("replays.start_segment(key, duty.class_id, seat_r_duty.heavy, current_daa, Some(reserved), backend,"));
+        assert!(route.contains("crate::palw_backends::palw_partial_seat_streamed_need_v1("), "M3");
+        assert!(route.contains("if !replays.has_room(seat_r_duty.heavy) {"));
+    }
+
+    /// **H3: the resume uses an opening that arrives after the first tick** — asked for on the first,
+    /// started on the tick it arrives, licensed on the tick it returns; and bounded: a segment spends
+    /// at most [`PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1`] candidates, after which it is not asked for
+    /// again and the seat holds nothing to try.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn h3_the_attempt_partial_resume_uses_an_opening_that_arrives_after_the_first_tick() {
+        let (claim, _segment, request) = partial_claim(100);
+        let (mut resumes, mut replays) = (PalwSeatResumesV1::default(), PalwSeatReplaysV1::default());
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut openings: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+        let first = resumes.step(&claim, &mut openings, &mut replays, fake_start(&starts)).await;
+        assert_eq!(first, PalwSeatResumeStepV1::Starved { missing: vec![request], served: false }, "the first tick asks");
+        openings.insert((claim.claim, request), vec![b"real".to_vec()]);
+        let later = PalwSeatResumeClaimV1 { now_daa: 130, ..claim };
+        assert_eq!(
+            settle(&mut resumes, &later, &mut openings, &mut replays, &starts).await,
+            PalwSeatResumeStepV1::Licensed(claim.mask)
+        );
+        // Bounded: junk refused before a step replays spends none of the bound, and the seat keeps
+        // asking; forged openings each spend a replay, and past the bound the segment is not asked for
+        // again and the seat holds nothing to try.
+        let other = PalwSeatResumeClaimV1 { claim: h(0xC2), ..claim };
+        let spent = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        for round in 0..2 * PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1 {
+            openings.insert((other.claim, request), vec![format!("junk{round}").into_bytes()]);
+            let step = settle(&mut resumes, &other, &mut openings, &mut replays, &spent).await;
+            assert_eq!(
+                step,
+                PalwSeatResumeStepV1::Starved { missing: vec![request], served: false },
+                "junk round {round}: still asking, and junk is not being served"
+            );
+        }
+        let mut round = 0u32;
+        loop {
+            openings.insert((other.claim, request), vec![format!("forged{round}").into_bytes()]);
+            let step = settle(&mut resumes, &other, &mut openings, &mut replays, &spent).await;
+            round += 1;
+            if step == (PalwSeatResumeStepV1::Starved { missing: vec![], served: true }) {
+                break;
+            }
+            assert_eq!(step, PalwSeatResumeStepV1::Starved { missing: vec![request], served: true });
+            assert!(round <= PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1 + 1, "bounded");
+        }
+        assert_eq!(
+            round, PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1,
+            "the bound of replayed candidates, then nothing to try — and, served, no accusation"
+        );
+        // The old per-duty resume (`replayed.insert`) is below SEAT-R only: past it the attempt lane's
+        // C7 partial seat takes the SEAT-S4 route every tick.
+        let source = source();
+        let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+        let fence = block.find("let resolved = if seat_r {").expect("the attempt lane's fence");
+        let resumed = fence + block[fence..].find(".seat_s4_resume_v1(").expect("the S4 route");
+        let old = fence + block[fence..].find("&& replayed.insert(seat_duty_panel_key_v1(duty))").expect("the old path");
+        assert!(resumed < old, "the S4 route is the fence's branch; the once-per-duty resume its else");
+    }
+
+    /// **M2: a replay whose answer is not the claim's licenses nothing.** SEAT-S2's comparison: the
+    /// floor's honest replay reproduces the committed output root and licenses; a claim whose roots
+    /// are the honest run's and whose output root names other tokens is refuted (terminal for
+    /// `Valid`; the full seat's fault finders run on); a replay naming no answer is no verdict.
+    #[test]
+    fn m2_an_output_root_mismatch_is_no_valid() {
+        use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;
+        let backend = floor_backend();
+        let (job, prompt) = backend.job_for_anchor(h(0x00C0_FFEE)).expect("job");
+        let job = palw_attempt_job_v1(job, true);
+        let claim = backend.execute(&job, &prompt).expect("the producer's run");
+        let replayed = backend.execute_for_verdict(&job, &prompt);
+        assert_eq!(replayed.as_ref().expect("replays").output_root, Some(claim.output_root), "the family fills it");
+        let step = |output| palw_seat_replay_step_v1(&replayed, claim.execution_root, claim.trace_root, 0, output);
+        assert_eq!(step(claim.output_root), PalwSeatReplayStepV1::Licensed);
+        assert_eq!(step(h(0xBAD)), PalwSeatReplayStepV1::Refuted, "the roots are the honest run's, the answer is not");
+        let unnamed = PalwReplayRootsV1 { output_root: None, ..replayed.clone().unwrap() };
+        assert_eq!(palw_replay_answer_v1(&unnamed, claim.output_root), PalwReplayAnswerV1::Unnamed);
+        assert_eq!(
+            palw_seat_replay_step_v1(&Ok(unnamed), claim.execution_root, claim.trace_root, 0, claim.output_root),
+            PalwSeatReplayStepV1::NoVerdict,
+            "no answer to compare: nothing licensed, nothing refuted"
+        );
+        // The free-prompt lane: the claim commits the run's own output root
+        // (`palw_fp_commitment_from_context_v3`, under the executed context), and the FP pass's replay
+        // names the run's own — the same value, so the honest claim licenses and a claim whose roots
+        // are the honest run's and whose answer is not is refuted.
+        let (fp_job, ids) = floor_fp_job(&backend);
+        let fp_prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        let run = backend.execute_free_prompt(&fp_job, &fp_prompt).expect("the producer's free-prompt run");
+        let ctx = backend.fp_job_context_for_executed_v1(&fp_job, run.facts.decode_tokens_executed).expect("the executed context");
+        let committed = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&fp_job, &ctx, &run, 0)
+            .expect("the claim the lane commits");
+        let fp_replayed = backend.execute_free_prompt(&fp_job, &fp_prompt).map(|run| PalwReplayRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.facts.full_logits_trace_root,
+            work_leaves: Some(run.facts.step_leaf_count),
+            output_root: Some(run.outcome.output_root),
+        });
+        let fp_step = |output| {
+            palw_seat_replay_step_v1(&fp_replayed, committed.execution_root, committed.trace_root, committed.work_leaves, output)
+        };
+        assert_eq!(fp_step(committed.output_root), PalwSeatReplayStepV1::Licensed, "the honest free-prompt claim");
+        assert_eq!(fp_step(h(0xBAD)), PalwSeatReplayStepV1::Refuted, "its roots, another answer");
+        // Both off-loop replays compare it: the attempt pass and the free-prompt pass, whose replay
+        // names the run's own output root.
+        let source = source();
+        for head in ["    async fn attempt_seat_replay_v1(", "    async fn fp_seat_replay_pass_v1("] {
+            assert!(body_of(source, head).contains("duty.output_root"), "{head} compares the claim's output root");
+        }
+        assert!(body_of(source, "    async fn fp_seat_replay_pass_v1(").contains("output_root: Some(run.outcome.output_root),"));
+    }
+
+    /// **M3: a partial seat is priced as the streamed fold it keeps**, not 72 B for every leaf it
+    /// walks — hundreds of GB at a 2M segment, which no host reserves.
+    #[test]
+    fn m3_a_partial_seat_is_priced_as_the_streamed_fold() {
+        use crate::palw_backends::{
+            PalwRoleMemoryNeedV1, palw_partial_seat_streamed_fold_bytes_v1, palw_partial_seat_streamed_need_v1,
+        };
+        use kaspa_consensus_core::palw_resource_profile_v1::{
+            PalwCaptureRetentionV1, PalwResourceProfileV1, PalwResourceRoleV1, PalwRuntimeProfileV1,
+        };
+        const MIB: u64 = 1 << 20;
+        let two_m_segment = 3u64 << 32; // a 2M job's leaves to a late segment's end: ~1.3e10
+        let eight_k = 1u64 << 21;
+        assert!(palw_partial_seat_streamed_fold_bytes_v1(two_m_segment) < 512 * MIB, "a 2M segment folds in well under a GiB");
+        assert!(palw_partial_seat_streamed_fold_bytes_v1(eight_k) < 8 * MIB, "an 8k segment in a few MiB");
+        assert!(two_m_segment * 72 > 500 * 1024 * MIB, "the profile's figure: hundreds of GB");
+        let profile = |role, capture, leaves: u64| PalwResourceProfileV1 {
+            runtime: PalwRuntimeProfileV1::A16KvI16,
+            role,
+            attention_layers: 28,
+            kv_dim: 256,
+            heads: 12,
+            resume_rows: 0,
+            end_rows: 1_000,
+            kv_resident_bytes: 7,
+            checkpoint_bytes: 0,
+            opening_bytes: 0,
+            retained_checkpoint_bytes: 0,
+            attention_scratch_bytes: 0,
+            trace_scratch_bytes: 0,
+            capture,
+            capture_retained_bytes: leaves.saturating_mul(72),
+            checkpoint_leg_bytes: 0,
+            leaves,
+            recurrence_layers: 0,
+            gdn_state_bytes: 0,
+        };
+        let need = |role, capture| PalwRoleMemoryNeedV1 {
+            role,
+            holding_bytes: 11,
+            derived_bytes: 0,
+            runtime: None,
+            profile: Some(profile(role, capture, two_m_segment)),
+        };
+        let partial = PalwResourceRoleV1::PartialSeat { seat_count: 5, segment_index: 3 };
+        let repriced = palw_partial_seat_streamed_need_v1(need(partial, PalwCaptureRetentionV1::ReplayHashes));
+        let p = repriced.profile.expect("kept");
+        assert_eq!(p.capture_retained_bytes, palw_partial_seat_streamed_fold_bytes_v1(two_m_segment));
+        assert_eq!((p.kv_resident_bytes, repriced.holding_bytes), (7, 11), "every other term is the profile's");
+        let full = need(PalwResourceRoleV1::FullSeat, PalwCaptureRetentionV1::Fold { retain_level: 12 });
+        assert_eq!(palw_partial_seat_streamed_need_v1(full.clone()), full, "another role is returned as it came");
+    }
+
+    /// **L1: a partial seat whose mask is the whole job replays it** — two seats cut one segment — on
+    /// every read class, C7 included; unread stays unread; and a five-seat panel's partial seats keep
+    /// their roles.
+    #[test]
+    fn l1_a_full_mask_partial_seat_takes_the_full_replay() {
+        use PalwSeatRRoleV1::*;
+        let (anchor, claim) = (h(0xA2), h(0xC2));
+        let two = palw_segment_assignment_v2(anchor, claim, 2);
+        let partial = (0..2u16).find(|s| *s != two.full_seat).expect("the other seat");
+        assert!(two.mask_of(partial).is_full(palw_segment_count_v2(2)), "one segment: the partial mask is the job");
+        for held in [Some(true), Some(false)] {
+            assert_eq!(palw_seat_r_role_v1(false, held, false, true), PartialReplays, "{held:?}");
+        }
+        assert_eq!(palw_seat_r_role_v1(false, None, false, true), PartialAbstains);
+        let five = palw_segment_assignment_v2(anchor, claim, 5);
+        for seat in (0..5u16).filter(|s| *s != five.full_seat) {
+            assert!(!five.mask_of(seat).is_full(palw_segment_count_v2(5)), "no effect on t12's five seats");
+        }
+    }
+
+    /// **L2: a free-prompt seat's context is its answer's** — the job the answer's ids bound under, at
+    /// the count its length names, never the job's ceiling (an early stop's context is not the
+    /// ceiling's) — and a seat holding no answer derives none and asks for the claim's material,
+    /// whose answer envelope carries the ids (the second pass, finding 1, retired the price search:
+    /// a held job the answer did not bind is anybody's).
+    #[test]
+    fn l2_an_fp_seat_without_the_output_ids_derives_no_context_and_asks() {
+        let backend = floor_backend();
+        let (job, _ids) = floor_fp_job(&backend);
+        let ceiling = backend.fp_job_context_for_executed_v1(&job, 7).expect("the ceiling's context");
+        let early = backend.fp_job_context_for_executed_v1(&job, 5).expect("an early stop's context");
+        assert_ne!(early, ceiling, "an early stop's context is not the ceiling's");
+        let source = source();
+        let context = body_of(source, "    fn fp_seat_job_v1(");
+        assert!(context.contains("let (material, ids) = self.fp_committed_answer_v1(backend, duty, held)?;"), "the answer's job only");
+        assert!(context.contains("backend.fp_job_context_for_executed_v1(&material.job, ids.len()"), "at the answer's length");
+        assert!(!context.contains("fp_job_context_v1(&material.job)"), "never the ceiling");
+        assert!(!context.contains("fp_job_material_for_claim("), "never a held job the answer did not bind");
+        let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+        let unanswered = block.find("// No job the answer authenticated, so no context to authenticate an").expect("the route's None arm");
+        let arm = &block[unanswered..unanswered + block[unanswered..].find("PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }").unwrap()];
+        assert!(arm.contains("self.request_material_signed(network_domain, duty.claim_id, current_daa).await;"), "it asks");
+    }
+
+    /// **F1: a stranger's free-prompt job at the claim's price refuses the producer's honest opening**
+    /// (the second pass's review probe, adopted). The duty's class and executor, another nonce and
+    /// another prompt of the same length price the same, and under that job the family refuses the
+    /// honest opening as another job's — a `NotTheClaims` refusal, which drops the bytes and leaves
+    /// the seat unserved. So the route resumes only under the job the answer authenticates
+    /// (`fp_seat_job_v1`), under which the same opening licenses the seat's mask.
+    #[test]
+    fn f1_a_strangers_fp_job_at_the_claims_price_refuses_the_honest_opening() {
+        use kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3;
+        use kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1;
+        let backend = floor_backend();
+        let (job, ids) = floor_fp_job(&backend);
+        let prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the producer's run");
+        let executed = run.facts.decode_tokens_executed;
+        let ctx = backend.fp_job_context_for_executed_v1(&job, executed).expect("the executed context");
+        let price = backend.fp_context_work_leaves_v1(&ctx).expect("a price");
+        let committed = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &ctx, &run, 0)
+            .expect("the claim");
+        assert_eq!(committed.work_leaves, price, "the claim's work_leaves is the priced context's");
+        let (seats, segment) = (5u16, 1u16);
+        let opening = backend.open_segment_checkpoint_v1(&run.outcome.material, seats, segment).expect("the producer opens");
+        let claim = PalwSegmentClaimV1 {
+            execution_root: committed.execution_root,
+            trace_root: committed.trace_root,
+            seat_count: seats,
+            segment_index: segment,
+        };
+        let honest = backend.replay_segment_from_checkpoint_v1(&ctx, &prompt, &opening, claim).expect("the claim's own job");
+        assert!(honest.matches, "under the claim's own job the honest opening licenses the seat's mask");
+        let stranger_ids = [9u32, 2, 6, 5, 3];
+        let stranger_prompt: Vec<usize> = stranger_ids.iter().map(|t| *t as usize).collect();
+        let form = backend.prompt_ids_form();
+        let stranger = PalwFreePromptJobV3 {
+            job_nonce: [0x77; 32],
+            prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &stranger_ids)
+                .expect("commits"),
+            ..job.clone()
+        };
+        let stranger_ctx = backend.fp_job_context_for_executed_v1(&stranger, executed).expect("a context");
+        assert_eq!(backend.fp_context_work_leaves_v1(&stranger_ctx), Some(price), "the stranger's job prices at the claim's");
+        assert_ne!(stranger_ctx, ctx);
+        let refused = backend
+            .replay_segment_from_checkpoint_v1(&stranger_ctx, &stranger_prompt, &opening, claim)
+            .expect_err("the honest opening under a stranger's job");
+        assert_eq!(
+            palw_seat_s4_refusal_v1(refused),
+            PalwSeatSegmentRefusalV1::NotTheClaims(misaka_palw_base0::segment_opening::Base0SegmentRefusalV1::NotTheSeatsJob.to_string()),
+            "a refusal that drops the honest bytes — which is why no unauthenticated job is resumed under"
+        );
+    }
+
+    /// **F1: whose an `Err` is.** Every link of the opening's authentication, as the family names it,
+    /// is the opening's (`NotTheClaims`); a replay that failed after them, a task that did not finish,
+    /// and an error this build does not know are this host's (`Local`). The match is exhaustive, so a
+    /// link the family adds does not compile here until it is sorted.
+    #[test]
+    fn f1_an_err_is_the_openings_only_when_the_family_names_an_authentication_link() {
+        use misaka_palw_base0::segment_opening::Base0SegmentRefusalV1 as R;
+        let is_a_link = |refusal: &R| match refusal {
+            R::NotAnOpening
+            | R::BindingDoesNotVerify
+            | R::NotTheClaimsExecution
+            | R::NotTheClaimsTrace
+            | R::NotTheSeatsJob
+            | R::NotThisClass
+            | R::PriceIsNotTheGeometrys
+            | R::NotTheSeatsSegment
+            | R::NotTheSegmentsRange
+            | R::ProofNotTheSegments
+            | R::ProofPathNotTheRanges
+            | R::NotMainStepLeaves
+            | R::AnchorNotCommitted
+            | R::AnchorNotCanonical
+            | R::AnchorCarriesNoState
+            | R::AnchorNotAResumePoint
+            | R::AnchorPastTheRange
+            | R::SeedPinMissing
+            | R::SeedPinNotCommitted
+            | R::SeedPinUnexpected
+            | R::PromptNotTheJobs => true,
+            R::Replay(_) => false,
+        };
+        let mut seen = HashSet::new();
+        for link in PALW_SEAT_S4_AUTHENTICATION_REFUSALS_V1.iter() {
+            assert!(is_a_link(link), "{link:?}");
+            assert!(seen.insert(link.to_string()), "{link:?} named twice");
+            assert_eq!(palw_seat_s4_refusal_v1(link.to_string()), PalwSeatSegmentRefusalV1::NotTheClaims(link.to_string()));
+        }
+        assert_eq!(seen.len(), 21, "every link listed");
+        for local in [
+            R::Replay("a kernel error".into()).to_string(),
+            "the replay task did not finish: task panicked".to_string(),
+            "a family this build does not know".to_string(),
+        ] {
+            assert_eq!(palw_seat_s4_refusal_v1(local.clone()), PalwSeatSegmentRefusalV1::Local(local));
+        }
+        let route = body_of(source(), "    async fn seat_s4_resume_v1(");
+        assert!(route.contains(".map_err(palw_seat_s4_refusal_v1)"), "the route's task sorts its Err");
+    }
+
+    /// **F1: this host's failure is never the producer's.** A segment task that panics, or whose
+    /// kernel fails after the opening authenticated, keeps its bytes in the pool, counts the seat as
+    /// served, and is started again within the bound: an honest opening whose first run failed here
+    /// licenses on its second, and one that always fails spends the bound and leaves the seat silent
+    /// — `Starved { served: true }`, never the material wait's `served: false`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn f1_a_local_failure_is_never_unserved_and_is_retried_within_the_bound() {
+        let (claim, _segment, request) = partial_claim(100);
+        let (mut resumes, mut replays) = (PalwSeatResumesV1::default(), PalwSeatReplaysV1::default());
+        let mut openings: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+        openings.insert((claim.claim, request), vec![b"real".to_vec()]);
+        let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let flaky = |replays: &mut PalwSeatReplaysV1, key, _segment, _opening: Vec<u8>| {
+            let runs = runs.clone();
+            replays.start_segment(key, h(0x2E), true, 0, None, Box::new(floor_backend()), move |_| {
+                if runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    panic!("this host's first run does not finish");
+                }
+                Ok(true)
+            });
+            true
+        };
+        assert_eq!(
+            settle_with(&mut resumes, &claim, &mut openings, &mut replays, flaky).await,
+            PalwSeatResumeStepV1::Licensed(claim.mask),
+            "the same bytes, started again, license"
+        );
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // A panicked task reads as this host's failure.
+        let mut slots = PalwSeatReplaysV1::default();
+        let key = (h(0xC9), h(0x10B));
+        slots.start_segment(key, h(0x2E), true, 0, None, Box::new(floor_backend()), |_| panic!("a kernel panic"));
+        let polled = loop {
+            match slots.poll_segment(&key, 1).await {
+                PalwSeatSegmentPollV1::Running => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+                other => break other,
+            }
+        };
+        assert!(matches!(polled, PalwSeatSegmentPollV1::Done { result: Err(PalwSeatSegmentRefusalV1::Local(_)), fresh: true }));
+        slots.forget_segment(&key);
+        assert_eq!(slots.poll_segment(&key, 2).await, PalwSeatSegmentPollV1::Absent, "forgotten: startable again");
+        // A kernel that always fails here: the bound, then silence — never unserved.
+        let other = PalwSeatResumeClaimV1 { claim: h(0xC3), ..claim };
+        openings.insert((other.claim, request), vec![b"real".to_vec()]);
+        let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let failing = |replays: &mut PalwSeatReplaysV1, key, _segment, _opening: Vec<u8>| {
+            let failures = failures.clone();
+            replays.start_segment(key, h(0x2E), true, 0, None, Box::new(floor_backend()), move |_| {
+                failures.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(palw_seat_s4_refusal_v1(misaka_palw_base0::segment_opening::Base0SegmentRefusalV1::Replay("oom".into()).to_string()))
+            });
+            true
+        };
+        assert_eq!(
+            settle_with(&mut resumes, &other, &mut openings, &mut replays, failing).await,
+            PalwSeatResumeStepV1::Starved { missing: vec![], served: true },
+            "spent on this host's failures: silent, and never the material wait's unserved"
+        );
+        assert_eq!(failures.load(std::sync::atomic::Ordering::SeqCst), PALW_SEAT_S4_CANDIDATES_PER_SEGMENT_V1 as usize, "bounded");
+        assert_eq!(openings.get(&(other.claim, request)).map(Vec::len), Some(1), "the bytes were kept, never dropped");
+    }
+
+    /// **F2: a full seat whose own replay did not run accuses nobody.** A replay this host's timing of
+    /// the class says returns after the deadline (`fits`), and one refused twice, come to `NoVerdict`
+    /// and the full seat reaches the tail: past SEAT-R the attempt lane is silent there, and so is a
+    /// free-prompt seat holding a job of the claim's — at any DAA, with a licence standing or not. A
+    /// free-prompt seat served no job waits and is noted; a refuted claim keeps its path; below
+    /// SEAT-R the wait runs as it always did.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn f2_a_full_seat_whose_replay_did_not_run_never_reaches_unavailable() {
+        use kaspa_consensus_core::palw_backend::PalwReplayRootsV1;
+        let class = h(0x2E);
+        let mut replays = PalwSeatReplaysV1::default();
+        async fn returned(replays: &mut PalwSeatReplaysV1, key: &(Hash64, Hash64), now: u64) -> PalwSeatReplayPollV1 {
+            loop {
+                match replays.poll(key, now).await {
+                    PalwSeatReplayPollV1::Running => tokio::time::sleep(std::time::Duration::from_millis(5)).await,
+                    other => return other,
+                }
+            }
+        }
+        // Not in time: the class's last replay here took 700 DAA, and a claim bound at 100 closes at 600.
+        let timed = (h(0xC1), h(0x10B));
+        replays.start(timed, class, false, 0, None, Box::new(floor_backend()), |_| {
+            Ok(PalwReplayRootsV1 { execution_root: h(1), trace_root: h(2), work_leaves: None, output_root: None })
+        });
+        assert!(matches!(returned(&mut replays, &timed, 700).await, PalwSeatReplayPollV1::Done { result: Ok(_), .. }));
+        assert!(!replays.fits(&class, 100, 600), "not started: it would return after the deadline");
+        // Refused twice: the retry is spent and the step is no verdict.
+        let refused = (h(0xC2), h(0x10B));
+        for attempt in 0..2 {
+            replays.start(refused, class, false, 100, None, Box::new(floor_backend()), |_| Err("the kernel refused".into()));
+            let PalwSeatReplayPollV1::Done { result, .. } = returned(&mut replays, &refused, 110).await else { panic!("returned") };
+            assert_eq!(palw_seat_replay_step_v1(&result, h(1), h(2), 0, h(3)), PalwSeatReplayStepV1::NoVerdict);
+            assert_eq!(replays.retry_refused(&refused, 110, 600), attempt == 0, "one retry, then the refusal stands");
+        }
+        // The tail: silent for the attempt lane (the fp job is not even asked), and for a free-prompt
+        // seat holding a job of the claim's.
+        let unasked = || -> bool { panic!("the attempt lane holds its job by the anchor") };
+        assert_eq!(palw_seat_tail_v1(true, false, false, unasked), PalwSeatTailV1::Silent);
+        assert_eq!(palw_seat_tail_v1(true, true, false, || true), PalwSeatTailV1::Silent);
+        assert_eq!(palw_seat_tail_v1(true, true, false, || false), PalwSeatTailV1::Waits { unserved: true }, "served no job");
+        for free_prompt in [false, true] {
+            let unasked = || -> bool { panic!("not asked") };
+            assert_eq!(palw_seat_tail_v1(true, free_prompt, true, unasked), PalwSeatTailV1::Waits { unserved: false }, "refuted");
+            let unasked = || -> bool { panic!("not asked") };
+            assert_eq!(palw_seat_tail_v1(false, free_prompt, false, unasked), PalwSeatTailV1::Waits { unserved: false }, "below");
+        }
+        // Where it is read: after the pull, before the one tail wait and its note — and `Silent` ends
+        // the verdict with nothing filed.
+        let source = source();
+        let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+        let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
+        let gate = block.find("match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {").expect("the tail's gate");
+        let wait = block.rfind("palw_seat_material_wait_ends_v1(").expect("the tail's wait");
+        assert!(block[..gate].rfind("self.request_material_signed(").is_some(), "the pull still runs");
+        assert!(gate < wait && block[gate..wait].contains("PalwSeatTailV1::Silent => break 'verdict None,"));
+        let note = "PalwSeatTailV1::Waits { unserved: true } => {\n                            unserved.entry(duty.claim_id)";
+        assert!(block[gate..wait].contains(note), "noted only when served no job");
+        assert!(!block.contains("if seat_r && !refuted {\n                        unserved.entry("), "the old unconditional note is gone");
+    }
+
+    /// **F4: a resuming partial seat is not held to a whole replay's memory.** The duty loop's
+    /// pre-check prices a full seat at the class's job; a `PartialResumes` duty skips it, because the
+    /// SEAT-S4 route reserves the partial seat's streamed need a segment at a time.
+    #[test]
+    fn f4_the_pre_check_does_not_price_a_resuming_partial_seat_as_a_full_seat() {
+        let source = source();
+        let block = &source[source.find("for index in order {").expect("the duty loop")..];
+        let check = block.find("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("the check");
+        let guard = &block[..check];
+        let guard = &guard[guard.rfind("if !(seat_r").expect("its guard")..];
+        let squeezed: String = guard.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            squeezed.contains(
+                "if!(seat_r&&(seat_replays.holds_claim(&duty.claim_id)||seat_r_duty.role==PalwSeatRRoleV1::PartialResumes))"
+            ),
+            "past SEAT-R only: below it the check prices every duty as it did"
+        );
+        let route = body_of(source, "    async fn seat_s4_resume_v1(");
+        assert!(route.contains("self.reserve_replay_v1(\"partial-seat\", &need, duty.class_id, duty.claim_id)"), "its own reservation");
+    }
+
+    /// **F5: a claim first seen while its class is unread gets `R_eff` once the class reads.** Noted
+    /// at its own retention meanwhile and read again each tick; the long-D row's horizon replaces it
+    /// once the registry answers; and a claim read under a read class is never read again.
+    #[test]
+    fn f5_a_long_d_claim_first_seen_unread_gets_r_eff_once_its_class_reads() {
+        let (mut liabilities, mut unread) = (HashMap::new(), HashSet::new());
+        let claim = h(0x51);
+        let horizon = |spans: Option<u32>| Some(if spans.is_some_and(|s| s > 100) { 40_000 } else { 6_400 });
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, claim, PalwSeatClassReadV1::Unread, horizon);
+        assert_eq!((liabilities.get(&claim), unread.contains(&claim)), (Some(&6_400), true), "its own retention meanwhile");
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, claim, PalwSeatClassReadV1::Unread, horizon);
+        assert!(unread.contains(&claim), "still unread: read again");
+        let long_d = PalwSeatClassReadV1::Rowed { verification_window_spans: 2_799, held_to_final: true, bought: false };
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, claim, long_d, horizon);
+        assert_eq!((liabilities.get(&claim), unread.contains(&claim)), (Some(&40_000), false), "R_eff, once read");
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, claim, long_d, |_| panic!("read once"));
+        // Unrowed is a read: final at once. No record yet notes nothing, and asks again.
+        let (unrowed, recordless) = (h(0x52), h(0x53));
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, unrowed, PalwSeatClassReadV1::Unrowed, horizon);
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, unrowed, PalwSeatClassReadV1::Unrowed, |_| panic!("once"));
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, recordless, long_d, |_| None);
+        assert!(!liabilities.contains_key(&recordless));
+        palw_seat_note_duty_liability_v1(&mut liabilities, &mut unread, recordless, long_d, horizon);
+        assert_eq!(liabilities.get(&recordless), Some(&40_000));
+        // The sweep keeps the unread set inside the liabilities.
+        let sweep = &source()[source().find("// R2: past SEAT-R also every claim this seat held a duty on").expect("the sweep")..];
+        assert!(sweep.contains("liabilities_unread.retain(|claim| retention_liabilities.contains_key(claim));"));
+    }
+
+    /// **F6: the asks' pacing leaves with the claim.** Past SEAT-R `requested_intervals` is swept with
+    /// the served openings, to the claims a duty, court or dispute still names; below it, as it was.
+    #[test]
+    fn f6_requested_intervals_is_swept_past_seat_r() {
+        let source = source();
+        let sweep = source.find("if seat_r {\n                interval_openings.retain(|(claim, _), _| live.contains(claim));").expect("H1's sweep");
+        let rest = &source[sweep..];
+        let rest = &rest[..rest.find("\n            }\n").expect("its end")];
+        assert!(rest.contains("requested_intervals.retain(|(claim, _), _| live.contains(claim));"));
+        assert_eq!(source.matches("requested_intervals.retain(").count(), 1, "past the fence only");
+    }
+
+    /// **N-5: the material wait** — `min(W_r/2, 60)` past SEAT-R, half the window below it; at once
+    /// past it when a licence stands (asked only while the time has not come); and never while the
+    /// seat replays: every replay and resume `Waiting` ends the verdict with nothing filed, before any
+    /// wait is read.
+    #[test]
+    fn n5_the_material_wait_is_capped_past_seat_r_and_never_fires_while_replaying() {
+        assert_eq!(PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, 60);
+        assert_eq!(palw_seat_material_wait_until_v1(true, 1_000, 1_600), 1_060, "the floor: min(300, 60)");
+        assert_eq!(palw_seat_material_wait_until_v1(true, 1_000, 3_799), 1_060, "the 2M row: min(1,399, 60)");
+        assert_eq!(palw_seat_material_wait_until_v1(true, 1_000, 1_040), 1_020, "a devnet window: its half is shorter");
+        assert_eq!(palw_seat_material_wait_until_v1(false, 1_000, 1_600), 1_300, "below SEAT-R: half the window, as always");
+        let never = || -> bool { panic!("asked only while the time has not come") };
+        assert!(palw_seat_material_wait_ends_v1(true, 1_000, 1_600, 1_060, never));
+        assert!(!palw_seat_material_wait_ends_v1(true, 1_000, 1_600, 1_059, || false));
+        assert!(palw_seat_material_wait_ends_v1(true, 1_000, 1_600, 1_001, || true), "a licence stands: at once");
+        assert!(!palw_seat_material_wait_ends_v1(false, 1_000, 1_600, 1_001, || true), "below SEAT-R the licence is not read");
+        // Never while replaying: in the verdict block every wait is read after the replay's and the
+        // resume's `Waiting` arms, which end the verdict with nothing filed.
+        let source = source();
+        let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+        let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
+        let waits: Vec<usize> = block.match_indices("palw_seat_material_wait_ends_v1(").map(|(i, _)| i).collect();
+        assert_eq!(waits.len(), 4, "the FP resume, the FP replaying partial seat, the attempt resume, and the tail");
+        for (n, at) in waits.iter().enumerate() {
+            let before = &block[..*at];
+            let resume_wait = before.rfind("PalwSeatResumeStepV1::Waiting => break 'verdict None,");
+            let replay_wait = before.rfind("(PalwSeatReplayStepV1::Waiting, _) => break 'verdict None,");
+            assert!(resume_wait.or(replay_wait).is_some(), "wait {n}: a Waiting arm precedes it");
+        }
+        assert_eq!(block.matches("PalwSeatResumeStepV1::Waiting => break 'verdict None,").count(), 2);
+        // A resuming seat that was served — an opening authenticated as the claim's, or on the FP lane
+        // a job of the claim's held — never reaches a wait: it abstains.
+        assert_eq!(block.matches("PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,").count(), 2);
+        for at in block.match_indices("PalwSeatResumeStepV1::Starved { served: false, .. } => {").map(|(i, _)| i) {
+            let served = block[..at].rfind("PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,").expect("before");
+            assert!(at - served < 200, "the served arm is the unserved one's neighbour");
+        }
+        assert_eq!(block.matches("(PalwSeatReplayStepV1::Waiting, _) => break 'verdict None,").count(), 2);
+        // And the licence landing on an unserved claim is P2-6's seam.
+        assert!(palw_seat_unserved_licence_v1(Some(&PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 9 })));
+        assert!(palw_seat_unserved_licence_v1(Some(&PalwClaimPhaseV2::Final { final_daa: 9 })));
+        assert!(!palw_seat_unserved_licence_v1(Some(&PalwClaimPhaseV2::PanelBound { bound_daa: 9 })));
+        assert!(!palw_seat_unserved_licence_v1(None));
+    }
+
+    /// **N-5 while a segment resume runs: `Waiting`, never `Starved`,** however long past the wait.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn n5_a_resuming_seat_is_never_starved_while_its_replay_runs() {
+        let (claim, _segment, request) = partial_claim(100);
+        let (mut resumes, mut replays) = (PalwSeatResumesV1::default(), PalwSeatReplaysV1::default());
+        let mut openings: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
+        openings.insert((claim.claim, request), vec![b"real".to_vec()]);
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = Arc::new(std::sync::Mutex::new(gate));
+        let start = |replays: &mut PalwSeatReplaysV1, key, _segment, _opening: Vec<u8>| {
+            let gate = gate.clone();
+            replays.start_segment(key, h(0x2E), true, 0, None, Box::new(floor_backend()), move |_| {
+                gate.lock().unwrap().recv().map_err(|e| PalwSeatSegmentRefusalV1::Local(e.to_string()))?;
+                Ok(true)
+            });
+            true
+        };
+        assert_eq!(resumes.step(&claim, &mut openings, &mut replays, start).await, PalwSeatResumeStepV1::Waiting);
+        let late = PalwSeatResumeClaimV1 { now_daa: 100 + 10 * PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, ..claim };
+        assert_eq!(
+            resumes.step(&late, &mut openings, &mut replays, |_: &mut PalwSeatReplaysV1, _, _, _| panic!("in flight")).await,
+            PalwSeatResumeStepV1::Waiting,
+            "ten X_ASKs on, still replaying: Waiting"
+        );
+        openings.clear();
+        assert_eq!(
+            resumes.step(&late, &mut openings, &mut replays, |_: &mut PalwSeatReplaysV1, _, _, _| panic!("in flight")).await,
+            PalwSeatResumeStepV1::Waiting,
+            "the candidate in flight is polled whatever the pool holds: never read as unserved"
+        );
+        release.send(()).unwrap();
+        let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        assert_eq!(
+            settle(&mut resumes, &late, &mut openings, &mut replays, &starts).await,
+            PalwSeatResumeStepV1::Licensed(claim.mask)
+        );
+    }
+
+    /// **R2: the foreign retention keeps a live-liability claim's files** — a claim whose duty ended
+    /// (licensed) and whose retention horizon has not passed stays whatever its files' age; one past
+    /// its horizon, and one never this seat's, go by age as before; the liabilities are bounded, the
+    /// soonest horizon out first; and a long-D class's horizon reaches past its own retention.
+    #[test]
+    fn r2_the_prune_keeps_a_live_liability_claims_files() {
+        let dir = std::env::temp_dir().join(format!("seat-s-r2-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (liable, expired, stranger) = (h(0x11), h(0x22), h(0x33));
+        for claim in [liable, expired, stranger] {
+            std::fs::write(dir.join(format!("{claim}.material")), b"bytes").unwrap();
+        }
+        let mut liabilities = HashMap::new();
+        palw_seat_note_liability_v1(&mut liabilities, liable, 9_000);
+        palw_seat_note_liability_v1(&mut liabilities, expired, 4_999);
+        let live: HashSet<Hash64> = HashSet::new();
+        let pins = palw_seat_retention_pins_v1(&live, &liabilities, 5_000);
+        assert!(pins.contains(&liable) && !pins.contains(&expired));
+        let hours = |n: u64| std::time::Duration::from_secs(n * 3600);
+        prune_foreign_retention_v1(&dir, &pins, std::time::SystemTime::now() + hours(100), 4_096);
+        assert!(dir.join(format!("{liable}.material")).exists(), "a live liability's file stays past the age bound");
+        assert!(!dir.join(format!("{expired}.material")).exists() && !dir.join(format!("{stranger}.material")).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+        // Bounded, the soonest horizon out first.
+        let mut bounded = HashMap::new();
+        for n in 0..PALW_SEAT_RETENTION_LIABILITIES_MAX_V1 as u64 {
+            palw_seat_note_liability_v1(&mut bounded, h(0x1000 + n), 10_000 + n);
+        }
+        palw_seat_note_liability_v1(&mut bounded, h(0x9999), 50_000);
+        assert_eq!(bounded.len(), PALW_SEAT_RETENTION_LIABILITIES_MAX_V1);
+        assert!(!bounded.contains_key(&h(0x1000)) && bounded.contains_key(&h(0x9999)));
+        // The horizon: the claim's own retention, and a long-D class's longer one.
+        let chain = crate::palw_receipt_pool::tests::Chain::new();
+        let mut claim = chain.state.claim(&chain.claim).expect("the fixture's claim").clone();
+        claim.accepted_daa = 1_000;
+        claim.trace_retention_daa = 6_400;
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        assert_eq!(palw_seat_retention_horizon_v1(&params, &claim, 1_010, Some(3)), 6_400, "the 8k row: its own retention");
+        assert_eq!(palw_seat_retention_horizon_v1(&params, &claim, 1_010, None), 6_400, "unrowed: its own retention");
+        assert!(palw_seat_retention_horizon_v1(&params, &claim, 1_010, Some(2_799)) > 6_400 + 2 * 2_799, "long-D: R_eff");
+        // Past SEAT-R the pins are the liabilities' too; below it, the live claims as always.
+        let sweep = &source()[source().find("// R2: past SEAT-R also every claim this seat held a duty on").expect("the sweep")..];
+        assert!(
+            sweep.contains("if seat_r {")
+                && sweep.contains("} else {\n                *self.foreign_pinned.lock().unwrap() = live.clone();")
+        );
+    }
+
+    /// **Below SEAT-R every path is what it was**: the arms, the forms whatever the role, the material
+    /// wait, and every SEAT-S route behind the fence — the S4 route, the N-5 reads, R2's pins and the
+    /// deadline display.
+    #[test]
+    fn below_seat_r_the_seat_s_paths_are_what_they_were() {
+        let mask = PalwSegmentMaskV2::single(1);
+        for arm in PalwSeatArmV1::ALL {
+            assert!(palw_seat_arm_licenses_v1(false, arm), "{arm:?}");
+        }
+        for role in [
+            PalwSeatRRoleV1::FullSeat,
+            PalwSeatRRoleV1::PartialReplays,
+            PalwSeatRRoleV1::PartialResumes,
+            PalwSeatRRoleV1::PartialAbstains,
+        ] {
+            assert_eq!(
+                palw_seat_receipt_forms_v1(true, false, true, role, mask),
+                PalwSeatReceiptFormsV1 { segments: Some(mask), whole: false }
+            );
+            assert_eq!(
+                palw_seat_receipt_forms_v1(false, false, true, role, mask),
+                PalwSeatReceiptFormsV1 { segments: None, whole: true }
+            );
+        }
+        for window in [40u64, 600, 2_799] {
+            assert_eq!(palw_seat_material_wait_until_v1(false, 500, 500 + window), 500 + window / 2);
+        }
+        let source = source();
+        let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+        let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
+        let squeezed: String = block.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(squeezed.contains("ifseat_r&&seat_r_duty.role==PalwSeatRRoleV1::PartialResumes{"), "the FP route: past the fence");
+        let fence = block.find("let resolved = if seat_r {").unwrap();
+        let old = fence + block[fence..].find("&& replayed.insert(seat_duty_panel_key_v1(duty))").unwrap();
+        let attempt_route = block.rfind(".seat_s4_resume_v1(").unwrap();
+        assert!(fence < attempt_route && attempt_route < old, "the attempt route: the fence's branch");
+        let unasked = || -> bool { panic!("below SEAT-R the tail asks nothing") };
+        assert_eq!(palw_seat_tail_v1(false, true, false, unasked), PalwSeatTailV1::Waits { unserved: false });
+        assert!(block.contains("match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {"));
+        assert!(
+            source.contains("if seat_r {\n                interval_openings.retain(|(claim, _), _| live.contains(claim));"),
+            "H1's sweep"
+        );
+        let events = body_of(source, "    pub async fn worker(");
+        assert!(events.contains("let per_claim = palw_seat_r_in_force_v1(&self.consensus_config.params, current_daa)"), "the display");
+        let key = palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 1, b"x");
+        assert_ne!(key, palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 2, b"x"), "a segment's own task");
+        assert_ne!(key.1, h(2), "never a whole-job replay's key");
     }
 }
