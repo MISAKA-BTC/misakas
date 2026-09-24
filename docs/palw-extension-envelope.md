@@ -258,7 +258,7 @@ build ships and gives one DSL vector with the hashes recomputing it must produce
 ```console
 $ misaka --network testnet-11 palw extension verify derived-transformer.json --depth vectors --receipt-out music.receipt.json
   tier       expressible now — no chain object rides for this kind
-    transformer_id  4f47c578…        resolved_tree current        vectors_run 1
+    transformer_id  90f58187…        resolved_tree current        vectors_run 1
 ```
 
 Nothing rides for a transformer: each *derivation* over it rides per claim as a `DerivedArtifactV1`

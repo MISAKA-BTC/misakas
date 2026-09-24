@@ -57,45 +57,57 @@
 use misaka_palw_derive::{SOURCE_TREE_SHA256_HEX, ids::transformer_id, registry};
 
 /// The source-tree hash every manifest quotes.
-const SOURCE_TREE: &str = "fa80f7680783b644eb90a2722f5ca0cc2f001788f4fe7a82e521cf1005585303";
+///
+/// **Moved 2026-09-24, from `fa80f768…` (ea2fd48e) — twice, and only the second was decided.**
+/// 7681c203 added the fifth family's arm to `rendered_output_hash_for_family` in `src/derive.rs`
+/// (`Qwen36V6` renders as `Qwen36`) and one assertion beside it, which moved the tree to
+/// `7025691a…` and every id with it, and re-pinned nothing: this test has been red since. The
+/// testnet-12 regenesis then moved `derive.rs`, `lib.rs`, `registry.rs` and `bin/palw-derive.rs`
+/// again, on purpose (ADR-0152 v3.1 post-edit 4: `output_root` under the network's rule, core's
+/// `CoreV1` on testnet-12; `--network` refusals for an unshipped suffix and for a network the job
+/// context contradicts), and the pin below is that tree. No manifest field but the tree moved in
+/// either step, so no transformer's behaviour or bounds did. `7025691a…` is not kept resolvable:
+/// the only chain that ran it is the testnet-12 the regenesis replaces. `fa80f768…` is, because
+/// testnet-11's 13520042 release shipped it — see `transformer_id_prior_tree.rs`.
+const SOURCE_TREE: &str = "4ada6cd1a24e15cfd523e69bea02d343fbac70ffda3a9611002d0fa207712d9f";
 
 /// `(transformer name, transformer_id)` for every transformer this build registers.
 const PINNED: &[(&str, &str)] = &[
     (
         "cad/stl/v1",
-        "902ca5144d15c1f09a143b0078424bde981c8b2dc5d677ab8818dedc86f4a1c383cff7d8ac0b1445899c2db7e7ef7e25aa749a8811cdc7d45e837b2f883c0935",
+        "eed06cbf04b01f436967cdd95c5bcd99c2521306f80974136510cfc3e2387877cf4cc35a743f236ed9e22b50619039a0b186d2a131f99beb8e62da634d290b21",
     ),
     (
         "code/evm/v1",
-        "c691c66ee5ccb7f575772683dae599c69ff50d4084ba445a9f7b6ac2893f22d56e1b755c212545a0490badad0cb5835821f7c2e349702914168533fac6588403",
+        "8f63266c65dbdb81f44d87493f519beec360f54911133fe1b7ca5c0619984b1d0f4c86e038ee5991a37d09aeefba076d685bf5270dd0fe615c218b93ca24bb67",
     ),
     (
         "contract/evm/v1",
-        "a5b34c70a41b2fe6513a2b8f6b2b9abaed0f59b38ece3ce2eb39d4af4b71c74834efece6683e835b0abe35268fb76942c805c7d3e728d6acf450bbc39ca51572",
+        "9a90ea9f045b343ec8303414d810e399e0cb0552fd2518abc3bbd62dde4e0975ff4e844981ba4de84539e841bc0f7e1ad1f6c6ac91a9190b2767dd912356283c",
     ),
     (
         "image/png/v1",
-        "afc299335937bb65552ce74984569684cc468b5799a5abecf535575177f5e5bbcf0c6b418aaec0f2deb8f02f30d01f6a3e4e262b440b2f7e8fbd0c5a6291d5f9",
+        "115dd87223155e06fbefb748f34c5798705c9ea2ed005bc7ea4d12ed1d7f81291f1467f6abd4176083fc84ffda7bcc6a67895126bbda10dc84e100491e874dab",
     ),
     (
         "json/canonical/v1",
-        "74d4a76930d7beec8848c74edf05f1e8f982e1b585576db7dc9fd6615cceb7c4d754130962966eab4283675271a4d4603814041c1732b88f99f229e67bfd8b37",
+        "1204b8d2690771427cb632369bdbef584f24503bdf778ecddcafd0519012fb957f6a736fd1ad7312455deb4c7a8e158402a087a575c8150d9579f609bf2aa2bb",
     ),
     (
         "map/mmap/v1",
-        "9a0f3765c6ea48efa211985a671878e6b9f85d5c42d118719d92db546e17603e2451e67cd7e229a830f654cfb3557e2f3ef82f82c113815b1fa58d17f174a613",
+        "7fcabe3c56a74ce399ee472e50b5ff57bd1783dd26734dd59309d9fec15404b5f5ef51cac60dbec81d0cfbd857bf4e4f751de1e2e309a14804726662f33c3040",
     ),
     (
         "music/smf/v1",
-        "4f47c5786c58affbf0a24e3203d50728385e26aece93737d56b79eebe95cbfff91d10ba03b3ee4cf22cdd836bbe295537fcf810210c8b4cd16a77afa1e5eb50e",
+        "90f5818727b4dae045835e4f19bb7173b2682b3a58f1374b29448157ac48ef1e1a8f09adbde5f9bda20c75b808cf7a1c6afac1e465f2625a04d66e7202812cee",
     ),
     (
         "scene/glb/v1",
-        "62931736fd5b306f158a9b945757c7ce8076ce8a9115297b00cb91afa466a62edc2ff7b92d629a8a13a0dce06272ebd1233ea5ac1ec8079b99382944a67c1cb2",
+        "6d758210911d96d724170d65339ce153f1beff08d973fd33b0a9e816a4ce40c4b805b62dd106f0e949e42558b4e810feb95b38d9fd5f0d5e2f38f8e1df7baa7d",
     ),
     (
         "simulation/trace/v1",
-        "c92cdad2eca5a3326537281ff48cdf40df139187329accbae7f4a7e96baf4e115f10efc8e4c071fc4498d1cd86d69f580649a71462def3ef3d7f09afae238734",
+        "37ac660569b5eadddb30a4113e35caa031a3a81bf27b6c9a5b084b0b8fa76ccd2fd68dff36fc8a85c9027477900735914228f90d0d9d2827ec5bd5ce08076bb2",
     ),
 ];
 
