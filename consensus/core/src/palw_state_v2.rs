@@ -56636,7 +56636,7 @@ pub(crate) mod tests {
         fn t71_a_mixed_set_with_a_v2_full_replay_valid() {
             let p = m4_params(true);
             let (s3, claim_id, _, partial) = s2_licensed(&p);
-            let (mut s4, _) = apply_door(
+            let (s4, _) = apply_door(
                 &s3,
                 &p,
                 &ctx(5, L + 1, 5),

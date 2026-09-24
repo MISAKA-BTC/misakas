@@ -435,8 +435,10 @@ pub(crate) const PALW_SEAT_S3_CAPTURES_V1: usize = 6;
 /// because (a) sampling beside a running replay is a second model-sized working set on the same host
 /// at once (each site replays a segment), which the replay slots and the memory ledger were sized
 /// without; (b) a `Sampled` filed while the seat's own replay may still end `Valid` credits the seat
-/// and latches `unserved_seen`, so it would cost the seat its count and the producer its SR-1b
-/// release — the order the ADR asks for needs a cancel the V3 door does not have; and (c) at launch
+/// — so SR-10's V3 door never takes its `Valid` after it, and only on a licence still awaiting its
+/// replay does the V2 door take the seat's whole-job replay (V3S-01, `palw_rcore_v2_widens_seat_v1`)
+/// — and latches `unserved_seen` for good, which costs the producer its SR-1b release even when the
+/// replay then lands: the order the ADR asks for needs a cancel the V3 door does not have; and (c) at launch
 /// the arm fires almost nowhere: the floor's family cannot sample a site, the 2M class is closed, and
 /// an 8k attempt's capture does not travel to the partial seats. What silence costs is the seat's pay
 /// (the escrow is held either way — a silent seat never serves), never the claim's liveness (Q-5's

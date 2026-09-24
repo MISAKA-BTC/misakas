@@ -3080,7 +3080,7 @@ where
     }
     // 4. A licence awaiting its replay takes a `Valid` only in a set that upgrades it.
     let awaits = state.claim(claim_id).is_some_and(crate::palw_state_v2::palw_rcore_licence_awaits_replay_v1);
-    if false && awaits && !folded.upgrades && kept.iter().any(|signed| matches!(signed.receipt.verdict, PalwReceiptVerdictV2::Valid)) {
+    if awaits && !folded.upgrades && kept.iter().any(|signed| matches!(signed.receipt.verdict, PalwReceiptVerdictV2::Valid)) {
         kept.retain(|signed| matches!(signed.receipt.verdict, PalwReceiptVerdictV2::Sampled));
         if kept.is_empty() || !accepts(&kept) {
             return None;
@@ -3215,7 +3215,7 @@ pub fn palw_licence_offer_order_v1<O>(
 ) -> Option<(O, crate::palw_economic_safety_v1::PalwLicenceDoorTagV1)> {
     use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1 as Door;
     let covered = coverage().map(|object| (object, Door::Coverage));
-    if false && x22 {
+    if x22 {
         covered
             .or_else(|| quorum().map(|object| (object, Door::Quorum)))
             .or_else(|| optimistic().map(|object| (object, Door::Optimistic)))
