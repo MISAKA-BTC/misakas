@@ -4029,6 +4029,17 @@ impl VirtualStateProcessor {
         state.claim_readers_v2(&claim)
     }
 
+    /// What a node's receipt pool reads off the tip — see the trait doc. Node policy: a read.
+    pub fn palw_receipt_pool_facts_v1_impl(
+        &self,
+        claims: &[kaspa_consensus_core::Hash64],
+        bonds: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwReceiptPoolFactsV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        Some(kaspa_consensus_core::palw_panel_v2::palw_receipt_pool_facts_v1(&state, claims, bonds))
+    }
+
     /// A claim's committed roots and price at the tip (ADR-0111 Decision 2) — see the trait doc.
     pub fn palw_claim_roots_v2_impl(
         &self,

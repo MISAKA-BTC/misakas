@@ -863,6 +863,20 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **What a node's receipt pool reads off the tip** (node policy, the 2026-09-24 launch review's
+    /// receipt-pool flush): the bound panel of each asked claim the tip holds `PanelBound`, and the
+    /// registered key of each asked bond — see [`crate::palw_panel_v2::PalwReceiptPoolFactsV1`].
+    /// `None` when there is no tip state to read (off `ConsensusV2`, or before the first one), which
+    /// the caller must not mistake for "no such panel, no such bond". Decides what a node keeps,
+    /// never what a block accepts.
+    fn palw_receipt_pool_facts_v1(
+        &self,
+        _claims: Vec<crate::Hash64>,
+        _bonds: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> Option<crate::palw_panel_v2::PalwReceiptPoolFactsV1> {
+        None
+    }
+
     /// **A claim's committed roots and price, at the tip** — `(execution_root, trace_root,
     /// work_leaves)` — what an executor serving a leaf's evidence off chain binds its answer to
     /// (ADR-0111 Decision 2). `None` for a claim this chain does not hold.
