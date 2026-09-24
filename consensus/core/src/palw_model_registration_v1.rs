@@ -315,7 +315,12 @@ pub fn palw_model_preflight_v1(
         shape.kimi_family,
         // 2026-09-23 audit C-4: the geometry a non-fused class is priced from must fit its query row.
         shape.attention_geometry_bound,
-    );
+    )
+    // ADR-0152 §4-ter C5, asked where the processor asks it (beside the gate).
+    .and_then(|entry| {
+        crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, params.palw_offence_attribution_active_at(daa_score))
+            .map(|()| entry)
+    });
 
     let mut reject_code = String::new();
     let mut processor_verdict = PalwModelRegistrationCodeV1::AdmissionOk.code().to_string();

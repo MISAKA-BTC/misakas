@@ -14594,6 +14594,32 @@ fn the_one_move_acceptance_arm_refuses_an_unanswerable_held_class_where_the_fold
     );
 }
 
+/// **ADR-0152 §4-ter: the acceptance layer's half of C2 and C5.** The held root claim (tag 57) is
+/// admitted by the same arm as the other two forms of move 1 — the k-ary fence, the declared arity,
+/// the responder's signature over the root claim — and exists only past `palw_offence_attribution`
+/// at the block's own DAA (the fold refuses it below, `HeldRootClaimRefused`); and a class
+/// registration past the fence is asked `palw_held_class_is_attributable_v1` beside the admission
+/// gate, at the block's own DAA.
+#[test]
+fn the_acceptance_layer_takes_the_held_root_claim_past_the_fence_and_refuses_an_unattributable_class() {
+    let source = include_str!("processor.rs");
+    let at = source.find("Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }").expect("the move-1 arm");
+    let end = at + source[at..].find("\n                Obj::CourtAttnDissected").expect("the next arm");
+    let arm = &source[at..end];
+    assert!(arm.contains("| Obj::CourtAttnRootClaimedHeld { session_id, root, arity, signature, .. } =>"), "one arm, three forms");
+    let fence =
+        arm.find("matches!(object, Obj::CourtAttnRootClaimedHeld { .. }) && !self.palw_offence_attribution_at(point.daa_score)");
+    assert!(fence.is_some(), "the held form's fence, at the block's DAA");
+    for check in ["palw_attn_move_is_admissible_v2(", "derived.dissection_arity()", "check_court_attn_root_claim_acceptance_v2("] {
+        assert!(arm.contains(check), "the held form takes `{check}` like the others");
+    }
+    let registration = source.find("kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v9(").expect("the gate");
+    let after = &source[registration..registration + 6_000];
+    let c5 = after.find("palw_held_class_is_attributable_v1(").expect("C5 beside the gate");
+    assert!(after[c5..c5 + 200].contains("self.palw_offence_attribution_at(point.daa_score)"), "at the block's fence");
+    assert!(source.contains("O::CourtAttnRootClaimedHeld { .. } => \"CourtAttnRootClaimedHeld\","), "and it has a name");
+}
+
 // ---- ADR-0125: the execution lane through the real pipeline ----------------------------------
 
 /// A network with the round lane open from genesis, two permits a round, and one schedule span far

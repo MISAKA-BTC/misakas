@@ -123,3 +123,27 @@ fn the_mirror_follows_the_fence_and_moves_no_id() {
     let bytes = |p: &Params| borsh::to_vec(&bundle_state(p)).expect("borsh");
     assert_eq!(bytes(&cleared), bytes(&t12), "borsh-skipped: the bundle's bytes do not carry it");
 }
+
+/// **C5: past the fence a held class is admitted only where its attention lie is attributable.** A
+/// held (graph-v7) row at `n_ctx ≤ 8,192` passes; past it — 16,384, the 2M row's 2,097,152 — it is
+/// refused by name; below the fence every one passes (the gate as it was); a class that does not
+/// register the held map is never asked (the floor's non-held profile, at any width).
+#[test]
+fn c5_a_held_class_past_the_answerable_context_is_refused_past_the_fence() {
+    use kaspa_consensus_core::palw_class_admission_v2::{PalwClassAdmissionError, palw_held_class_is_attributable_v1};
+    let row = |n_ctx: u32| kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v7(n_ctx).expect("a held row");
+    for n_ctx in [1_024u32, 4_096, 8_192] {
+        assert_eq!(palw_held_class_is_attributable_v1(&row(n_ctx), true), Ok(()), "n_ctx {n_ctx} is answerable");
+    }
+    for n_ctx in [16_384u32, 2_097_152] {
+        let refused = palw_held_class_is_attributable_v1(&row(n_ctx), true).expect_err("unattributable");
+        assert_eq!(refused, PalwClassAdmissionError::HeldClassUnattributable { n_ctx, bound: PALW_HELD_ANSWERABLE_N_CTX_V1 });
+        assert_eq!(refused.code(), "HELD_CLASS_UNATTRIBUTABLE");
+        assert_eq!(palw_held_class_is_attributable_v1(&row(n_ctx), false), Ok(()), "below the fence the gate is as it was");
+    }
+    let floor =
+        kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor");
+    assert!(!kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&floor));
+    assert_eq!(palw_held_class_is_attributable_v1(&floor, true), Ok(()), "a class that is not held is never asked");
+}

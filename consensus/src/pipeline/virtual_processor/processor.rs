@@ -7609,13 +7609,24 @@ impl VirtualStateProcessor {
                 // other court move uses.
                 // -------------------------------------------------------------------------
                 Obj::CourtAttnRootClaimed { session_id, root, arity, signature, .. }
-                | Obj::CourtAttnRootClaimedAnchored { session_id, root, arity, signature, .. } => {
+                | Obj::CourtAttnRootClaimedAnchored { session_id, root, arity, signature, .. }
+                | Obj::CourtAttnRootClaimedHeld { session_id, root, arity, signature, .. } => {
                     // ADR-0093 Decision 8: the anchored form exists only where its fence does. (The
                     // plain form's refusal past the fence needs the site, so the fold makes it.)
                     if matches!(object, Obj::CourtAttnRootClaimedAnchored { .. }) && !self.palw_attn_anchored_root_at(point.daa_score)
                     {
                         return Err(format!(
                             "session {session_id}: an anchored root claim before palw_attn_anchored_root is armed (ADR-0093 Decision 8)"
+                        ));
+                    }
+                    // ADR-0152 §4-ter C2: the held form (tag 57) exists only past
+                    // `palw_offence_attribution`, at the block's own DAA. Whether the class is an
+                    // answerable held one, and whether the sub-roots root to the anchor, need the
+                    // session and the site, so the fold makes those refusals; the signature and the
+                    // arity are the same checks as the other two forms', below.
+                    if matches!(object, Obj::CourtAttnRootClaimedHeld { .. }) && !self.palw_offence_attribution_at(point.daa_score) {
+                        return Err(format!(
+                            "session {session_id}: a held root claim before palw_offence_attribution is armed (ADR-0152 §4-ter)"
                         ));
                     }
                     kaspa_consensus_core::palw_court_v2::palw_attn_move_is_admissible_v2(
@@ -7900,6 +7911,14 @@ impl VirtualStateProcessor {
                         // 2026-09-23 audit C-4: past its fence a non-fused class's priced geometry
                         // must fit the query row its graph reads.
                         self.palw_audit_2026_09_23_at(point.daa_score),
+                    )
+                    .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
+                    // ADR-0152 §4-ter C5: past `palw_offence_attribution` a held class is admitted
+                    // only where its attention lie is attributable — its dissection answerable
+                    // inside a turn (`n_ctx ≤ PALW_HELD_ANSWERABLE_N_CTX_V1`).
+                    kaspa_consensus_core::palw_class_admission_v2::palw_held_class_is_attributable_v1(
+                        &carriage.profile,
+                        self.palw_offence_attribution_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -15116,6 +15135,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
         // ADR-0093 Decision 8 — move 1 with its anchor.
         O::CourtAttnRootClaimedAnchored { .. } => "CourtAttnRootClaimedAnchored",
+        // ADR-0152 §4-ter C2 — move 1 of a held class, with its anchor's slice sub-roots (tag 57).
+        O::CourtAttnRootClaimedHeld { .. } => "CourtAttnRootClaimedHeld",
         O::CourtAttnDissected { .. } => "CourtAttnDissected",
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
     }

@@ -1295,6 +1295,15 @@ pub enum PalwClassAdmissionError {
     /// `LinearInTheContext` so the refusal names the right problem).
     #[error("under the held regime the class's {wall} could not be priced across the context sweep")]
     ChainWallOrderUnknown { wall: &'static str },
+    /// **ADR-0152 §4-ter C5: a held class past `PALW_HELD_ANSWERABLE_N_CTX_V1`, registered past
+    /// `palw_offence_attribution`.** No honest party can play its dissection inside a turn, so an
+    /// attention lie in it is attributable to nobody — the (C) bound the 2M genesis row is accepted
+    /// under, which a later registration may not widen.
+    #[error(
+        "a held class at n_ctx {n_ctx} is past the {bound}-position context an honest party can dissect inside a turn: its \
+         attention lies are attributable to nobody (ADR-0152 §4-ter C5)"
+    )]
+    HeldClassUnattributable { n_ctx: u32, bound: u32 },
 }
 
 impl PalwClassAdmissionError {
@@ -1325,6 +1334,7 @@ impl PalwClassAdmissionError {
             Self::HeldMapNeedsItsFence => "FAMILY_FENCE_CLOSED",
             Self::LinearInTheContext { .. } => "LINEAR_IN_THE_CONTEXT",
             Self::ChainWallOrderUnknown { .. } => "CHAIN_WALL_ORDER_UNKNOWN",
+            Self::HeldClassUnattributable { .. } => "HELD_CLASS_UNATTRIBUTABLE",
         }
     }
 }
@@ -1987,6 +1997,22 @@ pub fn verify_class_admission_v8(
         // v8's callers predate the 2026-09-23 fence: the pre-fence gate, byte for byte.
         false,
     )
+}
+
+/// **ADR-0152 §4-ter C5: is a held class's attention lie attributable?** Past
+/// `palw_offence_attribution` (`attribution`), a registration whose profile registers the held map
+/// at `n_ctx > PALW_HELD_ANSWERABLE_N_CTX_V1` is refused ([`PalwClassAdmissionError::HeldClassUnattributable`]):
+/// neither party could compute an honest dissection move inside a turn, so the class would join the
+/// unanswerable set the genesis 2M row alone was accepted into. Every other profile, and every
+/// profile below the fence, passes. Asked by the acceptance layer beside
+/// [`verify_class_admission_v9`] for a post-genesis registration; genesis rows are judged by
+/// `validate_palw_v2` and listed in the bundle's unanswerable mirror instead.
+pub fn palw_held_class_is_attributable_v1(profile: &PalwShapeProfileV3, attribution: bool) -> Result<(), PalwClassAdmissionError> {
+    let bound = crate::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1;
+    if attribution && crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) && profile.n_ctx > bound {
+        return Err(PalwClassAdmissionError::HeldClassUnattributable { n_ctx: profile.n_ctx, bound });
+    }
+    Ok(())
 }
 
 /// [`verify_class_admission_v8`] with the Kimi family fence as an argument.

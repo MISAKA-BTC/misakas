@@ -6749,6 +6749,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         // ADR-0082 Decision 2 — the fused-attention dissection's three moves.
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. } => "CourtAttnRootClaimed",
         PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. } => "CourtAttnRootClaimedAnchored",
+        // ADR-0152 §4-ter C2 (tag 57): named only; filing it is the panel's routing (N3).
+        PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. } => "CourtAttnRootClaimedHeld",
         PalwConsensusObjectV2::CourtAttnDissected { .. } => "CourtAttnDissected",
         PalwConsensusObjectV2::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
         // ADR-0088 — the registry's ten moves (a line is founded, a version published and

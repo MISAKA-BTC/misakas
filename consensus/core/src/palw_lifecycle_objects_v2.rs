@@ -132,6 +132,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // have one.
         PalwConsensusObjectV2::CourtAttnRootClaimed { signature, .. }
         | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { signature, .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { signature, .. }
         | PalwConsensusObjectV2::CourtAttnDissected { signature, .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { signature, .. }
             if !signature.is_empty() =>
@@ -140,6 +141,7 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         }
         PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
         | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. }
         | PalwConsensusObjectV2::CourtAttnDissected { .. }
         | PalwConsensusObjectV2::CourtAttnChildChosen { .. } => Err(
             "a fused-attention dissection move must carry the signature of the party it is attributed to — unsigned, either side could write the other's moves",
@@ -1662,6 +1664,9 @@ mod tests {
                 },
             ),
             (56, PalwConsensusObjectV2::PanelUnavailableQuorum { claim: h64(22), receipts: Vec::new() }),
+            // 57 is ADR-0152 §4-ter's `CourtAttnRootClaimedHeld`, pinned beside the held drill that
+            // builds one in palw_state_v2's tests (`t_a2_the_held_root_claim_opens_the_phase_…`), as
+            // 42 is beside its own.
         ]);
         for (discriminant, object) in pinned {
             assert_eq!(borsh::to_vec(&object).unwrap()[0], discriminant, "{object:?}");
