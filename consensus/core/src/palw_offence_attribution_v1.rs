@@ -612,7 +612,9 @@ pub fn palw_false_valid_convicts_execution_v2(
 ///    disputed);
 /// 7. the contradiction is admitted ([`palw_false_valid_admission_v1`]; `ProducerWithholding` is
 ///    refused until F3), and a named void is the one the chain wrote on this claim
-///    (`palw_void_binds_claim_v1`, the V1 fold's own reading);
+///    (`palw_void_binds_claim_v1`, the V1 fold's own reading) — a PROVEN `CourtFraud`, never a
+///    court's `CourtDefault` (the executor's silence, which proves nothing a seat replayed; F2
+///    residual);
 /// 8. an execution-proving contradiction convicts against the TARGET's `execution_root` and
 ///    artifact root at the class's ladder ([`palw_false_valid_convicts_execution_v2`], the prompt
 ///    read through the evidence's opening where the job commits a Merkle root) — the root pin is the
@@ -675,6 +677,15 @@ pub fn palw_check_panel_false_valid_v2(
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
     let execution_proving = match palw_false_valid_admission_v1(&payload.contradiction)? {
         PalwFalseValidAdmissionV1::NamedVoid { reason, voided_daa } => {
+            // A court's DEFAULT is not its verdict (F2 residual): the void the executor's own
+            // silence wrote proves nothing about the execution the seats replayed, so a
+            // `CourtFraud` contradiction naming it is refused by name rather than as a mismatch.
+            if state.palw_void_binds_claim_v1(&target.claim_id, PalwVoidReasonV2::CourtDefault, voided_daa) {
+                return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+                    "the claim was voided by a court DEFAULT (the executor's silence), not a proven fraud; a Valid signer is \
+                     convicted only by a proof of the execution",
+                ));
+            }
             if !state.palw_void_binds_claim_v1(&target.claim_id, reason, voided_daa) {
                 return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
             }

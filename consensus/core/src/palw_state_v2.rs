@@ -2700,6 +2700,20 @@ pub enum PalwVoidReasonV2 {
     /// S0′, charged as a second `ReceiptTimeout`. Borsh discriminant 6. Declared by S; written by M4,
     /// by nobody yet.
     NotReplayBacked,
+    /// **A court ended against the executor by DEFAULT, not by proof** (ADR-0152 F2 residual, past
+    /// `Params::palw_offence_attribution` only). Borsh discriminant 7, appended.
+    ///
+    /// Two endings convict the executor without a verdict on the arithmetic: the responder's rung
+    /// running out (`sweep_court_deadlines`' `Responder` arm) and an executor-side close declaration
+    /// that never assembled (`convict_close_declarer_v1`). Both are charged exactly as a proven
+    /// fraud is — the producer did default on the only defence it had — but they are NOT a proof
+    /// that the execution was false: a colluding producer's deliberate silence in a bystander's
+    /// dissection writes this reason on an HONEST execution. `CourtFraud` is what kind 3's
+    /// `CourtFraud { voided_daa }` contradiction names against the claim's full-mask `Valid`
+    /// signers, so a default written under that reason would let the producer's silence slash the
+    /// honest full seats. Past the fence the defaults write this reason instead and kind 3 refuses
+    /// it by name; below the fence they write `CourtFraud`, byte for byte as before.
+    CourtDefault,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -5234,6 +5248,20 @@ fn forfeit_close_deposit_v1(
     builder.slash_bond(declarer, deposit as u128)
 }
 
+/// **The reason a court's DEFAULT against the executor is recorded under** (ADR-0152 F2 residual).
+///
+/// A court can end against the executor two ways: a verdict on the arithmetic (a close, a one-move
+/// accusation, a held leaf — `CourtFraud`, the proof), or the executor's default on its own
+/// defence — its rung running out, or its own close declaration never assembling. The default is
+/// charged exactly as the proof is, but it proves nothing about the execution, and kind 3 reads a
+/// `CourtFraud` void as that proof against every full-mask `Valid` signer. So past
+/// `palw_offence_attribution` the two default endings write [`PalwVoidReasonV2::CourtDefault`];
+/// below it they write `CourtFraud` as they always did, and every dormant network's fold is byte
+/// for byte what it was.
+pub fn palw_court_default_void_reason_v1(offence_attribution_active: bool) -> PalwVoidReasonV2 {
+    if offence_attribution_active { PalwVoidReasonV2::CourtDefault } else { PalwVoidReasonV2::CourtFraud }
+}
+
 /// **A failed declaration loses on its OWN side** (ADR-0080 design A, W5's second requirement, in
 /// one spelling for the two places that reach it).
 ///
@@ -5269,9 +5297,11 @@ fn convict_close_declarer_v1(
             // executor that will not stand behind its own announced root: it has not been convicted
             // of arithmetic, but it HAS defaulted on the only defence available to it. A late
             // conviction against an already-terminal claim closes the session and changes nothing
-            // else, exactly as a late verdict does.
+            // else, exactly as a late verdict does. Recorded as a DEFAULT past
+            // `palw_offence_attribution` ([`palw_court_default_void_reason_v1`]), charged the same.
             if !claim.phase.is_terminal() {
-                builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                let reason = palw_court_default_void_reason_v1(builder.extras.offence_attribution_active);
+                builder.void_and_slash(session.claim, &claim, ctx.daa_score, reason)?;
                 // C-03 (deep fence): the guilty responder also pays for the time it kept the court
                 // open — a share of the claim's reserved stake proportional to the session's length.
                 builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
@@ -14387,7 +14417,9 @@ impl<'a> TransitionBuilder<'a> {
         // CourtFraud takes, so withholding is never the cheaper way to fail. The cost falls on a
         // producer whose node is simply down as well; that is the trade the decision accepts.
         let escrow_forfeit = match reason {
-            PalwVoidReasonV2::CourtFraud => true,
+            // A court default is charged exactly as a proven fraud (ADR-0152 F2 residual): only the
+            // reason it is recorded under differs, so kind 3 cannot read it as a proof.
+            PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault => true,
             PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
             // ADR-0152 v3.1 S0′ (v22 skeleton): both are a second failed panel and are charged as the
             // second `ReceiptTimeout` is. No writer emits either yet (S-5 writes 5, M4 writes 6), so
@@ -14694,7 +14726,7 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<(), PalwStateV2Error> {
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa, reason };
-        if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding) {
+        if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::ProducerWithholding) {
             self.note_model_probe(claim, false);
         }
         // ADR-0132 Upgrade C: a voided claim is paid nothing, so its snapshot leaves with it.
@@ -16481,9 +16513,13 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                         // index it was asked about has not been convicted of arithmetic, but it
                         // HAS defaulted on the only defence available to it. A late default
                         // against an already-terminal claim closes the session and changes
-                        // nothing else, exactly as a late verdict does.
+                        // nothing else, exactly as a late verdict does. Past
+                        // `palw_offence_attribution` it is recorded as the default it is
+                        // ([`palw_court_default_void_reason_v1`]) — charged the same, but never a
+                        // proof a `Valid` signer can be convicted by.
                         if !claim.phase.is_terminal() {
-                            builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                            let reason = palw_court_default_void_reason_v1(builder.extras.offence_attribution_active);
+                            builder.void_and_slash(session.claim, &claim, ctx.daa_score, reason)?;
                             // C-03 (deep fence): the defaulting responder also pays for the time it
                             // kept the session open (a no-op below the fence).
                             builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
@@ -38267,6 +38303,54 @@ pub(crate) mod tests {
         );
     }
 
+    /// **ADR-0152 F2 residual: an executor's failed declaration is a court DEFAULT past
+    /// `palw_offence_attribution`** — charged exactly as the `CourtFraud` above, recorded under the
+    /// reason kind 3 does not read as a proof. The test above, with only the fence's bit set: every
+    /// bond is identical to the dormant sweep's, and the claim differs in its reason alone.
+    #[test]
+    fn f2_residual_a_declaring_executor_that_never_assembles_is_a_court_default_past_the_fence() {
+        let (p, s5, claim_id, session_id) = split_close_fixture();
+        let backstop = s5.court_session(&session_id).unwrap().deadline_daa;
+        let (declared, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 8)], None);
+        let sweep = |attribution: bool| {
+            let extras = PalwTransitionExtrasV1 { offence_attribution_active: attribution, ..Default::default() };
+            let (swept, _) = apply_palw_transition_v2_with_extras(
+                &declared,
+                &p,
+                &ctx(7, backstop + 1, 7),
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("the sweep applies");
+            swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+            swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+            assert!(swept.court_session(&session_id).is_none(), "the backstop closed the session");
+            swept
+        };
+        let (armed, dormant) = (sweep(true), sweep(false));
+        assert_eq!(
+            armed.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { voided_daa: backstop + 1, reason: PalwVoidReasonV2::CourtDefault }
+        );
+        assert_eq!(
+            dormant.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { voided_daa: backstop + 1, reason: PalwVoidReasonV2::CourtFraud }
+        );
+        for bond in declared.bonds.keys() {
+            assert_eq!(armed.bond(bond), dormant.bond(bond), "bond {bond:?} is charged exactly as the fraud charged it");
+        }
+        let executor = declared.claim(&claim_id).unwrap().bond;
+        assert!(armed.bond(&executor).unwrap().slashed > declared.bond(&executor).unwrap().slashed, "the executor is charged");
+        let mut relabelled = armed.claim(&claim_id).unwrap().clone();
+        relabelled.phase = dormant.claim(&claim_id).unwrap().phase.clone();
+        assert_eq!(&relabelled, dormant.claim(&claim_id).unwrap(), "the claim differs in its reason alone");
+    }
+
     /// A CHALLENGER's failed declaration is the unproven accusation it always was: the
     /// challenger-side close, unchanged.
     #[test]
@@ -44075,6 +44159,76 @@ pub(crate) mod tests {
             );
         }
 
+        /// **ADR-0152 F2 residual: past `palw_offence_attribution` a withheld root claim is a court
+        /// DEFAULT, charged as a fraud and recorded as a default.**
+        ///
+        /// C-08's conviction above is the right charge for a responder that withholds a root claim it
+        /// could build — but the drill here is HONEST (`Drill::new(false)`): the executor's silence is
+        /// a choice, and a producer colluding against its own seats makes exactly this choice in a
+        /// bystander's dissection. Recorded as `CourtFraud`, the void is what kind 3's `CourtFraud`
+        /// contradiction convicts every full-mask `Valid` signer by. So the same sweep, on the same
+        /// state, with only `offence_attribution_active` set, must write `CourtDefault` and change
+        /// NOTHING ELSE: every bond (the executor's debit, the court-time charge, the challenger's
+        /// release) and the claim record except its reason are identical to the dormant sweep's.
+        #[test]
+        fn f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — the withholding scenario");
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa, "the RUNG is what fires, not the backstop");
+            let sweep = |attribution: bool| {
+                let extras = PalwTransitionExtrasV1 {
+                    court_responder_coverage_active: true,
+                    audit_2026_09_11_deep_active: true,
+                    offence_attribution_active: attribution,
+                    ..Default::default()
+                };
+                let (swept, _) = apply_palw_transition_v2_with_extras(
+                    &state,
+                    &p,
+                    &ctx(after, after, after),
+                    &[],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &extras,
+                )
+                .expect("the sweep applies");
+                swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+                swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+                assert!(swept.court_session(&sid).is_none(), "the session is decided and gone");
+                swept
+            };
+            let (armed, dormant) = (sweep(true), sweep(false));
+            assert_eq!(
+                armed.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { voided_daa: after, reason: PalwVoidReasonV2::CourtDefault },
+                "past the fence the withheld root claim is recorded as the default it is"
+            );
+            assert_eq!(
+                dormant.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { voided_daa: after, reason: PalwVoidReasonV2::CourtFraud },
+                "below it, byte for byte the conviction C-08 shipped"
+            );
+            let executor = state.claim(&claim_id).unwrap().bond;
+            assert!(armed.bond(&executor).unwrap().slashed > state.bond(&executor).unwrap().slashed, "the executor is charged");
+            for bond in state.bonds.keys() {
+                assert_eq!(armed.bond(bond), dormant.bond(bond), "bond {bond:?} is charged exactly as the fraud charged it");
+            }
+            let mut relabelled = armed.claim(&claim_id).unwrap().clone();
+            relabelled.phase = dormant.claim(&claim_id).unwrap().phase.clone();
+            assert_eq!(&relabelled, dormant.claim(&claim_id).unwrap(), "and the claim differs in its reason alone");
+            assert_ne!(armed.state_root(), dormant.state_root(), "the reason is state");
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtDefault).unwrap(), vec![7], "appended: Borsh discriminant 7");
+            assert_eq!(crate::palw_state_v2::palw_court_default_void_reason_v1(false), PalwVoidReasonV2::CourtFraud);
+            assert_eq!(crate::palw_state_v2::palw_court_default_void_reason_v1(true), PalwVoidReasonV2::CourtDefault);
+        }
+
         /// **A dissection phase reports its OWN turn to the responder** (ADR-0082 Decision 2;
         /// mainnet audit 2026-09-06, H-5 item d).
         ///
@@ -48334,12 +48488,14 @@ pub(crate) mod tests {
             assert_eq!(&bytes[head - 16..head], &claim.rights_reserved.to_le_bytes(), "`rights_reserved` stays right before them");
         }
 
-        /// **The enum slots sit at their frozen indices** (S-SPEC 1c): void reasons 5 and 6.
+        /// **The enum slots sit at their frozen indices** (S-SPEC 1c): void reasons 5 and 6, and the
+        /// F2 residual's `CourtDefault` appended after them at 7.
         #[test]
         fn the_v22_void_reasons_are_pinned() {
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::UnavailableQuorum).unwrap(), vec![5]);
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::NotReplayBacked).unwrap(), vec![6]);
-            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[7]).is_err(), "no eighth reason");
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtDefault).unwrap(), vec![7]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[8]).is_err(), "no ninth reason");
         }
 
         /// **Every new delta entry (66–73) round-trips through borsh, applies onto its parent and
