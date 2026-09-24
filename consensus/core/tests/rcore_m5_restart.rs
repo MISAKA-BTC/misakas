@@ -54,6 +54,28 @@ fn v1(
     PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }
 }
 
+/// A court on licensed `claim` opened by `challenger` (T07's shape): its responder never moves.
+fn court_opened(s: &PalwChainStateV2, claim: Hash64, challenger: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+    const SPACE: kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1 =
+        kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves;
+    let record = s.claim(&claim).expect("the claim").clone();
+    PalwConsensusObjectV2::CourtOpened {
+        session_id: kaspa_consensus_core::palw_court_v2::court_session_id_v2(
+            &claim,
+            &record.trace_root,
+            &record.bond,
+            &challenger,
+            SPACE,
+            16,
+        ),
+        claim,
+        challenger_bond: challenger,
+        space: SPACE,
+        space_size: 16,
+        signature: Vec::new(),
+    }
+}
+
 /// Restart at every tip of `t` and at its tip: every restart loads and replays equal.
 fn restart_everywhere(t: &Tape) {
     for j in 0..=t.len() {
@@ -72,7 +94,11 @@ fn restart_everywhere(t: &Tape) {
 /// * E: redrawn (its first panel silent past `window_receipt`), rebound and licensed by five `Valid`s —
 ///   held (SR-1: never released after a redraw);
 /// * F: S2 (the full seat and one partial, `basis_k` 1) — held; then the other three seats' `Valid`s
-///   through the V2 door at `L + 60` (SR-1b) — released in that block.
+///   through the V2 door at `L + 60` (SR-1b) — released in that block;
+/// * G1, G2: three `Valid`s and two missing — held; then SR-10's V3 supplementary door with the two
+///   missing seats: G2 two `Valid`s — released in that block (SR-1b through the V3 door); G1 a `Valid`
+///   and a `Sampled` — the `Sampled` credited, no lock, no served bit, `unserved_seen` latched: held
+///   to Final (Q-1, IA-5).
 ///
 /// Final releases `w` for each, and the producer's ledger ends where it began. The run then reverts
 /// block by block to testnet-12's genesis (each reverted tip loading under its root) and re-applies,
@@ -153,8 +179,42 @@ fn t01_revert_and_ibd_twins_of_the_staged_lifecycle() {
     let up = t.c.s.claim(&f).unwrap().clone();
     assert!(up.rcore.escrow_released && up.rcore.basis_k >= 2, "F: SR-1b's upgrade releases E: {:?}", up.rcore);
     assert_eq!(before - t.c.s.reserved_exposure(&producer), e_f, "F: E leaves in the upgrade's block");
+    // G1 / G2: three `Valid`s and two missing (held), then SR-10's V3 supplementary door inside
+    // SR-1b's window with the two missing seats — G2 both `Valid` (served: the flip releases E in that
+    // block), G1 one `Valid` and one `Sampled` (Q-1: credited for pay, no lock, no served bit, and it
+    // latches `unserved_seen`, so it never flips: held to Final).
+    let mut supplementary = |t: &mut Tape, sampled: bool, seed: u64, what: &str| -> Hash64 {
+        let id = t.attempt(None, seed);
+        let bound = t.bind(id);
+        licence(t, id, v1(id, &seats, &[0, 1, 2], &[], bound), false, 3, what);
+        let anchor = t.c.anchor(&id);
+        let mut receipts = covered(id, anchor, &seats, &[3, 4], bound);
+        if sampled {
+            receipts[1].receipt.verdict = PalwReceiptVerdictV2::Sampled;
+        }
+        let claim = t.c.s.claim(&id).unwrap().clone();
+        let e = escrow(&t.c.sp, &claim);
+        let before = t.c.s.reserved_exposure(&producer);
+        t.step(vec![PalwConsensusObjectV2::ReceiptLicensedV2 { claim: id, receipts }]);
+        let after = t.c.s.claim(&id).unwrap().clone();
+        let credited = |k: &PalwBondKeyV2| t.c.s.panel_duties_of(&id).and_then(|row| row.get(k)).is_some_and(|at| *at != 0);
+        assert!(credited(&seats[3].0) && credited(&seats[4].0), "{what}: both supplementary seats credited for pay");
+        assert!(t.c.s.slashable_lock(seats[3].0, id).is_some(), "{what}: the Valid locks");
+        if sampled {
+            assert!(t.c.s.slashable_lock(seats[4].0, id).is_none(), "{what}: a Sampled takes no lock (Q-1)");
+            assert_eq!(after.rcore.served_mask & (1 << 4), 0, "{what}: a Sampled sets no served bit");
+            assert!(after.rcore.unserved_seen && !after.rcore.escrow_released, "{what}: Sampled latches unserved_seen: held");
+            assert_eq!(t.c.s.reserved_exposure(&producer), before, "{what}: E stays on the ledger");
+        } else {
+            assert!(after.rcore.escrow_released && !after.rcore.unserved_seen, "{what}: served by every seat: SR-1b flips");
+            assert_eq!(before - t.c.s.reserved_exposure(&producer), e, "{what}: E leaves in the V3 door's block");
+        }
+        id
+    };
+    let g1 = supplementary(&mut t, true, 0x0161, "G1 (V3 door: a Valid and a Sampled)");
+    let g2 = supplementary(&mut t, false, 0x0162, "G2 (V3 door: two Valids)");
     // Final releases w for every claim; the ledger ends where it began.
-    let last = [a, b, cc, d, e_id, f]
+    let last = [a, b, cc, d, e_id, f, g1, g2]
         .iter()
         .map(|id| match t.c.s.claim(id).unwrap().phase {
             PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => licensed_daa + t.c.sp.window_challenge_at(licensed_daa),
@@ -173,6 +233,87 @@ fn t01_revert_and_ibd_twins_of_the_staged_lifecycle() {
     t.ibd_from(scratch_genesis());
     restart_everywhere(&t);
     println!("T01 twins: {} blocks reverted to genesis, replayed from scratch, restarted at every tip", t.len());
+}
+
+/// **T01's twins on the model rows: 8k released at licence and held on `Incapable`, 2M (C7) held to
+/// Final.** Each class on its own tape standing on [`model_chain`]'s state (the class `Active`, the
+/// genesis bonds proved ready at its first DAA — a tape takes no carriage edits, so every claim is
+/// accepted, bound and licensed inside the readiness rows' eight one-DAA spans, and nothing after the
+/// licence reads readiness):
+///
+/// * 8k: X, five `Valid`s — `E` released at the licence (U1: only C7 is held); Y, three `Valid`s and
+///   two `Incapable` (refused on the floor, admitted on a model row) — held, `unserved_seen`;
+/// * 2M: Z, five `Valid`s through the quorum door, every seat served — still held (SR-1 cond. 4, C7).
+///
+/// Final releases `w` (and a held `E`) for each, the producer's ledger back where it began and each row
+/// written. Each tape then reverts block by block to its base (each reverted tip loading under its
+/// root) and re-applies, is folded again from its base (the IBD twin: a model row's readiness is a
+/// carriage edit here, so the scratch genesis is the tape's base), and restarts at every tip.
+#[test]
+fn t01_model_class_twins_8k_released_and_held_and_2m_held_to_final() {
+    let p = t12();
+    let (short, id2m) = model_classes(&p);
+    for (class, what) in [(short, "8k"), (id2m, "2M")] {
+        let mut c = model_chain(p.clone(), class, 1);
+        c.attribution = true;
+        let readied_at = c.daa - 1;
+        let mut t = Tape::new(c);
+        let producer = bond_key(1);
+        let base = t.c.s.reserved_exposure(&producer);
+        let seats = honest_seats(&t.c.p, 5);
+        let mut claims: Vec<(Hash64, bool)> = Vec::new();
+        let plans: Vec<(u64, bool)> = if class == short { vec![(0x01A8, false), (0x01B8, true)] } else { vec![(0x01C2, false)] };
+        for (seed, incapable) in plans {
+            let id = t.model_attempt(class, 1, seed);
+            let bound = t.bind_to(id, &seats);
+            let receipts: Vec<_> =
+                seats
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (k, _))| {
+                        if incapable && i >= 3 {
+                            receipt(id, *k, PalwReceiptVerdictV2::Incapable, bound)
+                        } else {
+                            valid(id, *k, bound)
+                        }
+                    })
+                    .collect();
+            let claim = t.c.s.claim(&id).unwrap().clone();
+            let e = escrow(&t.c.sp, &claim);
+            let before = t.c.s.reserved_exposure(&producer);
+            t.step(vec![PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }]);
+            assert!(t.c.daa < readied_at + 8, "{what}: licensed inside the readiness rows' eight spans");
+            let licensed = t.c.s.claim(&id).unwrap().clone();
+            assert!(matches!(licensed.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "{what}: licensed");
+            let released = class == short && !incapable;
+            assert_eq!(
+                (licensed.rcore.escrow_released, licensed.rcore.unserved_seen, licensed.rcore.basis_k),
+                (released, incapable, 3),
+                "{what} {seed:#x}: SR-1 (U1: 8k released at licence, C7 held; an Incapable holds)"
+            );
+            assert!(licensed.rcore.g_res_sompi > 0, "{what}: the licence froze G_res");
+            assert_eq!(before - t.c.s.reserved_exposure(&producer), if released { e } else { 0 }, "{what}: E leaves iff released");
+            claims.push((id, released));
+        }
+        let last = claims
+            .iter()
+            .map(|(id, _)| match t.c.s.claim(id).unwrap().phase {
+                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => licensed_daa + t.c.sp.window_challenge_at(licensed_daa),
+                ref other => panic!("{what}: licensed: {other:?}"),
+            })
+            .max()
+            .unwrap();
+        t.at(last + 1, vec![]);
+        for (id, _) in &claims {
+            assert!(matches!(t.c.s.claim(id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "{what}: {id} Final");
+            assert!(t.c.s.vesting_row(id).is_some(), "{what}: {id}'s row");
+        }
+        assert_eq!(t.c.s.reserved_exposure(&producer), base, "{what}: Final releases the rest");
+        t.revert_to_base_and_reapply();
+        t.ibd_from(t.base.clone());
+        restart_everywhere(&t);
+        println!("T01 {what} twin: {} claims, {} blocks reverted, replayed and restarted at every tip", claims.len(), t.len());
+    }
 }
 
 /// DL-1's deadline for `id` on `s`, read off the loaded state, against its row of the table.
@@ -194,9 +335,19 @@ fn deadline(s: &PalwChainStateV2, id: &Hash64) -> Option<u64> {
 ///   held) with its unserved seat's session open: no deadline;
 /// * V licensed with a bystander's session open (which does not pause it) reaches `Final` with the
 ///   session open (`FinalRow`): no deadline (retirement deferred) and its row re-keyed behind it;
-/// * P redrawn (`Provisional` mid its rebind window) and then voided, and Q and H voided by their DA
-///   defaults: `max(voided + retirement, last_closed + 1)`;
+/// * W `ReceiptLicensed` with a bystander's court open (its responder never moves): no deadline; then
+///   voided `CourtDefault`: `voided + retirement`;
+/// * P redrawn (`Provisional` mid its rebind window): `rebound + window_bind`, the redraw block's DAA
+///   the rebound; then voided `BindTimeout`: `voided + retirement`;
+/// * Q and H voided by their DA defaults, and V reversed by its `FinalRow` default:
+///   `max(voided + retirement, last_closed + 1)`;
 /// * R and S `Final` mid their retirement: `final + claim_retirement_daa`.
+///
+/// Every expected deadline is computed from DL-1's table and the run's own DAAs, never read off the
+/// fold's index. **Not here:** DL-1's re-arm from the SHIFTED anchor after a seat's session is
+/// ANSWERED (DA-5's pause credit) — an answer needs a real claim's material, which this harness's
+/// junk attempts do not carry; the processor's real-claim harness runs it
+/// (`t67_r_an_answer_at_the_deadline_credits_exactly_the_pause`, `t46_false_valid_real_claim.rs`).
 ///
 /// Every tip restarts equal to the uninterrupted run; the run reverts to its base with every reverted
 /// tip loading (released and held licences and open sessions among them), re-applies, and replays by
@@ -241,6 +392,14 @@ fn t40_dl1_restart_mid_session_and_mid_gate_on_every_phase_equals_the_uninterrup
     t.step(vec![v1(v, &seats, &[0, 1, 2, 3, 4], &[], bound)]);
     let v_licensed = t.c.daa;
     t.step(vec![da_accuse(v, bystander, 0)]);
+    // W: licensed (V1, basis 3), then a court opened on it by the bystander, whose responder never
+    // moves — DL-1's "ReceiptLicensed, open court: none".
+    let w = t.attempt(None, 0x4007);
+    let bound = t.bind(w);
+    t.step(vec![v1(w, &seats, &[0, 1, 2, 3, 4], &[], bound)]);
+    t.step(vec![court_opened(&t.c.s, w, bystander)]);
+    let court_deadline = t.c.s.court_sessions_iter().find(|(_, c)| c.claim == w).expect("the court is open").1.deadline_daa;
+    marks.push((t.len(), "W ReceiptLicensed with a court open", w, None));
     let wc_r = t.c.sp.window_challenge_at(r_licensed);
     let wc_s = t.c.sp.window_challenge_at(s_licensed);
     marks.push((t.len(), "R ReceiptLicensed basis 3 mid its challenge gate", r, Some((r_licensed + wc_r).max(t.c.daa))));
@@ -264,10 +423,12 @@ fn t40_dl1_restart_mid_session_and_mid_gate_on_every_phase_equals_the_uninterrup
     marks.push((t.len(), "V Final with a session open (FinalRow): retirement deferred", v, None));
     assert!(t.c.s.vesting_row(&v).unwrap().expiry_daa > t.c.s.da_session(&v, &bystander).unwrap().deadline_daa, "V's row re-keyed");
     marks.push((t.len(), "P PanelBound mid its receipt gate, later", p_id, Some(p_bound + wr)));
-    // P's receipt gate runs out: redrawn, mid its rebind window.
-    t.at(p_bound + wr + 1, vec![]);
+    // P's receipt gate runs out: redrawn, mid its rebind window. DL-1: "Provisional after a redraw:
+    // as today, from rebound_daa" — the redraw block's DAA plus `window_bind` (no DA session on P).
+    let redraw = p_bound + wr + 1;
+    t.at(redraw, vec![]);
     assert!(matches!(t.c.s.claim(&p_id).unwrap().phase, PalwClaimPhaseV2::Provisional), "RT#1 redraws P");
-    marks.push((t.len(), "P redrawn, mid its rebind window", p_id, t.c.s.deadline_of(&p_id)));
+    marks.push((t.len(), "P redrawn, mid its rebind window", p_id, Some(redraw + t.c.sp.window_bind())));
     // Q and H default (each its own block); P's rebind window runs out between them or after.
     let q_default = t.c.s.da_session(&q, &seats[0].0).unwrap().deadline_daa + 1;
     let h_default = t.c.s.da_session(&hh, &seats[3].0).unwrap().deadline_daa + 1;
@@ -290,11 +451,31 @@ fn t40_dl1_restart_mid_session_and_mid_gate_on_every_phase_equals_the_uninterrup
     marks.push((t.len(), "P voided BindTimeout, mid its retirement", p_id, Some(voided_daa + t.c.sp.claim_retirement_daa())));
     let producer = floor_producer(&t.c.p).0;
     assert!(t.c.s.consumed_offence(&palw_da_offence_id_v1(&producer.0, &q)).is_some(), "Q's DaDefault");
-    // V's FinalRow session runs out: S3, the row burned, the Final reversed.
+    // V's FinalRow session runs out: S3, the row burned, the Final reversed — voided and closed in
+    // the default's block, so DL-1's terminal row is `max(v_default + retirement, v_default + 1)`.
     let v_default = t.c.s.da_session(&v, &bystander).unwrap().deadline_daa + 1;
     t.at(v_default, vec![]);
     assert!(t.c.s.vesting_row(&v).is_none(), "V's row burned (S3)");
-    marks.push((t.len(), "V reversed by its FinalRow default, mid its retirement", v, t.c.s.deadline_of(&v)));
+    assert_eq!(t.c.s.da_claim(&v).and_then(|record| record.last_closed_daa), Some(v_default), "the session closed at the default");
+    marks.push((
+        t.len(),
+        "V reversed by its FinalRow default, mid its retirement",
+        v,
+        Some((v_default + t.c.sp.claim_retirement_daa()).max(v_default + 1)),
+    ));
+    // W's court runs out on its responder's silence: `CourtDefault`, terminal — no DA record on W, so
+    // DL-1's terminal row is `voided + retirement`.
+    if court_deadline + 1 > t.c.daa {
+        t.at(court_deadline + 1, vec![]);
+    }
+    let w_voided = (0..=t.len())
+        .find_map(|j| match t.state_at(j).claim(&w).map(|c| c.phase.clone()) {
+            Some(PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtDefault }) => Some((j, voided_daa)),
+            _ => None,
+        })
+        .expect("W's court defaults on its responder's silence");
+    assert!(t.c.s.da_claim(&w).is_none(), "no DA record on W");
+    marks.push((w_voided.0, "W voided CourtDefault, mid its retirement", w, Some(w_voided.1 + t.c.sp.claim_retirement_daa())));
     // Every named tip: the loaded state answers DL-1's row.
     for (j, what, id, want) in &marks {
         let loaded = t.restart_at(*j);

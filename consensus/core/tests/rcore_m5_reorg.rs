@@ -187,8 +187,11 @@ fn bound_claims(t: &mut Tape, seeds: &[u64]) -> Vec<Hash64> {
 /// five in `reward_pending`; step 3d then moves what its budget of new queue keys allows (8), and one
 /// wave-1 award waits in `reporter_rewards` for the next block's 3d. Every award is `⌊r ×
 /// collected⌋` of its producer's debit and pays the accuser once. The reorg twins: the whole run
-/// reverts block by block to its base and re-applies, and a sibling branch forked just before the
-/// default block, and one forked just before the sweep block, are each reorged to and back.
+/// reverts block by block to its base and re-applies; a sibling forked just before the default block
+/// folds the default ITSELF in a different block (two DAA later, after a claim of its own, beside a
+/// seat's accusation) — the same records and amounts, its own reveal window — and is reorged to and
+/// back; and a sibling forked just before the sweep block folds the sweep in an attempt block of its
+/// own and is reorged to and back.
 #[test]
 fn t75_reorg_twin_sweep_to_reporter_rewards_to_3d_with_sweep_time_convictions() {
     let mut t = armed_tape();
@@ -260,11 +263,33 @@ fn t75_reorg_twin_sweep_to_reporter_rewards_to_3d_with_sweep_time_convictions() 
     );
     // The reorg twins.
     t.revert_to_base_and_reapply();
-    for j in [default_block - 1, sweep_block - 1] {
-        let mut sibling = t.fork(j);
-        bound_claims(&mut sibling, &[0x75FF]);
-        t.reorg_to(j, &sibling);
+    // A sibling of the default block that folds the default itself in a different block: forked on
+    // wave 2's accusation, it takes a claim of its own and binds it, then runs out wave 1 two DAA
+    // later than the trunk, in a block that also carries a seat's accusation of its new claim. Its
+    // step 2 opens each wave-1 reward on the same record, with its own window.
+    let fork = default_block - 1;
+    assert_eq!(t.daa_at(fork), open2, "the default sibling forks on wave 2's accusation, before the default");
+    let mut sibling = t.fork(fork);
+    let extra = bound_claims(&mut sibling, &[0x75FF])[0];
+    assert!(sibling.c.daa < x1, "the sibling's own blocks land before wave 1 runs out");
+    sibling.at(x1 + 2, vec![da_accuse(extra, accuser, 0)]);
+    let r1_trunk = t.state_at(default_block).reward_pending(&key(&wave1[0])).unwrap().reveal_until;
+    for id in &wave1 {
+        let pending = *sibling.c.s.reward_pending(&key(id)).expect("the sibling's step 2 folds the default too");
+        let record = sibling.c.s.consumed_offence(&key(id)).expect("the sibling's DaDefault record");
+        assert_eq!(pending.amount, palw_reporter_reward_amount_v1(record.collected, 0), "the same reward rule on the sibling");
+        assert_eq!(pending.reveal_until, r1_trunk + 2, "its own window, from its own default block");
+        assert_eq!(pending.best.map(|w| w.reporter), Some(accuser), "named: the accuser");
     }
+    assert!(sibling.c.s.da_session(&extra, &accuser).is_some(), "the default block's own accusation opened");
+    assert_ne!(sibling.c.s.state_root(), t.state_at(default_block).state_root(), "a different default block");
+    sibling.revert_to_base_and_reapply();
+    t.reorg_to(fork, &sibling);
+    // A sibling of the sweep block: its first block is an attempt at x2, so the sweep folds there.
+    let mut sibling = t.fork(sweep_block - 1);
+    bound_claims(&mut sibling, &[0x75FE]);
+    assert!(wave1.iter().all(|id| sibling.c.s.reward_pending(&key(id)).is_none()), "the sibling swept wave 1 at its x2");
+    t.reorg_to(sweep_block - 1, &sibling);
 }
 
 /// **V3S-03 on the real DA court: a speculative commitment to a claim's DA key at admission is
@@ -362,6 +387,10 @@ fn bug_the_reporter_award_journals_a_reporter_awarded_note() {
 // T07: the reorg fuzz.
 // ---------------------------------------------------------------------------------------------
 
+/// R-1's reporter share `r`, in basis points — ADR-0152 §3.6 (1,000 bps), written here from the ADR
+/// and never read from the fold, so the oracle's reward bound is not the fold's own.
+const R_BPS: u128 = 1_000;
+
 /// What one Final claim's vesting row was when the chain wrote it — the oracle's own copy, kept after
 /// the row moves or burns, so a row that leaves early is still counted against its producer.
 #[derive(Clone, Debug)]
@@ -372,11 +401,48 @@ struct RowSeen {
     expiry_daa: u64,
     settled_at_final: u64,
     basis_k: u8,
+    /// The row's `E` and buyback bound `s` (R-5's `E_v = E − s`).
+    escrow: u64,
+    buyback: u64,
 }
 
-/// The T07 oracle, independent of the fold's own latch: which Final claims are still inside their
-/// conviction window, and what each bond could extract and the chain could recover from it there.
-#[derive(Default)]
+/// **The two clocks of ADR-0152 V-4 / L-3 at one tip, computed here from raw reads** — the
+/// processor's raw depth (`extras.settled_anchor_depth`), the state's anchor ring and its settled
+/// count — and never through the fold's helpers (`palw_second_clock_depth_v1`,
+/// `palw_second_clock_holds_v1`, `is_live_v3`, `palw_vesting_row_maturity_v1`), so a fault in one of
+/// those is a disagreement with this oracle rather than a blind spot it shares.
+struct Clocks {
+    now: u64,
+    wc: u64,
+    /// The depth after the liveness escape: `None` past `2 × window_court` with no licence anywhere.
+    escaped: Option<u64>,
+    /// V-4(b): a second clock is configured and escaped — a licence halt.
+    halted: bool,
+    settled_now: u64,
+}
+
+impl Clocks {
+    fn at(c: &Chain, s: &PalwChainStateV2, now: u64) -> Self {
+        let wc = c.sp.window_court();
+        let raw = c.extras_at(now).settled_anchor_depth;
+        let last = s.recent_anchor_daas().iter().copied().filter(|daa| *daa <= now).max().unwrap_or(0);
+        let escaped = raw.filter(|_| now.saturating_sub(last) < 2 * wc);
+        Self { now, wc, escaped, halted: raw.is_some() && escaped.is_none(), settled_now: s.settled_attempt_finals() }
+    }
+
+    /// An obligation whose DAA clock releases it at `release`, begun at settled count `settled_at`:
+    /// is it still held (the DAA clock, or the second clock bounded at `release + 2 × window_court`)?
+    fn holds(&self, release: u64, settled_at: u64) -> bool {
+        self.now < release
+            || self.escaped.is_some_and(|depth| {
+                self.settled_now.saturating_sub(settled_at) < depth && self.now < release.saturating_add(2 * self.wc)
+            })
+    }
+}
+
+/// The T07 oracle, independent of the fold's own latch and clocks: which Final claims are still
+/// inside their conviction window, and what each bond could extract and the chain could recover there.
+#[derive(Default, Clone)]
 struct T07Oracle {
     rows: std::collections::BTreeMap<Hash64, RowSeen>,
     /// Claims whose row a conviction burned: the recovery happened, nothing is extractable any more.
@@ -385,8 +451,25 @@ struct T07Oracle {
     /// latched the row. Monotone: a latched row is mature for good (X29), a halt after it reopens
     /// nothing.
     closed: std::collections::BTreeSet<Hash64>,
+    /// Claims a licence halt reached past their evidence horizon (`expiry + window_court`, the DAA
+    /// half of `palw_panel_obligation_prunable_v1` at the escaped depth): the escape may have pruned
+    /// their locks and liability for good (`sweep_panel_obligations`), so when licences resume and
+    /// the second clock holds the unlatched row again, nothing but the row stands behind it.
+    escaped: std::collections::BTreeSet<Hash64>,
     worst_margin: Option<(i128, String)>,
+    /// The worst margin of the aggregate over every producer (each seat's collateral counted once).
+    worst_global: Option<(i128, String)>,
+    /// The worst margin of R-5's lock sum over its bound `1.1·G_res + 0.1·E_v`.
+    worst_r5: Option<(i128, String)>,
+    /// Claims open only by a licence halt (their clocks ran, their locks released by the escape):
+    /// how many such checks, and the worst margin of the row alone over `G_res`.
+    halt_only: usize,
+    worst_halt: Option<(i128, String)>,
     checks: usize,
+    /// Checks at which the rows alone fell short of the extractable: the locks carried the invariant.
+    lock_carried: usize,
+    r5_checks: usize,
+    reward_checks: usize,
 }
 
 /// Coverage counters over one seed: what the run actually drove.
@@ -410,35 +493,41 @@ struct T07Coverage {
     licences_released: usize,
     licences_held: usize,
     sibling_reorgs: usize,
+    sibling_blocks: usize,
     restarts: usize,
 }
 
+fn worse(slot: &mut Option<(i128, String)>, margin: i128, at: impl FnOnce() -> String) {
+    if slot.as_ref().is_none_or(|(m, _)| margin < *m) {
+        *slot = Some((margin, at()));
+    }
+}
+
 impl T07Oracle {
-    /// Is the row's conviction window still open at `now` (ADR-0152 V-4 read independently of the
-    /// row's latch): its DAA clock has not run, or the second clock still holds it at the escaped
-    /// depth, or the chain is in a licence halt.
-    fn window_open(c: &Chain, s: &PalwChainStateV2, row: &RowSeen, now: u64) -> bool {
-        let wc = c.sp.window_court();
-        let raw = c.extras_at(now).settled_anchor_depth;
-        let escaped = kaspa_consensus_core::palw_state_v2::palw_second_clock_depth_v1(raw, s.recent_anchor_daas(), now, wc);
-        let halted = raw.is_some() && escaped.is_none();
-        now < row.expiry_daa
-            || halted
-            || kaspa_consensus_core::palw_panel_var_v1::palw_second_clock_holds_v1(
-                escaped,
-                s.settled_attempt_finals(),
-                row.settled_at_final,
-                row.expiry_daa,
-                now,
-                wc,
-            )
+    /// The row's current clocks (a DA session re-keys a row forward, DA-5), else those seen at Final.
+    fn clocks_of(s: &PalwChainStateV2, parent: &PalwChainStateV2, id: &Hash64, seen: &RowSeen) -> (u64, u64) {
+        s.vesting_row(id)
+            .or_else(|| parent.vesting_row(id))
+            .map(|row| (row.expiry_daa, row.settled_at_final))
+            .unwrap_or((seen.expiry_daa, seen.settled_at_final))
     }
 
-    /// One committed block: the structural checks on its transition, then the invariant at its tip.
+    /// V-4 read here: the row's conviction window is open — its lock predicate holds on the two clocks,
+    /// or the chain is in a licence halt.
+    fn window_open(clocks: &Clocks, s: &PalwChainStateV2, parent: &PalwChainStateV2, id: &Hash64, seen: &RowSeen) -> bool {
+        let (expiry, settled_at) = Self::clocks_of(s, parent, id, seen);
+        clocks.holds(expiry, settled_at) || clocks.halted
+    }
+
+    /// One committed block: the structural checks on its transition, then the invariants at its tip.
     fn observe(&mut self, c: &Chain, parent: &PalwChainStateV2, b: &TapeBlock, cov: &mut T07Coverage) {
-        use kaspa_consensus_core::palw_state_v2::{palw_claim_g_v1, palw_reporter_reward_extracted_v1};
+        use kaspa_consensus_core::palw_state_v2::{PalwDeltaEntryV2, palw_claim_g_v1};
         let s = &b.state;
         let now = b.daa;
+        let clocks = Clocks::at(c, s, now);
+        // The same clocks on the parent's anchor ring: a block's own licence ends a halt only after
+        // the fold's epoch sweep may have read it.
+        let halted_here = clocks.halted || Clocks::at(c, parent, now).halted;
         kaspa_consensus_core::palw_vesting_v1::palw_vesting_consistency_v1(s).unwrap_or_else(|e| panic!("DAA {now}: V-3: {e}"));
         let notes: Vec<PalwVestingNoteV1> = palw_vesting_notes_of_delta_v1(&b.delta).cloned().collect();
         let latched_here: std::collections::BTreeSet<Hash64> = notes
@@ -462,6 +551,8 @@ impl T07Oracle {
                         expiry_daa: row.expiry_daa,
                         settled_at_final: row.settled_at_final,
                         basis_k: row.basis_k,
+                        escrow: row.escrowed_reward,
+                        buyback: row.buyback_bound,
                     },
                 );
             }
@@ -471,7 +562,10 @@ impl T07Oracle {
                 PalwVestingNoteV1::Latched { claim_id, .. } => {
                     cov.latched += 1;
                     let seen = self.rows.get(claim_id).expect("a latched row was seen at its Final").clone();
-                    assert!(!Self::window_open(c, s, &seen, now), "DAA {now}: row {claim_id} latched inside its conviction window");
+                    assert!(
+                        !Self::window_open(&clocks, s, parent, claim_id, &seen),
+                        "DAA {now}: row {claim_id} latched inside its conviction window"
+                    );
                     self.closed.insert(*claim_id);
                 }
                 PalwVestingNoteV1::Moved { source: PalwVestingSourceV1::Row { claim_id }, .. } => {
@@ -499,66 +593,151 @@ impl T07Oracle {
                 assert!(noted, "DAA {now}: row {} vanished without a Moved or Burned note", row.claim_id);
             }
         }
-        // The invariant, per bond: Σ recoverable (net of R) ≥ Σ extractable over the bond's Final
-        // claims whose conviction window is open.
+        // R-1 (the reward side of the invariant): every reward this block opens is at most `r` of
+        // its conviction's collected debit, and every award it writes is the pending amount, once.
+        for entry in &b.delta.entries {
+            match entry {
+                PalwDeltaEntryV2::RewardPending { key, old: None, new: Some(pending) } => {
+                    let record = s.consumed_offence(key).unwrap_or_else(|| panic!("DAA {now}: a reward {key} with no conviction"));
+                    let bound = u128::from(record.collected) * R_BPS / 10_000;
+                    assert!(
+                        u128::from(pending.amount) <= bound,
+                        "DAA {now}: R-1: reward {} > r × collected {bound} on {key}",
+                        pending.amount
+                    );
+                    self.reward_checks += 1;
+                }
+                PalwDeltaEntryV2::ReporterReward { key, old: None, new: Some(award) } => {
+                    let pending = parent.reward_pending(key).unwrap_or_else(|| panic!("DAA {now}: an award {key} never pending"));
+                    assert_eq!(award.amount, pending.amount, "DAA {now}: the award is the pending amount");
+                    self.reward_checks += 1;
+                }
+                _ => {}
+            }
+        }
+        // The invariant. Per producer bond: Σ recoverable (net of R) ≥ Σ extractable over its Final
+        // claims whose conviction window is open; and over every producer together, with each seat's
+        // collateral counted ONCE across every claim it locks on.
         let mut extractable: std::collections::BTreeMap<PalwBondKeyV2, u128> = Default::default();
-        let mut recoverable: std::collections::BTreeMap<PalwBondKeyV2, u128> = Default::default();
-        let wc = c.sp.window_court();
-        let raw = c.extras_at(now).settled_anchor_depth;
-        let escaped = kaspa_consensus_core::palw_state_v2::palw_second_clock_depth_v1(raw, s.recent_anchor_daas(), now, wc);
+        let mut rows_kept: std::collections::BTreeMap<PalwBondKeyV2, u128> = Default::default();
+        // (producer, seat) → (Σ live lock, Σ R-1 reward on those locks).
+        let mut locks: std::collections::BTreeMap<(PalwBondKeyV2, PalwBondKeyV2), (u128, u128)> = Default::default();
         let rows: Vec<(Hash64, RowSeen)> = self.rows.iter().map(|(k, v)| (*k, v.clone())).collect();
         for (id, seen) in &rows {
             if self.convicted.contains(id) || self.closed.contains(id) {
                 continue;
             }
-            if !Self::window_open(c, s, seen, now) {
+            if !Self::window_open(&clocks, s, parent, id, seen) {
                 self.closed.insert(*id);
                 continue;
             }
-            // Extractable: G_res from the Final on; the escrow too if the row has already left.
             let row = s.vesting_row(id);
-            let ext = seen.g_res + if row.is_none() { seen.total } else { 0 };
-            // Recoverable: the row (a burn takes it whole, never rewarded) and every live lock on the
-            // claim, each capped by its seat's collateral, less R-1's reward on the lock's debit.
-            let mut rec = row.map(|r| r.total_sompi_u128()).unwrap_or(0);
+            let (expiry, settled_at) = Self::clocks_of(s, parent, id, seen);
+            if halted_here && now >= expiry.saturating_add(clocks.wc) {
+                self.escaped.insert(*id);
+            }
+            if !clocks.holds(expiry, settled_at) || self.escaped.contains(id) {
+                // Open only by a licence halt, or held again by the second clock after a halt reached
+                // it past its evidence horizon: V-4(b) holds the row (no latch, no move — checked
+                // above), while the liveness escape has released the locks on the claim by design (the
+                // 2026-09-24 audit's bound: "the chain forgets the obligation for good"). What stands
+                // behind `G_res` here is the row alone.
+                let kept = row.map(|r| r.total_sompi_u128()).unwrap_or(0);
+                worse(&mut self.worst_halt, kept as i128 - seen.g_res as i128, || {
+                    format!("DAA {now}, claim {id} (halt only): row {kept} vs G_res {}", seen.g_res)
+                });
+                self.halt_only += 1;
+                continue;
+            }
+            // Extractable: G_res from the Final on; the escrow too if the row has already left.
+            *extractable.entry(seen.producer).or_default() += seen.g_res + if row.is_none() { seen.total } else { 0 };
+            // Recoverable: the row (a burn takes it whole, never rewarded) and every lock live on the
+            // clocks, less R-1's reward `⌊r · (lock − X)⌋`, `X = min(lock, G_res / basis_k)`.
+            *rows_kept.entry(seen.producer).or_default() += row.map(|r| r.total_sompi_u128()).unwrap_or(0);
+            let mut live = Vec::new();
             if let Some(liability) = s.panel_liability(id) {
                 for (outpoint, _) in &liability.valid_signers {
                     let seat = PalwBondKeyV2(*outpoint);
                     let Some(lock) = s.slashable_lock(seat, *id) else { continue };
-                    if !lock.is_live_v3(now, s.settled_attempt_finals(), escaped, wc) {
+                    if !clocks.holds(lock.expiry_daa, lock.settled_at_final) {
                         continue;
                     }
-                    let collected = lock.amount.min(u128::from(s.bond(&seat).map(|b| b.collateral).unwrap_or(0)));
-                    let x = palw_reporter_reward_extracted_v1(lock.amount, seen.g_res, seen.basis_k);
-                    let r = palw_reporter_reward_amount_v1(u64::try_from(collected).unwrap_or(u64::MAX), x);
-                    rec += collected - u128::from(r).min(collected);
+                    live.push(lock.amount);
+                    let x = lock.amount.min(seen.g_res / u128::from(seen.basis_k.max(1)));
+                    let slot = locks.entry((seen.producer, seat)).or_default();
+                    slot.0 += lock.amount;
+                    slot.1 += (lock.amount - x) * R_BPS / 10_000;
                 }
             }
-            *extractable.entry(seen.producer).or_default() += ext;
-            *recoverable.entry(seen.producer).or_default() += rec;
+            // R-5 / R-6 (the lock side, alone): while the row's own clocks hold it (not only a halt),
+            // the licence's `basis_k` load-bearing locks are live (locks follow the row, V3S-04) and the
+            // `basis_k` smallest of them sum to at least `1.1·G_res + 0.1·E_v`, `E_v = E − s` (less the
+            // `basis_k` sompi the per-lock integer division may round away).
+            {
+                let k = usize::from(seen.basis_k);
+                assert!(k >= 2, "DAA {now}: claim {id} reached Final on basis_k {k} (Q-5: S2 never carries a claim to Final)");
+                assert!(
+                    live.len() >= k,
+                    "DAA {now}: claim {id} inside its window holds {} live locks of its basis_k {k} (V3S-04, L-3)",
+                    live.len()
+                );
+                live.sort_unstable();
+                let sum: u128 = live[..k].iter().sum();
+                let bound =
+                    (seen.g_res * 11 / 10 + u128::from(seen.escrow.saturating_sub(seen.buyback)) / 10).saturating_sub(k as u128);
+                worse(&mut self.worst_r5, sum as i128 - bound as i128, || {
+                    format!("DAA {now}, claim {id}: Σ{k} locks {sum} vs {bound}")
+                });
+                assert!(
+                    sum >= bound,
+                    "DAA {now}: claim {id}: R-5: the {k} load-bearing locks sum {sum} < 1.1·G_res + 0.1·E_v = {bound}"
+                );
+                self.r5_checks += 1;
+            }
+        }
+        let collateral = |seat: &PalwBondKeyV2| u128::from(s.bond(seat).map(|b| b.collateral).unwrap_or(0));
+        // A seat's locks for one producer, capped once by its collateral, net of R-1.
+        let net = |locked: u128, reward: u128, seat: &PalwBondKeyV2| {
+            let collected = locked.min(collateral(seat));
+            collected - reward.min(collected)
+        };
+        let mut recoverable = rows_kept.clone();
+        for ((producer, seat), (locked, reward)) in &locks {
+            *recoverable.entry(*producer).or_default() += net(*locked, *reward, seat);
         }
         for (bond, ext) in &extractable {
             let rec = recoverable.get(bond).copied().unwrap_or(0);
-            let margin = rec as i128 - *ext as i128;
-            if self.worst_margin.as_ref().is_none_or(|(m, _)| margin < *m) {
-                self.worst_margin =
-                    Some((margin, format!("DAA {now}, bond {:?}: recoverable {rec} vs extractable {ext}", bond.0.transaction_id)));
-            }
+            worse(&mut self.worst_margin, rec as i128 - *ext as i128, || {
+                format!("DAA {now}, bond {:?}: recoverable {rec} vs extractable {ext}", bond.0.transaction_id)
+            });
             assert!(rec >= *ext, "DAA {now}: bond {bond:?} Σ recoverable (net of R) {rec} < Σ extractable {ext}");
             self.checks += 1;
+            self.lock_carried += usize::from(rows_kept.get(bond).copied().unwrap_or(0) < *ext);
+        }
+        // Every producer at once: a seat that locks on several producers' claims is capped once.
+        if !extractable.is_empty() {
+            let mut by_seat: std::collections::BTreeMap<PalwBondKeyV2, (u128, u128)> = Default::default();
+            for ((_, seat), (locked, reward)) in &locks {
+                let slot = by_seat.entry(*seat).or_default();
+                slot.0 += locked;
+                slot.1 += reward;
+            }
+            let ext: u128 = extractable.values().sum();
+            let rec: u128 = rows_kept.values().sum::<u128>() + by_seat.iter().map(|(seat, (l, r))| net(*l, *r, seat)).sum::<u128>();
+            worse(&mut self.worst_global, rec as i128 - ext as i128, || format!("DAA {now}: recoverable {rec} vs extractable {ext}"));
+            assert!(rec >= ext, "DAA {now}: over every producer, Σ recoverable (net of R) {rec} < Σ extractable {ext}");
         }
     }
 }
 
-/// One step of the fuzz: an action drawn from the state (see [`t07_run`]).
+/// A planned equivocation: `(accused, nonce, offence key, reporters still to reveal, filed)`.
+type EqPlan = (PalwBondKeyV2, u64, Hash64, Vec<PalwBondKeyV2>, bool);
+
+/// One step of the fuzz: an action drawn from the state (see [`t07_run`]), its attempts carried by
+/// blocks of coinbase subsidy `subsidy`. `false` when there was nothing to do or the block was
+/// refused; a refused step undoes exactly the plan bookkeeping it did itself.
 #[allow(clippy::too_many_arguments)]
-fn t07_act(
-    t: &mut Tape,
-    rng: &mut Rng,
-    seq: &mut u64,
-    eqs: &mut Vec<(PalwBondKeyV2, u64, Hash64, Vec<PalwBondKeyV2>, bool)>,
-    cov: &mut T07Coverage,
-) -> bool {
+fn t07_act(t: &mut Tape, rng: &mut Rng, seq: &mut u64, eqs: &mut Vec<EqPlan>, cov: &mut T07Coverage, subsidy: u64) -> bool {
     use kaspa_consensus_core::palw_state_v2::palw_da_event_index_v1;
     let now = t.c.daa;
     let (floor, _, _, _) = genesis_classes(&t.c.p)[0];
@@ -576,6 +755,9 @@ fn t07_act(
         roll = 70;
     }
     *seq += 1;
+    // What this step itself did to the plans, so a refusal undoes exactly that.
+    let mut planned = false;
+    let mut filed: Option<usize> = None;
     let (daa, objects, attempt): (u64, Vec<PalwConsensusObjectV2>, Option<TapeAttempt>) = if roll < 16 {
         let n = producers[rng.below(3) as usize];
         let seed = 0x7070_0000 + *seq;
@@ -671,6 +853,7 @@ fn t07_act(
         }
         let objects = committed.iter().map(|r| reporter_commit(key, evidence, *r)).collect();
         eqs.push((accused, *seq, key, committed, false));
+        planned = true;
         (now + 1, objects, None)
     } else if roll < 69 {
         let waiting: Vec<usize> = (0..eqs.len()).filter(|i| !eqs[*i].4).collect();
@@ -681,6 +864,7 @@ fn t07_act(
         let (accused, nonce, _, _, _) = eqs[i].clone();
         let (object, _) = equivocation_of(accused, floor, nonce);
         eqs[i].4 = true;
+        filed = Some(i);
         (now + 1, vec![object], None)
     } else if roll < 75 {
         let open: Vec<(Hash64, PalwBondKeyV2)> = eqs
@@ -712,23 +896,22 @@ fn t07_act(
     let kind_commit = objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterCommitted { .. }));
     let kind_reveal = objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::ReporterRevealed { .. }));
     let kind_court = objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::CourtOpened { .. }));
-    if t.probe(daa, &objects, attempt.as_ref(), if attempt.is_some() { T12_BLOCK_SUBSIDY_SOMPI } else { 0 }).is_err() {
+    let subsidy = if attempt.is_some() { subsidy } else { 0 };
+    if t.probe(daa, &objects, attempt.as_ref(), subsidy).is_err() {
         cov.refused += 1;
-        // A refused equivocation stays unfiled; a refused commitment plan is dropped.
-        if kind_commit {
+        // A refused commitment plan is dropped (the one this step pushed, never another); a refused
+        // equivocation stays unfiled (the one this step filed, by its index).
+        if planned {
             eqs.pop();
         }
-        if let Some(e) = eqs.iter_mut().find(|e| {
-            objects.iter().any(|o| matches!(o, PalwConsensusObjectV2::ObjectiveOffence { accused, .. } if *accused == e.0)) && e.4
-        }) {
-            e.4 = false;
+        if let Some(i) = filed {
+            eqs[i].4 = false;
         }
         return false;
     }
     cov.commits += usize::from(kind_commit);
     cov.reveals += usize::from(kind_reveal);
     cov.courts += usize::from(kind_court);
-    let subsidy = if attempt.is_some() { T12_BLOCK_SUBSIDY_SOMPI } else { 0 };
     t.block(daa, objects, attempt, subsidy).expect("a probed block folds");
     true
 }
@@ -773,36 +956,36 @@ fn c_window_court(t: &Tape) -> u64 {
 const T07_SEEDS: [u64; 4] = [0x7070_0001, 0x7070_0002, 0x7070_0003, 0x7070_0004];
 const T07_STEPS: usize = 200;
 
-/// One seed of the fuzz; returns its coverage.
-fn t07_run(seed: u64, steps: usize) -> T07Coverage {
+/// The small-`E` twin's coinbase subsidy: `E` = 720,000 sompi against the floor's `G_res` of
+/// 11,752,660 — the row no longer covers the gain, so the locks must (on testnet-12's own subsidy
+/// the row, ~3,200 MSK, dwarfs `G_res`, ~0.12 MSK, and the aggregate cannot tell a lock from none).
+const T07_SMALL_E_SUBSIDY: u64 = 1_000_000;
+
+/// The oracle's findings over one seed.
+#[derive(Default, Debug, Clone)]
+struct T07Report {
+    cov: T07Coverage,
+    checks: usize,
+    lock_carried: usize,
+    r5_checks: usize,
+    reward_checks: usize,
+    halt_only: usize,
+    worst_halt: Option<(i128, String)>,
+}
+
+/// One seed of the fuzz, its attempts on blocks of coinbase `subsidy`; returns what it drove and saw.
+fn t07_run(seed: u64, steps: usize, subsidy: u64) -> T07Report {
     let mut t = armed_tape();
     t.step(vec![bond_obj(11, 60_000 * MSK), bond_obj(12, 60_000 * MSK), bond_obj(13, 400_000 * MSK), bond_obj(14, 400_000 * MSK)]);
     let mut rng = Rng(seed);
     let mut seq = seed << 12;
-    let mut eqs = Vec::new();
+    let mut eqs: Vec<EqPlan> = Vec::new();
     let mut cov = T07Coverage::default();
     let mut oracle = T07Oracle::default();
-    let mut forks: Vec<usize> = Vec::new();
+    // Fork points: the tip, and the oracle and the plans as they stood there.
+    let mut forks: Vec<(usize, T07Oracle, Vec<EqPlan>)> = Vec::new();
     let clock = std::time::Instant::now();
-    while t.len() < steps {
-        let before = t.len();
-        if !t07_act(&mut t, &mut rng, &mut seq, &mut eqs, &mut cov) {
-            continue;
-        }
-        assert_eq!(t.len(), before + 1);
-        let parent = t.state_at(before).clone();
-        let block = t.blocks[before].clone();
-        oracle.observe(&t.c, &parent, &block, &mut cov);
-        t07_count(&parent, &block, &mut cov);
-        if rng.below(23) == 0 {
-            forks.push(before);
-        }
-    }
-    // The maturity tail (seeded like the rest): a batch of thirty-one floor claims licensed in a row
-    // and Final together, then a second batch Final after it — thirty-one anchors settled past the
-    // first batch's Final, the second clock's depth (30) — then time past the first batch's DAA
-    // clock: its rows latch together and move a row per block (six new queue keys each against 3d's
-    // budget of eight), a backlog the last blocks drain part of.
+    // Observe the tape's last block.
     let observe = |t: &Tape, oracle: &mut T07Oracle, cov: &mut T07Coverage| {
         let j = t.len() - 1;
         let parent = t.state_at(j).clone();
@@ -810,10 +993,29 @@ fn t07_run(seed: u64, steps: usize) -> T07Coverage {
         oracle.observe(&t.c, &parent, &block, cov);
         t07_count(&parent, &block, cov);
     };
+    let mut tries = 0usize;
+    while t.len() < steps {
+        tries += 1;
+        assert!(tries <= steps * 20, "seed {seed:#x}: {tries} draws built only {} of {steps} blocks", t.len());
+        let before = t.len();
+        if !t07_act(&mut t, &mut rng, &mut seq, &mut eqs, &mut cov, subsidy) {
+            continue;
+        }
+        assert_eq!(t.len(), before + 1);
+        observe(&t, &mut oracle, &mut cov);
+        if rng.below(23) == 0 {
+            forks.push((t.len(), oracle.clone(), eqs.clone()));
+        }
+    }
+    // The maturity tail (seeded like the rest): a batch of thirty-one floor claims licensed in a row
+    // and Final together, then a second batch Final after it — thirty-one anchors settled past the
+    // first batch's Final, the second clock's depth (30) — then time past the first batch's DAA
+    // clock: its rows latch together and move a row per block (six new queue keys each against 3d's
+    // budget of eight), a backlog the last blocks drain part of.
     let mut batch_final = Vec::new();
     for batch in 0..2u64 {
         for k in 0..31u64 {
-            let id = t.attempt(None, (seed << 8) ^ 0x7A11_0000 ^ (batch << 6) ^ k);
+            let id = t.attempt_with(None, (seed << 8) ^ 0x7A11_0000 ^ (batch << 6) ^ k, subsidy);
             observe(&t, &mut oracle, &mut cov);
             let bound = t.bind(id);
             observe(&t, &mut oracle, &mut cov);
@@ -844,19 +1046,34 @@ fn t07_run(seed: u64, steps: usize) -> T07Coverage {
     scratch.attribution = true;
     t.ibd_from(scratch.s);
     let ibd = clock.elapsed();
-    // Sibling reorgs: at seeded tips a different branch (time moved on differently, an attempt of
-    // its own) is reorged to and back.
-    for j in forks {
+    // Sibling reorgs: at seeded tips a different branch is reorged to and back — time moved on
+    // differently, an attempt of its own, then a few seeded steps of the fuzz itself — every block
+    // of it observed by the oracle as it stood at the fork (the same checks as the trunk's).
+    for (j, mut o, mut plans) in forks {
         let mut sibling = t.fork(j);
         let jump = 1 + rng.below(1_500);
         sibling.at(sibling.c.daa + jump, vec![]);
+        observe(&sibling, &mut o, &mut cov);
         // An attempt of its own by bond 12, which the run may have drained below the producer floor
         // (U2): then the fold skips it, non-fatally, and the sibling records that block as it is.
-        let seed = 0x5B1B_0000 + j as u64;
-        let (env, key, _) = floor_attempt_of(&sibling.c, 12, seed);
-        let anchor = floor_job_anchor(&sibling.c.p, bond_key(12), 0x10C0 + seed);
+        let aseed = 0x5B1B_0000 + j as u64;
+        let (env, key, _) = floor_attempt_of(&sibling.c, 12, aseed);
+        let anchor = floor_job_anchor(&sibling.c.p, bond_key(12), 0x10C0 + aseed);
         let daa = sibling.c.daa + 1;
-        sibling.block(daa, vec![], Some((env, key, anchor)), T12_BLOCK_SUBSIDY_SOMPI).expect("the sibling's attempt block folds");
+        sibling.block(daa, vec![], Some((env, key, anchor)), subsidy).expect("the sibling's attempt block folds");
+        observe(&sibling, &mut o, &mut cov);
+        let mut srng = Rng(seed ^ ((j as u64) << 24) ^ 0x5B1B);
+        let mut sseq = (seed << 12) ^ (1 << 44) ^ ((j as u64) << 20);
+        let target = sibling.len() + 4 + srng.below(5) as usize;
+        let mut stries = 0usize;
+        while sibling.len() < target {
+            stries += 1;
+            assert!(stries <= 400, "seed {seed:#x}: the sibling at tip {j} built only {} blocks", sibling.len());
+            if t07_act(&mut sibling, &mut srng, &mut sseq, &mut plans, &mut cov, subsidy) {
+                observe(&sibling, &mut o, &mut cov);
+            }
+        }
+        cov.sibling_blocks += sibling.len();
         t.reorg_to(j, &sibling);
         cov.sibling_reorgs += 1;
     }
@@ -867,15 +1084,31 @@ fn t07_run(seed: u64, steps: usize) -> T07Coverage {
         cov.restarts += 1;
     }
     println!(
-        "T07 seed {seed:#x} timing: built {built:?} reverted {reverted:?} ibd {ibd:?} reorged {reorged:?} restarted {:?}",
+        "T07 seed {seed:#x} (subsidy {subsidy}) timing: built {built:?} reverted {reverted:?} ibd {ibd:?} reorged {reorged:?} restarted {:?}",
         clock.elapsed()
     );
+    let msk = |w: &Option<(i128, String)>| w.as_ref().map(|(m, at)| (*m as f64 / MSK as f64, at.clone()));
     println!(
-        "T07 seed {seed:#x}: {cov:?}; invariant checked {} times, worst margin {:?}",
+        "T07 seed {seed:#x}: {cov:?}; invariant {} times, {} carried by the locks (worst {:?}; all producers {:?}); R-5 {} times (worst {:?}); R-1 {} rewards; halt-only {} (row vs G_res worst {:?})",
         oracle.checks,
-        oracle.worst_margin.as_ref().map(|(m, at)| (*m as f64 / MSK as f64, at.clone()))
+        oracle.lock_carried,
+        msk(&oracle.worst_margin),
+        msk(&oracle.worst_global),
+        oracle.r5_checks,
+        msk(&oracle.worst_r5),
+        oracle.reward_checks,
+        oracle.halt_only,
+        msk(&oracle.worst_halt)
     );
-    cov
+    T07Report {
+        cov,
+        checks: oracle.checks,
+        lock_carried: oracle.lock_carried,
+        r5_checks: oracle.r5_checks,
+        reward_checks: oracle.reward_checks,
+        halt_only: oracle.halt_only,
+        worst_halt: oracle.worst_halt,
+    }
 }
 
 /// **T07: the reorg fuzz.** Over a fixed set of seeded block sequences on testnet-12's own fold (with
@@ -887,22 +1120,65 @@ fn t07_run(seed: u64, steps: usize) -> T07Coverage {
 /// jumps sized to every deadline (receipt timeouts and redraws, Final, the reveal sweep, row latch,
 /// move and retirement):
 ///
-/// * after every block, for every producer bond: **Σ recoverable (net of R) ≥ Σ extractable** over its
-///   Final claims inside their conviction window, the window read from the row's clocks independently
-///   of the fold's latch — extractable `G_res` (the frozen gain), plus the escrow if the row left
-///   early; recoverable the row and every live lock on the claim capped by its seat's collateral, less
-///   R-1's reward on each lock's debit. Beside it: V-3's counters, every Final writes its row with the
-///   licence's frozen `G_res` (V-2), no row latches inside its window, no row moves unlatched, and no
-///   row leaves without a `Moved` or `Burned` note;
+/// * after every block, the oracle's clocks are computed in the test from raw reads (the processor's
+///   raw depth, the anchor ring, the settled count), never through the fold's clock helpers:
+///   * **structural:** V-3's counters; every Final writes its row with the licence's frozen `G_res`
+///     (V-2); no row latches inside its window; no row moves unlatched; no row leaves without a
+///     `Moved` or `Burned` note;
+///   * **the lock side, alone (R-5, R-6, V3S-04):** while a Final claim's row is held by its own
+///     clocks, its `basis_k` load-bearing locks are live and the `basis_k` smallest sum to at least
+///     `1.1·G_res + 0.1·E_v` — the ADR's bound, computed here, not the fold's price;
+///   * **the reward side (R-1):** every reward opened is at most `r = 10%` of its conviction's
+///     collected debit, and every award is the pending amount;
+///   * **the aggregate:** for every producer bond, **Σ recoverable (net of R) ≥ Σ extractable** over
+///     its Final claims inside their window — extractable `G_res` (plus the escrow if the row left
+///     early), recoverable the row and every lock live on the clocks, each seat's locks capped ONCE by
+///     its collateral, less R-1's `⌊r · (lock − X)⌋` — and the same over every producer at once, each
+///     seat's collateral counted once across all of them;
+///   * **a window held open only by a licence halt** (its clocks ran; V-4(b) holds the row while the
+///     liveness escape has released the locks by design), or held again by the second clock after a
+///     halt reached the claim past its evidence horizon (`expiry + window_court`: the escape's epoch
+///     sweep may have pruned its locks and liability for good), stands on the row alone: on testnet-12's
+///     subsidy the row alone covers `G_res` there;
 /// * the run reverts block by block to its base and re-applies (every tip a reorg target: the same
 ///   state and root), is folded again from a genesis rebuilt from scratch (the IBD twin: the same
-///   deltas and roots), a sibling branch at seeded tips is reorged to and back, and the carriage at
-///   seeded tips restarts under its root with the rest of the run folded on the loaded state.
+///   deltas and roots), a sibling branch at seeded tips (a time jump, an attempt, then four to eight
+///   seeded steps of the fuzz, every block observed by the oracle as it stood at the fork) is reorged
+///   to and back, and the carriage at seeded tips restarts under its root with the rest of the run
+///   folded on the loaded state.
 ///
-/// The seeds together must drive every kind of event the property names.
+/// On testnet-12's own subsidy the row (~3,200 MSK) dwarfs `G_res` (~0.12 MSK), so there the aggregate
+/// holds on the row alone and only the lock-side and reward-side checks see the locks and R; the
+/// small-`E` twin ([`t07_small_e_twin_the_locks_must_cover_g_res`]) is where the aggregate itself
+/// rests on the locks. The seeds together must drive every kind of event the property names.
 #[test]
 fn t07_reorg_fuzz_recoverable_covers_extractable_and_every_tip_reverts_and_replays() {
-    t07_fuzz(&T07_SEEDS, T07_STEPS);
+    let reports = t07_fuzz(&T07_SEEDS, T07_STEPS, T12_BLOCK_SUBSIDY_SOMPI);
+    // The premise the doc names: on the shipped subsidy the rows alone cover every check.
+    assert_eq!(reports.iter().map(|r| r.lock_carried).sum::<usize>(), 0, "the row dominates on testnet-12's subsidy");
+    // A window held open only by a licence halt stands on the row alone (the escape released the
+    // locks): on testnet-12's subsidy the row covers G_res there too.
+    assert!(reports.iter().map(|r| r.halt_only).sum::<usize>() > 0, "the seeds drove no licence halt over an open row");
+    for r in &reports {
+        if let Some((margin, at)) = &r.worst_halt {
+            assert!(*margin >= 0, "a halt-only window: the row alone must cover G_res on testnet-12's subsidy: {at}");
+        }
+    }
+}
+
+/// **T07's small-`E` twin: the aggregate rests on the locks.** The same fuzz (four seeds, two hundred
+/// blocks and the tail) with every attempt carried by a block of coinbase subsidy
+/// [`T07_SMALL_E_SUBSIDY`], so each claim's escrow `E` (720,000 sompi) is about 6% of its `G_res`
+/// (11,752,660): the row no longer covers the gain, and **Σ recoverable ≥ Σ extractable** holds only
+/// if the live locks, capped once per seat and net of R-1, cover it. The premise is asserted: at every
+/// aggregate check the rows alone fall short of what is extractable. A window held open only by a
+/// licence halt is not an aggregate check (the escape released its locks by design, and here the row
+/// alone does NOT cover `G_res` — the residual the ADR accepts with the escape, reported, not asserted).
+#[test]
+fn t07_small_e_twin_the_locks_must_cover_g_res() {
+    let reports = t07_fuzz(&T07_SEEDS, T07_STEPS, T07_SMALL_E_SUBSIDY);
+    let (checks, carried): (usize, usize) = reports.iter().fold((0, 0), |(a, b), r| (a + r.checks, b + r.lock_carried));
+    assert_eq!(carried, checks, "the premise: at every check the rows alone fall short, so the locks carried every one");
 }
 
 /// **T07, heavy**: sixteen seeds of six hundred random blocks each (the default run is the four-seed
@@ -911,24 +1187,27 @@ fn t07_reorg_fuzz_recoverable_covers_extractable_and_every_tip_reverts_and_repla
 #[ignore = "heavy: 16 seeds x 600 random blocks; the default run is t07_reorg_fuzz_recoverable_covers_extractable_and_every_tip_reverts_and_replays"]
 fn t07_reorg_fuzz_heavy() {
     let seeds: Vec<u64> = (0..16u64).map(|i| 0x7070_1000 + i).collect();
-    t07_fuzz(&seeds, 600);
+    t07_fuzz(&seeds, 600, T12_BLOCK_SUBSIDY_SOMPI);
+    t07_fuzz(&seeds, 600, T07_SMALL_E_SUBSIDY);
 }
 
-/// The fuzz over `seeds`, `steps` random blocks each, the seeds folded side by side; the coverage
-/// asserted over all of them together.
-fn t07_fuzz(seeds: &[u64], steps: usize) {
+/// The fuzz over `seeds`, `steps` random blocks each on blocks of coinbase `subsidy`, the seeds folded
+/// side by side; the coverage asserted over all of them together.
+fn t07_fuzz(seeds: &[u64], steps: usize, subsidy: u64) -> Vec<T07Report> {
     let mut total = T07Coverage::default();
     // The seeds are independent chains: folded four side by side, each deterministic on its own.
-    let runs: Vec<T07Coverage> = seeds
+    let runs: Vec<T07Report> = seeds
         .chunks(4)
         .flat_map(|chunk| {
             std::thread::scope(|scope| {
-                let handles: Vec<_> = chunk.iter().map(|seed| scope.spawn(move || t07_run(*seed, steps))).collect();
+                let handles: Vec<_> = chunk.iter().map(|seed| scope.spawn(move || t07_run(*seed, steps, subsidy))).collect();
                 handles.into_iter().map(|h| h.join().expect("a seed's run")).collect::<Vec<_>>()
             })
         })
         .collect();
-    for c in runs {
+    let (mut checks, mut r5, mut rewards) = (0, 0, 0);
+    for r in &runs {
+        let c = r.cov;
         total.finals += c.finals;
         total.da_defaults += c.da_defaults;
         total.equivocations += c.equivocations;
@@ -944,9 +1223,13 @@ fn t07_fuzz(seeds: &[u64], steps: usize) {
         total.licences_released += c.licences_released;
         total.licences_held += c.licences_held;
         total.sibling_reorgs += c.sibling_reorgs;
+        total.sibling_blocks += c.sibling_blocks;
         total.restarts += c.restarts;
+        checks += r.checks;
+        r5 += r.r5_checks;
+        rewards += r.reward_checks;
     }
-    println!("T07 total: {total:?}");
+    println!("T07 total (subsidy {subsidy}): {total:?}; invariant {checks}, R-5 {r5}, R-1 {rewards}");
     // The seeds are not vacuous: together they drove every event the property names.
     for (what, n) in [
         ("Finals", total.finals),
@@ -962,9 +1245,14 @@ fn t07_fuzz(seeds: &[u64], steps: usize) {
         ("row moves", total.rows_moved),
         ("row burns", total.rows_burned),
         ("sibling reorgs", total.sibling_reorgs),
+        ("sibling blocks", total.sibling_blocks),
         ("restarts", total.restarts),
+        ("aggregate checks", checks),
+        ("R-5 lock-side checks", r5),
+        ("R-1 reward checks", rewards),
     ] {
         assert!(n > 0, "the seeds drove no {what}");
     }
     assert!(total.forgone, "the seeds drove no forgone reward");
+    runs
 }

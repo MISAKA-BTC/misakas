@@ -963,27 +963,62 @@ fn kind3(id: Hash64, seat: PalwBondKeyV2, receipt: PalwSeatReceiptV3, contradict
 }
 
 /// The next block folded with `palw_offence_attribution` armed as the processor arms it on
-/// testnet-12, and signer liability as shipped — the block a filed kind 3 lands in.
-fn try_step_f2(c: &Chain, objects: &[PalwConsensusObjectV2]) -> Result<PalwChainStateV2, PalwStateV2Error> {
+/// testnet-12, and signer liability `landed` (the shipped constant is `true` since P2-7) — the block
+/// a filed kind 3 lands in.
+fn try_step_f2(c: &Chain, objects: &[PalwConsensusObjectV2], landed: bool) -> Result<PalwChainStateV2, PalwStateV2Error> {
     let daa = c.daa + 1;
     let x = ctx(0xCA_0000 + daa, daa, daa, 0);
     let mut e = c.extras_at(daa);
     e.offence_attribution_active = c.p.palw_offence_attribution_active_at(daa);
-    assert!(e.offence_attribution_active && !e.seat_da_answer_landed, "testnet-12 arms F2; P2-7's constant is shipped false");
+    assert!(e.offence_attribution_active, "testnet-12 arms F2");
+    assert_eq!(
+        e.seat_da_answer_landed,
+        kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+        "the fixtures' extras carry the shipped value"
+    );
+    e.seat_da_answer_landed = landed;
     fold_with(&c.p, &c.sp, &c.s, &x, objects, PalwBlockWorkV3::None, Hash64::default(), &e).map(|(child, _, _)| child)
 }
 
-/// **M3 review F1: a DA default after `Final` is the WITHHOLDING it is, and convicts no signer.**
-/// A bystander's session on a licensed coverage claim does not pause it (V3S-08), so the claim goes
-/// `Final` with the session open (`window_challenge` 120 < `W_disclose` 1,200) and — with no vesting
-/// row in this build — the default lands at `FinalRow`. The reversal writes `ProducerWithholding` on
-/// the claim and on the liability row, so with signer liability dormant (P2-7's constant `false`)
-/// kind 3 against the honest full seat is refused both as `CourtFraud` (no such void) and as
-/// `ProducerWithholding` (N9's `da_confirmed` gate is the only route, and it is shut) — by the
-/// adjudicator and by the fold alike; the seat keeps its lock and its collateral. Before the fix the
-/// reversal wrote `CourtFraud` and the fold took the seat's whole lock.
+/// **M3 review F1: a DA default after `Final` is the WITHHOLDING it is — never a `CourtFraud` proof
+/// against a signer — and, with signer liability armed (P2-7, as shipped), the silent covering signer
+/// pays DA-7's S4 once.** A bystander's session on a licensed coverage claim does not pause it
+/// (V3S-08), so the claim goes `Final` with the session open (`window_challenge` 120 < `W_disclose`
+/// 1,200) and the default lands at `FinalRow`. The reversal writes `ProducerWithholding` on the claim
+/// and on the liability row, never `CourtFraud`, on both sides of P2-7's constant:
+///
+/// * **shipped (`PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1 = true`, signer liability armed):** DA-7's table
+///   (`FinalRow`: "S4 on each covering signer") and §3.6's S4 row: the full-mask seat, which covers
+///   the unanswered unit and did not answer, pays `lock + min(25%·C₀, 3G)` exactly once — its lock
+///   taken, one `PanelFalseValidV2` record under the (seat, claim) key, `collected` the debit — and
+///   the partial seats (which cover nothing, C7/IA-11) pay nothing. Kind 3 `CourtFraud` against it is
+///   still refused by the adjudicator and the fold (no such void binds the claim); a later kind 3
+///   `ProducerWithholding` against it is the no-op DA-7 names ("a `ProducerWithholding`
+///   contradiction filed later against the same signer is a no-op"): admitted, and it debits nothing
+///   and records nothing more. The residual is named in DA-7 (review L10): an honest covering signer
+///   silent for `W_disclose` is charged for silence; P2-7 makes disclosure a signer's duty. The twin
+///   where the covering signer ANSWERS and nobody is charged needs a real answer (the harness's floor
+///   claims carry no trace to open): `t32_t54b_a_silent_producers_covering_signer_answers_and_the_accusers_pay`
+///   in the processor's real-claim harness (`t46_false_valid_real_claim.rs`) runs it, silence and
+///   answer side by side.
+/// * **dormant (`false`, the rule before P2-7):** no signer is charged; kind 3 against the honest full
+///   seat is refused both as `CourtFraud` and as `ProducerWithholding` (N9's `da_confirmed` gate is
+///   the only route, and it is shut) by the adjudicator and the fold alike; the seat keeps its lock and
+///   collateral. Before the F1 fix the reversal wrote `CourtFraud` and the fold took the seat's whole
+///   lock whatever the constant said.
 #[test]
 fn m3r_f1_a_post_final_da_default_is_withholding_and_convicts_no_signer() {
+    assert!(
+        kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+        "P2-7 landed: the shipped constant arms signer liability (IA-14)"
+    );
+    for landed in [true, false] {
+        m3r_f1_body(landed);
+    }
+}
+
+fn m3r_f1_body(landed: bool) {
+    use kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2;
     let mut c = Chain::new(t12());
     let (id, seats, bound) = covered_floor_claim(&mut c, 0x91);
     c.step(&[bond_obj(1, 20_000 * MSK)]);
@@ -995,40 +1030,89 @@ fn m3r_f1_a_post_final_da_default_is_withholding_and_convicts_no_signer() {
     let (full, receipt) = full_seat_receipt(&c, id, &seats, bound);
     let lock = *c.s.slashable_lock(full, id).expect("the full seat's lock");
     let full_before = c.s.bond(&full).unwrap().collateral;
-    let closed = run_out(&mut c, id, bond_key(1));
+    let partials: Vec<(PalwBondKeyV2, u64)> =
+        seats.iter().map(|(k, _)| *k).filter(|k| *k != full).map(|k| (k, c.s.bond(&k).unwrap().collateral)).collect();
+    let closed = run_out_with(&mut c, id, bond_key(1), landed);
     assert!(
         matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa } if voided_daa == closed),
-        "the Final is reversed as the withholding"
+        "landed={landed}: the Final is reversed as the withholding"
     );
-    assert!(c.s.vesting_row(&id).is_none(), "the producer's S3 burned the row");
+    assert!(c.s.vesting_row(&id).is_none(), "landed={landed}: the producer's S3 burned the row");
     let row = c.s.panel_liability(&id).expect("the liability row");
     assert_eq!((row.voided_daa, row.void_reason), (Some(closed), Some(PalwVoidReasonV2::ProducerWithholding)));
+    // G as the liability row recorded it (`claim_g_v1` reads the record): G_res + E.
+    let g = row.g_res_sompi + u128::from(row.escrowed_reward);
     assert!(
         !c.s.palw_void_binds_claim_v1(&id, PalwVoidReasonV2::CourtFraud, closed),
-        "no CourtFraud void binds the claim, on the record or the row"
+        "landed={landed}: no CourtFraud void binds the claim, on the record or the row"
     );
-    for contradiction in
-        [PalwPanelContradictionV1::CourtFraud { voided_daa: closed }, PalwPanelContradictionV1::ProducerWithholding { voided_daa: closed }]
-    {
-        let object = kind3(id, full, receipt.clone(), contradiction.clone());
-        let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &object else { unreachable!() };
-        let rules = PalwIdentityRulesV1 {
-            prompt_ids_form: c.p.palw_prompt_ids_form_v1(),
-            base_class_id: c.sp.base_class_id(),
-            da_signer_liability: palw_da_signer_liability_armed_v1(
-                &c.sp,
-                kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
-                c.daa,
-            ),
-        };
-        assert!(!rules.da_signer_liability, "shipped: signer liability dormant");
-        let finding = palw_check_panel_false_valid_v2(&c.s, &full, evidence, false, false, rules, None);
-        assert!(finding.is_err(), "{contradiction:?}: the adjudicator refuses it: {finding:?}");
-        let folded = try_step_f2(&c, &[object]);
-        assert!(matches!(folded, Err(PalwStateV2Error::ObjectiveOffenceRefused(..))), "{contradiction:?}: the fold refuses it: {folded:?}");
+    for (k, before) in &partials {
+        assert_eq!(c.s.bond(k).unwrap().collateral, *before, "landed={landed}: a partial seat covers nothing and pays nothing (C7)");
     }
-    assert_eq!(c.s.bond(&full).unwrap().collateral, full_before, "the honest full seat pays nothing for the producer's silence");
-    assert_eq!(c.s.slashable_lock(full, id).map(|l| l.amount), Some(lock.amount), "and keeps its lock");
+    let seat_key = palw_false_valid_offence_id_v2(&full.0, &id);
+    if landed {
+        // DA-7 / §3.6 S4, computed from the ADR's row: lock + min(25%·C₀, 3G), C₀ the seat's
+        // collateral before the conviction.
+        let s4 = lock.amount + (u128::from(full_before) * 250 / 1000).min(3 * g);
+        let debit = u128::from(full_before - c.s.bond(&full).unwrap().collateral);
+        assert_eq!(debit, s4, "the silent covering signer pays S4 = lock + min(25%·C₀, 3G)");
+        assert!(c.s.slashable_lock(full, id).is_none(), "the lock is taken first");
+        let record = c.s.consumed_offence(&seat_key).expect("S4 under the (seat, claim) key").clone();
+        assert_eq!(
+            (record.kind, record.claim_id, u128::from(record.collected), u128::from(record.amount)),
+            (PalwOffenceKindV1::PanelFalseValidV2, id, debit, debit),
+            "one PanelFalseValidV2 record, its collected the debit"
+        );
+    } else {
+        assert_eq!(
+            c.s.bond(&full).unwrap().collateral,
+            full_before,
+            "dormant: the honest full seat pays nothing for the producer's silence"
+        );
+        assert_eq!(c.s.slashable_lock(full, id).map(|l| l.amount), Some(lock.amount), "dormant: and keeps its lock");
+        assert!(c.s.consumed_offence(&seat_key).is_none(), "dormant: no record under the (seat, claim) key");
+    }
+    let rules = PalwIdentityRulesV1 {
+        prompt_ids_form: c.p.palw_prompt_ids_form_v1(),
+        base_class_id: c.sp.base_class_id(),
+        da_signer_liability: palw_da_signer_liability_armed_v1(&c.sp, landed, c.daa),
+    };
+    assert_eq!(rules.da_signer_liability, landed, "signer liability is armed iff P2-7's constant is true");
+    let offences = |s: &PalwChainStateV2| PalwStateCarriageV2::from_state(s).consumed_offences.len();
+    let offences_before = offences(&c.s);
+    let full_after_default = c.s.bond(&full).unwrap().collateral;
+    // CourtFraud: refused by the adjudicator and the fold on both sides — no such void binds the claim.
+    let fraud = kind3(id, full, receipt.clone(), PalwPanelContradictionV1::CourtFraud { voided_daa: closed });
+    let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &fraud else { unreachable!() };
+    let finding = palw_check_panel_false_valid_v2(&c.s, &full, evidence, false, false, rules, None);
+    assert!(finding.is_err(), "landed={landed}: CourtFraud: the adjudicator refuses it: {finding:?}");
+    let folded = try_step_f2(&c, &[fraud], landed);
+    assert!(
+        matches!(folded, Err(PalwStateV2Error::ObjectiveOffenceRefused(..))),
+        "landed={landed}: CourtFraud: the fold refuses it: {folded:?}"
+    );
+    // ProducerWithholding: dormant, refused (N9's gate shut); armed, the no-op DA-7 names.
+    let withholding = kind3(id, full, receipt, PalwPanelContradictionV1::ProducerWithholding { voided_daa: closed });
+    let PalwConsensusObjectV2::ObjectiveOffence { evidence, .. } = &withholding else { unreachable!() };
+    let finding = palw_check_panel_false_valid_v2(&c.s, &full, evidence, false, false, rules, None);
+    let folded = try_step_f2(&c, &[withholding], landed);
+    if landed {
+        assert!(finding.is_ok(), "armed: the adjudicator admits the DA-confirmed contradiction: {finding:?}");
+        let after = folded.expect("armed: the fold admits it");
+        assert_eq!(
+            after.bond(&full).unwrap().collateral,
+            full_after_default,
+            "armed: a later ProducerWithholding debits nothing more"
+        );
+        assert_eq!(offences(&after), offences_before, "armed: and records nothing more (once per (seat, claim))");
+        assert_eq!(after.consumed_offence(&seat_key), c.s.consumed_offence(&seat_key), "armed: the S4 record is untouched");
+    } else {
+        assert!(finding.is_err(), "dormant: ProducerWithholding: the adjudicator refuses it: {finding:?}");
+        assert!(
+            matches!(folded, Err(PalwStateV2Error::ObjectiveOffenceRefused(..))),
+            "dormant: ProducerWithholding: the fold refuses it: {folded:?}"
+        );
+    }
 }
 
 /// **M3 review F3: no session opens on a unit the chain already holds the answer to — so an answered

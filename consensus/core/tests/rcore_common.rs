@@ -512,6 +512,12 @@ impl Tape {
 
     /// A floor attempt by bond `n` (the genesis producer when `n` is `None`), accepted in its own block.
     pub fn attempt(&mut self, n: Option<u64>, seed: u64) -> Hash64 {
+        self.attempt_with(n, seed, T12_BLOCK_SUBSIDY_SOMPI)
+    }
+
+    /// [`Self::attempt`] in a block whose coinbase subsidy is `subsidy` (the pool its escrow `E` is
+    /// carved from: a smaller subsidy, a smaller `E` beside the same `G_res`).
+    pub fn attempt_with(&mut self, n: Option<u64>, seed: u64, subsidy: u64) -> Hash64 {
         let (floor, _, _, _) = genesis_classes(&self.c.p)[0];
         let (env, key, id, bond) = match n {
             Some(n) => {
@@ -527,9 +533,32 @@ impl Tape {
         };
         let anchor = floor_job_anchor(&self.c.p, bond, 0x10C0 + seed);
         let daa = self.c.daa + 1;
-        let skips = self.block(daa, vec![], Some((env, key, anchor)), T12_BLOCK_SUBSIDY_SOMPI).expect("the attempt's block folds");
+        let skips = self.block(daa, vec![], Some((env, key, anchor)), subsidy).expect("the attempt's block folds");
         assert!(skips.is_empty() && self.c.s.claim(&id).is_some(), "the attempt is accepted: {skips:?}");
         id
+    }
+
+    /// **A model-class attempt by rich bond `n`, accepted in its own block** — [`model_claim`]'s
+    /// attempt on a tape, WITHOUT its re-readying carriage edit: a tape takes no edits, so the tape
+    /// must stand on a state [`model_chain`] readied at most a few spans before (testnet-12's span is
+    /// one DAA; the rows lapse after eight).
+    pub fn model_attempt(&mut self, class: Hash64, n: u64, seed: u64) -> Hash64 {
+        let daa = self.c.daa + 1;
+        let pwu = class_pwu(&self.c.p, &self.c.s, class, daa);
+        let pre_pow = 0x5_0000 + seed;
+        let (env, key, id) = junk_attempt(class, bond_key(n), pubkey_of(n), &operator_pubkey_of(n), pwu, seed, pre_pow);
+        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(h(NET), h(pre_pow), class, &bond_key(n).0, 7);
+        let skips =
+            self.block(daa, vec![], Some((env, key, anchor)), T12_BLOCK_SUBSIDY_SOMPI).expect("the model attempt's block folds");
+        assert!(skips.is_empty() && self.c.s.claim(&id).is_some(), "the model attempt is accepted: {skips:?}");
+        id
+    }
+
+    /// `claim` bound to `seats` in the next block; returns the bind DAA.
+    pub fn bind_to(&mut self, claim: Hash64, seats: &[(PalwBondKeyV2, Hash64)]) -> u64 {
+        self.step(vec![PalwConsensusObjectV2::PanelBound { claim, anchor: h(0xAC_0000 + self.c.daa), seats: seats_of(seats) }]);
+        assert!(matches!(self.c.s.claim(&claim).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the panel binds");
+        self.c.daa
     }
 
     /// `claim` bound to the floor seats in the next block; returns the bind DAA.

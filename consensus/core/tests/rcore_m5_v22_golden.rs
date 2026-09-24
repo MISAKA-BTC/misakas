@@ -22,6 +22,7 @@ mod common;
 use common::*;
 
 use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaClaimV1, PalwDaSessionV1, PalwDaStageV1, PalwDaUnitV1};
+use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
 use kaspa_consensus_core::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
 use kaspa_consensus_core::palw_panel_var_v1::{PalwPanelLiabilityRecordV1, PalwSlashableLockV1};
 use kaspa_consensus_core::palw_state_v2::{
@@ -237,7 +238,9 @@ fn t41_the_v22_golden_vectors_empty_and_inhabited() {
 /// only for an encoding change). Each record carries a distinct non-default value in every field the
 /// v22 layout added — the claim's `rcore` (incl. `g_res_sompi`), the vesting row (incl. the latch) and
 /// counters, the pending reward with its winner, the commitment row, the reporter counters, the DA
-/// session (every stage) and claim record (every field), the lock's mask and cut, the liability row's
+/// session (every stage) and claim record (every field; their unit lists carry an event AND every
+/// held unit — `PalwDaUnitV1::Held` with each `PalwHeldMissingV1` variant, the 8k A-held gate's
+/// encoding, which no fold on the floor writes), the lock's mask and cut, the liability row's
 /// door, basis, `G_res` and escrow, and the consumed offence's `collected` and `claim_id` — and the
 /// digest of its bytes is pinned.
 #[test]
@@ -285,6 +288,13 @@ fn t41_the_v22_record_encodings_are_pinned() {
     };
     let commit = PalwReporterCommitV1 { reporter: bond(5), committed_daa: 1_201 };
     let reporter_counters = PalwReporterCountersV1 { awarded_sompi: 100_000, forgone_sompi: 96_028 };
+    let every_unit = vec![
+        PalwDaUnitV1::Event { row: 7, tile: 2 },
+        PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: 3 }),
+        PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint: 2, chunk: 9 }),
+        PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: 1_024, count: 16 }),
+        PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 4_097 }),
+    ];
     let sessions: Vec<PalwDaSessionV1> = [PalwDaStageV1::Live, PalwDaStageV1::Licensed, PalwDaStageV1::FinalRow]
         .into_iter()
         .map(|stage| PalwDaSessionV1 {
@@ -292,7 +302,9 @@ fn t41_the_v22_record_encodings_are_pinned() {
             deadline_daa: 3_200,
             accuser_is_seat: stage != PalwDaStageV1::FinalRow,
             exposure: 32_009_640_274,
-            units: vec![PalwDaUnitV1::Event { row: 7, tile: 2 }],
+            // Every unit kind: an event, and each held unit (the 8k A-held gate's encoding,
+            // discriminant 1 and its four inner variants).
+            units: every_unit.clone(),
             stage,
         })
         .collect();
@@ -303,7 +315,7 @@ fn t41_the_v22_record_encodings_are_pinned() {
         opened_by_seat: [(bond(6), 1), (bond(7), 2)].into_iter().collect(),
         paused_since: Some(2_000),
         last_closed_daa: Some(1_999),
-        answered: [PalwDaUnitV1::Event { row: 0, tile: 0 }].into_iter().collect(),
+        answered: every_unit.iter().copied().chain([PalwDaUnitV1::Event { row: 0, tile: 0 }]).collect(),
         flat_answered: true,
         refuted_held: vec![(bond(8), 320)],
     };
@@ -346,6 +358,14 @@ fn t41_the_v22_record_encodings_are_pinned() {
         collected: 320_096_402_740,
         claim_id: h(0x5A02),
     };
+    // The unit's tags byte for byte: `Event` is 0 and `Held` 1, and `Held`'s four inner variants
+    // 0..=3 in declaration order (appended-last `StepLeaf` is 3).
+    let tags: Vec<Vec<u8>> = every_unit.iter().map(|u| borsh::to_vec(u).unwrap()).collect();
+    assert_eq!(tags[0], [vec![0u8], 7u32.to_le_bytes().to_vec(), vec![2u8]].concat(), "Event {{ row, tile }}");
+    assert_eq!(tags[1], [vec![1u8, 0], 3u32.to_le_bytes().to_vec()].concat(), "Held(PromptIdsTile)");
+    assert_eq!(tags[2], [vec![1u8, 1], 2u32.to_le_bytes().to_vec(), 9u32.to_le_bytes().to_vec()].concat(), "Held(StateChunk)");
+    assert_eq!(tags[3], [vec![1u8, 2], 1_024u64.to_le_bytes().to_vec(), 16u32.to_le_bytes().to_vec()].concat(), "Held(StepRange)");
+    assert_eq!(tags[4], [vec![1u8, 3], 4_097u64.to_le_bytes().to_vec()].concat(), "Held(StepLeaf)");
     // Each record decodes back to itself (a shape the encoder and decoder agree on).
     fn round<T: borsh::BorshSerialize + borsh::BorshDeserialize + PartialEq + std::fmt::Debug>(value: &T) {
         assert_eq!(&borsh::from_slice::<T>(&borsh::to_vec(value).unwrap()).unwrap(), value);
@@ -368,7 +388,7 @@ fn t41_the_v22_record_encodings_are_pinned() {
         ("PalwPendingRewardV1", digest(&borsh::to_vec(&pending).unwrap())),
         ("PalwReporterCommitV1", digest(&borsh::to_vec(&commit).unwrap())),
         ("PalwReporterCountersV1", digest(&borsh::to_vec(&reporter_counters).unwrap())),
-        ("PalwDaSessionV1 (Live, Licensed, FinalRow)", digest(&borsh::to_vec(&sessions).unwrap())),
+        ("PalwDaSessionV1 (Live, Licensed, FinalRow; every unit kind)", digest(&borsh::to_vec(&sessions).unwrap())),
         ("PalwDaClaimV1", digest(&borsh::to_vec(&record).unwrap())),
         ("PalwSlashableLockV1", digest(&borsh::to_vec(&lock).unwrap())),
         ("PalwPanelLiabilityRecordV1", digest(&borsh::to_vec(&liability).unwrap())),
@@ -381,8 +401,8 @@ fn t41_the_v22_record_encodings_are_pinned() {
         "c7723e6229ed367fc0afd2f72e5712eda7d941b32a33a8b9ba82db840eb7478d", // PalwPendingRewardV1
         "cc0c43765c2bebb37288716a8851254e34abe6a534eb20d85b60ddd5a14570b2", // PalwReporterCommitV1
         "211813b42cca0fc007a86c07d2b767c61e2e0fa50b4470fee07323dfb3eac7da", // PalwReporterCountersV1
-        "f1fd885bdf45442a541649c678dd2c122558ace2a7f13b8519f9f76a685d3e47", // PalwDaSessionV1
-        "67fa77ec6b13b2f7193cc92006080d6276b061766962c1d3a7ec88ecabd7a257", // PalwDaClaimV1
+        "65c5638eaa8dec4f482a6dae13c7b490eb9ec0fec8d13b8cd004b9c23f77914f", // PalwDaSessionV1
+        "da62e85b79b466150f9ac97f53e53aafe70d3ff5b788cf005a6fd37781c27ba8", // PalwDaClaimV1
         "74f585bc9a1d8887fc2e92feba1387db5ae96a3a35f645beee02025a150be9b6", // PalwSlashableLockV1
         "3d319ff29614dc063db42a7e9aa7a8ff7767cee6519a310d654e9f09bfbd86a0", // PalwPanelLiabilityRecordV1
         "e8e4d8837819bb9984f1561da937f8b18ba64045c1fd552bd91cb2dee4d576f5", // PalwConsumedOffenceV1
