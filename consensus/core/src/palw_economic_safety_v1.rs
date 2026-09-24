@@ -228,6 +228,38 @@ pub enum PalwLicenceDoorV1 {
     ShardPart { quorum_per_shard: u16 },
 }
 
+/// **The licensing door, as a record stores it** (ADR-0152 v3.1, v22; the S spec's 1c): the stored
+/// twin of [`PalwLicenceDoorV1`], which names a fold arm and is never encoded. R-core+ records the
+/// door of a claim's Final-basis licence set on the claim (`PalwClaimRcoreV1::licence_door`), on
+/// its liability record, and on its vesting row ([`crate::palw_vesting_v1::PalwVestingRowV1`]).
+///
+/// Explicit discriminants, as `PalwPanelContradictionV1` carries them: a variant is only ever
+/// appended, and its tag byte never moves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+#[repr(u8)]
+pub enum PalwLicenceDoorTagV1 {
+    /// V1 `ReceiptLicensed`: a quorum of `Valid`s.
+    Quorum = 0,
+    /// ADR-0133 `ReceiptLicensedV2`: the quorum and coverage.
+    Coverage = 1,
+    /// ADR-0133 S2 `OptimisticLicensed`: the full-replay seat's `Valid` alone.
+    Optimistic = 2,
+    /// ADR-0100 Decision 4 `ShardReceiptLicensed` (dormant on testnet-12).
+    ShardPart { quorum_per_shard: u16 } = 3,
+}
+
+impl From<PalwLicenceDoorV1> for PalwLicenceDoorTagV1 {
+    fn from(door: PalwLicenceDoorV1) -> Self {
+        match door {
+            PalwLicenceDoorV1::Quorum => Self::Quorum,
+            PalwLicenceDoorV1::Coverage => Self::Coverage,
+            PalwLicenceDoorV1::Optimistic => Self::Optimistic,
+            PalwLicenceDoorV1::ShardPart { quorum_per_shard } => Self::ShardPart { quorum_per_shard },
+        }
+    }
+}
+
 /// **How many colluding `Valid` signatures a licence through `door` needs at the least** — the
 /// count [`palw_seat_lock_required_v2`] divides the gain by, past `palw_audit_2026_09_23`.
 ///
@@ -355,5 +387,27 @@ mod tests {
     fn a_permit_is_priced_at_fees_not_at_a_subsidy() {
         assert_eq!(palw_permit_value_sompi_v1(PERMIT), PERMIT);
         assert_eq!(PALW_T12_PERMIT_FEE_CEILING_SOMPI, 1_000_000, "a hundred minimum-relay fees a round, until t12 measures it");
+    }
+
+    /// The stored door's tag bytes are pinned (append-only), and every fold door maps to the tag of
+    /// the same name.
+    #[test]
+    fn the_stored_licence_door_tags_are_pinned_and_mirror_the_fold_doors() {
+        let tag = |d: PalwLicenceDoorTagV1| borsh::to_vec(&d).unwrap();
+        assert_eq!(tag(PalwLicenceDoorTagV1::Quorum), vec![0]);
+        assert_eq!(tag(PalwLicenceDoorTagV1::Coverage), vec![1]);
+        assert_eq!(tag(PalwLicenceDoorTagV1::Optimistic), vec![2]);
+        assert_eq!(tag(PalwLicenceDoorTagV1::ShardPart { quorum_per_shard: 0x0302 }), vec![3, 0x02, 0x03]);
+        for (door, stored) in [
+            (PalwLicenceDoorV1::Quorum, PalwLicenceDoorTagV1::Quorum),
+            (PalwLicenceDoorV1::Coverage, PalwLicenceDoorTagV1::Coverage),
+            (PalwLicenceDoorV1::Optimistic, PalwLicenceDoorTagV1::Optimistic),
+            (PalwLicenceDoorV1::ShardPart { quorum_per_shard: 7 }, PalwLicenceDoorTagV1::ShardPart { quorum_per_shard: 7 }),
+        ] {
+            assert_eq!(PalwLicenceDoorTagV1::from(door), stored);
+            let bytes = tag(stored);
+            assert_eq!(borsh::from_slice::<PalwLicenceDoorTagV1>(&bytes).unwrap(), stored);
+        }
+        assert!(borsh::from_slice::<PalwLicenceDoorTagV1>(&[4]).is_err(), "no fifth door");
     }
 }
