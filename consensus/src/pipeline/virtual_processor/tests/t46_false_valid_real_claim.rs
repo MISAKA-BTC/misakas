@@ -5219,3 +5219,8 @@ mod t47_model_class_attribution;
 /// SR-8, J-6) — a child of this suite, so the filer's pieces run on this harness's claims and doors.
 #[path = "t46_p2_8_reporter_filer.rs"]
 mod t46_p2_8_reporter_filer;
+
+/// **ADR-0152 v3.1 N10 / §7.3 P2-8c, T54d: the automatic `PanelFalseValidV2` filer's path on real
+/// claims** — a child of this suite, so it runs on this harness, these doors and these assertions.
+#[path = "t54d_false_valid_filer.rs"]
+mod t54d_false_valid_filer;

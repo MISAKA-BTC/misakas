@@ -4117,6 +4117,8 @@ impl PalwPanelService {
                         Ok(()) => {
                             if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
                                 info!("[{PALW_PANEL}] submitted this seat's DefaultAccused of claim {session_id} in tx {txid} (P2-6)");
+                            } else if crate::palw_filer_false_valid::palw_false_valid_queued_v1(round, mine_is_responder, &object) {
+                                info!("[{PALW_PANEL}] submitted PanelFalseValidV2 offence {session_id} in tx {txid} (P2-8c)");
                             } else {
                                 info!(
                                     "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
@@ -5595,6 +5597,9 @@ impl PalwPanelService {
         let mut last_lane: Option<PalwCarrierLaneV1> = None;
         // P2-6: the claims this seat accuses of withholding, until the chain has the accusation.
         let mut accusations = PalwSeatAccusationsV1::default();
+        // P2-8c: the claims this node holds a proof against, and the false-Valid filings it made. In
+        // memory, like the accusations above: a restart forgets it (the module's "What a restart loses").
+        let mut false_valid = crate::palw_filer_false_valid::PalwFalseValidFilerV1::for_params(&self.consensus_config.params);
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -6938,6 +6943,21 @@ impl PalwPanelService {
                             continue;
                         };
                         info!("[{PALW_PANEL}] session {} closes as {verdict:?} on step {index}", duty.session_id);
+                        // P2-8c (ADR-0152 N10): a close this node's replay built that proves the executor
+                        // guilty proves every `Valid` signer the audit's rule reaches false too.
+                        if verdict == kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty && !duty.i_am_responder {
+                            false_valid.note_court_close_v1(
+                                crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                    &self.consensus_config.params,
+                                    self.config.fee_outpoint.is_some(),
+                                    current_daa,
+                                ),
+                                duty.claim_id,
+                                &proof,
+                                index,
+                                current_daa,
+                            );
+                        }
                         Some(PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof })
                     }
                     // Not our move: the other party owes this rung. Counted, because "waiting" and
@@ -7999,6 +8019,22 @@ impl PalwPanelService {
                                     // this seat found, and it is recorded rather than dropped.
                                     CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {
                                         self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                        // P2-8c (ADR-0152 N10): the same refutation is a proof against every
+                                        // `Valid` signer of the claim, filed once a licence names them.
+                                        false_valid.note_step_refutation_v1(
+                                            crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                                                &self.consensus_config.params,
+                                                self.config.fee_outpoint.is_some(),
+                                                current_daa,
+                                            ),
+                                            duty.claim_id,
+                                            &refutation,
+                                            &openings,
+                                            prompt_opening.as_ref(),
+                                            crate::palw_filer_false_valid::PalwFalseValidSourceV1::CaptureSample { leaf },
+                                            Some(duty.bound_daa),
+                                            current_daa,
+                                        );
                                         // **P2-8 (SR-8): past `palw_rcore_plus`, `ExecutorRefuted` over
                                         // the refutation in hand** — built before the accusation below
                                         // takes the refutation by value; `None` below the fence.
@@ -9001,6 +9037,31 @@ impl PalwPanelService {
                 // entry: nothing else prunes `court_moved`, and every accusation added one (the P2-6
                 // review's note).
                 court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
+            }
+
+            // --- P2-8c: this node's automatic PanelFalseValidV2 filings ---
+            //
+            // ADR-0152 v3.1 N10: a proof the capture arm or a court close noted above is filed against
+            // every `Valid` signer of the claim the audit's liability rule reaches, once a licence
+            // names them — off the tick, one claim a tick, each filing asked of the chain first and
+            // queued once through the module's seam (`palw_filer_false_valid.rs`). Below
+            // `palw_rcore_plus`, and on a node that carries nothing, the book is emptied.
+            if crate::palw_filer_false_valid::palw_false_valid_armed_v1(
+                &self.consensus_config.params,
+                self.config.fee_outpoint.is_some(),
+                current_daa,
+            ) {
+                crate::palw_filer_false_valid::palw_false_valid_tick_v1(
+                    &mut false_valid,
+                    &session,
+                    bond_key,
+                    current_daa,
+                    &mut court_pending,
+                    &mut court_moved,
+                )
+                .await;
+            } else {
+                false_valid.clear();
             }
 
             // --- P2-8: the reporter's commit–reveal filer (ADR-0152 R-3; `reporter_filer`) ---
@@ -10084,7 +10145,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
 /// acceptance data (the merged blocks' transactions it accepted, in reverse), stopping below the
 /// height or after `max_chain_blocks` chain blocks. A transaction the chain did not accept, or on
 /// another subnetwork, or whose payload does not decode, is never visited.
-fn walk_accepted_lifecycle_objects_v1(
+pub(crate) fn walk_accepted_lifecycle_objects_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     not_before_daa: u64,
     max_chain_blocks: usize,

@@ -186,6 +186,71 @@ pub struct PalwPanelFalseValidEvidenceV2 {
     pub reporter_reveal: Vec<u8>,
 }
 
+impl PalwPanelFalseValidEvidenceV2 {
+    /// **The evidence a filer sends** (ADR-0152 v3.1 N10, §7.3 P2-8c): version 2, the accused
+    /// named by the receipt it signed (the adjudicator's step 3 refuses any other seat), the
+    /// contradiction in the carriage the caller built — a step refutation's prompt through
+    /// [`crate::palw_step_refute::palw_refutation_prompt_carriage_v1`], exactly as the one-move
+    /// court's pair — and F7's slot EMPTY: on testnet-12 `reporter_armed` is `false` and R-3's
+    /// reporter files through objects 53/54, never through this slot. A pure constructor; what the
+    /// evidence proves is [`palw_check_panel_false_valid_v2`]'s to say.
+    pub fn filed_v2(
+        claim_id: Hash64,
+        receipt: PalwFalseValidReceiptV1,
+        contradiction: PalwPanelContradictionV1,
+        prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
+    ) -> Self {
+        Self {
+            version: PALW_PANEL_FALSE_VALID_VERSION_V2,
+            claim_id,
+            accused_seat: receipt.inner().seat_bond.0,
+            receipt,
+            contradiction,
+            prompt_ids_opening,
+            reporter_reveal: Vec::new(),
+        }
+    }
+
+    /// **The `ObjectiveOffence` that carries it**: kind 3 against the accused seat, the borsh bytes
+    /// as the evidence and `evidence_id` their digest ([`crate::palw_offence_v1::palw_offence_evidence_digest_v1`],
+    /// which the gate and the fold both check) — the id R-3's commitment binds (N12), so a
+    /// reporter filer reads it from here and never recomputes it.
+    pub fn object_v2(&self) -> crate::palw_state_v2::PalwConsensusObjectV2 {
+        let evidence = borsh::to_vec(self).expect("a false-Valid evidence is borsh-serializable");
+        crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+            kind: crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2,
+            accused: PalwBondKeyV2(self.accused_seat),
+            evidence_id: crate::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence),
+            evidence,
+        }
+    }
+}
+
+/// **The `Valid` receipts a licence object carried, each in the form it was licensed in** (C-3,
+/// P2-8c): a V1 `ReceiptLicensed` — which also carries a supplementary receipt — holds full V2
+/// receipts (`Full`, signed over `palw_receipt_message_v2`); a Verification V2 `ReceiptLicensedV2`
+/// and an S2 `OptimisticLicensed` hold V3 receipts with their masks (`Segmented`, signed over
+/// `palw_receipt_message_v3` with the mask). The form is the one the seat SIGNED, so a V3 receipt
+/// is never offered as `Full`: its signature verifies only under the V3 message. `None` for any
+/// other object; only `Valid` receipts naming the licence's own claim are returned, since the
+/// adjudicator convicts nothing else (`Sampled` is never liable, Q-1).
+pub fn palw_false_valid_receipts_of_licence_v1(
+    object: &crate::palw_state_v2::PalwConsensusObjectV2,
+) -> Option<(Hash64, Vec<PalwFalseValidReceiptV1>)> {
+    use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    let valid = |inner: &PalwSeatReceiptV2, claim: &Hash64| inner.claim == *claim && inner.verdict == PalwReceiptVerdictV2::Valid;
+    match object {
+        Obj::ReceiptLicensed { claim, receipts } => {
+            Some((*claim, receipts.iter().filter(|r| valid(r, claim)).cloned().map(PalwFalseValidReceiptV1::Full).collect()))
+        }
+        Obj::ReceiptLicensedV2 { claim, receipts } | Obj::OptimisticLicensed { claim, receipts } => Some((
+            *claim,
+            receipts.iter().filter(|r| valid(&r.receipt, claim)).cloned().map(PalwFalseValidReceiptV1::Segmented).collect(),
+        )),
+        _ => None,
+    }
+}
+
 /// Which lane a claim came from. Not stored as such: read off the claim row when a target is
 /// resolved, or off the liability row's `free_prompt` where the row recorded the claim's identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
