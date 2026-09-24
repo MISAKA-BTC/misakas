@@ -3384,6 +3384,9 @@ async fn t18e_the_floor_relabel_is_refuted_by_j5() {
             trace_root: claim.envelope.attempt.trace_root,
             anchor: claim.anchor,
             attempt_draw: Some(true),
+            // SEAT-S2's field: the answer is compared by the caller, never by `verify_material`, and
+            // this check is the job context's (the fixtures' `None`, as SEAT-S2 wrote them).
+            output_root: None,
         },
     );
     assert_eq!(verdict, kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Mismatch, "a seat refuses the relabel");
