@@ -166,16 +166,21 @@ fn non_market(s: &PalwChainStateV2) -> usize {
     palw_vesting_non_market_rows_waiting_v1(s)
 }
 
-/// The economy claim licensed by seats 1 and 2 at DAA 103 under `p`, one sweep short of `Final`.
+/// The economy claim licensed by all three seats at DAA 103 under `p`, one sweep short of `Final`.
+///
+/// Three, not two: past `palw_rcore_plus` S-3's quorum door licenses only on
+/// `PALW_PANEL_COLLUDING_QUORUM_V1` (3) BACKED `Valid` signers (SR-6, `license_rcore_v1`), and a
+/// set short of it is inert — the claim stays `PanelBound`. Each of the three backs its lock
+/// (`lock_3` = 94 on a 1,000-sompi bond, committed 66–266, under the 500‰ ceiling).
 fn economy_licensed(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64) {
     let (s3, claim_id) = economy_bound(p);
-    let receipts = vec![receipt_at(claim_id, bond_key(1), true, 103), receipt_at(claim_id, bond_key(2), true, 103)];
+    let receipts: Vec<_> = (1..=3u64).map(|n| receipt_at(claim_id, bond_key(n), true, 103)).collect();
     let (s4, _) =
         apply_economy(&s3, p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts }], None);
     (s4, claim_id)
 }
 
-/// The economy claim finalized at DAA 124 under `p` (licensed by seats 1 and 2 at 103).
+/// The economy claim finalized at DAA 124 under `p` (licensed by its three seats at 103).
 fn economy_final(p: &PalwStateParamsV2) -> (PalwChainStateV2, PalwStateDeltaV2, Hash64) {
     let (s4, claim_id) = economy_licensed(p);
     let (s5, d5) = apply_economy(&s4, p, &ctx(5, 124, 5), &[], None);
@@ -186,12 +191,13 @@ fn economy_final(p: &PalwStateParamsV2) -> (PalwChainStateV2, PalwStateDeltaV2, 
 // ---- V-2 / T13: what vests ------------------------------------------------------------------
 
 /// **T13 / V-2: a Final names a row, not a payout.** ADR-0124's claim (620 escrowed; producer 496,
-/// two credited seats 41 each, the reserve 42) finalizes past `palw_rcore_plus`: nothing enters
+/// three credited seats 41 each, the reserve 1 — S-3's quorum door licenses on all three) finalizes
+/// past `palw_rcore_plus`: nothing enters
 /// `pending_payouts`, the reserve is not credited, and one row holds exactly those amounts — the
 /// producer's under its A-KEY key, each credited seat's under its payee key, the reserve — with
 /// the lock's two clocks (`final + window_court`, the settled count at Final). The row is the
-/// claim's liability's twin: the door `Quorum` (the zero tag S's doors overwrite), `basis_k` 0,
-/// no attribution recorded (objective offences are dormant in this fixture, so there is no
+/// claim's liability's twin: the door `Quorum` and `basis_k` 3 that S-3's licence recorded on the
+/// claim (the recount of its three backed signers), no attribution recorded (objective offences are dormant in this fixture, so there is no
 /// liability record to copy from).
 #[test]
 fn t13_a_final_names_a_row_with_the_payout_amounts_and_writes_no_payout() {
@@ -207,10 +213,11 @@ fn t13_a_final_names_a_row_with_the_payout_amounts_and_writes_no_payout() {
         vec![
             (bond_key(1), PalwPayoutV2 { payload: Hash64::from_u64_word(0x9A11), amount: 41 }),
             (bond_key(2), PalwPayoutV2 { payload: payload(2), amount: 41 }),
+            (bond_key(3), PalwPayoutV2 { payload: payload(3), amount: 41 }),
         ],
-        "each credited seat, in seat order; the silent seat is not a leg"
+        "each credited seat, in seat order"
     );
-    assert_eq!(row.reserve, 42);
+    assert_eq!(row.reserve, 1);
     assert_eq!((row.escrowed_reward, row.buyback_bound, row.total_sompi()), (620, 0, 620), "the escrow, whole, and no buyback");
     // The lock's second clock: the settled count the claim's liability began at. Below the audit
     // fence (this fixture) the Final settles its own anchor after the row and the lock are written,
@@ -218,54 +225,59 @@ fn t13_a_final_names_a_row_with_the_payout_amounts_and_writes_no_payout() {
     assert_eq!((row.final_daa, row.expiry_daa, row.matured_at), (124, 624, None));
     assert_eq!(row.settled_at_final + 1, s5.settled_attempt_finals());
     assert_eq!((row.class_id, row.artifact_root, row.producer_bond), (h64(1), h64(11), bond_key(1)));
-    assert_eq!((row.licence_door, row.basis_k, row.job_identity), (PalwLicenceDoorTagV1::Quorum, 0, Hash64::default()));
+    assert_eq!((row.licence_door, row.basis_k, row.job_identity), (PalwLicenceDoorTagV1::Quorum, 3, Hash64::default()));
     assert_eq!(s5.vesting_counters(), PalwVestingCountersV1 { created: 620, moved: 0, burned: 0 });
     let legs: Vec<_> = row.legs().collect();
-    assert_eq!(legs.len(), 4, "producer, two seats, the reserve");
+    assert_eq!(legs.len(), 5, "producer, three seats, the reserve");
     assert_eq!(legs[0].queue_key, Some(palw_vesting_payout_key_v1(&claim_id)), "A-KEY, never the raw claim id");
     assert_eq!(legs[1].queue_key, Some(palw_panel_payout_key_v1(&Hash64::from_u64_word(0x9A11))));
-    assert_eq!((legs[3].kind, legs[3].queue_key, legs[3].amount), (PalwVestingLegKindV1::Reserve, None, 42));
-    assert_eq!(row.leg_count(), 3, "the reserve is not a leg");
+    assert_eq!((legs[4].kind, legs[4].queue_key, legs[4].amount), (PalwVestingLegKindV1::Reserve, None, 1));
+    assert_eq!(row.leg_count(), 4, "the reserve is not a leg");
     // The journal: the row and the counters, and no buyback note (no pair took a slice).
     assert!(d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::Vesting { key, old: None, new: Some(_) } if *key == claim_id)));
     assert!(d5.entries.iter().any(|e| matches!(e, PalwDeltaEntryV2::VestingCounters { .. })));
     assert!(notes(&d5).is_empty());
-    // The row is keyed by payee for B-3: bond 1 (producer and seat) and bond 2, not the silent 3.
+    // The row is keyed by payee for B-3: bond 1 (producer and seat) once, and each other seat.
     assert_eq!(s5.vesting_rows_of_payee(&bond_key(1)).count(), 1);
     assert_eq!(s5.vesting_rows_of_payee(&bond_key(2)).count(), 1);
-    assert_eq!(s5.vesting_rows_of_payee(&bond_key(3)).count(), 0);
+    assert_eq!(s5.vesting_rows_of_payee(&bond_key(3)).count(), 1);
+    assert_eq!(s5.vesting_rows_of_payee(&bond_key(4)).count(), 0, "a bond off the panel pays nothing");
 }
 
 /// **T13 / V-2: the work-price remainder is never vested.** ADR-0124 Decision 6's lighter class
-/// is paid 40/400 of its 620 escrow (producer 50, its seat 12): its row holds 62 and records the
-/// 620 it withheld; the 558 in between is named nowhere — neither row, nor payout, nor reserve.
-/// The floor's claim in the same sweep vests whole.
+/// is paid 40/400 of its 620 escrow (producer 50, each of its three seats 4): its row holds 62 and
+/// records the 620 it withheld; the 558 in between is named nowhere — neither row, nor payout, nor
+/// reserve. The floor's claim in the same sweep vests whole.
 #[test]
 fn t13_the_work_price_remainder_is_named_nowhere() {
     let (fin, floor_id, light_id) = two_class_finals(&vp());
     let floor = fin.vesting_row(&floor_id).unwrap();
     let light = fin.vesting_row(&light_id).unwrap();
     assert_eq!((floor.total_sompi(), floor.producer.amount), (620, 496));
-    assert_eq!((light.total_sompi(), light.producer.amount, light.seats[0].1.amount), (62, 50, 12));
+    assert_eq!((light.total_sompi(), light.producer.amount, light.seats[0].1.amount), (62, 50, 4));
     assert_eq!(light.escrowed_reward, 620, "the row records what was withheld");
     assert!(fin.pending_payouts_iter().next().is_none());
     assert_eq!(fin.vesting_counters().created, 620 + 62, "the remainder is not created");
 }
 
 /// ADR-0124 Decision 6's two-class fixture (a floor claim and a class-3 claim priced 40/400), both
-/// finalized at DAA 140 under `p`.
+/// finalized at DAA 140 under `p`. Each is judged by seats 2, 3 and 4, all three signing: past
+/// `palw_rcore_plus` S-3's quorum door needs `PALW_PANEL_COLLUDING_QUORUM_V1` (3) backed `Valid`
+/// signers (SR-6), so the one-seat panel this fixture was first written with never licenses there.
 fn two_class_finals(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64, Hash64) {
     let genesis = PalwChainStateV2::genesis();
     let mut objects = register_class_and_bond();
-    objects.push(PalwConsensusObjectV2::BondRegistered {
-        bond: bond_key(2),
-        pubkey: vec![7, 2],
-        operator_pubkey: op_key(22),
-        collateral: 1_000,
-        payout_payload: payload(2),
-        capable_classes: Default::default(),
-        signature: Vec::new(),
-    });
+    for n in 2..=4u64 {
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(n),
+            pubkey: vec![7, n as u8],
+            operator_pubkey: op_key(20 + n),
+            collateral: 1_000,
+            payout_payload: payload(n),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+    }
     for (class, cap, share) in [(2u64, 400u64, 300u16), (3, 160, 200)] {
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(class),
@@ -291,10 +303,10 @@ fn two_class_finals(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64, Hash64)
             &s,
             p,
             &ctx(n * 10, 100 + n, n * 10),
-            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(70 + n), seats: vec![seat_n(2)] }],
+            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(70 + n), seats: (2..=4).map(seat_n).collect() }],
             None,
         );
-        let receipts = vec![receipt_at(claim_id, bond_key(2), true, 101 + n)];
+        let receipts: Vec<_> = (2..=4u64).map(|seat| receipt_at(claim_id, bond_key(seat), true, 101 + n)).collect();
         let (licensed, _) = apply_economy(
             &bound,
             p,
@@ -309,14 +321,28 @@ fn two_class_finals(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64, Hash64)
 }
 
 /// ADR-0091's lattice (the `model_market` module's `finalized_claim`, past `palw_rcore_plus`): the
-/// founding line seeded, one attempt at a 1,000 subsidy (620 escrowed), a one-seat panel bound
-/// below the panel-economy fence — so the claim has NO duty row — licensed at 104 and `Final` at
-/// 125. Returns the state before and at `Final`, the `Final` block's delta, the claim id and the
-/// extras every block ran under.
+/// founding line seeded, one attempt at a 1,000 subsidy (620 escrowed), a panel of three (the
+/// producer and bonds 2 and 3, S-3's quorum of backed signers) bound below the panel-economy fence —
+/// so the claim has NO duty row — licensed by all three at 104 and `Final` at 125. Returns the
+/// state before and at `Final`, the `Final` block's delta, the claim id and the extras every block
+/// ran under.
 fn buyback_final(p: &PalwStateParamsV2) -> (PalwChainStateV2, PalwChainStateV2, PalwStateDeltaV2, Hash64, PalwTransitionExtrasV1) {
     let extras = PalwTransitionExtrasV1 { model_lines_active: true, ..Default::default() };
     let class = h64(1);
-    let (s1, _) = fold_objects(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &register_class_and_bond(), None, &extras);
+    // Seats 2 and 3 beside the producer: S-3's quorum door licenses on three backed signers.
+    let mut registry = register_class_and_bond();
+    for n in 2..=3u64 {
+        registry.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(n),
+            pubkey: vec![7, n as u8],
+            operator_pubkey: op_key(20 + n),
+            collateral: 1_000,
+            payout_payload: payload(n),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        });
+    }
+    let (s1, _) = fold_objects(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &registry, None, &extras);
     let seed = PalwConsensusObjectV2::ModelSeed {
         line_id: class,
         seeder: Hash64::from_u64_word(0xB0_0009),
@@ -327,10 +353,11 @@ fn buyback_final(p: &PalwStateParamsV2) -> (PalwChainStateV2, PalwChainStateV2, 
     let env = attempt(40, 1);
     let claim_id = attempt_id_v2(&env.attempt);
     let (s2, _) = fold_objects(&s1, p, &PalwBlockContextV2 { subsidy: 1_000, ..ctx(3, 102, 3) }, &[], Some(&env), &extras);
-    let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+    let seats = (1..=3).map(seat_n).collect();
     let bound = PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats };
     let (s3, _) = fold_objects(&s2, p, &ctx(4, 103, 4), &[bound], None, &extras);
-    let licensed = PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) };
+    let receipts = (1..=3u64).map(|n| receipt_at(claim_id, bond_key(n), true, 104)).collect();
+    let licensed = PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts };
     let (s4, _) = fold_objects(&s3, p, &ctx(5, 104, 5), &[licensed], None, &extras);
     let (s5, d5) = fold_objects(&s4, p, &PalwBlockContextV2 { subsidy: 9_999_999, ..ctx(6, 125, 6) }, &[], None, &extras);
     assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
@@ -455,10 +482,11 @@ fn v2_the_row_copies_the_liability_records_attribution() {
 /// **T03 (the fold half): Σ withheld = Σ minted-from-rows + Σ live + Σ burned + Σ unnamed + Σ buyback
 /// + Δ panel_reserve**, closed from the deltas alone on a simulated chain: two claims (620 each)
 /// finalize at 140 and vest (620 and 62); the next blocks carry nothing; at the rows' expiry (640)
-/// step 3d latches and moves both in one block — three new keys (two producer keys, seat 2's one
-/// accumulated key) and the floor's reserve 0 — and the block after drains exactly those keys, which
-/// is what its coinbase pays (`palw_v2_payout_outputs` renders the same prefix). Minted-from-rows is
-/// attributed by the parent queue's keys, as Phase 2's coinbase test will by position.
+/// step 3d latches and moves both in one block — five new keys (two producer keys, and the one
+/// accumulated key of each of seats 2, 3 and 4) and the floor's reserve 1 — and the block after
+/// drains exactly those keys, which is what its coinbase pays (`palw_v2_payout_outputs` renders the
+/// same prefix). Minted-from-rows is attributed by the parent queue's keys, as Phase 2's coinbase
+/// test will by position.
 #[test]
 fn t03_the_withheld_escrow_is_minted_burned_or_named_nowhere_from_the_deltas_alone() {
     let p = vp();
@@ -499,7 +527,7 @@ fn t03_the_withheld_escrow_is_minted_burned_or_named_nowhere_from_the_deltas_alo
             other => panic!("unexpected note {other:?}"),
         }
     }
-    assert_eq!(moved_keys.len(), 3, "two producer keys and seat 2's one key");
+    assert_eq!(moved_keys.len(), 5, "two producer keys and each seat's one key (seats 2, 3 and 4 judged both)");
     assert_eq!(moved.panel_reserve_sompi() as u128 - reserve_before as u128, reserve_credited);
     let c = moved.vesting_counters();
     assert_eq!(c.moved, minted_from_rows + reserve_credited);
@@ -535,7 +563,12 @@ fn fence_off_twin_a_final_pays_as_before_and_no_row_exists() {
     let off = params().with_worker_carve_permille(620).unwrap();
     let later = off.clone().with_rcore_plus_mirrors(Some(1_000_000), 0, Vec::new());
     let (s5, d5, claim_id) = economy_final(&off);
-    let (t5, _, _) = economy_final(&later);
+    // The later twin shares the licence and diverges only where the vesting fence would act (the
+    // `Final` block and after): S-3's load invariants read an armed mirror as armed from genesis,
+    // the only way `validate_palw_rcore_plus_v1` lets a network arm it, so a licensed claim without
+    // a licence door (one licensed below the mirror's height) is no state they load.
+    let (s4, _) = economy_licensed(&off);
+    let (t5, _) = apply_economy(&s4, &later, &ctx(5, 124, 5), &[], None);
     assert_eq!(s5.state_root(), t5.state_root(), "an unreached fence moves nothing");
     assert_eq!(s5.vesting_len(), 0);
     assert!(s5.vesting_counters().is_zero() && !s5.has_rcore_plus_data());
@@ -546,7 +579,7 @@ fn fence_off_twin_a_final_pays_as_before_and_no_row_exists() {
     let rows: BTreeMap<Hash64, PalwPayoutV2> = s5.pending_payouts_iter().map(|(k, v)| (*k, *v)).collect();
     assert_eq!(rows[&claim_id], PalwPayoutV2 { payload: Hash64::from_u64_word(0x9A11), amount: 496 });
     assert_eq!(rows[&palw_panel_payout_key_v1(&payload(2))].amount, 41);
-    assert_eq!(s5.panel_reserve_sompi(), 42);
+    assert_eq!(s5.panel_reserve_sompi(), 1);
     // Well past the would-be expiry, still nothing vests or moves on either twin.
     let (s6, d6) = fold(&s5, &off, 700, &Default::default());
     let (t6, _) = fold(&t5, &later, 700, &Default::default());
@@ -1318,3 +1351,4 @@ fn the_payee_index_answers_b3_as_the_walk_does() {
     assert_eq!(legs.len(), 24, "bond 9 sits on every row");
     assert!(legs.iter().all(|(_, leg)| leg.kind == PalwVestingLegKindV1::Seat && leg.payee_bond == Some(bond_key(9))));
 }
+
