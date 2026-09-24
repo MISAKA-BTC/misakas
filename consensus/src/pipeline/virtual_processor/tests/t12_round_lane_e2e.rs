@@ -1095,3 +1095,130 @@ async fn t12_a_skipped_own_attempt_has_its_carve_withheld_from_the_child_coinbas
     );
     assert_eq!(paid_to_card0, parts.worker_base_sompi - claim.escrowed_reward, "the child pays the worker base less the escrow");
 }
+
+/// **The licence stall (2026-09-24), through the node's own assemblers on testnet-12's ruleset.**
+///
+/// About half the floor claims of testnet-12 stayed `PanelBound`: the processor's assemblers added
+/// V3 receipts in arrival order and dropped any whose addition was not `NoQuorum`, so a pool froze
+/// at its first two `Valid`s — the optimistic licence formed only when the full-replay seat was one
+/// of them, and the coverage licence never. Here the chain derives a floor claim's five-seat panel,
+/// every seat signs its duty receipt over the V3 message with its assigned mask (real ML-DSA-87, by
+/// the seats the chain drew), and the full seat's receipt arrives LAST:
+///
+/// * the whole panel assembles a `ReceiptLicensedV2` of all five, and the acceptance layer takes it;
+/// * the pool claim d0815709 held when it stalled — three partials, then the full seat — assembles an
+///   `OptimisticLicensed` of the full seat and one partial, and coverage assembles nothing;
+/// * that optimistic object rides a funded 0x4b carrier and the claim is `ReceiptLicensed`: the
+///   acceptance layer, the audit fence's fold filter and the fold itself all agree with the builder.
+#[tokio::test]
+async fn t12_a_late_full_seat_licenses_through_the_node_s_own_assemblers() {
+    use kaspa_consensus_core::palw_panel_v2::{
+        PALW_RECEIPT_V3_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3, palw_receipt_message_v3,
+    };
+    use kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2;
+    kaspa_core::log::try_init_logger("warn");
+
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    assert!(config.params.palw_verification_v2_at(0) && config.params.palw_verification_s2_at(0), "t12 arms S1 and S2 at genesis");
+    let ttpb = config.params.target_time_per_block();
+    let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let network_domain = chain.network_domain;
+
+    chain.heartbeat(ttpb, Vec::new()).await;
+    let (_, claim_id) = chain.attempt(0, ttpb, Vec::new(), &|_| true).await;
+    chain
+        .beat_until(4 * bundle.panel.anchor_delay() + 400, "the claim's panel binds", |c| {
+            let (_, state) = c.tip_state();
+            state.claim(&claim_id).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
+        })
+        .await;
+    let (_, state) = chain.tip_state();
+    let panel = state.panel(&claim_id).expect("a bound claim has a panel").clone();
+    assert_eq!(panel.seats.len(), 5, "the shipped jury");
+    let assignment = palw_segment_assignment_v2(panel.anchor, claim_id, panel.seats.len() as u16);
+    let signed_daa = chain.ctx.consensus.get_virtual_daa_score();
+    let by_duty: Vec<PalwSeatReceiptV3> = panel
+        .seats
+        .iter()
+        .enumerate()
+        .map(|(i, seat)| {
+            let card = chain.bonds.iter().position(|b| *b == seat.bond).expect("every seat is a genesis card");
+            let segments = assignment.mask_of(i as u16);
+            let message = palw_receipt_message_v3(network_domain, claim_id, PalwReceiptVerdictV2::Valid, signed_daa, segments);
+            let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                &card_key(card).signing_key,
+                message.as_byte_slice(),
+                PALW_RECEIPT_V3_MLDSA87_CONTEXT,
+                [0x33u8; 32],
+            )
+            .expect("sign")
+            .as_ref()
+            .to_vec();
+            PalwSeatReceiptV3 {
+                receipt: PalwSeatReceiptV2 {
+                    claim: claim_id,
+                    verdict: PalwReceiptVerdictV2::Valid,
+                    seat_bond: seat.bond,
+                    signed_daa,
+                    signature,
+                },
+                segments,
+            }
+        })
+        .collect();
+    let full = by_duty[assignment.full_seat as usize].clone();
+    let partials: Vec<PalwSeatReceiptV3> =
+        by_duty.iter().enumerate().filter(|(i, _)| *i != assignment.full_seat as usize).map(|(_, r)| r.clone()).collect();
+    let vp = chain.vp();
+
+    // The whole panel, the full seat's receipt last: coverage licenses with all five.
+    let mut whole = partials.clone();
+    whole.push(full.clone());
+    let coverage = vp.palw_v2_receipt_coverage_assemble_impl(claim_id, &whole).expect("the whole panel covers");
+    let Obj::ReceiptLicensedV2 { receipts, .. } = &coverage else { panic!("coverage builds a ReceiptLicensedV2: {coverage:?}") };
+    assert_eq!(receipts.len(), 5);
+    let (tip_block, state) = vp.palw_state_v2_store.read().load_tip_cached(&bundle.state).unwrap().expect("the tip loads");
+    let virtual_state = vp.lkg_virtual_state.load();
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: tip_block,
+        daa_score: virtual_state.daa_score,
+        blue_score: virtual_state.ghostdag_data.blue_score,
+        subsidy: 0,
+    };
+    vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&coverage))
+        .expect("the acceptance layer takes the coverage licence the node built");
+
+    // d0815709's pool: three partials, then the full seat.
+    let stalled: Vec<PalwSeatReceiptV3> = partials[..3].iter().cloned().chain(std::iter::once(full.clone())).collect();
+    assert!(vp.palw_v2_receipt_coverage_assemble_impl(claim_id, &stalled).is_none(), "four receipts cannot cover");
+    let optimistic = vp.palw_v2_optimistic_assemble_impl(claim_id, &stalled).expect("the late full seat still licenses");
+    let Obj::OptimisticLicensed { receipts, .. } = &optimistic else { panic!("an OptimisticLicensed: {optimistic:?}") };
+    assert_eq!(receipts.as_slice(), &[full.clone(), partials[0].clone()], "the full seat first, then the first partial to arrive");
+    vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&optimistic))
+        .expect("the acceptance layer takes the optimistic licence the node built");
+
+    // Carried, it licenses the claim.
+    let carrier = {
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: optimistic.clone() })
+            .expect("serializes");
+        let (float_outpoint, float_entry) = floats[0].clone();
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(float_outpoint, vec![], 0, 1)],
+            vec![TransactionOutput::new(float_entry.amount - 300_000, card_payout_spk(0))],
+            0,
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload,
+        );
+        sign_spend(&mut tx, float_entry, 0, config.params.storage_mass_parameter);
+        tx
+    };
+    let carrying = chain.heartbeat(ttpb, vec![carrier.clone()]).await;
+    assert!(carrying.transactions.iter().any(|tx| tx.id() == carrier.id()), "the carrier is in the block");
+    chain.heartbeat(ttpb, Vec::new()).await; // accepts the carrying block's transactions
+    let (_, state) = chain.tip_state();
+    let phase = state.claim(&claim_id).unwrap().phase.clone();
+    assert!(matches!(phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the carried optimistic licence licenses the claim: {phase:?}");
+}

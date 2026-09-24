@@ -57,6 +57,33 @@ pub fn palw_optimistic_receipts_license_v2(
     }
 }
 
+/// **The coverage half of the optimistic door, as the acceptance layer applies it.** The set's
+/// receipts are checked by `validate_receipt_coverage_v2` for everything a receipt must be (a seat,
+/// once, signed over its mask, inside the window), and the door takes `Ok` or `NoQuorum` from it and
+/// nothing else. So a set below the quorum passes without coverage, and a set AT or past the quorum
+/// must cover: three or four `Valid` on the shipped five-seat panel are `CoverageShort` and refused.
+///
+/// One predicate, asked by the processor's `OptimisticLicensed` arm and by the node's selection
+/// (`palw_panel_v2::palw_select_optimistic_licence_v2`), so the set a node offers and the set a block
+/// accepts cannot be decided by two copies of the rule.
+pub fn palw_optimistic_coverage_admits_v2(coverage: &Result<PalwReceiptQuorumV2, PalwPanelV2Error>) -> bool {
+    matches!(coverage, Ok(_) | Err(PalwPanelV2Error::NoQuorum { .. }))
+}
+
+/// **Would the acceptance layer take this set as an `OptimisticLicensed`?** Both of its checks: the
+/// full-replay seat's `Valid` ([`palw_optimistic_receipts_license_v2`]) and the coverage verdict
+/// `coverage` — `validate_receipt_coverage_v2` over the same `receipts` at the carrying point — as
+/// [`palw_optimistic_coverage_admits_v2`] reads it.
+pub fn palw_optimistic_licence_admits_v2(
+    anchor: Hash64,
+    claim_id: Hash64,
+    seats: &[PalwBondKeyV2],
+    receipts: &[PalwSeatReceiptV3],
+    coverage: &Result<PalwReceiptQuorumV2, PalwPanelV2Error>,
+) -> bool {
+    palw_optimistic_receipts_license_v2(anchor, claim_id, seats, receipts).is_ok() && palw_optimistic_coverage_admits_v2(coverage)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

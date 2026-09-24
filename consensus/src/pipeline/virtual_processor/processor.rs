@@ -6566,12 +6566,16 @@ impl VirtualStateProcessor {
     }
 
     /// ADR-0133 S1: assemble a `ReceiptLicensedV2` from V3 receipts by coverage, past the fence.
+    ///
+    /// The set is chosen by `palw_select_coverage_licence_v2` (the 2026-09-24 licence-stall fix),
+    /// which asks `validate_receipt_coverage_v2` — bound here exactly as the acceptance arm binds it —
+    /// of every set it tries. The greedy loop this replaced dropped every receipt whose addition came
+    /// back `CoverageShort`, so its pool stopped at two `Valid`s and this door never opened.
     pub fn palw_v2_receipt_coverage_assemble_impl(
         &self,
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
         if !self.palw_verification_v2_at(self.lkg_virtual_state.load().daa_score) {
             return None;
         }
@@ -6592,44 +6596,39 @@ impl VirtualStateProcessor {
         let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
             Self::verify_mldsa87_with_context_bool(key, message, sig, context)
         };
-        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3> = Vec::new();
-        let mut verdict: Option<Q> = None;
-        for candidate in candidates {
-            let mut attempt = kept.clone();
-            attempt.push(candidate.clone());
-            match kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
+        let coverage = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
+            kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
                 &state,
                 panel_params,
                 state_params,
                 &point,
                 network_domain,
                 &claim,
-                &attempt,
+                receipts,
                 verify,
                 self.palw_unavailable_abstains_at(point.daa_score),
                 self.palw_admission_independence_daa(),
-            ) {
-                Ok(q) => {
-                    kept = attempt;
-                    verdict = Some(q);
-                }
-                Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. })
-                | Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::OutsiderHasNotAnswered { .. }) => {
-                    kept.push(candidate.clone());
-                }
-                Err(_) => {}
-            }
-        }
-        match verdict? {
-            Q::Licensed { .. } => {
-                Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: kept })
-            }
-            _ => None,
-        }
+            )
+        };
+        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_coverage_licence_v2(candidates, coverage, |receipts| {
+            self.palw_v2_offered_licence_licenses_v1(
+                &state,
+                state_params,
+                &point,
+                &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: receipts.to_vec() },
+            )
+        })?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts })
     }
 
     /// ADR-0133 S2: assemble an `OptimisticLicensed` from V3 receipts when the full-replay seat's
     /// `Valid` is present, past the fence.
+    ///
+    /// The set is chosen by `palw_select_optimistic_licence_v2` (the 2026-09-24 licence-stall fix):
+    /// the full seat's `Valid` first wherever it arrived, then only the riders the door still takes
+    /// (`palw_optimistic_licence_admits_v2`, the predicate the acceptance arm calls) and the fold
+    /// licenses, or all five when all five validated. The greedy loop this replaced added receipts in arrival order and
+    /// dropped the full seat's `Valid` whenever two `Valid`s had arrived before it.
     pub fn palw_v2_optimistic_assemble_impl(
         &self,
         claim: kaspa_hashes::Hash64,
@@ -6655,60 +6654,77 @@ impl VirtualStateProcessor {
         let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
             Self::verify_mldsa87_with_context_bool(key, message, sig, context)
         };
-        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3> = Vec::new();
-        for candidate in candidates {
-            let mut attempt = kept.clone();
-            attempt.push(candidate.clone());
-            match kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
+        let coverage = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
+            kaspa_consensus_core::palw_panel_v2::validate_receipt_coverage_v2(
                 &state,
                 panel_params,
                 state_params,
                 &point,
                 network_domain,
                 &claim,
-                &attempt,
+                receipts,
                 verify,
                 self.palw_unavailable_abstains_at(point.daa_score),
                 self.palw_admission_independence_daa(),
-            ) {
-                Ok(_) | Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => kept = attempt,
-                Err(_) => {}
-            }
-        }
-        let panel = state.panel(&claim)?;
-        let seats: Vec<_> = panel.seats.iter().map(|s| s.bond).collect();
-        kaspa_consensus_core::palw_optimistic_licence_v2::palw_optimistic_receipts_license_v2(
-            panel.anchor,
-            claim,
-            &seats,
-            &kept,
-        )
-        .ok()?;
-        let object = kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed { claim, receipts: kept };
-        // **2026-09-24 DoS audit review of #6: offer only a set the fold will license.** Past the
-        // audit fence an S2 set whose full-replay seat cannot post the door's whole-gain price is
-        // INERT — it folds, and the claim stays `PanelBound`. kaspad asks coverage, then this, then
-        // the V1 quorum (`.or_else` in `palw_panel.rs`), so returning that set here kept the V1
-        // quorum from ever being tried: the node resubmitted the same inert set every replan until
-        // the receipt window voided a claim three V1 receipts would have licensed. The fold is
-        // asked directly (`palw_v2_object_licenses_claim_v1`), so this filter is the fold's
-        // predicate, not a second copy of it.
-        if self.palw_audit_2026_09_23_at(point.daa_score)
-            && !kaspa_consensus_core::palw_state_v2::palw_v2_object_licenses_claim_v1(
-                &state,
-                state_params,
-                &point,
-                &object,
-                self.palw_unavailable_abstains_at(point.daa_score),
-                self.palw_capability_bound_at(point.daa_score),
-                self.palw_uncertified_weightless_at(point.daa_score),
-                self.palw_da_court_at(point.daa_score),
-                &self.palw_transition_extras_for(&point),
             )
-        {
-            return None;
-        }
-        Some(object)
+        };
+        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_optimistic_licence_v2(
+            &state,
+            &claim,
+            self.palw_admission_independence_daa(),
+            candidates,
+            coverage,
+            |receipts| {
+                self.palw_v2_offered_licence_licenses_v1(
+                    &state,
+                    state_params,
+                    &point,
+                    &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed {
+                        claim,
+                        receipts: receipts.to_vec(),
+                    },
+                )
+            },
+        )?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::OptimisticLicensed { claim, receipts })
+    }
+
+    /// **2026-09-24 DoS audit review of #6: offer only a set the fold will license.** A licence set
+    /// whose `Valid` signer cannot post its door's price licenses nothing: past the audit fence it
+    /// is INERT — it folds, and the claim stays `PanelBound` (an S2 set whose full-replay seat
+    /// cannot post the whole-gain price is the case the review found) — and below it the fold
+    /// refuses it (`SeatValidLockRefused`) and the rehearsal drops the object. kaspad asks coverage,
+    /// then optimistic (`.or_else` in `palw_panel.rs`), so a set the first door offered and the fold
+    /// did not take kept the second from ever being tried: the node resubmitted it every replan
+    /// until the receipt window voided a claim the other door would have licensed.
+    ///
+    /// On a Verification V2 chain those two are the only doors kaspad can form. Its V1 pool holds
+    /// the inner halves of its V3 receipts, signed over the V3 message, and the V1 quorum and
+    /// supplementary validators check the V2 message — so nothing falls through past optimistic,
+    /// and a seat the licence did not carry is not credited later.
+    ///
+    /// The fold is asked directly (`palw_v2_object_licenses_claim_v1`), so this is the fold's
+    /// predicate, not a second copy of it. It is asked on every network: it decides only which set
+    /// this node offers, never what a block accepts, and it declines only a set the fold refuses or
+    /// leaves inert on the state the node would carry it into — on either side of the fence.
+    fn palw_v2_offered_licence_licenses_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> bool {
+        kaspa_consensus_core::palw_state_v2::palw_v2_object_licenses_claim_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )
     }
 
     /// **The ladder this network froze, ADR-0084 U-08's one accessor.** `max_step_leaf_count` is a
@@ -8112,10 +8128,14 @@ impl VirtualStateProcessor {
                         self.palw_unavailable_abstains_at(point.daa_score),
                         self.palw_admission_independence_daa(),
                     );
-                    // Signatures and seats must still be real; the door does not require coverage.
-                    match coverage {
-                        Ok(_) | Err(kaspa_consensus_core::palw_panel_v2::PalwPanelV2Error::NoQuorum { .. }) => {}
-                        Err(e) => return Err(format!("claim {claim}'s optimistic receipts do not verify: {e}")),
+                    // Signatures and seats must still be real. Below the quorum the door does not require
+                    // coverage; at or past it the set must cover (`CoverageShort` is refused). One
+                    // predicate, which the node's selection (`palw_select_optimistic_licence_v2`) asks of
+                    // every set it offers.
+                    if let Err(e) = &coverage
+                        && !kaspa_consensus_core::palw_optimistic_licence_v2::palw_optimistic_coverage_admits_v2(&coverage)
+                    {
+                        return Err(format!("claim {claim}'s optimistic receipts do not verify: {e}"));
                     }
                 }
                 Obj::DefaultAccused { claim, missing_event_index, accuser, signature } => {
