@@ -320,7 +320,10 @@ async fn t53_a_drill_conviction_is_refused_on_public_testnet_12() {
     // As the drill filed it: a drill seat, its drill key, the drill domain.
     let drill_seat = PalwBondKeyV2(palw_t12_drill_premine_outpoint_v1(&drill_salt(), 1));
     let filed = offence(drill_seat, &d.ring.key(PalwDrillKeyRoleV1::Bond, 1).keypair(), d.domain);
-    public.validate(&filed).expect_err("a drill conviction is refused on public testnet-12");
+    // Refused at its accused before any signature is read: a drill seat is no bond here (the
+    // reviewer's note — pinned to its reason, so a refusal for anything else fails this test).
+    let why = public.validate(&filed).expect_err("a drill conviction is refused on public testnet-12");
+    assert!(why.contains("names a PALW bond this chain does not have"), "{why}");
     assert!(public.accepted(&filed).is_empty(), "and the walk drops it");
 
     // The domain alone refuses it: public card 1, its own key, the drill's domain.

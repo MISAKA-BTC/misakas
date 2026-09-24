@@ -18,11 +18,20 @@
 //!   from advertising itself to them).
 //! * **The shipping rules, unedited.** `--override-params-file` is refused: the salt swaps the params
 //!   for the drill's, and an override would either be discarded silently or drill rules nobody ships.
-//! * **Drill-only keys.** The producer key must be a bond key of THIS drill's keyring, and the pay and
-//!   heartbeat addresses must be addresses of it. A card key signing on a drill chain is the replay
-//!   ADR-0152 §8.2 forbids, and a public miner script on a drill coinbase mints a public outpoint.
-//!   `--palw-producer-bond` and `--palw-fee-outpoint` naming public testnet-12's genesis txids are
-//!   refused by name: they are a public unit's flags copied onto a drill.
+//! * **Drill-only keys.** The producer key must be a bond key of THIS drill's keyring, the validator
+//!   key a validator key of it, and the pay and heartbeat addresses must be addresses of it. A card
+//!   key signing on a drill chain is the replay ADR-0152 §8.2 forbids, and a public miner script on
+//!   a drill coinbase mints a public outpoint. `--palw-producer-bond`, `--palw-fee-outpoint` and
+//!   `--stake-bond` naming public testnet-12's genesis txids are refused by name: they are a public
+//!   unit's flags copied onto a drill. The same rule reaches past start-up: `getBlockTemplate` pays
+//!   only a drill address (`rpc/service`), and the EVM ingress admits only the drill's EVM accounts
+//!   (`FlowContext::submit_rpc_evm_transaction`).
+//! * **The EVM lane is not separated by the salt.** An EVM transaction is bound to `EVM_CHAIN_ID` —
+//!   one constant on every network — and to its sender's nonce, never to the genesis, so an account
+//!   that holds value on public testnet-12 signs, on a drill, a transaction valid there too. A drill
+//!   therefore uses the keyring's EVM accounts only: `--evm-fee-recipient` must be one, and the
+//!   keyring export lists them (`evm`). A per-genesis chain id would close it structurally; that is a
+//!   consensus change outside the drill.
 //! * **Its own app directory.** A drill writes a marker into `<appdir>/<network>/`; a salted node
 //!   refuses a directory that holds another node's data without its marker, and an unsalted node
 //!   refuses one with a marker. Without it a drill pointed at a public node's app dir meets
@@ -30,13 +39,14 @@
 //!   database — and shares its panel state (`palw-panel/palw-fee-outpoint`) besides.
 use crate::args::Args;
 use kaspa_addresses::{Address, Prefix, Version};
+use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::config::drill::{
     PALW_DRILL_KEYRING_SPAN_V1, PalwDrillKeyRoleV1, PalwDrillKeyringV1, PalwDrillSaltV1, palw_drill_network_v1,
     palw_t12_drill_cards_v1, palw_t12_drill_fee_float_outpoint_v1, palw_t12_drill_main_key_v1, palw_t12_drill_premine_outpoint_v1,
     palw_t12_public_genesis_txid_v1,
 };
 use kaspa_consensus_core::errors::config::{ConfigError, ConfigResult};
-use kaspa_consensus_core::network::{NetworkId, NetworkType};
+use kaspa_consensus_core::network::NetworkType;
 use std::path::{Path, PathBuf};
 
 fn refused(why: impl Into<String>) -> ConfigError {
@@ -89,7 +99,11 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
     }
     let ring = PalwDrillKeyringV1::new(salt);
     palw_drill_keys_are_drill_only_v1(args, &ring)?;
-    for (flag, value) in [("--palw-producer-bond", &args.palw_producer_bond), ("--palw-fee-outpoint", &args.palw_fee_outpoint)] {
+    for (flag, value) in [
+        ("--palw-producer-bond", &args.palw_producer_bond),
+        ("--palw-fee-outpoint", &args.palw_fee_outpoint),
+        ("--stake-bond", &args.stake_bond),
+    ] {
         if let Some(outpoint) = value.as_deref().and_then(|s| crate::palw_producer::parse_outpoint(s).ok())
             && palw_t12_public_genesis_txid_v1(&outpoint.transaction_id)
         {
@@ -103,10 +117,12 @@ pub fn palw_drill_validate_args_v1(args: &Args) -> ConfigResult<()> {
     Ok(())
 }
 
-/// **The drill-only key rule** (ADR-0152 §8.2): the producer key is one of this drill's bond keys,
-/// and the pay and heartbeat addresses are this drill's. A key or address the keyring does not
-/// derive is refused whether or not public testnet-12 knows it: the keyring is the positive list,
-/// so no deny-list has to stay complete.
+/// **The drill-only key rule** (ADR-0152 §8.2: drill-only keys "for miners, heartbeats, payouts and
+/// bonds"): the producer key is one of this drill's bond keys, the validator key one of its
+/// validator keys, the pay and heartbeat addresses are this drill's, and the EVM fee recipient is
+/// one of its EVM accounts. A key or address the keyring does not derive is refused whether or not
+/// public testnet-12 knows it: the keyring is the positive list, so no deny-list has to stay
+/// complete.
 fn palw_drill_keys_are_drill_only_v1(args: &Args, ring: &PalwDrillKeyringV1) -> ConfigResult<()> {
     let salt_id = ring.salt().id();
     if let Some(path) = args.palw_producer_key.as_deref() {
@@ -116,6 +132,30 @@ fn palw_drill_keys_are_drill_only_v1(args: &Args, ring: &PalwDrillKeyringV1) -> 
             return Err(refused(format!(
                 "--palw-producer-key={path} is not a bond key of drill {salt_id} (bond keys 0..{PALW_DRILL_KEYRING_SPAN_V1}). A drill signs \
                  with drill-only keys, never a card key: take a seed from the keyring --palw-drill-write-keyring writes"
+            )));
+        }
+    }
+    if let Some(path) = args.validator_key.as_deref() {
+        let seed = kaspa_pq_validator_core::load_validator_seed(path).map_err(|e| refused(format!("--validator-key: {e}")))?;
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        if ring.find_validator_pubkey(key.public_key()).is_none() {
+            return Err(refused(format!(
+                "--validator-key={path} is not a validator key of drill {salt_id} (validator keys 0..{PALW_DRILL_KEYRING_SPAN_V1}). A \
+                 drill's attestations are signed with drill-only keys: take a seed from the keyring's `validator` rows"
+            )));
+        }
+    }
+    #[cfg(feature = "evm")]
+    if let Some(text) = args.evm_fee_recipient.as_deref() {
+        let hex = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")).unwrap_or(text);
+        let mut account = [0u8; 20];
+        if hex.len() != 40 || faster_hex::hex_decode(hex.as_bytes(), &mut account).is_err() {
+            return Err(refused(format!("--evm-fee-recipient={text} is not a 20-byte hex address")));
+        }
+        if !kaspa_evm::tx::palw_drill_evm_accounts_v1(ring.salt()).contains(&account) {
+            return Err(refused(format!(
+                "--evm-fee-recipient={text} is not an EVM account of drill {salt_id}. The EVM lane is the one the salt does not \
+                 separate (one chain id, no genesis in the signature), so a drill pays and signs only with the keyring's `evm` accounts"
             )));
         }
     }
@@ -137,8 +177,15 @@ fn palw_drill_keys_are_drill_only_v1(args: &Args, ring: &PalwDrillKeyringV1) -> 
 
 /// **Where drill injectors that are otherwise devnet/simnet-only may run**: devnet, simnet, and a
 /// salted testnet-12 — a private chain by construction. Public testnet-12 stays refused.
-pub fn palw_private_drill_network_v1(network: NetworkId, args: &Args) -> bool {
-    matches!(network.network_type, NetworkType::Devnet | NetworkType::Simnet) || args.palw_drill_genesis_salt.is_some()
+///
+/// Read off the chain the node RUNS — its `Config` — never off the arguments (P2-12 review
+/// finding 7): a salt counts only when the params it installed carry a genesis that is not the
+/// network's public one, so a node whose params swap was lost would run public testnet-12 with its
+/// injectors refused rather than armed.
+pub fn palw_private_drill_network_v1(config: &Config) -> bool {
+    matches!(config.params.net.network_type, NetworkType::Devnet | NetworkType::Simnet)
+        || (config.palw_drill_genesis_salt.is_some()
+            && config.params.genesis.hash != kaspa_consensus_core::config::params::Params::from(config.params.net).genesis.hash)
 }
 
 /// The marker a drill writes into `<appdir>/<network>/`.
@@ -272,10 +319,43 @@ pub fn palw_drill_write_keyring_v1(salt: &PalwDrillSaltV1, dir: &Path) -> Result
         "bonds": role_rows(PalwDrillKeyRoleV1::Bond, cards.len() as u32)?,
         "heartbeat": role_rows(PalwDrillKeyRoleV1::Heartbeat, 0)?,
         "payout": role_rows(PalwDrillKeyRoleV1::Payout, 0)?,
+        "validator": role_rows(PalwDrillKeyRoleV1::Validator, 0)?,
+        // The EVM lane's accounts — the only ones a drill signs with (the salt does not separate
+        // the lane; see the module doc). `key_file` holds the secp256k1 secret as 64 hex.
+        "evm": evm_rows(salt, dir)?,
     });
     let text = serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?;
     std::fs::write(&manifest_path, text).map_err(|e| format!("cannot write {}: {e}", manifest_path.display()))?;
     Ok(manifest_path)
+}
+
+/// The keyring export's `evm` rows: accounts `0..PALW_DRILL_EXPORT_PER_ROLE_V1`, each with its
+/// address and a 0600 file holding its secret. Empty in a build without the EVM lane (which cannot
+/// run testnet-12 anyway).
+fn evm_rows(salt: &PalwDrillSaltV1, dir: &Path) -> Result<Vec<serde_json::Value>, String> {
+    #[cfg(feature = "evm")]
+    {
+        let accounts = kaspa_evm::tx::palw_drill_evm_accounts_v1(salt);
+        (0..PALW_DRILL_EXPORT_PER_ROLE_V1)
+            .map(|n| {
+                let name = format!("evm-{n}.key");
+                write_private(
+                    &dir.join(&name),
+                    faster_hex::hex_string(&kaspa_consensus_core::config::drill::palw_drill_evm_secret_v1(salt, n)).as_bytes(),
+                )?;
+                Ok(serde_json::json!({
+                    "n": n,
+                    "address": format!("0x{}", faster_hex::hex_string(&accounts[n as usize])),
+                    "key_file": name,
+                }))
+            })
+            .collect()
+    }
+    #[cfg(not(feature = "evm"))]
+    {
+        let _ = (salt, dir);
+        Ok(Vec::new())
+    }
 }
 
 fn outpoint_text(outpoint: kaspa_consensus_core::tx::TransactionOutpoint) -> String {
@@ -421,13 +501,62 @@ mod tests {
         let from_file: Result<Args, _> = toml::from_str(&format!("palw-drill-genesis-salt = \"{SALT}\""));
         assert!(from_file.is_err(), "never from a config file: an unknown key is refused");
 
-        // The private-drill predicate the injectors read.
-        let public = with(&[]);
-        assert!(!palw_private_drill_network_v1(public.network(), &public), "public testnet-12 is not a drill");
-        let salted = with(&[&flag]);
-        assert!(palw_private_drill_network_v1(salted.network(), &salted));
-        let devnet = parse(&["--devnet"]);
-        assert!(palw_private_drill_network_v1(devnet.network(), &devnet));
+        // The help strings themselves (review finding 9): no lost `\` continuation leaves a run of
+        // spaces inside one, and the three injectors say where they now run.
+        let cmd = crate::args::cli();
+        let help_of = |id: &str| cmd.get_arguments().find(|a| a.get_id() == id).and_then(|a| a.get_help()).unwrap().to_string();
+        for id in [
+            "palw-drill-genesis-salt",
+            "palw-drill-write-keyring",
+            "palw-drill-answer-only",
+            "palw-drill-refuse-leaf-evidence",
+            "palw-drill-tamper-fp-leaf",
+        ] {
+            let text = help_of(id);
+            assert!(!text.contains("  "), "--{id}'s help has a run of spaces: {text}");
+        }
+        for id in ["palw-drill-answer-only", "palw-drill-refuse-leaf-evidence", "palw-drill-tamper-fp-leaf"] {
+            assert!(help_of(id).contains("OR A SALTED TESTNET-12 DRILL ONLY"), "--{id}");
+        }
+    }
+
+    /// The node's `Config` as `create_core_with_runtime` builds it from these arguments.
+    fn config_of(args: &Args) -> Config {
+        let mut config = Config::new(kaspa_consensus_core::config::params::Params::from(args.network()));
+        args.apply_to_config(&mut config);
+        config
+    }
+
+    /// **`apply_to_config` installs the drill params and the salt together, and the injector gate
+    /// reads the chain the node runs** (P2-12 review finding 7). Salted: the drill genesis, the
+    /// salt, a private drill. Unsalted testnet-12: public testnet-12's genesis, no salt, not a
+    /// drill. A salted config whose params swap was lost — public genesis, salt set — is NOT a
+    /// private drill: the gate refuses the injectors on the chain it would actually run.
+    #[test]
+    fn t53_the_config_carries_the_drill_genesis_and_the_injector_gate_reads_it() {
+        let base = ["--testnet", "--netsuffix=12", "--nodnsseed", "--addpeer=10.0.0.2:26311"];
+        let flag = format!("--palw-drill-genesis-salt={SALT}");
+        let public_t12 = kaspa_consensus_core::config::params::Params::from(palw_drill_network_v1());
+
+        let salted_argv: Vec<&str> = base.iter().copied().chain([flag.as_str()]).collect();
+        let salted = config_of(&parse(&salted_argv));
+        assert_eq!(salted.params.genesis.hash, kaspa_consensus_core::config::drill::palw_t12_drill_genesis_block_v1(&salt()).hash);
+        assert_ne!(salted.params.genesis.hash, public_t12.genesis.hash);
+        assert_eq!(salted.palw_drill_genesis_salt, Some(salt()), "the salt rides with the params it salted");
+        assert_eq!(salted.params.net, palw_drill_network_v1());
+        assert!(palw_private_drill_network_v1(&salted));
+
+        let public = config_of(&parse(&base));
+        assert_eq!(public.params.genesis.hash, public_t12.genesis.hash);
+        assert_eq!(public.palw_drill_genesis_salt, None);
+        assert!(!palw_private_drill_network_v1(&public), "public testnet-12 is not a drill");
+
+        let mut lost_swap = config_of(&parse(&salted_argv));
+        lost_swap.params = public_t12;
+        assert!(!palw_private_drill_network_v1(&lost_swap), "a salt on public testnet-12's genesis arms nothing");
+
+        assert!(palw_private_drill_network_v1(&config_of(&parse(&["--devnet"]))));
+        assert!(palw_private_drill_network_v1(&config_of(&parse(&["--simnet"]))));
     }
 
     /// **Drill-only keys, by the keyring**: a drill bond seed and drill addresses pass; a card key,
@@ -439,6 +568,7 @@ mod tests {
         let other = PalwDrillKeyringV1::new(PalwDrillSaltV1::from_bytes([0x35; 32]).unwrap());
         let drill_bond = seed_file(dir.path(), "drill-bond", &ring.key(PalwDrillKeyRoleV1::Bond, 3).seed);
         let drill_operator = seed_file(dir.path(), "drill-operator", &ring.key(PalwDrillKeyRoleV1::Operator, 3).seed);
+        let drill_validator = seed_file(dir.path(), "drill-validator", &ring.key(PalwDrillKeyRoleV1::Validator, 0).seed);
         let foreign_bond = seed_file(dir.path(), "foreign-bond", &other.key(PalwDrillKeyRoleV1::Bond, 3).seed);
         let heartbeat = ring.key(PalwDrillKeyRoleV1::Heartbeat, 0).address(Prefix::Testnet).to_string();
         let payout = ring.key(PalwDrillKeyRoleV1::Payout, 1).address(Prefix::Testnet).to_string();
@@ -465,8 +595,35 @@ mod tests {
             format!("--palw-producer-bond={}:{}", drill_seat.transaction_id, drill_seat.index),
             format!("--palw-producer-pay-address={payout}"),
             format!("--palw-heartbeat-miner-address={heartbeat}"),
+            format!("--validator-key={drill_validator}"),
+            format!("--stake-bond={}:{}", drill_seat.transaction_id, drill_seat.index),
         ]);
         assert!(palw_drill_validate_args_v1(&ok).is_ok(), "{:?}", palw_drill_validate_args_v1(&ok));
+
+        // Review finding 6: the validator key and the stake bond are drill-only too.
+        for (extra, needle) in [
+            (format!("--validator-key={drill_bond}"), "is not a validator key of drill"),
+            (format!("--validator-key={foreign_bond}"), "is not a validator key of drill"),
+            (format!("--stake-bond={}:{}", public_seat.transaction_id, public_seat.index), "names public testnet-12's genesis txid"),
+        ] {
+            let why = refusal(&node(&[extra.clone()]));
+            assert!(why.contains(needle), "{extra}: {why}");
+        }
+
+        // Review finding 2: the EVM fee recipient is one of the drill's EVM accounts.
+        #[cfg(feature = "evm")]
+        {
+            let ours = kaspa_evm::tx::palw_drill_evm_accounts_v1(&salt())[2];
+            let ok = node(&[format!("--evm-fee-recipient=0x{}", faster_hex::hex_string(&ours))]);
+            assert!(palw_drill_validate_args_v1(&ok).is_ok(), "{:?}", palw_drill_validate_args_v1(&ok));
+            let theirs = kaspa_evm::tx::palw_drill_evm_accounts_v1(&PalwDrillSaltV1::from_bytes([0x35; 32]).unwrap())[2];
+            for text in [format!("0x{}", faster_hex::hex_string(&theirs)), format!("0x{}", "11".repeat(20))] {
+                let why = refusal(&node(&[format!("--evm-fee-recipient={text}")]));
+                assert!(why.contains("is not an EVM account of drill"), "{text}: {why}");
+            }
+            let why = refusal(&node(&["--evm-fee-recipient=0x12".to_owned()]));
+            assert!(why.contains("20-byte hex"), "{why}");
+        }
 
         for (extra, needle) in [
             (format!("--palw-producer-key={drill_operator}"), "is not a bond key of drill"),
@@ -548,6 +705,29 @@ mod tests {
         }
         assert_eq!(manifest["bonds"].as_array().unwrap().len() + seats.len(), PALW_DRILL_EXPORT_PER_ROLE_V1 as usize);
         assert_eq!(manifest["heartbeat"].as_array().unwrap().len(), PALW_DRILL_EXPORT_PER_ROLE_V1 as usize);
+        let validator = &manifest["validator"][0];
+        let seed =
+            kaspa_pq_validator_core::load_validator_seed(dir.path().join(validator["seed_file"].as_str().unwrap()).to_str().unwrap())
+                .expect("a validator seed kaspad accepts");
+        assert_eq!(
+            PalwDrillKeyringV1::new(salt()).find_validator_pubkey(kaspa_pq_validator_core::ValidatorKey::from_seed(seed).public_key()),
+            Some(0)
+        );
+        #[cfg(feature = "evm")]
+        {
+            let evm = manifest["evm"].as_array().unwrap();
+            assert_eq!(evm.len(), PALW_DRILL_EXPORT_PER_ROLE_V1 as usize);
+            let accounts = kaspa_evm::tx::palw_drill_evm_accounts_v1(&salt());
+            assert_eq!(evm[4]["address"], format!("0x{}", faster_hex::hex_string(&accounts[4])).as_str());
+            let key_path = dir.path().join(evm[4]["key_file"].as_str().unwrap());
+            let secret = std::fs::read_to_string(&key_path).unwrap();
+            assert_eq!(secret, faster_hex::hex_string(&kaspa_consensus_core::config::drill::palw_drill_evm_secret_v1(&salt(), 4)));
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(std::fs::metadata(&key_path).unwrap().permissions().mode() & 0o777, 0o600, "a secret is owner-only");
+            }
+        }
 
         // A drill node configured from the manifest passes the drill-only key rule.
         let seat0 = &seats[0];

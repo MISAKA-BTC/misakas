@@ -771,6 +771,9 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
     // entry point that reached here without `create_core`'s pre-flight. A drill never opens a
     // directory holding another node's data, and a public node never opens a drill's.
     crate::palw_drill::palw_drill_datadir_guard_or_exit_v1(args, config.palw_drill_genesis_salt.as_ref());
+    // Where the otherwise devnet/simnet-only drill injectors may run, read off the chain this node
+    // RUNS (its config), never its arguments (P2-12 review finding 7).
+    let palw_private_drill = crate::palw_drill::palw_private_drill_network_v1(&config);
 
     // Print package name and version
     info!("{} v{}", env!("CARGO_PKG_NAME"), git::with_short_hash(version()));
@@ -1810,7 +1813,7 @@ Do you confirm? (y/n)";
                         drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
                             // Devnet, simnet, or a salted testnet-12 drill (ADR-0152 §8.2) — a
                             // private chain by construction; never public testnet-12.
-                            Some(leaf) if !crate::palw_drill::palw_private_drill_network_v1(network, args) => {
+                            Some(leaf) if !palw_private_drill => {
                                 panic!(
                                     "--palw-drill-tamper-fp-leaf={leaf} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
                                 )
@@ -1828,7 +1831,7 @@ Do you confirm? (y/n)";
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
                         drill_answer_only: {
-                            let drill = crate::palw_drill::palw_private_drill_network_v1(network, args);
+                            let drill = palw_private_drill;
                             if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {
                                 panic!(
                                     "--palw-drill-answer-only and --palw-drill-refuse-leaf-evidence are drills and are devnet/simnet (or a \

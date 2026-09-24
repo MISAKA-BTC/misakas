@@ -22,9 +22,19 @@
 //!    reason ADR-0152 §8.2 forbids spending a card key's premine on any private chain). Every key a
 //!    drill signs or is paid with is therefore derived here from the salt ([`PalwDrillKeyringV1`]):
 //!    the genesis seats' bond and operator keys, their payouts and fee floats, the main wallet, the
-//!    heartbeat miners' addresses and the extra bonds a drill registers (D-9, D-10). No card key and
-//!    no address public testnet-12 pays is one of them, and kaspad refuses a salted node configured
-//!    with any other (`kaspad/src/palw_drill.rs`).
+//!    heartbeat miners' addresses, the validator keys, the EVM accounts and the extra bonds a drill
+//!    registers (D-9, D-10). No card key and no address public testnet-12 pays is one of them, and
+//!    kaspad refuses a salted node configured with any other (`kaspad/src/palw_drill.rs`).
+//!
+//! **What the salt does NOT separate: the EVM lane.** An EVM transaction binds `EVM_CHAIN_ID` (one
+//! constant on every network) and its sender's nonce, never the genesis, so 1 and 2 do not reach it
+//! and only 3 does — see [`PalwDrillKeyRoleV1::Evm`].
+//!
+//! **Off-node signers take the salt too** (P2-12 review finding 1). The `misaka` CLI and the gateway
+//! rail build their params with [`palw_chain_params_v1`] — the constructor kaspad uses — and check
+//! them against the node's reported genesis with [`palw_node_genesis_verdict_v1`] before they sign:
+//! a tool that built `Params::from(testnet-12)` against a drill node signed under PUBLIC testnet-12's
+//! domain, which is 2 inverted.
 //!
 //! **The salt never applies by accident.** It is an explicit argument of every function below — no
 //! global, no environment variable, and `Params::from(testnet-12)` never reads it. It exists only on
@@ -148,14 +158,33 @@ pub enum PalwDrillKeyRoleV1 {
     Bond,
     /// A genesis card's operator identity (one per seat, as `derive_panel_v2` needs).
     Operator,
-    /// A payout address that is not a bond's own (`--palw-producer-pay-address`).
+    /// A payout address that is not a bond's own (`--palw-producer-pay-address`, a
+    /// `getBlockTemplate` pay address).
     Payout,
     /// A heartbeat miner's fee address (`--palw-heartbeat-miner-address`).
     Heartbeat,
+    /// A DNS-finality validator's signing key (`--validator-key`, ADR-0018) — "bonds" in ADR-0152
+    /// §8.2's list, and a key that signs attestations, so a drill's is drill-only like every other.
+    Validator,
+    /// **An EVM account** (the EVM lane, ADR-0020): a secp256k1 secret, not an ML-DSA-87 seed —
+    /// [`palw_drill_evm_secret_v1`] derives it, and kaspad (which links the lane's curve; this crate
+    /// is secp-free) turns it into the account address. The EVM lane is the one place the salt does
+    /// NOT separate a drill from public testnet-12: an EVM transaction is bound to `EVM_CHAIN_ID`,
+    /// one constant on every network, and to the sender's nonce — neither to the genesis. A transfer,
+    /// a bridge withdrawal or a model-market action signed on a drill by an account that also holds
+    /// value on public testnet-12 is valid there at the same nonce, and anybody who reaches the
+    /// drill's P2P port can lift it out of a drill block. So every EVM account a drill signs with is
+    /// one of these (the market step's generator included), a salted node pays its EVM fees only
+    /// to one (`--evm-fee-recipient`), and its `eth_sendRawTransaction` admits only their
+    /// transactions. A per-genesis EVM chain id would close it structurally; that is a consensus
+    /// change and not the drill's to make.
+    Evm,
 }
 
 impl PalwDrillKeyRoleV1 {
-    pub const ALL: [Self; 5] = [Self::Main, Self::Bond, Self::Operator, Self::Payout, Self::Heartbeat];
+    /// Every ML-DSA-87 role — what a producer key, a validator key and every UTXO address a drill
+    /// uses can be. [`Self::Evm`] is not one of them: its keys are secp256k1.
+    pub const MLDSA87: [Self; 6] = [Self::Main, Self::Bond, Self::Operator, Self::Payout, Self::Heartbeat, Self::Validator];
 
     pub fn name(self) -> &'static str {
         match self {
@@ -164,6 +193,8 @@ impl PalwDrillKeyRoleV1 {
             Self::Operator => "operator",
             Self::Payout => "payout",
             Self::Heartbeat => "heartbeat",
+            Self::Validator => "validator",
+            Self::Evm => "evm",
         }
     }
 }
@@ -192,6 +223,29 @@ pub fn palw_drill_key_seed_v1(salt: &PalwDrillSaltV1, role: PalwDrillKeyRoleV1, 
     seed
 }
 
+/// The order `n` of secp256k1's group, big-endian — a secret must lie in `1..n`.
+const SECP256K1_ORDER_BE: [u8; 32] = [
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xBA, 0xAE, 0xDC, 0xE6, 0xAF,
+    0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+];
+
+/// **The secp256k1 secret of drill EVM account `n`** ([`PalwDrillKeyRoleV1::Evm`]):
+/// [`palw_drill_key_seed_v1`]`(salt, Evm, n)`, re-hashed with a counter in the (≈ 2⁻¹²⁸) case it is
+/// not a scalar in `1..n` — so every index has exactly one account, derived without a curve library.
+/// The address is kaspad's to compute (`kaspa_evm::evm_address_of_secret_v1`).
+pub fn palw_drill_evm_secret_v1(salt: &PalwDrillSaltV1, n: u32) -> [u8; 32] {
+    let mut secret = palw_drill_key_seed_v1(salt, PalwDrillKeyRoleV1::Evm, n);
+    let mut counter: u32 = 0;
+    while secret == [0u8; 32] || secret >= SECP256K1_ORDER_BE {
+        counter += 1;
+        let mut state = blake2b_simd::Params::new().hash_length(32).key(PALW_DRILL_KEY_SEED_DOMAIN_V1).to_state();
+        state.update(&secret);
+        state.update(&counter.to_le_bytes());
+        secret.copy_from_slice(state.finalize().as_bytes());
+    }
+    secret
+}
+
 /// **One drill key**: its seed, its ML-DSA-87 verification key and its P2PKH owner payload.
 #[derive(Clone, PartialEq, Eq)]
 pub struct PalwDrillKeyV1 {
@@ -204,7 +258,10 @@ pub struct PalwDrillKeyV1 {
 }
 
 impl PalwDrillKeyV1 {
+    /// An ML-DSA-87 role's key ([`PalwDrillKeyRoleV1::MLDSA87`]). An EVM account is secp256k1 and
+    /// has no such key: [`palw_drill_evm_secret_v1`].
     pub fn derive(salt: &PalwDrillSaltV1, role: PalwDrillKeyRoleV1, n: u32) -> Self {
+        assert!(role != PalwDrillKeyRoleV1::Evm, "a drill EVM account is secp256k1: palw_drill_evm_secret_v1 derives it");
         let seed = palw_drill_key_seed_v1(salt, role, n);
         let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed);
         let pubkey = keypair.verification_key.as_ref().to_vec();
@@ -256,13 +313,35 @@ impl PalwDrillKeyringV1 {
         (0..PALW_DRILL_KEYRING_SPAN_V1).find(|n| self.key(PalwDrillKeyRoleV1::Bond, *n).pubkey == pubkey)
     }
 
-    /// The drill key (of any role) whose address carries this owner payload, or `None` when the
-    /// payload is not one of this drill's — what a pay or heartbeat address must be.
+    /// The index of the drill VALIDATOR key with this verification key (`--validator-key`), or
+    /// `None` when the key is not one of this drill's.
+    pub fn find_validator_pubkey(&self, pubkey: &[u8]) -> Option<u32> {
+        (0..PALW_DRILL_KEYRING_SPAN_V1).find(|n| self.key(PalwDrillKeyRoleV1::Validator, *n).pubkey == pubkey)
+    }
+
+    /// The drill key (of any ML-DSA-87 role) whose address carries this owner payload, or `None`
+    /// when the payload is not one of this drill's — what a pay or heartbeat address must be.
     pub fn find_payload(&self, payload: &[u8]) -> Option<(PalwDrillKeyRoleV1, u32)> {
-        PalwDrillKeyRoleV1::ALL
+        PalwDrillKeyRoleV1::MLDSA87
             .into_iter()
             .flat_map(|role| (0..PALW_DRILL_KEYRING_SPAN_V1).map(move |n| (role, n)))
             .find(|(role, n)| self.key(*role, *n).payload[..] == *payload)
+    }
+
+    /// **Every owner payload this drill's keyring derives** (all ML-DSA-87 roles, the whole span) —
+    /// the set a salted node computes ONCE and then asks per `getBlockTemplate` (at most
+    /// `6 × 32` key generations, a few tens of milliseconds, never on the request path).
+    pub fn payloads(&self) -> std::collections::HashSet<[u8; 64]> {
+        PalwDrillKeyRoleV1::MLDSA87
+            .into_iter()
+            .flat_map(|role| (0..PALW_DRILL_KEYRING_SPAN_V1).map(move |n| (role, n)))
+            .map(|(role, n)| self.key(role, n).payload)
+            .collect()
+    }
+
+    /// The secrets of this drill's EVM accounts `0..PALW_DRILL_KEYRING_SPAN_V1`, in index order.
+    pub fn evm_secrets(&self) -> Vec<[u8; 32]> {
+        (0..PALW_DRILL_KEYRING_SPAN_V1).map(|n| palw_drill_evm_secret_v1(&self.salt, n)).collect()
     }
 }
 
@@ -367,6 +446,89 @@ pub fn palw_t12_public_genesis_txid_v1(txid: &Hash64) -> bool {
     *txid == premine_txid_for(palw_drill_network_v1()) || *txid == testnet12_community_txid()
 }
 
+/// **The params of the chain a salt names — the one constructor every signer shares** (kaspad's
+/// `apply_to_config`, the `misaka` CLI, the gateway rail): `Params::from(network)` without a salt,
+/// the drill's params with one, and a refusal for a salt on any network but testnet-12. An
+/// off-node signer that built `Params::from(network)` against a drill node signed every object
+/// under PUBLIC testnet-12's network domain — refused by the drill, and valid on public
+/// testnet-12, the opposite of ADR-0152 §8.2 — which is why this takes the salt explicitly and
+/// [`palw_node_genesis_verdict_v1`] checks the answer against the node.
+pub fn palw_chain_params_v1(network: NetworkId, salt: Option<&PalwDrillSaltV1>) -> Result<crate::config::params::Params, String> {
+    match salt {
+        None => Ok(crate::config::params::Params::from(network)),
+        Some(salt) if network == palw_drill_network_v1() => Ok(crate::config::params::palw_t12_drill_params_v1(salt)),
+        Some(salt) => Err(format!(
+            "a drill genesis salt (drill {}) applies to testnet-12 only, and this is {network}: a salt drills the network whose shipping \
+             rules it keeps",
+            salt.id()
+        )),
+    }
+}
+
+/// **Whether an off-node signer must ask the node its genesis before signing**: on testnet-12 — the
+/// one network a drill shares a name with — and whenever a salt is given. Elsewhere there is no
+/// second genesis under the name, and a node that predates `getPalwNodeStatus` would drop the
+/// connection at the question (an unknown wRPC op closes the socket), so it is not asked.
+pub fn palw_node_genesis_check_applies_v1(network: NetworkId, salt: Option<&PalwDrillSaltV1>) -> bool {
+    salt.is_some() || network == palw_drill_network_v1()
+}
+
+/// **Is the node's chain the one these params describe?** — asked by every off-node signer before
+/// it signs (ADR-0152 §8.2): a PALW signature is made under `palw_network_domain_v2_for(network,
+/// genesis)`, so a signer whose genesis is not the node's signs objects that node refuses — and,
+/// against a drill, objects public testnet-12 accepts. `node_genesis_hash` / `node_drill_salt_id`
+/// are what the node reports (`getPalwNodeStatus`, version 4); empty is a node older than those
+/// fields, which predates the salt and so is never a drill.
+///
+/// Every refusal names the fix: the drill's salt, the other drill's, none, or a build of the
+/// network's own genesis.
+pub fn palw_node_genesis_verdict_v1(
+    local: &crate::config::params::Params,
+    local_salt: Option<&PalwDrillSaltV1>,
+    node_genesis_hash: &str,
+    node_drill_salt_id: &str,
+) -> Result<(), String> {
+    let net = local.net;
+    let ours = local.genesis.hash;
+    if node_genesis_hash.is_empty() {
+        return match local_salt {
+            None => Ok(()),
+            Some(salt) => Err(format!(
+                "the node does not report its genesis, so it predates the drill salt and is not a drill node — yet this tool was given \
+                 drill {}'s salt. Point it at that drill's node, or drop --palw-drill-genesis-salt",
+                salt.id()
+            )),
+        };
+    }
+    let theirs: Hash64 = node_genesis_hash
+        .parse()
+        .map_err(|_| format!("the node reports genesis {node_genesis_hash:?}, which is not a 128-hex hash"))?;
+    if theirs == ours {
+        return Ok(());
+    }
+    Err(match (node_drill_salt_id.is_empty(), local_salt) {
+        (false, None) => format!(
+            "the node runs {net} DRILL {node_drill_salt_id} (genesis {theirs}), and this tool derived public {net}'s genesis {ours}: \
+             everything it signed would be refused by the drill and valid on public {net}. Pass --palw-drill-genesis-salt=<drill \
+             {node_drill_salt_id}'s salt>"
+        ),
+        (false, Some(salt)) => format!(
+            "the node runs {net} drill {node_drill_salt_id} (genesis {theirs}), and this tool was given drill {}'s salt (genesis {ours}): \
+             pass the salt of the drill this node runs",
+            salt.id()
+        ),
+        (true, Some(salt)) => format!(
+            "the node runs public {net} (genesis {theirs}), and this tool was given drill {}'s salt (genesis {ours}): drop \
+             --palw-drill-genesis-salt, or point it at that drill's node",
+            salt.id()
+        ),
+        (true, None) => format!(
+            "the node runs {net} on genesis {theirs}, and this build's {net} is genesis {ours}: another incarnation of the network, \
+             whose signatures neither side accepts — use a build of the node's network"
+        ),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -413,7 +575,7 @@ mod tests {
         assert_ne!(key(&a, PalwDrillKeyRoleV1::Bond, 3).pubkey, key(&b, PalwDrillKeyRoleV1::Bond, 3).pubkey, "per salt");
         assert_ne!(key(&a, PalwDrillKeyRoleV1::Bond, 3).pubkey, key(&a, PalwDrillKeyRoleV1::Bond, 4).pubkey, "per index");
         let mut seeds = std::collections::BTreeSet::new();
-        for role in PalwDrillKeyRoleV1::ALL {
+        for role in PalwDrillKeyRoleV1::MLDSA87.into_iter().chain([PalwDrillKeyRoleV1::Evm]) {
             for n in 0..4 {
                 assert!(seeds.insert(palw_drill_key_seed_v1(&a, role, n)), "{role:?} {n}: a seed belongs to one role and one index");
             }
@@ -439,7 +601,7 @@ mod tests {
             public_payloads.push(payload);
         }
         let ring = PalwDrillKeyringV1::new(a);
-        for role in PalwDrillKeyRoleV1::ALL {
+        for role in PalwDrillKeyRoleV1::MLDSA87 {
             for n in 0..PALW_DRILL_KEYRING_SPAN_V1 {
                 let k = ring.key(role, n);
                 assert!(!public_keys.contains(&k.pubkey), "{role:?} {n} is a card key");
@@ -459,6 +621,84 @@ mod tests {
         );
         assert_eq!(ring.find_payload(&ring.key(PalwDrillKeyRoleV1::Heartbeat, last + 1).payload), None, "past the span");
         assert_eq!(ring.find_payload(&PALW_T12_GENESIS_BONDS[0].payout_payload), None, "a card's payout");
+    }
+
+    /// **The roles the review added** (P2-12 review, findings 2 and 6): a validator key is found
+    /// as a validator key and not as a bond; an EVM account's secret is a secp256k1 scalar in
+    /// `1..n`, the Evm role's own seed, per salt and index; the payload set is every ML-DSA-87
+    /// role's whole span and nothing public testnet-12 pays.
+    #[test]
+    fn t53_validator_and_evm_drill_keys() {
+        let (a, b) = (salt(0x71), salt(0x72));
+        let ring = PalwDrillKeyringV1::new(a);
+        let validator = ring.key(PalwDrillKeyRoleV1::Validator, 5);
+        assert_eq!(ring.find_validator_pubkey(&validator.pubkey), Some(5));
+        assert_eq!(ring.find_validator_pubkey(&ring.key(PalwDrillKeyRoleV1::Bond, 5).pubkey), None, "a bond key is not a validator's");
+        assert_eq!(ring.find_bond_pubkey(&validator.pubkey), None, "nor the reverse");
+        assert_eq!(ring.find_payload(&validator.payload), Some((PalwDrillKeyRoleV1::Validator, 5)));
+
+        let secret = palw_drill_evm_secret_v1(&a, 3);
+        assert_eq!(secret, palw_drill_key_seed_v1(&a, PalwDrillKeyRoleV1::Evm, 3), "the Evm role's own seed (in range)");
+        assert!(secret != [0u8; 32] && secret < SECP256K1_ORDER_BE, "a secp256k1 scalar");
+        assert_ne!(secret, palw_drill_evm_secret_v1(&b, 3), "per salt");
+        assert_ne!(secret, palw_drill_evm_secret_v1(&a, 4), "per index");
+        let secrets = ring.evm_secrets();
+        assert_eq!(secrets.len(), PALW_DRILL_KEYRING_SPAN_V1 as usize);
+        assert_eq!(secrets[3], secret);
+        assert!(
+            PalwDrillKeyRoleV1::MLDSA87.iter().all(|role| palw_drill_key_seed_v1(&a, *role, 3) != secret),
+            "no ML-DSA seed doubles as an EVM secret"
+        );
+        assert!(std::panic::catch_unwind(|| PalwDrillKeyV1::derive(&a, PalwDrillKeyRoleV1::Evm, 0)).is_err(), "no ML-DSA EVM key");
+
+        let payloads = ring.payloads();
+        assert_eq!(payloads.len(), PalwDrillKeyRoleV1::MLDSA87.len() * PALW_DRILL_KEYRING_SPAN_V1 as usize, "all distinct");
+        assert!(payloads.contains(&ring.key(PalwDrillKeyRoleV1::Payout, 31).payload));
+        assert!(!payloads.contains(&PALW_T12_GENESIS_BONDS[0].payout_payload), "a card's payout is not a drill's");
+    }
+
+    /// **Off-node signers take their params from the salt and check them against the node**
+    /// (review finding 1). Against a drill node, a tool without the salt is refused and told the
+    /// drill's id; with the drill's salt it derives the drill's params, whose network domain is the
+    /// drill's and not public testnet-12's; with another drill's salt, or a salt against a public
+    /// node, it is refused; a node too old to report is accepted only without a salt.
+    #[test]
+    fn t53_an_off_node_signer_signs_under_the_nodes_genesis() {
+        use crate::config::params::Params;
+        let t12 = palw_drill_network_v1();
+        let (a, b) = (salt(0x81), salt(0x82));
+        let public = palw_chain_params_v1(t12, None).unwrap();
+        let drill = palw_chain_params_v1(t12, Some(&a)).unwrap();
+        assert_eq!(public.genesis.hash, Params::from(t12).genesis.hash);
+        assert_eq!(drill.genesis.hash, palw_t12_drill_genesis_block_v1(&a).hash);
+        let why = palw_chain_params_v1(NetworkId::new(NetworkType::Devnet), Some(&a)).unwrap_err();
+        assert!(why.contains("testnet-12 only"), "{why}");
+        let domain =
+            |p: &Params| crate::palw_attempt_v2::palw_network_domain_v2_for(p.net.to_string().as_bytes(), Some(p.genesis.hash));
+        assert_ne!(domain(&drill), domain(&public), "the salted params sign under the drill's domain");
+
+        let drill_node = (drill.genesis.hash.to_string(), a.id());
+        let public_node = (public.genesis.hash.to_string(), String::new());
+        assert_eq!(palw_node_genesis_verdict_v1(&drill, Some(&a), &drill_node.0, &drill_node.1), Ok(()));
+        assert_eq!(palw_node_genesis_verdict_v1(&public, None, &public_node.0, &public_node.1), Ok(()));
+        let why = palw_node_genesis_verdict_v1(&public, None, &drill_node.0, &drill_node.1).unwrap_err();
+        assert!(why.contains(&format!("DRILL {}", a.id())) && why.contains("--palw-drill-genesis-salt"), "{why}");
+        let other = palw_chain_params_v1(t12, Some(&b)).unwrap();
+        let why = palw_node_genesis_verdict_v1(&other, Some(&b), &drill_node.0, &drill_node.1).unwrap_err();
+        assert!(why.contains(&a.id()) && why.contains(&b.id()), "{why}");
+        let why = palw_node_genesis_verdict_v1(&drill, Some(&a), &public_node.0, &public_node.1).unwrap_err();
+        assert!(why.contains("drop") && why.contains("public testnet-12"), "{why}");
+        let why = palw_node_genesis_verdict_v1(&public, None, &Hash64::from_u64_word(7).to_string(), "").unwrap_err();
+        assert!(why.contains("another incarnation"), "{why}");
+        assert_eq!(palw_node_genesis_verdict_v1(&public, None, "", ""), Ok(()), "a node predating the field is not a drill");
+        assert!(palw_node_genesis_verdict_v1(&drill, Some(&a), "", "").is_err(), "but a salt needs a node that says its genesis");
+        assert!(palw_node_genesis_verdict_v1(&public, None, "zz", "").is_err());
+
+        // Who is asked: testnet-12 always, any network with a salt, no other network without one.
+        assert!(palw_node_genesis_check_applies_v1(t12, None));
+        assert!(palw_node_genesis_check_applies_v1(NetworkId::new(NetworkType::Devnet), Some(&a)));
+        assert!(!palw_node_genesis_check_applies_v1(NetworkId::new(NetworkType::Devnet), None));
+        assert!(!palw_node_genesis_check_applies_v1(NetworkId::new(NetworkType::Mainnet), None));
     }
 
     /// **The salt moves every genesis name and keeps every genesis amount.** The drill set is public

@@ -299,17 +299,20 @@ pub struct Args {
     pub palw_drill_write_keyring: Option<String>,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
-    /// DRILL ONLY (devnet/simnet): this node's canonical free-prompt claims commit a capture with
-    /// one lane of this step leaf corrupted — the one-move court's drill (ADR-0100 §6 step 2).
+    /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
+    /// This node's canonical free-prompt claims commit a capture with one lane of this step leaf
+    /// corrupted — the one-move court's drill (ADR-0100 §6 step 2).
     pub palw_drill_tamper_fp_leaf: Option<u64>,
     /// DRILL ONLY: open a court against every licensed claim, reproduced or not.
     pub palw_drill_challenge_all: bool,
-    /// DRILL ONLY (devnet/simnet): this node's canonical free-prompt claims are broadcast and
-    /// served as their ANSWER envelope, never the capture — as at a width no capture fits the
-    /// material cap — so a seat judges them by intervals alone (ADR-0111's drill).
+    /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
+    /// This node's canonical free-prompt claims are broadcast and served as their ANSWER envelope,
+    /// never the capture — as at a width no capture fits the material cap — so a seat judges them
+    /// by intervals alone (ADR-0111's drill).
     pub palw_drill_answer_only: bool,
-    /// DRILL ONLY (devnet/simnet): this node refuses every leaf-evidence request on the interval
-    /// lane, so a seat that named a leaf must demand its evidence on chain (ADR-0111 Decision 3).
+    /// DRILL ONLY (devnet/simnet, or a salted testnet-12 drill: `palw_private_drill_network_v1`).
+    /// This node refuses every leaf-evidence request on the interval lane, so a seat that named a
+    /// leaf must demand its evidence on chain (ADR-0111 Decision 3).
     pub palw_drill_refuse_leaf_evidence: bool,
     /// ADR-0074 Decision 1: run the network's own job when nobody is asking and commit it as a
     /// canonical free-prompt claim, drawn by the chain's beacon like any other.
@@ -635,12 +638,10 @@ impl Args {
         if let Some(hex) = self.palw_drill_genesis_salt.as_deref() {
             let salt = kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(hex)
                 .unwrap_or_else(|e| panic!("--palw-drill-genesis-salt: {e} (validate_args refuses this first)"));
-            assert_eq!(
-                self.network(),
-                kaspa_consensus_core::config::drill::palw_drill_network_v1(),
-                "--palw-drill-genesis-salt is testnet-12's alone (validate_args refuses this first)"
-            );
-            config.params = kaspa_consensus_core::config::params::palw_t12_drill_params_v1(&salt);
+            // The constructor every signer shares (the CLI and the rail call it too), so the node
+            // and its off-node tools can never build two different drill chains from one salt.
+            config.params = kaspa_consensus_core::config::drill::palw_chain_params_v1(self.network(), Some(&salt))
+                .unwrap_or_else(|e| panic!("--palw-drill-genesis-salt: {e} (validate_args refuses this first)"));
             config.palw_drill_genesis_salt = Some(salt);
         }
 
@@ -1343,7 +1344,7 @@ pub fn cli() -> Command {
                 .help(
                     "PALW DRILL ONLY: this node's canonical free-prompt claims are broadcast and served as their answer \
                      envelope, never the capture, so every seat judges them by intervals alone and must obtain a named \
-                     leaf's evidence from the executor (ADR-0111). DEVNET/SIMNET ONLY.",
+                     leaf's evidence from the executor (ADR-0111). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(
@@ -1354,7 +1355,7 @@ pub fn cli() -> Command {
                 .help(
                     "PALW DRILL ONLY: this node refuses every leaf-evidence request on the interval lane, so a seat that \
                      named a leaf demands its evidence on chain through the held data-availability court (ADR-0111 \
-                     Decision 3). DEVNET/SIMNET ONLY.",
+                     Decision 3). DEVNET/SIMNET OR A SALTED TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(
@@ -1366,7 +1367,8 @@ pub fn cli() -> Command {
                 .help(
                     "PALW DRILL ONLY: this node's canonical free-prompt claims (--palw-canonical-claims) commit a capture \
                      with one lane of this step leaf corrupted, the commitment re-derived so only a re-execution sees it — \
-                     so the one-move court (ADR-0100) can be shown convicting on a live chain. DEVNET/SIMNET ONLY.",
+                     so the one-move court (ADR-0100) can be shown convicting on a live chain. DEVNET/SIMNET OR A SALTED \
+                     TESTNET-12 DRILL ONLY.",
                 ),
         )
         .arg(
@@ -1377,7 +1379,11 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help(
-                    "ADR-0152 §8.2: run a testnet-12 DRILL chain — the shipping rules on a genesis this 64-hex salt moves                      (`openssl rand -hex 32`). testnet-12 only; needs --nodnsseed, an explicit --addpeer/--connect list, drill-only                      keys (see --palw-drill-write-keyring) and an app dir no public node uses. Its peers are other nodes of the same                      drill: public testnet-12 refuses it at the handshake and it refuses public testnet-12.",
+                    "ADR-0152 §8.2: run a testnet-12 DRILL chain — the shipping rules on a genesis this 64-hex salt moves \
+                     (`openssl rand -hex 32`). testnet-12 only; needs --nodnsseed, an explicit --addpeer/--connect list, drill-only \
+                     keys (see --palw-drill-write-keyring) and an app dir no public node uses. Its peers are other nodes of the same \
+                     drill: public testnet-12 refuses it at the handshake and it refuses public testnet-12. The EVM lane is NOT \
+                     separated by the salt (one chain id): use the keyring's EVM accounts only.",
                 ),
         )
         .arg(
@@ -1386,7 +1392,9 @@ pub fn cli() -> Command {
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help(
-                    "With --palw-drill-genesis-salt: write the drill's keyring — seed files (0600) and manifest.json with the drill                      genesis, every seat's bond and fee-float outpoint, and the drill-only heartbeat and payout addresses — into this                      directory, and exit.",
+                    "With --palw-drill-genesis-salt: write the drill's keyring — seed files (0600) and manifest.json with the drill \
+                     genesis, every seat's bond and fee-float outpoint, and the drill-only heartbeat, payout, validator and EVM keys \
+                     — into this directory, and exit.",
                 ),
         )
         .arg(

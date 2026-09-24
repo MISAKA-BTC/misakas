@@ -3024,6 +3024,7 @@ mod tests {
             evm_rpc: "http://127.0.0.1:8545".to_string(),
             timeout_secs: 3,
             quiet: false,
+            palw_drill_genesis_salt: None,
         }
     }
 

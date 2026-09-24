@@ -15,6 +15,10 @@ line: {"format": "misaka-palw-drill-snapshot/v1", "wall_ms", "host", "dag": misa
    1,000 DAA, and O-1's live criterion, ≥ 30 licences within 3,000 DAA of the first Final (the first
    snapshot whose `totals.vesting_created` is positive): PASS, FAIL or PENDING.
 
+The exit status is the drill's verdict, which `misaka-palw-t12-rcore-drill.sh report` refuses to pass on
+anything but 0: 0 every report available and O-1 PASS; 3 INCOMPLETE (a report not available — e.g. a build
+without getPalwVesting — or O-1 still PENDING); 1 O-1 FAIL. An absent report is never a pass.
+
 BUILT BEFORE THE LAUNCH, RUN AFTER IT: nothing here has read a live host. `--self-test` runs the three
 reports over a synthetic snapshot set and checks their arithmetic; that is the only execution it has had.
 
@@ -225,6 +229,22 @@ def analyze(work_dir):
     return {"snapshots": len(rows), "histogram": report_histogram(rows), "secs_per_daa": report_secs_per_daa(rows), "cadence": report_cadence(rows)}
 
 
+EXIT_PASS, EXIT_FAIL, EXIT_INCOMPLETE = 0, 1, 3
+
+
+def verdict(reports):
+    """(exit status, why): INCOMPLETE while any report is unavailable or O-1 is PENDING, FAIL on O-1 FAIL."""
+    missing = [name for name in ("histogram", "secs_per_daa", "cadence") if not reports[name]["available"]]
+    if missing:
+        return EXIT_INCOMPLETE, "INCOMPLETE: not available: " + ", ".join(missing)
+    o1 = reports["cadence"].get("o1", "PENDING (no verdict)")
+    if o1.startswith("FAIL"):
+        return EXIT_FAIL, "FAIL: O-1 " + o1
+    if not o1.startswith("PASS"):
+        return EXIT_INCOMPLETE, "INCOMPLETE: O-1 " + o1
+    return EXIT_PASS, "PASS: O-1 " + o1
+
+
 def self_test():
     """The three reports over a synthetic run whose answers are known: 200 s/DAA, one licence every 50 DAA
     from DAA 100, the first Final at DAA 300, two doors, a camelCase histogram in one snapshot."""
@@ -250,7 +270,16 @@ def self_test():
     assert r["cadence"]["first_final_daa"] == 300, r["cadence"]
     assert abs(r["cadence"]["per_1000_daa"] - 20.0) < 1e-6, r["cadence"]
     assert r["cadence"]["o1"].startswith("PASS (60 licences"), r["cadence"]["o1"]
-    print("self-test: the three reports reproduce a synthetic run's known answers")
+    assert verdict(r)[0] == EXIT_PASS, verdict(r)
+    # A run whose snapshots carry no getPalwVesting (a build without P2-10) is INCOMPLETE, never a pass.
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "snapshots.jsonl"), "w") as f:
+            for daa in (100, 200):
+                f.write(json.dumps({"wall_ms": daa * 200_000, "dag": {"virtual_daa": daa}, "vesting": None}) + "\n")
+        bare = analyze(d)
+    assert verdict(bare)[0] == EXIT_INCOMPLETE and "histogram" in verdict(bare)[1], verdict(bare)
+    assert bare["secs_per_daa"]["available"], "the clock report needs no vesting"
+    print("self-test: the three reports reproduce a synthetic run's known answers; a run without vesting is INCOMPLETE")
 
 
 def main():
@@ -265,11 +294,15 @@ def main():
     if not args.work_dir:
         parser.error("work_dir is required")
     reports = analyze(args.work_dir)
+    code, why = verdict(reports)
     if args.json:
+        reports["verdict"] = why
         print(json.dumps(reports, indent=2, sort_keys=True, default=str))
     else:
         print(f"{reports['snapshots']} snapshot(s) in {args.work_dir}")
         print_reports(reports)
+        print(f"== verdict: {why}")
+    sys.exit(code)
 
 
 if __name__ == "__main__":

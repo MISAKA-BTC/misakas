@@ -1910,6 +1910,17 @@ impl FlowContext {
         // Recover the class-1-admitted sender locally (same rule the stateful submit
         // below re-applies, so the two never disagree on admissibility).
         let sender = self.mining_manager().evm_recover_sender(&raw)?;
+        // **ADR-0152 §8.2 (P2-12 review finding 2): a testnet-12 drill signs with drill-only EVM
+        // accounts.** The EVM lane is the one the salt does not separate — one `EVM_CHAIN_ID` on
+        // every network and no genesis in the signature — so a transaction from an account that
+        // holds value on public testnet-12, admitted here, would be valid there at the same nonce
+        // and could be lifted out of a drill block by anyone who reaches the drill's P2P port. A
+        // public node (no salt) never enters this branch.
+        if let Some(why) =
+            kaspa_evm::tx::palw_drill_evm_sender_refusal_v1(self.config.palw_drill_genesis_salt.as_ref(), &sender.as_bytes())
+        {
+            return Err(EvmMempoolError::Inadmissible(why));
+        }
         // Read the sender's canonical (nonce, balance) at the EVM head via the consensus
         // session. PREFER the O(1) flat-head point-lookup (audit H-03 — avoids a
         // full-snapshot scan per submit); fall back to the authoritative single-sender

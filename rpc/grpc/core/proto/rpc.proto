@@ -1884,6 +1884,10 @@ message GetPalwNodeStatusResponseMessage {
   uint64 laneLastWorkDaa = 28;
   string laneMix = 29;
   string laneAlarm = 30;
+  // ADR-0152 §8.2 (P2-12): the genesis this node runs and its drill salt's id (empty on every
+  // real network) — what an off-node signer checks before it signs.
+  string genesisHash = 31;
+  string drillSaltId = 32;
   RPCError error = 1000;
 }
 

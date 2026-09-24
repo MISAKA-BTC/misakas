@@ -230,15 +230,31 @@ chain でも有効になる（premine の spend も、登録も、receipt も）
   ルール（fence・window・class 行・R-core+）は出荷物そのもの（`t53_the_drill_runs_the_shipping_rules_on_its_own_genesis`
   が「genesis と registry 以外は fingerprint まで同じ」を検査）。
 * **drill 専用鍵**: genesis の 8 席（bond 鍵・operator 鍵・payout／fee float）、main wallet、heartbeat の
-  支払先、drill で登録する bond（D-9 の 130,000 MSK 席、D-10 の再登録）はすべて salt から導出する鍵。
-  card 鍵は一切使わない。`kaspad ... --palw-drill-genesis-salt=<salt> --palw-drill-write-keyring=<dir>` が
-  seed file（0600）と `manifest.json`（drill genesis、各席の bond outpoint・fee float・address、
-  heartbeat／payout address、公開 t12 の genesis を並記）を書いて終了する。drill script はこの manifest
+  支払先、validator 鍵、drill で登録する bond（D-9 の 130,000 MSK 席、D-10 の再登録）、EVM account は
+  すべて salt から導出する鍵。card 鍵は一切使わない。`kaspad ... --palw-drill-genesis-salt=<salt>
+  --palw-drill-write-keyring=<dir>` が seed file（0600）と `manifest.json`（drill genesis、各席の bond
+  outpoint・fee float・address、heartbeat／payout／validator の鍵、EVM account（`evm`: address と
+  secp256k1 secret の file）、公開 t12 の genesis を並記）を書いて終了する。drill script はこの manifest
   だけを読む（鍵を自分で導出しない）。
+* **EVM lane は salt で分離されない。** EVM tx は `EVM_CHAIN_ID`（全 network で同じ定数）と nonce にしか
+  束縛されず、genesis を含まない。公開 t12 で残高を持つ account が drill で署名した transfer・bridge
+  withdrawal・model market の操作は、公開 t12 でも同じ nonce で有効になり、drill の P2P port に届く誰でも
+  drill の block から取り出せる。したがって drill で署名する EVM account は manifest の `evm` だけ
+  （market step の buy/sell generator も含む）。salt 付きノードは `--evm-fee-recipient` を drill の
+  account に限り、EVM ingress（`eth_sendRawTransaction`／`submitEvmTransaction`）は drill account 以外の
+  sender を拒否する。構造的に閉じるには genesis ごとの EVM chain id が要るが、それは consensus 変更で
+  drill の範囲外。
 * **起動時に拒否されるもの**（`kaspad/src/palw_drill.rs`）: testnet-12 以外／`--nodnsseed` 無し／明示
   peer 無し／`--override-params-file`／drill keyring に無い `--palw-producer-key`（card 鍵を含む）・
-  `--palw-producer-pay-address`・`--palw-heartbeat-miner-address`／公開 t12 の genesis txid を指す
-  `--palw-producer-bond`・`--palw-fee-outpoint`（公開 unit の flag の写し）。
+  `--validator-key`・`--palw-producer-pay-address`・`--palw-heartbeat-miner-address`・
+  `--evm-fee-recipient`／公開 t12 の genesis txid を指す `--palw-producer-bond`・`--palw-fee-outpoint`・
+  `--stake-bond`（公開 unit の flag の写し）。起動後も同じ規則: `getBlockTemplate` は drill の address
+  にしか払わない（外部 miner 用）。
+* **off-node の署名者も salt を取る**: `misaka` CLI と gateway rail（`misaka-palw-fp-rail
+  --print-identity`）は `--palw-drill-genesis-salt=<salt>` で drill の params を作る（kaspad と同じ
+  `palw_chain_params_v1`）。署名の前に `getPalwNodeStatus`（v4: `genesisHash`・`drillSaltId`）でノードの
+  genesis を読み、自分の params と違えば署名しない（salt 無しで drill ノードに向けると「drill <id> の
+  salt を渡せ」と拒否。以前は公開 t12 の domain で署名していた — drill では拒否され、公開 t12 では有効）。
 * **app dir**: drill は `<appdir>/misaka-testnet-12/palw-drill-genesis` に marker を書く。marker の無い
   既存データ（公開ノードの可能性）を drill は開かない — 開けば genesis 検査で「DB を消すか」と聞かれ、
   `--yes` なら公開ノードの DB を消す。逆に salt 無しのノードは marker のある dir を開かない。
@@ -248,13 +264,21 @@ chain でも有効になる（premine の spend も、登録も、receipt も）
   （これが drill 専用鍵が要る理由）— drill 専用 script なら一致しない。
 * **devnet/simnet 専用だった drill 注入器**（`--palw-drill-tamper-fp-leaf`、`--palw-drill-answer-only`、
   `--palw-drill-refuse-leaf-evidence`）は salt 付き drill でも使える（公開 t12 では従来どおり拒否）。
-* **場所**: 4 ホスト以上の fleet。**この Mac では絶対に動かさない。公開 t12 ノードが動いているホストでも
+* **場所**: fleet ホスト。**この Mac では絶対に動かさない。公開 t12 ノードが動いているホストでも
   動かさない**（09-23 の crash loop の教訓）。`scripts/misaka-palw-t12-rcore-drill.sh check-host` が両方を
-  拒否する。
+  拒否する（unit 名・unit file・`--configfile` 起動を含む kaspad process・公開 t12 の既定 port の
+  listener・drill marker の無い `~/.rusty-kaspa/misaka-testnet-12`）。8k 行は異なる operator の ready seat
+  が 7 つ要るので、1 ホストに複数 seat（`node <seat>` を seat ごとに。app dir と port は seat ごとに別、
+  gRPC listener は無し — 既定の 127.0.0.1:26210 は 1 ホスト 1 つで、bind 失敗はノードを落とす）か、
+  7 ホスト以上に 1 seat ずつ。
 * **手順と証拠**: `scripts/misaka-palw-t12-rcore-drill.sh`（D-1〜D-10、位置で番号付け。証拠は各 action の
-  後に書かれた log と RPC だけ）、`scripts/misaka-palw-t12-rcore-analyze.py`（door／withheld histogram＝p、
-  秒／DAA の実測、licence の cadence と O-1 判定）。どちらも構文検査と analyzer の合成データ self-test のみ
-  で、どのホストにも流していない。
+  後に書かれた log と RPC だけ）。各 step の結果は exit code と `steps.status` に残る: 0 PASS／1 FAIL／
+  3 INCOMPLETE（getPalwVesting が無い build など、証拠を出せない）／4 MANUAL（手作業部分は `attest` で
+  証拠を記録）。`report` は全 step が PASS か ATTESTED で、analyzer も 0 のときだけ通る — 待ちの打ち切りや
+  証拠の欠落が「done」で終わることはない。`scripts/misaka-palw-t12-rcore-analyze.py`（door／withheld
+  histogram＝p、秒／DAA の実測、licence の cadence と O-1 判定。exit 0 PASS／3 INCOMPLETE／1 FAIL）。
+  どちらも構文検査と、ノードもホストも使わない self-test（script の step 機構、analyzer の合成データ）
+  のみで、どのホストにも流していない。
 
 ---
 

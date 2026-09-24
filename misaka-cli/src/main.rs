@@ -184,6 +184,15 @@ struct Cli {
     #[arg(long, global = true)]
     quiet: bool,
 
+    /// **A testnet-12 DRILL's genesis salt** (64 hex, the one its nodes run with; ADR-0152 §8.2).
+    /// Every PALW object this CLI signs is made under the network domain of the node's GENESIS, and
+    /// a drill answers to `testnet-12` on another genesis: without the salt this CLI would sign
+    /// under public testnet-12's domain — refused by the drill, valid on public testnet-12. The CLI
+    /// asks the node which genesis it runs and refuses to sign on a mismatch, naming this flag.
+    /// Command line only: no environment variable and no config key, so no public command inherits it.
+    #[arg(long, global = true)]
+    palw_drill_genesis_salt: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -2376,6 +2385,7 @@ async fn main() -> std::process::ExitCode {
         evm_rpc: cli.evm_rpc.clone().or_else(|| cfg.evm.rpc_url.clone()).unwrap_or_else(|| "http://127.0.0.1:8545".to_string()),
         timeout_secs: cli.timeout,
         quiet: cli.quiet,
+        palw_drill_genesis_salt: cli.palw_drill_genesis_salt.clone(),
     };
 
     // ADR-0122: a mining command takes the network the operator NAMED (the flag, the env, the

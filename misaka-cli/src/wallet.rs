@@ -118,15 +118,77 @@ pub(crate) async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
     if !server.has_utxo_index {
         return Err(CliError::new(exit::GENERIC, "node has no UTXO index (start it with --utxoindex)".to_string()));
     }
-    Ok(NodeView::from_parts(client, &server))
+    // ADR-0152 §8.2: every signature this view feeds is made under the node's GENESIS — take the
+    // params of the chain the salt names, and refuse before any signing if the node runs another.
+    let (params, salt) = chain_params(ctx, server.network_id)?;
+    check_node_genesis(&client, &params, salt.as_ref()).await?;
+    Ok(NodeView::from_parts(client, &server, params))
+}
+
+/// **The params of the chain this CLI signs for** (ADR-0152 §8.2; P2-12 review finding 1):
+/// `Params::from(network)`, or a testnet-12 drill's params when `--palw-drill-genesis-salt` is
+/// given — one constructor, shared with kaspad and the rail
+/// (`config::drill::palw_chain_params_v1`). Every network domain the CLI signs under is
+/// `palw_network_domain_v2_for(params.net, params.genesis.hash)` of what this returns.
+pub(crate) fn chain_params(
+    ctx: &Ctx,
+    network: NetworkId,
+) -> Result<(Params, Option<kaspa_consensus_core::config::drill::PalwDrillSaltV1>), CliError> {
+    let salt = ctx
+        .palw_drill_genesis_salt
+        .as_deref()
+        .map(kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex)
+        .transpose()
+        .map_err(|e| CliError::new(exit::CONFIG, format!("--palw-drill-genesis-salt: {e}")))?;
+    let params = kaspa_consensus_core::config::drill::palw_chain_params_v1(network, salt.as_ref())
+        .map_err(|e| CliError::new(exit::CONFIG, format!("--palw-drill-genesis-salt: {e}")))?;
+    Ok((params, salt))
+}
+
+/// **Refuse to sign for a node whose genesis is not `params`'** (ADR-0152 §8.2; review finding 1).
+/// Asked of testnet-12 nodes — the only network with a drill — and of any node when a salt is
+/// given; the node's `getPalwNodeStatus` (version 4) says which genesis it runs and which drill,
+/// and `palw_node_genesis_verdict_v1` names the fix. Fail-closed on testnet-12: a node that cannot
+/// say which genesis it runs is not signed for, because the one mistake this guards against — a
+/// drill object signed under public testnet-12's domain — is valid on the public network.
+pub(crate) async fn check_node_genesis(
+    client: &KaspaRpcClient,
+    params: &Params,
+    salt: Option<&kaspa_consensus_core::config::drill::PalwDrillSaltV1>,
+) -> Result<(), CliError> {
+    if !kaspa_consensus_core::config::drill::palw_node_genesis_check_applies_v1(params.net, salt) {
+        return Ok(());
+    }
+    let status = client.get_palw_node_status().await.map_err(|e| {
+        CliError::new(
+            exit::NETWORK_MISMATCH,
+            format!(
+                "getPalwNodeStatus: {e} — cannot confirm which {} genesis the node runs, so nothing is signed for it (a drill and \
+                 public {} share the network name)",
+                params.net, params.net
+            ),
+        )
+    })?;
+    node_genesis_verdict(params, salt, &status)
+}
+
+/// [`check_node_genesis`]'s verdict on a status already read (the operator surface reads it once).
+pub(crate) fn node_genesis_verdict(
+    params: &Params,
+    salt: Option<&kaspa_consensus_core::config::drill::PalwDrillSaltV1>,
+    status: &kaspa_rpc_core::GetPalwNodeStatusResponse,
+) -> Result<(), CliError> {
+    kaspa_consensus_core::config::drill::palw_node_genesis_verdict_v1(params, salt, &status.genesis_hash, &status.drill_salt_id)
+        .map_err(|why| CliError::new(exit::NETWORK_MISMATCH, why))
 }
 
 impl NodeView {
     /// A view over a connection someone else opened and checked — the operator surface
     /// (ADR-0122), which reads a node whether or not it has `--utxoindex` and says which facts that
-    /// costs it, rather than refusing the whole screen the way a spender must.
-    pub(crate) fn from_parts(client: KaspaRpcClient, server: &kaspa_rpc_core::GetServerInfoResponse) -> NodeView {
-        let params = Params::from(server.network_id);
+    /// costs it, rather than refusing the whole screen the way a spender must. `params` is the
+    /// chain's ([`chain_params`]); a signer reaches here only through [`connect`], which has
+    /// checked them against the node's genesis.
+    pub(crate) fn from_parts(client: KaspaRpcClient, server: &kaspa_rpc_core::GetServerInfoResponse, params: Params) -> NodeView {
         let coinbase_maturity = params.coinbase_maturity();
         let settlement_long_maturity_daa = params.dns_params.as_ref().map_or(0, |d| d.coinbase_settlement_long_maturity_daa);
         NodeView { client, params, virtual_daa: server.virtual_daa_score, coinbase_maturity, settlement_long_maturity_daa }

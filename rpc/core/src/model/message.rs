@@ -7246,11 +7246,20 @@ pub struct GetPalwNodeStatusResponse {
     pub lane_last_work_daa: u64,
     pub lane_mix: String,
     pub lane_alarm: String,
+    /// **Version 4: the genesis this node runs, and its drill salt's id** (ADR-0152 §8.2, P2-12
+    /// review finding 1). Every PALW signature is made under `palw_network_domain_v2_for(network,
+    /// genesis)`, and a testnet-12 drill answers to the network name `testnet-12` on another
+    /// genesis — so an off-node signer (the `misaka` CLI, the gateway rail) reads these and refuses
+    /// to sign when its own params' genesis is not this one
+    /// (`config::drill::palw_node_genesis_verdict_v1`). `drill_salt_id` is empty on every real
+    /// network; it is the salt's short id, never the salt. Both empty from a version-3 sender.
+    pub genesis_hash: String,
+    pub drill_salt_id: String,
 }
 
 impl Serializer for GetPalwNodeStatusResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &3, writer)?;
+        store!(u16, &4, writer)?;
         store!(String, &self.consensus_params_id, writer)?;
         store!(Vec<u64>, &self.fence_schedule, writer)?;
         store!(String, &self.consensus_schedule_id, writer)?;
@@ -7283,6 +7292,9 @@ impl Serializer for GetPalwNodeStatusResponse {
         store!(u64, &self.lane_last_work_daa, writer)?;
         store!(String, &self.lane_mix, writer)?;
         store!(String, &self.lane_alarm, writer)?;
+        // Version 4: the genesis and the drill salt's id.
+        store!(String, &self.genesis_hash, writer)?;
+        store!(String, &self.drill_salt_id, writer)?;
         Ok(())
     }
 }
@@ -7329,7 +7341,46 @@ impl Deserializer for GetPalwNodeStatusResponse {
             out.lane_mix = load!(String, reader)?;
             out.lane_alarm = load!(String, reader)?;
         }
+        // A version-3 sender stops here: it predates the drill salt, so it is no drill.
+        if version >= 4 {
+            out.genesis_hash = load!(String, reader)?;
+            out.drill_salt_id = load!(String, reader)?;
+        }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod palw_node_status_wire_tests {
+    use super::*;
+
+    /// **Version 4 carries the genesis and the drill id; a version-3 sender decodes with both
+    /// empty** — which `palw_node_genesis_verdict_v1` reads as "predates the salt, so no drill".
+    #[test]
+    fn the_node_status_carries_its_genesis_and_a_v3_sender_carries_none() {
+        let response = GetPalwNodeStatusResponse {
+            consensus_params_id: "ab".repeat(32),
+            lane_alarm: "quiet".to_string(),
+            genesis_hash: "cd".repeat(64),
+            drill_salt_id: "0123456789abcdef".to_string(),
+            ..Default::default()
+        };
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert_eq!((back.genesis_hash.as_str(), back.drill_salt_id.as_str()), (response.genesis_hash.as_str(), "0123456789abcdef"));
+        assert_eq!(back.lane_alarm, "quiet", "the version-3 fields before them are where they were");
+
+        // A version-3 sender: the same bytes without the two version-4 strings, version 3.
+        let public = GetPalwNodeStatusResponse { genesis_hash: String::new(), drill_salt_id: String::new(), ..response };
+        let mut v4 = Vec::new();
+        Serializer::serialize(&public, &mut v4).unwrap();
+        let mut empty = Vec::new();
+        store!(String, &String::new(), &mut empty).unwrap();
+        let mut v3 = v4[..v4.len() - 2 * empty.len()].to_vec();
+        v3[..2].copy_from_slice(&3u16.to_le_bytes());
+        let old = <GetPalwNodeStatusResponse as Deserializer>::deserialize(&mut v3.as_slice()).unwrap();
+        assert_eq!((old.genesis_hash.as_str(), old.drill_salt_id.as_str(), old.lane_alarm.as_str()), ("", "", "quiet"));
     }
 }
 
