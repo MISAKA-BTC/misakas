@@ -1930,6 +1930,31 @@ pub fn verify_binding_v1(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64,
     verify_binding(binding)
 }
 
+/// **The execution root a binding's parts commit to** — the value [`verify_binding_v1`] recomputes
+/// and compares with `committed_execution_root`, spelled once so a prover that re-commits a
+/// binding (a drill, a fixture, a filer assembling evidence) derives it exactly as the check does.
+pub fn binding_commitment_root_v1(binding: &PalwStepBindingV2) -> Hash64 {
+    let context_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
+    let step_root = step_leg_root_v1(&context_hash, &profile_hash, binding.step_leaf_count, &binding.step_merkle_root);
+    let checkpoint_root = checkpoint_leg_root_v2(
+        &context_hash,
+        &binding.checkpoint_profile.profile_hash(),
+        &binding.state_chunk_map_id,
+        decode_calls,
+        binding.checkpoint_count,
+        &binding.checkpoint_merkle_root,
+    );
+    execution_commitment_root_v2(
+        &context_hash,
+        &binding.full_logits_trace_root,
+        &binding.activation_leg_root,
+        &checkpoint_root,
+        &step_root,
+    )
+}
+
 fn verify_binding(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64), PalwStepLegError> {
     if binding.version != PALW_STEP_LEG_OBJECT_VERSION_V1 {
         return Err(PalwStepLegError::UnsupportedVersion { got: binding.version, expected: PALW_STEP_LEG_OBJECT_VERSION_V1 });

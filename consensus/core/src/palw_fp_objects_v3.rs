@@ -359,6 +359,8 @@ where
         out.objects.push(PalwConsensusObjectV3Carrier {
             carrier: id,
             object: PalwConsensusObjectV2::FreePromptCommitted {
+                // ADR-0152 v3.1 J-1 (F1): the commitment's job pin, which the claim records as its identity.
+                job_pin: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&payload.commitment),
                 claim: payload.claim_id(),
                 class_id: commitment.job.class_id,
                 bond: PalwBondKeyV2(commitment.job.executor_bond),

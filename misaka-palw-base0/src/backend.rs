@@ -2442,6 +2442,7 @@ mod end_to_end_tests {
 
         // **The claim, from the run.** Every field here is the execution's, not a constant.
         let committed = Obj::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
             claim: claim_id,
             class_id: entry.class_id(),
             bond: PalwBondKeyV2(bond_outpoint),

@@ -154,6 +154,7 @@ pub mod palw_adversarial;
 /// permits. No coefficient table, no fence — `cargo test palw_arbitrage_search` is the program.
 pub mod palw_arbitrage_search_v1;
 pub mod palw_artifact;
+pub mod palw_attempt_rules_v1;
 pub mod palw_attempt_v2;
 /// ADR-0082 Decision 2 / U-03: the dissection as a court phase, and its window gate.
 pub mod palw_attn_court_v1;

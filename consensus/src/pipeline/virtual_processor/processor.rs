@@ -2064,31 +2064,15 @@ impl VirtualStateProcessor {
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
-                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits) => {
-                                            kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
-                                                carrying_block: *blue,
-                                                work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
-                                                // B-4: the execution key from the merged blue's OWN header (pre_pow +
-                                                // nonce). A header the store cannot serve degrades to the attempt id — a
-                                                // unique value that never false-dedups — but a mergeset blue always has one.
-                                                execution_key: self
-                                                    .headers_store
-                                                    .get_header(*blue)
-                                                    .ok()
-                                                    .map(|h| self.palw_execution_key_v1(&h, &envelope.attempt))
-                                                    .unwrap_or_else(|| {
-                                                        kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt)
-                                                    }),
-                                                // B-1: the merged block's OWN subsidy — the pool its escrow is carved
-                                                // from past the deep fence, the SAME value `palw_v2_merged_escrow_withheld`
-                                                // hands the coinbase to withhold (both read it from this one field).
-                                                subsidy: *subsidy,
-                                                // ADR-0126: the carve resolved at the merged block's DAA, read from the
-                                                // same record for the same reason.
-                                                escrow_carve: *carve,
-                                                bits: *bits,
-                                            }
-                                        }
+                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope, subsidy, carve, bits) => self
+                                            .palw_merged_attempt_work_v1(
+                                                *blue,
+                                                self.headers_store.get_header(*blue).ok().as_deref(),
+                                                envelope,
+                                                *subsidy,
+                                                *carve,
+                                                *bits,
+                                            ),
                                         PalwMergedOwnedWorkV1::Spend(blue, envelope) => {
                                             kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
                                                 carrying_block: *blue,
@@ -2103,20 +2087,22 @@ impl VirtualStateProcessor {
                                                 subsidy: 0,
                                                 escrow_carve: None,
                                                 bits: 0,
+                                                // Not an attempt: it answers no anchor.
+                                                job_anchor: kaspa_hashes::Hash64::default(),
                                             }
                                         }
                                     })
                                     .collect();
                                 // B-4: this block's OWN attempt's execution key, from its own header
-                                // (pre_pow + nonce). `default` when the block carries no attempt.
-                                let own_execution_key = match attempt.as_ref() {
-                                    Some(envelope) => self
-                                        .headers_store
-                                        .get_header(current)
-                                        .ok()
-                                        .map(|h| self.palw_execution_key_v1(&h, &envelope.attempt))
-                                        .unwrap_or_else(|| kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt)),
-                                    None => kaspa_hashes::Hash64::default(),
+                                // (pre_pow + nonce), and (ADR-0152 v3.1 J-1) its execution anchor —
+                                // the job identity the claim records. Both `default` when the block
+                                // carries no attempt.
+                                let (own_execution_key, own_job_anchor) = match attempt.as_ref() {
+                                    Some(envelope) => self.palw_attempt_keys_v1(
+                                        self.headers_store.get_header(current).ok().as_deref(),
+                                        &envelope.attempt,
+                                    ),
+                                    None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
                                 };
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
                                     state,
@@ -2147,6 +2133,8 @@ impl VirtualStateProcessor {
                                         if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                                             extras.round_permit_uses = verdicts.uses.clone();
                                         }
+                                        // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
+                                        extras.own_job_anchor = own_job_anchor;
                                         extras
                                     },
                                 ) {
@@ -5411,6 +5399,7 @@ impl VirtualStateProcessor {
         ),
         kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
     > {
+        let (execution_key, job_anchor) = self.palw_attempt_keys_v1(Some(header), &envelope.attempt);
         kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
             state,
             state_params,
@@ -5419,7 +5408,51 @@ impl VirtualStateProcessor {
             objects,
             kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
             &[],
-            self.palw_execution_key_v1(header, &envelope.attempt),
+            execution_key,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1 {
+                own_job_anchor: job_anchor,
+                ..self.palw_transition_extras_for(point)
+            },
+        )
+    }
+
+    /// **A block that carries no work of its own and merges one blue's attempt** — the merged work
+    /// built by the pipeline's own [`Self::palw_merged_attempt_work_v1`] from the blue's header (or
+    /// with none, as when the store cannot serve it), folded at this processor's fences. ADR-0152
+    /// v3.1 T-THREAD pins what a merged claim records through it.
+    #[cfg(test)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    pub(super) fn palw_v2_fold_merged_attempt_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        blue: BlockHash,
+        blue_header: Option<&kaspa_consensus_core::header::Header>,
+        envelope: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2,
+        subsidy: u64,
+    ) -> Result<
+        (
+            kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+            kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
+            Vec<(BlockHash, String)>,
+        ),
+        kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
+    > {
+        let merged = [self.palw_merged_attempt_work_v1(blue, blue_header, envelope, subsidy, None, 0)];
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7(
+            state,
+            state_params,
+            self.palw_admission_params_v2.as_ref(),
+            point,
+            &[],
+            kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
+            &merged,
+            kaspa_hashes::Hash64::default(),
             self.palw_unavailable_abstains_at(point.daa_score),
             self.palw_capability_bound_at(point.daa_score),
             self.palw_uncertified_weightless_at(point.daa_score),
@@ -8149,12 +8182,12 @@ impl VirtualStateProcessor {
                     if !self.palw_objective_offence_at(point.daa_score) {
                         return Err("an objective offence is not armed on this network (ADR-0144 §9)".into());
                     }
-                    // **ADR-0152 v3.1 §6, the v22 skeleton: kinds 4, 5 and 6 are declared, not
-                    // landed** — refused by name on every network before any evidence is read, as
-                    // the fold refuses them, until M2 (4), M3 (5) and S-4 (6) land their rules.
-                    if kind.is_declared_not_landed_v1() {
-                        return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::KindNotLanded(
-                            kind.not_landed_reason_v1(),
+                    // **ADR-0152 v3.1: kinds 5 and 6 are records the fold writes, never filed** —
+                    // refused by name on every network before any evidence is read, as the fold
+                    // refuses them, permanently (the skeleton review's F1).
+                    if kind.is_fold_recorded_only_v1() {
+                        return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::KindNotFileable(
+                            kind.not_fileable_reason_v1(),
                         )
                         .to_string());
                     }
@@ -8199,6 +8232,7 @@ impl VirtualStateProcessor {
                                     state_params.fp_decode_rules_at(point.daa_score),
                                     // F7's reporter slot: empty until its own fence arms it.
                                     false,
+                                    self.palw_identity_rules_v1(point.daa_score),
                                     Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
                                         chain_domain: domain,
                                         seat_pubkey: &record.pubkey,
@@ -8223,13 +8257,48 @@ impl VirtualStateProcessor {
                                 }
                                 continue;
                             }
+                            // **ADR-0152 v3.1 J-4 (F1): the executor refuted.** The same adjudicator
+                            // the fold runs — no receipt and no signature: the evidence is objective
+                            // and names nobody but the claim's own executor — and a claim already
+                            // refuted is refused here, since the fold would carry it as a no-op.
+                            PalwOffenceKindV1::ExecutorRefuted => {
+                                if evidence.is_empty() {
+                                    return Err(PalwOffenceVerifyError::EvidenceEmpty.to_string());
+                                }
+                                if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
+                                    return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
+                                }
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_executor_refuted_v1(
+                                    state,
+                                    accused,
+                                    evidence,
+                                    state_params.fp_decode_rules_at(point.daa_score),
+                                    false,
+                                    self.palw_identity_rules_v1(point.daa_score),
+                                )
+                                .map_err(|e| e.to_string())?;
+                                let offence_id =
+                                    kaspa_consensus_core::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1(
+                                        &accused.0,
+                                        &finding.target.claim_id,
+                                    );
+                                if state.consumed_offence(&offence_id).is_some() {
+                                    return Err(format!(
+                                        "claim {}'s executor is already refuted: one offence per claim",
+                                        finding.target.claim_id
+                                    ));
+                                }
+                                continue;
+                            }
                             PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
                             // Refused above; listed so a routing change that forgets them fails to compile.
-                            PalwOffenceKindV1::ExecutorRefuted
-                            | PalwOffenceKindV1::DaDefault
-                            | PalwOffenceKindV1::CourtConviction => {}
+                            PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {}
                         }
-                    } else if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 = kind {
+                    } else if matches!(
+                        kind,
+                        kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2
+                            | kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted
+                    ) {
                         return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string());
                     }
                     kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_v1(
@@ -8856,6 +8925,16 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash))
     }
 
+    /// **ADR-0152 v3.1 J-5: what the identity checks read besides the evidence** — the network's
+    /// prompt-id form and the base class — the same two values the fold reads from its extras and
+    /// its bundle, so the gate and the fold judge one identity rule.
+    fn palw_identity_rules_v1(&self, daa_score: u64) -> kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+        kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+            prompt_ids_form: self.palw_prompt_ids_form_at(daa_score),
+            base_class_id: self.palw_v2_bundle.as_ref().map(|bundle| bundle.base_class_id).unwrap_or_default(),
+        }
+    }
+
     /// **B-4: the pre_pow-inclusive execution commitment of `attempt` as carried by `header`'s
     /// block** — the key the fold dedups on past `palw_audit_2026_09_11_deep`. It is exactly the
     /// anchor the class lottery drew under (`palw_admission_v2` derives the same
@@ -8870,14 +8949,76 @@ impl VirtualStateProcessor {
         header: &kaspa_consensus_core::header::Header,
         attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
     ) -> kaspa_hashes::Hash64 {
-        let anchor = kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(
+        kaspa_consensus_core::palw_attempt_v2::execution_commitment_v3(attempt, self.palw_execution_anchor_v1(header, attempt))
+    }
+
+    /// **ADR-0152 v3.1 J-1 (F1): the execution anchor of `attempt` as carried by `header`'s block** —
+    /// `execution_anchor_v3(network domain, pre_pow, class, bond, nonce)`, the job the attempt had to
+    /// answer (the floor's producer sets `ctx.job_id` to it). Split out of
+    /// [`Self::palw_execution_key_v1`], which keys the dedup on the commitment under it; the claim
+    /// records the anchor itself as its `job_identity`.
+    fn palw_execution_anchor_v1(
+        &self,
+        header: &kaspa_consensus_core::header::Header,
+        attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+    ) -> kaspa_hashes::Hash64 {
+        kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(
             self.palw_network_domain_v2(),
             kaspa_consensus_core::hashing::header::pre_pow_hash_64(header),
             attempt.class_id,
             &attempt.executor_bond,
             header.nonce,
-        );
-        kaspa_consensus_core::palw_attempt_v2::execution_commitment_v3(attempt, anchor)
+        )
+    }
+
+    /// **One block's attempt keys, from its OWN header** — `(execution key, job anchor)`: the key B-4
+    /// dedups on and the anchor J-1 records. With no header at hand the key degrades to the attempt id
+    /// (a unique value that never false-dedups) and the anchor to `default` — never the attempt id,
+    /// which would be an identity the chain made up and a borrowed binding could be convicted
+    /// against (SPEC §4.2).
+    fn palw_attempt_keys_v1(
+        &self,
+        header: Option<&kaspa_consensus_core::header::Header>,
+        attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+    ) -> (kaspa_hashes::Hash64, kaspa_hashes::Hash64) {
+        match header {
+            Some(header) => (self.palw_execution_key_v1(header, attempt), self.palw_execution_anchor_v1(header, attempt)),
+            None => (kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(attempt), kaspa_hashes::Hash64::default()),
+        }
+    }
+
+    /// **A merged attempt's work, as the pipeline carries it into the accepting block's fold** —
+    /// the execution key and the job anchor from the merged block's OWN header
+    /// ([`Self::palw_attempt_keys_v1`]), beside the subsidy, carve and bits that block recorded. One
+    /// construction for the pipeline and for the test that pins what it records.
+    fn palw_merged_attempt_work_v1<'a>(
+        &self,
+        blue: BlockHash,
+        header: Option<&kaspa_consensus_core::header::Header>,
+        envelope: &'a kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2,
+        subsidy: u64,
+        escrow_carve: Option<kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2>,
+        bits: u32,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'a> {
+        let (execution_key, job_anchor) = self.palw_attempt_keys_v1(header, &envelope.attempt);
+        kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
+            carrying_block: blue,
+            work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
+            // B-4: the execution key from the merged blue's OWN header (pre_pow + nonce). A header
+            // the store cannot serve degrades to the attempt id — a unique value that never
+            // false-dedups — but a mergeset blue always has one.
+            execution_key,
+            // B-1: the merged block's OWN subsidy — the pool its escrow is carved from past the deep
+            // fence, the SAME value `palw_v2_merged_escrow_withheld` hands the coinbase to withhold
+            // (both read it from this one field).
+            subsidy,
+            // ADR-0126: the carve resolved at the merged block's DAA, read from the same record for
+            // the same reason.
+            escrow_carve,
+            bits,
+            // ADR-0152 v3.1 J-1: the job the merged attempt answers, from the blue's own header.
+            job_anchor,
+        }
     }
 
     /// ADR-0088: the bond a line's `role` ("owner" or "developer") names, read from the acceptance
@@ -9441,6 +9582,8 @@ impl VirtualStateProcessor {
             // Only the acceptance rehearsal sets it, from the block's header
             // (`palw_v2_accepted_objects`); the fold takes it from the block's work.
             own_attempt_class: None,
+            // ADR-0152 v3.1 J-1: set by the chain walk for the block's own attempt, never here.
+            own_job_anchor: kaspa_hashes::Hash64::default(),
         }
     }
 

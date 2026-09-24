@@ -194,6 +194,7 @@ fn merged(env: &PalwAttemptEnvelopeV2, carrying: u64, key: u64) -> PalwMergedWor
         subsidy: 0,
         escrow_carve: None,
         bits: 0,
+        job_anchor: kaspa_hashes::Hash64::default(),
     }
 }
 
@@ -1226,6 +1227,7 @@ fn dos_l1_q6b_seat_duty_with_the_real_escrow_is_covered_by_the_claimants_own_res
 /// A free-prompt commitment by bond `n` on `class_id`, one canonical job of `leaves`.
 fn fp_commitment(class_id: Hash64, leaves: u64, n: u64, seed: u64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::FreePromptCommitted {
+        job_pin: kaspa_hashes::Hash64::default(),
         claim: h(0xF0_0000 + seed),
         class_id,
         bond: bond_key(n),

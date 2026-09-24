@@ -179,6 +179,7 @@ fn merged(env: &PalwAttemptEnvelopeV2, carrying: u64, key: u64) -> PalwMergedWor
         subsidy: 0,
         escrow_carve: None,
         bits: 0,
+        job_anchor: kaspa_hashes::Hash64::default(),
     }
 }
 
@@ -202,6 +203,7 @@ fn setup(class: (Hash64, u64, u128, u64), bonds: &[(u64, u64)]) -> Vec<PalwConse
 
 fn fp_commitment(class_id: Hash64, leaves: u64, n: u64, seed: u64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::FreePromptCommitted {
+        job_pin: kaspa_hashes::Hash64::default(),
         claim: h(0xF0_0000 + seed),
         class_id,
         bond: bond_key(n),

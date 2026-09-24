@@ -116,7 +116,8 @@ pub fn base0_activation_leg_root_v1(ctx: &PalwJobContextV2) -> Hash64 {
 /// Re-exported, not re-typed. The derivation moved to `kaspa_consensus_core::palw_attempt_v2`;
 /// two spellings of one domain key is how the anchor quietly moves for half the network.
 pub use kaspa_consensus_core::palw_attempt_v2::PALW_DOMAIN_JOB_ANCHOR_V1 as PALW_BASE0_DOMAIN_JOB_ANCHOR;
-pub const PALW_BASE0_DOMAIN_JOB_PROMPT: &[u8] = b"misaka-palw/base0/rc-job-prompt/v1";
+/// Re-exported, not re-typed: the prompt loop moved to core (ADR-0152 v3.1 J-5) with its domain.
+pub use kaspa_consensus_core::palw_attempt_rules_v1::PALW_ATTEMPT_PROMPT_DOMAIN_V1 as PALW_BASE0_DOMAIN_JOB_PROMPT;
 
 /// **What the RC's job is a function of — and what it deliberately is NOT.**
 ///
@@ -169,22 +170,12 @@ pub fn base0_rc_job_v1(
     decode: u32,
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> (PalwJobContextV2, Vec<usize>) {
-    let mut prompt = Vec::with_capacity(prefill as usize);
-    let mut counter = 0u64;
-    while prompt.len() < prefill as usize {
-        let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_JOB_PROMPT).to_state();
-        h.update(anchor.as_byte_slice());
-        h.update(&counter.to_le_bytes());
-        let block = h.finalize();
-        for word in block.as_bytes().chunks_exact(8) {
-            if prompt.len() == prefill as usize {
-                break;
-            }
-            let v = u64::from_le_bytes(word.try_into().expect("chunks_exact(8)"));
-            prompt.push((v % vocab.max(1) as u64) as usize);
-        }
-        counter += 1;
-    }
+    // ADR-0152 v3.1 J-5 (F1): the counter-mode loop lives in core now, bytes unchanged, so the chain
+    // can derive the prompt an anchor names (`floor_attempt_context_golden` pins the two equal).
+    let prompt: Vec<usize> = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_prompt_ids_v1(&anchor, vocab as u64, prefill)
+        .into_iter()
+        .map(|id| id as usize)
+        .collect();
     let mut ctx = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, prefill, decode);
     ctx.job_id = anchor;
     ctx.execution_seed = anchor.as_byte_slice()[..32].try_into().expect("a 64-byte hash has 32 bytes");

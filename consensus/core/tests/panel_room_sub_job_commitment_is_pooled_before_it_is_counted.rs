@@ -45,6 +45,7 @@ fn fp_extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
 /// A free-prompt commitment of `quanta` quanta on `class` by `n`'s bond.
 fn commitment(class_id: Hash64, quantum_leaves: u64, quanta: u64, n: u64, seed: u64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::FreePromptCommitted {
+        job_pin: kaspa_hashes::Hash64::default(),
         claim: h(0xF0_0000 + seed),
         class_id,
         bond: bond_key(n),
