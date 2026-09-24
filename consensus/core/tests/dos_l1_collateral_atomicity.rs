@@ -14,6 +14,8 @@
 //!       own attempt; Q2 asserts that at an executor sized to #9's per-attempt collateral, the
 //!       record keeps the pre-fence overrun.
 //!   Q3  seat locks (`slashable_locks`) vs the exposure ledger: does either ceiling see the other?
+//!       The pre-fence record, on the R-core+ fence-off twin: past ADR-0152's `palw_rcore_plus` both
+//!       read the one committed ledger (`rcore_s3_one_ledger` T08, `rcore_one_invariant`).
 //!   Q4  retire-after-draw: a seat drawn while Active retires with no live lock, then signs Valid;
 //!       the lock lands on a Retiring bond. The 09-23 withdrawal predicate (`v3`) never read locks;
 //!       since `6bb8c844` (fix #1) the gate is `v4`, which also locks a bond that still backs
@@ -565,12 +567,17 @@ fn dos_l1_q2_pre_fence_record_own_attempt_overruns_the_ceiling_after_same_block_
 }
 
 // =============================================================================================
-// Q3 — seat locks and the exposure ledger never see each other
+// Q3 — seat locks and the exposure ledger never see each other (below R-core+)
 // =============================================================================================
 
+/// **The pre-fence record** (the S review's L6), folded on testnet-12's R-core+ fence-off twin: the
+/// lock ledger (`slashable_available_v2`) and the exposure ceiling (admission's `reserved_exposure`)
+/// are two ceilings on one collateral, each blind to the other. Past `palw_rcore_plus` there is one
+/// committed ledger — `reserved + registration + Σ max(duty, live lock)` — at every gate, which
+/// `rcore_s3_one_ledger`'s T08 pins to the sompi.
 #[test]
-fn dos_l1_q3_one_collateral_backs_a_full_exposure_ceiling_and_a_full_lock_ledger() {
-    let p = t12();
+fn dos_l1_q3_pre_fence_record_one_collateral_backs_a_full_exposure_ceiling_and_a_full_lock_ledger() {
+    let p = t12_fence_off_twin();
     let b = bundle(&p);
     let sp = &b.state;
     let cls = floor_row(&b);

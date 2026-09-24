@@ -948,6 +948,10 @@ pub const PALW_RCORE_STRIKE_WINDOW_DAA_V1: u64 = 7_500;
 pub const PALW_RCORE_STRIKE_THRESHOLD_V1: u32 = 3;
 /// Q-3: the Final-basis `k` a licence set must recount to.
 pub const PALW_RCORE_FINAL_BASIS_K_V1: u8 = 2;
+// The coverage door's rule on a backed subset is read as `basis_k ≥ PALW_RCORE_FINAL_BASIS_K_V1`
+// (`license_rcore_v1`): that is Verification V2's "every segment attested ≥ 2 times" only while the
+// two numbers are one (the S review's L6).
+const _: () = assert!(crate::palw_verification_v2::PALW_VERIFICATION_V2_ATTESTATIONS_PER_SEGMENT as u8 == PALW_RCORE_FINAL_BASIS_K_V1);
 /// R-3: open reporter commitments one bond may hold.
 pub const PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1: u32 = 64;
 /// R: the reporter's share of what a conviction collected, in basis points. A constant, not a
@@ -2372,6 +2376,11 @@ pub fn palw_seat_duty_of_v1(state: &PalwChainStateV2, claim_id: &Hash64, bond: &
 /// `reserved_exposure` past the fence (A-6, S-3) and are read by [`palw_accuser_exposure_v1`];
 /// `DefaultDisputed`'s accuser term stays inside until M3 retires that phase.
 ///
+/// A lock whose claim is still live (not `Final`, not voided) is committed whatever its clocks say
+/// (review L5): its liability begins again at Final (`persist_panel_liability` re-dates it), so a
+/// lock that ran past its expiry while a court held the claim past `licence + window_court` is still
+/// backed from the licence that admitted it, and the re-date at Final moves nothing.
+///
 /// `escaped_depth` is the depth AFTER the liveness escape ([`palw_second_clock_depth_v1`]); callers
 /// holding the raw depth use [`palw_bond_committed_raw_v1`]. Saturating. Cost
 /// `O(log n + locks_of(bond))`.
@@ -2387,7 +2396,10 @@ pub fn palw_bond_committed_v1(
         .slashable_locks
         .range((*bond, ZERO_HASH64)..)
         .take_while(|((holder, _), _)| holder == bond)
-        .filter(|(_, lock)| lock.is_live_v3(now_daa, settled_now, escaped_depth, window_court))
+        .filter(|((_, claim_id), lock)| {
+            lock.is_live_v3(now_daa, settled_now, escaped_depth, window_court)
+                || state.claims.get(claim_id).is_some_and(|claim| !claim.phase.is_terminal())
+        })
         .map(|((_, claim_id), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(state, claim_id, bond)))
         .fold(0u128, u128::saturating_add);
     state.reserved_exposure(bond).saturating_add(state.registration_exposure(bond)).saturating_add(lock_excess)
@@ -2426,10 +2438,65 @@ pub fn palw_bond_free_slashable_v1(
     palw_bond_free_collateral_v1(record, committed, params.bond_collateral_is_net_v1())
 }
 
-/// **A bond's headroom under the 500‰ ceiling**: `collateral × fp_max_exposure_ratio_permille / 1000
-/// − committed`, saturating — the room every work gate (`apply_attempt`, admission item 8, the FP
-/// lane, the bind and the draw) measures a new commitment against past the fence (SR-7, A-3). The
-/// ceiling reads `collateral` as the attempt ceiling does. A missing bond is `0`.
+/// **Which half of a bond a gate draws on** (ADR-0152 A-3 / A-6 as amended by the S review, M1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwRcoreGateV1 {
+    /// Work — a claim, a duty, a lock top-up, an FP commitment: the 500‰ ceiling on `committed`.
+    Work,
+    /// An accusation — a court, a held dissection, a DA accusation: the free half only.
+    Accuser,
+}
+
+/// **The one invariant every gate keeps past `palw_rcore_plus`: `committed + accuser ≤ C`** (the S
+/// review's M1; an ADR-0152 A-6 amendment). With `C` the posted collateral and `ceiling = C ×
+/// ratio‰ / 1000` (500‰ on testnet-12), the room a new amount must fit is:
+///
+/// * [`PalwRcoreGateV1::Work`]: `min(ceiling − committed, C − committed − accuser)`;
+/// * [`PalwRcoreGateV1::Accuser`]: `C − max(committed, ceiling) − accuser` — accusers use the free
+///   half and never the work half's unused room, so a later claim can never be the one that breaks
+///   the invariant.
+///
+/// Saturating: a bond already past either bound has no room. Pure, so the fold, admission, the
+/// draw, the producer's facts and the RPC compute one number.
+pub fn palw_rcore_gate_room_of_v1(
+    collateral: u64,
+    ratio_permille: u32,
+    committed: u128,
+    accuser: u128,
+    gate: PalwRcoreGateV1,
+) -> u128 {
+    let posted = collateral as u128;
+    let ceiling = posted.saturating_mul(ratio_permille as u128) / 1000;
+    match gate {
+        PalwRcoreGateV1::Work => ceiling.saturating_sub(committed).min(posted.saturating_sub(committed).saturating_sub(accuser)),
+        PalwRcoreGateV1::Accuser => posted.saturating_sub(committed.max(ceiling)).saturating_sub(accuser),
+    }
+}
+
+/// [`palw_rcore_gate_room_of_v1`] on `state` at `now_daa` and the RAW second-clock depth (the escape
+/// computed here), with `params.fp_max_exposure_ratio_permille`. A missing bond has no room.
+pub fn palw_rcore_gate_room_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+    gate: PalwRcoreGateV1,
+) -> u128 {
+    let Some(record) = state.bonds.get(bond) else { return 0 };
+    palw_rcore_gate_room_of_v1(
+        record.collateral,
+        params.fp_max_exposure_ratio_permille,
+        palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth),
+        palw_accuser_exposure_v1(state, bond),
+        gate,
+    )
+}
+
+/// **A bond's headroom for work** — [`palw_rcore_gate_room_v1`] with [`PalwRcoreGateV1::Work`]: the
+/// 500‰ ceiling less `committed`, and never past `collateral − committed − accuser` (the S review's
+/// M1). The room every work gate (`apply_attempt`, admission item 8, the FP lane, the bind, the licence
+/// top-up and the draw) measures a new commitment against past the fence. A missing bond is `0`.
 pub fn palw_bond_headroom_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -2437,9 +2504,7 @@ pub fn palw_bond_headroom_v1(
     now_daa: u64,
     raw_depth: Option<u64>,
 ) -> u128 {
-    let Some(record) = state.bonds.get(bond) else { return 0 };
-    let ceiling = (record.collateral as u128).saturating_mul(params.fp_max_exposure_ratio_permille as u128) / 1000;
-    ceiling.saturating_sub(palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth))
+    palw_rcore_gate_room_v1(state, params, bond, now_daa, raw_depth, PalwRcoreGateV1::Work)
 }
 
 /// **A-6: what `bond` holds as an accuser** — the claim's `reserved` of every court it has open as
@@ -2457,9 +2522,10 @@ pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) 
         .fold(0u128, u128::saturating_add)
 }
 
-/// **A-6: the room an accuser still has on its free half** — [`palw_bond_free_slashable_v1`] less
-/// [`palw_accuser_exposure_v1`], saturating. Opening a court (or, from M3, a DA session) past the
-/// fence requires its new exposure to fit here: `committed + accuser + new ≤ collateral × 1000‰`.
+/// **A-6: the room an accuser still has on its free half** — [`palw_rcore_gate_room_v1`] with
+/// [`PalwRcoreGateV1::Accuser`]: `collateral − max(committed, 500‰ × collateral) − accuser`
+/// (amended by the S review, M1, from `collateral − committed − accuser`). Opening a court, a held
+/// dissection or a DA accusation past the fence requires its new exposure to fit here.
 pub fn palw_accuser_room_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -2467,12 +2533,20 @@ pub fn palw_accuser_room_v1(
     now_daa: u64,
     raw_depth: Option<u64>,
 ) -> u128 {
-    palw_bond_free_slashable_v1(state, params, bond, now_daa, raw_depth).saturating_sub(palw_accuser_exposure_v1(state, bond))
+    palw_rcore_gate_room_v1(state, params, bond, now_daa, raw_depth, PalwRcoreGateV1::Accuser)
+}
+
+/// **Does `bond` challenge any open court?** (B-3's accuser clause, keyed on the session rather than
+/// on its exposure, the S review's L6: a session whose claim has retired still holds its challenger
+/// until it closes.)
+pub fn palw_bond_has_open_court_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> bool {
+    state.courts_by_challenger.range((*bond, ZERO_HASH64)..).next().is_some_and(|(challenger, _)| challenger == bond)
 }
 
 /// **B-3: the withdrawal gate past `palw_rcore_plus`** (the Phase 2 plan §2.3 signature).
 ///
-/// `v5(escaped depth) || (rcore && accuser_exposure > 0) || (rcore && payee of an unmatured row)`,
+/// `v5(escaped depth) || (rcore && committed − registration > 0) || (rcore && an open court as
+/// challenger) || (rcore && payee of an unmatured row)`,
 /// where the escaped depth is computed here from `raw_depth` (I-8). v5's live-duty clause —
 /// `reserved_exposure > 0` or any live lock — IS B-3's first clause under this ledger: past the
 /// fence `reserved_exposure` holds own commitments (the abandon hold included) and duties, and every
@@ -2497,7 +2571,12 @@ pub fn palw_bond_collateral_is_locked_v6(
     let window_court = params.window_court();
     let escaped = palw_second_clock_depth_v1(raw_depth, &state.recent_anchor_daas, now_daa, window_court);
     palw_bond_collateral_is_locked_v5(state, key, bond, now_daa, withdrawal_delay_daa, escaped, duty_gate, window_court)
-        || (rcore && palw_accuser_exposure_v1(state, key) > 0)
+        // B-3 clause 1 on the one ledger: a lock on a live claim is committed whatever its clocks say
+        // (review L5), so its seat stays locked until the claim ends.
+        || (rcore
+            && duty_gate
+            && palw_bond_committed_v1(state, key, now_daa, escaped, window_court) > state.registration_exposure(key))
+        || (rcore && palw_bond_has_open_court_v1(state, key))
         || (rcore && palw_bond_is_payee_of_unmatured_row_v1(state, params, key, now_daa, raw_depth))
 }
 
@@ -2517,16 +2596,56 @@ pub fn palw_bond_is_payee_of_unmatured_row_v1(
 /// L-1's escrow term, in permille of the vested-but-unbought escrow per load-bearing signer.
 pub const PALW_RCORE_ESCROW_LOCK_PERMILLE_V1: u128 = 100;
 
-/// **L-1: what one counted `Valid` signer locks** — `palw_seat_lock_required_v2(g_res, k′) +
-/// ⌈100‰ · (escrowed_reward − buyback_bound) / k′⌉` with `k′ = max(basis_k, 2)` (Q-3's recount;
-/// `lock_1` is gone: S2 never carries a claim to Final). `g_res` is the residual fraud gain
-/// `palw_max_fraud_gain_v1(facts) − escrowed_reward` (the escrow vests and is burned by a
-/// conviction, so a signer backs only its unvested margin). Saturating.
-pub fn palw_rcore_lock_v1(g_res: u128, escrowed_reward: u64, buyback_bound: u64, basis_k: u8) -> u128 {
+/// **Do vesting rows exist in this build?** (the S review's H1; ADR-0152 V-1…V-8, L-1, SR-1.)
+///
+/// L-1 prices a seat's lock on the RESIDUAL gain `G_res = G − E` because a Final's escrow `E` is meant
+/// to sit in a vesting row that a conviction burns (`burn_vesting_row`), and SR-1 releases `E` from
+/// the producer's ledger at licence for the same reason. Until the vesting work lands, a Final pays
+/// `E` out (`finalize_claim`) and nothing can take it back, so a post-Final conviction recovers only
+/// the seats' locks — which then must cover the WHOLE gain. While this is `false` every lock is
+/// priced on `G` ([`palw_rcore_lock_v1`]), so three colluding `lock_3` (two `lock_2`) out-value the
+/// whole gain whatever the vesting rows do.
+///
+/// **Owned by the vesting work, which flips it to `true` in the same commit that makes
+/// `finalize_claim` write the row instead of paying `E` and gives `burn_vesting_row` its body.** A
+/// build cannot arm the residual pricing without the rows that justify it.
+pub const PALW_RCORE_VESTING_ROWS_LANDED_V1: bool = false;
+
+/// **L-1 as the ADR writes it, for a build whose vesting rows burn `E`** —
+/// `palw_seat_lock_required_v2(g_res, k′) + ⌈100‰ · (escrowed_reward − buyback_bound) / k′⌉` with
+/// `k′ = max(basis_k, 2)`; `g_res = w + R + s`. [`palw_rcore_lock_v1`] prices this only once
+/// [`PALW_RCORE_VESTING_ROWS_LANDED_V1`] is `true`. Saturating.
+pub fn palw_rcore_lock_vested_v1(g_res: u128, escrowed_reward: u64, buyback_bound: u64, basis_k: u8) -> u128 {
     let k = u64::from(basis_k.max(PALW_RCORE_FINAL_BASIS_K_V1));
     let vested = u128::from(escrowed_reward.saturating_sub(buyback_bound));
     let escrow_term = vested.saturating_mul(PALW_RCORE_ESCROW_LOCK_PERMILLE_V1).div_ceil(1_000u128.saturating_mul(u128::from(k)));
     crate::palw_economic_safety_v1::palw_seat_lock_required_v2(g_res, k).saturating_add(escrow_term)
+}
+
+/// **L-1 without vesting rows: the lock on the WHOLE gain** — `palw_seat_lock_required_v2(gain, k′)`
+/// with `gain = G = w + R + E` (`palw_max_fraud_gain_v1`) and `k′ = max(basis_k, 2)`, so `k′`
+/// colluding locks out-value the whole gain with the 10% margin (the S review's H1). The buyback bound
+/// `s` is inside `E` here — the slice a Final buys is part of the escrow, not a gain beside it.
+pub fn palw_rcore_lock_unvested_v1(gain: u128, basis_k: u8) -> u128 {
+    let k = u64::from(basis_k.max(PALW_RCORE_FINAL_BASIS_K_V1));
+    crate::palw_economic_safety_v1::palw_seat_lock_required_v2(gain, k)
+}
+
+/// **L-1: what one counted `Valid` signer locks** (`k′ = max(basis_k, 2)`: `lock_1` is gone — S2
+/// never carries a claim to Final). `g_res` is the residual gain `w + R + s` (the lock's fraud facts
+/// plus the buyback bound). While [`PALW_RCORE_VESTING_ROWS_LANDED_V1`] is `false` the lock is priced
+/// on the whole gain ([`palw_rcore_lock_unvested_v1`]); once it is `true`, on the residual with the
+/// escrow's 100‰ term ([`palw_rcore_lock_vested_v1`]). Saturating.
+pub fn palw_rcore_lock_v1(g_res: u128, escrowed_reward: u64, buyback_bound: u64, basis_k: u8) -> u128 {
+    if PALW_RCORE_VESTING_ROWS_LANDED_V1 {
+        palw_rcore_lock_vested_v1(g_res, escrowed_reward, buyback_bound, basis_k)
+    } else {
+        // `G = G_res − s + E`: the residual less the buyback bound it carries, plus the escrow.
+        palw_rcore_lock_unvested_v1(
+            g_res.saturating_sub(u128::from(buyback_bound)).saturating_add(u128::from(escrowed_reward)),
+            basis_k,
+        )
+    }
 }
 
 /// **L-4: what each seat reserves at bind** — `min(max(λ-term, lock_2), commitment_at_bind /
@@ -2590,13 +2709,20 @@ pub fn palw_rcore_release_due_v1(
     claim_id: &Hash64,
     claim: &PalwClaimStateV2,
 ) -> bool {
+    palw_rcore_release_record_holds_v1(state, claim_id, claim) && !palw_rcore_class_is_c7_v1(params, state, &claim.class_id)
+}
+
+/// SR-1's release conditions that read the claim's OWN record — the door, the recount, the served
+/// mask against its bound panel, the latch, the redraw — and nothing mutable beside it (not the
+/// class's lifecycle row, not the C7 list). The load invariant (SR-4) checks this: a release, once
+/// written, stays explained by the record that wrote it.
+pub fn palw_rcore_release_record_holds_v1(state: &PalwChainStateV2, claim_id: &Hash64, claim: &PalwClaimStateV2) -> bool {
     use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
     let rcore = &claim.rcore;
     if !matches!(rcore.licence_door, Some(PalwLicenceDoorTagV1::Quorum | PalwLicenceDoorTagV1::Coverage))
         || rcore.basis_k < PALW_RCORE_FINAL_BASIS_K_V1
         || rcore.unserved_seen
         || claim.rebound_daa.is_some()
-        || palw_rcore_class_is_c7_v1(params, state, &claim.class_id)
     {
         return false;
     }
@@ -9075,8 +9201,9 @@ impl PalwChainStateV2 {
                         )));
                     }
                 }
-                // SR-4: the flag is set only where the release was due, and never un-set.
-                if rcore.escrow_released && !palw_rcore_release_due_v1(params, self, id, claim) {
+                // SR-4: the flag is set only where the record it was set on says the release was due
+                // (not re-judged against the mutable lifecycle row or C7 list), and never un-set.
+                if rcore.escrow_released && !palw_rcore_release_record_holds_v1(self, id, claim) {
                     return Err(PalwStateV2Error::CarriageInconsistent(format!(
                         "claim {id} released its escrow without the release being due"
                     )));
@@ -10212,25 +10339,53 @@ impl PalwFoldReadV1<'_> {
         facts
     }
 
-    /// **ADR-0152 L-1: the residual fraud gain** `G_res = palw_max_fraud_gain_v1(facts) −
-    /// escrowed_reward` (`w + R + s`, the buyback bound `s` being 0 — see [`Self::rcore_lock`]).
-    fn rcore_g_res(&self, claim: &PalwClaimStateV2) -> u128 {
-        crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&self.rcore_fraud_facts(claim)).saturating_sub(claim.escrowed_reward as u128)
+    /// **ADR-0152 IMPL-15's buyback bound `s`**: the slice of the escrow a Final buys from the pair of
+    /// the claim's line (`palw_model_buyback_slice_v1`, 5% of `E`) where that pair is open to the buy
+    /// now — the `model_buyback_at_final` path, bounded by the whole escrow — else 0 (no line, no pair,
+    /// a closed pair: the miner is paid the whole escrow and nothing is bought).
+    fn rcore_buyback_bound(&self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u64 {
+        let slice = crate::palw_model_market_v1::palw_model_buyback_slice_v1(claim.escrowed_reward);
+        let open = self
+            .state
+            .claim_roots
+            .get(claim_id)
+            .and_then(|root| self.state.artifact_line_of_root(&claim.class_id, root, self.extras.artifact_root_ownership_active))
+            .and_then(|line_id| self.state.model_markets.get(&line_id))
+            .is_some_and(|market| crate::palw_model_market_v1::palw_model_buyback_quote_v1(market, slice).is_some());
+        if open { slice } else { 0 }
+    }
+
+    /// **ADR-0152 L-1: the residual fraud gain** `G_res = w + R + s` — `palw_max_fraud_gain_v1(facts)
+    /// − escrowed_reward` (which omits `s`) plus the buyback bound (IMPL-15; the S review's M2).
+    fn rcore_g_res(&self, claim_id: &Hash64, claim: &PalwClaimStateV2) -> u128 {
+        crate::palw_panel_var_v1::palw_max_fraud_gain_v1(&self.rcore_fraud_facts(claim))
+            .saturating_sub(claim.escrowed_reward as u128)
+            .saturating_add(u128::from(self.rcore_buyback_bound(claim_id, claim)))
     }
 
     /// **ADR-0152 L-1: what one counted `Valid` signer of a set recounted to `basis_k` locks** —
-    /// [`palw_rcore_lock_v1`] on this claim's `G_res` and escrow. The buyback bound `s` is priced at
-    /// 0: it is 0 on every testnet-12 row (ADR §2's table), and the vesting row records the slice
-    /// actually bought at Final.
-    fn rcore_lock(&self, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
-        palw_rcore_lock_v1(self.rcore_g_res(claim), claim.escrowed_reward, 0, basis_k)
+    /// [`palw_rcore_lock_v1`] on this claim's `G_res`, escrow and buyback bound: on the whole gain
+    /// while [`PALW_RCORE_VESTING_ROWS_LANDED_V1`] is `false`.
+    fn rcore_lock(&self, claim_id: &Hash64, claim: &PalwClaimStateV2, basis_k: u8) -> u128 {
+        palw_rcore_lock_v1(
+            self.rcore_g_res(claim_id, claim),
+            claim.escrowed_reward,
+            self.rcore_buyback_bound(claim_id, claim),
+            basis_k,
+        )
     }
 
     /// **ADR-0152 L-4 / L-4b: a claim's bind-time prices** for a panel of `seat_count` seats at
     /// `now_daa` — the λ-term (ECON's floor half at this block's multiple), `lock_2`, the commitment
     /// the duty is capped by, `duty_bind` and the eligibility `max(duty_bind, lock_2)`.
-    fn rcore_bind_prices(&self, claim: &PalwClaimStateV2, seat_count: usize, now_daa: u64) -> PalwRcoreBindPricesV1 {
-        let lock_2 = self.rcore_lock(claim, PALW_RCORE_FINAL_BASIS_K_V1);
+    fn rcore_bind_prices(
+        &self,
+        claim_id: &Hash64,
+        claim: &PalwClaimStateV2,
+        seat_count: usize,
+        now_daa: u64,
+    ) -> PalwRcoreBindPricesV1 {
+        let lock_2 = self.rcore_lock(claim_id, claim, PALW_RCORE_FINAL_BASIS_K_V1);
         let lambda_term = crate::palw_panel_economy_v1::palw_panel_seat_reward_floor_v1(
             claim.escrowed_reward,
             seat_count,
@@ -10239,7 +10394,7 @@ impl PalwFoldReadV1<'_> {
         let commitment = palw_claim_commitment_v1(self.params, claim, now_daa).unwrap_or(u128::MAX);
         let duty_bind = palw_rcore_duty_bind_v1(lambda_term, lock_2, commitment, seat_count);
         PalwRcoreBindPricesV1 {
-            g_res: self.rcore_g_res(claim),
+            g_res: self.rcore_g_res(claim_id, claim),
             lock_2,
             lambda_term,
             commitment,
@@ -10442,7 +10597,10 @@ impl PalwFoldReadV1<'_> {
             // alone. The claim asked about counts whole here, not pooled as the room counts it: it
             // draws a panel of its own, and c_2M = 1 is one claim, so no part-job slack admits a
             // second.
-            if audited && !exempt && crate::palw_work_target_v1::palw_panel_held_to_final_v1(row) {
+            // C7 is read through `palw_rcore_class_is_c7_v1` — the window rule united with the
+            // conservative list, one predicate with the escrow's release (the S review's L2; the
+            // list is empty below `palw_rcore_plus`, so this is the window rule there).
+            if audited && !exempt && palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
                 let inflight = self.model_registry_inflight(class_id);
                 if (inflight as u64).saturating_add(whole) > row.profile.max_inflight_claims as u64 {
                     return Err(PalwStateV2Error::ClassInflightCapped {
@@ -10579,7 +10737,8 @@ impl PalwFoldReadV1<'_> {
     ) -> (u64, u128, u128, u64) {
         let rate = self.panel_rate_v1(class_id, row, fold, now_daa, None);
         let mut room = rate.room();
-        if crate::palw_work_target_v1::palw_panel_held_to_final_v1(row) {
+        // C7 through the one predicate (the S review's L2).
+        if palw_rcore_class_is_c7_v1(self.params, self.state, class_id) {
             room = room.min((row.profile.max_inflight_claims as u128).saturating_sub(rate.owed).min(u64::MAX as u128) as u64);
         }
         (room, rate.inflight_replay(), rate.per_span.saturating_mul(rate.window as u128), rate.window)
@@ -10722,11 +10881,12 @@ pub fn palw_rcore_bind_prices_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     extras: &PalwTransitionExtrasV1,
+    claim_id: &Hash64,
     claim: &PalwClaimStateV2,
     seat_count: usize,
     now_daa: u64,
 ) -> PalwRcoreBindPricesV1 {
-    PalwFoldReadV1::outside(state, params, extras).rcore_bind_prices(claim, seat_count, now_daa)
+    PalwFoldReadV1::outside(state, params, extras).rcore_bind_prices(claim_id, claim, seat_count, now_daa)
 }
 
 /// **ADR-0152 L-1 for a reader outside the fold**: what one counted `Valid` signer of a set
@@ -10735,10 +10895,11 @@ pub fn palw_rcore_seat_lock_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     extras: &PalwTransitionExtrasV1,
+    claim_id: &Hash64,
     claim: &PalwClaimStateV2,
     basis_k: u8,
 ) -> u128 {
-    PalwFoldReadV1::outside(state, params, extras).rcore_lock(claim, basis_k)
+    PalwFoldReadV1::outside(state, params, extras).rcore_lock(claim_id, claim, basis_k)
 }
 
 /// **ADR-0152 T-2(a) for a reader outside the fold** (S-SPEC 1g): `bond`'s claims of `class_id` in
@@ -11236,9 +11397,9 @@ fn palw_panel_owed_v1(
     let base = params.base_class_id();
     let per_job = params.fp_quanta_per_canonical_job as u64;
     // A class without a lifecycle row is never held: it puts no term on the budget, and the gate
-    // does not read its room.
-    let held_to_final =
-        |id: &Hash64| state.model_lifecycles.get(id).is_some_and(crate::palw_work_target_v1::palw_panel_held_to_final_v1);
+    // does not read its room. C7 is read through the one predicate the escrow's release reads
+    // (`palw_rcore_class_is_c7_v1`, the S review's L2; the conservative list is empty below the fence).
+    let held_to_final = |id: &Hash64| state.model_lifecycles.contains_key(id) && palw_rcore_class_is_c7_v1(params, state, id);
     // (attempts, free-prompt claims, free-prompt quanta), pooled per class.
     let mut pooled: BTreeMap<Hash64, (u64, u64, u64)> = BTreeMap::new();
     for (id, tally) in index.iter().filter(|(id, _)| **id != base) {
@@ -11370,6 +11531,7 @@ pub fn palw_panel_demand_read_v1(
 /// ADR-0152's C7) no more than its static inflight cap leaves (T-2(b), c_2M = 1).
 pub fn palw_panel_room_read_v1(
     state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
     class_id: &Hash64,
     per_span: u128,
     claim_replay: u128,
@@ -11381,7 +11543,8 @@ pub fn palw_panel_room_read_v1(
     };
     let rate = PalwPanelRateV1::read(class_id, per_span, row.profile.verification_window_spans as u64, claim_replay, owed, terms);
     let room = rate.room();
-    if crate::palw_work_target_v1::palw_panel_held_to_final_v1(row) {
+    // C7 through the one predicate (the S review's L2).
+    if palw_rcore_class_is_c7_v1(params, state, class_id) {
         room.min((row.profile.max_inflight_claims as u128).saturating_sub(rate.owed).min(u64::MAX as u128) as u64)
     } else {
         room
@@ -11476,6 +11639,7 @@ impl<'a> TransitionBuilder<'a> {
     /// **`enforce` is the fence, not a policy.** The court arm predates `palw_da_court` and its
     /// reservation must stay byte-identical on a network the fence has not reached; the accusation
     /// arm is refused outright while the fence is dormant, so it always passes `true`.
+    #[allow(clippy::too_many_arguments)]
     fn reserve_accuser_exposure_v2(
         &mut self,
         bond: PalwBondKeyV2,
@@ -11483,8 +11647,15 @@ impl<'a> TransitionBuilder<'a> {
         amount: u128,
         edge: &'static str,
         enforce: bool,
+        now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
-        if enforce {
+        // **ADR-0152 past `palw_rcore_plus`: the accuser gate** (the S review's M1). The stake is still
+        // written to `reserved_exposure` below (the DA arm's interim ledger until M3), but it is
+        // admitted on the free half against the one invariant, not on the claim ledger's 500‰
+        // ceiling, which saw neither the courts nor the locks' excess.
+        if self.params.rcore_plus_active_at(now_daa) {
+            self.check_accuser_room(bond, amount, edge, now_daa)?;
+        } else if enforce {
             // What this bond already backs — its live claims, its own registrations, and every
             // accusation and court it already has open — plus what this one would reserve.
             let backed = self
@@ -11523,12 +11694,27 @@ impl<'a> TransitionBuilder<'a> {
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
         if !self.params.rcore_plus_active_at(now_daa) {
-            return self.reserve_accuser_exposure_v2(bond, collateral, amount, edge, self.da_court);
+            return self.reserve_accuser_exposure_v2(bond, collateral, amount, edge, self.da_court, now_daa);
         }
-        let backed = self.committed_at(&bond, now_daa).saturating_add(palw_accuser_exposure_v1(&self.state, &bond));
-        let ceiling = collateral as u128;
-        if backed.saturating_add(amount) > ceiling {
-            return Err(PalwStateV2Error::AccusationExposureCeiling { bond, edge, backed, accusation: amount, ceiling });
+        self.check_accuser_room(bond, amount, edge, now_daa)
+    }
+
+    /// **The accuser gate past `palw_rcore_plus`** (A-6 as amended by the S review, M1): `amount`
+    /// fits the free half — `max(committed, 500‰ × C) + accuser + amount ≤ C` — or it is refused
+    /// `AccusationExposureCeiling` (backed = `C − room`, ceiling = `C`). Every accusation that stakes
+    /// against a bond passes here: the court opening, the held dissection and the data-availability
+    /// accusation (M3's redesign routes through it too).
+    fn check_accuser_room(&self, bond: PalwBondKeyV2, amount: u128, edge: &'static str, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        let room = self.gate_room(&bond, now_daa, PalwRcoreGateV1::Accuser);
+        if amount > room {
+            let collateral = self.state.bonds.get(&bond).map(|record| record.collateral as u128).unwrap_or(0);
+            return Err(PalwStateV2Error::AccusationExposureCeiling {
+                bond,
+                edge,
+                backed: collateral.saturating_sub(room),
+                accusation: amount,
+                ceiling: collateral,
+            });
         }
         Ok(())
     }
@@ -12272,14 +12458,18 @@ impl<'a> TransitionBuilder<'a> {
         palw_bond_committed_v1(&self.state, bond, now_daa, self.second_clock_depth(now_daa), self.params.window_court)
     }
 
-    /// **ADR-0152 SR-7: the 500‰ ceiling of `bond`** — `collateral × fp_max_exposure_ratio_permille
-    /// / 1000`, the one every gate measures `committed` against (0 for a missing bond).
-    fn exposure_ceiling_of(&self, bond: &PalwBondKeyV2) -> u128 {
-        self.state
-            .bonds
-            .get(bond)
-            .map(|record| (record.collateral as u128).saturating_mul(self.params.fp_max_exposure_ratio_permille as u128) / 1000)
-            .unwrap_or(0)
+    /// **The one invariant's room on this fold's clocks** ([`palw_rcore_gate_room_of_v1`], the S
+    /// review's M1): a work gate's room is the 500‰ ceiling less `committed` and never past
+    /// `collateral − committed − accuser`; an accuser gate's is the free half less the accuser ledger.
+    fn gate_room(&self, bond: &PalwBondKeyV2, now_daa: u64, gate: PalwRcoreGateV1) -> u128 {
+        let Some(record) = self.state.bonds.get(bond) else { return 0 };
+        palw_rcore_gate_room_of_v1(
+            record.collateral,
+            self.params.fp_max_exposure_ratio_permille,
+            self.committed_at(bond, now_daa),
+            palw_accuser_exposure_v1(&self.state, bond),
+            gate,
+        )
     }
 
     /// **ADR-0152 S-SPEC §2 `claim_g_v1`: a claim's gain terms for the action tiers** — from the
@@ -12290,7 +12480,7 @@ impl<'a> TransitionBuilder<'a> {
     fn claim_g_v1(&self, claim_id: &Hash64) -> Option<PalwClaimGV1> {
         if let Some(claim) = self.state.claims.get(claim_id) {
             return Some(PalwClaimGV1 {
-                g_res: self.read().rcore_g_res(claim),
+                g_res: self.read().rcore_g_res(claim_id, claim),
                 escrowed_reward: claim.escrowed_reward,
                 basis_k: claim.rcore.basis_k,
             });
@@ -12339,22 +12529,19 @@ impl<'a> TransitionBuilder<'a> {
                 .iter()
                 .filter(|(bond, _)| {
                     self.state.slashable_locks.contains_key(&(*bond, claim_id))
-                        || self.committed_at(bond, now_daa).saturating_add(lock.saturating_sub(palw_seat_duty_of_v1(
-                            &self.state,
-                            &claim_id,
-                            bond,
-                        ))) <= self.exposure_ceiling_of(bond)
+                        || lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, bond))
+                            <= self.gate_room(bond, now_daa, PalwRcoreGateV1::Work)
                 })
                 .copied()
                 .collect()
         };
         let first = recount(&valid).max(PALW_RCORE_FINAL_BASIS_K_V1);
-        let mut backed = backed_at(self.read().rcore_lock(claim, first));
+        let mut backed = backed_at(self.read().rcore_lock(&claim_id, claim, first));
         if recount(&backed).max(PALW_RCORE_FINAL_BASIS_K_V1) < first {
-            backed = backed_at(self.read().rcore_lock(claim, PALW_RCORE_FINAL_BASIS_K_V1));
+            backed = backed_at(self.read().rcore_lock(&claim_id, claim, PALW_RCORE_FINAL_BASIS_K_V1));
         }
         let basis_k = recount(&backed);
-        PalwRcoreBackedSetV1 { lock: self.read().rcore_lock(claim, basis_k), basis_k, segments, backed }
+        PalwRcoreBackedSetV1 { lock: self.read().rcore_lock(&claim_id, claim, basis_k), basis_k, segments, backed }
     }
 
     /// **ADR-0152 S-SPEC §3.4: one licence past `palw_rcore_plus`, through any of the three doors.**
@@ -12622,11 +12809,11 @@ impl<'a> TransitionBuilder<'a> {
         // the licence takes from the same room.
         if self.params.rcore_plus_active_at(now_daa) {
             let distinct: BTreeSet<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).collect();
-            let prices = self.read().rcore_bind_prices(claim, distinct.len(), now_daa);
+            let prices = self.read().rcore_bind_prices(&claim_id, claim, distinct.len(), now_daa);
             let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
             for seat in &distinct {
                 let may_work = self.state.bonds.get(seat).is_some_and(|record| palw_bond_may_take_work_v2(record, floor));
-                let room = self.exposure_ceiling_of(seat).saturating_sub(self.committed_at(seat, now_daa));
+                let room = self.gate_room(seat, now_daa, PalwRcoreGateV1::Work);
                 if !may_work || room < prices.eligibility {
                     return Err(PalwStateV2Error::SeatValidLockRefused {
                         seat: *seat,
@@ -12706,7 +12893,7 @@ impl<'a> TransitionBuilder<'a> {
         let rcore_row = self
             .params
             .rcore_plus_active_at(now_daa)
-            .then(|| (claim.rcore.licence_door, claim.rcore.basis_k, self.read().rcore_g_res(claim)));
+            .then(|| (claim.rcore.licence_door, claim.rcore.basis_k, self.read().rcore_g_res(&claim_id, claim)));
         self.write_panel_liability(
             claim_id,
             Some(crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 {
@@ -14707,7 +14894,7 @@ impl<'a> TransitionBuilder<'a> {
         // duty` never exceeds what the claim forfeits (F14) — and the `3 × claim.reserved` term is
         // retired.
         let seat_exposure = if self.params.rcore_plus_active_at(now_daa) {
-            self.read().rcore_bind_prices(claim, on_duty.len(), now_daa).duty_bind
+            self.read().rcore_bind_prices(&claim_id, claim, on_duty.len(), now_daa).duty_bind
         } else {
             crate::palw_panel_economy_v1::palw_panel_seat_exposure_v1(
                 claim.reserved,
@@ -14833,13 +15020,13 @@ impl<'a> TransitionBuilder<'a> {
         if self.params.rcore_plus_active_at(ctx.daa_score) {
             let cap = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as u8;
             let basis_k = claim.rcore.basis_k.saturating_add(receipts.len().min(u8::MAX as usize) as u8).min(cap);
-            let lock = self.read().rcore_lock(claim, basis_k);
+            let lock = self.read().rcore_lock(&claim_id, claim, basis_k);
             let seat_count = self.state.panels.get(&claim_id).map(|panel| panel.seats.len()).unwrap_or(0);
             let segments = crate::palw_verification_v2::palw_segment_count_v2(seat_count.min(u16::MAX as usize) as u16);
             for receipt in receipts {
                 let seat = receipt.seat_bond;
                 let top_up = lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, &seat));
-                let room = self.exposure_ceiling_of(&seat).saturating_sub(self.committed_at(&seat, ctx.daa_score));
+                let room = self.gate_room(&seat, ctx.daa_score, PalwRcoreGateV1::Work);
                 if !self.state.slashable_locks.contains_key(&(seat, claim_id)) && room < top_up {
                     return Err(PalwStateV2Error::SeatValidLockRefused { seat, claim: claim_id, required: top_up, available: room });
                 }
@@ -16877,6 +17064,25 @@ pub fn apply_palw_transition_v7(
         if let Some(cached) = builder.inflight_index.get_mut().as_ref() {
             debug_assert_eq!(*cached, palw_inflight_index_build_v1(&builder.state), "the in-flight index drifted from its walk");
         }
+        // **DL-1 at the end of every block (the S review's L3)**: the court indexes are their
+        // sessions' and groups' deadlines, and past `palw_rcore_plus` the claim deadline index is
+        // exactly `palw_rcore_deadline_v1` of every claim at this block's DAA — the equality
+        // `assert_deadline_consistency` demands at load, asked where a writer could have broken it.
+        let court: BTreeSet<(u64, Hash64)> =
+            builder.state.court_sessions.iter().map(|(id, session)| (court_next_deadline_v2(&builder.state, session), *id)).collect();
+        debug_assert_eq!(court, builder.state.court_deadlines, "the court deadline index drifted");
+        let close: BTreeSet<(u64, (Hash64, PalwCourtSideV1))> =
+            builder.state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
+        debug_assert_eq!(close, builder.state.court_close_deadlines, "the close-group deadline index drifted");
+        if builder.params.rcore_plus_active_at(ctx.daa_score) {
+            let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
+            for (id, claim) in &builder.state.claims {
+                if let Ok(Some(at)) = palw_rcore_deadline_v1(&builder.state, builder.params, id, claim, Some(ctx.daa_score)) {
+                    expected.insert((at, *id));
+                }
+            }
+            debug_assert_eq!(expected, builder.state.deadlines, "the deadline index differs from DL-1's deadlines");
+        }
     }
 
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
@@ -17160,7 +17366,14 @@ fn open_da_session_v2(
     // arm calls too: one ceiling, one ledger, both arms — spelled once so they cannot
     // drift apart again, which is exactly how this arm came to have a bound and its
     // sibling did not.
-    builder.reserve_accuser_exposure_v2(*accuser, accuser_record.collateral, exposure, "data-availability accusation", true)?;
+    builder.reserve_accuser_exposure_v2(
+        *accuser,
+        accuser_record.collateral,
+        exposure,
+        "data-availability accusation",
+        true,
+        ctx.daa_score,
+    )?;
     // The claim's own clock is paused while the session runs, exactly as an open court
     // pauses the path to `Final`; `resumed` carries the phase back.
     let mut disputed = claim.clone();
@@ -19680,11 +19893,19 @@ fn apply_object(
                 // operator for exposure it is in the act of giving back. Everything else the bond
                 // backs — live claims and its own class registrations — is counted, on the
                 // ADR-0056 Decision 3 rule that the ceiling applies to the SUM.
-                let already = builder
-                    .state
-                    .reserved_exposure(bond)
-                    .checked_add(builder.state.registration_exposure(bond))
-                    .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+                // ADR-0152 (the S review's L4): past `palw_rcore_plus` what the bond backs is the one
+                // ledger plus its accuser ledger — the invariant `committed + accuser ≤ C` this
+                // declaration's 100% check extends to (capability exposure is non-slashable
+                // standing, priced against the whole collateral as before).
+                let already = if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                    builder.committed_at(bond, ctx.daa_score).saturating_add(palw_accuser_exposure_v1(&builder.state, bond))
+                } else {
+                    builder
+                        .state
+                        .reserved_exposure(bond)
+                        .checked_add(builder.state.registration_exposure(bond))
+                        .ok_or(PalwStateV2Error::Overflow("total exposure"))?
+                };
                 check_capable_classes_declared_v1(
                     &builder.state,
                     *bond,
@@ -19871,12 +20092,21 @@ fn apply_object(
                     // cost nothing the next registration or claim could feel. Derived from the
                     // bond's own `capable_classes`, and zero while the fence is off.
                     let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(bond_record) } else { 0 };
-                    let already = builder
-                        .state
-                        .reserved_exposure(&carriage_bond)
-                        .checked_add(builder.state.registration_exposure(&carriage_bond))
-                        .and_then(|sum| sum.checked_add(declared))
-                        .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+                    // ADR-0152 (the S review's L4): past `palw_rcore_plus` the one ledger (locks'
+                    // excess included) and the accuser ledger, so this 100% check keeps
+                    // `committed + accuser + declared ≤ C`; below it, the claim ledger as before.
+                    let backing = if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                        builder
+                            .committed_at(&carriage_bond, ctx.daa_score)
+                            .saturating_add(palw_accuser_exposure_v1(&builder.state, &carriage_bond))
+                    } else {
+                        builder
+                            .state
+                            .reserved_exposure(&carriage_bond)
+                            .checked_add(builder.state.registration_exposure(&carriage_bond))
+                            .ok_or(PalwStateV2Error::Overflow("total exposure"))?
+                    };
+                    let already = backing.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
                     let price = builder.params.registration_exposure_sompi() as u128;
                     if already.saturating_add(price) > collateral as u128 {
                         return Err(PalwStateV2Error::RegistrationExposureUnaffordable {
@@ -21523,10 +21753,15 @@ fn apply_object(
                     .ok_or(PalwStateV2Error::Overflow("total exposure"))?
             };
             let backed = own.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
-            let ceiling = (bond_record.collateral as u128)
-                .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
-                .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
-                / 1000;
+            // Past the fence the one invariant's room (review M1) holds the declared term too.
+            let ceiling = if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                own.saturating_add(builder.gate_room(bond, ctx.daa_score, PalwRcoreGateV1::Work))
+            } else {
+                (bond_record.collateral as u128)
+                    .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
+                    .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
+                    / 1000
+            };
             // **The audit's #5 (escrow half): the receipt rights this claim's Final could realize**,
             // priced now and held with the weight — see `PalwClaimStateV2::rights_reserved`. Only a
             // compute-priced claim past the audit fence; zero otherwise, which keeps every other
@@ -23619,10 +23854,16 @@ fn apply_attempt(
         };
         let adding =
             palw_claim_commitment_v1(builder.params, &claim, ctx.daa_score).ok_or(PalwStateV2Error::Overflow("claim reservation"))?;
-        let ceiling = (bond_record.collateral as u128)
-            .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
-            .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
-            / 1000;
+        // Past the fence the ceiling is the one invariant's (review M1): the 500‰ ceiling, and
+        // never past `collateral − accuser` — `backed + room`.
+        let ceiling = if builder.params.rcore_plus_active_at(ctx.daa_score) {
+            backed.saturating_add(builder.gate_room(&claim.bond, ctx.daa_score, PalwRcoreGateV1::Work))
+        } else {
+            (bond_record.collateral as u128)
+                .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
+                .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
+                / 1000
+        };
         if backed.checked_add(adding).ok_or(PalwStateV2Error::Overflow("reserved exposure"))? > ceiling {
             return Err(PalwStateV2Error::AttemptExposureCeiling { bond: claim.bond, backed, claim: adding, ceiling });
         }
@@ -50157,7 +50398,7 @@ pub(crate) mod tests {
         }
 
         /// **A-6: an accuser's exposure is its open courts' `reserved`, read by the challenger index**,
-        /// and its room is the free half less that.
+        /// and its room is the free half — `C − max(committed, 500‰ · C)` — less that.
         #[test]
         fn accuser_exposure_reads_the_challenger_index_and_the_room_is_the_free_half_less_it() {
             let p = rcore_params();
@@ -50180,8 +50421,11 @@ pub(crate) mod tests {
             let s2 = b_builder.state.clone();
             assert_eq!(palw_accuser_exposure_v1(&s2, &b), 77);
             assert_eq!(palw_accuser_exposure_v1(&s2, &bond_key(2)), 0);
+            // The free half is `C − max(committed, 500‰ · C)` (the S review's M1), not the whole of
+            // `C − committed`: 5,000 − max(1,370, 2,500) − 77.
             let free = palw_bond_free_slashable_v1(&s2, &p, &b, 1_000, None);
-            assert_eq!(palw_accuser_room_v1(&s2, &p, &b, 1_000, None), free - 77);
+            assert_eq!(free, 5_000 - 1_370);
+            assert_eq!(palw_accuser_room_v1(&s2, &p, &b, 1_000, None), 5_000 - 2_500 - 77);
             // The index the writer kept is the one a load rebuilds.
             let mut rebuilt = s2.clone();
             rebuild_deadline_free_indices(&mut rebuilt);
@@ -50253,6 +50497,15 @@ pub(crate) mod tests {
                 palw_bond_collateral_is_locked_v6(&s, &armed, &key, &record, 20_000, delay, None, true),
                 "past: the accuser clause holds it"
             );
+            // Keyed on the open session, not on its exposure (the S review's L6): a court whose claim
+            // reserves nothing still holds its challenger until it closes.
+            s.claims.get_mut(&h64(0xE1)).unwrap().reserved = 0;
+            assert_eq!(palw_accuser_exposure_v1(&s, &key), 0, "the premise: no accuser exposure");
+            assert!(palw_bond_has_open_court_v1(&s, &key));
+            assert!(
+                palw_bond_collateral_is_locked_v6(&s, &armed, &key, &record, 20_000, delay, None, true),
+                "past: an open court with no exposure still holds it"
+            );
             assert!(
                 !palw_bond_is_payee_of_unmatured_row_v1(&s, &armed, &key, 20_000, None),
                 "the payee clause is the vesting work's stub"
@@ -50260,18 +50513,32 @@ pub(crate) mod tests {
         }
 
         /// **L-1, L-4 and L-4b's prices** by hand, and `k′ = max(basis_k, 2)`: no lock is priced at 1.
+        /// The ADR's L-1 is [`palw_rcore_lock_vested_v1`]; while no vesting row exists the fold's
+        /// [`palw_rcore_lock_v1`] prices the whole gain `G = G_res − s + E` (the S review's H1).
         #[test]
         fn the_lock_the_duty_and_the_eligibility_are_the_adrs_formulas() {
             // lock_3: (300/3 + 1) · 1.1 = 111, plus ⌈100‰ · (1000 − 100) / 3⌉ = 30.
-            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 3), 141);
+            assert_eq!(palw_rcore_lock_vested_v1(300, 1_000, 100, 3), 141);
             // lock_2: (300/2 + 1) · 1.1 = 166, plus ⌈100‰ · 900 / 2⌉ = 45.
-            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 2), 211);
+            assert_eq!(palw_rcore_lock_vested_v1(300, 1_000, 100, 2), 211);
             for k in [0u8, 1] {
-                assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, k), 211, "k = {k} prices at 2");
+                assert_eq!(palw_rcore_lock_vested_v1(300, 1_000, 100, k), 211, "k = {k} prices at 2");
+                assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, k), palw_rcore_lock_v1(300, 1_000, 100, 2), "k = {k} prices at 2");
             }
-            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 7), palw_rcore_lock_v1(300, 1_000, 100, 7), "deterministic");
-            assert_eq!(palw_rcore_lock_v1(300, 50, 100, 2), 166, "a buyback above the escrow leaves no escrow term");
-            assert_eq!(palw_rcore_lock_v1(300, 1_001, 0, 3), 111 + 34, "the escrow term rounds up");
+            assert_eq!(palw_rcore_lock_vested_v1(300, 50, 100, 2), 166, "a buyback above the escrow leaves no escrow term");
+            assert_eq!(palw_rcore_lock_vested_v1(300, 1_001, 0, 3), 111 + 34, "the escrow term rounds up");
+            // Without vesting rows: G = 300 − 100 + 1000 = 1,200; lock_3 = (400 + 1) · 1.1 = 441,
+            // lock_2 = (600 + 1) · 1.1 = 661 — k′ locks out-value G by the margin.
+            assert!(!PALW_RCORE_VESTING_ROWS_LANDED_V1, "H1: no build arms the residual pricing before its rows");
+            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 3), 441);
+            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 2), 661);
+            assert_eq!(palw_rcore_lock_unvested_v1(1_200, 3), 441);
+            for k in [2u8, 3] {
+                assert!(
+                    u128::from(k) * palw_rcore_lock_v1(300, 1_000, 100, k) > 1_200 * 11 / 10,
+                    "k′ = {k}: the whole gain, with margin"
+                );
+            }
             // duty_bind = min(max(λ, lock_2), commitment / seats), never over the commitment (≤ 1).
             assert_eq!(palw_rcore_duty_bind_v1(256, 160, 3_201, 5), 256, "floor: λ binds");
             assert_eq!(palw_rcore_duty_bind_v1(100, 459, 3_201, 5), 459, "8k: lock_2 binds");
@@ -50282,6 +50549,34 @@ pub(crate) mod tests {
             }
             assert_eq!(palw_rcore_seat_eligibility_v1(256, 160), 256);
             assert_eq!(palw_rcore_seat_eligibility_v1(12_588, 33_379), 33_379);
+        }
+
+        /// **The one invariant's two gates** (the S review's M1): every gate keeps `committed +
+        /// accuser + new ≤ C`; a work gate stays under the 500‰ ceiling too, and an accuser gate
+        /// stakes only the free half, `C − max(committed, ceiling)`.
+        #[test]
+        fn the_work_and_accuser_gates_keep_one_invariant() {
+            use PalwRcoreGateV1::{Accuser, Work};
+            assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 0, 0, Work), 500);
+            assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 200, 0, Work), 300);
+            assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 200, 700, Work), 100, "the accuser ledger caps work at C");
+            assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 600, 0, Work), 0, "over the ceiling");
+            assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 0, 0, Accuser), 500, "the free half");
+            assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 200, 100, Accuser), 400);
+            assert_eq!(
+                palw_rcore_gate_room_of_v1(1_000, 500, 700, 100, Accuser),
+                200,
+                "committed past the ceiling eats the free half"
+            );
+            assert_eq!(palw_rcore_gate_room_of_v1(1_000, 500, 700, 400, Accuser), 0);
+            for committed in (0..=1_000u128).step_by(25) {
+                for accuser in (0..=1_000u128).step_by(25) {
+                    let w = palw_rcore_gate_room_of_v1(1_000, 500, committed, accuser, Work);
+                    assert!(w == 0 || (committed + accuser + w <= 1_000 && committed + w <= 500), "work {committed}/{accuser}");
+                    let a = palw_rcore_gate_room_of_v1(1_000, 500, committed, accuser, Accuser);
+                    assert!(a == 0 || committed.max(500) + accuser + a <= 1_000, "accuser {committed}/{accuser}");
+                }
+            }
         }
 
         /// **Q-3's recount over the shipped geometries**: V1 is `min(3, #Valid)`, coverage is 2, an

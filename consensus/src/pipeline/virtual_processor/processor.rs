@@ -7058,6 +7058,7 @@ impl VirtualStateProcessor {
                                 state,
                                 state_params,
                                 &self.palw_transition_extras_for(point),
+                                claim,
                                 claim_record,
                                 point.daa_score,
                                 panel_params.seat_count() as usize,
@@ -9206,6 +9207,8 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        // The claim's id: the buyback bound `s` of L-1's `G_res` reads the claim's root through it.
+        claim_id: &Hash64,
         claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
         now_daa: u64,
         // The panel's seat count: what `duty_bind` divides the claim's commitment by.
@@ -9236,6 +9239,7 @@ impl VirtualStateProcessor {
                     state,
                     state_params,
                     extras,
+                    claim_id,
                     claim,
                     seat_count,
                     now_daa,
@@ -10701,6 +10705,7 @@ impl VirtualStateProcessor {
                     state,
                     state_params,
                     &binding_extras,
+                    claim_id,
                     claim,
                     block_daa,
                     panel_params.seat_count() as usize,
