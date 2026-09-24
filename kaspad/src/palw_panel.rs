@@ -765,9 +765,14 @@ pub(crate) fn palw_seat_duty_order_v1(deadlines: &[(u64, Hash64)], by_deadline: 
 /// the assembler is offered the SHORTEST prefix of the candidates it assembles from — the quorum,
 /// and the outsider where the claim has one — and the candidates are rotated by `sent`, the V1 sets
 /// this node has already sent for the claim, so a set that went inert is followed by one that
-/// leaves other seats out. The fold-aware choice (the coverage and optimistic doors ask the fold,
-/// `palw_v2_offered_licence_licenses_v1`) is the assembler's to make; this is the node's half until
-/// it does.
+/// leaves other seats out.
+///
+/// **Past `palw_rcore_plus` the assembler makes the fold-aware choice itself** (ADR-0152 SR-6, Phase
+/// 2 P2-5): it offers the fold's backed subset of the set it is handed, and nothing for a set whose
+/// backed subset is short of the quorum, so a prefix that carries an unbacked `Valid` is passed over
+/// for the next one and the V1 door falls through to S2 (X22) instead of holding the claim on an
+/// inert set. The prefix still bounds the set to the quorum and the rotation still varies it; below
+/// that fence (a SEAT-R network without R-core+) they are this door's only defence, as before.
 pub(crate) fn palw_v1_offer_v1<R: Clone, O>(candidates: &[R], sent: u32, mut assemble: impl FnMut(Vec<R>) -> Option<O>) -> Option<O> {
     if candidates.is_empty() {
         return None;
@@ -12766,11 +12771,12 @@ mod court_responder_coverage_pin {
     /// **ADR-0133 S1/S2 with ADR-0152's X22, pinned where they live: the collector hands the licence
     /// doors to `palw_licence_offer_order_v1` — coverage, V1, S2 — under the R-core+ fence.** Past it
     /// they are asked in that order (a set at `basis_k ≥ 2` before the fast path that lands on Q-5's
-    /// gate); below it in the order this test pinned before X22, coverage, then the optimistic
-    /// licence, then the V1 quorum (`x22_offers_a_replay_backed_licence_before_s2_and_asks_lazily`
-    /// runs both orders).
+    /// gate); below it in the order this test pinned before X22 (and was named for), coverage, then
+    /// the optimistic licence, then the V1 quorum (`x22_offers_a_replay_backed_licence_before_s2_and_asks_lazily`
+    /// runs both orders; T45, `t45_a_backed_v1_is_offered_before_s2_and_an_unbacked_one_is_passed_over`,
+    /// the backed V1 before S2).
     #[test]
-    fn the_collector_assembles_coverage_then_optimistic_then_v1() {
+    fn the_collector_assembles_coverage_then_v1_then_optimistic() {
         const MARKER: &str = "mod court_responder_coverage_pin";
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
@@ -15550,7 +15556,7 @@ mod q7_sampled_and_collector_tests {
     use super::{
         COURT_MOVE_REPLAN_DAA, MARKER_SEAT_S, PALW_SEAT_SAMPLED_LEAD_DAA_V1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1,
         PalwSeatS3SampleV1, palw_receipt_pools_sweep_v1, palw_seat_receipt_forms_v1, palw_seat_s3_sample_v1, palw_seat_sampled_due_v1,
-        palw_supplementary_candidates_fingerprint_v1, palw_supplementary_idle_v1, palw_supplementary_offer_order_v1,
+        palw_supplementary_candidates_fingerprint_v1, palw_supplementary_idle_v1, palw_supplementary_offer_order_v1, palw_v1_offer_v1,
     };
     use crate::palw_receipt_pool::{PalwReceiptPoolV1, ReceiptSweepV1};
     use kaspa_consensus_core::palw_backend::{
@@ -15851,6 +15857,54 @@ mod q7_sampled_and_collector_tests {
             "below the fence: coverage, S2, then V1, as before"
         );
         assert_eq!(offer(false, false, true, false).0, Some(("quorum", PalwLicenceDoorTagV1::Quorum)));
+    }
+
+    /// **T45 (ADR-0152 X22 with SR-6, Phase 2 P2-5), the node half: the collector offers a backed V1
+    /// before S2, and passes an unbacked one over.** The licence collector's V1 door past SEAT-R is
+    /// `palw_v1_offer_v1` over the pool, and past `palw_rcore_plus` the assembler it drives answers with
+    /// the fold's backed subset of a prefix, or nothing when that subset is short of the quorum (the
+    /// processor half, `t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an_unbacked_one`,
+    /// holds the real assembler to that on a 2M claim). Here that contract drives the collector's
+    /// composition: with an unbacked seat first in the pool the three-seat prefix is passed over and
+    /// the four-seat one offers its three backed seats, through V1, S2 never built; rotated by `sent`
+    /// the unbacked seat moves and the quorum prefix is backed at once; with two backed seats in the
+    /// pool no prefix licenses and S2 is offered — the claim is never held on an inert V1 set.
+    #[test]
+    fn t45_a_backed_v1_is_offered_before_s2_and_an_unbacked_one_is_passed_over() {
+        use std::cell::Cell;
+        const UNBACKED: u64 = 9;
+        const QUORUM: usize = 3;
+        // The P2-5 assembler's contract: the backed subset of the set, if it is a quorum.
+        let assemble = |set: Vec<u64>| {
+            let backed: Vec<u64> = set.into_iter().filter(|seat| *seat != UNBACKED).collect();
+            (backed.len() >= QUORUM).then_some(backed)
+        };
+        let s2_built = Cell::new(false);
+        let collect = |pool: &[u64], sent: u32| {
+            s2_built.set(false);
+            palw_licence_offer_order_v1(
+                true,
+                || None,
+                || palw_v1_offer_v1(pool, sent, assemble),
+                || {
+                    s2_built.set(true);
+                    Some(vec![0])
+                },
+            )
+        };
+        assert_eq!(
+            collect(&[UNBACKED, 1, 2, 3, 4], 0),
+            Some((vec![1, 2, 3], PalwLicenceDoorTagV1::Quorum)),
+            "the backed three, via V1"
+        );
+        assert!(!s2_built.get(), "S2 never built while a backed V1 is on hand");
+        assert_eq!(
+            collect(&[UNBACKED, 1, 2, 3, 4], 1),
+            Some((vec![1, 2, 3], PalwLicenceDoorTagV1::Quorum)),
+            "rotated: backed at once"
+        );
+        assert_eq!(collect(&[UNBACKED, 1, 2], 0), Some((vec![0], PalwLicenceDoorTagV1::Optimistic)), "no backed quorum: S2");
+        assert!(s2_built.get());
     }
 
     fn receipt(claim: Hash64, seat: u64) -> PalwSeatReceiptV2 {
