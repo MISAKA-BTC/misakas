@@ -1537,6 +1537,338 @@ fn palw_disclosure_queue_key_v1(duty: &kaspa_consensus_core::palw_producer_v2::P
     (duty.claim_id, folded, true)
 }
 
+/// **Which lane's job a claim ran, as an R-core answer reads it** (ADR-0152 DA-4, X7; P2-7).
+#[derive(Clone, Debug)]
+pub(crate) enum PalwDaLaneV1 {
+    /// A free-prompt claim. Its job is NOT chain data: only a payload this node kept carries it.
+    /// `panel_da_admissible` is the network's (`Params::palw_panel_da_admissible`): which privacy
+    /// modes this node's seats may judge (`palw_fp_seat_may_judge_mode_v1`), and so re-make.
+    FreePrompt { panel_da_admissible: bool },
+    /// An attempt claim: the anchor and the draw its capture is checked under, and the job its
+    /// block asked for — chain data, so any node re-makes the capture — `None` when the block is not
+    /// in this node's store.
+    Attempt { anchor: Hash64, attempt_draw: Option<bool>, job: Option<(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>)> },
+}
+
+/// **The facts of one claim an R-core answer is built under** (ADR-0152 DA-4, X7; P2-7) — read off
+/// the chain on the panel's tick and moved into the blocking task that loads the claim's material
+/// ([`palw_da_material_v1`]) and answers its units ([`palw_da_unit_answer_v1`]), which read no session.
+#[derive(Clone, Debug)]
+pub(crate) struct PalwDaClaimFactsV1 {
+    pub claim_id: Hash64,
+    pub class_id: Hash64,
+    pub executor_bond: PalwBondKeyV2,
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    /// The claim's priced step leaves (`palw_claim_roots_v2`): what a leaf's evidence is checked against.
+    pub work_leaves: u64,
+    pub form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    pub lane: PalwDaLaneV1,
+}
+
+impl PalwDaClaimFactsV1 {
+    /// The roots `verify_material` checks a capture of this claim under: a free-prompt capture under
+    /// its OWN payload's job id — the claim's execution root commits the id, so a stranger's job does
+    /// not reproduce it — and an attempt capture under the block's anchor and draw. `output_root:
+    /// None`, as every DA and court re-make reads it (the SEAT-S2 audit of every `None`): the question
+    /// is whether these bytes are the claim's step leg, and no family's `verify_material` reads the answer.
+    fn roots_v1(&self, fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>) -> PalwClaimRootsV1 {
+        let (anchor, attempt_draw) = match &self.lane {
+            PalwDaLaneV1::Attempt { anchor, attempt_draw, .. } => (*anchor, *attempt_draw),
+            PalwDaLaneV1::FreePrompt { .. } => {
+                (fp_job.map(kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3).unwrap_or_default(), None)
+            }
+        };
+        PalwClaimRootsV1 { execution_root: self.execution_root, trace_root: self.trace_root, anchor, attempt_draw, output_root: None }
+    }
+}
+
+/// **The material an R-core answer is built from, checked against the claim's roots** (P2-7).
+#[derive(Debug)]
+pub(crate) enum PalwDaCaptureV1 {
+    /// A free-prompt claim's payload: its job, the user's prompt and the family capture.
+    FreePrompt(kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1),
+    /// An attempt claim's bare family capture.
+    Attempt(Vec<u8>),
+}
+
+/// **ADR-0152 DA-4 / X7 (P2-7): the material an R-core answer is built from — kept and verified, or
+/// re-made and verified, never trusted.** Returns it, and whether it was re-made.
+///
+/// `kept` is every copy this node holds for the claim, own retention first, read one at a time. A
+/// copy is answered from only if it reproduces the claim's committed roots (`verify_material`, the
+/// check every seat arm and every re-make applies). A free-prompt payload that merely DECODES as
+/// `FPC1` proves nothing about its capture — the decoder binds the job and the prompt, and the
+/// capture is opaque to it — and a planted one (a peer racing the producer's job-only `FPM1` gossip
+/// with an `FPC1` of the right job and a garbage capture) would have an honest covering signer answer
+/// garbage, default, and be charged S4 for material it could have re-made (the P2-7 review's HIGH).
+///
+/// Otherwise the claim's job is replayed: an attempt claim's from its block (chain data), a
+/// free-prompt claim's from a kept payload that carries a job of the claim's class and producer — any
+/// spelling (`FPC1`, `FPA1`, `FPM1`: a full seat that licensed by replaying `FPM1` keeps exactly
+/// that), each distinct job tried in the order kept, so a stranger's job before the claim's costs a
+/// replay and never the answer. The re-made capture is used only if it reproduces the roots, and
+/// handed to `keep` — in its lane's form: the `FPC1` of the job, or the attempt's bare capture — to
+/// replace what did not verify, so the next session on the claim is answered without a replay.
+///
+/// Runs inside the blocking task [`PalwPanelService::rcore_da_answers_v1`] reserved memory for: the
+/// verification and the replay are whole-capture work. A free-prompt claim whose job this node never
+/// kept cannot be answered from here: its job is not chain data.
+pub(crate) fn palw_da_material_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    kept: impl IntoIterator<Item = Vec<u8>>,
+    keep: impl FnOnce(&[u8]),
+) -> Result<(PalwDaCaptureV1, bool), String> {
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PalwFpCaptureV1, PalwFpMaterialV1, palw_fp_capture_decode_v1, palw_fp_capture_encode_v1, palw_fp_job_material_decode_v1,
+    };
+    let reproduces =
+        |capture: &[u8], roots: PalwClaimRootsV1| backend.verify_material(capture, roots) == PalwMaterialVerdictV1::Matches;
+    match &facts.lane {
+        PalwDaLaneV1::FreePrompt { panel_da_admissible } => {
+            let mut jobs: Vec<PalwFpMaterialV1> = Vec::new();
+            for bytes in kept {
+                let material = match palw_fp_capture_decode_v1(&bytes, facts.form) {
+                    Some(payload) if reproduces(&payload.capture, facts.roots_v1(Some(&payload.material.job))) => {
+                        return Ok((PalwDaCaptureV1::FreePrompt(payload), false));
+                    }
+                    // Decodes, and its capture is not the claim's: its job may still be.
+                    Some(payload) => payload.material,
+                    None => match palw_fp_job_material_decode_v1(&bytes, facts.form) {
+                        Some(material) => material,
+                        None => continue,
+                    },
+                };
+                // The seat's own gate on a job it would replay (`fp_job_material_for_claim`): the
+                // claim's class and producer, a privacy mode it may judge.
+                if material.job.class_id == facts.class_id
+                    && material.job.executor_bond == facts.executor_bond.0
+                    && crate::palw_fp_seat::palw_fp_seat_may_judge_mode_v1(material.job.privacy_mode, *panel_da_admissible)
+                    && !jobs.iter().any(|held| held.job == material.job)
+                {
+                    jobs.push(material);
+                }
+            }
+            if jobs.is_empty() {
+                return Err("no kept capture reproduces the claim's roots, and no job of this free-prompt claim is kept here: its \
+                            job is not chain data"
+                    .to_string());
+            }
+            let mut refused = String::new();
+            for material in jobs {
+                let Some(ids) = PalwPanelService::fp_prompt_for_job(backend, &material, facts.form) else {
+                    refused = "the kept job's prompt is not the job's".to_string();
+                    continue;
+                };
+                let prompt: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
+                let capture = match backend.execute_free_prompt(&material.job, &prompt) {
+                    Ok(run) => run.outcome.material,
+                    Err(e) => {
+                        refused = format!("the kept job's replay was refused: {e}");
+                        continue;
+                    }
+                };
+                if !reproduces(&capture, facts.roots_v1(Some(&material.job))) {
+                    refused = "the kept job's replay does not reproduce the claim's committed roots".to_string();
+                    continue;
+                }
+                keep(&palw_fp_capture_encode_v1(&material.job, &ids, &capture));
+                let material = PalwFpMaterialV1 { job: material.job, prompt_token_ids: ids };
+                return Ok((PalwDaCaptureV1::FreePrompt(PalwFpCaptureV1 { material, capture }), true));
+            }
+            Err(refused)
+        }
+        PalwDaLaneV1::Attempt { job, .. } => {
+            let roots = facts.roots_v1(None);
+            for bytes in kept {
+                // The attempt lane retains the family capture bare (ADR-0084 Decision 4); read through
+                // an `FPC1` envelope all the same, as `fp_capture_view` does.
+                let capture = match palw_fp_capture_decode_v1(&bytes, facts.form) {
+                    Some(payload) => payload.capture,
+                    None => bytes,
+                };
+                if reproduces(&capture, roots) {
+                    return Ok((PalwDaCaptureV1::Attempt(capture), false));
+                }
+            }
+            let (job, prompt) = job
+                .as_ref()
+                .ok_or("no kept capture reproduces the claim's roots, and the claim's block is not in this node's store")?;
+            let capture = backend.execute(job, prompt).map_err(|e| format!("the block's job's replay was refused: {e}"))?.material;
+            if !reproduces(&capture, roots) {
+                return Err("the replay of the block's job does not reproduce the claim's committed roots".to_string());
+            }
+            keep(&capture);
+            Ok((PalwDaCaptureV1::Attempt(capture), true))
+        }
+    }
+}
+
+/// **A held unit's disclosure from a free-prompt capture** (ADR-0103 Decision 4, ADR-0111 Decisions
+/// 4 and 6): the ONE held builder (`palw_da_held_disclosure_from_capture_v1`) over the capture and its
+/// job's prompt, the binding read off interval 0 where the answer does not carry its own. The v1
+/// court's answer ([`PalwPanelService::fp_held_da_disclosure_of_v1`]) and R-core's
+/// ([`palw_da_unit_answer_v1`]) both build through it.
+fn palw_fp_held_disclosure_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    payload: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
+    roots: PalwClaimRootsV1,
+    work_leaves: u64,
+    missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<
+    (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1),
+    String,
+> {
+    kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
+        backend,
+        &payload.capture,
+        &payload.material.prompt_token_ids,
+        roots,
+        work_leaves,
+        missing,
+        form,
+        || PalwPanelService::served_binding_v1(backend, payload),
+    )
+}
+
+/// **ADR-0152 DA-4 (P2-7): the answer to one unit, from the claim's verified material.** An event
+/// unit is opened out of the capture (`disclose_trace_event`: `Flat`, `Tiled`, or `OutOfRange` from
+/// the binding alone) by the claim's own class backend. A held unit by the ONE held builder: from a
+/// free-prompt capture with its job's prompt ([`palw_fp_held_disclosure_v1`]); from an attempt
+/// capture with the canonical prompt its block's anchor implies — the fold draws held units on
+/// attempt claims too (a `DefaultAccusedHeld` on any class draws width-1 step ranges beside a named
+/// leaf) — and the capture's own binding, read off an out-of-range event disclosure (every family's DA
+/// responder carries it there, and the fold's checkers read that binding).
+pub(crate) fn palw_da_unit_answer_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    material: &PalwDaCaptureV1,
+    unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_held_answer_v1};
+    let capture: &[u8] = match material {
+        PalwDaCaptureV1::FreePrompt(payload) => &payload.capture,
+        PalwDaCaptureV1::Attempt(capture) => capture,
+    };
+    let missing = match unit {
+        PalwDaUnitV1::Event { row, tile } => return backend.disclose_trace_event(capture, row, tile).map(PalwDaAnswerV1::Event),
+        PalwDaUnitV1::Held(missing) => missing,
+    };
+    let (binding, disclosure) = match (material, &facts.lane) {
+        (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
+            backend,
+            payload,
+            facts.roots_v1(Some(&payload.material.job)),
+            facts.work_leaves,
+            missing,
+            facts.form,
+        )?,
+        (PalwDaCaptureV1::Attempt(capture), PalwDaLaneV1::Attempt { job, .. }) => {
+            let (_, prompt) = job.as_ref().ok_or("the claim's block is not in this node's store")?;
+            let prompt: Vec<u32> = prompt
+                .iter()
+                .map(|id| u32::try_from(*id).map_err(|_| format!("prompt id {id} does not fit a u32")))
+                .collect::<Result<_, _>>()?;
+            kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
+                backend,
+                capture,
+                &prompt,
+                facts.roots_v1(None),
+                facts.work_leaves,
+                missing,
+                facts.form,
+                || backend.disclose_trace_event(capture, u32::MAX, u8::MAX).map(|disclosure| disclosure.binding().clone()),
+            )?
+        }
+        (PalwDaCaptureV1::Attempt(_), PalwDaLaneV1::FreePrompt { .. }) => {
+            return Err("a bare capture is not a free-prompt claim's material".to_string());
+        }
+    };
+    Ok(palw_da_held_answer_v1(facts.claim_id, missing, binding, disclosure))
+}
+
+/// **One claim's R-core answers, built off the loop** (P2-7): what [`palw_da_claim_answers_v1`] returns.
+#[derive(Debug)]
+pub(crate) struct PalwDaClaimAnswersV1 {
+    /// Whether the material was re-made by a replay of the claim's job (and handed to `keep`).
+    pub remade: bool,
+    /// One entry a unit asked, in order: `None` for an event unit a `Flat` of this claim already
+    /// answers (IMPL-16) — one queued or sent before, or one built here — so no carrier is paid for
+    /// an answer the fold refuses `DaUnitAlreadyAnswered`.
+    pub answers: Vec<Option<Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String>>>,
+}
+
+/// **P2-7: every due unit of one claim answered from ONE load of its material** — loaded and checked
+/// ([`palw_da_material_v1`]), each unit answered from it ([`palw_da_unit_answer_v1`]), and the material
+/// dropped when this returns: the panel's tick never holds a claim's capture past its own answers, nor
+/// one beside the next claim's (the P2-7 review's MEDIUM: a per-tick cache of every claim's whole
+/// capture, cloned once a unit). `flat` says a `Flat` of this claim is already queued or sent.
+pub(crate) fn palw_da_claim_answers_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    kept: impl IntoIterator<Item = Vec<u8>>,
+    keep: impl FnOnce(&[u8]),
+    units: &[kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1],
+    in_run_rows: u32,
+    mut flat: bool,
+) -> Result<PalwDaClaimAnswersV1, String> {
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_flat_answers_unit_v1};
+    use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
+    let (material, remade) = palw_da_material_v1(backend, facts, kept, keep)?;
+    let mut answers = Vec::with_capacity(units.len());
+    for unit in units {
+        if flat && palw_da_flat_answers_unit_v1(unit, in_run_rows) {
+            answers.push(None);
+            continue;
+        }
+        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit);
+        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })));
+        answers.push(Some(answer));
+    }
+    Ok(PalwDaClaimAnswersV1 { remade, answers })
+}
+
+/// **Keep a re-made capture as the claim's copy under `foreign/`** (P2-7), in place of whatever did not
+/// verify: written aside and renamed over, so a reader never sees half of it. Pinned while a live lock
+/// of this node's or an open session names the claim (`foreign_pinned`), and the retention janitor's
+/// space rule takes a copy an R-core session can still demand last. Best-effort: on a failed write the
+/// answers built from it still go, and the next session re-makes it.
+fn palw_da_keep_remade_v1(dir: &std::path::Path, claim: &Hash64, bytes: &[u8]) {
+    let path = dir.join(format!("{claim}.material"));
+    let partial = dir.join(format!("{claim}.material.partial"));
+    if let Err(e) =
+        std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&partial, bytes)).and_then(|()| std::fs::rename(&partial, &path))
+    {
+        warn!("[{PALW_PANEL}] claim {claim}: cannot keep the re-made capture ({e}); the next data-availability session re-makes it");
+    }
+}
+
+/// **Why one claim's R-core answers were not built this tick** (P2-7).
+#[derive(Debug)]
+pub(crate) enum PalwDaClaimHoldV1 {
+    /// The memory ledger cannot cover the claim's material and builders now: asked again next tick.
+    Ledger(String),
+    /// Nothing to answer from — no kept copy reproduces the roots and no replay does, the claim or its
+    /// class does not resolve, or the task died: asked again a re-plan later, since a replay that
+    /// did not reproduce the roots will not on the next tick either.
+    Material(String),
+}
+
+/// [`offload`] for a shared backend — the executor's kept instance ([`PalwPanelService::executor_backend_v1`])
+/// is an `Arc`, and the task borrows it rather than taking it: `Err` is a task that did not finish.
+async fn offload_shared<T, F>(
+    backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+    work: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1) -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || work(backend.as_ref())).await.map_err(|e| format!("the backend task did not finish: {e}"))
+}
+
 /// The family capture inside a pool payload: an `FPC1` payload's inner tuple (ADR-0073 Decision
 /// 1a), or the bytes themselves for an attempt's raw capture. What `verify_material` and the
 /// provers take — the pool and the retention keep the payload as it travelled.
@@ -3757,25 +4089,32 @@ impl PalwPanelService {
     /// Write-once per claim file; pruned by age on every write so the directory stays bounded
     /// (~2.3 MB a floor material, a few hundred claims a day, 72 h of them ≈ single-digit GiB
     /// worst case, far less in practice). Errors are swallowed: durability here is an assist to
-    /// the pull transport, not an obligation — the OBLIGATED copy is the producer's.
-    fn persist_foreign_material(&self, claim: &Hash64, bytes: &[u8]) {
+    /// the pull transport, not an obligation — the OBLIGATED copy is the producer's. Past
+    /// `palw_rcore_plus` a full seat's `Valid` on a free-prompt claim IS an obligation (X7: its lock
+    /// covers every unit a DA session can demand, and the job is not chain data), so this returns
+    /// whether a copy for the claim is on disk — written now or before — and that seat abstains
+    /// rather than sign what it holds nothing to answer from.
+    fn persist_foreign_material(&self, claim: &Hash64, bytes: &[u8]) -> bool {
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}.material"));
         if path.exists() {
-            return;
+            return true;
         }
         if let Err(e) = std::fs::create_dir_all(&dir) {
             warn!("[{PALW_PANEL}] cannot create the foreign retention directory {}: {e}", dir.display());
-            return;
+            return false;
         }
         // **A write failure is reported.** Swallowing it (`let _ =`) left the panel believing it
         // was retaining while a full volume dropped every byte — the node then answers no pull and
         // is charged for the silence (audit M2-2).
         if let Err(e) = std::fs::write(&path, bytes) {
             warn!("[{PALW_PANEL}] cannot retain material for claim {claim}: {e}");
-            return;
+            // A half-written file would read as kept on the next call.
+            let _ = std::fs::remove_file(&path);
+            return false;
         }
         self.prune_foreign_retention(&dir);
+        true
     }
 
     /// Bound `retention/foreign/` by BOTH age and count, oldest first.
@@ -6255,12 +6594,22 @@ impl PalwPanelService {
             // claim's PRODUCER at once, or as a COVERING SIGNER — a live lock whose mask covers the
             // unit, the fold's own predicate, so exactly the units a default would charge it S4 for —
             // once the producer has had its turn (`palw_disclosure_due_v1`). The material is what
-            // this node kept for the claim: its own retention, the verified copy its seat kept (held
-            // while the lock lives: `disclosure_retain` pins it below), or an attempt capture re-made
-            // by replaying the claim's job and checked against its roots. One `Flat` a claim answers
-            // every in-run event unit (IMPL-16). Below the fence the duty list is empty.
+            // this node kept for the claim, checked against its roots, or a capture re-made by
+            // replaying the claim's job and checked the same way (`palw_da_material_v1`), one claim at
+            // a time, off the loop, under the memory ledger (`rcore_da_answers_v1`). One `Flat` a claim
+            // answers every in-run event unit (IMPL-16). Below the fence the duty list is empty.
             let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);
-            let disclosure_retain: Vec<Hash64> = disclosure.retain.iter().map(|(claim, _)| *claim).collect();
+            // What this node must keep: every claim a live lock of its bond still answers for, and
+            // every claim an open session demands a unit of now (its own too: a re-made capture is
+            // kept under `foreign/`). Pinned HERE, before any seat duty below can write `foreign/`
+            // and prune it — on the first tick after a restart the pins set at the end of the last
+            // tick are gone (the P2-7 review's LOW), and the age sweep would take a job payload a
+            // live lock still answers for; the end of the tick sets them again, with these.
+            let disclosure_retain: Vec<Hash64> =
+                disclosure.retain.iter().map(|(claim, _)| *claim).chain(disclosure.duties.iter().map(|duty| duty.claim_id)).collect();
+            if !disclosure_retain.is_empty() {
+                self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());
+            }
             da_flat_sent.retain(|_, sent| current_daa < sent.saturating_add(COURT_MOVE_REPLAN_DAA));
             // An answer still queued (the fee UTXO was busy) whose unit no open session demands of
             // this node any more — another discloser answered it, or its session closed — is one the
@@ -6273,7 +6622,6 @@ impl PalwPanelService {
                 _ => true,
             });
             if da_armed && !disclosure.duties.is_empty() {
-                let mut captures: HashMap<Hash64, Result<Vec<u8>, String>> = HashMap::new();
                 // A `Flat` queued (possibly waiting for the fee UTXO) or just sent answers the claim's run.
                 let mut flat_queued: HashSet<Hash64> = court_pending
                     .iter()
@@ -6290,6 +6638,10 @@ impl PalwPanelService {
                     })
                     .collect();
                 flat_queued.extend(da_flat_sent.keys().copied());
+                // The due units not queued or recently tried, by claim, in the duty list's order —
+                // soonest deadline first — so the claim whose session ends first is built first and
+                // asks the memory ledger first.
+                let mut by_claim: Vec<(Hash64, Vec<&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1>)> = Vec::new();
                 for duty in &disclosure.duties {
                     if !palw_disclosure_due_v1(duty, current_daa) {
                         continue;
@@ -6308,38 +6660,77 @@ impl PalwPanelService {
                     if court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
                         continue;
                     }
-                    match self.rcore_da_answer_v1(&session, network_domain, duty, &mut captures).await {
-                        Ok(object) => {
-                            info!(
-                                "[{PALW_PANEL}] claim {}: answering {:?} of an open data-availability session as {:?} — deadline \
-                                 DAA {} (ADR-0152 DA-4, X7)",
-                                duty.claim_id, duty.unit, duty.role, duty.deadline_daa
-                            );
-                            if let PalwConsensusObjectV2::MaterialDisclosedV2 {
-                                answer:
-                                    kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
-                                        kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. },
-                                    ),
-                                ..
-                            } = &object
-                            {
-                                flat_queued.insert(duty.claim_id);
-                                da_flat_sent.insert(duty.claim_id, current_daa);
+                    match by_claim.iter_mut().find(|(claim, _)| *claim == duty.claim_id) {
+                        Some((_, duties)) => duties.push(duty),
+                        None => by_claim.push((duty.claim_id, vec![duty])),
+                    }
+                }
+                for (claim, duties) in by_claim {
+                    let role = duties[0].role;
+                    match self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await {
+                        Ok(built) => {
+                            for (duty, built) in duties.iter().zip(built) {
+                                let key = palw_disclosure_queue_key_v1(duty);
+                                match built {
+                                    // A `Flat` built for an earlier unit answers this one.
+                                    Ok(None) => {}
+                                    Ok(Some(object)) => {
+                                        info!(
+                                            "[{PALW_PANEL}] claim {claim}: answering {:?} of an open data-availability session as {role:?} \
+                                             — deadline DAA {} (ADR-0152 DA-4, X7)",
+                                            duty.unit, duty.deadline_daa
+                                        );
+                                        if let PalwConsensusObjectV2::MaterialDisclosedV2 {
+                                            answer:
+                                                kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                                                    kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat {
+                                                        ..
+                                                    },
+                                                ),
+                                            ..
+                                        } = &object
+                                        {
+                                            flat_queued.insert(claim);
+                                            da_flat_sent.insert(claim, current_daa);
+                                        }
+                                        court_pending.push((key.0, key.1, key.2, object));
+                                    }
+                                    Err(why) => {
+                                        warn!(
+                                            "[{PALW_PANEL}] claim {claim}: cannot answer {:?} of an open data-availability session as \
+                                             {role:?}: {why}",
+                                            duty.unit
+                                        );
+                                        court_moved.insert(key, current_daa);
+                                        *court_stalls
+                                            .entry("a data-availability unit cannot be answered from what this node holds")
+                                            .or_default() += 1;
+                                    }
+                                }
                             }
-                            court_pending.push((key.0, key.1, key.2, object));
                         }
-                        Err(why) => {
+                        // Asked again next tick, soonest deadline first again.
+                        Err(PalwDaClaimHoldV1::Ledger(why)) => {
+                            *court_stalls.entry("the memory ledger cannot cover a data-availability answer").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1("panel-da-answer-ledger", || {
+                                format!("[{PALW_PANEL}] claim {claim}: the data-availability answer waits — {why}")
+                            });
+                        }
+                        // Tried again a re-plan later, not every tick: building the material may have
+                        // replayed the claim's whole job, and one that does not reproduce the roots
+                        // will not on the next tick either.
+                        Err(PalwDaClaimHoldV1::Material(why)) => {
                             warn!(
-                                "[{PALW_PANEL}] claim {}: cannot answer {:?} of an open data-availability session as {:?}: {why}",
-                                duty.claim_id, duty.unit, duty.role
+                                "[{PALW_PANEL}] claim {claim}: cannot answer {} unit(s) of an open data-availability session as \
+                                 {role:?}: {why}",
+                                duties.len()
                             );
-                            // Tried again a re-plan later, not every tick: building the answer may
-                            // have replayed the claim's whole job (`rcore_da_capture_v1`), and one
-                            // that does not reproduce the roots will not on the next tick either.
-                            court_moved.insert(key, current_daa);
+                            for duty in &duties {
+                                court_moved.insert(palw_disclosure_queue_key_v1(duty), current_daa);
+                            }
                             *court_stalls
                                 .entry("a data-availability unit cannot be answered from what this node holds")
-                                .or_default() += 1;
+                                .or_default() += duties.len();
                         }
                     }
                 }
@@ -6679,8 +7070,20 @@ impl PalwPanelService {
                                 .await
                             {
                                 (PalwSeatReplayStepV1::Licensed, bytes) => {
-                                    if let Some(bytes) = bytes {
-                                        self.persist_foreign_material(&duty.claim_id, &bytes);
+                                    let kept = bytes.is_none_or(|bytes| self.persist_foreign_material(&duty.claim_id, &bytes));
+                                    // Past `palw_rcore_plus` this `Valid` is a full mask's X7 liability:
+                                    // every unit a DA session can demand, answered from the job kept
+                                    // here — not chain data — or charged S4 if the producer withholds.
+                                    // A seat that could not keep the job files nothing (silence costs
+                                    // a seat nothing, X10), and tries again next tick.
+                                    if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+                                        warn!(
+                                            "[{PALW_PANEL}] claim {}: licensed by replay, but its job could not be kept on disk — no \
+                                             Valid: a full mask's Valid owes every unit a data-availability session can demand, from \
+                                             material this seat does not hold (ADR-0152 X7, DA-7 S4)",
+                                            duty.claim_id
+                                        );
+                                        break 'verdict None;
                                     }
                                     debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::FreePromptReplay));
                                     licensed_by_replay = true;
@@ -8586,9 +8989,10 @@ impl PalwPanelService {
             } else {
                 *self.foreign_pinned.lock().unwrap() = live.clone();
             }
-            // P2-7: and every claim a live lock of this bond still answers for (`disclosure_retain`,
-            // read off the chain's locks, so a restart that forgot the duty book keeps them too).
-            // Empty below `palw_rcore_plus`.
+            // P2-7: and every claim a live lock of this bond still answers for, or an open session
+            // demands a unit of now (`disclosure_retain`, read off the chain's locks and sessions, so a
+            // restart that forgot the duty book keeps them too — pinned already at the duty read, before
+            // any seat duty could prune). Empty below `palw_rcore_plus`.
             if !disclosure_retain.is_empty() {
                 self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());
             }
@@ -10305,7 +10709,7 @@ impl PalwPanelService {
     /// names every unit the court can and has no catch-all) from the capture, its job's prompt and
     /// the claim's roots — the binding read off interval 0 where the answer does not carry its own.
     /// The v1 court's answer ([`Self::held_da_answer_v1`]) reads it; R-core's (P2-7) builds through
-    /// [`Self::fp_held_da_disclosure_of_v1`] on the capture it holds, re-made if need be.
+    /// the same builder ([`palw_fp_held_disclosure_v1`]) on the capture it verified, re-made if need be.
     fn fp_held_da_disclosure_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -10344,16 +10748,7 @@ impl PalwPanelService {
             let none = Hash64::default();
             (PalwClaimRootsV1 { execution_root: none, trace_root: none, anchor: none, attempt_draw: None, output_root: None }, 0)
         };
-        kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
-            backend,
-            &payload.capture,
-            &payload.material.prompt_token_ids,
-            roots,
-            work_leaves,
-            missing,
-            self.class_prompt_ids_form(job.class_id),
-            || Self::served_binding_v1(backend, payload),
-        )
+        palw_fp_held_disclosure_v1(backend, payload, roots, work_leaves, missing, self.class_prompt_ids_form(job.class_id))
     }
 
     /// **The held DA court's answer, in the unit accused** (ADR-0103 Decision 4; ADR-0111 Decisions
@@ -10396,8 +10791,8 @@ impl PalwPanelService {
     /// **Open event `(row, tile)` of a retained or re-made capture** (ADR-0062 D3; ADR-0152 DA-4) —
     /// nothing re-executed: the rows and ids kept at execution are what the claim committed. A
     /// free-prompt retention wraps the family capture with the job and its ids; the attempt lane
-    /// retains the family capture bare (ADR-0084 Decision 4). The v1 court's responder and R-core's
-    /// (P2-7) both open through it.
+    /// retains the family capture bare (ADR-0084 Decision 4). The v1 court's responder; R-core's
+    /// (P2-7) opens the capture it verified by the claim's own class ([`palw_da_unit_answer_v1`]).
     fn disclose_retained_event_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -10418,232 +10813,127 @@ impl PalwPanelService {
         }
     }
 
-    /// **The capture an R-core answer is built from** (ADR-0152 DA-4, P2-7), once a tick a claim
-    /// (`captures`): this node's own retention, then the verified copy it kept as a seat (pinned
-    /// while its lock lives), and otherwise a capture re-made by replaying the claim's job, used only
-    /// if it reproduces the committed roots — an attempt claim's from its block
-    /// ([`Self::remade_attempt_capture_v1`]; the job is chain data), a free-prompt claim's from the
-    /// job payload this node kept ([`Self::remade_fp_capture_v1`]: a full seat that licensed by
-    /// replaying a job-only `FPM1` payload keeps that payload, not a capture). A free-prompt claim
-    /// this node kept no job for cannot be answered from here: its job is not chain data.
-    async fn rcore_da_capture_v1(
+    /// **ADR-0152 DA-4 / X7 (P2-7): the `MaterialDisclosedV2`s that answer one claim's due units**,
+    /// `duties` (one claim's, soonest deadline first), each signed by its duty's discloser — this
+    /// node's bond: the producer, or a covering signer.
+    ///
+    /// The claim's facts are read off the chain here; everything heavy runs in ONE blocking task under
+    /// ONE reservation of the memory ledger (`"da-answer"`, a full seat's figure for the class — the
+    /// court's bound for its close, and an upper bound over a whole-job re-make and the held builders,
+    /// which on a fold capture replay the anchor state): the copies this node kept are read and
+    /// checked, the capture re-made if none verifies ([`palw_da_material_v1`]) and kept under
+    /// `foreign/`, every unit answered from it ([`palw_da_claim_answers_v1`]), and the material dropped
+    /// when the task ends. A refusal of the reservation is [`PalwDaClaimHoldV1::Ledger`], tried again
+    /// the next tick; the duties arrive soonest deadline first, so the claim whose session ends first
+    /// asks the ledger first. (The P2-7 review's MEDIUM: whole-job replays and held builders ran with
+    /// no reservation, the held builders on the tick itself, beside a per-tick cache of every claim's
+    /// whole capture.)
+    ///
+    /// The producer answers on the executor's kept instance (its walk, as the v1 held answer does); a
+    /// covering signer on a fresh one through the one resolve door, which neither releases nor keeps
+    /// the executor's (the review's LOW). Each object is built by the ONE builder the real-claim tests
+    /// carry through the gate and the fold (`palw_da_answer_object_v1`), inside the ruleset's close
+    /// ceiling (DA-8). One entry a duty, in order: `Ok(None)` for a unit a `Flat` answers.
+    async fn rcore_da_answers_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         network_domain: Hash64,
-        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
-        captures: &mut HashMap<Hash64, Result<Vec<u8>, String>>,
-    ) -> Result<Vec<u8>, String> {
-        if let Some(held) = captures.get(&duty.claim_id) {
-            return held.clone();
+        duties: &[&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1],
+        flat_queued: bool,
+    ) -> Result<Vec<Result<Option<PalwConsensusObjectV2>, String>>, PalwDaClaimHoldV1> {
+        use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
+        let Some(first) = duties.first() else { return Ok(Vec::new()) };
+        let (claim, class_id, artifact_root) = (first.claim_id, first.class_id, first.artifact_root);
+        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> = match first.role {
+            PalwDisclosureRoleV1::Producer => self.executor_backend_v1(session, class_id, artifact_root),
+            PalwDisclosureRoleV1::CoveringSigner => self.resolve_backend(session, class_id, artifact_root).map(Arc::from),
         }
-        let retained = self
-            .retained_capture(&duty.claim_id)
-            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok());
-        let form = self.class_prompt_ids_form(duty.class_id);
-        let held = match retained {
-            // An attempt's bare capture, or a free-prompt payload that carries its capture (`FPC1`).
-            Some(bytes)
-                if !duty.free_prompt
-                    || kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, form).is_some() =>
-            {
-                Ok(bytes)
-            }
-            None if !duty.free_prompt => {
-                let remade = self
-                    .remade_attempt_capture_v1(
-                        session,
-                        network_domain,
-                        duty.accepted_block,
-                        duty.class_id,
-                        duty.artifact_root,
-                        &duty.executor_bond,
-                        duty.execution_root,
-                        duty.trace_root,
-                    )
-                    .await;
-                if remade.is_ok() {
-                    info!(
-                        "[{PALW_PANEL}] claim {}: no capture kept here — re-made by replaying its block's job to answer a \
-                         data-availability session ({:?})",
-                        duty.claim_id, duty.role
-                    );
-                }
-                remade
-            }
-            // A free-prompt claim whose kept payload is its job alone, or nothing.
-            _ => {
-                let remade = self.remade_fp_capture_v1(session, duty).await;
-                if remade.is_ok() {
-                    info!(
-                        "[{PALW_PANEL}] claim {}: no free-prompt capture kept here — re-made by replaying the job this node kept, \
-                         to answer a data-availability session ({:?})",
-                        duty.claim_id, duty.role
-                    );
-                }
-                remade
+        .map_err(PalwDaClaimHoldV1::Material)?;
+        let (_, _, work_leaves) =
+            session.palw_claim_roots_v2(claim).ok_or(PalwDaClaimHoldV1::Material("the chain holds no such claim".to_string()))?;
+        let lane = if first.free_prompt {
+            PalwDaLaneV1::FreePrompt { panel_da_admissible: self.consensus_config.params.palw_panel_da_admissible() }
+        } else {
+            let bond = &first.executor_bond;
+            PalwDaLaneV1::Attempt {
+                anchor: self
+                    .job_anchor_for_claim(session, backend.as_ref(), network_domain, first.accepted_block, class_id, bond)
+                    .unwrap_or_default(),
+                attempt_draw: self.attempt_draw_for_claim(session, first.accepted_block),
+                job: self.attempt_job_for_claim(session, backend.as_ref(), network_domain, first.accepted_block, class_id, bond),
             }
         };
-        captures.insert(duty.claim_id, held.clone());
-        held
-    }
-
-    /// **Re-make a free-prompt capture from the job this node kept** (ADR-0152 DA-4, X7; P2-7) — the
-    /// free-prompt twin of [`Self::remade_attempt_capture_v1`]. A full seat that licensed by replaying
-    /// a job-only `FPM1` payload (SEAT-R) keeps that payload (`persist_foreign_material`) and not the
-    /// capture its replay made, yet its lock covers every unit (C7), so a producer that withholds
-    /// would have it charged S4 for material it never held. The job is replayed off the loop and the
-    /// capture used only if it reproduces the claim's committed roots under the job's id — the check
-    /// every retained capture passes — and then kept as the claim's `FPC1` in place of the job-only
-    /// payload (the same job, now with its evidence), so the next unit is answered without a replay.
-    async fn remade_fp_capture_v1(
-        &self,
-        session: &kaspa_consensusmanager::ConsensusProxy,
-        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
-    ) -> Result<Vec<u8>, String> {
-        use kaspa_consensus_core::palw_freeprompt_v3::{fp_job_id_v3, palw_fp_capture_encode_v1};
-        let form = self.class_prompt_ids_form(duty.class_id);
-        let material = self
-            .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, &[])
-            .ok_or("no capture and no job of this free-prompt claim is kept here: its job is not chain data")?;
-        let backend = self.resolve_backend(session, duty.class_id, duty.artifact_root)?;
-        let ids = Self::fp_prompt_for_job(backend.as_ref(), &material, form).ok_or("the kept job's prompt is not the job's")?;
-        let job = material.job;
-        let roots = PalwClaimRootsV1 {
-            execution_root: duty.execution_root,
-            trace_root: duty.trace_root,
-            anchor: fp_job_id_v3(&job),
-            attempt_draw: None,
-            output_root: None,
-        };
-        let work = ReplayWork::FreePrompt(job.clone(), ids.iter().map(|id| *id as usize).collect());
-        let (backend, outcome) = offload(backend, move |b| work.run(b)).await?;
-        let capture = outcome.ok_or("the replay did not run")?.material;
-        if backend.verify_material(&capture, roots) != PalwMaterialVerdictV1::Matches {
-            return Err("the kept job's replay does not reproduce the claim's committed roots".to_string());
-        }
-        let payload = palw_fp_capture_encode_v1(&job, &ids, &capture);
-        let dir = self.config.retention_dir.join("foreign");
-        let path = dir.join(format!("{}.material", duty.claim_id));
-        let partial = dir.join(format!("{}.material.partial", duty.claim_id));
-        if let Err(e) = std::fs::create_dir_all(&dir)
-            .and_then(|()| std::fs::write(&partial, &payload))
-            .and_then(|()| std::fs::rename(&partial, &path))
-        {
-            warn!("[{PALW_PANEL}] claim {}: cannot keep the re-made capture ({e}); it answers this tick only", duty.claim_id);
-        }
-        Ok(payload)
-    }
-
-    /// **A held unit of an ATTEMPT claim, answered from its capture** (ADR-0152 DA-3/DA-4, P2-7). The
-    /// fold draws held units on attempt claims too — a `DefaultAccusedHeld` on any class draws
-    /// width-1 step ranges beside a named leaf — and v1's responder answered them only from a
-    /// free-prompt capture, so an honest attempt producer defaulted. The prompt is the canonical one
-    /// the claim's anchor implies, the roots name that job, and the binding is the capture's own, read
-    /// off an out-of-range event disclosure (every family's DA responder carries it there, and the
-    /// fold's checkers read that binding).
-    fn attempt_held_da_disclosure_v1(
-        &self,
-        session: &kaspa_consensusmanager::ConsensusProxy,
-        network_domain: Hash64,
-        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
-        capture: &[u8],
-        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
-    ) -> Result<
-        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1),
-        String,
-    > {
-        let backend = self.resolve_backend(session, duty.class_id, duty.artifact_root)?;
-        let (_, prompt) = self
-            .attempt_job_for_claim(session, backend.as_ref(), network_domain, duty.accepted_block, duty.class_id, &duty.executor_bond)
-            .ok_or("the claim's block is not in this node's store")?;
-        let prompt: Vec<u32> = prompt
-            .iter()
-            .map(|id| u32::try_from(*id).map_err(|_| format!("prompt id {id} does not fit a u32")))
-            .collect::<Result<_, _>>()?;
-        let (_, _, work_leaves) = session.palw_claim_roots_v2(duty.claim_id).ok_or("the chain holds no such claim")?;
-        let roots = PalwClaimRootsV1 {
-            execution_root: duty.execution_root,
-            trace_root: duty.trace_root,
-            anchor: self
-                .job_anchor_for_claim(
-                    session,
-                    backend.as_ref(),
-                    network_domain,
-                    duty.accepted_block,
-                    duty.class_id,
-                    &duty.executor_bond,
-                )
-                .unwrap_or_default(),
-            attempt_draw: self.attempt_draw_for_claim(session, duty.accepted_block),
-            output_root: None,
-        };
-        kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
-            backend.as_ref(),
-            capture,
-            &prompt,
-            roots,
+        let facts = PalwDaClaimFactsV1 {
+            claim_id: claim,
+            class_id,
+            executor_bond: first.executor_bond,
+            execution_root: first.execution_root,
+            trace_root: first.trace_root,
             work_leaves,
-            missing,
-            self.class_prompt_ids_form(duty.class_id),
-            || backend.disclose_trace_event(capture, u32::MAX, u8::MAX).map(|disclosure| disclosure.binding().clone()),
-        )
-    }
-
-    /// **ADR-0152 DA-4 / X7 (P2-7): the `MaterialDisclosedV2` that answers one unit `duty` names**,
-    /// signed by the duty's discloser (this node's bond: the producer, or a covering signer). An
-    /// event unit is opened out of the claim's capture ([`Self::disclose_retained_event_v1`]: `Flat`,
-    /// `Tiled`, or `OutOfRange` from the binding alone); a held unit by the ONE held builder, from a
-    /// free-prompt capture ([`Self::fp_held_da_disclosure_of_v1`]) or an attempt capture
-    /// ([`Self::attempt_held_da_disclosure_v1`]) — either kind kept or re-made by
-    /// [`Self::rcore_da_capture_v1`]. The object is built by the ONE builder the
-    /// real-claim tests carry through the gate and the fold (`palw_da_answer_object_v1`), inside the
-    /// ruleset's close ceiling (DA-8).
-    async fn rcore_da_answer_v1(
-        &self,
-        session: &kaspa_consensusmanager::ConsensusProxy,
-        network_domain: Hash64,
-        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
-        captures: &mut HashMap<Hash64, Result<Vec<u8>, String>>,
-    ) -> Result<PalwConsensusObjectV2, String> {
-        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_answer_object_v1, palw_da_held_answer_v1};
-        let answer = match duty.unit {
-            PalwDaUnitV1::Event { row, tile } => {
-                let bytes = self.rcore_da_capture_v1(session, network_domain, duty, captures).await?;
-                PalwDaAnswerV1::Event(self.disclose_retained_event_v1(
-                    session,
-                    duty.class_id,
-                    duty.artifact_root,
-                    &bytes,
-                    row,
-                    tile,
-                )?)
-            }
-            PalwDaUnitV1::Held(missing) => {
-                let bytes = self.rcore_da_capture_v1(session, network_domain, duty, captures).await?;
-                let (binding, disclosure) = if duty.free_prompt {
-                    let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(
-                        &bytes,
-                        self.class_prompt_ids_form(duty.class_id),
-                    )
-                    .ok_or("the kept material is not a free-prompt capture")?;
-                    let backend = self.executor_backend_v1(session, duty.class_id, duty.artifact_root)?;
-                    self.fp_held_da_disclosure_of_v1(session, duty.claim_id, backend.as_ref(), &payload, missing)?
-                } else {
-                    self.attempt_held_da_disclosure_v1(session, network_domain, duty, &bytes, missing)?
-                };
-                palw_da_held_answer_v1(duty.claim_id, missing, binding, disclosure)
-            }
+            form: self.class_prompt_ids_form(class_id),
+            lane,
         };
-        palw_da_answer_object_v1(
-            &network_domain,
-            duty.claim_id,
-            duty.unit,
-            answer,
-            duty.discloser,
-            self.config.court.max_close_bytes(),
-            |message, context| self.sign(message, context),
-        )
-        .map_err(|e| e.to_string())
+        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
+            backend.as_ref(),
+            class_id,
+            artifact_root,
+            None,
+            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
+            |id| self.chain_carriage_v1(session, id),
+        );
+        let reserved = self.reserve_replay_v1("da-answer", &need, class_id, claim).map_err(PalwDaClaimHoldV1::Ledger)?;
+        // Every copy this node may hold, own retention first; a free-prompt claim's `.answer`
+        // envelopes too, which carry its job.
+        let dir = &self.config.retention_dir;
+        let paths: Vec<PathBuf> = if first.free_prompt {
+            self.fp_retained_payload_paths(&claim).to_vec()
+        } else {
+            vec![crate::palw_producer::palw_retained_material_path(dir, &claim), dir.join("foreign").join(format!("{claim}.material"))]
+        };
+        let foreign = dir.join("foreign");
+        let units: Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1> = duties.iter().map(|duty| duty.unit).collect();
+        let in_run_rows = first.in_run_rows;
+        let built = offload_shared(backend, move |b| {
+            let _held_for_the_answers = reserved;
+            palw_da_claim_answers_v1(
+                b,
+                &facts,
+                paths.iter().filter_map(|path| std::fs::read(path).ok()),
+                |bytes| palw_da_keep_remade_v1(&foreign, &claim, bytes),
+                &units,
+                in_run_rows,
+                flat_queued,
+            )
+        })
+        .await
+        .map_err(PalwDaClaimHoldV1::Material)?
+        .map_err(PalwDaClaimHoldV1::Material)?;
+        if built.remade {
+            info!(
+                "[{PALW_PANEL}] claim {claim}: no kept copy reproduces its roots — its capture was re-made by replaying the claim's job \
+                 and kept, to answer a data-availability session ({:?})",
+                first.role
+            );
+        }
+        Ok(duties
+            .iter()
+            .zip(built.answers)
+            .map(|(duty, answer)| match answer {
+                None => Ok(None),
+                Some(Err(why)) => Err(why),
+                Some(Ok(answer)) => kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+                    &network_domain,
+                    duty.claim_id,
+                    duty.unit,
+                    answer,
+                    duty.discloser,
+                    self.config.court.max_close_bytes(),
+                    |message, context| self.sign(message, context),
+                )
+                .map(Some)
+                .map_err(|e| e.to_string()),
+            })
+            .collect())
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
@@ -10991,7 +11281,8 @@ impl PalwPanelService {
         replays: &mut PalwSeatReplaysV1,
     ) -> (PalwSeatReplayStepV1, Option<Vec<u8>>) {
         use kaspa_consensus_core::palw_freeprompt_v3::{
-            PalwFpMaterialV1, fp_job_id_v3, palw_fp_capture_decode_v1, palw_fp_job_material_decode_v1, palw_fp_seat_prompt_admit_v1,
+            PalwFpMaterialV1, fp_job_id_v3, palw_fp_capture_decode_v1, palw_fp_job_material_decode_v1, palw_fp_material_encode_v1,
+            palw_fp_seat_prompt_admit_v1,
         };
         let form = self.class_prompt_ids_form(duty.class_id);
         let Ok(probe) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
@@ -11055,7 +11346,7 @@ impl PalwPanelService {
         order.sort_by_key(|i| !own[*i]);
         let mut waiting = false;
         for index in order {
-            let (job_id, material, payloads) = &jobs[index];
+            let (job_id, material, _) = &jobs[index];
             let is_own = own[index];
             // Whether this job's replay can decide the claim: the claim's own, or any while none is.
             let decides = is_own || !holds_own;
@@ -11091,7 +11382,17 @@ impl PalwPanelService {
                                 duty.claim_id, replayed.work_leaves, seat_r_duty.role
                             );
                         }
-                        return (PalwSeatReplayStepV1::Licensed, payloads.first().cloned());
+                        // What is kept of a licence is the job it licensed, in its job-only spelling
+                        // (`FPM1`): never a served payload's `FPC1` whose capture nothing checked — a
+                        // peer racing the producer's gossip can plant one of the right job with a
+                        // garbage capture, and a covering signer then answered its DA session from it
+                        // (the P2-7 review's HIGH). A verified `FPC1` of this job is kept already
+                        // (`proof`, above; the directory is write-once), and R-core's answer re-makes
+                        // the capture from this one (`palw_da_material_v1`).
+                        return (
+                            PalwSeatReplayStepV1::Licensed,
+                            Some(palw_fp_material_encode_v1(&material.job, &material.prompt_token_ids)),
+                        );
                     }
                     if fresh {
                         warn!(
@@ -12642,18 +12943,27 @@ mod court_responder_coverage_pin {
             body("fn fp_held_da_disclosure_v1(").contains("self.fp_held_da_disclosure_of_v1("),
             "the free-prompt loader builds through the one free-prompt held source"
         );
+        // Module-level functions end at a column-0 brace.
+        let top = |head: &str| {
+            let at = &source[source.find(head).unwrap_or_else(|| panic!("{head}"))..];
+            &at[..at.find("\n}\n").expect("its end")]
+        };
         assert!(
-            body("fn fp_held_da_disclosure_of_v1(").contains("palw_da_held_disclosure_from_capture_v1("),
+            body("fn fp_held_da_disclosure_of_v1(").contains("palw_fp_held_disclosure_v1("),
+            "which builds through the one free-prompt held builder"
+        );
+        assert!(
+            top("fn palw_fp_held_disclosure_v1(").contains("palw_da_held_disclosure_from_capture_v1("),
             "which builds through the core's held builder"
         );
-        let rcore = body("async fn rcore_da_answer_v1(");
-        for reached in ["self.fp_held_da_disclosure_of_v1(", "self.attempt_held_da_disclosure_v1(", "palw_da_answer_object_v1("] {
+        let rcore = body("async fn rcore_da_answers_v1(");
+        for reached in ["palw_da_claim_answers_v1(", "palw_da_answer_object_v1("] {
             assert!(rcore.contains(reached), "R-core's answer reaches {reached}");
         }
-        assert!(
-            body("fn attempt_held_da_disclosure_v1(").contains("palw_da_held_disclosure_from_capture_v1("),
-            "and so does the attempt claim's"
-        );
+        let unit = top("pub(crate) fn palw_da_unit_answer_v1(");
+        assert!(unit.contains("palw_fp_held_disclosure_v1("), "a free-prompt claim's held unit, through the one FP held builder");
+        assert!(unit.contains("palw_da_held_disclosure_from_capture_v1("), "and an attempt claim's through the core's held builder");
+        assert!(top("pub(crate) fn palw_da_claim_answers_v1(").contains("palw_da_unit_answer_v1("), "every unit of a claim");
         let core = include_str!("../../consensus/core/src/palw_da_rcore_v1.rs");
         let builder = &core[core.find("pub fn palw_da_held_disclosure_from_capture_v1(").expect("the held builder")..];
         let builder = &builder[..builder.find("\n}\n").expect("its end")];
@@ -14307,7 +14617,7 @@ mod seat_s_tests {
         Hash64::from_u64_word(n)
     }
 
-    fn floor_backend() -> misaka_palw_base0::backend::Base0Backend {
+    pub(super) fn floor_backend() -> misaka_palw_base0::backend::Base0Backend {
         use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
         let court =
             kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
@@ -14332,7 +14642,7 @@ mod seat_s_tests {
     }
 
     /// A free-prompt job of the floor's, greedy, five prompt ids and a seven-token ceiling, and the ids.
-    fn floor_fp_job(
+    pub(super) fn floor_fp_job(
         backend: &misaka_palw_base0::backend::Base0Backend,
     ) -> (kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<u32>) {
         use kaspa_consensus_core::palw_freeprompt_v3::{
@@ -15306,11 +15616,12 @@ mod seat_s_tests {
 
 #[cfg(test)]
 mod p2_7_disclosure_policy {
-    //! **ADR-0152 X7 (Phase 2, P2-7): when the node answers a disclosure duty, and how its queue
-    //! keys an answer.** The duty list and the answer are consensus-core's
+    //! **ADR-0152 X7 (Phase 2, P2-7): when the node answers a disclosure duty, what it answers from,
+    //! and how its queue keys an answer.** The duty list and the answer object are consensus-core's
     //! (`palw_disclosure_duties_v1`, `palw_da_answer_object_v1`) and are carried through the gate and
     //! the fold on real claims in `t46_false_valid_real_claim::m3_da_court`; this is the node's own
-    //! policy around them.
+    //! policy around them — the material loader and the unit builders run here on the floor's fixture
+    //! backend (kept → verified → re-made → nothing), and the tick's loop is pinned where it runs.
     use super::*;
     use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
     use kaspa_consensus_core::palw_producer_v2::{PalwDisclosureDutyV1, PalwDisclosureRoleV1};
@@ -15365,39 +15676,208 @@ mod p2_7_disclosure_policy {
         );
     }
 
-    /// **What an answer is built from** (P2-7, X7): the kept capture — own retention, then the
-    /// seat's verified copy — and otherwise one re-made by replaying the claim's job: an attempt's
-    /// from its block, a free-prompt claim's from the job payload the seat kept (a full seat licensed
-    /// by replaying a job-only `FPM1` payload keeps no capture). A job-only payload is never answered
-    /// from as if it were a capture, and a re-made capture is checked against the claim's roots
-    /// before it is kept in the payload's place.
+    /// A floor free-prompt claim the fixture backend ran: the backend, the claim's facts, its job and
+    /// prompt, and the honest capture.
+    fn fp_claim() -> (
+        misaka_palw_base0::backend::Base0Backend,
+        PalwDaClaimFactsV1,
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        Vec<u32>,
+        Vec<u8>,
+    ) {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let backend = super::seat_s_tests::floor_backend();
+        let (job, ids) = super::seat_s_tests::floor_fp_job(&backend);
+        let prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the producer's run");
+        let facts = PalwDaClaimFactsV1 {
+            claim_id: Hash64::from_u64_word(0xC1),
+            class_id: job.class_id,
+            executor_bond: PalwBondKeyV2(job.executor_bond),
+            execution_root: run.outcome.execution_root,
+            trace_root: run.facts.full_logits_trace_root,
+            work_leaves: run.facts.step_leaf_count,
+            form: backend.prompt_ids_form(),
+            lane: PalwDaLaneV1::FreePrompt { panel_da_admissible: false },
+        };
+        (backend, facts, job, ids, run.outcome.material)
+    }
+
+    /// Answer `units` of `facts`'s claim from `kept` on the fixture backend: what was built, and what
+    /// was handed to `keep`.
+    fn answer(
+        backend: &misaka_palw_base0::backend::Base0Backend,
+        facts: &PalwDaClaimFactsV1,
+        kept: Vec<Vec<u8>>,
+        units: &[PalwDaUnitV1],
+        flat: bool,
+    ) -> (Result<PalwDaClaimAnswersV1, String>, Option<Vec<u8>>) {
+        let mut kept_back = None;
+        let built = palw_da_claim_answers_v1(backend, facts, kept, |bytes| kept_back = Some(bytes.to_vec()), units, 2, flat);
+        (built, kept_back)
+    }
+
+    /// **The P2-7 review's HIGH: an R-core answer is built from a capture that reproduces the claim's
+    /// roots, or from one re-made by replaying the claim's job — never from a payload that merely
+    /// decodes as `FPC1`.** On the floor's fixture backend, one free-prompt claim:
+    ///
+    /// 1. an honest `FPC1` kept: answered from as it is, nothing replayed or rewritten;
+    /// 2. a PLANTED `FPC1` — the claim's job, a garbage capture — that the decoder accepts: never
+    ///    answered from; the job it carries is replayed, and the verified capture (byte for byte the
+    ///    honest payload) is handed to `keep` to replace it; with an honest copy kept beside it, that
+    ///    copy answers and nothing is replayed;
+    /// 3. the job alone (`FPM1`, what a full seat that licensed by replay keeps): re-made and kept as
+    ///    the claim's `FPC1`;
+    /// 4. nothing, a stranger's job (the claim's class and producer, another nonce), another
+    ///    producer's job: no answer and nothing kept — and a stranger's job before the claim's costs a
+    ///    replay, never the answer.
+    ///
+    /// Before the fix case 2 answered from the garbage (the loader's guard was the decoder alone), so
+    /// it is red without it.
     #[test]
-    fn a_capture_is_kept_or_re_made_and_a_re_made_one_is_checked_before_it_is_kept() {
+    fn a_da_answer_is_built_from_a_verified_or_re_made_capture_never_a_decodable_one() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            palw_fp_capture_decode_v1, palw_fp_capture_encode_v1, palw_fp_material_encode_v1,
+        };
+        let (backend, facts, job, ids, capture) = fp_claim();
+        let honest = palw_fp_capture_encode_v1(&job, &ids, &capture);
+        let garbage = palw_fp_capture_encode_v1(&job, &ids, b"a capture nobody checked");
+        assert!(palw_fp_capture_decode_v1(&garbage, facts.form).is_some(), "the planted payload decodes as the claim's FPC1");
+        let job_only = palw_fp_material_encode_v1(&job, &ids);
+        let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+        // (1) Honest.
+        let (built, kept) = answer(&backend, &facts, vec![honest.clone()], &event, false);
+        let built = built.expect("answered from the honest copy");
+        assert!(!built.remade && kept.is_none(), "nothing replayed, nothing rewritten");
+        let honest_answer = built.answers[0].clone().expect("asked").expect("the event opens");
+        // (2) Planted.
+        let (built, kept) = answer(&backend, &facts, vec![garbage.clone()], &event, false);
+        let built = built.expect("re-made from the job the planted payload carries");
+        assert!(built.remade, "the garbage capture is never answered from");
+        assert_eq!(kept.as_deref(), Some(honest.as_slice()), "the verified re-make replaces it: the honest payload, byte for byte");
+        assert_eq!(built.answers[0], Some(Ok(honest_answer.clone())), "and answers as the honest copy does");
+        let (built, kept) = answer(&backend, &facts, vec![garbage.clone(), honest.clone()], &event, false);
+        assert!(!built.expect("the honest copy answers").remade && kept.is_none(), "own retention planted, the seat's copy honest");
+        // (3) The job alone.
+        let (built, kept) = answer(&backend, &facts, vec![job_only.clone()], &event, false);
+        assert!(built.expect("re-made from the kept job").remade);
+        assert_eq!(kept.as_deref(), Some(honest.as_slice()), "and kept as the claim's FPC1");
+        // (4) Nothing to answer from.
+        let (built, kept) = answer(&backend, &facts, Vec::new(), &event, false);
+        assert!(built.is_err() && kept.is_none(), "a free-prompt job is not chain data");
+        let mut stranger = job.clone();
+        stranger.job_nonce = [0xA5; 32];
+        let stranger_only = palw_fp_material_encode_v1(&stranger, &ids);
+        let (built, kept) = answer(&backend, &facts, vec![stranger_only.clone()], &event, false);
+        assert!(built.is_err() && kept.is_none(), "a stranger's job does not reproduce the claim's roots");
+        let (built, kept) = answer(&backend, &facts, vec![stranger_only, job_only.clone()], &event, false);
+        assert!(built.expect("the claim's own job, tried next").remade && kept.as_deref() == Some(honest.as_slice()));
+        let mut other = job.clone();
+        other.executor_bond =
+            kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB1), 0);
+        let (built, kept) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&other, &ids)], &event, false);
+        assert!(built.is_err() && kept.is_none(), "another producer's job is not replayed");
+    }
+
+    /// **Every due unit of a claim from one load, and one `Flat` answers the claim's run** (IMPL-16): a
+    /// `Flat` already queued answers an in-run event unit (`None`, no carrier), and one built here
+    /// answers the next in-run unit the same way; a held unit of a free-prompt claim is answered from
+    /// the same capture by the one held builder; an answer is the form the ONE object builder takes.
+    #[test]
+    fn a_claims_units_are_answered_from_one_load_and_one_flat_answers_its_run() {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_answer_object_v1};
+        use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+        use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
+        let (backend, facts, job, ids, capture) = fp_claim();
+        let honest = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(&job, &ids, &capture);
+        let (built, _) = answer(&backend, &facts, vec![honest.clone()], &[PalwDaUnitV1::Event { row: 0, tile: 0 }], true);
+        assert_eq!(built.expect("loaded").answers, vec![None], "a queued Flat answers the in-run unit");
+        let units = [
+            PalwDaUnitV1::Event { row: 0, tile: 0 },
+            PalwDaUnitV1::Event { row: 1, tile: 0 },
+            PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: 0 }),
+        ];
+        let built = answer(&backend, &facts, vec![honest], &units, false).0.expect("loaded once");
+        assert_eq!(built.answers.len(), 3);
+        let first = built.answers[0].clone().expect("asked").expect("opens");
+        if matches!(first, PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })) {
+            assert_eq!(built.answers[1], None, "the Flat built for row 0 answers row 1 of a two-row run");
+        } else {
+            assert!(built.answers[1].is_some(), "no Flat, so row 1 is answered on its own");
+        }
+        let held = built.answers[2].clone().expect("asked").expect("the prompt tile opens from the capture's job");
+        let bond = facts.executor_bond;
+        for (unit, answer) in [(units[0], first), (units[2], held)] {
+            palw_da_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, u64::MAX, |_, _| Some(vec![1]))
+                .expect("the form the fold takes");
+        }
+    }
+
+    /// **An attempt claim's material: kept and verified, or re-made from its block's job** — which is
+    /// chain data, so a garbage copy (or none) costs a replay and is replaced, and only a node whose
+    /// store lacks the block has nothing to answer from.
+    #[test]
+    fn an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let backend = super::seat_s_tests::floor_backend();
+        let anchor = Hash64::from_u64_word(0x00C0_FFEE);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("job");
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, true);
+        let run = backend.execute(&job, &prompt).expect("the producer's run");
+        let mut facts = PalwDaClaimFactsV1 {
+            claim_id: Hash64::from_u64_word(0xC2),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0)),
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            work_leaves: 0,
+            form: backend.prompt_ids_form(),
+            lane: PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: Some((job, prompt)) },
+        };
+        let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+        let (built, kept) = answer(&backend, &facts, vec![run.material.clone()], &event, false);
+        assert!(!built.expect("answered").remade && kept.is_none(), "the kept capture verifies");
+        let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec()], &event, false);
+        assert!(built.expect("re-made from the block's job").remade);
+        assert_eq!(kept.as_deref(), Some(run.material.as_slice()), "kept in the garbage's place");
+        facts.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: None };
+        let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec()], &event, false);
+        assert!(built.is_err() && kept.is_none(), "no block in this store: nothing to re-make from");
+    }
+
+    /// **The tick runs R-core's loop, and it runs before the seat's duties** (the P2-7 review's
+    /// MEDIUM and LOW): the duty read, then the pins of what it must keep (before any seat duty below
+    /// can write `foreign/` and prune it), then each claim's answers built and queued on the carrier
+    /// path every court move rides. And a licence by replay keeps the job it licensed in its
+    /// job-only spelling, never a served `FPC1` nothing checked, and past the fence a seat that could
+    /// not keep it signs no `Valid`.
+    #[test]
+    fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find("mod p2_7_disclosure_policy").expect("this module is in this file")];
-        let body = |head: &str| {
-            let at = &source[source.find(head).unwrap_or_else(|| panic!("{head}"))..];
-            &at[..at.find("\n    }\n").expect("its end")]
-        };
-        let loader = body("async fn rcore_da_capture_v1(");
-        let own = loader.find(".retained_capture(&duty.claim_id)").expect("own retention first");
-        let foreign = loader.find("join(\"foreign\")").expect("then the seat's copy");
-        assert!(own < foreign);
-        let guard = &loader[loader.find("Some(bytes)").expect("the kept bytes' arm")..];
-        let guard = &guard[..guard.find("=>").expect("its guard")];
+        let read = source.find("let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);").expect("the duty read");
+        let pinned = read
+            + source[read..].find("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
+        let built = pinned
+            + source[pinned..]
+                .find("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")
+                .expect("each claim's answers built");
+        let queued = built + source[built..].find("court_pending.push((key.0, key.1, key.2, object));").expect("and queued");
+        let seats = source.find("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");
+        assert!(read < pinned && pinned < built && built < queued && queued < seats, "read, pin, build, queue — before the seats");
+        let fp = &source[source.find("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
+        let fp = &fp[..fp.find("\n    }\n").expect("its end")];
         assert!(
-            guard.contains("if !duty.free_prompt")
-                && guard.contains("|| kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, form).is_some()"),
-            "a free-prompt payload is answered from only if it carries its capture: {guard}"
+            fp.contains("PalwSeatReplayStepV1::Licensed,\n                            Some(palw_fp_material_encode_v1(&material.job, &material.prompt_token_ids)),"),
+            "a licence keeps the job it licensed"
         );
-        assert!(loader.contains(".remade_attempt_capture_v1("), "an attempt claim's is re-made from its block");
-        assert!(loader.contains("self.remade_fp_capture_v1(session, duty)"), "a free-prompt claim's from the kept job");
-        let remade = body("async fn remade_fp_capture_v1(");
-        let replayed = remade.find("ReplayWork::FreePrompt(").expect("the job is replayed");
-        let checked = remade.find("backend.verify_material(&capture, roots) != PalwMaterialVerdictV1::Matches").expect("and checked");
-        let kept = remade.find("std::fs::rename(&partial, &path)").expect("and kept");
-        assert!(replayed < checked && checked < kept, "checked against the claim's roots before it is kept");
-        assert!(remade.contains("anchor: fp_job_id_v3(&job)"), "under the job's own id");
+        assert!(!fp.contains("payloads.first()"), "never the first-arrived spelling");
+        let licensed = &source[source.find("(PalwSeatReplayStepV1::Licensed, bytes) => {").expect("the licence arm")..];
+        let valid = licensed.find("break 'verdict Some(PalwReceiptVerdictV2::Valid);").expect("its Valid");
+        let abstain = licensed
+            .find("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {")
+            .expect("the kept-or-abstain gate");
+        assert!(abstain < valid, "past the fence nothing is signed that this seat cannot answer for");
     }
 
     /// **The queue key names the claim and the unit**: the same unit keys the same entry (so a

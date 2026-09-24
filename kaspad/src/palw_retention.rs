@@ -16,7 +16,9 @@
 //! * **The space rule**: while the volume holding the directory has less free than
 //!   [`retention_reserve_bytes_v1`] — `max(8 GiB, 5 % of the volume)` — attempt captures go oldest
 //!   first whatever their age, then the panel's foreign copies — those an R-core session can still
-//!   demand a unit of last (a covering signer answers from its copy, X7). A court or an accusation
+//!   demand a unit of last, and of those the free-prompt ones last of all (a covering signer answers
+//!   from its copy, X7, and a free-prompt job is not chain data: [`retained_foreign_rank_v1`]); one of
+//!   those taken is said by name, as a liability. A court or an accusation
 //!   that asks later is answered from a replay of the block's job (`remade_attempt_capture_v1`), and a seat
 //!   re-verifies a foreign claim by replaying it. A free-prompt capture is never taken by this rule:
 //!   it is the one copy anywhere. What could not be freed is said, once a minute, by name.
@@ -96,8 +98,9 @@ pub(crate) struct RetainedChainViewV1 {
 /// **P2-7 (ADR-0152 DA-4, DA-7, X7):** past `palw_rcore_plus` a session opens on a `Final` claim too
 /// (`FinalRow`: a default is S3, the row burned and `min(25% · C, 3 G)`), so a free-prompt capture —
 /// the one copy anywhere — is never due while `da_owed`, whatever its phase; and under the space
-/// rule the foreign copies a session can still demand go after every other foreign copy, because a
-/// covering signer answers from its copy and a free-prompt job is not chain data.
+/// rule the foreign copies a session can still demand go after every other foreign copy, the
+/// free-prompt ones last of all ([`retained_foreign_rank_v1`]), because a covering signer answers from
+/// its copy and a free-prompt job is not chain data.
 pub(crate) fn retention_prune_plan_v1(
     claims: &[RetainedClaimV1],
     chain: impl Fn(&Hash64) -> Option<RetainedChainViewV1>,
@@ -133,15 +136,17 @@ pub(crate) fn retention_prune_plan_v1(
         }
     }
     // **The space rule**: the oldest re-makeable bytes first — own attempt captures, then foreign copies,
-    // those an R-core session can still demand last (P2-7).
+    // those an R-core session can still demand last, the free-prompt ones last of all (P2-7).
     let mut short = reserve.saturating_sub(free.saturating_add(freed));
     if short > 0 {
         let age = |c: &RetainedClaimV1| c.age.unwrap_or(Duration::MAX);
-        let owed: Vec<bool> =
-            claims.iter().map(|c| c.kind == RetainedKindV1::Foreign && chain(&c.claim).is_some_and(|view| view.da_owed)).collect();
+        let rank: Vec<u8> = claims
+            .iter()
+            .map(|c| if c.kind == RetainedKindV1::Foreign { retained_foreign_rank_v1(chain(&c.claim).as_ref()) } else { 0 })
+            .collect();
         for kind in [RetainedKindV1::Attempt, RetainedKindV1::Foreign] {
             let mut order: Vec<usize> = (0..claims.len()).filter(|i| claims[*i].kind == kind && !doomed.contains(i)).collect();
-            order.sort_by(|a, b| (owed[*a], age(&claims[*b])).cmp(&(owed[*b], age(&claims[*a]))));
+            order.sort_by(|a, b| (rank[*a], age(&claims[*b])).cmp(&(rank[*b], age(&claims[*a]))));
             for i in order {
                 if short == 0 {
                     break;
@@ -152,6 +157,19 @@ pub(crate) fn retention_prune_plan_v1(
         }
     }
     (doomed, short)
+}
+
+/// **How late the space rule takes a foreign copy** (P2-7; lower goes first): `0`, nothing an R-core
+/// session can still demand of it; `1`, a session can (`da_owed`) and it is an attempt claim's, which
+/// any node re-makes from its block; `2`, a session can and it is a free-prompt claim's, whose job is
+/// not chain data — for a full-mask signer the one copy it answers from, so taking it is an S4 the
+/// signer could not avoid if the producer withholds (the P2-7 review's LOW).
+pub(crate) fn retained_foreign_rank_v1(view: Option<&RetainedChainViewV1>) -> u8 {
+    match view {
+        Some(view) if view.da_owed && matches!(view.source, PalwClaimSourceV2::FreePrompt { .. }) => 2,
+        Some(view) if view.da_owed => 1,
+        _ => 0,
+    }
 }
 
 /// Read `dir` (and `dir/foreign`) into retained claims; `.partial` files older than an hour are
@@ -291,7 +309,18 @@ impl PalwRetentionJanitor {
                 phase: state.phase,
             })
         };
-        let (doomed, short) = retention_prune_plan_v1(&claims, chain, self.attempt_horizon, free, reserve);
+        let (doomed, short) = retention_prune_plan_v1(&claims, &chain, self.attempt_horizon, free, reserve);
+        for i in &doomed {
+            let c = &claims[*i];
+            if c.kind == RetainedKindV1::Foreign && retained_foreign_rank_v1(chain(&c.claim).as_ref()) == 2 {
+                warn!(
+                    "[{PALW_RETENTION}] claim {}: the volume is under its free-space floor, so its free-prompt copy goes \
+                     while a data-availability session can still demand a unit of it — if this node holds a full-mask Valid \
+                     lock on it and the producer withholds, it cannot answer and is charged S4 (ADR-0152 X7)",
+                    c.claim
+                );
+            }
+        }
         let mut removed = 0usize;
         let mut bytes = 0u64;
         for i in doomed {
@@ -456,6 +485,30 @@ mod tests {
         let unowed = |_: &Hash64| Some(view(false));
         let (doomed, _) = retention_prune_plan_v1(&foreign, unowed, 60 * MIN, 0, 5 * GIB);
         assert_eq!(doomed, vec![1], "with nothing owed, oldest first as before");
+        // Among the owed copies, an attempt claim's (re-made from its block by any node) goes before a
+        // free-prompt claim's (its job is not chain data: a full-mask signer's one copy), even when the
+        // free-prompt copy is the older (the P2-7 review's LOW).
+        let attempt = |da_owed: bool| RetainedChainViewV1 {
+            source: PalwClaimSourceV2::Attempt,
+            phase: PalwClaimPhaseV2::Final { final_daa: 9 },
+            da_owed,
+        };
+        let mixed = vec![claim(4, RetainedKindV1::Foreign, 10 * GIB, 900), claim(5, RetainedKindV1::Foreign, 10 * GIB, 100)];
+        let owed_both = |claim: &Hash64| Some(if *claim == Hash64::from_u64_word(4) { view(true) } else { attempt(true) });
+        let (doomed, short) = retention_prune_plan_v1(&mixed, owed_both, 60 * MIN, 0, 5 * GIB);
+        assert_eq!((doomed, short), (vec![1], 0), "the owed attempt copy goes first, though it is the younger");
+        let (doomed, _) = retention_prune_plan_v1(&mixed, owed_both, 60 * MIN, 0, 15 * GIB);
+        assert_eq!(doomed, vec![1, 0], "and the owed free-prompt copy only when nothing else frees the floor");
+        assert_eq!(
+            [
+                retained_foreign_rank_v1(None),
+                retained_foreign_rank_v1(Some(&view(false))),
+                retained_foreign_rank_v1(Some(&attempt(false))),
+                retained_foreign_rank_v1(Some(&attempt(true))),
+                retained_foreign_rank_v1(Some(&view(true))),
+            ],
+            [0, 0, 0, 1, 2]
+        );
     }
 
     /// **The directory is read by its bytes and names**: an `FPC1` material is a free-prompt capture, a

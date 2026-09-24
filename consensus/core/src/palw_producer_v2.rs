@@ -1322,12 +1322,18 @@ pub fn palw_disclosure_duties_v1(
                 *deadline = (*deadline).min(session.deadline_daa);
             }
         }
-        for (unit, deadline_daa) in units {
+        // A lock holder's covering signers of every unit, from one walk of the lock map a claim.
+        let covering: Vec<Vec<PalwBondKeyV2>> = if producer {
+            Vec::new()
+        } else {
+            let asked: Vec<crate::palw_da_rcore_v1::PalwDaUnitV1> = units.keys().copied().collect();
+            crate::palw_state_v2::palw_da_covering_signers_v1(state, params, extras, &claim_id, &asked, now_daa)
+        };
+        for (index, (unit, deadline_daa)) in units.into_iter().enumerate() {
             let (discloser, role, signer_rank) = if producer {
                 (claim.bond, PalwDisclosureRoleV1::Producer, 0)
             } else {
-                let covering = crate::palw_state_v2::palw_da_covering_signers_v1(state, params, extras, &claim_id, &unit, now_daa);
-                match covering.iter().enumerate().find(|(_, seat)| mine.contains(seat)) {
+                match covering[index].iter().enumerate().find(|(_, seat)| mine.contains(seat)) {
                     Some((rank, seat)) => (*seat, PalwDisclosureRoleV1::CoveringSigner, rank.min(usize::from(u16::MAX)) as u16),
                     None => continue,
                 }

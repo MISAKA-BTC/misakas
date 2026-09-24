@@ -4297,6 +4297,13 @@ mod m3_da_court {
     /// sessions are refuted, nobody is charged — the producer, the answering signer and the partial
     /// seats keep their collateral — each accuser's exposure is held, and the claim's retirement burns
     /// it.
+    ///
+    /// What this does NOT run is kaspad: the answer here is built from the harness's capture by the
+    /// core builder. The node's own loader and builders (kept → verified → re-made → nothing) run on the
+    /// floor's fixture backend in `kaspad::palw_panel::p2_7_disclosure_policy`, and the tick's loop is
+    /// pinned there. Plan §4's T54b proper — a node e2e on a devnet preset — is a POST-LAUNCH item
+    /// (§8.4 / Q12): the operator deferred every drill and node launch until after the t12 launch
+    /// (2026-09-24).
     #[tokio::test]
     async fn t32_t54b_a_silent_producers_covering_signer_answers_and_the_accusers_pay() {
         use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;

@@ -965,6 +965,23 @@ fn p2_7_the_disclosure_duties_follow_the_open_sessions_and_the_covering_locks() 
             palw_da_lock_covers_unit_v1(&c.s, &c.sp, &extras, &full, &id, &U::Event { row: 0, tile: 0 }, at),
             "the fold's predicate"
         );
+        // Every unit's covering signers, from one walk of the lock map (the P2-7 review's LOW): a list
+        // a unit, in the units' order, each exactly the seats the per-unit predicate reads as covering.
+        {
+            use kaspa_consensus_core::palw_state_v2::palw_da_covering_signers_v1;
+            let asked = [U::Event { row: 0, tile: 0 }, U::Event { row: 7, tile: 0 }];
+            let lists = palw_da_covering_signers_v1(&c.s, &c.sp, &extras, &id, &asked, at);
+            assert_eq!(lists, vec![vec![full], vec![full]], "the full seat covers both, and nobody else");
+            for (unit, list) in asked.iter().zip(&lists) {
+                let one: Vec<PalwBondKeyV2> = seats
+                    .iter()
+                    .map(|(k, _)| *k)
+                    .filter(|k| palw_da_lock_covers_unit_v1(&c.s, &c.sp, &extras, k, &id, unit, at))
+                    .collect();
+                assert_eq!(list, &one, "{unit:?}: the per-unit predicate's set");
+            }
+            assert!(palw_da_covering_signers_v1(&c.s, &c.sp, &extras, &id, &[], at).is_empty());
+        }
         assert_eq!(signer.retain, vec![(id, retention)], "a live lock keeps the claim's material");
         // Partial seats (the accuser included) and a bystander: nothing to answer.
         for mine in partials.iter().copied().chain([bystander]) {

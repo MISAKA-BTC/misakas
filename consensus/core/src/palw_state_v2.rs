@@ -12121,24 +12121,33 @@ pub fn palw_da_lock_covers_unit_v1(
 }
 
 /// **ADR-0152 C7 / DA-7, for callers outside the fold (Phase 2, P2-7): every covering signer of
-/// `unit` on `claim_id` at `now_daa`, in bond order** — the bonds whose lock
-/// [`palw_da_lock_covers_unit_v1`] reads as covering, found as `da_default_v1` finds them (a walk of
-/// the lock map filtered by claim). Node policy staggers the signers' answers by their place here, so
+/// each of `units` on `claim_id` at `now_daa`, in bond order** — one list a unit, in `units`' order:
+/// the bonds whose lock [`palw_da_lock_covers_unit_v1`] reads as covering, found as `da_default_v1`
+/// finds them (the lock map filtered by claim). The claim's locks are found in ONE walk of the map
+/// and each unit is asked of them by the fold's own per-unit predicate — the duty read asks this for
+/// every unit of every claim it holds a lock on, and a walk a unit was O(units × locks) on the panel's
+/// tick (the P2-7 review's LOW). Node policy staggers the signers' answers by their place here, so
 /// one answer lands and the others see the unit answered; it is never a consensus input.
 pub fn palw_da_covering_signers_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     extras: &PalwTransitionExtrasV1,
     claim_id: &Hash64,
-    unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
+    units: &[crate::palw_da_rcore_v1::PalwDaUnitV1],
     now_daa: u64,
-) -> Vec<PalwBondKeyV2> {
+) -> Vec<Vec<PalwBondKeyV2>> {
     let read = PalwFoldReadV1::outside(state, params, extras);
-    state
-        .slashable_locks
+    let locks: Vec<(&PalwBondKeyV2, &crate::palw_panel_var_v1::PalwSlashableLockV1)> =
+        state.slashable_locks.iter().filter(|((_, claim), _)| claim == claim_id).map(|((seat, _), lock)| (seat, lock)).collect();
+    units
         .iter()
-        .filter(|((_, claim), lock)| claim == claim_id && read.da_lock_covers_v1(lock, std::slice::from_ref(unit), now_daa))
-        .map(|((seat, _), _)| *seat)
+        .map(|unit| {
+            locks
+                .iter()
+                .filter(|(_, lock)| read.da_lock_covers_v1(lock, std::slice::from_ref(unit), now_daa))
+                .map(|(seat, _)| **seat)
+                .collect()
+        })
         .collect()
 }
 
