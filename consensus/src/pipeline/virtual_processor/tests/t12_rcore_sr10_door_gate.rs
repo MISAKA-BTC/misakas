@@ -916,7 +916,9 @@ fn t33_claim(g: &mut Gate) -> (Hash64, PalwSegmentAssignmentV2, Vec<usize>, usiz
 /// and the V1 assembler offers nothing (before P2-5 it offered the inert three). The five seats' V3
 /// `Valid`s over their masks do not cover once the unbacked partial seat is taken out (every segment
 /// has one partial holder beside the full seat), so the coverage assembler offers nothing, as the fold
-/// says.
+/// says — a leg that holds with or without P2-5 (`palw_select_coverage_licence_v2` already asked the
+/// fold, and on this cut a coverage set's backed subset is the whole set or nothing), kept to pin that
+/// the helper leaves the coverage door's answer as it was; the V1 legs are the ones P2-5 turns green.
 #[tokio::test]
 async fn t12_t33_the_v1_and_coverage_assemblers_return_the_backed_subset() {
     let mut g = gate(true);
@@ -994,6 +996,13 @@ async fn t12_t33_the_v1_and_coverage_assemblers_return_the_backed_subset() {
 /// cover). With only the unbacked seat's and two others' V2 `Valid`s pooled, V1 is inert and offers
 /// nothing, so S2 is offered — before P2-5 the V1 door returned that inert set and, asked before S2,
 /// held the claim to its receipt window. The S2 licence folds; the inert V1 set would not have.
+///
+/// And through the collector's own V1 door past SEAT-R — `palw_v1_offer_v1`, the shortest prefix,
+/// rotated by the sets already sent (consensus-core's, the function kaspad calls) — over the real
+/// assembler, the unbacked seat first in the pool: every rotation offers three backed seats through
+/// V1, each carried `Valid` backed in the fold. Before P2-5 the rotations that put the unbacked seat
+/// in the three-seat prefix offered it — the acceptance check takes that set as `Licensed` — and the
+/// fold left it inert.
 #[tokio::test]
 async fn t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an_unbacked_one() {
     use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1 as Door;
@@ -1024,6 +1033,30 @@ async fn t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an
     assert_eq!(door, Door::Quorum, "a backed V1 before S2");
     let backed: Vec<PalwSeatReceiptV2> = whole.iter().enumerate().filter(|(i, _)| *i != victim).map(|(_, r)| r.clone()).collect();
     assert_eq!(object, Obj::ReceiptLicensed { claim, receipts: backed }, "the backed subset");
+
+    // The collector's own V1 door past SEAT-R over the real assembler: the shortest prefix, every
+    // rotation, the unbacked seat first in the pool.
+    let mut pool = whole.clone();
+    pool.rotate_left(victim);
+    for sent in 0..pool.len() as u32 {
+        let (offered, door) = kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(
+            true,
+            || g.vp().palw_v2_receipt_coverage_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+            || {
+                kaspa_consensus_core::palw_panel_v2::palw_v1_offer_v1(&pool, sent, |set| {
+                    g.vp().palw_v2_receipt_quorum_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &set)
+                })
+            },
+            || g.vp().palw_v2_optimistic_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+        )
+        .expect("a licence on hand");
+        assert_eq!(door, Door::Quorum, "V1 before S2 (send {sent})");
+        let Obj::ReceiptLicensed { receipts, .. } = &offered else { panic!("a V1 set: {offered:?}") };
+        let seats: Vec<PalwBondKeyV2> = receipts.iter().map(|r| r.seat_bond).collect();
+        assert_eq!(seats.len(), 3, "the quorum and nothing past it (send {sent})");
+        assert!(!seats.contains(&whole[victim].seat_bond), "the unbacked seat is passed over (send {sent})");
+        assert_eq!(g.fold_answers(&point, &offered), (Some(seats), true), "every carried Valid backed (send {sent})");
+    }
 
     // An unbacked V1 is not waited on: S2.
     let short: Vec<PalwSeatReceiptV2> = [victim, (victim + 1) % 5, (victim + 2) % 5].iter().map(|&i| whole[i].clone()).collect();

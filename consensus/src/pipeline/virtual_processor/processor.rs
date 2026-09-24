@@ -7100,6 +7100,21 @@ impl VirtualStateProcessor {
     /// the whole set does not, and when the whole set licenses nothing no part of it does. The
     /// backed subset re-tests to itself (same recount, same price), so the second fold agrees.
     ///
+    /// **The re-check is kept in release builds, by choice (the P2-5 review's LOW 3).** It is
+    /// redundant by the argument above — the review's exhaustive probe over every sub-pool found it
+    /// never changes the answer — but the door is a separate predicate from the fold (its own verdict
+    /// precedence over what remains: the `Unavailable` obligations, the outsider, the window), and a
+    /// carrier the door refuses is not an inert licence but a mempool refusal, on which kaspad's
+    /// licence collector drops its funding chain for the rest of the tick. So what is offered is what
+    /// the door and the fold were both shown, not what a monotonicity proof says they would say. Its
+    /// price — one acceptance check (the ML-DSA verifications) and one more fold (a parent-state
+    /// clone) — is paid only when a `Valid` was dropped, and such a set is offered, submitted and
+    /// throttled for `COURT_MOVE_REPLAN_DAA`, so it does not recur each tick. What does recur is the
+    /// first fold, on a pool that licenses nothing (re-assembled every tick; only submitted claims
+    /// are throttled): that is SR-6's own question, the price the coverage and S2 doors already pay
+    /// through `palw_v2_offered_licence_licenses_v1`, once per `palw_v1_offer_v1` prefix that reaches
+    /// the acceptance quorum.
+    ///
     /// Below the fence `object` is returned as it came (byte-identical to the assemblers before
     /// P2-5): a licence there is the whole set's or nothing, and each caller keeps the rule it had.
     fn palw_v2_offered_backed_subset_v1(
