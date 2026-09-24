@@ -13,20 +13,22 @@
 //! and the re-charges take effect for the next block.
 //!
 //! Each scenario, on testnet-12's genesis through the real fold, with the short-window row
-//! admitting on its eight ready genesis seats: one claim accepted, bound and licensed; the room
-//! filled with attempts to exactly one; then, in ONE block, the object and an attempt the
-//! pre-check admits.
+//! admitting on its eight ready genesis seats: one claim accepted, bound and — for the objects that
+//! act on a licensed claim — licensed; the room filled with attempts to exactly one; then, in ONE
+//! block, the object and an attempt the pre-check admits.
 //!
-//! **Which row.** testnet-12's short-window row is under the held regime, and past the review a
-//! held class owes every claim until Final, so on it a licence releases nothing and an accusation
-//! or a court re-charges nothing. The accusation and the court are therefore also folded on that
-//! row with its held-regime ladder taken out through the carriage — a class a licence releases
-//! (ADR-0152 T-2(a)) — where the object DOES take the room from one to zero (asserted, so the test
-//! cannot pass for want of a re-charge). The court is `CourtOpened` with the held-context ladder
-//! off (this fixture's extras leave it `None`): a held dissection (`ShardCourtAccused` →
+//! **Which row.** testnet-12's short-window row as shipped. It records ADR-0119's held ladder, but
+//! its 3-span window is not ADR-0152's C7 (`palw_panel_held_to_final_v1`), so a licence releases its
+//! claim (T-2(a)) and the accusation and the court DO take the room from one to zero (asserted, so
+//! the test cannot pass for want of a re-charge). The court is `CourtOpened` with the held-context
+//! ladder off (this fixture's extras leave it `None`): a held dissection (`ShardCourtAccused` →
 //! `open_held_dissection_v1`) reaches the demand only through the same `write_court` /
-//! `open_courts_by_claim` entry, and its accusation cannot be built outside the crate. The
-//! retirements need no such change: they move the budget, not the owed claims.
+//! `open_courts_by_claim` entry, and its accusation cannot be built outside the crate. On a class
+//! held to Final an accusation or a court re-charges nothing
+//! (`panel_room_owed_claims_through_the_carriage_rebuild` pins that), and testnet-12's only such
+//! row, 2M, has no room left beside a live claim at c_2M = 1. The retirements move the budget, not
+//! the owed claims, so their first claim is left bound: it is owed on the rule past the fence and on
+//! the one below it alike, and the parent the pre-check admits is the same under both.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_step3_objects_cannot_refuse_the_own_attempt
 
@@ -42,6 +44,7 @@ use kaspa_consensus_core::palw_state_v2::{
     PalwBlockWorkV3, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2, PalwStateDeltaV2, PalwStateV2Error,
     palw_v2_apply_one_object_v1,
 };
+use kaspa_consensus_core::palw_work_target_v1::palw_panel_held_to_final_v1;
 
 const PRODUCERS: u64 = 12;
 const ACCUSER: u64 = 77;
@@ -75,19 +78,17 @@ struct Outcome {
     next_daa: u64,
 }
 
-fn scenario(p: &Params, object: Step3, released_at_licence: bool) -> Outcome {
+fn scenario(p: &Params, object: Step3) -> Outcome {
     let b = bundle(p);
     let sp = b.state.clone();
     let seat_count = b.panel.seat_count() as usize;
     let (class, _) = model_classes(p);
     let honest = honest(p);
     let mut s = activated(&sp, &genesis_state(p), class);
-    if released_at_licence {
-        s = edited(&sp, &s, |c| {
-            c.class_step_ladders.remove(&class);
-        });
-    }
-    assert_eq!(s.class_is_held_v1(&class), !released_at_licence);
+    assert!(
+        s.class_is_held_v1(&class) && !palw_panel_held_to_final_v1(s.model_lifecycle(&class).unwrap()),
+        "the premise: the short row records a held ladder and is released at licence"
+    );
 
     let mut daa = 1_000u64;
     let mut objs: Vec<PalwConsensusObjectV2> = (1..=PRODUCERS).map(|n| bond_obj(n, RICH)).collect();
@@ -96,7 +97,7 @@ fn scenario(p: &Params, object: Step3, released_at_licence: bool) -> Outcome {
     s = go(p, &sp, &s, &ctx(0x3000_0000 + daa, daa, daa, 0), &objs, PalwBlockWorkV3::None, Hash64::default()).expect("bonds").0;
     assert_eq!(op186(p, &sp, &s, class, daa).ready_seats_now, 8);
 
-    // The first claim: accepted, bound, licensed.
+    // The first claim: accepted, bound, and licensed where the object acts on a licensed claim.
     daa += 1;
     s = readied(&sp, &s, &honest, class, daa - 1);
     let (env, key, first) = junk_attempt(class, bond_key(1), pubkey_of(1), &operator_pubkey_of(1), 1_000, 0x1, 0x1_0001);
@@ -107,14 +108,16 @@ fn scenario(p: &Params, object: Step3, released_at_licence: bool) -> Outcome {
     s = readied(&sp, &s, &honest, class, daa - 1);
     let seats = honest_seats(p, seat_count);
     s = bound(p, &sp, &s, first, &seats, daa);
-    daa += 1;
-    s = readied(&sp, &s, &honest, class, daa - 1);
-    s = licensed(p, &sp, &s, first, &seats, daa);
-    assert!(
-        matches!(s.claim(&first).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
-        "{:?}",
-        s.claim(&first).unwrap().phase
-    );
+    if object != Step3::TwoRetirements {
+        daa += 1;
+        s = readied(&sp, &s, &honest, class, daa - 1);
+        s = licensed(p, &sp, &s, first, &seats, daa);
+        assert!(
+            matches!(s.claim(&first).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
+            "{:?}",
+            s.claim(&first).unwrap().phase
+        );
+    }
 
     // Fill the class's room to exactly one; op 186 and the gate agree on every parent.
     let mut seed = 0x100u64;
@@ -234,9 +237,9 @@ fn show(r: &Folded) -> String {
 }
 
 /// What every scenario asserts: the pre-check, the object and the attempt alone are what the
-/// review measured; together they fold, the attempt is admitted, and the charge the object made
-/// stands for the next block.
-fn assert_the_attempt_keeps_its_room(p: &Params, o: &Outcome, object: Step3, recharges: bool) {
+/// review measured — the object alone takes the last room — together they fold, the attempt is
+/// admitted, and the charge the object made stands for the next block.
+fn assert_the_attempt_keeps_its_room(p: &Params, o: &Outcome, object: Step3) {
     let sp = bundle(p).state;
     println!(
         "{object:?}: room on the parent {}, after the object alone {}; pre-check {:?}; rehearsal {:?}",
@@ -255,9 +258,7 @@ fn assert_the_attempt_keeps_its_room(p: &Params, o: &Outcome, object: Step3, rec
     assert!(o.object_alone.is_ok(), "control: the object alone folds");
     let (after_attempt, _, _) = o.attempt_alone.as_ref().expect("control: the attempt alone is admitted");
     assert_eq!(op186(p, &sp, after_attempt, o.class, o.next_daa).panel_room, 0, "control: the attempt alone takes the last room");
-    if recharges {
-        assert_eq!(o.room_after_object, 0, "the premise: the object alone takes the last room, without asking the gate");
-    }
+    assert_eq!(o.room_after_object, 0, "the premise: the object alone takes the last room, without asking the gate");
 
     let (after, _, _) = o.both.as_ref().unwrap_or_else(|e| panic!("the object and the attempt fold in one block ({object:?}): {e}"));
     assert!(after.claim(&o.own).is_some(), "the block's own attempt is admitted");
@@ -270,29 +271,22 @@ fn assert_the_attempt_keeps_its_room(p: &Params, o: &Outcome, object: Step3, rec
 #[test]
 fn a_default_accusation_on_a_licensed_claim_and_the_own_attempt_fold_in_one_block() {
     let p = t12();
-    let o = scenario(&p, Step3::Accusation, true);
-    assert_the_attempt_keeps_its_room(&p, &o, Step3::Accusation, true);
+    let o = scenario(&p, Step3::Accusation);
+    assert_the_attempt_keeps_its_room(&p, &o, Step3::Accusation);
 }
 
 #[test]
 fn a_court_opened_on_a_licensed_claim_and_the_own_attempt_fold_in_one_block() {
     let p = t12();
-    let o = scenario(&p, Step3::Court, true);
-    assert_the_attempt_keeps_its_room(&p, &o, Step3::Court, true);
-}
-
-#[test]
-fn a_default_accusation_and_the_own_attempt_fold_in_one_block_on_testnet12s_short_row() {
-    let p = t12();
-    let o = scenario(&p, Step3::Accusation, false);
-    assert_the_attempt_keeps_its_room(&p, &o, Step3::Accusation, false);
+    let o = scenario(&p, Step3::Court);
+    assert_the_attempt_keeps_its_room(&p, &o, Step3::Court);
 }
 
 #[test]
 fn two_retirements_of_ready_seats_and_the_own_attempt_fold_in_one_block() {
     let p = t12();
-    let o = scenario(&p, Step3::TwoRetirements, false);
-    assert_the_attempt_keeps_its_room(&p, &o, Step3::TwoRetirements, true);
+    let o = scenario(&p, Step3::TwoRetirements);
+    assert_the_attempt_keeps_its_room(&p, &o, Step3::TwoRetirements);
     // Below the fence nothing moved: the readiness path predates the rate rule, and the block the
     // old rule's pre-check admitted is still refused there (testnet-11's behaviour, unchanged).
     assert!(o.precheck_below_the_fence.is_ok(), "the old rule's pre-check admits too: {:?}", o.precheck_below_the_fence);

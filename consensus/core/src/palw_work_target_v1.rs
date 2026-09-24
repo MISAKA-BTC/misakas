@@ -15,6 +15,7 @@
 //! * [`palw_work_ticket_target_v1`] — a class's ticket target from its CCU and `W`;
 //! * [`palw_panel_room_v1`] — the network-wide verification budget in one class's claims
 //!   (ADR-0137 D5): one horizon, one pool, no per-class allocation;
+//! * [`palw_panel_held_to_final_v1`] — which classes the panel room holds to Final (ADR-0152's C7);
 //! * [`palw_final_work_shares_v1`] — the reader's share: finalized work over a window.
 //!
 //! **Shadow first.** The state carries `W` as a shadow value outside the state root
@@ -26,7 +27,7 @@ use std::collections::BTreeMap;
 
 use kaspa_hashes::Hash64;
 
-use crate::palw_model_registry_v1::PalwModelWorkV1;
+use crate::palw_model_registry_v1::{PalwModelLifecycleRowV1, PalwModelWorkV1};
 
 /// The clamp of one epoch step of `W`: never more than ×4 or ÷4 an epoch, the class DAA's own
 /// bound (`class_daa_max_factor` on every shipped bundle).
@@ -206,6 +207,42 @@ pub fn palw_panel_capacity_by_rate_v1(panel_replay_per_span: u128, others_scaled
     }
 }
 
+/// **ADR-0152's C7 by the window rule** (§9 Q2): the verification window, in spans, from which the
+/// panel room holds a class to Final ([`palw_panel_held_to_final_v1`]). A class's window is the spans
+/// its panel is given to replay one claim, `⌈safety × verification CCU / reference⌉` plus the
+/// receipt allowance ([`crate::palw_model_registry_v1::palw_verification_window_spans_v1`]). On
+/// testnet-12's genesis this selects the 2M row alone (2,799 spans), not the short-window row (3).
+pub const PALW_RCORE_C7_WINDOW_SPANS_V1: u32 = 1_000;
+
+/// **Whether the panel room holds this class to Final**: ADR-0152's C7, by the window rule
+/// ([`PALW_RCORE_C7_WINDOW_SPANS_V1`]). Read past `palw_audit_2026_09_23` only. A class it selects
+/// (ADR-0152 T-2(b), the 2M lane):
+///
+/// * owes the panel every claim it has in flight until Final: no licence releases one, and a court
+///   on a licensed claim adds nothing the class does not already owe (`palw_panel_owed_v1`);
+/// * is refused past its static `max_inflight_claims` (`ClassInflightCapped`: c_2M = 1 until
+///   ADR-0153), and op 186 shows it no more room than that cap leaves
+///   ([`crate::palw_state_v2::palw_panel_room_read_v1`]).
+///
+/// Every other class is released at licence and judged by the rate room alone (T-2(a)). On
+/// testnet-12 that is the short-window row (the "8k" row: window 3, `max_inflight_claims` 5).
+///
+/// **This is not ADR-0119's held regime.** `PalwChainStateV2::class_is_held_v1` asks whether a class
+/// recorded its own step ladder at registration, which decides its court and its data availability.
+/// On testnet-12 BOTH genesis model rows recorded one. f8c91f19 keyed this hold on that predicate,
+/// so it held the short row to Final and to its cap of 5 as well, cutting its throughput about
+/// fivefold (the 2026-09-24 re-review of f8c91f19). The two questions are independent: a class with
+/// a held ladder and a short window is released at licence, and a class with a long window and no
+/// ladder is held.
+///
+/// The window is a function of the class's registered work and the registry's globals, and the span
+/// step re-derives it from the same inputs, so this answer does not move while the class's claims
+/// are in flight. When `Params::palw_rcore_conservative_classes` lands with R-core+, C7 becomes the
+/// union of that set and this rule.
+pub fn palw_panel_held_to_final_v1(row: &PalwModelLifecycleRowV1) -> bool {
+    row.profile.verification_window_spans >= PALW_RCORE_C7_WINDOW_SPANS_V1
+}
+
 /// **The reader's share**: each class's finalized work over the last `window_epochs` closed
 /// epochs, in permille of every class's, class-id order; empty where nothing finalized.
 pub fn palw_final_work_shares_v1(final_work: &BTreeMap<u64, BTreeMap<Hash64, u128>>, window_epochs: u64) -> Vec<(Hash64, u16)> {
@@ -368,5 +405,37 @@ mod tests {
         let bytes = borsh::to_vec(&row).unwrap();
         assert_eq!(bytes.len(), 16 + 16 + 16 + 16 + 8 + 8 + 8);
         assert_eq!(borsh::from_slice::<PalwWorkTargetV2>(&bytes).unwrap(), row);
+    }
+
+    /// ADR-0152's C7 by the window rule: a window of 1,000 spans is held to Final and 999 is not,
+    /// whatever the class's static cap.
+    #[test]
+    fn adr0152_c7_is_a_window_of_at_least_1000_spans() {
+        use crate::palw_model_registry_v1::{PalwDerivedProfileV1, PalwModelLifecycleV1};
+        let row = |window: u32, cap: u32| PalwModelLifecycleRowV1 {
+            state: PalwModelLifecycleV1::Active,
+            work: PalwModelWorkV1::default(),
+            profile: PalwDerivedProfileV1 { verification_window_spans: window, max_inflight_claims: cap, ..Default::default() },
+            since_span: 0,
+            probes_passed: 0,
+            probes_failed: 0,
+            probes_passed_this_span: 0,
+            probes_failed_this_span: 0,
+            ready_seats: 0,
+            inflight_claims: 0,
+            utilization_permille: 0,
+            admission_milli: 0,
+            cap_utilization_permille: 0,
+            priced_share_permille: 0,
+        };
+        assert_eq!(PALW_RCORE_C7_WINDOW_SPANS_V1, 1_000);
+        // testnet-12's genesis model rows: the short-window row (3 spans, cap 5) and 2M (2,799, cap 1).
+        assert!(!palw_panel_held_to_final_v1(&row(3, 5)), "the short-window row is released at licence");
+        assert!(palw_panel_held_to_final_v1(&row(2_799, 1)), "the 2M row is held to Final");
+        for cap in [1, 5, 64] {
+            assert!(!palw_panel_held_to_final_v1(&row(999, cap)), "999 spans, cap {cap}");
+            assert!(palw_panel_held_to_final_v1(&row(1_000, cap)), "1,000 spans, cap {cap}");
+        }
+        assert!(palw_panel_held_to_final_v1(&row(u32::MAX, 1)));
     }
 }

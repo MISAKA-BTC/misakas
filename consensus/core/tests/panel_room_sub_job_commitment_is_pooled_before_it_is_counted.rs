@@ -9,13 +9,14 @@
 //! class's term, was refused as if it took a whole claim more: on the block's own attempt's behalf
 //! when it was of another class (the verification's probe: `PanelRoomExhausted` for 2M with the 2M
 //! op-186 room still 1 after it), and by its own class's room when that was 0. Past the fence the
-//! rate room now asks what the class would owe with the commitment pooled in. A held class's static
-//! cap still counts the claim asked about whole: each claim draws its own panel, and c_2M = 1 is
-//! one claim.
+//! rate room now asks what the class would owe with the commitment pooled in. The static cap of a
+//! class held to Final (ADR-0152's C7, `palw_panel_held_to_final_v1`: testnet-12's 2M row) still
+//! counts the claim asked about whole: each claim draws its own panel, and c_2M = 1 is one claim.
 //!
 //! On testnet-12's genesis through the real fold and the acceptance rehearsal, free prompts priced
-//! in leaves (`canonical_work_daa = None`, as the cross-class test does); the short-window row's
-//! canonical job is 8 quanta.
+//! in leaves (`canonical_work_daa = None`, as the cross-class test does); a canonical job is 8
+//! quanta. The short-window row is the row as shipped: it records ADR-0119's held ladder, and its
+//! 3-span window is not C7's, so the rate room alone judges it.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_sub_job_commitment_is_pooled_before_it_is_counted
 
@@ -30,6 +31,7 @@ use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBlockWorkV3, PalwChainStateV2, PalwClaimSourceV2, PalwConsensusObjectV2, PalwStateParamsV2,
     PalwStateV2Error, PalwTransitionExtrasV1, palw_v2_apply_one_object_v1,
 };
+use kaspa_consensus_core::palw_work_target_v1::{palw_panel_capacity_by_rate_v1, palw_panel_held_to_final_v1};
 
 const PRODUCER: u64 = 41;
 const COMMITTER: u64 = 42;
@@ -183,7 +185,7 @@ fn a_one_quantum_commitment_in_the_last_part_job_is_kept_beside_the_2m_attempt()
 }
 
 /// The short row at capacity — five jobs owed, op-186 room 0 — with its last job one quantum short.
-fn short_row_at_capacity(held: bool) -> (Params, PalwStateParamsV2, Hash64, PalwChainStateV2, u64) {
+fn short_row_at_capacity() -> (Params, PalwStateParamsV2, Hash64, PalwChainStateV2, u64) {
     let p = t12();
     let sp = bundle(&p).state.clone();
     let (short, _) = model_classes(&p);
@@ -191,12 +193,10 @@ fn short_row_at_capacity(held: bool) -> (Params, PalwStateParamsV2, Hash64, Palw
     let now = 1_000u64;
     let q = short_quantum_leaves(&p, &sp, short);
     let mut s = activated(&sp, &genesis_state(&p), short);
-    if !held {
-        s = edited(&sp, &s, |c| {
-            c.class_step_ladders.remove(&short);
-        });
-    }
-    assert_eq!(s.class_is_held_v1(&short), held);
+    assert!(
+        s.class_is_held_v1(&short) && !palw_panel_held_to_final_v1(s.model_lifecycle(&short).unwrap()),
+        "the premise: the short row records a held ladder and is judged by the room alone"
+    );
     s = readied(&sp, &s, &honest, short, now);
     s = fold_with(
         &p,
@@ -235,43 +235,107 @@ fn short_row_at_capacity(held: bool) -> (Params, PalwStateParamsV2, Hash64, Palw
     (p, sp, short, s, next)
 }
 
-/// Not held, the short row's room pools the commitment: at room 0 a commitment that fills the last
-/// part-job is kept and one that starts a job is refused. Held, its static cap of 5 refuses every
-/// new claim beside five jobs, part-job or not.
+/// The short row's room pools the commitment: at room 0 a commitment that fills the last part-job
+/// is kept and one that starts a job is refused.
 #[test]
 fn at_zero_room_a_commitment_that_fills_the_last_part_job_is_kept_and_a_whole_job_is_refused() {
-    for held in [false, true] {
-        let (p, sp, short, s, daa) = short_row_at_capacity(held);
-        let q = short_quantum_leaves(&p, &sp, short);
-        let block = ctx(0x4500_0002, daa, daa, 0);
-        let attempt_gate = gate(&p, &sp, &s, short, daa);
-        let one_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 1, COMMITTER, 0xC5), None);
-        let seven_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 7, COMMITTER, 0xC6), None);
-        let whole = rehearse(&p, &sp, &block, &s, &commitment(short, q, 8, COMMITTER, 0xC7), None);
-        let show = |r: &Result<PalwChainStateV2, PalwStateV2Error>| r.as_ref().map(|_| "kept").map_err(|e| format!("{e:?}"));
-        println!(
-            "held {held}: attempt gate {attempt_gate:?}; 1 quantum {:?}; 7 quanta {:?}; a whole job {:?}",
-            show(&one_q),
-            show(&seven_q),
-            show(&whole)
-        );
-        assert!(attempt_gate.is_err(), "an attempt meets a room of 0 (held {held})");
-        if held {
-            let capped = |r: &Result<PalwChainStateV2, PalwStateV2Error>| match r {
-                Err(PalwStateV2Error::ClassInflightCapped { class, inflight: 5, cap: 5 }) => *class == short,
-                _ => false,
-            };
-            assert!(capped(&one_q) && capped(&seven_q) && capped(&whole), "the held row's cap of 5 refuses a sixth claim of any size");
-        } else {
-            let one_q = one_q.unwrap_or_else(|e| panic!("34 quanta are still 5 jobs: kept: {e}"));
-            assert_eq!(owed(&p, &one_q, short), 5);
-            let seven_q = seven_q.unwrap_or_else(|e| panic!("40 quanta are still 5 jobs: kept: {e}"));
-            assert_eq!(owed(&p, &seven_q, short), 5);
-            assert!(
-                matches!(whole, Err(PalwStateV2Error::PanelRoomExhausted { class, .. }) if class == short),
-                "41 quanta are 6 jobs, past the capacity of 5: {:?}",
-                show(&whole)
-            );
-        }
-    }
+    let (p, sp, short, s, daa) = short_row_at_capacity();
+    let q = short_quantum_leaves(&p, &sp, short);
+    let block = ctx(0x4500_0002, daa, daa, 0);
+    let attempt_gate = gate(&p, &sp, &s, short, daa);
+    let one_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 1, COMMITTER, 0xC5), None);
+    let seven_q = rehearse(&p, &sp, &block, &s, &commitment(short, q, 7, COMMITTER, 0xC6), None);
+    let whole = rehearse(&p, &sp, &block, &s, &commitment(short, q, 8, COMMITTER, 0xC7), None);
+    let show = |r: &Result<PalwChainStateV2, PalwStateV2Error>| r.as_ref().map(|_| "kept").map_err(|e| format!("{e:?}"));
+    println!(
+        "attempt gate {attempt_gate:?}; 1 quantum {:?}; 7 quanta {:?}; a whole job {:?}",
+        show(&one_q),
+        show(&seven_q),
+        show(&whole)
+    );
+    assert!(attempt_gate.is_err(), "an attempt meets a room of 0");
+    let one_q = one_q.unwrap_or_else(|e| panic!("34 quanta are still 5 jobs: kept: {e}"));
+    assert_eq!(owed(&p, &one_q, short), 5);
+    let seven_q = seven_q.unwrap_or_else(|e| panic!("40 quanta are still 5 jobs: kept: {e}"));
+    assert_eq!(owed(&p, &seven_q, short), 5);
+    assert!(
+        matches!(whole, Err(PalwStateV2Error::PanelRoomExhausted { class, .. }) if class == short),
+        "41 quanta are 6 jobs, past the capacity of 5: {:?}",
+        show(&whole)
+    );
+}
+
+/// A class held to Final — the 2M row — counts the claim asked about whole at its static cap: with
+/// one one-quantum commitment in flight (one job of c_2M = 1), a commitment of any size is refused
+/// at the cap, though pooled it would add no job (one and seven quanta) or fit the rate's capacity of
+/// two (a whole job).
+#[test]
+fn a_class_held_to_final_refuses_a_part_job_commitment_at_its_cap() {
+    let p = t12();
+    let b = bundle(&p);
+    let sp = b.state.clone();
+    let (_, id2m) = model_classes(&p);
+    let honest = honest(&p);
+    let now = 1_000u64;
+    let per_job = sp.fp_quanta_per_canonical_job() as u64;
+    let job = genesis_classes(&p).iter().find(|c| c.0 == id2m).expect("the 2M row").1;
+    let q = (job / per_job).max(1);
+    let mut s = activated(&sp, &genesis_state(&p), id2m);
+    let row = s.model_lifecycle(&id2m).unwrap().clone();
+    assert!(palw_panel_held_to_final_v1(&row) && row.profile.max_inflight_claims == 1, "the premise: 2M is C7, c_2M = 1");
+    s = readied(&sp, &s, &honest, id2m, now);
+    s = fold_with(
+        &p,
+        &sp,
+        &s,
+        &ctx(0x4600_0000, now, now, 0),
+        &[bond_obj(COMMITTER, RICH)],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        &fp_extras(&p, now),
+    )
+    .expect("the bond")
+    .0;
+    let next = now + 1;
+    s = readied(&sp, &s, &honest, id2m, now);
+    assert_eq!(op186(&p, &sp, &s, id2m, next).panel_room, 1, "eight ready seats: the 2M room is its cap of one");
+    let first = commitment(id2m, q, 1, COMMITTER, 0xD0);
+    s = fold_with(
+        &p,
+        &sp,
+        &s,
+        &ctx(0x4600_0001, next, next, 0),
+        &[first.clone()],
+        PalwBlockWorkV3::None,
+        Hash64::default(),
+        &fp_extras(&p, next),
+    )
+    .expect("a one-quantum 2M commitment folds")
+    .0;
+    assert_eq!(quanta_of(&s, &first), 1);
+    let next = next + 1;
+    s = readied(&sp, &s, &honest, id2m, next - 1);
+    let globals = registry_fold(&p, next).expect("the registry").globals;
+    let per_span = 8 * globals.reference_work_per_span * (globals.utilization_permille.min(1_000) as u128) / 1_000;
+    let capacity = palw_panel_capacity_by_rate_v1(
+        per_span,
+        0,
+        row.profile.verification_window_spans as u64,
+        row.work.economic_ccu_per_claim * b.panel.seat_count() as u128,
+    );
+    assert_eq!((owed(&p, &s, id2m), capacity), (1, 2), "one job owed of a rate capacity of two");
+    assert_eq!(op186(&p, &sp, &s, id2m, next).panel_room, 0, "and the room is the cap's: 0");
+
+    let block = ctx(0x4600_0002, next, next, 0);
+    let capped = |r: &Result<PalwChainStateV2, PalwStateV2Error>| matches!(r, Err(PalwStateV2Error::ClassInflightCapped { class, inflight: 1, cap: 1 }) if *class == id2m);
+    let one_q = rehearse(&p, &sp, &block, &s, &commitment(id2m, q, 1, COMMITTER, 0xD1), None);
+    let seven_q = rehearse(&p, &sp, &block, &s, &commitment(id2m, q, 7, COMMITTER, 0xD2), None);
+    let whole = rehearse(&p, &sp, &block, &s, &commitment(id2m, q, 8, COMMITTER, 0xD3), None);
+    let show = |r: &Result<PalwChainStateV2, PalwStateV2Error>| r.as_ref().map(|_| "kept").map_err(|e| format!("{e:?}"));
+    println!("2M at its cap: 1 quantum {:?}; 7 quanta {:?}; a whole job {:?}", show(&one_q), show(&seven_q), show(&whole));
+    assert!(capped(&one_q) && capped(&seven_q) && capped(&whole), "the 2M row's cap of 1 refuses a second claim of any size");
+    assert!(
+        matches!(gate(&p, &sp, &s, id2m, next), Err(PalwStateV2Error::ClassInflightCapped { inflight: 1, cap: 1, .. })),
+        "and an attempt"
+    );
 }
