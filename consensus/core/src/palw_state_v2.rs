@@ -11351,6 +11351,14 @@ pub fn palw_escrow_destroyed_by_delta_v2(delta: &PalwStateDeltaV2) -> u64 {
 }
 
 
+#[cfg(test)]
+thread_local! {
+    /// **R2's measure (tests only): how many times the fold asked the readiness predicate** — the
+    /// unit the span step's cost is counted in (one ask per bond per class the step reads), so a
+    /// test can say "does not scale with Candidate rows" without timing anything.
+    pub(crate) static PALW_READY_PREDICATE_EVALS_FOR_TESTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 /// **The fold's read-only inputs — the parent state, the params and the block's extras — for the
 /// rules a caller outside the fold must evaluate exactly as the fold does** (the 2026-09-23
 /// route-matrix audit's #3: the panel draw asks the bind's Valid-lock question before it names a
@@ -12273,6 +12281,8 @@ impl PalwFoldReadV1<'_> {
         // never past V2), free collateral for the readiness multiple.
         // Past the fence `collateral` is read as the net figure it is (`palw_bond_free_collateral_v1`,
         // review of the 2026-09-24 DoS audit #12) — in the fold by THIS block's fence, as before.
+        #[cfg(test)]
+        PALW_READY_PREDICATE_EVALS_FOR_TESTS.with(|count| count.set(count.get() + 1));
         let Some(row) = self.state.seat_readiness.get(&(*bond_key, *class_id)) else { return false };
         crate::palw_model_registry_v1::palw_seat_not_ready_reason_net_v1(
             self.state,
@@ -16991,7 +17001,16 @@ impl<'a> TransitionBuilder<'a> {
             palw_admission_jury_seed_v1,
         };
         let period = palw_admission_audit_period_spans_v2(self.params.epoch_length, fold.span_daa, fold.admission_audit_period_daa);
-        if !palw_admission_audit_due_v1(span_now, period) {
+        // **R2 (ADR-0152-adjacent: Activation Pool; the review's M2): past `palw_activation_pool` a
+        // class meets its jury at ITS OWN span of the period** (`(span + H(class_id)) mod period ==
+        // 0`), the seed still the anchor of the span before. One jury per period as before; the
+        // network's audits, and the readiness proofs aimed at them, stop landing in one span.
+        let due = if self.extras.activation_pool.is_some() {
+            crate::palw_activation_pool_v1::palw_admission_audit_due_staggered_v1(class_id, span_now, period)
+        } else {
+            palw_admission_audit_due_v1(span_now, period)
+        };
+        if !due {
             return false;
         }
         let Some(anchor) = self.state.round_seed_anchor.as_ref().filter(|anchor| anchor.span.saturating_add(1) == span_now) else {
@@ -17293,8 +17312,37 @@ impl<'a> TransitionBuilder<'a> {
         }
         let mut admissions: Vec<(Hash64, u64)> = Vec::new();
         let rowed: Vec<Hash64> = self.state.model_lifecycles.keys().copied().collect();
+        // **R2 (ADR-0152-adjacent: Activation Pool; the review's M2), past `palw_activation_pool`: a
+        // row is observed only when something can come of it.** The rows of a `Dormant` or `Frozen`
+        // class are not stepped at all — a Dormant class re-enters through a fresh registration and
+        // a Frozen one never does, so a jury seated or a probe counted for either is an answer
+        // nobody may act on (the review's M8) — and a `Candidate` row reads its ready seats and its
+        // jury only at its own staggered audit span, the one boundary its step can change anything
+        // at (`Candidate` leaves only on a seated jury, and admits nothing in between). Everything
+        // else is stepped every span exactly as before. Each skipped row admits nothing
+        // (`admission_milli` 0): a parked class admits no claim, and a Candidate's admission is
+        // zero by its state. So a listing costs the span step one comparison between its audits,
+        // not a walk of the bond registry — the price the 1 MSK burn has to cover (the review's A7).
+        let r2 = self.extras.activation_pool.is_some();
+        let audit_period = crate::palw_model_registry_v1::palw_admission_audit_period_spans_v2(
+            self.params.epoch_length,
+            fold.span_daa,
+            fold.admission_audit_period_daa,
+        );
         for class_id in &rowed {
             let row = self.state.model_lifecycles.get(class_id).cloned().expect("just listed");
+            if r2 && *class_id != base {
+                let parked = matches!(
+                    self.state.classes.get(class_id).map(|record| &record.status),
+                    Some(PalwClassStatusV2::Dormant { .. } | PalwClassStatusV2::Frozen { .. })
+                );
+                let between_audits = matches!(row.state, PalwModelLifecycleV1::Candidate)
+                    && !crate::palw_activation_pool_v1::palw_admission_audit_due_staggered_v1(class_id, span_now, audit_period);
+                if parked || between_audits {
+                    admissions.push((*class_id, 0));
+                    continue;
+                }
+            }
             let target = self.state.class_targets.get(class_id).map(|t| t.target).unwrap_or(u128::MAX);
             let expected = crate::palw_economic_compute_v1::palw_expected_attempts_q32_v1(target);
             let profile =
@@ -31377,6 +31425,10 @@ pub(crate) mod tests {
 
     mod adr0135 {
         use super::*;
+
+        // ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): R2 through this fixture's
+        // registry step.
+        mod activation_pool_r2_v1;
 
         /// The registry's fixture params: the shared `params()` with a receipt window of four spans
         /// (40 DAA) instead of ten DAA — the derived verification window of any class is at least
