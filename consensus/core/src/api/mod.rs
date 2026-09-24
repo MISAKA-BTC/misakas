@@ -857,6 +857,17 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **ADR-0152 X7 / DA-4 (Phase 2, P2-7): the R-core court's half** — every unanswered unit of an
+    /// open data-availability session this node must answer, as the claim's producer or as a
+    /// covering signer, and the claims a live lock obliges it to keep the material of. Empty below
+    /// `palw_rcore_plus`, where [`Self::palw_da_duties_v2`] is the court's duty list.
+    fn palw_disclosure_duties_v1(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> crate::palw_producer_v2::PalwDisclosureDutiesV1 {
+        Default::default()
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {

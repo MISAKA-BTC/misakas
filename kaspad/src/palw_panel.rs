@@ -1502,6 +1502,41 @@ pub(crate) fn palw_seat_retention_pins_v1(
     live.iter().copied().chain(liabilities.iter().filter(|(_, horizon)| **horizon >= current_daa).map(|(claim, _)| *claim)).collect()
 }
 
+/// **ADR-0152 X7 (Phase 2, P2-7), node policy: is a disclosure duty this node's to answer now?**
+/// Never past the deadline (the first block past it defaults the session, DA-7). The claim's
+/// PRODUCER answers at once. A COVERING SIGNER lets the producer have the first half of `W_disclose`
+/// and then answers in its place, staggered by its rank among the unit's covering signers — a
+/// sixteenth of the window per rank, and never later than a quarter-window before the deadline — so
+/// an honest producer's answer is the one that lands, a silent producer's signers answer with room
+/// to spare, and one signer's answer usually lands before the next signer's turn comes (the unit
+/// then leaves every duty list). Every answer is refused by the fold once the unit is answered
+/// (`DaUnitAlreadyAnswered`), so the stagger only saves carrier fees; it never decides who is charged.
+pub(crate) fn palw_disclosure_due_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1, current_daa: u64) -> bool {
+    use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
+    if current_daa > duty.deadline_daa {
+        return false;
+    }
+    match duty.role {
+        PalwDisclosureRoleV1::Producer => true,
+        PalwDisclosureRoleV1::CoveringSigner => {
+            let window = duty.disclose_window_daa.max(1);
+            let stagger = (window / 16).max(1).saturating_mul(u64::from(duty.signer_rank));
+            let lead = (window / 2).saturating_sub(stagger).max(window / 4);
+            current_daa.saturating_add(lead) >= duty.deadline_daa
+        }
+    }
+}
+
+/// **The court queue's key of an R-core answer** (P2-7): the claim, and the unit folded to 32 bits
+/// under a node-local domain. Node bookkeeping only (`court_moved`, `court_pending`): a collision
+/// between two units of one claim delays one answer by a replan, and decides nothing on chain.
+fn palw_disclosure_queue_key_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1) -> (Hash64, u32, bool) {
+    let unit = borsh::to_vec(&duty.unit).unwrap_or_default();
+    let digest = blake2b_simd::Params::new().hash_length(32).key(b"misaka-node/da-answer-queue-key/v1").hash(&unit);
+    let folded = u32::from_le_bytes(digest.as_bytes()[..4].try_into().expect("four bytes"));
+    (duty.claim_id, folded, true)
+}
+
 /// The family capture inside a pool payload: an `FPC1` payload's inner tuple (ADR-0073 Decision
 /// 1a), or the bytes themselves for an attempt's raw capture. What `verify_material` and the
 /// provers take — the pool and the retention keep the payload as it travelled.
@@ -4653,6 +4688,10 @@ impl PalwPanelService {
         // CHAIN decide by re-planning. A duty only survives re-planning if chain state still says
         // that move is due, so a landed move disappears on its own when the round advances.
         let mut court_moved: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
+        // ADR-0152 IMPL-16 (P2-7): the claims whose R-core `Flat` answer this node sent, and when —
+        // one `Flat` answers every in-run event unit, so while it is plausibly in flight no other
+        // in-run unit of the claim is answered again (the fold would refuse it as answered).
+        let mut da_flat_sent: HashMap<Hash64, u64> = HashMap::new();
         // Claims this node has already judged: either reproduced (nothing to say) or disputed.
         let mut challenged: HashSet<Hash64> = HashSet::new();
         // **Pending court moves survive the tick.** They used to be built into a per-tick vector
@@ -6164,20 +6203,7 @@ impl PalwPanelService {
                     continue;
                 }
                 let (row, tile) = kaspa_consensus_core::palw_state_v2::palw_da_event_index_parts_v1(duty.missing_event_index);
-                // A free-prompt retention wraps the family capture with the job and its ids; the
-                // attempt lane retains the family capture bare (ADR-0084 Decision 4).
-                let disclosed = match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(
-                    &bytes,
-                    self.class_prompt_ids_form(duty.class_id),
-                ) {
-                    Some(payload) => self
-                        .resolve_backend(&session, duty.class_id, duty.artifact_root)
-                        .and_then(|backend| backend.disclose_trace_event(&payload.capture, row, tile)),
-                    None => match self.backend_for_raw_capture_v1(&session, &bytes) {
-                        Some((backend, _)) => backend.disclose_trace_event(&bytes, row, tile),
-                        None => Err("no held class reads the retained capture".to_string()),
-                    },
-                };
+                let disclosed = self.disclose_retained_event_v1(&session, duty.class_id, duty.artifact_root, &bytes, row, tile);
                 let disclosure = match disclosed {
                     Ok(disclosure) => disclosure,
                     Err(why) => {
@@ -6218,6 +6244,91 @@ impl PalwPanelService {
                         signature,
                     },
                 ));
+            }
+
+            // --- ADR-0152 X7 / DA-4 (P2-7): R-core+'s data-availability court — every demanded unit ---
+            //
+            // Past `palw_rcore_plus` an accusation opens a session in `da_sessions` and never touches
+            // the claim's phase (DA-1), so the loop above finds nothing there, and the v1 answers it
+            // built are refused (`DaV1AnswerRetired`). Here each unit an open session demands of this
+            // node is answered with one `MaterialDisclosedV2` (`palw_da_answer_object_v1`): as the
+            // claim's PRODUCER at once, or as a COVERING SIGNER — a live lock whose mask covers the
+            // unit, the fold's own predicate, so exactly the units a default would charge it S4 for —
+            // once the producer has had its turn (`palw_disclosure_due_v1`). The material is what
+            // this node kept for the claim: its own retention, the verified copy its seat kept (held
+            // while the lock lives: `disclosure_retain` pins it below), or an attempt capture re-made
+            // by replaying the claim's job and checked against its roots. One `Flat` a claim answers
+            // every in-run event unit (IMPL-16). Below the fence the duty list is empty.
+            let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);
+            let disclosure_retain: Vec<Hash64> = disclosure.retain.iter().map(|(claim, _)| *claim).collect();
+            da_flat_sent.retain(|_, sent| current_daa < sent.saturating_add(COURT_MOVE_REPLAN_DAA));
+            if da_armed && !disclosure.duties.is_empty() {
+                let mut captures: HashMap<Hash64, Result<Vec<u8>, String>> = HashMap::new();
+                // A `Flat` queued (possibly waiting for the fee UTXO) or just sent answers the claim's run.
+                let mut flat_queued: HashSet<Hash64> = court_pending
+                    .iter()
+                    .filter_map(|(_, _, _, object)| match object {
+                        PalwConsensusObjectV2::MaterialDisclosedV2 {
+                            claim,
+                            answer:
+                                kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                                    kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. },
+                                ),
+                            ..
+                        } => Some(*claim),
+                        _ => None,
+                    })
+                    .collect();
+                flat_queued.extend(da_flat_sent.keys().copied());
+                for duty in &disclosure.duties {
+                    if !palw_disclosure_due_v1(duty, current_daa) {
+                        continue;
+                    }
+                    if flat_queued.contains(&duty.claim_id)
+                        && kaspa_consensus_core::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(&duty.unit, duty.in_run_rows)
+                    {
+                        continue;
+                    }
+                    let key = palw_disclosure_queue_key_v1(duty);
+                    if let Some(sent_daa) = court_moved.get(&key)
+                        && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
+                    {
+                        continue;
+                    }
+                    if court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
+                        continue;
+                    }
+                    match self.rcore_da_answer_v1(&session, network_domain, duty, &mut captures).await {
+                        Ok(object) => {
+                            info!(
+                                "[{PALW_PANEL}] claim {}: answering {:?} of an open data-availability session as {:?} — deadline \
+                                 DAA {} (ADR-0152 DA-4, X7)",
+                                duty.claim_id, duty.unit, duty.role, duty.deadline_daa
+                            );
+                            if let PalwConsensusObjectV2::MaterialDisclosedV2 {
+                                answer:
+                                    kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                                        kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. },
+                                    ),
+                                ..
+                            } = &object
+                            {
+                                flat_queued.insert(duty.claim_id);
+                                da_flat_sent.insert(duty.claim_id, current_daa);
+                            }
+                            court_pending.push((key.0, key.1, key.2, object));
+                        }
+                        Err(why) => {
+                            warn!(
+                                "[{PALW_PANEL}] claim {}: cannot answer {:?} of an open data-availability session as {:?}: {why}",
+                                duty.claim_id, duty.unit, duty.role
+                            );
+                            *court_stalls
+                                .entry("a data-availability unit cannot be answered from what this node holds")
+                                .or_default() += 1;
+                        }
+                    }
+                }
             }
 
             // --- the seat's half: answer every duty exactly once ---
@@ -8461,6 +8572,12 @@ impl PalwPanelService {
             } else {
                 *self.foreign_pinned.lock().unwrap() = live.clone();
             }
+            // P2-7: and every claim a live lock of this bond still answers for (`disclosure_retain`,
+            // read off the chain's locks, so a restart that forgot the duty book keeps them too).
+            // Empty below `palw_rcore_plus`.
+            if !disclosure_retain.is_empty() {
+                self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());
+            }
             // H1's other half, past SEAT-R: the served openings of a claim no duty, court or dispute
             // names any more leave the pool. It admits no new `(claim, interval)` pair past its ceiling
             // and nothing else ever removed one, so a node stopped hearing openings — every re-ask of a
@@ -10129,19 +10246,6 @@ impl PalwPanelService {
         )
     }
 
-    /// **The binding and the prompt behind a retained free-prompt capture** — what a held
-    /// disclosure of a prompt tile is bound by (ADR-0103 Decision 4). The binding is read off the
-    /// capture's interval 0, which every family serves and which carries it.
-    fn retained_binding_and_prompt_v1(
-        &self,
-        session: &kaspa_consensusmanager::ConsensusProxy,
-        claim: Hash64,
-    ) -> Result<(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, Vec<u32>), String> {
-        let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
-        let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
-        Ok((binding, payload.material.prompt_token_ids))
-    }
-
     /// **This node's retained free-prompt capture of `claim`, with the backend of its class** —
     /// the one loader behind every answer an executor gives from its retention (ADR-0111 Decision
     /// 6): its own capture first, then one it holds for another executor.
@@ -10181,10 +10285,52 @@ impl PalwPanelService {
         Ok(v4.binding)
     }
 
+    /// **A held unit's disclosure, from this node's free-prompt retention** (ADR-0103 Decision 4;
+    /// ADR-0111 Decisions 4 and 6): a leaf's evidence, a prompt tile, a state chunk or a run of step
+    /// leaves, built by the ONE held builder (`palw_da_held_disclosure_from_capture_v1`, whose match
+    /// names every unit the court can and has no catch-all) from the capture, its job's prompt and
+    /// the claim's roots — the binding read off interval 0 where the answer does not carry its own.
+    /// The v1 court's answer ([`Self::held_da_answer_v1`]) and R-core's (P2-7) both read it.
+    fn fp_held_da_disclosure_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        claim: Hash64,
+        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
+    ) -> Result<
+        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1),
+        String,
+    > {
+        let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
+        let job = &payload.material.job;
+        // `output_root: None`: the chain's roots read (`palw_claim_roots_v2`) carries no output root,
+        // and a leaf's evidence proves a step leaf against the execution root — not the answer.
+        // The roots are read by the leaf's arm only, and asked of the chain only for it.
+        let (roots, work_leaves) = if matches!(missing, kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { .. }) {
+            let (execution_root, trace_root, work_leaves) =
+                session.palw_claim_roots_v2(claim).ok_or("the chain holds no such claim")?;
+            let anchor = kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job);
+            (PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: None, output_root: None }, work_leaves)
+        } else {
+            let none = Hash64::default();
+            (PalwClaimRootsV1 { execution_root: none, trace_root: none, anchor: none, attempt_draw: None, output_root: None }, 0)
+        };
+        kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
+            backend.as_ref(),
+            &payload.capture,
+            &payload.material.prompt_token_ids,
+            roots,
+            work_leaves,
+            missing,
+            self.class_prompt_ids_form(job.class_id),
+            || Self::served_binding_v1(backend.as_ref(), &payload),
+        )
+    }
+
     /// **The held DA court's answer, in the unit accused** (ADR-0103 Decision 4; ADR-0111 Decisions
     /// 4 and 6), signed by the claim's bond: a leaf's evidence, a prompt tile, a state chunk or a run
-    /// of step leaves, each built from this executor's retention — an executor that cannot answer
-    /// is one the court slashes, so every unit the court can name has its answer here.
+    /// of step leaves, each built from this executor's retention ([`Self::fp_held_da_disclosure_v1`])
+    /// — an executor that cannot answer is one the court slashes, so every unit the court can name
+    /// has its answer there. The v1 court's (below `palw_rcore_plus`).
     fn held_da_answer_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -10193,35 +10339,10 @@ impl PalwPanelService {
         missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
     ) -> Result<PalwConsensusObjectV2, String> {
         use kaspa_consensus_core::palw_held_da_v1::{
-            PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldDisclosureCarriageV1, PalwHeldDisclosureV1,
-            PalwHeldMissingV1, palw_held_da_disclosure_message_v1,
+            PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldDisclosureCarriageV1,
+            palw_held_da_disclosure_message_v1,
         };
-        let (binding, disclosure) = match missing {
-            PalwHeldMissingV1::StepLeaf { leaf } => {
-                let evidence = self.retained_leaf_evidence_v1(session, claim, leaf)?;
-                (evidence.refutation.binding.clone(), PalwHeldDisclosureV1::StepLeaf { evidence: Box::new(evidence) })
-            }
-            PalwHeldMissingV1::PromptIdsTile { tile } => {
-                let (binding, prompt) = self.retained_binding_and_prompt_v1(session, claim)?;
-                let position = tile.saturating_mul(kaspa_consensus_core::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN);
-                let opening = kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1(&prompt, position)
-                    .map_err(|e| format!("the prompt tile does not open: {e}"))?;
-                (binding, PalwHeldDisclosureV1::PromptIdsTile { opening })
-            }
-            PalwHeldMissingV1::StateChunk { checkpoint, chunk } => {
-                let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
-                let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
-                let (anchor, chunk) =
-                    backend.held_state_chunk_answer_v1(&payload.capture, &payload.material.prompt_token_ids, checkpoint, chunk)?;
-                (binding, PalwHeldDisclosureV1::StateChunk { anchor, chunk })
-            }
-            PalwHeldMissingV1::StepRange { first, count } => {
-                let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
-                let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
-                let opening = backend.held_step_range_answer_v1(&payload.capture, &payload.material.prompt_token_ids, first, count)?;
-                (binding, PalwHeldDisclosureV1::StepRange { opening })
-            }
-        };
+        let (binding, disclosure) = self.fp_held_da_disclosure_v1(session, claim, missing)?;
         let mut carriage = PalwHeldDisclosureCarriageV1 {
             version: PALW_HELD_DA_VERSION_V1,
             claim,
@@ -10240,6 +10361,185 @@ impl PalwPanelService {
         let message = palw_held_da_disclosure_message_v1(domain.as_byte_slice(), &carriage);
         carriage.signature = self.sign(message.as_byte_slice(), PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT).ok_or("no signing key")?;
         Ok(PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure: Box::new(carriage) })
+    }
+
+    /// **Open event `(row, tile)` of a retained or re-made capture** (ADR-0062 D3; ADR-0152 DA-4) —
+    /// nothing re-executed: the rows and ids kept at execution are what the claim committed. A
+    /// free-prompt retention wraps the family capture with the job and its ids; the attempt lane
+    /// retains the family capture bare (ADR-0084 Decision 4). The v1 court's responder and R-core's
+    /// (P2-7) both open through it.
+    fn disclose_retained_event_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        bytes: &[u8],
+        row: u32,
+        tile: u8,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes, self.class_prompt_ids_form(class_id)) {
+            Some(payload) => self
+                .resolve_backend(session, class_id, artifact_root)
+                .and_then(|backend| backend.disclose_trace_event(&payload.capture, row, tile)),
+            None => match self.backend_for_raw_capture_v1(session, bytes) {
+                Some((backend, _)) => backend.disclose_trace_event(bytes, row, tile),
+                None => Err("no held class reads the retained capture".to_string()),
+            },
+        }
+    }
+
+    /// **The capture an R-core answer is built from** (ADR-0152 DA-4, P2-7), once a tick a claim
+    /// (`captures`): this node's own retention, then the verified copy it kept as a seat (pinned
+    /// while its lock lives), and — for an attempt claim, whose job is chain data — a capture re-made
+    /// by replaying the claim's block's job, used only if it reproduces the committed roots
+    /// ([`Self::remade_attempt_capture_v1`]). A free-prompt claim this node kept nothing for cannot be
+    /// answered from here (a seat that licensed from a job-only payload holds roots, not a capture).
+    async fn rcore_da_capture_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
+        captures: &mut HashMap<Hash64, Result<Vec<u8>, String>>,
+    ) -> Result<Vec<u8>, String> {
+        if let Some(held) = captures.get(&duty.claim_id) {
+            return held.clone();
+        }
+        let retained = self
+            .retained_capture(&duty.claim_id)
+            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok());
+        let held = match retained {
+            Some(bytes) => Ok(bytes),
+            None if !duty.free_prompt => {
+                let remade = self
+                    .remade_attempt_capture_v1(
+                        session,
+                        network_domain,
+                        duty.accepted_block,
+                        duty.class_id,
+                        duty.artifact_root,
+                        &duty.executor_bond,
+                        duty.execution_root,
+                        duty.trace_root,
+                    )
+                    .await;
+                if remade.is_ok() {
+                    info!(
+                        "[{PALW_PANEL}] claim {}: no capture kept here — re-made by replaying its block's job to answer a \
+                         data-availability session ({:?})",
+                        duty.claim_id, duty.role
+                    );
+                }
+                remade
+            }
+            None => Err("no capture of this free-prompt claim is kept here".to_string()),
+        };
+        captures.insert(duty.claim_id, held.clone());
+        held
+    }
+
+    /// **A held unit of an ATTEMPT claim, answered from its capture** (ADR-0152 DA-3/DA-4, P2-7). The
+    /// fold draws held units on attempt claims too — a `DefaultAccusedHeld` on any class draws
+    /// width-1 step ranges beside a named leaf — and v1's responder answered them only from a
+    /// free-prompt capture, so an honest attempt producer defaulted. The prompt is the canonical one
+    /// the claim's anchor implies, the roots name that job, and the binding is the capture's own, read
+    /// off an out-of-range event disclosure (every family's DA responder carries it there, and the
+    /// fold's checkers read that binding).
+    fn attempt_held_da_disclosure_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
+        capture: &[u8],
+        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
+    ) -> Result<
+        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1),
+        String,
+    > {
+        let backend = self.resolve_backend(session, duty.class_id, duty.artifact_root)?;
+        let (_, prompt) = self
+            .attempt_job_for_claim(session, backend.as_ref(), network_domain, duty.accepted_block, duty.class_id, &duty.executor_bond)
+            .ok_or("the claim's block is not in this node's store")?;
+        let prompt: Vec<u32> = prompt
+            .iter()
+            .map(|id| u32::try_from(*id).map_err(|_| format!("prompt id {id} does not fit a u32")))
+            .collect::<Result<_, _>>()?;
+        let (_, _, work_leaves) = session.palw_claim_roots_v2(duty.claim_id).ok_or("the chain holds no such claim")?;
+        let roots = PalwClaimRootsV1 {
+            execution_root: duty.execution_root,
+            trace_root: duty.trace_root,
+            anchor: self
+                .job_anchor_for_claim(
+                    session,
+                    backend.as_ref(),
+                    network_domain,
+                    duty.accepted_block,
+                    duty.class_id,
+                    &duty.executor_bond,
+                )
+                .unwrap_or_default(),
+            attempt_draw: self.attempt_draw_for_claim(session, duty.accepted_block),
+            output_root: None,
+        };
+        kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
+            backend.as_ref(),
+            capture,
+            &prompt,
+            roots,
+            work_leaves,
+            missing,
+            self.class_prompt_ids_form(duty.class_id),
+            || backend.disclose_trace_event(capture, u32::MAX, u8::MAX).map(|disclosure| disclosure.binding().clone()),
+        )
+    }
+
+    /// **ADR-0152 DA-4 / X7 (P2-7): the `MaterialDisclosedV2` that answers one unit `duty` names**,
+    /// signed by the duty's discloser (this node's bond: the producer, or a covering signer). An
+    /// event unit is opened out of the claim's capture ([`Self::disclose_retained_event_v1`]: `Flat`,
+    /// `Tiled`, or `OutOfRange` from the binding alone); a held unit by the ONE held builder, from a
+    /// free-prompt retention ([`Self::fp_held_da_disclosure_v1`]) or an attempt capture
+    /// ([`Self::attempt_held_da_disclosure_v1`]). The object is built by the ONE builder the
+    /// real-claim tests carry through the gate and the fold (`palw_da_answer_object_v1`), inside the
+    /// ruleset's close ceiling (DA-8).
+    async fn rcore_da_answer_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
+        captures: &mut HashMap<Hash64, Result<Vec<u8>, String>>,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_answer_object_v1, palw_da_held_answer_v1};
+        let answer = match duty.unit {
+            PalwDaUnitV1::Event { row, tile } => {
+                let bytes = self.rcore_da_capture_v1(session, network_domain, duty, captures).await?;
+                PalwDaAnswerV1::Event(self.disclose_retained_event_v1(
+                    session,
+                    duty.class_id,
+                    duty.artifact_root,
+                    &bytes,
+                    row,
+                    tile,
+                )?)
+            }
+            PalwDaUnitV1::Held(missing) => {
+                let (binding, disclosure) = if duty.free_prompt {
+                    self.fp_held_da_disclosure_v1(session, duty.claim_id, missing)?
+                } else {
+                    let bytes = self.rcore_da_capture_v1(session, network_domain, duty, captures).await?;
+                    self.attempt_held_da_disclosure_v1(session, network_domain, duty, &bytes, missing)?
+                };
+                palw_da_held_answer_v1(duty.claim_id, missing, binding, disclosure)
+            }
+        };
+        palw_da_answer_object_v1(
+            &network_domain,
+            duty.claim_id,
+            duty.unit,
+            answer,
+            duty.discloser,
+            self.config.court.max_close_bytes(),
+            |message, context| self.sign(message, context),
+        )
+        .map_err(|e| e.to_string())
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
@@ -12224,18 +12524,26 @@ mod court_responder_coverage_pin {
         let event = source[loop_start..].find("palw_da_event_index_parts_v1(duty.missing_event_index)").expect("the event path");
         assert!(held < event, "a held unit is answered before an event index is read");
         // Every unit the court can name is answered, and with no catch-all arm — so a unit added to
-        // `PalwHeldMissingV1` is a compile error here rather than an executor slashed for silence.
+        // `PalwHeldMissingV1` is a compile error there rather than an executor slashed for silence.
+        // The arms are the ONE held builder's (`palw_da_held_disclosure_from_capture_v1`, P2-7),
+        // which the v1 answer and R-core's both reach.
         let answer = &source[source.find("fn held_da_answer_v1(").expect("the held answer")..];
         let answer = &answer[..answer.find("\n    }\n").expect("its end")];
+        assert!(answer.contains("self.fp_held_da_disclosure_v1(session, claim, missing)?"), "the v1 answer uses the shared builder");
+        let fp = &source[source.find("fn fp_held_da_disclosure_v1(").expect("the free-prompt held source")..];
+        assert!(fp.contains("palw_da_held_disclosure_from_capture_v1("), "which builds through the core's held builder");
+        let core = include_str!("../../consensus/core/src/palw_da_rcore_v1.rs");
+        let builder = &core[core.find("pub fn palw_da_held_disclosure_from_capture_v1(").expect("the held builder")..];
+        let builder = &builder[..builder.find("\n}\n").expect("its end")];
         for unit in [
             "PalwHeldMissingV1::StepLeaf { leaf } =>",
             "PalwHeldMissingV1::PromptIdsTile { tile } =>",
             "PalwHeldMissingV1::StateChunk { checkpoint, chunk } =>",
             "PalwHeldMissingV1::StepRange { first, count } =>",
         ] {
-            assert!(answer.contains(unit), "the held answer has no arm {unit}");
+            assert!(builder.contains(unit), "the held builder has no arm {unit}");
         }
-        assert!(!answer.contains("other =>") && !answer.contains("_ =>"), "no held unit falls to a catch-all refusal");
+        assert!(!builder.contains("other =>") && !builder.contains("_ =>"), "no held unit falls to a catch-all refusal");
     }
 
     /// **ADR-0121 §7, pinned where the seat's fault is handled**: a `FaultInRange` whose address is
@@ -14871,5 +15179,91 @@ mod seat_s_tests {
         let key = palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 1, b"x");
         assert_ne!(key, palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 2, b"x"), "a segment's own task");
         assert_ne!(key.1, h(2), "never a whole-job replay's key");
+    }
+}
+
+#[cfg(test)]
+mod p2_7_disclosure_policy {
+    //! **ADR-0152 X7 (Phase 2, P2-7): when the node answers a disclosure duty, and how its queue
+    //! keys an answer.** The duty list and the answer are consensus-core's
+    //! (`palw_disclosure_duties_v1`, `palw_da_answer_object_v1`) and are carried through the gate and
+    //! the fold on real claims in `t46_false_valid_real_claim::m3_da_court`; this is the node's own
+    //! policy around them.
+    use super::*;
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    use kaspa_consensus_core::palw_producer_v2::{PalwDisclosureDutyV1, PalwDisclosureRoleV1};
+
+    fn duty(role: PalwDisclosureRoleV1, signer_rank: u16, unit: PalwDaUnitV1, deadline_daa: u64, window: u64) -> PalwDisclosureDutyV1 {
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0));
+        PalwDisclosureDutyV1 {
+            claim_id: Hash64::from_u64_word(1),
+            accepted_block: Hash64::from_u64_word(2),
+            class_id: Hash64::from_u64_word(3),
+            artifact_root: Hash64::from_u64_word(4),
+            executor_bond: bond,
+            discloser: bond,
+            role,
+            signer_rank,
+            unit,
+            deadline_daa,
+            disclose_window_daa: window,
+            in_run_rows: 1,
+            trace_root: Hash64::default(),
+            execution_root: Hash64::default(),
+            free_prompt: false,
+        }
+    }
+
+    /// **The producer answers at once; a covering signer waits out the producer's half of the
+    /// window, staggered by its rank, and never later than a quarter-window before the deadline;
+    /// nobody answers past the deadline.** testnet-12's `W_disclose` of 1,200 DAA on a session opened
+    /// at 1,000: the producer from 1,000 to 2,200; the rank-0 signer from 1,600 (600 left), rank 1
+    /// from 1,675, rank 4 and every later rank from 1,900 (300 left); and a devnet-short window keeps
+    /// the same shape.
+    #[test]
+    fn the_producer_answers_at_once_and_a_covering_signer_after_its_turn() {
+        let unit = PalwDaUnitV1::Event { row: 0, tile: 0 };
+        let producer = duty(PalwDisclosureRoleV1::Producer, 0, unit, 2_200, 1_200);
+        for at in [1_000, 1_599, 2_200] {
+            assert!(palw_disclosure_due_v1(&producer, at), "the producer at {at}");
+        }
+        assert!(!palw_disclosure_due_v1(&producer, 2_201), "past the deadline the session has defaulted");
+        for (rank, first) in [(0u16, 1_600u64), (1, 1_675), (2, 1_750), (3, 1_825), (4, 1_900), (5, 1_900), (40, 1_900)] {
+            let signer = duty(PalwDisclosureRoleV1::CoveringSigner, rank, unit, 2_200, 1_200);
+            assert!(!palw_disclosure_due_v1(&signer, first - 1), "rank {rank} waits until {first}");
+            assert!(palw_disclosure_due_v1(&signer, first), "rank {rank} answers from {first}");
+            assert!(palw_disclosure_due_v1(&signer, 2_200) && !palw_disclosure_due_v1(&signer, 2_201), "rank {rank}: to the deadline");
+        }
+        let short = duty(PalwDisclosureRoleV1::CoveringSigner, 0, unit, 40, 20);
+        assert!(!palw_disclosure_due_v1(&short, 29) && palw_disclosure_due_v1(&short, 30), "half of a short window");
+        let degenerate = duty(PalwDisclosureRoleV1::CoveringSigner, 3, unit, 5, 0);
+        assert!(
+            palw_disclosure_due_v1(&degenerate, 5) && !palw_disclosure_due_v1(&degenerate, 6),
+            "a zero window still ends at its deadline"
+        );
+    }
+
+    /// **The queue key names the claim and the unit**: the same unit keys the same entry (so a
+    /// queued or recently sent answer is not rebuilt), distinct units of one claim key distinct
+    /// entries (so one answer never hides another), and the key's claim half is the claim.
+    #[test]
+    fn the_queue_key_is_the_claim_and_the_unit() {
+        use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+        let units = [
+            PalwDaUnitV1::Event { row: 0, tile: 0 },
+            PalwDaUnitV1::Event { row: 7, tile: 0 },
+            PalwDaUnitV1::Event { row: 0, tile: 1 },
+            PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 5 }),
+            PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: 5, count: 1 }),
+            PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint: 1, chunk: 2 }),
+            PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: 0 }),
+        ];
+        let keys: Vec<(Hash64, u32, bool)> =
+            units.iter().map(|unit| palw_disclosure_queue_key_v1(&duty(PalwDisclosureRoleV1::Producer, 0, *unit, 10, 10))).collect();
+        let distinct: HashSet<u32> = keys.iter().map(|key| key.1).collect();
+        assert_eq!(distinct.len(), units.len(), "one entry a unit");
+        assert!(keys.iter().all(|key| key.0 == Hash64::from_u64_word(1) && key.2), "the claim, as the responder");
+        let again = palw_disclosure_queue_key_v1(&duty(PalwDisclosureRoleV1::CoveringSigner, 2, units[3], 99, 10));
+        assert_eq!(again, keys[3], "the unit, whoever answers it");
     }
 }

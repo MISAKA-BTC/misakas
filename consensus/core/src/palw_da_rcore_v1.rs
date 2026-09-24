@@ -38,18 +38,27 @@ pub const PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1: u16 = 16;
 /// DA-8: sessions one seat of the claim's current panel opens on the claim over its life, at most.
 /// Seats are exempt from the lifetime cap above; this is their own budget.
 pub const PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1: u8 = 4;
-/// **Have seats landed automatic DA answering?** — `false` in this build. DA-7's S4 on covering
-/// signers and N9's `ProducerWithholding` against them are fair only because a covering signer can
-/// answer the demanded unit itself with the material it retained (DA-4, X7: any bond with a live
-/// lock on the claim may disclose). While kaspad's seats do not yet do that, both stay DORMANT
-/// ([`crate::palw_state_v2::palw_da_signer_liability_armed_v1`] reads this const); the producer's
-/// DA-7 charge, the `DaDefault` record, the reward and every other DA rule stay live.
+/// **Have seats landed automatic DA answering?** — `true` since Phase 2's P2-7. DA-7's S4 on
+/// covering signers and N9's `ProducerWithholding` against them are fair only because a covering
+/// signer can answer the demanded unit itself with the material it retained (DA-4, X7: any bond
+/// with a live lock on the claim may disclose). kaspad's seats now do: every tick a seat reads
+/// `palw_producer_v2::palw_disclosure_duties_v1` — the units of every open session on a claim where
+/// its live lock's mask covers them, by the fold's own covering predicate — and answers each with a
+/// `MaterialDisclosedV2` built by [`palw_da_answer_object_v1`] from the material it kept while the
+/// lock lives (its verified copy, or an attempt capture re-made by replaying the claim's job). So
+/// both are ARMED past `palw_rcore_plus` ([`crate::palw_state_v2::palw_da_signer_liability_armed_v1`]
+/// reads this const).
 ///
-/// **Owned by the peer's Phase 2, P2-7**, which flips it to `true` together with its tests when
-/// kaspad seats auto-answer DA units with retained material as covering signers. A consensus
-/// constant, not a switch: the fold reads it through `PalwTransitionExtrasV1::seat_da_answer_landed`,
-/// which the processor sets to exactly this value, and which only tests set otherwise.
-pub const PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1: bool = false;
+/// **The residual it arms (ADR §5.7, X7, named):** a covering signer that holds no capture it can
+/// answer from — a free-prompt claim licensed from a job-only (`FPM1`) payload, whose replay keeps
+/// roots and no capture — cannot answer and is charged S4 for a default it could not prevent; an
+/// attempt claim's signer always can (the job is chain data). A partial seat never covers a unit (C7),
+/// so interval and segment signers are never charged for what they never held.
+///
+/// A consensus constant, not a switch: the fold reads it through
+/// `PalwTransitionExtrasV1::seat_da_answer_landed`, which the processor sets to exactly this value,
+/// and which only tests set otherwise (M3's `landed` twins test both sides).
+pub const PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1: bool = true;
 /// DA-6: `r`, the refuted-session cost as a fraction of the stage's reward base, in basis points —
 /// the reporter reward's `r` (R-1, `PALW_RCORE_REPORTER_REWARD_BPS_V1`), so the refuted cost never
 /// exceeds the reward a correct accusation earns.
@@ -496,6 +505,174 @@ pub fn palw_da_unit_covered_by_v1(_unit: &PalwDaUnitV1, attested: crate::palw_ve
     segments > 0 && attested.is_full(segments)
 }
 
+// ---------------------------------------------------------------------------------------------
+// DA-4 / DA-8 (Phase 2, P2-7): an answer's form and size, and the ONE builder of tag 55
+// ---------------------------------------------------------------------------------------------
+
+/// **DA-4: is `answer` the form `unit` is answered in, on `claim`?** An event unit by an event
+/// disclosure; a held unit by a version-1 carriage that names this claim and this unit and whose
+/// own signature slot is empty (the object's discloser signs the whole answer, so one answer has
+/// one encoding). The fold's own shape rule — `apply_da_answer_v1` refuses with
+/// `DaAnswerMalformed { why }` and exactly this text — exported so node policy (P2-7) never builds a
+/// form the fold refuses.
+pub fn palw_da_answer_form_v1(claim: &Hash64, unit: &PalwDaUnitV1, answer: &PalwDaAnswerV1) -> Result<(), &'static str> {
+    match (unit, answer) {
+        (PalwDaUnitV1::Event { .. }, PalwDaAnswerV1::Event(_)) => Ok(()),
+        (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
+            if carriage.version != crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1 {
+                Err("the carriage is not version 1")
+            } else if carriage.claim != *claim || carriage.missing != *missing {
+                Err("the carriage names another claim or unit")
+            } else if !carriage.signature.is_empty() {
+                Err("the carriage's own signature slot is empty: the discloser signs the whole answer")
+            } else {
+                Ok(())
+            }
+        }
+        _ => Err("an event unit is answered by an event disclosure, a held unit by a held carriage"),
+    }
+}
+
+/// **DA-8: an answer's size as the acceptance layer counts it** — `borsh(answer)` bytes, which the
+/// gate compares against the ruleset's close ceiling (`PalwCourtParamsV2::max_close_bytes`, 80 KiB
+/// on the frozen bundle) before it reads the signature. `u64::MAX` for an answer that does not
+/// encode. One count for the gate and for the builder below, so a node never pays a carrier for an
+/// answer the gate drops by size.
+pub fn palw_da_answer_bytes_v1(answer: &PalwDaAnswerV1) -> u64 {
+    borsh::to_vec(answer).map(|bytes| bytes.len() as u64).unwrap_or(u64::MAX)
+}
+
+/// **A held unit's answer as tag 55 carries it** (DA-4): the unit's carriage — this claim, this
+/// unit, the binding the disclosure is checked under — with its own signature slot EMPTY, because
+/// the object's discloser signs the whole answer ([`palw_da_disclosure_message_v4`]).
+pub fn palw_da_held_answer_v1(
+    claim: Hash64,
+    missing: PalwHeldMissingV1,
+    binding: crate::palw_step_leg::PalwStepBindingV2,
+    disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1,
+) -> PalwDaAnswerV1 {
+    PalwDaAnswerV1::Held(Box::new(PalwHeldDisclosureCarriageV1 {
+        version: crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1,
+        claim,
+        missing,
+        binding,
+        disclosure,
+        signature: Vec::new(),
+    }))
+}
+
+/// **A held unit's disclosure, built from a capture the answering node holds** (ADR-0103 Decision
+/// 4, ADR-0111 Decisions 4 and 6; DA-4 for R-core's court): a leaf's evidence (which the fold then
+/// adjudicates), a prompt tile, a state chunk or a run of step leaves — every unit the court can
+/// name, with NO catch-all arm, so a unit added to [`PalwHeldMissingV1`] is a compile error here
+/// rather than an honest producer or signer slashed for a silence it could not help.
+///
+/// The capture's lane does not matter: a free-prompt capture answers with its job's prompt, an
+/// attempt capture with the canonical prompt its block's anchor implies (the fold draws held units
+/// on attempt claims too, DA-3), and `roots` names the job either way. `binding` is asked only for
+/// the three units whose answer does not carry its own (a leaf's evidence does): the caller reads it
+/// off the capture in its family's form.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_da_held_disclosure_from_capture_v1(
+    backend: &dyn crate::palw_backend::PalwExecutionBackendV1,
+    capture: &[u8],
+    prompt_token_ids: &[u32],
+    roots: crate::palw_backend::PalwClaimRootsV1,
+    work_leaves: u64,
+    missing: PalwHeldMissingV1,
+    form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    binding: impl FnOnce() -> Result<crate::palw_step_leg::PalwStepBindingV2, String>,
+) -> Result<(crate::palw_step_leg::PalwStepBindingV2, crate::palw_held_da_v1::PalwHeldDisclosureV1), String> {
+    use crate::palw_held_da_v1::PalwHeldDisclosureV1;
+    Ok(match missing {
+        PalwHeldMissingV1::StepLeaf { leaf } => {
+            let evidence = crate::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+                backend,
+                capture,
+                prompt_token_ids,
+                roots,
+                work_leaves,
+                leaf,
+                form,
+            )?;
+            (evidence.refutation.binding.clone(), PalwHeldDisclosureV1::StepLeaf { evidence: Box::new(evidence) })
+        }
+        PalwHeldMissingV1::PromptIdsTile { tile } => {
+            let binding = binding()?;
+            let position = tile.saturating_mul(crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN);
+            let opening = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(prompt_token_ids, position)
+                .map_err(|e| format!("the prompt tile does not open: {e}"))?;
+            (binding, PalwHeldDisclosureV1::PromptIdsTile { opening })
+        }
+        PalwHeldMissingV1::StateChunk { checkpoint, chunk } => {
+            let binding = binding()?;
+            let (anchor, chunk) = backend.held_state_chunk_answer_v1(capture, prompt_token_ids, checkpoint, chunk)?;
+            (binding, PalwHeldDisclosureV1::StateChunk { anchor, chunk })
+        }
+        PalwHeldMissingV1::StepRange { first, count } => {
+            let binding = binding()?;
+            let opening = backend.held_step_range_answer_v1(capture, prompt_token_ids, first, count)?;
+            (binding, PalwHeldDisclosureV1::StepRange { opening })
+        }
+    })
+}
+
+/// **Why node policy builds no `MaterialDisclosedV2` from an answer** — each is a refusal the
+/// acceptance layer or the fold would make of the object, found before a carrier is paid for.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwDaAnswerBuildErrorV1 {
+    #[error("the fold refuses the answer's form: {0}")]
+    Form(&'static str),
+    #[error("the answer is {bytes} bytes, above this ruleset's {ceiling}-byte close ceiling (DA-8)")]
+    AboveCloseCeiling { bytes: u64, ceiling: u64 },
+    #[error("no signing key for the discloser")]
+    Unsigned,
+    #[error("the answer cannot ride a carrier: {0}")]
+    CannotRide(&'static str),
+}
+
+/// **DA-4 (P2-7): the ONE builder of `MaterialDisclosedV2`** — what kaspad's responder queues for
+/// every unit an open session demands of it, as the claim's producer or as a covering signer (X7).
+///
+/// It refuses what the chain would refuse, by the chain's own rules: the answer's form
+/// ([`palw_da_answer_form_v1`], the fold's), its size against the ruleset's close ceiling
+/// ([`palw_da_answer_bytes_v1`], the gate's), and the stateless ride rule
+/// (`palw_lifecycle_object_may_ride_v2`: signed). It signs [`palw_da_disclosure_message_v4`] over
+/// the answer's digest under [`PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT`] with `sign(message, context)`
+/// — the discloser's key, which the gate verifies against the bond the object names. Whether that
+/// bond may answer (the producer, or a live lock: X7) and whether a session still demands the unit
+/// are state, read by the duty that asked (`palw_disclosure_duties_v1`) and by the fold again.
+pub fn palw_da_answer_object_v1(
+    network_domain: &Hash64,
+    claim: Hash64,
+    unit: PalwDaUnitV1,
+    answer: PalwDaAnswerV1,
+    discloser: PalwBondKeyV2,
+    max_close_bytes: u64,
+    sign: impl FnOnce(&[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<crate::palw_state_v2::PalwConsensusObjectV2, PalwDaAnswerBuildErrorV1> {
+    palw_da_answer_form_v1(&claim, &unit, &answer).map_err(PalwDaAnswerBuildErrorV1::Form)?;
+    let bytes = palw_da_answer_bytes_v1(&answer);
+    if bytes > max_close_bytes {
+        return Err(PalwDaAnswerBuildErrorV1::AboveCloseCeiling { bytes, ceiling: max_close_bytes });
+    }
+    let message = palw_da_disclosure_message_v4(network_domain, &claim, &unit, &palw_da_answer_digest_v1(&answer), &discloser);
+    let signature = sign(message.as_byte_slice(), PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT)
+        .filter(|signature| !signature.is_empty())
+        .ok_or(PalwDaAnswerBuildErrorV1::Unsigned)?;
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, discloser, signature };
+    crate::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object).map_err(PalwDaAnswerBuildErrorV1::CannotRide)?;
+    Ok(object)
+}
+
+/// **Does one `Flat` answer on this claim answer `unit` too?** (DA-4, IMPL-16.) The fold's own
+/// predicate ([`palw_da_unit_answered_v1`]) asked of a record whose only fact is an accepted `Flat`:
+/// an in-run event unit at tile 0. Node policy (P2-7) sends one `Flat` a claim and lets it answer
+/// the rest, instead of paying a carrier for an answer the fold then refuses `DaUnitAlreadyAnswered`.
+pub fn palw_da_flat_answers_unit_v1(unit: &PalwDaUnitV1, in_run_rows: u32) -> bool {
+    palw_da_unit_answered_v1(&PalwDaClaimV1 { flat_answered: true, ..Default::default() }, unit, in_run_rows)
+}
+
 /// Every domain and context this module keys — listed in `PALW_STATE_V2_ALL_DOMAINS` (the family
 /// the cross-family uniqueness sweep and the committed context set are derived from).
 pub const PALW_DA_RCORE_ALL_DOMAINS: &[&[u8]] = &[
@@ -671,6 +848,18 @@ mod tests {
             assert!(!palw_da_unit_covered_by_v1(&unit, PalwSegmentMaskV2(0b0001), 4));
             assert!(!palw_da_unit_covered_by_v1(&unit, PalwSegmentMaskV2::NONE, 0), "an unwritten mask covers nothing");
         }
+    }
+
+    /// **P2-7: one `Flat` answers exactly what the fold says it answers** — an in-run event unit at
+    /// tile 0 (IMPL-16), never a row past the run, another tile or a held unit — so the responder
+    /// skips only what the fold would refuse `DaUnitAlreadyAnswered`.
+    #[test]
+    fn one_flat_answers_exactly_the_in_run_event_units_at_tile_0() {
+        assert!(palw_da_flat_answers_unit_v1(&PalwDaUnitV1::Event { row: 0, tile: 0 }, 1));
+        assert!(!palw_da_flat_answers_unit_v1(&PalwDaUnitV1::Event { row: 1, tile: 0 }, 1), "past the one-row run");
+        assert!(palw_da_flat_answers_unit_v1(&PalwDaUnitV1::Event { row: 256, tile: 0 }, 257));
+        assert!(!palw_da_flat_answers_unit_v1(&PalwDaUnitV1::Event { row: 0, tile: 1 }, 1), "another tile");
+        assert!(!palw_da_flat_answers_unit_v1(&PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 0 }), 1), "a held unit");
     }
 
     /// **The keys and the message separate what they bind.** The offence key is per claim; the
