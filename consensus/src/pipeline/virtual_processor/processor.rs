@@ -4113,14 +4113,13 @@ impl VirtualStateProcessor {
         state.claim_readers_v2(&claim)
     }
 
-    /// **ADR-0152 v3.1 N10 (Phase 2, P2-8c): what filing this `PanelFalseValidV2` object comes to**
-    /// — at the tip, at the point the licence assembler asks from (the tip block, the virtual's DAA
-    /// and blue score), so a conviction the filer sends is one the next block folds. `None` with no
-    /// tip state.
-    pub fn palw_false_valid_filing_check_v1_impl(
+    /// **The tip a P2-8c filer asks from** — the tip block's state at the point the licence assembler
+    /// asks from (the tip block, the virtual's DAA and blue score), so what the filer is told is what
+    /// the next block folds. `None` with no tip state.
+    fn palw_false_valid_tip_v1(
         &self,
-        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+    ) -> Option<(Arc<kaspa_consensus_core::palw_state_v2::PalwChainStateV2>, kaspa_consensus_core::palw_state_v2::PalwBlockContextV2)>
+    {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let virtual_state = self.lkg_virtual_state.load();
@@ -4130,18 +4129,67 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
+        Some((state, point))
+    }
+
+    /// `palw_network_domain_v2_for(network id, genesis)` — the domain the gate verifies every
+    /// receipt under.
+    fn palw_false_valid_chain_domain_v1(&self) -> kaspa_consensus_core::Hash64 {
+        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash))
+    }
+
+    /// **ADR-0152 v3.1 N10 (Phase 2, P2-8c): what filing this `PanelFalseValidV2` object comes to**
+    /// at the tip ([`Self::palw_false_valid_filing_check_v1_at`]). `None` with no tip state.
+    pub fn palw_false_valid_filing_check_v1_impl(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        let (state, point) = self.palw_false_valid_tip_v1()?;
         Some(self.palw_false_valid_filing_check_v1_at(&state, &point, object))
     }
 
+    /// **ADR-0152 v3.1 N10 (P2-8c): which of `receipts` the chain relied on**, at the tip — one answer
+    /// a receipt, in order ([`Self::palw_false_valid_receipt_relied_v1_at`]). `None` with no tip state
+    /// or below `Params::palw_rcore_plus`, where the filer does not run.
+    pub fn palw_false_valid_relied_receipts_v1_impl(
+        &self,
+        receipts: &[kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidReceiptV1],
+    ) -> Option<Vec<bool>> {
+        let (state, point) = self.palw_false_valid_tip_v1()?;
+        if !self.palw_rcore_plus_at(point.daa_score) {
+            return None;
+        }
+        Some(receipts.iter().map(|receipt| self.palw_false_valid_receipt_relied_v1_at(&state, receipt).is_ok()).collect())
+    }
+
+    /// [`Self::palw_false_valid_relied_receipts_v1_impl`] for one receipt on a given state: the core
+    /// admission (`palw_false_valid_receipt_relied_v1`) under this chain's domain and the gate's own
+    /// ML-DSA-87 verifier — the real-claim tests call it on the state they folded.
+    pub(crate) fn palw_false_valid_receipt_relied_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        receipt: &kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidReceiptV1,
+    ) -> Result<(), &'static str> {
+        kaspa_consensus_core::palw_false_valid_filing_v1::palw_false_valid_receipt_relied_v1(
+            state,
+            receipt,
+            self.palw_false_valid_chain_domain_v1(),
+            &Self::verify_mldsa87_with_context_bool,
+        )
+    }
+
     /// [`Self::palw_false_valid_filing_check_v1_impl`] on a given state at `point` — the one place the
-    /// three answers are asked in order (the real-claim tests call it on the state they folded):
+    /// answers are asked in order (the real-claim tests call it on the state they folded):
     ///
-    /// 1. **the adjudicator, classified** (`palw_false_valid_filing_check_v1`): the (seat, claim) key,
-    ///    then `palw_check_panel_false_valid_v2` without the signature, under the rules and decode
-    ///    switch the gate and the fold read at `point` — so a liability refusal (`NotLiable`) and an
-    ///    open court (`Wait`) are told apart from every other refusal;
-    /// 2. **the gate** (`palw_v2_validate_objects`): the signature under this chain's domain and the
-    ///    seat's registered key, `Active` or `Retiring`;
+    /// 1. **the ledger key, the receipt's admission and the adjudicator, classified**
+    ///    (`palw_false_valid_filing_check_v1`): a (seat, claim) already convicted; a receipt the
+    ///    chain never relied on (`Unrelied`: its signature under this chain's domain and the seat's
+    ///    registered key with the gate's verifier, its lock or row) — before the liability rule can
+    ///    call junk `NotLiable`; then `palw_check_panel_false_valid_v2` without the signature, under
+    ///    the rules and decode switch the gate and the fold read at `point`, so a liability refusal
+    ///    (`NotLiable`) and an open court (`Wait`) are told apart from every other refusal;
+    /// 2. **the gate** (`palw_v2_validate_objects`): the adjudicator again with the signature, the
+    ///    seat `Active` or `Retiring`;
     /// 3. **the fold** (`palw_v2_apply_one_object_v1` on the tip): the lock the seat must still hold
     ///    or the liability row that lists it, the heavy-prompt budget, and S-4's funnel — so the
     ///    answer is the fold's own and cannot drift from it.
@@ -4174,6 +4222,8 @@ impl VirtualStateProcessor {
             evidence,
             state_params.fp_decode_rules_at(point.daa_score),
             self.palw_identity_rules_v1(point.daa_score),
+            self.palw_false_valid_chain_domain_v1(),
+            &Self::verify_mldsa87_with_context_bool,
         );
         if !matches!(check, Check::File { .. }) {
             return check;

@@ -5588,7 +5588,8 @@ impl PalwPanelService {
         let mut last_lane: Option<PalwCarrierLaneV1> = None;
         // P2-6: the claims this seat accuses of withholding, until the chain has the accusation.
         let mut accusations = PalwSeatAccusationsV1::default();
-        // P2-8c: the claims this node holds a proof against, and the false-Valid filings it made.
+        // P2-8c: the claims this node holds a proof against, and the false-Valid filings it made. In
+        // memory, like the accusations above: a restart forgets it (the module's "What a restart loses").
         let mut false_valid = crate::palw_filer_false_valid::PalwFalseValidFilerV1::for_params(&self.consensus_config.params);
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).

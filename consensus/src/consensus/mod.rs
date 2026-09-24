@@ -2249,6 +2249,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_false_valid_filing_check_v1_impl(&object)
     }
 
+    fn palw_false_valid_relied_receipts_v1(
+        &self,
+        receipts: Vec<kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidReceiptV1>,
+    ) -> Option<Vec<bool>> {
+        self.virtual_processor.palw_false_valid_relied_receipts_v1_impl(&receipts)
+    }
+
     fn palw_receipt_pool_facts_v1(
         &self,
         claims: Vec<kaspa_consensus_core::Hash64>,

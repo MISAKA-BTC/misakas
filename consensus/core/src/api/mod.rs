@@ -929,6 +929,19 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 v3.1 N10 (P2-8c): which of `receipts` the chain relied on**, at the tip — one
+    /// answer a receipt, in order (`palw_false_valid_receipt_relied_v1`: a `Valid` whose lock over
+    /// this receipt's mask, liability row or conviction is in state, signed under this chain's
+    /// domain and the seat's registered key). A filer admits a receipt it read off the chain only
+    /// on `true`, so a licence object the gate dropped cannot fill its slots. `None` with no tip
+    /// state or below `Params::palw_rcore_plus`. Node policy's read; never what a block accepts.
+    fn palw_false_valid_relied_receipts_v1(
+        &self,
+        _receipts: Vec<crate::palw_offence_attribution_v1::PalwFalseValidReceiptV1>,
+    ) -> Option<Vec<bool>> {
+        None
+    }
+
     /// **What a node's receipt pool reads off the tip** (node policy, the 2026-09-24 launch review's
     /// receipt-pool flush): the bound panel of each asked claim the tip holds `PanelBound`, and the
     /// registered key of each asked bond — see [`crate::palw_panel_v2::PalwReceiptPoolFactsV1`].
