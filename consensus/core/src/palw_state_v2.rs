@@ -23498,6 +23498,15 @@ fn sweep_reward_reveals(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
                     });
                 }
                 builder.write_reporter_reward(offence_key, Some(PalwPayoutV2 { payload: winner.payload, amount: pending.amount }));
+                // The award names its reporter's bond in the journal (S-7's note): the reward row
+                // and 3d's `Moved` carry only the payload, and the vesting reads, the per-payee
+                // index and the economics ledger read the bond off this note (M5, T75).
+                builder.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::ReporterAwarded {
+                    offence_id: offence_key,
+                    reporter: winner.reporter,
+                    payload: winner.payload,
+                    sompi: pending.amount,
+                });
                 counters.awarded_sompi = counters.awarded_sompi.saturating_add(pending.amount as u128);
             }
             None => counters.forgone_sompi = counters.forgone_sompi.saturating_add(pending.amount as u128),
