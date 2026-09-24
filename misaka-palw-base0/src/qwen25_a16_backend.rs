@@ -1579,9 +1579,12 @@ impl Qwen25A16Backend {
     /// retained checkpoint leaf opened in its leg; (c) the slice sub-roots from (a); (d) the out
     /// tile and the query row opened out of the fold (a block replayed from the interval's anchor,
     /// every completed block folded against the retained digest, the path from the retained
-    /// nodes); (e) the inputs, layer ℓ's K and V out of (a). What it holds is the state and a few
-    /// blocks of leaf hashes. A DENSE retention (a job small enough to have kept its tiles) answers
-    /// through the dense builder, with the sub-roots of the anchor it reads.
+    /// nodes); (e) the inputs, layer ℓ's K and V out of (a). What it holds is the state (the walk's
+    /// cache and the anchor's chunks with their leaf hashes — ≈ 1.5–2 GB at the peak at 8,192
+    /// positions of the 1.5B row, the review's F8; see the trait verb's note) and a few blocks of leaf
+    /// hashes, never a leaf vector. The state walk is the seat memo's, which serialises forwards. A
+    /// DENSE retention (a job small enough to have kept its tiles) answers through the dense builder,
+    /// with the sub-roots of the anchor it reads.
     fn attn_held_responder_v1(
         &self,
         material: &[u8],

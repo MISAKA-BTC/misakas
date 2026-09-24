@@ -507,6 +507,18 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ///
     /// `carried_prompt` is as [`Self::attn_site_evidence`] takes it. `Err` by default: a family
     /// without the windowed builder says so through [`Self::supports_dissection`] for a held class.
+    ///
+    /// **What it costs a node, stated for the timing drill (T-A5; the review's F8).** Not the
+    /// 470 MB the design note gave: at 8,192 positions of the 1.5B row the cache alone is 28 layers ×
+    /// K and V × 8,192 × 256 codes, and the evidence holds the anchor's chunks beside it (the bytes and
+    /// their leaf hashes) with the engine's working set on top — ≈ 1.5–2 GB at the peak, per build.
+    /// The responder's state walk is the seat memo's, and the memo serialises its forwards: two held
+    /// sessions against one executor's claims answer one after the other, each a whole-context forward
+    /// (`palw_held_class_unanswerable_v1` prices one inside the turn). There is deliberately no
+    /// consensus cap on concurrent held sessions per executor: the cap would be a shield — the
+    /// executor's own Sybils would fill it with decoys on its OTHER claims and a seat holding the lie
+    /// would be refused — so the bound is the node's: T-A5 measures the root-claim latency and the
+    /// peak memory at `k` concurrent sessions per executor, and the operator sizes the host.
     fn attn_site_evidence_held_v1(
         &self,
         _material: &[u8],

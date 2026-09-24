@@ -6,7 +6,9 @@
 //! query slice at the site's position and layer ℓ's K and V over the history, and the anchor the
 //! bottom reads is the checkpoint AFTER the site's position (`covered = p + 1`), whose state holds
 //! exactly those rows. So both parties build the evidence from ONE forward to `p + 1` — the state, in
-//! `O(state)` — plus two committed leaves opened, the site's output tile and its query row:
+//! `O(state)` (≈ 1.5–2 GB at the peak at 8,192 positions of the 1.5B row, with the chunks and the
+//! engine's working set; the trait verb's note has the budget and why no consensus cap bounds it) —
+//! plus two committed leaves opened, the site's output tile and its query row:
 //!
 //! * **the responder** opens both from its own fold (a block replayed from the interval's anchor,
 //!   the path from the digests it retained), anchors at its own retained checkpoint leaf, and files
