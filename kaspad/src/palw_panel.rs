@@ -2216,6 +2216,12 @@ impl PalwSeatAccusationsV1 {
         self.wanted.contains_key(claim)
     }
 
+    /// The last DAA `claim`'s accusation is filed by — its landing margin (the priority lane's due
+    /// date for it, `palw_court_queue_edf_v1`).
+    pub(crate) fn by(&self, claim: &Hash64) -> Option<u64> {
+        self.wanted.get(claim).map(|(by, _)| *by)
+    }
+
     /// **The claims whose accusation the chain is asked about now** — each claim whose window still
     /// runs (the rest are forgotten here), not queued for a carrier (`queued`), not sent less than a
     /// re-plan ago (`sent_at`: `court_moved`'s DAA), and not refused for room less than a re-plan ago.
@@ -2444,6 +2450,70 @@ fn receipt_pool_kept_v1(
 /// a receipt the pool calls good is one a block would.
 fn verify_receipt_signature_v1(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
     kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
+}
+
+/// **The priority lane in earliest-deadline order** (the feat/t12-aheld-node review's MEDIUM: one
+/// carrier is in flight per panel, and a FIFO queue let four held sessions' moves wait behind each
+/// other past their rungs). A stable sort of `queue` by the DAA each item is due by (`due`, which
+/// every queue site states for its item: a court move its session's rung or backstop
+/// [`palw_court_move_due_v1`], a data-availability answer its session's deadline or the covering
+/// signer's turn [`palw_disclosure_answer_due_v1`], P2-6's accusation its landing margin, the held
+/// route's items theirs). The integration owner's rules, binding:
+///
+/// * **one court session's items never swap**: every item of one key (a session, or a claim) sorts at
+///   the key's EARLIEST due, then by round — a total tie-break on `(key, round)`;
+/// * **an item without a due date sorts after every dated one, by age** (the queue's own order, which
+///   the stable sort keeps), so nothing new starves an old one of its kind;
+/// * **it reorders the priority lane and nothing else**: the licences' turn and the one-in-flight
+///   rule are the tick's slots' (`PalwCarrierSlotsV1`), untouched.
+///
+/// A new kind of item plugs in by stating its due DAA where it is queued (`court_due.insert`); one
+/// that states none is carried by age, after the dated ones.
+pub(crate) fn palw_court_queue_edf_v1(
+    queue: &mut [(Hash64, u32, bool, PalwConsensusObjectV2)],
+    due: &HashMap<(Hash64, u32, bool), u64>,
+) {
+    let mut earliest: HashMap<Hash64, u64> = HashMap::new();
+    for (key, round, role, _) in queue.iter() {
+        if let Some(at) = due.get(&(*key, *round, *role)) {
+            earliest.entry(*key).and_modify(|e| *e = (*e).min(*at)).or_insert(*at);
+        }
+    }
+    queue.sort_by(|a, b| {
+        let rank = |(key, round, _, _): &(Hash64, u32, bool, PalwConsensusObjectV2)| match earliest.get(key) {
+            Some(at) => (0u8, *at, *key, *round),
+            // Undated: after every dated item, in the queue's own (age) order.
+            None => (1u8, 0, Hash64::default(), 0),
+        };
+        rank(a).cmp(&rank(b))
+    });
+}
+
+/// **The DAA a dense court move is due by**: the session's backstop for a move at `Terminal` (a
+/// close — no rung clocks it), else the rung the session carries, inside the backstop.
+pub(crate) fn palw_court_move_due_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u64 {
+    match duty.turn {
+        kaspa_consensus_core::palw_bisect::PalwBisectTurnV1::Terminal => duty.session_deadline_daa,
+        _ => duty.rung_deadline_daa.min(duty.session_deadline_daa),
+    }
+}
+
+/// **The DAA a P2-7 answer is due by**: the session's deadline for the producer; for a covering
+/// signer the earlier of that and the turn of the signer ranked after it
+/// ([`palw_disclosure_due_v1`]'s stagger) — its answer should land before the next signer answers in
+/// its place.
+pub(crate) fn palw_disclosure_answer_due_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1) -> u64 {
+    use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
+    match duty.role {
+        PalwDisclosureRoleV1::Producer => duty.deadline_daa,
+        PalwDisclosureRoleV1::CoveringSigner => {
+            let window = duty.disclose_window_daa.max(1);
+            let next = u64::from(duty.signer_rank).saturating_add(1);
+            let stagger = (window / 16).max(1).saturating_mul(next);
+            let lead = (window / 2).saturating_sub(stagger).max(window / 4);
+            duty.deadline_daa.saturating_sub(lead).min(duty.deadline_daa)
+        }
+    }
 }
 
 fn court_move_round_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u32 {
@@ -4107,12 +4177,16 @@ impl PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         current_daa: u64,
         court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        court_due: &mut HashMap<(Hash64, u32, bool), u64>,
         funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
         inflight: &mut usize,
         court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
         challenged: &mut HashSet<Hash64>,
     ) {
-        // The court's moves first: a rung has a deadline and a receipt quorum does not.
+        // The court's moves first: a rung has a deadline and a receipt quorum does not — and among
+        // them the one due first (EDF; the licences' turn and the one-in-flight rule are the tick's
+        // slots', untouched).
+        palw_court_queue_edf_v1(court_pending, court_due);
         let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
         for (session_id, round, mine_is_responder, object) in std::mem::take(court_pending) {
             let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
@@ -4162,6 +4236,7 @@ impl PalwPanelService {
             }
         }
         *court_pending = unsent;
+        court_due.retain(|key, _| court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key));
         // **ADR-0125 §7.3: a permit signed twice, filed.** The relay queues each pair once;
         // the evidence proves itself, so any funded panel may carry it. Behind the court's
         // moves (they have deadlines) and in the priority lane; one carrier a tick at most,
@@ -4911,7 +4986,9 @@ impl PalwPanelService {
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
         // The producer's guard, for the claim this node underwrites here too: no claim of a fused
         // class this build cannot defend at its dissection's turn — past `palw_offence_attribution`, no
-        // held class it cannot answer inside the court's turn (ADR-0152 §4-ter N4).
+        // held class it cannot answer inside the court's turn (ADR-0152 §4-ter N4). **New here on every
+        // network whose k-ary court is armed, below the fence too** (the canonical claim filed such a
+        // class before): node policy only — which claims this node files, never what a block accepts.
         if let Some(refusal) = crate::palw_producer::palw_dissection_refusal_v1(
             backend.as_ref(),
             &self.consensus_config.params,
@@ -5586,6 +5663,10 @@ impl PalwPanelService {
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        // The DAA each queued item is due by, where one is computable — what the priority lane orders
+        // by (`palw_court_queue_edf_v1`). Each queue site states its item's; an item without one is
+        // carried after every dated item, by age.
+        let mut court_due: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
         // ADR-0100: the claims this seat has accused in the one-move court, so a fault that
         // recurs on every tick (the duty stands until the claim ends) is filed once.
         let mut accused: HashSet<Hash64> = HashSet::new();
@@ -6060,6 +6141,7 @@ impl PalwPanelService {
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
             attn_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
             held_court.begin_tick_v1(&court_duties, current_daa).await;
+            let mut held_duties: Vec<kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2> = Vec::new();
             for duty in &court_duties {
                 let move_round = court_move_round_v1(duty);
                 if let Some(sent_daa) = court_moved.get(&(duty.session_id, move_round, duty.i_am_responder))
@@ -6083,11 +6165,16 @@ impl PalwPanelService {
                 // builders (N1 for the responder, N2 for a challenger), built off the tick, and the
                 // held root claim (tag 57) as move 1 — never the dense builder below, which a held
                 // job is past. Below `palw_offence_attribution` no duty takes it.
-                if self.held_route_of_v1(&session, duty, current_daa, &mut held_court) {
-                    match self.held_move_v1(&session, duty, current_daa, &mut held_court) {
-                        Ok(object) => court_pending.push((duty.session_id, move_round, duty.i_am_responder, object)),
-                        Err(why) => *court_stalls.entry(why).or_default() += 1,
-                    }
+                let held_host = held_court::PalwPanelHeldHostV1 {
+                    panel: self,
+                    session: &session,
+                    network_domain,
+                    bond: bond_key,
+                    materials: &materials,
+                    open_claims: &HashMap::new(),
+                };
+                if held_court.routes_v1(&held_host, duty, current_daa) {
+                    held_duties.push(duty.clone());
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
@@ -6557,9 +6644,14 @@ impl PalwPanelService {
                             else {
                                 continue;
                             };
-                            let Ok(court) = kaspa_consensus_core::palw_court_v2::palw_court_params_at_v2(
+                            // The arity the ACCEPTANCE layer derives and refuses any other than: the
+                            // processor's `palw_court_params_at` is the held derivation wherever the held
+                            // regime is in force (testnet-12 from genesis: 4 where the plain derivation
+                            // finds none; testnet-11: 2 either side of its regime's height).
+                            let Ok(court) = kaspa_consensus_core::palw_court_v2::palw_court_params_held_at_v2(
                                 bundle,
                                 params.palw_kary_court_active_at(current_daa),
+                                params.palw_held_context_active_at(current_daa),
                             ) else {
                                 *court_stalls.entry("this ruleset's court has no shape for a dissection").or_default() += 1;
                                 continue;
@@ -6698,6 +6790,7 @@ impl PalwPanelService {
                             PalwConsensusObjectV2::CourtClosed { session_id: duty.session_id, verdict, proof }
                         }
                     };
+                    court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
                     court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
                     continue;
                 }
@@ -6983,10 +7076,58 @@ impl PalwPanelService {
                     }
                 };
                 let Some(object) = object else { continue };
+                court_due.insert((duty.session_id, move_round, duty.i_am_responder), palw_court_move_due_v1(duty));
                 court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
             }
-            // ADR-0152 §4-ter N3: the tick's one held build, the soonest deadline first, off the tick.
-            self.held_start_build_v1(&session, network_domain, current_daa, &mut held_court, &materials).await;
+            // ADR-0152 §4-ter N3: the held route — the chain reads it asks for, its moves (each with the
+            // DAA its session says it is due by), and the builds the ledger admits, off the tick.
+            {
+                // 4-ter.3 step 6's pursuits past their sessions: the pursued claims' rows, off the tick.
+                let pursued = held_court.pursued_claims_v1();
+                let open_claims = if pursued.is_empty() {
+                    HashMap::new()
+                } else {
+                    let rows = session
+                        .clone()
+                        .spawn_blocking(move |c| {
+                            c.palw_claim_rows_v1(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat, false, 4_096)
+                        })
+                        .await
+                        .map(|read| read.rows)
+                        .unwrap_or_default();
+                    held_court::palw_held_open_claims_v1(&rows, &pursued)
+                };
+                let held_host = held_court::PalwPanelHeldHostV1 {
+                    panel: self,
+                    session: &session,
+                    network_domain,
+                    bond: bond_key,
+                    materials: &materials,
+                    open_claims: &open_claims,
+                };
+                for read in held_court.chain_reads_v1(&held_host, &held_duties, current_daa) {
+                    let span = current_daa.saturating_sub(read.not_before_daa).saturating_add(64).min(1 << 16) as usize;
+                    let (sid, claim, not_before) = (read.session_id, read.claim_id, read.not_before_daa);
+                    let objects = session
+                        .clone()
+                        .spawn_blocking(move |c| attn_held_objects_from_chain_v1(c, sid, claim, not_before, span))
+                        .await;
+                    held_court.note_chain_v1(sid, objects, current_daa);
+                }
+                let busy = |key: &(Hash64, u32, bool)| {
+                    court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == *key)
+                        || court_moved.get(key).is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                };
+                let tick = held_court::palw_held_moves_v1(&held_host, &mut held_court, &held_duties, current_daa, busy);
+                for why in tick.stalls {
+                    *court_stalls.entry(why).or_default() += 1;
+                }
+                for queued in tick.queued {
+                    court_due.insert(queued.key, queued.due);
+                    court_pending.push((queued.key.0, queued.key.1, queued.key.2, queued.object));
+                }
+                held_court::palw_held_start_builds_v1(&held_host, &mut held_court, current_daa);
+            }
             // Ask for every accused capture a close needed and this node did not hold. Outside the
             // logging guard below deliberately: a request that only goes out when a summary line
             // happens to be printed is a request nobody can reason about.
@@ -7100,6 +7241,7 @@ impl PalwPanelService {
                                  deadline DAA {}",
                                 duty.claim_id, duty.disclose_deadline_daa
                             );
+                            court_due.insert(key, duty.disclose_deadline_daa);
                             court_pending.push((key.0, key.1, key.2, object));
                         }
                         Err(why) => {
@@ -7140,6 +7282,7 @@ impl PalwPanelService {
                      retained capture — deadline DAA {}",
                     duty.claim_id, duty.disclose_deadline_daa
                 );
+                court_due.insert(key, duty.disclose_deadline_daa);
                 court_pending.push((
                     key.0,
                     key.1,
@@ -7261,6 +7404,7 @@ impl PalwPanelService {
                                             flat_queued.insert(claim);
                                             da_flat_sent.insert(claim, current_daa);
                                         }
+                                        court_due.insert(key, palw_disclosure_answer_due_v1(duty));
                                         court_pending.push((key.0, key.1, key.2, object));
                                     }
                                     Err(why) => {
@@ -8974,6 +9118,9 @@ impl PalwPanelService {
                                         admission.stage, admission.exposure, admission.deadline_daa
                                     );
                                     let key = palw_da_accusation_queue_key_v1(claim);
+                                    if let Some(by) = accusations.by(&claim) {
+                                        court_due.insert(key, by);
+                                    }
                                     court_pending.push((key.0, key.1, key.2, object));
                                 }
                                 Err(why) => {
@@ -9122,6 +9269,7 @@ impl PalwPanelService {
                         &session,
                         current_daa,
                         &mut court_pending,
+                        &mut court_due,
                         &mut funding,
                         &mut inflight,
                         &mut court_moved,
@@ -9455,6 +9603,7 @@ impl PalwPanelService {
                         &session,
                         current_daa,
                         &mut court_pending,
+                        &mut court_due,
                         &mut funding,
                         &mut inflight,
                         &mut court_moved,
@@ -10168,29 +10317,47 @@ fn attn_root_filings_from_chain_v1(
     found
 }
 
-/// **The accused's HELD filing, read back off the chain** (ADR-0152 §4-ter N3, C2): what its
-/// `CourtAttnRootClaimedHeld` (tag 57) carried — the binding, the committed output tile, the anchor
-/// and every slice sub-root of the anchor's state, which the fold refused unless they root to the
-/// anchor (H3). The session record keeps none of it, so a held challenger reads it here, beside
-/// [`attn_root_filings_from_chain_v1`] and through the same walk: every held root claim filed for
-/// `session_id` in the span, OLDEST first, for the caller to keep the one whose tile proves against
-/// the claim's own root at the narrowed leaf.
-fn attn_held_filings_from_chain_v1(
+/// **The held route's chain reads, beside [`attn_root_filings_from_chain_v1`]** (ADR-0152 §4-ter
+/// N3, C2; 4-ter.3 step 6): through the same walk, every lifecycle object accepted since the
+/// session's opening that is a held root claim for `session_id` (`CourtAttnRootClaimedHeld`, tag 57:
+/// the accused's binding, tile, anchor and slice sub-roots — `PalwAttnHeldFilingV1::from_object_v1(&object)`
+/// reads them) or the producer's disclosure of a held unit of `claim_id` (R-core+'s
+/// `MaterialDisclosedV2`, the v1 court's `MaterialDisclosedHeld`), OLDEST first. Nothing here is taken
+/// on its word: the walk returns objects the fold refused too, and the route checks each the fold's
+/// way before it reads it (`palw_held_filing_of_duty_v1`, `palw_held_step6_disclosed_v1`).
+fn attn_held_objects_from_chain_v1(
     consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
     session_id: Hash64,
+    claim_id: Hash64,
     not_before_daa: u64,
     max_chain_blocks: usize,
-) -> Vec<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1> {
+) -> Vec<PalwConsensusObjectV2> {
     let mut found = Vec::new();
     walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
-        if let Some((filed, filing)) = kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1::from_object_v1(&object)
-            && filed == session_id
-        {
-            found.push(filing);
+        if palw_held_chain_object_is_the_sessions_v1(&object, &session_id, &claim_id) {
+            found.push(object);
         }
     });
     found.reverse();
     found
+}
+
+/// Whether an accepted lifecycle object is one [`attn_held_objects_from_chain_v1`] returns for the
+/// session and its claim — the predicate alone, so a fixture chain filters with it too.
+pub(crate) fn palw_held_chain_object_is_the_sessions_v1(
+    object: &PalwConsensusObjectV2,
+    session_id: &Hash64,
+    claim_id: &Hash64,
+) -> bool {
+    match object {
+        PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. } => {
+            kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1::from_object_v1(object)
+                .is_some_and(|(filed, _)| filed == *session_id)
+        }
+        PalwConsensusObjectV2::MaterialDisclosedV2 { claim, .. } => claim == claim_id,
+        PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure } => disclosure.claim == *claim_id,
+        _ => false,
+    }
 }
 
 /// **A backend computation runs OFF the async runtime.** A seat's re-execution, a canonical

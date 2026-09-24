@@ -1510,7 +1510,8 @@ impl AsyncService for PalwProducerService {
 /// (`palw_held_class_unanswerable_v1`: the context bound, a recurrent layer, a compute turn — `m = 2`
 /// reference replays — past the cap). So on testnet-12 the node refuses the 2M row and any held
 /// hybrid, and produces the 8k row, whose held dissection it answers (the panel's held route). Below
-/// the fence, and on every network that does not arm it, byte for byte what it was.
+/// the fence, and on every network that does not arm it, the PRODUCER's refusal is what it was; the
+/// panel's canonical claim asks it too, which is new there (node policy, no consensus effect).
 pub(crate) fn palw_dissection_refusal_v1(
     backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
     params: &kaspa_consensus_core::config::params::Params,

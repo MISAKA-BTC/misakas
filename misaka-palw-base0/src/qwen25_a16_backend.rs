@@ -372,6 +372,7 @@ impl A16DrillLieV1 {
                         position: absolute,
                         lane: row_lane,
                         delta,
+                        cache: None,
                     }));
                 }
                 let tile_len = node.tile_len.max(1) as usize;
@@ -380,6 +381,27 @@ impl A16DrillLieV1 {
                 let leaf = kaspa_consensus_core::palw_step::canonical_step_leaf_index(profile, ctx, &coord)
                     .ok_or("the fused site's coordinate is not in this job")?;
                 Ok(Self::Tile { leaf, lane: Some(row_lane), delta })
+            }
+            // ADR-0152 §4-ter.3 step 6's forger: the cache holds the row moved, the step row honest; the
+            // engine follows it, so every replay and recompute of the job does too.
+            PalwFreePromptDrillFaultV1::CacheRow { call, layer, position, kind, lane, delta } => {
+                if kind > 1 {
+                    return Err(format!("cache kind {kind} is neither K (0) nor V (1)"));
+                }
+                if usize::from(layer) >= profile.layer_count as usize {
+                    return Err(format!("layer {layer} is outside the class"));
+                }
+                if u32::from(lane) >= u32::from(profile.attn_kv_heads) * profile.attn_head_dim {
+                    return Err(format!("lane {lane} is outside the cache row"));
+                }
+                let absolute = if call == 0 { position as usize } else { ctx.declared_prefill_tokens as usize + call as usize - 1 };
+                Ok(Self::Attn(crate::engine_a16::A16DrillAttnLieV1 {
+                    layer: usize::from(layer),
+                    position: absolute,
+                    lane: usize::from(lane),
+                    delta,
+                    cache: Some(kind),
+                }))
             }
         }
     }
@@ -1786,6 +1808,114 @@ impl Qwen25A16Backend {
             chunks,
             Some(filing.slice_sub_roots.clone()),
         )
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6** — the trait verb's body: the cache-write node of `kind` at layer
+    /// `attn_layer`, every tile of it at history position `history_position` (a prefill position `p`
+    /// is `(call 0, p)`, a decode position the head of its call), each leaf before the narrowed one,
+    /// streamed from ONE honest replay to the site's step with the accused's filed path of the
+    /// narrowed leaf — refused unless the stream roots to the accused's step root (the rows are then
+    /// its committed ones).
+    fn attn_held_cache_write_rows_of_v1(
+        &self,
+        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+        kind: kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1,
+        attn_layer: u16,
+        history_position: u32,
+    ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        use kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1;
+        use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepNodeRoleV1, PalwStepOutLenV1, PalwStepTableV1};
+        use kaspa_consensus_core::palw_step_leg::{PalwStepPrefixStreamV1, step_tile_leaf_hash_v1};
+        if !self.court_capable {
+            return Err("the v1 class carries no capture to read a cache row out of".to_string());
+        }
+        let binding = &filing.binding;
+        if binding.shape_profile.shape_profile_id() != self.class_profile_id {
+            return Err("the filing is not this class's".to_string());
+        }
+        let (profile, ctx) = (&binding.shape_profile, &binding.job_context);
+        let prompt_ids = self.attn_prompt_ids_v1(binding, carried_prompt)?;
+        let cap = self.step_ladder_cap();
+        let step_leaf_count = crate::fp_interval::base0_fp_binding_step_space_v1(binding, cap).map_err(|e| e.to_string())?;
+        let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        let (site, _) = crate::attn_held::base0_attn_held_site_v1(
+            binding,
+            narrowed,
+            inventory.operands(),
+            inventory.root(),
+            Some(&filing.anchor),
+            cap,
+        )?;
+        crate::attn_held::base0_attn_held_filing_is_the_sites_v1(filing, &site, narrowed)?;
+        let role = match kind {
+            kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1::Key => PalwStepNodeRoleV1::KCacheWrite,
+            kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1::Value => PalwStepNodeRoleV1::VCacheWrite,
+        };
+        let index = profile.attn_nodes.iter().position(|n| n.role == role).ok_or("the class declares no such cache write")?;
+        let node = &profile.attn_nodes[index];
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else {
+            return Err("a cache write's row is not a fixed width".to_string());
+        };
+        let tiles = elements.div_ceil(node.tile_len.max(1));
+        let slot = profile.global_node_slot(PalwStepTableV1::Attn, attn_layer, index).ok_or("the layer has no such cache write")?;
+        let prefill = ctx.declared_prefill_tokens;
+        let (call_index, position) =
+            if history_position < prefill { (0, history_position) } else { (history_position - prefill + 1, 0) };
+        let wanted: Vec<u64> = (0..tiles)
+            .map(|tile_index| {
+                kaspa_consensus_core::palw_step::canonical_step_leaf_index(
+                    profile,
+                    ctx,
+                    &PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index },
+                )
+                .ok_or_else(|| format!("history position {history_position} has no cache-write leaf in this job"))
+            })
+            .collect::<Result<_, _>>()?;
+        if wanted.iter().any(|leaf| *leaf >= narrowed) {
+            return Err(format!("the cache-write row at {history_position} is not before the narrowed leaf {narrowed}"));
+        }
+        let step = crate::attn_held::base0_attn_held_site_step_v1(binding, &site);
+        let mut stream = PalwStepPrefixStreamV1::new_capped_v1(step_leaf_count, &filing.out_tile.opening, &wanted, cap)
+            .map_err(|e| format!("the accused's path of the disputed leaf: {e}"))?;
+        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
+        let mut cache = A16Cache::with_storage(self.artifact.shape.n_layers, self.runtime_profile);
+        cache.reserve_positions(step as usize, row_elements);
+        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let mut replay = A16ReplayEngineV1 { engine, cache, plan: self.plan.as_ref(), vocab: self.artifact.shape.vocab };
+        let (ctx_hash, profile_hash) = (ctx.context_hash(), profile.shape_profile_id());
+        let mut kept: Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)> = Vec::new();
+        let mut pushed: Result<(), String> = Ok(());
+        crate::fp_interval::base0_fp_replay_interval_with_v1(
+            profile,
+            ctx,
+            &crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: &prompt },
+            crate::fp_interval::Base0FpWindowV1 { first_step: 1, last_step: step },
+            step_leaf_count,
+            &mut replay,
+            &mut |index, tile| {
+                if index < narrowed && pushed.is_ok() {
+                    pushed = stream.push(step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)).map_err(|e| e.to_string());
+                    if wanted.contains(&index) {
+                        kept.push((index, tile));
+                    }
+                }
+                Ok(())
+            },
+        )?;
+        pushed?;
+        let (root, openings) = stream.finish().map_err(|e| format!("the honest rows before the disputed leaf: {e}"))?;
+        if root != binding.step_merkle_root {
+            return Err("the honest rows before the disputed leaf do not root to the accused's binding".to_string());
+        }
+        kept.sort_by_key(|(index, _)| *index);
+        if kept.len() != wanted.len() || openings.len() != wanted.len() {
+            return Err("the replay did not produce every tile of the cache-write row".to_string());
+        }
+        // `wanted` is in tile order, which is leaf order; the stream answers in the order it was asked.
+        Ok(kept.into_iter().zip(openings).map(|((_, leaf), opening)| PalwAttnRowOpeningV1 { leaf, opening }).collect())
     }
 
     fn tiles_from_material_v1(&self, retention: &crate::produce::Base0RetentionV1) -> Result<crate::legs::Base0StepTilesV1, String> {
@@ -3390,6 +3520,20 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             None => self.attn_held_responder_v1(material, narrowed, carried_prompt),
             Some(filing) => self.attn_held_challenger_v1(filing, narrowed, carried_prompt),
         }
+    }
+
+    /// **ADR-0152 §4-ter.3 step 6: the accused's committed cache-write row, opened against its step
+    /// root** — see [`kaspa_consensus_core::palw_backend::PalwExecutionBackendV1::attn_held_cache_write_rows_v1`].
+    fn attn_held_cache_write_rows_v1(
+        &self,
+        filing: &kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        narrowed: u64,
+        carried_prompt: Option<&[u32]>,
+        kind: kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1,
+        attn_layer: u16,
+        history_position: u32,
+    ) -> Result<Vec<kaspa_consensus_core::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        self.attn_held_cache_write_rows_of_v1(filing, narrowed, carried_prompt, kind, attn_layer, history_position)
     }
 
     fn has_fused_site(&self) -> bool {

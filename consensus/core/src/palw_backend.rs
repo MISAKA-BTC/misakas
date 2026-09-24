@@ -547,6 +547,32 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this family has no windowed builder for a held fused site".to_string())
     }
 
+    /// **ADR-0152 §4-ter.3 step 6: the accused's committed cache-write row, opened against ITS step
+    /// root** — what a `CheckpointAccused` carries beside the chunk the producer disclosed.
+    ///
+    /// When a challenger's own sub-root of slice `(K|V, ℓ)` is not the one the accused filed
+    /// (`PalwAttnHeldEvidenceV1::fallback_v1`), the accused's checkpoint disagrees with rows that
+    /// precede its lie; once the producer discloses the disputed tile's chunk (the held DA court's
+    /// `StateChunk`), a row of it that is not the honest row is accused against the row the accused's
+    /// step tree committed at that position: every tile of layer `attn_layer`'s `KCacheWrite`
+    /// (`kind` Key) or `VCacheWrite` (Value) node at history position `history_position`. Those
+    /// leaves precede the narrowed leaf (the cache write comes before the fused site in the canonical
+    /// order, and the anchor holds no position past the site's), so they are the accused's committed
+    /// rows exactly when they are this node's honest ones; each is opened against the accused's step
+    /// root from a stream of this node's own leaves before the narrowed one and the filed path of it
+    /// — one replay to the site, as the windowed challenger's. `Err` by default.
+    fn attn_held_cache_write_rows_v1(
+        &self,
+        _filing: &crate::palw_attn_responder_v1::PalwAttnHeldFilingV1,
+        _narrowed: u64,
+        _carried_prompt: Option<&[u32]>,
+        _kind: crate::palw_state_chunk_map::PalwStateChunkKindV1,
+        _attn_layer: u16,
+        _history_position: u32,
+    ) -> Result<Vec<crate::palw_attn_court_v1::PalwAttnRowOpeningV1>, String> {
+        Err("this family cannot open a held claim's cache-write rows from a filing".to_string())
+    }
+
     /// **Can this backend take a FUSED dissection's turn?** — deliberately not
     /// [`Self::supports_court`], which is a different turn.
     ///
@@ -1266,6 +1292,14 @@ pub enum PalwFreePromptDrillFaultV1 {
     /// lie fed: the consistent forger 4-ter F9 names, whose anchor an honest challenger reaches only
     /// through the filed slice sub-roots.
     AttnOutput { call: u32, layer: u16, position: u32, head: u16, lane: u16, delta: i32, follow: bool },
+    /// **A lie in a CACHE row** (ADR-0152 §4-ter.3 step 6's forger): the `kind` (0 = K, 1 = V) row
+    /// layer `layer` writes at the canonical coordinate `(call, position)` is committed HONEST as its
+    /// cache-write step row, while the cache — every checkpoint that holds the position, every later
+    /// read — holds lane `lane` of it moved by `delta`. The attention at that position and after
+    /// reads the moved row (the committed outputs follow it), so the anchor's slice `(K|V, layer)`
+    /// disagrees with the producer's own cache-write rows: the held dissection's bottom cannot be
+    /// built from the filing, and the checkpoint court convicts on the disclosed chunk.
+    CacheRow { call: u32, layer: u16, position: u32, kind: u8, lane: u16, delta: i32 },
 }
 
 /// **How a `BendLogits` drill moves a lane** (ADR-0152 v3.1 addendum §4-bis.10).

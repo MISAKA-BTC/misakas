@@ -437,6 +437,101 @@ impl PalwAttnHeldFilingV1 {
             _ => None,
         }
     }
+
+    /// **The held filing `object` carries for `session_id`, checked the way the fold checked it —
+    /// for a PARTY reading root claims back off the chain** (the feat/t12-aheld-node review, HIGH).
+    ///
+    /// A walk of the accepted lifecycle objects returns every object an accepted carrier held,
+    /// including the ones the fold REFUSED: a liar can put a held root claim with one sub-root
+    /// swapped on the chain before its real one — the fold drops it (`HeldSubRootsDoNotRoot`), its
+    /// carrier stays accepted — and a challenger that took the first object naming the session
+    /// would build its bottom against a top path no anchor has. So the reader applies the fold's own
+    /// checks of the held arm, in its order, with nothing but chain facts the party already holds —
+    /// the claim's execution root and class, the class's artifact root, the narrowed leaf and the
+    /// court's opening cap — and keeps only a filing that passes all of them:
+    ///
+    /// 1. the object is a held root claim for `session_id`;
+    /// 2. its binding is the claim's (the registered class's profile, the claim's execution root),
+    ///    registers the held map, and counts its leaves canonically (C-01);
+    /// 3. its output tile is the narrowed leaf;
+    /// 4. its operand openings prove against `artifact_root`, and the site derives from them — which
+    ///    re-derives the execution root from the binding's parts (`verify_binding_v1`);
+    /// 5. the anchor is the site's own checkpoint, opened against the claim's checkpoint leg
+    ///    (`palw_attn_anchor_is_the_sites_v1`);
+    /// 6. the sub-roots are the anchor's: their count is the held layout's slice count, and they fold
+    ///    through the top tree to the anchor's committed state root (H2/H3,
+    ///    `palw_state_top_root_from_sub_roots_v4`);
+    /// 7. the output tile opens against the binding's step root.
+    ///
+    /// `Err` names the first check that refused. Any filing that passes is the accused's own
+    /// commitments (each field is pinned to a root the claim committed), so which passing object a
+    /// party reads does not matter; the fold remains the only judge of which one opened the phase.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_object_checked_v1(
+        object: &crate::palw_state_v2::PalwConsensusObjectV2,
+        session_id: &Hash64,
+        claim_execution_root: Hash64,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        narrowed: u64,
+        opening_cap: u64,
+    ) -> Result<Self, String> {
+        let crate::palw_state_v2::PalwConsensusObjectV2::CourtAttnRootClaimedHeld {
+            session_id: filed,
+            binding,
+            out_tile,
+            anchor,
+            slice_sub_roots,
+            operand_openings,
+            ..
+        } = object
+        else {
+            return Err("not a held root claim".to_string());
+        };
+        if filed != session_id {
+            return Err("a held root claim for another session".to_string());
+        }
+        if binding.shape_profile.shape_profile_id() != class_id {
+            return Err("the binding's profile is not the claim's class".to_string());
+        }
+        if binding.committed_execution_root != claim_execution_root {
+            return Err("the binding is not the claim's execution".to_string());
+        }
+        if !crate::palw_state_chunk_map::palw_map_is_held_v4(&binding.shape_profile.state_chunk_map_id) {
+            return Err("the binding does not register the held map".to_string());
+        }
+        match crate::palw_step::step_leaf_count_capped_v1(&binding.shape_profile, &binding.job_context, binding.step_leaf_count) {
+            Ok(count) if count == binding.step_leaf_count => {}
+            _ => return Err("the binding's step_leaf_count is not canonical (C-01)".to_string()),
+        }
+        if out_tile.opening.leaf_index != narrowed {
+            return Err("the output tile is not the narrowed leaf".to_string());
+        }
+        let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, artifact_root)
+            .map_err(|e| format!("the operand openings: {e}"))?;
+        let site = crate::palw_court_v2::palw_attn_dispute_site_unpinned_v3(binding, &operands, narrowed, Some(anchor), opening_cap)
+            .map_err(|e| format!("the site: {e}"))?;
+        crate::palw_attn_court_v1::palw_attn_anchor_is_the_sites_v1(anchor, &site.binding, &site.site)
+            .map_err(|e| format!("the anchor is not the site's: {e}"))?;
+        let layout = crate::palw_state_chunk_map::palw_state_layout_v4(&binding.shape_profile, site.site.anchor_positions)
+            .map_err(|e| format!("the anchor's held layout: {e:?}"))?;
+        if slice_sub_roots.len() != layout.slice_count() as usize {
+            return Err(format!("{} sub-roots for {} slices (H2)", slice_sub_roots.len(), layout.slice_count()));
+        }
+        let rooted = crate::palw_state_chunk_map::palw_state_top_root_from_sub_roots_v4(&layout, slice_sub_roots)
+            .map_err(|e| format!("the sub-roots' top tree: {e:?}"))?;
+        if rooted != anchor.leaf.state_chunks_root {
+            return Err("the filed sub-roots do not root to the anchor's committed state (H3, HeldSubRootsDoNotRoot)".to_string());
+        }
+        crate::palw_attn_court_v1::palw_attn_opened_lanes_v1(out_tile, &site.binding, site.head_lanes.2 as usize)
+            .map_err(|e| format!("the output tile does not open: {e}"))?;
+        Ok(Self {
+            binding: (**binding).clone(),
+            out_tile: out_tile.clone(),
+            anchor: (**anchor).clone(),
+            slice_sub_roots: slice_sub_roots.clone(),
+        })
+    }
 }
 
 /// **A held site's evidence, built by a windowed builder** (ADR-0152 §4-ter N1/N2): the court
