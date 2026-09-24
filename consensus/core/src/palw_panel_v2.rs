@@ -472,6 +472,13 @@ pub enum PalwPanelV2Error {
         "the eligible operators weigh {eligible} MSK of a base of {base} MSK, under the eligible-stake floor: the draw does not bind"
     )]
     InsufficientEligibleStake { eligible: u128, base: u128 },
+    /// ADR-0152 Q-1: a `Sampled` receipt where `Params::palw_rcore_plus` is not in force. It poisons
+    /// any set it is in, so every other network's receipt sets are exactly what they were.
+    #[error("seat {0:?} answered Sampled, a verdict only R-core+ admits (ADR-0152 Q-1)")]
+    SampledBelowRcore(PalwBondKeyV2),
+    /// ADR-0152 SR-10: the V3 supplementary door's refusals, by name.
+    #[error("a V3 supplementary receipt set is refused: {0}")]
+    SupplementaryV3Refused(&'static str),
 }
 
 impl PalwPanelV2Error {
@@ -2163,6 +2170,17 @@ pub enum PalwReceiptVerdictV2 {
     /// It counts toward neither side: a seat that cannot judge does not get to decide. And it is
     /// refused on the liveness floor, where no node can truthfully claim it.
     Incapable,
+    /// **ADR-0152 v3.1 Q-1: the seat held its S3 sites and recomputed them with no mismatch.**
+    ///
+    /// Audit, not verification. It counts toward no quorum and no coverage count, takes no lock and
+    /// carries no liability (`PanelFalseValidV2` convicts only a `Valid`), and it is not "served"
+    /// for SR-1's release (C1): its sites are a public function of the bind, so a producer can serve
+    /// an honest seat exactly those and withhold the rest. It is credited for seat pay as a `Valid`
+    /// is (§9.1 Q3), is never dissent-slashed, and does not satisfy ADR-0147's outsider veto.
+    ///
+    /// Appended: Borsh index 3, signed under message tag 4. Refused below `Params::palw_rcore_plus`
+    /// by the acceptance layer and by the fold, so no other network's receipt sets change.
+    Sampled,
 }
 
 /// One seat's signed receipt.
@@ -2205,6 +2223,8 @@ pub fn palw_receipt_message_v2(network_domain: Hash64, claim: Hash64, verdict: P
             state.update(&chunk_index.to_le_bytes());
             state.update(&requested_daa.to_le_bytes())
         }
+        // ADR-0152 Q-1: the next tag, never a reuse, so no signature over another verdict reads as it.
+        PalwReceiptVerdictV2::Sampled => state.update(&[4u8]),
     };
     state.update(&signed_daa.to_le_bytes());
     finish(state)
@@ -2531,6 +2551,13 @@ where
                 }
                 unavailable += 1
             }
+            // ADR-0152 Q-1: audit, not a vote — answered, counted in no quorum and in no segment's
+            // coverage, whatever mask it carries. R-core+'s verdict only.
+            PalwReceiptVerdictV2::Sampled => {
+                if !state_params.rcore_plus_active_at(ctx.daa_score) {
+                    return Err(PalwPanelV2Error::SampledBelowRcore(receipt.seat_bond));
+                }
+            }
         }
     }
     if valid >= params.quorum() {
@@ -2841,6 +2868,129 @@ where
     Ok(PalwReceiptQuorumV2::Supplementary { credited: answered.len() as u16 })
 }
 
+/// **ADR-0152 SR-10: the V3 supplementary door, as the acceptance layer checks it.**
+///
+/// The V2 door ([`validate_supplementary_receipts_v1`]) takes V2 `Valid`s only, and a partial seat
+/// signs V3 receipts over its mask, which cannot be re-presented as V2 — so without this door an S2
+/// licence of the full seat and one partial could never recount to `basis_k ≥ 2`, and a late partial
+/// seat could never complete a release. Past `Params::palw_rcore_plus` a `ReceiptLicensedV2` on a claim
+/// already `ReceiptLicensed` is therefore a supplementary set, not a licence (no new object tag; the
+/// processor routes it here on the claim's phase).
+///
+/// What it may carry, all checked here: one or more V3 receipts (`Valid`, `Unavailable`, `Incapable`,
+/// `Sampled`) naming this claim, each from a seat of the bound panel that is on duty, not yet
+/// credited and holding no lock on the claim — a counted signer is never counted twice — no seat
+/// twice; each verified under `palw_receipt_message_v3` by the seat bond's registered key, signed
+/// inside `[bound_daa, bound_daa + window_receipt]` and not after the carrying block; the object
+/// itself at or before the receipt deadline. A `Valid` must carry exactly the seat's assigned mask,
+/// as the coverage door requires, so the mask its lock records is the assignment (Q-6). `Incapable`
+/// is refused on the liveness floor. `Unavailable` is an abstention with no obligation to check:
+/// `palw_unavailable_abstains` is a prerequisite of the fence. A set of abstentions only
+/// (`Unavailable`, `Incapable`) on a claim whose `unserved_seen` is already latched is refused: an
+/// abstention is neither credited nor locked, so the same signed receipt would otherwise pass again
+/// and again until the receipt deadline, each time recording nothing, for a block's space and one
+/// ML-DSA verify per receipt (M4 review, finding 4). The fold re-derives every structural fact from
+/// its own state (`credit_supplementary_receipts_v3`), this refusal included.
+pub fn validate_supplementary_receipts_v3<V>(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    claim_id: &Hash64,
+    receipts: &[PalwSeatReceiptV3],
+    verify_mldsa87: V,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    if !state_params.rcore_plus_active_at(ctx.daa_score) {
+        return Err(PalwPanelV2Error::SupplementaryV3Refused("the V3 door is R-core+'s (ADR-0152 SR-10)"));
+    }
+    let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
+    if !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+        return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "SupplementaryReceiptsV3" });
+    }
+    let duties = state.panel_duties_of(claim_id).ok_or(PalwPanelV2Error::NotOnDuty(*claim_id))?;
+    let panel = state.panel(claim_id).ok_or(PalwPanelV2Error::NoPanel(*claim_id))?;
+    let bound_daa = panel.bound_daa;
+    let receipt_deadline = bound_daa
+        .checked_add(state_params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
+        .ok_or(PalwPanelV2Error::ReceiptOutsideWindow { seat: claim.bond, why: "the receipt deadline overflows the DAA score" })?;
+    if receipts.is_empty() {
+        return Err(PalwPanelV2Error::SupplementaryV3Refused("no receipt"));
+    }
+    if ctx.daa_score > receipt_deadline {
+        return Err(PalwPanelV2Error::SupplementaryV3Refused("the receipt window has closed"));
+    }
+    let assignment = crate::palw_verification_v2::palw_segment_assignment_v2(panel.anchor, *claim_id, panel.seats.len() as u16);
+    let mut answered: Vec<PalwBondKeyV2> = Vec::new();
+    for signed in receipts {
+        let receipt = &signed.receipt;
+        if receipt.claim != *claim_id {
+            return Err(PalwPanelV2Error::ReceiptClaimMismatch { got: receipt.claim, expected: *claim_id });
+        }
+        let Some(seat_index) = panel.seats.iter().position(|seat| seat.bond == receipt.seat_bond) else {
+            return Err(PalwPanelV2Error::NotASeat(receipt.seat_bond));
+        };
+        match duties.get(&receipt.seat_bond) {
+            None => return Err(PalwPanelV2Error::NotASeat(receipt.seat_bond)),
+            Some(at) if *at != 0 => return Err(PalwPanelV2Error::SeatAlreadyCredited(receipt.seat_bond)),
+            Some(_) => {}
+        }
+        if state.slashable_lock(receipt.seat_bond, *claim_id).is_some() {
+            return Err(PalwPanelV2Error::SeatAlreadyCredited(receipt.seat_bond));
+        }
+        if answered.contains(&receipt.seat_bond) {
+            return Err(PalwPanelV2Error::DuplicateSeat(receipt.seat_bond));
+        }
+        let bond = state.bond(&receipt.seat_bond).ok_or(PalwPanelV2Error::SeatBondMissing(receipt.seat_bond))?;
+        let message = palw_receipt_message_v3(network_domain, *claim_id, receipt.verdict, receipt.signed_daa, signed.segments);
+        if !verify_mldsa87(&bond.pubkey, message.as_byte_slice(), &receipt.signature, PALW_RECEIPT_V3_MLDSA87_CONTEXT) {
+            return Err(PalwPanelV2Error::ReceiptSignatureInvalid);
+        }
+        if receipt.signed_daa < bound_daa {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed before the panel was bound" });
+        }
+        if receipt.signed_daa > receipt_deadline {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed past the receipt deadline" });
+        }
+        if receipt.signed_daa > ctx.daa_score {
+            return Err(PalwPanelV2Error::ReceiptOutsideWindow { seat: receipt.seat_bond, why: "signed after the block carrying it" });
+        }
+        match receipt.verdict {
+            PalwReceiptVerdictV2::Valid => {
+                let expected = assignment.mask_of(seat_index as u16);
+                if signed.segments != expected {
+                    return Err(PalwPanelV2Error::MaskNotAssigned {
+                        seat: receipt.seat_bond,
+                        got: signed.segments.0,
+                        expected: expected.0,
+                    });
+                }
+            }
+            PalwReceiptVerdictV2::Incapable => {
+                if !crate::palw_state_v2::palw_seat_may_plead_incapable_v2(claim.class_id, state_params.base_class_id()) {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "no node may plead it cannot execute the liveness floor",
+                    });
+                }
+            }
+            PalwReceiptVerdictV2::Unavailable { .. } | PalwReceiptVerdictV2::Sampled => {}
+        }
+        answered.push(receipt.seat_bond);
+    }
+    // An abstention is neither credited nor locked and sets no served bit: all it records is the
+    // `unserved_seen` latch. Once that is set, a set of abstentions only has nothing left to record.
+    // The fold refuses the same set by the same test.
+    let answers =
+        receipts.iter().any(|signed| matches!(signed.receipt.verdict, PalwReceiptVerdictV2::Valid | PalwReceiptVerdictV2::Sampled));
+    if !answers && claim.rcore.unserved_seen {
+        return Err(PalwPanelV2Error::SupplementaryV3Refused("abstentions only, on a claim whose unserved_seen is already latched"));
+    }
+    Ok(PalwReceiptQuorumV2::Supplementary { credited: answered.len() as u16 })
+}
+
 /// **One shard's part** (ADR-0100 Decision 4): the same receipt checks, over the seats of THAT
 /// shard's slice of a stratified panel, at the same quorum a shard's seats are drawn for. Refused
 /// by name: a claim that does not license by parts, a part of another plan, a shard out of range,
@@ -3026,6 +3176,14 @@ where
                     });
                 }
                 unavailable += 1
+            }
+            // **ADR-0152 Q-1: audit, not a vote.** The seat sampled its S3 sites: on the record, not
+            // a no-show, and counted toward neither side — it attests nothing a quorum could rest
+            // on. R-core+'s verdict only; below the fence it poisons the set.
+            PalwReceiptVerdictV2::Sampled => {
+                if !state_params.rcore_plus_active_at(ctx.daa_score) {
+                    return Err(PalwPanelV2Error::SampledBelowRcore(receipt.seat_bond));
+                }
             }
         }
     }
@@ -7904,5 +8062,39 @@ mod tests {
                 assert!(draw(&outside, &co, anchor(0), sw_policy()).is_ok(), "eight genesis seats, one saturated: 7/8 binds");
             }
         }
+    }
+
+    /// **ADR-0152 Q-1: `Sampled` is appended and pinned — Borsh index 3, message tag 4.** The index
+    /// follows `Valid` (0), `Unavailable` (1) and `Incapable` (2), so no existing encoding moves; the
+    /// tag follows 1/2/3, so no signature over another verdict reads as a `Sampled`. The V3 message
+    /// wraps the V2 one and so carries the tag with the mask.
+    #[test]
+    fn rcore_m4_sampled_is_borsh_index_3_and_message_tag_4() {
+        assert_eq!(borsh::to_vec(&PalwReceiptVerdictV2::Valid).unwrap(), vec![0]);
+        assert_eq!(borsh::to_vec(&PalwReceiptVerdictV2::Unavailable { chunk_index: 7, requested_daa: 9 }).unwrap()[0], 1);
+        assert_eq!(borsh::to_vec(&PalwReceiptVerdictV2::Incapable).unwrap(), vec![2]);
+        assert_eq!(borsh::to_vec(&PalwReceiptVerdictV2::Sampled).unwrap(), vec![3]);
+        assert_eq!(borsh::from_slice::<PalwReceiptVerdictV2>(&[3]).unwrap(), PalwReceiptVerdictV2::Sampled);
+
+        let (net, claim, signed_daa) = (h64(0x4E), h64(0xC1), 1_234u64);
+        let mut by_hand = keyed(PALW_RECEIPT_V2_DOMAIN_MESSAGE);
+        by_hand.update(net.as_byte_slice());
+        by_hand.update(claim.as_byte_slice());
+        by_hand.update(&[4u8]);
+        by_hand.update(&signed_daa.to_le_bytes());
+        let v2 = palw_receipt_message_v2(net, claim, PalwReceiptVerdictV2::Sampled, signed_daa);
+        assert_eq!(v2, finish(by_hand), "H(domain ‖ network ‖ claim ‖ 4 ‖ signed_daa)");
+        for other in [
+            PalwReceiptVerdictV2::Valid,
+            PalwReceiptVerdictV2::Incapable,
+            PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 0 },
+        ] {
+            assert_ne!(palw_receipt_message_v2(net, claim, other, signed_daa), v2, "{other:?}");
+        }
+        let mask = crate::palw_verification_v2::PalwSegmentMaskV2::single(2);
+        let mut v3_by_hand = keyed(PALW_RECEIPT_V3_DOMAIN_MESSAGE);
+        v3_by_hand.update(v2.as_byte_slice());
+        v3_by_hand.update(&mask.0.to_le_bytes());
+        assert_eq!(palw_receipt_message_v3(net, claim, PalwReceiptVerdictV2::Sampled, signed_daa, mask), finish(v3_by_hand));
     }
 }

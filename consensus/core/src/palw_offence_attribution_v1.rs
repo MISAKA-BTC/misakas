@@ -1868,10 +1868,21 @@ mod tests {
         let mut other_claim = good.clone();
         other_claim.receipt = PalwFalseValidReceiptV1::Full(v2_receipt(1, h64(CLAIM + 1), PalwReceiptVerdictV2::Valid));
         assert_eq!(judge(&state, &other_claim), Err(E::PanelFalseValidWorkMismatch));
-        for verdict in [PalwReceiptVerdictV2::Incapable, PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 1 }] {
+        for verdict in [
+            PalwReceiptVerdictV2::Incapable,
+            PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 1 },
+            // ADR-0152 Q-1 / Q-6: a sampler is never liable — `Sampled` is not `Valid`.
+            PalwReceiptVerdictV2::Sampled,
+        ] {
             let mut not_valid = good.clone();
             not_valid.receipt = PalwFalseValidReceiptV1::Full(v2_receipt(1, h64(CLAIM), verdict));
             assert_eq!(judge(&state, &not_valid), Err(E::PanelFalseValidNotValidVerdict), "{verdict:?}");
+            let mut segmented_not_valid = good.clone();
+            segmented_not_valid.receipt = PalwFalseValidReceiptV1::Segmented(PalwSeatReceiptV3 {
+                receipt: v2_receipt(1, h64(CLAIM), verdict),
+                segments: PalwSegmentMaskV2::single(0),
+            });
+            assert_eq!(judge(&state, &segmented_not_valid), Err(E::PanelFalseValidNotValidVerdict), "segmented {verdict:?}");
         }
     }
 

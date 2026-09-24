@@ -16190,6 +16190,9 @@ mod t12_rcore_s6_producer_share;
 // ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
 // and the fold past `palw_rcore_plus`, with real card signatures.
 mod t12_rcore_s7_reporter_gate;
+// ADR-0152 SR-10: the processor's gate routes a set on a licensed claim to the V3 supplementary door
+// past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
+mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
 // ADR-0152 M4: the stake-weighted draw where the chain draws — the one resolver (SW-1) and the
 // one-state, bind-only-in-the-anchor-block derivation (SW-8, T89) on a real testnet-12 chain.

@@ -572,7 +572,10 @@ where
     }
     match payload.valid_receipt.verdict {
         crate::palw_panel_v2::PalwReceiptVerdictV2::Valid => {}
-        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { .. } | crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable => {
+        // ADR-0152 Q-1 / Q-6: `Sampled` is not `Valid`, so it is never a false one.
+        crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { .. }
+        | crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable
+        | crate::palw_panel_v2::PalwReceiptVerdictV2::Sampled => {
             return Err(PalwOffenceVerifyError::PanelFalseValidNotValidVerdict);
         }
     }
@@ -920,6 +923,8 @@ mod tests {
         for verdict in [
             crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 1 },
             crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable,
+            // ADR-0152 Q-1: `Sampled` is not `Valid`, so no false-Valid evidence can rest on it.
+            crate::palw_panel_v2::PalwReceiptVerdictV2::Sampled,
         ] {
             let payload = mock_panel_false_valid(op(1), claim, &[9u8; 4], b"testnet-11", Hash64::from_u64_word(0xD1), verdict);
             let evidence = borsh::to_vec(&payload).unwrap();
