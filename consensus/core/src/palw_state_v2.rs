@@ -3738,7 +3738,9 @@ pub enum PalwVoidReasonV2 {
     /// 3 refuses a `CourtFraud` contradiction naming it, live or through the liability row: a `Valid`
     /// signer is convicted only by a proof of the committed execution. `CourtFraud` stays the reason
     /// of every verdict proven against committed data — a one-move `ExecutorGuilty` at a committed
-    /// leaf, the checkpoint court, a non-dissection close.
+    /// leaf, the checkpoint court, a non-dissection close. The split-δ play needs no held map, so the
+    /// reason covers EVERY dissection's verdict past the fence, held class or not (the name is the
+    /// decision's history, not a scope).
     CourtHeldVerdict,
 }
 
@@ -6493,6 +6495,22 @@ pub(crate) fn palw_held_class_is_answerable_v1(
         && !params.held_class_is_unanswerable_v1(class_id)
 }
 
+/// **ADR-0152 §4-ter (the review's F3, the user's decision (B)): the reason a court's PROVEN verdict
+/// voids a claim with** — [`PalwVoidReasonV2::CourtHeldVerdict`] for EVERY dissection's bottom (an
+/// `AttnDissection` close) past `palw_offence_attribution`, [`PalwVoidReasonV2::CourtFraud`] for every
+/// other verdict and everywhere below the fence.
+///
+/// A dissection's bottom proves the producer's own disclosure false, never the execution a seat
+/// replayed — the split-δ play (a lie split across one round's siblings over an honest root) rides to
+/// an `ExecutorGuilty` bottom on an honest execution whatever the class, held or not. So the
+/// decision is "a dissection's verdict is the producer's", not "a held one's": the name
+/// `CourtHeldVerdict` stays (Borsh discriminant 8), and it covers every dissection verdict. Below the
+/// fence, and on every network that does not arm it (testnet-11, devnet, mainnet), `CourtFraud` as it
+/// always was.
+pub fn palw_court_verdict_void_reason_v1(offence_attribution_active: bool, dissection: bool) -> PalwVoidReasonV2 {
+    if offence_attribution_active && dissection { PalwVoidReasonV2::CourtHeldVerdict } else { PalwVoidReasonV2::CourtFraud }
+}
+
 /// **The reason a court's DEFAULT against the executor is recorded under** (ADR-0152 F2 residual).
 ///
 /// A court can end against the executor two ways: a verdict on the arithmetic (a close, a one-move
@@ -6503,14 +6521,6 @@ pub(crate) fn palw_held_class_is_answerable_v1(
 /// `palw_offence_attribution` the two default endings write [`PalwVoidReasonV2::CourtDefault`];
 /// below it they write `CourtFraud` as they always did, and every dormant network's fold is byte
 /// for byte what it was.
-/// **ADR-0152 §4-ter (the review's F3, the user's decision (B)): the reason a court's PROVEN verdict
-/// voids a claim with** — [`PalwVoidReasonV2::CourtHeldVerdict`] for a held dissection's bottom past
-/// `palw_offence_attribution` (it proves the producer's disclosure false, never the execution a seat
-/// replayed), [`PalwVoidReasonV2::CourtFraud`] for every other verdict and everywhere below the fence.
-pub fn palw_court_verdict_void_reason_v1(offence_attribution_active: bool, held_dissection: bool) -> PalwVoidReasonV2 {
-    if offence_attribution_active && held_dissection { PalwVoidReasonV2::CourtHeldVerdict } else { PalwVoidReasonV2::CourtFraud }
-}
-
 pub fn palw_court_default_void_reason_v1(offence_attribution_active: bool) -> PalwVoidReasonV2 {
     if offence_attribution_active { PalwVoidReasonV2::CourtDefault } else { PalwVoidReasonV2::CourtFraud }
 }
@@ -14668,7 +14678,7 @@ impl<'a> TransitionBuilder<'a> {
 
     /// [`Self::convict_by_court_verdict_v1`] recording `reason` on the claim (and, past `Final`, the
     /// liability row): `CourtFraud` for a verdict proven against committed data,
-    /// [`PalwVoidReasonV2::CourtHeldVerdict`] for a held dissection's bottom past
+    /// [`PalwVoidReasonV2::CourtHeldVerdict`] for a dissection's bottom past
     /// `palw_offence_attribution` ([`palw_court_verdict_void_reason_v1`]). Everything else — the
     /// charge, the court time, S-4's tiers, the `CourtConviction` record and the challenger's reward —
     /// is the funnel's, the same for both.
@@ -15977,8 +15987,8 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     /// [`Self::act_on_convicted_claim_v1`] recording `reason` — `CourtFraud` for a proof of the
-    /// execution, [`PalwVoidReasonV2::CourtHeldVerdict`] for a held dissection's verdict (charged
-    /// the same; no kind-3 basis).
+    /// execution, [`PalwVoidReasonV2::CourtHeldVerdict`] for a dissection's verdict (charged the
+    /// same; no kind-3 basis).
     fn act_on_convicted_claim_as_v1(
         &mut self,
         ctx: &PalwBlockContextV2,
@@ -25485,13 +25495,13 @@ fn apply_object(
                         // `palw_rcore_plus` with S2's action and the `CourtConviction` record, the
                         // challenger the reward's winner.
                         //
-                        // ADR-0152 §4-ter (the review's F3, decision (B)): a held dissection's bottom
-                        // proves the producer's own disclosure false, not the execution the seats
-                        // replayed — recorded `CourtHeldVerdict`, charged the same, no kind-3 basis.
+                        // ADR-0152 §4-ter (the review's F3, decision (B)): a dissection's bottom proves
+                        // the producer's own disclosure false, not the execution the seats replayed —
+                        // whatever the class — recorded `CourtHeldVerdict`, charged the same, no
+                        // kind-3 basis.
                         let reason = palw_court_verdict_void_reason_v1(
                             builder.extras.offence_attribution_active,
-                            matches!(proof, crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. })
-                                && builder.state.class_is_held_v1(&claim.class_id),
+                            matches!(proof, crate::palw_court_v2::PalwCourtVerdictProofV2::AttnDissection { .. }),
                         );
                         builder.convict_by_court_verdict_as_v1(
                             ctx,
@@ -50380,6 +50390,110 @@ pub(crate) mod tests {
             );
         }
 
+        /// **ADR-0152 §4-ter F3, decision (B), for EVERY dissection (the feat/t12-aheld-node review):
+        /// a NON-held fused class's dissection verdict is the producer's too.** The drill's class is a
+        /// graph-v5 row under the tiled map — no held ladder recorded (`class_is_held_v1` false). Its
+        /// forged execution is narrowed to the bottom through the chain, and the `ExecutorGuilty`
+        /// close carries the real `AttnDissection` proof:
+        /// * past `palw_offence_attribution` the claim voids `CourtHeldVerdict` (reason 8) — the
+        ///   split-δ play needs no held map, so the rule is "a dissection's verdict", not "a held
+        ///   one's" — and kind 3's `CourtFraud` naming that void is refused against the licensing
+        ///   seat's `Valid` by name;
+        /// * the same close with the fence off voids `CourtFraud` and kind 3 is admitted, as it
+        ///   always was; and on every shipped network that does not arm the fence (testnet-11 either
+        ///   side of its held regime, devnet, mainnet) the reason is `CourtFraud` at every height.
+        #[test]
+        fn f3b_a_non_held_dissections_verdict_is_the_producers_past_the_fence() {
+            use crate::palw_offence_attribution_v1::{
+                PALW_PANEL_FALSE_VALID_VERSION_V2, PalwFalseValidReceiptV1, PalwIdentityRulesV1, PalwPanelFalseValidEvidenceV2,
+                palw_check_panel_false_valid_v2,
+            };
+            use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1};
+            let p = params_with_ladder();
+            let forged = Drill::new(true);
+            let (state, claim_id, sid, tile, daa) = narrow_to_the_terminal(&p, &forged);
+            assert!(!state.class_is_held_v1(&forged.profile.shape_profile_id()), "the premise: a non-held fused class");
+            let proof = dissection_close(&forged, forged.bottom_anchored(sid, tile));
+            for past in [true, false] {
+                let extras = PalwTransitionExtrasV1 { offence_attribution_active: past, ..Default::default() };
+                let close = PalwConsensusObjectV2::CourtClosed {
+                    session_id: sid,
+                    verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                    proof: proof.clone(),
+                };
+                let (end, _) = apply_palw_transition_v2_with_extras(
+                    &state,
+                    &p,
+                    &ctx(daa, daa, daa),
+                    std::slice::from_ref(&close),
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &extras,
+                )
+                .expect("the close folds");
+                end.assert_internal_consistency(&p).expect("internal consistency");
+                let want = if past { PalwVoidReasonV2::CourtHeldVerdict } else { PalwVoidReasonV2::CourtFraud };
+                assert_eq!(
+                    end.claim(&claim_id).expect("the claim").phase,
+                    PalwClaimPhaseV2::Voided { voided_daa: daa, reason: want },
+                    "past {past}: a non-held class's dissection verdict"
+                );
+                let payload = PalwPanelFalseValidEvidenceV2 {
+                    version: PALW_PANEL_FALSE_VALID_VERSION_V2,
+                    claim_id,
+                    accused_seat: bond_key(1).0,
+                    receipt: PalwFalseValidReceiptV1::Full(crate::palw_panel_v2::PalwSeatReceiptV2 {
+                        claim: claim_id,
+                        verdict: crate::palw_panel_v2::PalwReceiptVerdictV2::Valid,
+                        seat_bond: bond_key(1),
+                        signed_daa: 103,
+                        signature: Vec::new(),
+                    }),
+                    contradiction: PalwPanelContradictionV1::CourtFraud { voided_daa: daa },
+                    prompt_ids_opening: None,
+                    reporter_reveal: vec![],
+                };
+                let rules = PalwIdentityRulesV1 {
+                    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                    base_class_id: p.base_class_id(),
+                    da_signer_liability: false,
+                };
+                let kind3 =
+                    palw_check_panel_false_valid_v2(&end, &bond_key(1), &borsh::to_vec(&payload).unwrap(), false, false, rules, None);
+                if past {
+                    assert!(
+                        matches!(&kind3, Err(PalwOffenceVerifyError::ContradictionNotAdmitted(why)) if why.contains("HELD DISSECTION")),
+                        "a dissection's verdict convicts no signer: {kind3:?}"
+                    );
+                } else {
+                    assert!(
+                        !matches!(&kind3, Err(PalwOffenceVerifyError::ContradictionNotAdmitted(_))),
+                        "below the fence the CourtFraud void is kind 3's contradiction, as it was: {kind3:?}"
+                    );
+                }
+            }
+            // The shipped networks without the fence: `CourtFraud` for every verdict at every height.
+            use crate::network::{NetworkId, NetworkType};
+            for (name, net) in [
+                ("testnet-11", crate::config::params::Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
+                ("devnet", crate::config::params::Params::from(NetworkId::new(NetworkType::Devnet))),
+                ("mainnet", crate::config::params::Params::from(NetworkId::new(NetworkType::Mainnet))),
+            ] {
+                for at in [0u64, 7_099, 7_100, 10_000, u64::MAX] {
+                    for dissection in [true, false] {
+                        assert_eq!(
+                            palw_court_verdict_void_reason_v1(net.palw_offence_attribution_active_at(at), dissection),
+                            PalwVoidReasonV2::CourtFraud,
+                            "{name} at {at}: a verdict is CourtFraud (dissection {dissection})"
+                        );
+                    }
+                }
+            }
+        }
+
         /// **C-01 (mainnet audit 2026-09-11): a non-canonical `step_leaf_count` cannot open a fused
         /// dissection past the audit fence.** The bottom classifies the terminal leaf under the
         /// CANONICAL count `step_leaf_count(profile, context)` (`canonical_step_coordinates`) but
@@ -57610,7 +57724,7 @@ pub(crate) mod tests {
                 crate::palw_economics_ledger_v1::palw_void_reason_name_v1(&PalwVoidReasonV2::CourtHeldVerdict),
                 "court_held_verdict"
             );
-            assert_eq!(palw_court_verdict_void_reason_v1(true, true), PalwVoidReasonV2::CourtHeldVerdict);
+            assert_eq!(palw_court_verdict_void_reason_v1(true, true), PalwVoidReasonV2::CourtHeldVerdict, "every dissection verdict");
             assert_eq!(palw_court_verdict_void_reason_v1(true, false), PalwVoidReasonV2::CourtFraud, "a verdict on committed data");
             assert_eq!(palw_court_verdict_void_reason_v1(false, true), PalwVoidReasonV2::CourtFraud, "below the fence, as it was");
         }
