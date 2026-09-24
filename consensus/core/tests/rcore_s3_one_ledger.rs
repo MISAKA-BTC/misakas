@@ -565,6 +565,57 @@ fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
     );
 }
 
+/// **The S re-review's N1, closed by the residual price: on the floor and the 8k row a licence needs
+/// no top-up, so it is never inert for want of room.** With the vesting rows in, L-1's `lock_3` and
+/// `lock_2` sit within the duty the bind already reserved (the floor's duty is λ, the 8k row's is
+/// `lock_2`), so `max(duty, lock) − duty = 0` for every door: a seat whose room the bind used up to
+/// the last sompi is still backed. Five `Valid`s license through the V1 door — every seat locked,
+/// credited and served — on both classes. (SR-6's unbacked path bites where the lock tops the duty
+/// up: the 2M row, T33.)
+#[test]
+fn n1_on_the_floor_and_the_8k_row_the_licence_needs_no_top_up_and_five_valids_license() {
+    let p = t12();
+    let (short, _) = model_classes(&p);
+    for (name, class) in [("floor", None), ("8k", Some(short))] {
+        let (mut c, id, seats) = match class {
+            None => {
+                let mut c = Chain::new(p.clone());
+                let id = c.floor_claim(0x4E01);
+                let seats = c.floor_seats();
+                (c, id, seats)
+            }
+            Some(class) => {
+                let mut c = model_chain(p.clone(), class, 1);
+                let id = model_claim(&mut c, class, 1, 0x4E02);
+                c.s = readied(&c.sp, &c.s, &honest(&c.p), class, c.daa);
+                (c, id, honest_seats(&p, 5))
+            }
+        };
+        let claim = c.claim(&id);
+        let e = c.extras_at(c.daa + 1);
+        let prices = palw_rcore_bind_prices_v1(&c.s, &c.sp, &e, &id, &claim, 5, c.daa + 1);
+        for k in [3u8, 2] {
+            assert!(
+                palw_rcore_seat_lock_v1(&c.s, &c.sp, &e, &id, &claim, k) <= prices.duty_bind,
+                "{name}: lock_{k} within the duty — no top-up at licence"
+            );
+        }
+        let bound = c.bind(id, &seats);
+        // The victim's room gone after the bind: its ceiling one sompi under what it already backs.
+        let victim = seats[1].0;
+        let at = c.daa + 1;
+        let committed = palw_bond_committed_v1(&c.s, &victim, at, raw_depth(&p, at), c.sp.window_court());
+        c.s = with_collateral(&c.sp, &c.s, victim, u64::try_from(2 * committed - 2).unwrap());
+        c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+        let after = c.claim(&id);
+        assert!(matches!(after.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "{name}: five Valids license");
+        assert_eq!(after.rcore.served_mask.count_ones(), 5, "{name}: every seat served, the squeezed one included");
+        assert!(c.s.slashable_lock(victim, id).is_some(), "{name}: the squeezed seat is backed and locks");
+        let row = c.s.panel_duty_row_of(&id).expect("duty row");
+        assert!(row.seats.get(&victim).is_some_and(|at| *at != 0), "{name}: and is credited");
+    }
+}
+
 /// **T33 (SR-6): a licence on the backed subset.** One seat is unbacked at the licence (its room
 /// gone after the bind). On the V1 door the other four license: the unbacked one takes no lock, no
 /// credit and no served bit (so the escrow is held), and the assemblers' predicate agrees. On the
