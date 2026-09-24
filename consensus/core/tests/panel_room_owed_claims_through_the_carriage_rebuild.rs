@@ -272,9 +272,22 @@ fn walk(ladder: bool, c7_window: bool) -> Owed {
     let provisional = owed_by(&s3, sp, seat_count, model_id);
 
     // Licence, through the carriage (what a node loads / a reorg rebuilds).
+    // ADR-0152 R-core+ (S-2): testnet-12 records a licence's door and recount on the claim, and
+    // its load refuses a licensed claim without them — so the edit writes what a V1 quorum licence
+    // with its escrow held would record (the ledger is left as it was), and a revert clears it.
     let with_phase = |base: &PalwChainStateV2, phase: PalwClaimPhaseV2| {
         let mut c = PalwStateCarriageV2::from_state(base);
-        c.claims.get_mut(&claim_id).unwrap().phase = phase;
+        let record = c.claims.get_mut(&claim_id).unwrap();
+        record.rcore = if matches!(phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
+            kaspa_consensus_core::palw_state_v2::PalwClaimRcoreV1 {
+                licence_door: Some(kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1::Quorum),
+                basis_k: 3,
+                ..Default::default()
+            }
+        } else {
+            Default::default()
+        };
+        record.phase = phase;
         c.into_state_v3(sp, None, false, None)
     };
     let licensed = with_phase(&s3, PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 3 }).expect("licensed state rebuilds");

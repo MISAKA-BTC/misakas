@@ -8968,7 +8968,9 @@ impl PalwChainStateV2 {
                         && palw_claim_is_on_abandon_hold_v2(claim, params, point.daa_score)
                     {
                         let entry = exposure.entry(claim.bond).or_insert(0);
-                        *entry = palw_claim_bond_reservation_v1(params, claim)
+                        // ADR-0152 SR-1/SR-3: the claim's commitment at the last point, which on its
+                        // abandon hold is the whole reservation, as `release_abandon_hold` returns it.
+                        *entry = palw_claim_commitment_v1(params, claim, point.daa_score)
                             .and_then(|held| entry.checked_add(held))
                             .ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     }
@@ -8977,10 +8979,13 @@ impl PalwChainStateV2 {
                     immature =
                         immature.checked_add(claim.immature_contribution).ok_or(PalwStateV2Error::Overflow("consistency immature"))?;
                     let entry = exposure.entry(claim.bond).or_insert(0);
-                    // The claim's whole reservation (option A's escrow term is 0 below its height, the
-                    // receipt rights 0 for anything but a free-prompt claim past the audit fence),
-                    // exactly as `reserve_for_claim` wrote it.
-                    *entry = palw_claim_bond_reservation_v1(params, claim)
+                    // The claim's commitment (ADR-0152 SR-1): its whole reservation — option A's
+                    // escrow term is 0 below its height, the receipt rights 0 for anything but a
+                    // free-prompt claim past the audit fence — less the escrow term once a licence
+                    // released it (past `palw_rcore_plus` only), exactly as the ledger's writers
+                    // moved it. A pure function of the record and the last point.
+                    let at = self.last_point.map(|point| point.daa_score).unwrap_or(0);
+                    *entry = palw_claim_commitment_v1(params, claim, at)
                         .and_then(|held| entry.checked_add(held))
                         .ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     // **ADR-0124 Decision 3: every seat on duty holds its exposure**, rebuilt from the
@@ -9020,6 +9025,42 @@ impl PalwChainStateV2 {
                         *entry = entry.checked_add(*accuser_exposure).ok_or(PalwStateV2Error::Overflow("consistency exposure"))?;
                     }
                     unresolved.insert((claim.accepted_blue_score, *id));
+                }
+            }
+        }
+        // **ADR-0152 R-core+: the staged record's load invariants** (S-SPEC §3.2, §3.8), past the fence
+        // only — below it every record is `Default` and nothing here is asked. A record the fold could
+        // not have written is refused at load, where a node reading its own tip can still say which.
+        if params.rcore_plus_from_daa().is_some() {
+            for (id, claim) in &self.claims {
+                let rcore = &claim.rcore;
+                match &claim.phase {
+                    PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::PanelBound { .. } if *rcore != PalwClaimRcoreV1::default() => {
+                        return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                            "claim {id} has not licensed and carries an R-core+ record"
+                        )));
+                    }
+                    PalwClaimPhaseV2::ReceiptLicensed { .. } if rcore.licence_door.is_none() => {
+                        return Err(PalwStateV2Error::CarriageInconsistent(format!("licensed claim {id} records no licence door")));
+                    }
+                    _ => {}
+                }
+                if claim.phase.is_terminal() {
+                    continue;
+                }
+                if let Some(panel) = self.panels.get(id) {
+                    let full = crate::palw_verification_v2::PalwSegmentMaskV2::full(panel.seats.len().min(32) as u16).0;
+                    if rcore.served_mask & !full != 0 {
+                        return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                            "claim {id} serves a seat its panel does not have"
+                        )));
+                    }
+                }
+                // SR-4: the flag is set only where the release was due, and never un-set.
+                if rcore.escrow_released && !palw_rcore_release_due_v1(params, self, id, claim) {
+                    return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                        "claim {id} released its escrow without the release being due"
+                    )));
                 }
             }
         }
@@ -9335,6 +9376,23 @@ impl PalwChainStateV2 {
     /// The parameterized deadline check: with params in hand the exact deadline of every
     /// non-terminal claim is recomputable, and the index must match it entry for entry.
     pub fn assert_deadline_consistency(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        // **ADR-0152 DL-1, past `palw_rcore_plus`: one deadline function, and the index IS it.** Every
+        // row of `palw_rcore_deadline_v1` is exact at rest — the licensed row's `max(floor, last)`
+        // included (see `rebuild_deadline_index_v2`) — so the index is checked for equality, not
+        // for membership above a floor. Below the fence the check is the one it always was.
+        if params.rcore_plus_from_daa().is_some() {
+            let last = self.last_point.map(|point| point.daa_score);
+            let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
+            for (id, claim) in &self.claims {
+                if let Some(at) = palw_rcore_deadline_v1(self, params, id, claim, last)? {
+                    expected.insert((at, *id));
+                }
+            }
+            if expected != self.deadlines {
+                return Err(PalwStateV2Error::CarriageInconsistent("deadline index differs from DL-1's deadlines".into()));
+            }
+            return Ok(());
+        }
         let mut expected: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
             let open_courts = self.open_courts_by_claim.get(id).copied().unwrap_or(0);
@@ -10963,7 +11021,10 @@ fn palw_inflight_index_note_v1(index: &mut BTreeMap<Hash64, PalwInflightTallyV1>
         return;
     }
     let tally = index.entry(claim.class_id).or_default();
-    let licensed = matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. });
+    // ADR-0152 T-2(c): a licence frees the replay only where the set recounted to `basis_k ≥ 2` —
+    // an S2 licence keeps its replay charged. Below `palw_rcore_plus` no door is recorded and this
+    // is `ReceiptLicensed`, the rule it always was.
+    let licensed = palw_rcore_counts_licensed_v1(claim);
     let (slot, licensed_slot, quanta) = match &claim.source {
         PalwClaimSourceV2::Attempt => (&mut tally.attempts, &mut tally.licensed_attempts, None),
         PalwClaimSourceV2::FreePrompt { quanta, .. } => {
@@ -11070,8 +11131,9 @@ fn palw_panel_owed_v1(
             continue;
         }
         let Some(claim) = state.claims.get(claim_key) else { continue };
-        if claim.class_id == base || held_to_final(&claim.class_id) || !matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
-        {
+        // ADR-0152 T-2(c)'s court filter: only a claim the tally counted as licensed is charged
+        // again — an S2 licence is still owed, so a court on it adds nothing (no double charge).
+        if claim.class_id == base || held_to_final(&claim.class_id) || !palw_rcore_counts_licensed_v1(claim) {
             continue;
         }
         let slot = pooled.entry(claim.class_id).or_default();
@@ -14393,6 +14455,82 @@ impl<'a> TransitionBuilder<'a> {
         self.credit_seat_receipts(claim_id, receipts, ctx.daa_score);
         // A supplementary `Valid` is not part of the set that licensed: it locks the quorum price.
         self.lock_valid_receipts(claim_id, claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?;
+        // ADR-0152 SR-1b (S-SPEC §3.5): past `palw_rcore_plus` the door also serves, recounts, may
+        // upgrade an S2 licence and may flip the escrow's release.
+        if self.params.rcore_plus_active_at(ctx.daa_score) {
+            self.stage_supplementary_v1(claim_id, claim, receipts, deadline, ctx.daa_score)?;
+        }
+        Ok(())
+    }
+
+    /// **ADR-0152 SR-1b in the V2 door** (S-SPEC §3.5), on receipts `credit_supplementary_receipts`
+    /// has already verified: `Valid`, of panel seats on duty not yet credited, distinct, inside the
+    /// receipt window.
+    ///
+    /// * **Served bits** — each receipt's seat.
+    /// * **Recount** — a V2 receipt attests the full cut, so each one raises every segment's count by
+    ///   one and Q-3's `min(3, min over segments)` becomes `min(3, basis_k + new)` exactly (the
+    ///   licence's recount is exact below 3, and a credited seat is never carried again).
+    /// * **Upgrade** — the first time the recount reaches 2 the door is recorded as Coverage if a
+    ///   counted mask is partial (the licence was a coverage set, or an S2 set that carried a partial
+    ///   seat besides the full one), otherwise Quorum; and an attempt's anchor settles (V-8).
+    /// * **SR-1b** — while `daa ≤ min(L + ⌊window_challenge_at(L) / 2⌋, bound + window_receipt)` a
+    ///   record that now satisfies [`palw_rcore_release_due_v1`] flips `escrow_released` and the
+    ///   escrow term leaves the producer's ledger in this block; later, never. Never un-flips (SR-4).
+    ///
+    /// The lock these receipts take is still the door's quorum price here; L-1's `lock_{max(k,2)}`
+    /// with the mask is S-3's.
+    fn stage_supplementary_v1(
+        &mut self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2],
+        receipt_deadline: u64,
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+        let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else { return Ok(()) };
+        let seats: Vec<PalwBondKeyV2> =
+            self.state.panels.get(&claim_id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+        let mut staged = claim.clone();
+        let licensed_mask = staged.rcore.served_mask;
+        let mut added = 0u8;
+        for receipt in receipts {
+            let Some(index) = seats.iter().position(|seat| *seat == receipt.seat_bond) else { continue };
+            if index < 32 && staged.rcore.served_mask & (1u32 << index) == 0 {
+                staged.rcore.served_mask |= 1u32 << index;
+                added = added.saturating_add(1);
+            }
+        }
+        let cap = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as u8;
+        let old_k = staged.rcore.basis_k;
+        staged.rcore.basis_k = old_k.saturating_add(added).min(cap);
+        if old_k < PALW_RCORE_FINAL_BASIS_K_V1 && staged.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1 {
+            let partial_counted = match staged.rcore.licence_door {
+                Some(PalwLicenceDoorTagV1::Coverage) => true,
+                Some(PalwLicenceDoorTagV1::Optimistic) => {
+                    let full = self.read().optimistic_full_seat(claim_id);
+                    seats.iter().enumerate().any(|(i, seat)| i < 32 && licensed_mask & (1u32 << i) != 0 && Some(*seat) != full)
+                }
+                _ => false,
+            };
+            staged.rcore.licence_door =
+                Some(if partial_counted { PalwLicenceDoorTagV1::Coverage } else { PalwLicenceDoorTagV1::Quorum });
+            if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+                self.settle_anchor(now_daa, true)?;
+            }
+        }
+        if !staged.rcore.escrow_released {
+            let half = self.params.window_challenge_at(licensed_daa) / 2;
+            let closes = licensed_daa.saturating_add(half).min(receipt_deadline);
+            if now_daa <= closes && palw_rcore_release_due_v1(self.params, &self.state, &claim_id, &staged) {
+                staged.rcore.escrow_released = true;
+            }
+        }
+        if staged.rcore != claim.rcore {
+            self.move_commitment(claim, &staged, now_daa)?;
+            self.write_claim(claim_id, Some(staged));
+        }
         Ok(())
     }
 
@@ -14757,8 +14895,9 @@ impl<'a> TransitionBuilder<'a> {
         }
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
         // Option A: the claim's escrow joins its weight on the bond past the fence (0 before it), and a
-        // free-prompt claim's receipt rights join them past the audit fence (#5).
-        let next = palw_claim_bond_reservation_v1(self.params, claim)
+        // free-prompt claim's receipt rights join them past the audit fence (#5). ADR-0152 SR-3's
+        // first transition: what a new claim commits, which at acceptance is the whole reservation.
+        let next = palw_claim_commitment_v1(self.params, claim, claim.accepted_daa)
             .and_then(|held| current.checked_add(held))
             .ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         self.write_exposure(claim.bond, Some(next));
@@ -14772,10 +14911,15 @@ impl<'a> TransitionBuilder<'a> {
 
     /// Release an immature claim's reservations (on `Final` and `Voided` alike — the exposure and
     /// the immature contribution both belong only to non-terminal claims).
-    fn release_for_claim(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+    ///
+    /// **ADR-0152 SR-3's terminal transition: what the claim commits NOW** — `claim` is the live
+    /// record the terminal write replaces, so a licence that released the escrow term already gave
+    /// that part back ([`Self::license_claim`], the V2 door) and only the rest leaves here. Below
+    /// `palw_rcore_plus` no licence releases anything, so this is the whole reservation
+    /// `reserve_for_claim` added, as before.
+    fn release_for_claim(&mut self, claim: &PalwClaimStateV2, now_daa: u64) -> Result<(), PalwStateV2Error> {
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
-        // What `reserve_for_claim` added, the whole of it — decided at the claim's own acceptance.
-        let held = palw_claim_bond_reservation_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        let held = palw_claim_commitment_v1(self.params, claim, now_daa).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         let next = current.checked_sub(held).ok_or(PalwStateV2Error::Overflow("reserved_exposure underflow"))?;
         self.write_exposure(claim.bond, if next == 0 { None } else { Some(next) });
         self.state.bounded_immature = self
@@ -14947,25 +15091,123 @@ impl<'a> TransitionBuilder<'a> {
     /// **A claim licenses** — the phase, the receipt deadline disarmed, the challenge deadline
     /// armed unless a court is already open. Spelled once for the whole-object licence and the
     /// last shard's part (ADR-0100 Decision 4), so the two cannot license differently.
+    ///
+    /// **ADR-0152 R-core+ (S-SPEC §3.4 step 5):** `claim` arrives with its `rcore` record staged by
+    /// the door ([`Self::staged_licence_v1`]) and is written once. SR-3's flip transition: where the
+    /// door released the escrow term, the bond's ledger gives it back in this write
+    /// ([`Self::move_commitment`]). V-8: past `palw_rcore_plus` the anchor settles only for an
+    /// attempt whose licence set recounted to `basis_k ≥ 2` — an S2 licence and every free-prompt
+    /// licence never tick. The deadline is DL-1's ([`palw_rcore_deadline_v1`]).
     fn license_claim(&mut self, claim_id: Hash64, claim: PalwClaimStateV2, daa_score: u64) -> Result<(), PalwStateV2Error> {
+        let rcore = self.params.rcore_plus_active_at(daa_score);
         // **The second clock ticks HERE past `palw_audit_2026_09_23`** (2026-09-24 DoS audit,
         // §4b): a licence needs a quorum's live signatures in the very block that carries it, so
         // heartbeat-only history cannot produce one. `Final` — which the DAA-driven deadline sweep
         // reaches on its own — keeps the tick only below the fence (`finalize_claim`).
-        if self.extras.audit_2026_09_23_active && matches!(claim.source, PalwClaimSourceV2::Attempt) {
+        let attempt = matches!(claim.source, PalwClaimSourceV2::Attempt);
+        let ticks = if rcore {
+            attempt && claim.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1
+        } else {
+            self.extras.audit_2026_09_23_active && attempt
+        };
+        if ticks {
             self.settle_anchor(daa_score, true)?;
         }
+        let before = self.state.claims.get(&claim_id).cloned();
         let mut licensed = claim;
         licensed.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: daa_score };
-        self.write_claim(claim_id, Some(licensed));
+        if let Some(before) = &before {
+            self.move_commitment(before, &licensed, daa_score)?;
+        }
+        self.write_claim(claim_id, Some(licensed.clone()));
         self.disarm_deadline(claim_id);
-        if !self.state.open_courts_by_claim.contains_key(&claim_id) {
-            let deadline = daa_score
-                .checked_add(self.params.window_challenge_at(daa_score))
-                .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+        if let Some(deadline) = palw_rcore_deadline_v1(&self.state, self.params, &claim_id, &licensed, Some(daa_score))? {
             self.arm_deadline(deadline, claim_id);
         }
         Ok(())
+    }
+
+    /// **SR-3's funnel for a write that keeps the claim live**: the producer's `reserved_exposure`
+    /// moves by `commitment(before) − commitment(after)` at `now_daa` — the licence's release of the
+    /// escrow term, SR-1b's late flip. `checked` both ways, so a double release fails deterministically
+    /// on every node rather than being absorbed. The bond never changes under a claim.
+    fn move_commitment(&mut self, before: &PalwClaimStateV2, after: &PalwClaimStateV2, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        debug_assert_eq!(before.bond, after.bond, "a claim's bond is fixed at acceptance");
+        let held = palw_claim_commitment_v1(self.params, before, now_daa).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        let holds = palw_claim_commitment_v1(self.params, after, now_daa).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
+        if held == holds {
+            return Ok(());
+        }
+        let current = self.state.reserved_exposure.get(&after.bond).copied().unwrap_or(0);
+        let next = current
+            .checked_sub(held)
+            .and_then(|rest| rest.checked_add(holds))
+            .ok_or(PalwStateV2Error::Overflow("reserved_exposure staging"))?;
+        self.write_exposure(after.bond, if next == 0 { None } else { Some(next) });
+        Ok(())
+    }
+
+    /// **ADR-0152 S-SPEC §3.4 step 3: the licence set's R-core+ record**, staged on a copy of `claim`
+    /// for [`Self::license_claim`] to write. `receipts` are the carried receipts with the mask each
+    /// attests (a V2 receipt the full cut, a V3 receipt its own); a seat is read once, in the order
+    /// carried, and a receipt from a bond that is not on the claim's panel is read as nothing.
+    ///
+    /// * `licence_door` — the door;
+    /// * `basis_k` — Q-3's recount over the distinct `Valid` signers' masks
+    ///   ([`palw_receipt_set_basis_k_v1`]; the cut is `palw_segment_count_v2(seats)`);
+    /// * `served_mask` — bit `i` for panel seat `i` that carried a `Valid`;
+    /// * `unserved_seen` — any `Unavailable` or `Incapable` carried;
+    /// * `escrow_released` — [`palw_rcore_release_due_v1`] on the record so far.
+    ///
+    /// Below `palw_rcore_plus` the claim is returned untouched: the record stays `Default`.
+    fn staged_licence_v1(
+        &self,
+        claim_id: Hash64,
+        claim: &PalwClaimStateV2,
+        door: PalwLicenceDoorV1,
+        receipts: &[(&crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)],
+        now_daa: u64,
+    ) -> PalwClaimStateV2 {
+        let mut staged = claim.clone();
+        if !self.params.rcore_plus_active_at(now_daa) {
+            return staged;
+        }
+        let seats: Vec<PalwBondKeyV2> =
+            self.state.panels.get(&claim_id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+        let segments = crate::palw_verification_v2::palw_segment_count_v2(seats.len().min(u16::MAX as usize) as u16);
+        let full = crate::palw_verification_v2::PalwSegmentMaskV2::full(segments);
+        let mut seen: Vec<PalwBondKeyV2> = Vec::new();
+        let mut masks = Vec::new();
+        let mut served_mask = 0u32;
+        let mut unserved_seen = false;
+        for (receipt, mask) in receipts {
+            let Some(index) = seats.iter().position(|seat| *seat == receipt.seat_bond) else { continue };
+            if seen.contains(&receipt.seat_bond) {
+                continue;
+            }
+            seen.push(receipt.seat_bond);
+            match receipt.verdict {
+                crate::palw_panel_v2::PalwReceiptVerdictV2::Valid => {
+                    masks.push(mask.unwrap_or(full));
+                    if index < 32 {
+                        served_mask |= 1u32 << index;
+                    }
+                }
+                crate::palw_panel_v2::PalwReceiptVerdictV2::Unavailable { .. }
+                | crate::palw_panel_v2::PalwReceiptVerdictV2::Incapable => {
+                    unserved_seen = true;
+                }
+            }
+        }
+        staged.rcore = PalwClaimRcoreV1 {
+            licence_door: Some(door.into()),
+            basis_k: palw_receipt_set_basis_k_v1(&masks, segments),
+            escrow_released: false,
+            served_mask,
+            unserved_seen,
+        };
+        staged.rcore.escrow_released = palw_rcore_release_due_v1(self.params, &self.state, &claim_id, &staged);
+        staged
     }
 
     /// ADR-0100 Decision 4: whether this claim's panel was drawn per shard. Answers `false`
@@ -15097,7 +15339,7 @@ impl<'a> TransitionBuilder<'a> {
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
         self.note_model_probe(claim, true);
         self.note_final_work(&id, claim, final_daa);
-        self.release_for_claim(claim)?;
+        self.release_for_claim(claim, final_daa)?;
         // The weight divergence between the lanes (ADR-0044): an attempt's Final IS its block's
         // certified work; a free-prompt Final only LICENSES — its weight arrives per spent
         // quantum, at the receipt block that spends it.
@@ -15265,7 +15507,7 @@ impl<'a> TransitionBuilder<'a> {
             self.arm_deadline(release_at, id);
             return Ok(());
         }
-        self.release_for_claim(claim)?;
+        self.release_for_claim(claim, voided_daa)?;
         self.write_claim(id, Some(voided.clone()));
         self.disarm_deadline(id);
         self.arm_retirement(id, &voided)?;
@@ -19850,7 +20092,10 @@ fn apply_object(
                 // credited — the licensing object is the first carrier of who answered.
                 builder.credit_seat_receipts(*claim_id, receipts, ctx.daa_score);
                 builder.lock_valid_receipts(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?;
-                builder.license_claim(*claim_id, claim, ctx.daa_score)?;
+                // ADR-0152 S-SPEC §3.4: the set's R-core+ record (a V2 receipt attests the full cut).
+                let carried: Vec<_> = receipts.iter().map(|receipt| (receipt, None)).collect();
+                let staged = builder.staged_licence_v1(*claim_id, &claim, PalwLicenceDoorV1::Quorum, &carried, ctx.daa_score);
+                builder.license_claim(*claim_id, staged, ctx.daa_score)?;
             }
         }
         PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond, space, space_size, signature: _ } => {
@@ -20259,7 +20504,10 @@ fn apply_object(
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
             builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)?;
-            builder.license_claim(*claim_id, claim, ctx.daa_score)?;
+            // ADR-0152 S-SPEC §3.4: the set's R-core+ record, each receipt with the mask it attests.
+            let carried: Vec<_> = receipts.iter().map(|r| (&r.receipt, Some(r.segments))).collect();
+            let staged = builder.staged_licence_v1(*claim_id, &claim, PalwLicenceDoorV1::Coverage, &carried, ctx.daa_score);
+            builder.license_claim(*claim_id, staged, ctx.daa_score)?;
         }
         // **ADR-0152 v3.1 §6, the v22 skeleton: tags 53–56 are declared, not landed.** Refused by
         // name on every network — `Params::palw_rcore_plus` arms none of them — until each owner
@@ -20302,7 +20550,11 @@ fn apply_object(
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
             builder.credit_seat_receipts(*claim_id, &inner, ctx.daa_score);
             builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)?;
-            builder.license_claim(*claim_id, claim, ctx.daa_score)?;
+            // ADR-0152 S-SPEC §3.4: an S2 set records its door and recount (Q-3: 1 for the full seat
+            // and one partial), and S2 never releases the escrow (SR-1 cond. 1).
+            let carried: Vec<_> = receipts.iter().map(|r| (&r.receipt, Some(r.segments))).collect();
+            let staged = builder.staged_licence_v1(*claim_id, &claim, PalwLicenceDoorV1::Optimistic, &carried, ctx.daa_score);
+            builder.license_claim(*claim_id, staged, ctx.daa_score)?;
         }
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
             let mut group = builder
@@ -23303,72 +23555,27 @@ fn palw_commitment_indexes_of_v1(
 /// canonical deadline positions**, i.e. anything loaded from carriage (whose consistency check
 /// enforces it) or rebuilt through deltas that were verified against a transition.
 fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+    // **ADR-0152 DL-1: every row from the one deadline function** (`palw_rcore_deadline_v1`), whose
+    // rows are this rebuild's, bit for bit, on every network:
+    //
+    // * `Provisional` from `bind_base_daa()`, not `accepted_daa` — the fourth site that dates the
+    //   bind phase. A redrawn claim's deadline from `accepted_daa` disagreed with
+    //   `assert_deadline_consistency`, and `into_state` runs rebuild-then-assert: the tip stopped
+    //   loading one block after any redraw, and the delta path carried a stale deadline instead.
+    // * `PanelBound` at its receipt window; `ReceiptLicensed` with an open court owes none.
+    // * `ReceiptLicensed` at `max(licensed + window_challenge_at(licensed), last_daa)`: a
+    //   court-cleared claim's re-armed deadline is `max(floor, clearing daa)`, and the clearing daa
+    //   is not primary data — but `max(floor, last_point.daa)` reproduces the stored value EXACTLY
+    //   for every state at rest: never courted, the floor has not been swept so `floor ≥ last_daa`;
+    //   cleared at C with no later block, `last_daa = C`; cleared at C with later blocks at D > C
+    //   and still licensed, the stored `max(floor, C)` survived the sweep at D, so `floor ≥ D`.
+    // * `DefaultDisputed` (ADR-0062 SA-3) at `accused_daa` plus the disclose window.
+    // * A terminal record's audit-C5 abandon hold or its retirement (`terminal_deadline_of`).
+    let last = state.last_point.map(|point| point.daa_score);
     let mut deadlines = BTreeSet::new();
     for (id, claim) in &state.claims {
-        let open_courts = state.open_courts_by_claim.get(id).copied().unwrap_or(0);
-        match claim.phase {
-            PalwClaimPhaseV2::Provisional => {
-                deadlines.insert((
-                    // `bind_base_daa()`, not `accepted_daa` — the fourth site that dates the bind
-                    // phase, and the one the redraw's own doc listed and did not convert. A
-                    // redrawn claim's deadline computed from `accepted_daa` disagrees with
-                    // `expected_deadline`/`assert_deadline_consistency`, and `into_state` runs
-                    // rebuild-then-assert: the tip stops loading (`CarriageInconsistent`), which
-                    // the virtual processor `.expect`s — a node crash one block after any redraw,
-                    // unfixable by a wipe because re-sync re-derives it. The delta path
-                    // (apply/revert) skips the assert, so it would instead have carried a stale
-                    // deadline and voided the claim at the next sweep while an inline node kept it
-                    // live: the same defect wearing the reorg-divergence costume.
-                    claim.bind_base_daa().checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?,
-                    *id,
-                ));
-            }
-            PalwClaimPhaseV2::PanelBound { bound_daa } => {
-                deadlines.insert((
-                    bound_daa
-                        .checked_add(params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
-                        .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
-                    *id,
-                ));
-            }
-            PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
-                // Audit C5's abandon hold and launch blockers §8's retirement, rebuilt on the same
-                // rule `void_claim`/`finalize_claim` armed and `assert_deadline_consistency`
-                // recomputes — one helper, so the three cannot drift.
-                if let Some(at) = terminal_deadline_of(claim, params, state.last_point.as_ref())? {
-                    deadlines.insert((at, *id));
-                }
-            }
-            PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => {}
-            PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
-                let floor = licensed_daa
-                    .checked_add(params.window_challenge_at(licensed_daa))
-                    .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
-                // A court-cleared claim's re-armed deadline is `max(floor, clearing daa)`, and the
-                // clearing daa itself is not primary data — but `max(floor, last_point.daa)`
-                // reproduces the stored value EXACTLY for every state at rest:
-                //
-                // * never courted, still licensed ⇒ its floor has not been swept, so
-                //   `floor ≥ last_daa` and the max is the floor — the stored value;
-                // * cleared at daa C with no later block ⇒ `last_daa = C`, max(floor, C) — the
-                //   stored value by the re-arm rule;
-                // * cleared at C with later blocks at daa D > C ⇒ still licensed means the stored
-                //   `max(floor, C)` survived the sweep at D, so `max(floor, C) ≥ D`, which with
-                //   `D > C` forces `floor ≥ D` — both maxes are the floor.
-                let last_daa = state.last_point.map(|p| p.daa_score).unwrap_or(0);
-                deadlines.insert((floor.max(last_daa), *id));
-            }
-            // ADR-0062 SA-3. Fully derived from the record — `accused_daa` plus the ruleset's own
-            // disclose window — so unlike the licensed case there is nothing to reconstruct: the
-            // rebuilt index is the armed one by construction, on every branch.
-            PalwClaimPhaseV2::DefaultDisputed { accused_daa, .. } => {
-                deadlines.insert((
-                    accused_daa
-                        .checked_add(palw_da_disclose_window_daa_v1(params))
-                        .ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?,
-                    *id,
-                ));
-            }
+        if let Some(at) = palw_rcore_deadline_v1(state, params, id, claim, last)? {
+            deadlines.insert((at, *id));
         }
     }
     state.deadlines = deadlines;

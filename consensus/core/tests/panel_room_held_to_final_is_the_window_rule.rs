@@ -41,8 +41,22 @@ const SECOND: u64 = 9_502;
 
 /// `s` with `class`'s window set to `spans` (read-only: the span step re-derives the window at the
 /// next boundary, and nothing folds on this state).
+/// `s` with only `class`'s window moved. ADR-0152 R-core+ (S-2): testnet-12 releases a licensed
+/// claim's escrow term at licence unless its class is C7 (U1), and its load refuses a released claim
+/// whose release is not due — so where the moved window makes the class C7, each released claim of
+/// the class is re-staged as the fold would have staged it under that window: held, its escrow term
+/// back on its producer's ledger. The room reading this test measures does not read either.
 fn with_window(sp: &PalwStateParamsV2, s: &PalwChainStateV2, class: Hash64, spans: u32) -> PalwChainStateV2 {
-    edited(sp, s, |c| c.model_lifecycles.get_mut(&class).expect("a model row").profile.verification_window_spans = spans)
+    edited(sp, s, |c| {
+        c.model_lifecycles.get_mut(&class).expect("a model row").profile.verification_window_spans = spans;
+        if spans >= PALW_RCORE_C7_WINDOW_SPANS_V1 {
+            for claim in c.claims.values_mut().filter(|claim| claim.class_id == class && claim.rcore.escrow_released) {
+                claim.rcore.escrow_released = false;
+                let escrow = sp.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
+                *c.reserved_exposure.entry(claim.bond).or_insert(0) += escrow;
+            }
+        }
+    })
 }
 
 #[test]

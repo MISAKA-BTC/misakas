@@ -342,3 +342,70 @@ fn dos_repro_2_free_prompt_flood_linear_per_block_cost() {
     println!("ONE-TIME gate the finding omitted: the FP compute lane is inert until a permissionless FamilyCertified drill");
     println!("  (real grading) + ClassLaneCertified publish the floor's fp_work_profile; after that any bond floods.");
 }
+
+/// **ADR-0152 T02c: the free-prompt abandon hold past `palw_rcore_plus` (C2)** — the T02 twin the
+/// staged reserve must keep. testnet-12 arms R-core+ at genesis, and SR-1's commitment table keeps
+/// audit C5's row: a free-prompt `BindTimeout` holds its whole reservation (`w + rr`; the escrow term
+/// is 0 on the FP lane) through `voided + fp_abandon_hold_daa` INCLUSIVE — the sweep's boundary — and
+/// releases it in the first block past it. The ledger is re-derived from the claim at the last point
+/// on every load (`into_state_v3`), so a restart mid-hold, at the boundary block and after it reloads
+/// the state it left, with its committed root.
+#[test]
+fn t02c_the_free_prompt_abandon_hold_is_the_commitment_to_its_boundary_and_reloads_mid_hold() {
+    use kaspa_consensus_core::palw_state_v2::{palw_claim_bond_reservation_v1, palw_claim_commitment_v1};
+    // The fence-off twin: testnet-12 with `palw_rcore_plus = None` (C7 cleared, mirrors re-synced),
+    // where the hold is audit C5's rule as it always was — the same numbers on both sides.
+    let twin = {
+        let mut t = t12();
+        t.palw_rcore_plus = None;
+        t.palw_rcore_conservative_classes = &[];
+        t.sync_palw_rcore_plus();
+        t
+    };
+    for (armed, p) in [(true, t12()), (false, twin)] {
+        let sp = bundle(&p).state;
+        assert_eq!(sp.rcore_plus_active_at(0), armed, "the premise: testnet-12 arms R-core+ from genesis, its twin does not");
+        assert_eq!(sp.fp_abandon_hold_daa(), 600, "the premise: testnet-12's hold");
+        let (base, floor, wl) = setup(&p);
+        let bond = bond_key(ATTACKER);
+        let before = base.reserved_exposure(&bond);
+        let reload = |s: &PalwChainStateV2| {
+            PalwStateCarriageV2::from_state(s)
+                .into_state_v3(&sp, Some(s.state_root()), false, p.palw_canonical_work_daa())
+                .expect("the state reloads under its committed root")
+        };
+
+        let s0 = fold_t12(&p, &base, &ctx(0x7000, 2_000, 7_000, 0), &[fp_commit(floor, bond, attacker_pubkey(), wl, 700_001)])
+            .expect("commit folds");
+        let id = h(0xF0_0000_0000 + 700_001);
+        let claim = s0.claim(&id).expect("the commitment is a claim").clone();
+        let full = palw_claim_bond_reservation_v1(&sp, &claim).expect("fits");
+        assert_eq!(claim.escrowed_reward, 0, "the FP lane escrows nothing");
+        assert!(full > 0 && full == claim.reserved + claim.rights_reserved, "the premise: the hold is w + rr");
+        assert_eq!(s0.reserved_exposure(&bond), before + full, "acceptance commits w + rr");
+        assert_eq!(palw_claim_commitment_v1(&sp, &claim, 2_000), Some(full));
+
+        let s1 = fold_t12(&p, &s0, &ctx(0x7001, 2_000 + sp.window_bind() + 1, 7_001, 0), &[]).expect("the bind window sweeps");
+        let voided = s1.claim(&id).expect("held, not retired").clone();
+        let PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::BindTimeout } = voided.phase else {
+            panic!("voided at BindTimeout: {:?}", voided.phase)
+        };
+        let release_at = voided_daa + sp.fp_abandon_hold_daa();
+        assert_eq!(s1.reserved_exposure(&bond), before + full, "the void holds the whole reservation");
+        assert_eq!(palw_claim_commitment_v1(&sp, &voided, release_at), Some(full), "committed through release_at, inclusive");
+        assert_eq!(palw_claim_commitment_v1(&sp, &voided, release_at + 1), Some(0), "and nothing after it");
+        assert_eq!(reload(&s1), s1, "reload at the void");
+
+        let mid = fold_t12(&p, &s1, &ctx(0x7002, voided_daa + 300, 7_002, 0), &[]).expect("mid-hold block");
+        assert_eq!(mid.reserved_exposure(&bond), before + full, "mid-hold");
+        assert_eq!(reload(&mid), mid, "restart mid-hold");
+
+        let at = fold_t12(&p, &mid, &ctx(0x7003, release_at, 7_003, 0), &[]).expect("the boundary block");
+        assert_eq!(at.reserved_exposure(&bond), before + full, "still held in the block whose DAA is release_at");
+        assert_eq!(reload(&at), at, "restart at the boundary");
+
+        let after = fold_t12(&p, &at, &ctx(0x7004, release_at + 1, 7_004, 0), &[]).expect("the release block");
+        assert_eq!(after.reserved_exposure(&bond), before, "released in the first block past release_at");
+        assert_eq!(reload(&after), after, "restart after the release");
+    }
+}
