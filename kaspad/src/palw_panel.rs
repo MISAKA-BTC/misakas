@@ -4002,12 +4002,12 @@ impl PalwPanelService {
         // exposure (eight quanta of an eighth each — `claim_exposure`, the attempt lane's one
         // inference), and admission item 8 refuses a commitment past the ceiling at the
         // transition; running the inference only to have the object dropped burns the work.
-        if bond_facts.reserved_exposure.saturating_add(bond_facts.claim_exposure) > bond_facts.exposure_ceiling {
-            return Err(format!(
-                "no exposure room for a canonical claim: bond backs {} and one claim needs {} against a ceiling of {}",
-                bond_facts.reserved_exposure, bond_facts.claim_exposure, bond_facts.exposure_ceiling
-            ));
-        }
+        // ADR-0152 P6: past `palw_rcore_plus`, the producer floor and the one committed ledger —
+        // the two numbers the fold's `FreePromptCommitted` arm refuses on — and below it the
+        // `reserved_exposure` check, byte for byte (`palw_canonical_claim_room_v1`).
+        let rcore_plus =
+            crate::palw_producer::palw_rcore_plus_reads_v1(&self.consensus_config.params, session, class_id, &bond, facts.daa_score);
+        crate::palw_producer::palw_canonical_claim_room_v1(bond_facts, rcore_plus)?;
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
         // The class's canonical job in leaves: the attempt lane's derived pwu is expected draws ×
         // one job, and the draws are a pure function of the class target.
@@ -4100,7 +4100,14 @@ impl PalwPanelService {
             Some(bond),
         ) {
             Some(answer) => match answer.price {
-                Ok(price) => kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: price.quanta, pwu: price.pwu },
+                Ok(price) => {
+                    // ADR-0152 P6: the room check above priced the claim with the attempt lane's
+                    // number; this is the fold's own `FreePromptExposureCeiling` inequality on the
+                    // price it will write, asked before a carrier is built or a fee spent (past
+                    // the fence only — below it the lane is unchanged).
+                    crate::palw_producer::palw_canonical_claim_bond_room_v1(&price, answer.bond_room, rcore_plus.is_some())?;
+                    kaspa_pq_validator_core::FpCommitmentPriceV1::Chain { quanta: price.quanta, pwu: price.pwu }
+                }
                 Err(refusal) => return Err(format!("the chain would refuse this canonical claim: {refusal}")),
             },
             None => kaspa_pq_validator_core::FpCommitmentPriceV1::Leaves {
