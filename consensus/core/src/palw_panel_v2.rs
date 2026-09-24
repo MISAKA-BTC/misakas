@@ -1988,6 +1988,63 @@ where
     (sound.len() > 1 && admits(&alone, &coverage(&alone)) && licenses(&alone)).then_some(alone)
 }
 
+/// **What a node's receipt pool reads off the tip, and nothing more** (node policy; the 2026-09-24
+/// launch review's receipt-pool flush).
+///
+/// The pool a node offers [`palw_select_coverage_licence_v2`] and [`palw_select_optimistic_licence_v2`]
+/// is filled by gossip, which checks size and nothing else. It held sixteen receipts a claim and
+/// evicted the oldest, so sixteen borsh-valid receipts naming a claim with junk signatures — about
+/// 150 bytes each, relayed to every node — evicted all five seats' receipts everywhere, each seat's
+/// own included. The selection then dropped the junk and found no licence, nothing re-delivered the
+/// genuine five, and the claim sat `PanelBound` to its redraw and, on a second flood, to the
+/// timeout that voids it and slashes an honest producer. A pool can refuse that only if it knows
+/// who may sign for a claim and under which keys: the bound panel's seats and each seat bond's
+/// registered key. This answers exactly that, for the claims and bonds asked.
+///
+/// Read-only and advisory: it decides what a node KEEPS, never what a block accepts. The assembler
+/// still puts every receipt it is offered to the acceptance validator.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwReceiptPoolFactsV1 {
+    /// For each asked claim the tip holds `PanelBound`: its bound panel. A claim the tip does not
+    /// hold, or holds in any other phase, is absent.
+    pub panels: Vec<PalwReceiptPanelFactV1>,
+    /// For each asked bond the registry holds: its registered ML-DSA-87 key.
+    pub seat_keys: Vec<(PalwBondKeyV2, Vec<u8>)>,
+}
+
+/// One bound panel, as [`PalwReceiptPoolFactsV1`] carries it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwReceiptPanelFactV1 {
+    pub claim_id: Hash64,
+    /// When the panel bound. A receipt signed before it counts for no seat of this panel
+    /// ([`validate_receipt_coverage_v2`]: "signed before the panel was bound").
+    pub bound_daa: u64,
+    /// The beacon the panel was drawn from — what tells two sibling panels at one DAA apart.
+    pub anchor: Hash64,
+    /// The seats' bonds, in seat order.
+    pub seats: Vec<PalwBondKeyV2>,
+}
+
+/// [`PalwReceiptPoolFactsV1`] at one state: the `PanelBound` claims among `claims` with their panels,
+/// and the registered keys of the bonds among `bonds`, each in the order asked.
+pub fn palw_receipt_pool_facts_v1(state: &PalwChainStateV2, claims: &[Hash64], bonds: &[PalwBondKeyV2]) -> PalwReceiptPoolFactsV1 {
+    let panels = claims
+        .iter()
+        .filter_map(|claim_id| {
+            let PalwClaimPhaseV2::PanelBound { bound_daa } = state.claim(claim_id)?.phase else { return None };
+            let panel = state.panel(claim_id)?;
+            Some(PalwReceiptPanelFactV1 {
+                claim_id: *claim_id,
+                bound_daa,
+                anchor: panel.anchor,
+                seats: panel.seats.iter().map(|seat| seat.bond).collect(),
+            })
+        })
+        .collect();
+    let seat_keys = bonds.iter().filter_map(|bond| state.bond(bond).map(|record| (*bond, record.pubkey.clone()))).collect();
+    PalwReceiptPoolFactsV1 { panels, seat_keys }
+}
+
 pub fn validate_supplementary_receipts_v1<V>(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
@@ -5024,5 +5081,39 @@ mod tests {
             validate_shard_receipt_part_v1(&s5, &pp, &sp, &ctx(6, 110, 6), h64(999), &shard0, yes, false),
             Err(PalwPanelV2Error::ShardAlreadyLicensed { shard: 0 })
         );
+    }
+
+    /// **The receipt pool's read is the tip's bound panel and the registry's keys, and nothing
+    /// else** (node policy; the 2026-09-24 launch review's receipt-pool flush). A `PanelBound` claim
+    /// answers with its panel as the state holds it; a claim in any other phase, or none at all,
+    /// answers nothing — so the pool can never be told a panel the chain does not hold; a bond the
+    /// registry holds answers with its registered key, and an invented one with nothing.
+    #[test]
+    fn the_receipt_pool_reads_only_bound_panels_and_registered_keys() {
+        let (state, claim_id, _sp, _p, _net, seats) = five_seat_licensed_fixture();
+        let panel = state.panel(&claim_id).unwrap().clone();
+        let stranger = PalwBondKeyV2(bond_outpoint(0xDEAD));
+        let bonds: Vec<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).chain([stranger]).collect();
+        let facts = palw_receipt_pool_facts_v1(&state, &[h64(0xBAD), claim_id], &bonds);
+        assert_eq!(
+            facts.panels,
+            vec![PalwReceiptPanelFactV1 {
+                claim_id,
+                bound_daa: panel.bound_daa,
+                anchor: panel.anchor,
+                seats: panel.seats.iter().map(|seat| seat.bond).collect(),
+            }],
+            "the bound claim answers with its panel, the invented one with nothing"
+        );
+        assert_eq!(facts.seat_keys.len(), seats.len(), "every seat's key and no stranger's");
+        for (bond, key) in &facts.seat_keys {
+            assert_eq!(key, &state.bond(bond).unwrap().pubkey);
+        }
+        assert!(facts.seat_keys.iter().all(|(bond, _)| *bond != stranger));
+
+        // A claim the state holds but has not bound yet has no panel to name.
+        let (provisional, unbound) = populated_state();
+        assert!(matches!(provisional.claim(&unbound).unwrap().phase, PalwClaimPhaseV2::Provisional));
+        assert!(palw_receipt_pool_facts_v1(&provisional, &[unbound], &[]).panels.is_empty());
     }
 }

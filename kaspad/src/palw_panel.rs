@@ -8,7 +8,8 @@
 //!   claim's own committed roots (`base0_material_matches_claim_v1`); sign a
 //!   [`PalwSeatReceiptV2`] and broadcast it. `Ok(true)` is `Valid`; `Ok(false)` and `Err` are the
 //!   seat's honest `Unavailable` — a mismatch is the court's to convict, not a receipt's.
-//! * **Collector.** Pool every receipt gossip delivers (own ones included) and ask consensus —
+//! * **Collector.** Pool the receipts gossip delivers — per seat of the bound panel, signature-gated,
+//!   with this node's own kept apart where no arrival reaches them (`palw_receipt_pool`) — and ask consensus —
 //!   [`palw_v2_receipt_quorum_assemble`](kaspa_consensus_core::api::ConsensusApi::palw_v2_receipt_quorum_assemble),
 //!   which runs the ACCEPTANCE validator itself — whether a quorum stands. What comes back is the
 //!   object a block would take, or nothing yet.
@@ -135,9 +136,6 @@ pub fn replay_licenses_v1(
         .is_none_or(|w| kaspa_consensus_core::palw_backend::palw_opening_is_at_the_claims_price_v1(w, priced_work_leaves));
     roots_reproduce && work_reproduces
 }
-/// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
-/// and the assembler drops garbage anyway — the cap only bounds memory.
-const RECEIPTS_PER_CLAIM: usize = 16;
 /// Distinct material payloads kept per claim (mirrors the gossip relay budget).
 const MATERIALS_PER_CLAIM: usize = 4;
 
@@ -272,17 +270,62 @@ fn seat_reask_daa_v1(receipt_window_daa: u64) -> u64 {
     (receipt_window_daa / 4).clamp(1, 25)
 }
 
-/// **Which bound panel a seat duty is a duty to** — the claim, the DAA it bound at, and the anchor
-/// its panel was drawn from (the 2026-09-24 licence-stall fix, its second half).
+/// What [`seat_duty_panel_key_v1`] names a duty by: `(claim, bound_daa, anchor, seat_index,
+/// panel_seat_count)`.
+type SeatDutyPanelKeyV1 = (Hash64, u64, Hash64, u8, u16);
+
+/// **Which bound panel a seat duty is a duty to, and which seat of it** — the claim, the DAA it
+/// bound at, the anchor its panel was drawn from (the 2026-09-24 licence-stall fix, its second
+/// half), and this seat's index in a panel of how many seats (the launch review of that fix, LOW).
 ///
 /// `bound_daa` alone told a redraw from the first panel but not two SIBLINGS: the anchor is found
 /// by walking the candidate block's own chain, so two blocks at the anchor slot bind two different
 /// panels at the same DAA, and a seat on both answered the first and was told "already answered"
-/// by the second — whose mask, and often whose seats, differ. The anchor names the panel (it is
-/// what the draw and the segment assignment are functions of), so a re-bound panel is a new duty
-/// and the seat judges it; the same panel seen again is not.
-fn seat_duty_panel_key_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2) -> (Hash64, u64, Hash64) {
-    (duty.claim_id, duty.bound_daa, duty.panel_anchor)
+/// by the second — whose mask, and often whose seats, differ. The anchor names the draw's
+/// randomness, but not everything the draw reads: two siblings that also differ in the registry
+/// (a bond registered or ejected in one of them) draw a different panel from the same anchor at the
+/// same DAA, in which this seat may sit at another index — and a seat's segment mask is a function
+/// of its index and the panel's size (`palw_segment_assignment_v2(anchor, claim, seats).mask_of(i)`),
+/// so its receipt to one is not a receipt to the other. The seat's own place is therefore part of
+/// the key: a re-bound panel, or a seat moved within one, is a new duty and the seat judges it; the
+/// same panel and place seen again is not.
+fn seat_duty_panel_key_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2) -> SeatDutyPanelKeyV1 {
+    (duty.claim_id, duty.bound_daa, duty.panel_anchor, duty.seat_index, duty.panel_seat_count)
+}
+
+/// **Whether the duty loop answers `duty` this tick**: a panel-and-place it has not answered, inside
+/// its receipt window. Pure over the duty and the set, so the re-file rule across a sibling swap and
+/// a reorg is testable without a node.
+fn seat_duty_is_due_v1(
+    duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+    answered: &HashSet<SeatDutyPanelKeyV1>,
+    current_daa: u64,
+) -> bool {
+    !answered.contains(&seat_duty_panel_key_v1(duty)) && current_daa <= duty.receipt_deadline
+}
+
+/// **The claims the receipt pools keep whatever their ceiling says** (the launch review of the
+/// licence-stall fix, LOW (a)): this tick's seat duties and this node's own filings — chain facts
+/// and this node's own acts, and NOTHING a peer sent.
+///
+/// It was `live_last_tick ∪ receipts.keys()`, and the second half was the V2 pool, which gossip fills:
+/// a V2 receipt naming an invented claim made that claim "kept" in the V3 pool and so exempt from its
+/// ceiling, so the ceiling's 64 MiB bound could be widened by about as much again by the same
+/// flood; and the first half was last tick's, so a claim that became a duty this tick was evictable
+/// for one. Read after this tick's duties, from the duties and the own-receipt sets alone.
+fn receipt_pool_kept_v1(
+    duties: &[kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2],
+    v2: &crate::palw_receipt_pool::PalwReceiptPoolV1<PalwSeatReceiptV2>,
+    v3: &crate::palw_receipt_pool::PalwReceiptPoolV1<PalwSeatReceiptV3>,
+) -> HashSet<Hash64> {
+    duties.iter().map(|duty| duty.claim_id).chain(v2.own_claim_ids().copied()).chain(v3.own_claim_ids().copied()).collect()
+}
+
+/// **The acceptance validator's ML-DSA-87 check, as the receipt pool calls it** — the same function
+/// (`verify_mldsa87_with_context`, portable verify, length-checked) the consensus closures wrap, so
+/// a receipt the pool calls good is one a block would.
+fn verify_receipt_signature_v1(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool {
+    kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
 }
 
 fn court_move_round_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u32 {
@@ -323,65 +366,6 @@ const PANEL_POOL_MAX_CLAIMS: usize = 512;
 /// Sized so the pool cannot outgrow what a seat needs: `PANEL_POOL_MAX_CLAIMS` live claims at one
 /// 16 MiB material each is far past any real duty backlog, and this cuts in first.
 const PANEL_POOL_MAX_BYTES: usize = 192 * 1024 * 1024;
-
-/// **A ceiling on the V3 receipt pool's claims, enforced where it grows** (the review of the
-/// 2026-09-24 licence-stall fix).
-///
-/// A gossiped V3 receipt is checked for nothing but a non-empty signature before it is pooled, and
-/// the pool was bounded only by the end-of-tick age sweep — so one peer naming a fresh claim id per
-/// message had every one of them kept for `PANEL_POOL_RETENTION_DAA` (about five and a half days at
-/// testnet-12's 120 s blocks), up to a full inbox of receipts a tick. The collector reads this pool
-/// only for a claim this node filed on, so a foreign claim's receipts are worth keeping only until
-/// this node sees the bind that makes the claim its duty.
-///
-/// So beyond the claims the caller names as kept (this node's duties and the claims it filed on),
-/// the pool holds at most this many, evicting whole claims oldest-arrival first — never the one that
-/// just arrived, as the material pool does. At `RECEIPTS_PER_CLAIM` receipts of at most 16 KiB each
-/// (the gossip layer's receipt ceiling), the evictable part is at most 64 MiB whatever a peer sends.
-const RECEIPTS_V3_MAX_CLAIMS: usize = 256;
-
-/// Pool one gossiped V3 receipt, and hold the pool to [`RECEIPTS_V3_MAX_CLAIMS`] claims beyond the
-/// ones `kept` names. `arrival` orders claims by first arrival; a claim with no stamp (one this node
-/// pooled when it filed, and has since stopped keeping) is the oldest.
-fn pool_admit_receipt_v3_v1(
-    pool: &mut HashMap<Hash64, Vec<PalwSeatReceiptV3>>,
-    arrival: &mut HashMap<Hash64, u64>,
-    arrival_seq: &mut u64,
-    receipt: PalwSeatReceiptV3,
-    kept: impl Fn(&Hash64) -> bool,
-) {
-    // **A receipt with no signature is not a receipt** — the V2 pool's door check, for its reason
-    // (audit M2-7): the pool is unauthenticated and capped, and consensus re-verifies every
-    // signature at acceptance.
-    if receipt.receipt.signature.is_empty() {
-        return;
-    }
-    let claim = receipt.receipt.claim;
-    let receipts = pool.entry(claim).or_default();
-    if receipts.contains(&receipt) {
-        return;
-    }
-    // Oldest out rather than newest refused, as the V2 pool evicts.
-    if receipts.len() >= RECEIPTS_PER_CLAIM {
-        receipts.remove(0);
-    }
-    receipts.push(receipt);
-    arrival.entry(claim).or_insert_with(|| {
-        *arrival_seq += 1;
-        *arrival_seq
-    });
-    let mut evictable = pool.keys().filter(|id| !kept(id)).count();
-    while evictable > RECEIPTS_V3_MAX_CLAIMS {
-        let Some(oldest) =
-            pool.keys().filter(|id| **id != claim && !kept(id)).min_by_key(|id| arrival.get(*id).copied().unwrap_or(0)).copied()
-        else {
-            break;
-        };
-        pool.remove(&oldest);
-        arrival.remove(&oldest);
-        evictable -= 1;
-    }
-}
 
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
@@ -1712,6 +1696,28 @@ impl PalwPanelService {
             Ok(sig) => Some(sig.as_ref().to_vec()),
             Err(e) => {
                 warn!("[{PALW_PANEL}] ML-DSA-87 sign failed: {e:?}");
+                None
+            }
+        }
+    }
+
+    /// **Sign `message` again, as a new signature** — the re-send of a seat's own receipt (the
+    /// receipt-pool flush fix, (4)).
+    ///
+    /// [`Self::sign`] passes ML-DSA-87 an all-zero `rnd`, which is FIPS 204's deterministic variant:
+    /// the same key, message and context give the same signature, so a re-signed receipt would be the
+    /// same bytes, the same gossip digest, and a `Duplicate` at every node whose relay-once memory
+    /// still holds the first copy — exactly the nodes a flood made drop it. Fresh randomness is the
+    /// hedged variant: a different, equally valid signature over the same message
+    /// (`the_hedged_resend_is_a_new_signature_over_the_same_receipt`), so the copy is new bytes
+    /// everywhere and verifies wherever the first did.
+    fn sign_hedged(signing_key: &libcrux_ml_dsa::ml_dsa_87::MLDSA87SigningKey, message: &[u8], context: &[u8]) -> Option<Vec<u8>> {
+        let mut rnd = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut rnd);
+        match libcrux_ml_dsa::ml_dsa_87::sign(signing_key, message, context, rnd) {
+            Ok(sig) => Some(sig.as_ref().to_vec()),
+            Err(e) => {
+                warn!("[{PALW_PANEL}] ML-DSA-87 hedged sign failed: {e:?}");
                 None
             }
         }
@@ -3053,18 +3059,25 @@ impl PalwPanelService {
             Hash64,
             (u64, Option<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1>),
         > = HashMap::new();
-        let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
-        let mut receipts_v3: HashMap<Hash64, Vec<PalwSeatReceiptV3>> = HashMap::new();
-        // When each claim's V3 receipts were first seen here, so the sweep can bound that pool by
-        // age. It was never swept: every gossiped V3 receipt (an ML-DSA-87 signature, ~4.6 KB) of
-        // every claim stayed for the life of the process.
-        let mut receipts_v3_seen: HashMap<Hash64, u64> = HashMap::new();
-        // …and the order they arrived in, with the claims last tick's sweep found live, so the pool
-        // is also held to `RECEIPTS_V3_MAX_CLAIMS` at arrival (`pool_admit_receipt_v3_v1`): an age
-        // bound alone is a bound a flood of invented claim ids outruns.
-        let mut receipts_v3_arrival: HashMap<Hash64, u64> = HashMap::new();
-        let mut receipts_v3_arrival_seq: u64 = 0;
-        let mut live_last_tick: HashSet<Hash64> = HashSet::new();
+        // **The receipt pools, V2 and V3** (the launch review's receipt-pool flush; see
+        // `palw_receipt_pool` for the four rules they keep). This node's own receipts live inside
+        // them but outside everything an arrival can evict; what gossip delivers is keyed per
+        // (claim, seat bond), refused for a bond the bound panel does not name, and may take an
+        // occupied place only with a signature that verifies. Both are bounded at arrival
+        // (`RECEIPT_POOL_MAX_CLAIMS` beyond the kept claims) and by age in the sweep below.
+        let mut receipt_pool_v2: crate::palw_receipt_pool::PalwReceiptPoolV1<PalwSeatReceiptV2> =
+            crate::palw_receipt_pool::PalwReceiptPoolV1::new(network_domain);
+        let mut receipt_pool_v3: crate::palw_receipt_pool::PalwReceiptPoolV1<PalwSeatReceiptV3> =
+            crate::palw_receipt_pool::PalwReceiptPoolV1::new(network_domain);
+        // What the tip says about them — bound panels and registered seat keys, read once a tick.
+        let mut receipt_facts = crate::palw_receipt_pool::ReceiptChainFactsV1::default();
+        // Receipts off the inbox, waiting for this tick's chain read (a tick that stops early leaves
+        // them for the next one). Bounded by `RECEIPT_ARRIVALS_MAX`, oldest out.
+        let mut receipt_arrivals: std::collections::VecDeque<crate::palw_receipt_pool::ArrivedReceiptV1> =
+            std::collections::VecDeque::new();
+        // **This seat's own receipts, for the re-send** (fix (4)): what each signed, keyed by the duty
+        // it discharged, and when it next goes out again. Re-sent only while that very duty stands.
+        let mut own_filed: HashMap<SeatDutyPanelKeyV1, crate::palw_receipt_pool::OwnFiledV1> = HashMap::new();
         // **Keyed by the PANEL, not by the claim** (ADR-0060's redraw, found while landing
         // ADR-0065 D4). A claim whose panel concludes nothing is revived once and binds a SECOND
         // panel anchored on the sweep, which is the mechanism D4 leans on when a seat cannot be
@@ -3073,15 +3086,16 @@ impl PalwPanelService {
         // that had sat on the first panel. `bound_daa` is what distinguishes the two: the redraw
         // re-binds at the sweep's own score. It does not distinguish two SIBLING panels, bound at
         // one DAA by two blocks at the anchor slot, so the key carries the anchor too
-        // (`seat_duty_panel_key_v1`, the 2026-09-24 licence-stall fix).
-        let mut answered: HashSet<(Hash64, u64, Hash64)> = HashSet::new();
+        // (`seat_duty_panel_key_v1`, the 2026-09-24 licence-stall fix) — and this seat's index and
+        // the panel's size, because two siblings can draw different panels from one anchor.
+        let mut answered: HashSet<SeatDutyPanelKeyV1> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
         // Attempt claims this seat has replayed once (ADR-0084 Decision 7): a replay that did not
         // reproduce the claim's roots is not re-run every tick — the opening lane decides from there.
         // Once per PANEL, keyed as `answered` is: a seat re-judging a re-bound panel that found its
         // claim already replayed fell through to the pull and, at half the window, to `Unavailable`
         // on a claim it had verified — and the new panel's segment assignment is not the old one's.
-        let mut replayed: HashSet<(Hash64, u64, Hash64)> = HashSet::new();
+        let mut replayed: HashSet<SeatDutyPanelKeyV1> = HashSet::new();
         // When this seat last pulled for a claim it holds no material for, so a slow answer is
         // not re-asked every 2-second tick.
         let mut requested: HashMap<Hash64, u64> = HashMap::new();
@@ -3212,34 +3226,16 @@ impl PalwPanelService {
                         }
                     }
                     PalwGossipEvent::Receipt { bytes } => {
-                        if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV3>(&bytes) {
-                            pool_admit_receipt_v3_v1(
-                                &mut receipts_v3,
-                                &mut receipts_v3_arrival,
-                                &mut receipts_v3_arrival_seq,
-                                receipt,
-                                |claim| live_last_tick.contains(claim) || receipts.contains_key(claim),
-                            );
-                        } else if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV2>(&bytes) {
-                            // **A receipt with no signature is not a receipt.** The pool is
-                            // unauthenticated and capped, so sixteen well-formed junk receipts
-                            // naming a live claim used to fill it before any real one arrived —
-                            // every honest receipt was then dropped at the door and no quorum
-                            // assembled (audit M2-7, failure path 3). Consensus re-verifies every
-                            // signature at acceptance; this is the door check that keeps the pool
-                            // from being a free denial of service.
-                            let plausible = !receipt.signature.is_empty();
-                            let pool = receipts.entry(receipt.claim).or_default();
-                            if plausible && !pool.contains(&receipt) {
-                                // Oldest out rather than newest refused, for the same reason the
-                                // material pool evicts: whoever is first must not be able to lock
-                                // out whoever is right.
-                                if pool.len() >= RECEIPTS_PER_CLAIM {
-                                    pool.remove(0);
-                                }
-                                pool.push(receipt);
-                            }
-                        }
+                        // **Held for this tick's chain read, not pooled here** (the receipt-pool
+                        // flush fix). Whether a receipt may be kept depends on the panel the tip
+                        // binds and the key the registry holds for its seat, which the drain has
+                        // not read yet; the admission after the duty read decides
+                        // (`receipt_pool_tick_v1`). What the drain can refuse without the chain it
+                        // refuses (`receipt_arrival_push_v1`): bytes that are no receipt, and a
+                        // signature that is not an ML-DSA-87 signature's length (the audit's
+                        // one-to-eight-byte junk) — no key verifies either, and neither may take a
+                        // place in the queue.
+                        crate::palw_receipt_pool::receipt_arrival_push_v1(&mut receipt_arrivals, &bytes);
                     }
                     // ADR-0077 Decision 8. Held, not judged: the seat binds an opening to the
                     // claim's roots and replays the interval before believing anything in it.
@@ -3276,9 +3272,6 @@ impl PalwPanelService {
             // (audit M2-2).
             for claim in materials.keys() {
                 first_seen.entry(*claim).or_insert(current_daa);
-            }
-            for claim in receipts_v3.keys() {
-                receipts_v3_seen.entry(*claim).or_insert(current_daa);
             }
 
             // **Build the class registration FIRST — the comment always said "ahead of
@@ -4684,8 +4677,69 @@ impl PalwPanelService {
 
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
+
+            // --- the receipt pools: this tick's arrivals, against one read of the tip ---
+            //
+            // After the duty read, so the claims kept out of the ceiling's reach are this tick's
+            // duties and this node's own filings — chain facts, never a peer's word (LOW (a)) — and
+            // before the collector, so what it offers is what this tick heard.
+            {
+                let kept = receipt_pool_kept_v1(&duties, &receipt_pool_v2, &receipt_pool_v3);
+                let tick = crate::palw_receipt_pool::receipt_pool_tick_v1(
+                    &mut receipt_arrivals,
+                    &mut receipt_pool_v2,
+                    &mut receipt_pool_v3,
+                    &mut receipt_facts,
+                    |claims, bonds| session.palw_receipt_pool_facts_v1(claims, bonds),
+                    // Admitted in a random order: a flooder cannot time its junk ahead of the
+                    // genuine receipt inside a tick, so each re-send is a fresh draw against the
+                    // check budget.
+                    |arrivals| rand::seq::SliceRandom::shuffle(arrivals, &mut rand::thread_rng()),
+                    &verify_receipt_signature_v1,
+                    current_daa,
+                    &kept,
+                );
+                // `None`: no tip state to judge them against yet — they wait in the queue.
+                if let Some((outcomes, budget)) = tick
+                    && !outcomes.is_empty()
+                {
+                    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+                    for outcome in &outcomes {
+                        *counts.entry(format!("{outcome:?}")).or_default() += 1;
+                    }
+                    // A signature that fails, or a contest past the check budget, is somebody
+                    // sending receipts no seat signed — worth one line a minute, not one a tick.
+                    let refused = outcomes
+                        .iter()
+                        .filter(|o| {
+                            matches!(
+                                o,
+                                crate::palw_receipt_pool::ReceiptAdmitV1::BadSignature
+                                    | crate::palw_receipt_pool::ReceiptAdmitV1::Deferred
+                            )
+                        })
+                        .count();
+                    if refused > 0 {
+                        crate::palw_backends::note_throttled_v1("receipt-pool-refusals", || {
+                            format!(
+                                "[{PALW_PANEL}] receipt pool: {refused} receipt(s) this tick failed their signature check or \
+                                 waited past the check budget ({counts:?}, {} checks) — pooled receipts stay, and seats \
+                                 re-send theirs",
+                                budget.used
+                            )
+                        });
+                    }
+                    trace!(
+                        "[{PALW_PANEL}] receipts this tick: {counts:?}, {} signature checks; pooled {} (V2) + {} (V3)",
+                        budget.used,
+                        receipt_pool_v2.pooled_len(),
+                        receipt_pool_v3.pooled_len()
+                    );
+                }
+            }
+
             for duty in &duties {
-                if answered.contains(&seat_duty_panel_key_v1(duty)) || current_daa > duty.receipt_deadline {
+                if !seat_duty_is_due_v1(duty, &answered, current_daa) {
                     continue;
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
@@ -5577,9 +5631,23 @@ impl PalwPanelService {
                     if matches!(verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
                         own_receipts.insert(duty.claim_id, (inner.clone(), duty.receipt_deadline));
                     }
-                    receipts.entry(duty.claim_id).or_default().push(inner);
-                    receipts_v3.entry(duty.claim_id).or_default().push(receipt);
+                    // **This node's own receipt is never in the evictable pool** (fix (1)). The V2
+                    // pool keeps the inner half beside it, as it always held it: the V1 assembler
+                    // refuses it (it is signed over the V3 message), and it is what puts the claim
+                    // on the collector's list.
+                    receipt_pool_v2.insert_own(inner, current_daa);
+                    receipt_pool_v3.insert_own(receipt, current_daa);
                     answered.insert(seat_duty_panel_key_v1(duty));
+                    own_filed.insert(
+                        seat_duty_panel_key_v1(duty),
+                        crate::palw_receipt_pool::OwnFiledV1 {
+                            claim: duty.claim_id,
+                            verdict,
+                            signed_daa,
+                            segments: Some(mask),
+                            schedule: crate::palw_receipt_pool::OwnRebroadcastV1::filed(std::time::Instant::now()),
+                        },
+                    );
                     self.flow_context.broadcast_palw_seat_receipt(bytes).await;
                     continue;
                 }
@@ -5604,9 +5672,61 @@ impl PalwPanelService {
                 if matches!(verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
                     own_receipts.insert(duty.claim_id, (receipt.clone(), duty.receipt_deadline));
                 }
-                receipts.entry(duty.claim_id).or_default().push(receipt);
+                receipt_pool_v2.insert_own(receipt, current_daa);
                 answered.insert(seat_duty_panel_key_v1(duty));
+                own_filed.insert(
+                    seat_duty_panel_key_v1(duty),
+                    crate::palw_receipt_pool::OwnFiledV1 {
+                        claim: duty.claim_id,
+                        verdict,
+                        signed_daa,
+                        segments: None,
+                        schedule: crate::palw_receipt_pool::OwnRebroadcastV1::filed(std::time::Instant::now()),
+                    },
+                );
                 self.flow_context.broadcast_palw_seat_receipt(bytes).await;
+            }
+
+            // --- the seat's re-send: its own receipts, while their panels stand (fix (4)) ---
+            //
+            // A receipt was broadcast once and never again, and a peer's relay-once memory made even
+            // a second broadcast of the same bytes a `Duplicate` — so a node that lost it (to a flood,
+            // a full inbox, a restart) never got it back, and the claim waited out its window. Each
+            // receipt whose duty still stands goes out again on a backoff, RE-SIGNED: a new signature
+            // over the same message, so new bytes that every node admits and relays, and that a pool
+            // already holding the first copy verified refuses as `Redundant` without a check. The
+            // duty is the chain's word that the claim is `PanelBound` on that very panel with this
+            // seat on it; once the claim leaves `PanelBound`, the duty and the re-sends stop — and
+            // not before: the chain keeps a heavy class's claim `PanelBound` far past the duty's
+            // global `receipt_deadline` (ADR-0133 §11.3), and the re-sends run as long as it does.
+            {
+                let now = std::time::Instant::now();
+                let standing: HashSet<SeatDutyPanelKeyV1> = duties.iter().map(seat_duty_panel_key_v1).collect();
+                let due = crate::palw_receipt_pool::own_receipts_due_v1(
+                    &own_filed,
+                    &standing,
+                    now,
+                    crate::palw_receipt_pool::OWN_RECEIPT_REBROADCASTS_PER_TICK,
+                );
+                let kp = self.keypair.as_ref().expect("checked at start");
+                for key in due {
+                    let Some(own) = own_filed.get_mut(&key) else { continue };
+                    let Some(bytes) =
+                        crate::palw_receipt_pool::own_receipt_resend_bytes_v1(own, bond_key, network_domain, |message, context| {
+                            Self::sign_hedged(&kp.signing_key, message, context)
+                        })
+                    else {
+                        continue;
+                    };
+                    own.schedule.sent(now);
+                    trace!(
+                        "[{PALW_PANEL}] re-sent this seat's {:?} receipt for claim {} (re-send {})",
+                        verdict_name(&own.verdict),
+                        own.claim,
+                        own.schedule.sends()
+                    );
+                    self.flow_context.broadcast_palw_seat_receipt(bytes).await;
+                }
             }
 
             // --- the collector + submitter's half ---
@@ -5689,7 +5809,7 @@ impl PalwPanelService {
                     // Not the same condition as "no fee UTXO", and it must not print as one: this
                     // panel is waiting for its own chain to confirm, which is the system working.
                     trace!("[{PALW_PANEL}] holding: {inflight} carriers unconfirmed (cap {MAX_INFLIGHT_CARRIERS})");
-                } else if funding.is_none() && receipts.keys().any(|c| !submitted.contains_key(c)) {
+                } else if funding.is_none() && receipt_pool_v2.claim_ids().iter().any(|c| !submitted.contains_key(c)) {
                     // Once per tick, not once per claim: a pending carrier keeps every quorum
                     // unfundable until it is mined, and that used to be tens of thousands of
                     // identical lines an hour.
@@ -6018,7 +6138,10 @@ impl PalwPanelService {
                         }
                     }
                 }
-                let claims: Vec<Hash64> = receipts.keys().copied().collect();
+                // The claims the V2 pool holds anything for — heard V2 receipts, and every claim this
+                // node filed on (its V3 filings keep their inner half there) — as `receipts.keys()`
+                // named them before the pools were rebuilt.
+                let claims: Vec<Hash64> = receipt_pool_v2.claim_ids();
                 for claim in claims {
                     if inflight >= MAX_INFLIGHT_CARRIERS || readiness_waiting {
                         break;
@@ -6036,8 +6159,10 @@ impl PalwPanelService {
                     if submit_attempts.get(&claim).copied().unwrap_or(0) >= SUBMIT_ATTEMPTS {
                         continue;
                     }
-                    let pool = receipts.get(&claim).cloned().unwrap_or_default();
-                    let v3 = receipts_v3.get(&claim).cloned().unwrap_or_default();
+                    // Own receipts first, then what was heard of the tip panel's seats — the
+                    // assembler judges every one.
+                    let pool = receipt_pool_v2.candidates(&claim, &receipt_facts);
+                    let v3 = receipt_pool_v3.candidates(&claim, &receipt_facts);
                     let Some(object) = session
                         .palw_v2_receipt_coverage_assemble(claim, v3.clone())
                         .or_else(|| session.palw_v2_optimistic_assemble(claim, v3))
@@ -6215,41 +6340,53 @@ impl PalwPanelService {
             pool_sweep_material_v1(&mut materials, &mut pool_arrival, &mut pool_bytes, |claim| {
                 live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim))
             });
-            receipts.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
-            // The V3 pool is read by the collector only for a claim still in `receipts`, so it keeps
-            // exactly those, the live ones, and anything seen inside the retention bound — a peer's
-            // receipt can arrive before this node has seen the bind that makes the claim its duty.
-            receipts_v3.retain(|claim, _| {
-                live.contains(claim)
-                    || receipts.contains_key(claim)
-                    || receipts_v3_seen.get(claim).is_some_and(|seen| current_daa <= seen.saturating_add(PANEL_POOL_RETENTION_DAA))
-            });
-            receipts_v3_seen.retain(|claim, _| receipts_v3.contains_key(claim));
-            receipts_v3_arrival.retain(|claim, _| receipts_v3.contains_key(claim));
+            // The receipt pools by the same rule (`ReceiptSweepV1`): a heard claim aged from when the
+            // pool first heard it (a peer's receipt can arrive before this node has seen the bind
+            // that makes the claim its duty, so a young foreign claim is kept), and this node's own
+            // receipts from when it filed them — kept while a duty names the claim, however long
+            // the claim's class keeps it `PanelBound`, and otherwise until this node submits for
+            // it or the retention age passes. Never because of anything that arrived, and never at
+            // the duty's global `receipt_deadline`, which a heavy class outlives (ADR-0133 §11.3).
+            let receipt_sweep = crate::palw_receipt_pool::ReceiptSweepV1 {
+                live: &live,
+                submitted: &submitted,
+                current_daa,
+                retention_daa: PANEL_POOL_RETENTION_DAA,
+            };
+            receipt_pool_v2.sweep(&receipt_sweep);
+            receipt_pool_v3.sweep(&receipt_sweep);
             // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
             // keep become the thing that grows.
-            first_seen.retain(|claim, _| materials.contains_key(claim) || receipts.contains_key(claim) || live.contains(claim));
+            first_seen
+                .retain(|claim, _| materials.contains_key(claim) || receipt_pool_v2.contains_claim(claim) || live.contains(claim));
             requested.retain(|claim, _| first_seen.contains_key(claim) || live.contains(claim));
             // `answered` was missed by this sweep and grew for the life of the process — one entry
             // per claim this seat ever filed on, on a node whose RSS history is the reason the rest
             // of these lines exist. Dropping a non-live entry cannot cause a double-file: a claim
             // leaves `live` only once no duty names it, and the duty loop refuses anything past
             // `receipt_deadline` regardless of what this set remembers.
-            answered.retain(|(claim, _, _)| live.contains(claim));
+            answered.retain(|(claim, _, _, _, _)| live.contains(claim));
             // The same argument for `replayed`, which only the duty loop reads, for a live duty.
-            replayed.retain(|(claim, _, _)| live.contains(claim));
+            replayed.retain(|(claim, _, _, _, _)| live.contains(claim));
+            // A re-send is scheduled for exactly the duties `answered` remembers: one the chain has
+            // moved past is never re-sent (`own_receipts_due_v1` asks for the standing duty anyway),
+            // and one a reorg brings back is re-sent again while the claim is still live. No
+            // deadline: the standing duty is the chain's own window.
+            own_filed.retain(|key, _| answered.contains(key));
             // ADR-0124 Decision 2: a receipt this seat may still carry itself lives exactly as long
             // as its window; the chain refuses anything past `receipt_deadline` regardless.
             own_receipts.retain(|_, (_, deadline)| current_daa <= *deadline);
             supplementary_submitted.retain(|claim, _| own_receipts.contains_key(claim));
             // Our own executions are only needed while the dispute they support is open.
             own_executions.retain(|claim, _| live.contains(claim));
-            submit_attempts.retain(|claim, _| receipts.contains_key(claim));
+            submit_attempts.retain(|claim, _| receipt_pool_v2.contains_claim(claim));
             submitted.retain(|_claim, at| current_daa <= at.saturating_add(PANEL_POOL_RETENTION_DAA));
-            trace!("[{PALW_PANEL}] tick: {} duties, {} claims pooled", duties.len(), receipts.len());
-            // What the V3 pool's arrival ceiling keeps next tick, whatever arrives before the duties
-            // are read again.
-            live_last_tick = live;
+            trace!(
+                "[{PALW_PANEL}] tick: {} duties, {} claims pooled (V2), {} (V3)",
+                duties.len(),
+                receipt_pool_v2.claim_count(),
+                receipt_pool_v3.claim_count()
+            );
         }
     }
 }
@@ -8911,11 +9048,21 @@ mod seat_reask_tests {
 
 #[cfg(test)]
 mod seat_duty_panel_key_tests {
-    use super::seat_duty_panel_key_v1;
+    use super::{PalwPanelService, SeatDutyPanelKeyV1, receipt_pool_kept_v1, seat_duty_is_due_v1, seat_duty_panel_key_v1};
+    use crate::palw_receipt_pool::{
+        OwnFiledV1, OwnRebroadcastV1, PalwReceiptPoolV1, ReceiptChainFactsV1, VerifyBudgetV1, own_receipts_due_v1,
+    };
+    use kaspa_consensus_core::palw_panel_v2::{
+        PALW_RECEIPT_V3_MLDSA87_CONTEXT, PalwReceiptPoolFactsV1, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3,
+        palw_receipt_message_v3,
+    };
     use kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2;
     use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
     use kaspa_consensus_core::tx::TransactionOutpoint;
     use kaspa_hashes::Hash64;
+    use std::collections::{HashMap, HashSet};
+    use std::time::{Duration, Instant};
 
     fn duty(claim: u64, bound_daa: u64, anchor: u64) -> PalwSeatDutyV2 {
         let h = Hash64::from_u64_word;
@@ -8941,6 +9088,12 @@ mod seat_duty_panel_key_tests {
         }
     }
 
+    fn at_seat(mut duty: PalwSeatDutyV2, seat_index: u8, panel_seat_count: u16) -> PalwSeatDutyV2 {
+        duty.seat_index = seat_index;
+        duty.panel_seat_count = panel_seat_count;
+        duty
+    }
+
     /// **A seat answers each PANEL once** (the 2026-09-24 licence-stall fix). Two sibling blocks at
     /// the anchor slot bind two panels for one claim at one DAA; keyed by `(claim, bound_daa)` the
     /// seat that answered the first was told "already answered" by the second and never filed for
@@ -8954,79 +9107,133 @@ mod seat_duty_panel_key_tests {
         assert_ne!(first, seat_duty_panel_key_v1(&duty(8, 120, 0xA1)), "another claim is another duty");
         assert_eq!(first, seat_duty_panel_key_v1(&duty(9, 120, 0xA1)), "the same panel is answered once");
     }
-}
 
-#[cfg(test)]
-mod receipt_v3_pool_tests {
-    use super::{RECEIPTS_PER_CLAIM, RECEIPTS_V3_MAX_CLAIMS, pool_admit_receipt_v3_v1};
-    use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3};
-    use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
-    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
-    use kaspa_consensus_core::tx::TransactionOutpoint;
-    use kaspa_hashes::Hash64;
-    use std::collections::{HashMap, HashSet};
-
-    fn receipt(claim: u64, seat: u64) -> PalwSeatReceiptV3 {
-        PalwSeatReceiptV3 {
-            receipt: PalwSeatReceiptV2 {
-                claim: Hash64::from_u64_word(claim),
-                verdict: PalwReceiptVerdictV2::Valid,
-                seat_bond: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(seat), 0)),
-                signed_daa: 7,
-                signature: vec![1; 8],
-            },
-            segments: PalwSegmentMaskV2::single(0),
-        }
+    /// **A seat moved within a panel re-files** (the launch review of the licence-stall fix, LOW
+    /// (b)). Two siblings that differ in the registry draw different panels from one anchor at one
+    /// DAA; the seat's mask is a function of its index and the panel's size, so a receipt to its
+    /// old place is not one to its new. Keyed by `(claim, bound_daa, anchor)` alone the moved seat
+    /// was "already answered" and filed nothing.
+    #[test]
+    fn a_seat_moved_within_a_panel_refiles() {
+        let mut answered: HashSet<SeatDutyPanelKeyV1> = HashSet::new();
+        let before = duty(9, 120, 0xA1);
+        assert!(seat_duty_is_due_v1(&before, &answered, 130));
+        answered.insert(seat_duty_panel_key_v1(&before));
+        assert!(!seat_duty_is_due_v1(&before, &answered, 131), "the same place, answered");
+        assert!(seat_duty_is_due_v1(&at_seat(before.clone(), 3, 5), &answered, 131), "moved to another index: a new duty");
+        assert!(seat_duty_is_due_v1(&at_seat(before.clone(), 2, 6), &answered, 131), "a panel of another size: a new duty");
+        assert!(!seat_duty_is_due_v1(&at_seat(before.clone(), 3, 5), &answered, 721), "…inside its receipt window only");
     }
 
-    /// **A flood of invented claim ids cannot grow the V3 pool, or push out a claim this node
-    /// keeps** (the review of the 2026-09-24 licence-stall fix). Past the ceiling the oldest
-    /// evictable claim goes; a kept claim never does, and neither does the one that just arrived.
+    /// **The duty loop across a sibling swap and an A→B→A reorg** (the secondary test the launch
+    /// review asked for). The seat files on panel A; the tip moves to sibling B (another anchor at
+    /// the same DAA, and the seat at another index in it) and the seat files on B; the tip moves back
+    /// to A and the seat does NOT file again — A was answered, its receipt is still held — but A's
+    /// re-send resumes, because A is the standing duty again, while B's stops.
     #[test]
-    fn the_v3_pool_is_held_to_its_ceiling_oldest_first_and_never_evicts_a_kept_claim() {
-        let (mut pool, mut arrival, mut seq) = (HashMap::new(), HashMap::new(), 0u64);
-        let kept: HashSet<Hash64> = [Hash64::from_u64_word(1), Hash64::from_u64_word(2)].into();
-        let is_kept = |claim: &Hash64| kept.contains(claim);
-        // This node's two duties arrive first, then a flood well past the ceiling.
-        for claim in 1..=(RECEIPTS_V3_MAX_CLAIMS as u64 + 100) {
-            pool_admit_receipt_v3_v1(&mut pool, &mut arrival, &mut seq, receipt(claim, 1), is_kept);
-        }
-        assert_eq!(pool.len(), RECEIPTS_V3_MAX_CLAIMS + kept.len(), "the ceiling counts only what may be evicted");
-        assert!(kept.iter().all(|claim| pool.contains_key(claim)), "the kept claims stay, however old");
-        let newest = Hash64::from_u64_word(RECEIPTS_V3_MAX_CLAIMS as u64 + 100);
-        assert!(pool.contains_key(&newest), "the claim that just arrived stays");
-        // Claims 3..=100 went, in arrival order, one per arrival past the ceiling.
-        assert!(!pool.contains_key(&Hash64::from_u64_word(3)) && !pool.contains_key(&Hash64::from_u64_word(100)));
-        assert!(pool.contains_key(&Hash64::from_u64_word(101)), "…and only as many as the ceiling needed");
-        assert_eq!(arrival.len(), pool.len(), "the arrival order goes with the pool");
-
-        // A claim pooled without an arrival stamp (this node's own filing) is the oldest once it is
-        // no longer kept.
-        let own = Hash64::from_u64_word(9_999);
-        pool.insert(own, vec![receipt(9_999, 1)]);
-        pool_admit_receipt_v3_v1(&mut pool, &mut arrival, &mut seq, receipt(10_000, 1), is_kept);
-        assert!(!pool.contains_key(&own) && !pool.contains_key(&Hash64::from_u64_word(101)));
-        assert!(pool.contains_key(&Hash64::from_u64_word(102)) && pool.contains_key(&Hash64::from_u64_word(10_000)));
+    fn the_duty_loop_refiles_across_a_sibling_swap_and_not_back_across_an_a_b_a_reorg() {
+        let panel_a = duty(9, 120, 0xA1);
+        let panel_b = at_seat(duty(9, 120, 0xB1), 4, 5);
+        let mut answered: HashSet<SeatDutyPanelKeyV1> = HashSet::new();
+        let mut filed: HashMap<SeatDutyPanelKeyV1, OwnFiledV1> = HashMap::new();
+        let t0 = Instant::now();
+        let file = |duty: &PalwSeatDutyV2, answered: &mut HashSet<SeatDutyPanelKeyV1>, filed: &mut HashMap<_, _>| {
+            answered.insert(seat_duty_panel_key_v1(duty));
+            filed.insert(
+                seat_duty_panel_key_v1(duty),
+                OwnFiledV1 {
+                    claim: duty.claim_id,
+                    verdict: PalwReceiptVerdictV2::Valid,
+                    signed_daa: 125,
+                    segments: None,
+                    schedule: OwnRebroadcastV1::filed(t0),
+                },
+            );
+        };
+        // The tip holds A.
+        let due: Vec<PalwSeatDutyV2> = [panel_a.clone()].into_iter().filter(|d| seat_duty_is_due_v1(d, &answered, 125)).collect();
+        assert_eq!(due.len(), 1);
+        file(&panel_a, &mut answered, &mut filed);
+        // The tip moves to sibling B: a new panel, a new place — the seat judges it.
+        assert!(seat_duty_is_due_v1(&panel_b, &answered, 126), "the sibling is a new duty");
+        file(&panel_b, &mut answered, &mut filed);
+        let standing_b: HashSet<SeatDutyPanelKeyV1> = [seat_duty_panel_key_v1(&panel_b)].into();
+        let late = t0 + Duration::from_secs(31);
+        assert_eq!(own_receipts_due_v1(&filed, &standing_b, late, 8), vec![seat_duty_panel_key_v1(&panel_b)], "only B re-sends");
+        // And back to A: answered already (the claim stayed live, so the sweep kept the key), so no
+        // second filing — but A's re-send is due again, and B's is not.
+        assert!(!seat_duty_is_due_v1(&panel_a, &answered, 127), "A is not filed twice");
+        let standing_a: HashSet<SeatDutyPanelKeyV1> = [seat_duty_panel_key_v1(&panel_a)].into();
+        assert_eq!(own_receipts_due_v1(&filed, &standing_a, late, 8), vec![seat_duty_panel_key_v1(&panel_a)], "only A re-sends");
+        // Once the claim leaves `PanelBound` no panel of it stands, and nothing re-sends.
+        assert!(own_receipts_due_v1(&filed, &HashSet::new(), late, 8).is_empty());
     }
 
-    /// The door checks the V2 pool made: no signature, no receipt; a copy is not a second receipt;
-    /// a claim's own slice evicts oldest first.
+    /// **The kept set is chain facts only** (LOW (a)): this tick's duties and this node's own
+    /// filings. A claim the network sent receipts for — however many — is not kept, and so stays
+    /// under the pool's ceiling.
     #[test]
-    fn the_v3_pool_refuses_an_unsigned_receipt_and_a_copy_and_caps_a_claim_oldest_out() {
-        let (mut pool, mut arrival, mut seq) = (HashMap::new(), HashMap::new(), 0u64);
-        let mut unsigned = receipt(5, 1);
-        unsigned.receipt.signature.clear();
-        pool_admit_receipt_v3_v1(&mut pool, &mut arrival, &mut seq, unsigned, |_| false);
-        assert!(pool.is_empty() && arrival.is_empty(), "an unsigned receipt leaves no entry behind");
-        pool_admit_receipt_v3_v1(&mut pool, &mut arrival, &mut seq, receipt(5, 1), |_| false);
-        pool_admit_receipt_v3_v1(&mut pool, &mut arrival, &mut seq, receipt(5, 1), |_| false);
-        assert_eq!(pool[&Hash64::from_u64_word(5)].len(), 1);
-        for seat in 2..=(RECEIPTS_PER_CLAIM as u64 + 1) {
-            pool_admit_receipt_v3_v1(&mut pool, &mut arrival, &mut seq, receipt(5, seat), |_| false);
+    fn the_kept_set_ignores_gossip() {
+        let h = Hash64::from_u64_word;
+        let seat = PalwBondKeyV2(TransactionOutpoint::new(h(4), 0));
+        let mut v2: PalwReceiptPoolV1<PalwSeatReceiptV2> = PalwReceiptPoolV1::new(h(999));
+        let mut v3: PalwReceiptPoolV1<PalwSeatReceiptV3> = PalwReceiptPoolV1::new(h(999));
+        let mut facts = ReceiptChainFactsV1::default();
+        facts.refresh(
+            PalwReceiptPoolFactsV1 { panels: Vec::new(), seat_keys: vec![(seat, vec![0; kaspa_txscript::MLDSA87_PK_LEN])] },
+            &[seat].into(),
+        );
+        let receipt = |claim: u64| PalwSeatReceiptV2 {
+            claim: h(claim),
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: seat,
+            signed_daa: 7,
+            signature: vec![1; kaspa_txscript::MLDSA87_SIG_LEN],
+        };
+        // Gossip: receipts for claims 0x61 and 0x62, pooled unchecked (no budget).
+        let mut spent = VerifyBudgetV1::new(0, 0);
+        let never = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| false;
+        for claim in [0x61, 0x62] {
+            assert!(v2.admit(receipt(claim), &facts, &never, &mut spent, 10, &HashSet::new()).kept());
+            let v3_receipt = PalwSeatReceiptV3 { receipt: receipt(claim), segments: PalwSegmentMaskV2::single(0) };
+            assert!(v3.admit(v3_receipt, &facts, &never, &mut spent, 10, &HashSet::new()).kept());
         }
-        let slice = &pool[&Hash64::from_u64_word(5)];
-        assert_eq!(slice.len(), RECEIPTS_PER_CLAIM);
-        assert_eq!(slice[0], receipt(5, 2), "the first to arrive went out");
+        assert!(receipt_pool_kept_v1(&[], &v2, &v3).is_empty(), "nothing a peer sent is kept");
+        // A duty and an own filing are.
+        v3.insert_own(PalwSeatReceiptV3 { receipt: receipt(0x71), segments: PalwSegmentMaskV2::single(0) }, 700);
+        let kept = receipt_pool_kept_v1(&[duty(0x72, 120, 0xA1)], &v2, &v3);
+        assert_eq!(kept, [h(0x71), h(0x72)].into());
+    }
+
+    /// **The re-send is a new signature over the same receipt** (fix (4)). The filing signs with an
+    /// all-zero `rnd` — ML-DSA-87's deterministic variant, whose re-signing is the same bytes and so
+    /// a relay-once `Duplicate` everywhere. The hedged re-sign is new bytes that verify under the
+    /// same key and message.
+    #[test]
+    fn the_hedged_resend_is_a_new_signature_over_the_same_receipt() {
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x42; 32]);
+        let key = kp.verification_key.as_ref().to_vec();
+        let message = palw_receipt_message_v3(
+            Hash64::from_u64_word(999),
+            Hash64::from_u64_word(9),
+            PalwReceiptVerdictV2::Valid,
+            125,
+            PalwSegmentMaskV2::single(1),
+        );
+        let deterministic = |_: ()| {
+            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), PALW_RECEIPT_V3_MLDSA87_CONTEXT, [0u8; 32])
+                .unwrap()
+                .as_ref()
+                .to_vec()
+        };
+        assert_eq!(deterministic(()), deterministic(()), "the filing's signature is deterministic");
+        let first = PalwPanelService::sign_hedged(&kp.signing_key, message.as_byte_slice(), PALW_RECEIPT_V3_MLDSA87_CONTEXT).unwrap();
+        let again = PalwPanelService::sign_hedged(&kp.signing_key, message.as_byte_slice(), PALW_RECEIPT_V3_MLDSA87_CONTEXT).unwrap();
+        assert_ne!(first, again, "fresh randomness each time");
+        assert_ne!(first, deterministic(()));
+        for signature in [&first, &again] {
+            assert!(super::verify_receipt_signature_v1(&key, message.as_byte_slice(), signature, PALW_RECEIPT_V3_MLDSA87_CONTEXT));
+        }
     }
 }
 

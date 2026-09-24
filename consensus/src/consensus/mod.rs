@@ -2227,6 +2227,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }
 
+    fn palw_receipt_pool_facts_v1(
+        &self,
+        claims: Vec<kaspa_consensus_core::Hash64>,
+        bonds: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwReceiptPoolFactsV1> {
+        self.virtual_processor.palw_receipt_pool_facts_v1_impl(&claims, &bonds)
+    }
+
     fn palw_claim_roots_v2(
         &self,
         claim: kaspa_consensus_core::Hash64,
