@@ -1,6 +1,8 @@
 //! **ADR-0152 v3.1 R-core+, S-3: one ledger at every gate, on testnet-12's own fold** — T08, T15,
 //! T17 (U2), T33, T77, T78, T84 and A-4 (S-SPEC §3.1, §3.3–§3.5, §10), beside fence-off twins where
-//! the rule has a pre-fence form.
+//! the rule has a pre-fence form; and where S-3 meets the other two halves of the integration
+//! (rcore/int-1): the vesting row a partial quorum writes (T13 under SR-6's door) and the stake draw
+//! under the seat filter (SR-7 × SW-1).
 //!
 //! Every block goes through `apply_palw_transition_v7` with the extras the processor resolves and is
 //! checked by [`Chain::step`]: the delta re-applies and reverts, and the carriage reloads (the ledger
@@ -16,13 +18,21 @@ mod common;
 use common::*;
 
 use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2};
-use kaspa_consensus_core::palw_panel_v2::{PalwPanelValidLockV1, PalwRcoreSeatFilterV1};
+use kaspa_consensus_core::palw_model_registry_v1::PalwReadinessPolicyV1;
+use kaspa_consensus_core::palw_panel_economy_v1::{PalwSeatEconomyV1, palw_panel_collateral_floor_v1};
+use kaspa_consensus_core::palw_panel_v2::{
+    PalwPanelDrawPolicyV1, PalwPanelIndependenceV1, PalwPanelStakeDrawV1, PalwPanelV2Error, PalwPanelValidLockV1,
+    PalwRcoreSeatFilterV1, derive_panel_v2_with_policy,
+};
+use kaspa_consensus_core::palw_panel_var_v1::PalwSlashableLockV1;
 use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwStateV2Error, palw_accuser_exposure_v1, palw_bond_collateral_is_locked_v6, palw_bond_committed_raw_v1,
-    palw_bond_committed_v1, palw_rcore_bind_prices_v1, palw_rcore_seat_lock_v1, palw_second_clock_depth_v1,
-    palw_v2_object_licenses_claim_v1,
+    palw_bond_committed_v1, palw_bond_is_payee_of_unmatured_row_v1, palw_panel_valid_lock_required_v1, palw_rcore_bind_prices_v1,
+    palw_rcore_seat_lock_v1, palw_second_clock_depth_of_v1, palw_second_clock_depth_v1, palw_v2_object_licenses_claim_v1,
 };
+use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+use std::collections::BTreeSet;
 
 const MSK: u128 = 100_000_000;
 
@@ -171,6 +181,163 @@ fn t08_fold_admission_producer_facts_and_draw_read_one_committed_number() {
         "T08: committed {:.8} MSK = fold = admission = PROD v4 = draw at DAA {t} (raw depth {raw:?}, escaped {escaped:?})",
         msk_of(committed)
     );
+}
+
+/// The draw policy the processor resolves for `claim` bound at `daa`, rebuilt from core on `c.s`:
+/// `palw_panel_draw_policy_at` at the anchor and `palw_panel_valid_lock_of_v1` at the binding block
+/// — one block under SW-8, so both are read at `daa`.
+fn draw_policy(c: &Chain, claim: &PalwClaimStateV2, daa: u64) -> PalwPanelDrawPolicyV1 {
+    let (p, sp) = (&c.p, &c.sp);
+    let e = extras(p, daa);
+    let seat_count = bundle(p).panel.seat_count() as usize;
+    let economy = p.palw_panel_economy_active_at(daa).then(|| PalwSeatEconomyV1 {
+        panel_floor_sompi: palw_panel_collateral_floor_v1(sp.min_collateral_sompi()),
+        max_exposure_ratio_permille: sp.fp_max_exposure_ratio_permille(),
+        reward_multiple_permille: p.palw_panel_reward_multiple_permille_at(daa),
+    });
+    let readiness = registry_fold(p, daa).filter(|fold| fold.governs_at(daa)).map(|fold| {
+        PalwReadinessPolicyV1::at(
+            &fold,
+            daa,
+            sp.base_class_id(),
+            p.palw_audit_2026_09_23_active_at(daa) && p.palw_readiness_v2_at(daa),
+        )
+    });
+    let independence = p.palw_admission_independence_daa().map(|from_daa| PalwPanelIndependenceV1 {
+        from_daa,
+        base_class_id: sp.base_class_id(),
+        anchor_daa: daa,
+    });
+    let valid_lock = (e.audit_2026_09_23_active && e.objective_offence_at(daa)).then(|| PalwPanelValidLockV1 {
+        required: palw_panel_valid_lock_required_v1(&c.s, sp, &e, claim),
+        now_daa: daa,
+        settled_anchor_depth: palw_second_clock_depth_of_v1(&c.s, sp, &e, daa),
+        window_court: sp.window_court(),
+        rcore: sp.rcore_plus_active_at(daa).then(|| PalwRcoreSeatFilterV1 {
+            eligibility: palw_rcore_bind_prices_v1(&c.s, sp, &e, claim, seat_count, daa).eligibility,
+            ceiling_permille: sp.fp_max_exposure_ratio_permille(),
+        }),
+    });
+    PalwPanelDrawPolicyV1 {
+        weighted: p.palw_audit_2026_09_11_deep_active_at(daa),
+        economy,
+        readiness,
+        independence,
+        valid_lock,
+        stake: p.palw_rcore_plus_active_at(daa).then_some(PalwPanelStakeDrawV1::V1),
+    }
+}
+
+/// `s` with a live lock on `bond` worth half its posted collateral — its whole 500‰ ceiling on the
+/// one ledger (A-1 reads a lock), so S-3's seat filter refuses it on any claim.
+fn loaded(sp: &PalwStateParamsV2, s: &PalwChainStateV2, bond: PalwBondKeyV2, lock_claim: Hash64) -> PalwChainStateV2 {
+    let amount = s.bond(&bond).expect("the bond").collateral as u128 / 2;
+    edited(sp, s, |carriage| {
+        carriage.slashable_locks.insert(
+            (bond, lock_claim),
+            PalwSlashableLockV1 {
+                claim: lock_claim,
+                amount,
+                expiry_daa: 10_000_000,
+                settled_at_final: 0,
+                attested: PalwSegmentMaskV2::NONE,
+                segments: 0,
+            },
+        );
+    })
+}
+
+/// **SR-7 × SW-1: the stake draw seats only what the bind binds, on testnet-12's own state** (the
+/// integration's review, 2026-09-24). Under SW-8 a panel binds in its anchor block or the claim
+/// voids there, and past the 2026-09-23 audit a `PanelBound` the bind refuses is inert (C-3) — so
+/// a draw that seated a bond L-4b refuses would void the claim with nothing logged. With the policy
+/// resolved as the processor resolves it (the stake draw, the economy, readiness, independence and
+/// S-3's seat filter) and genesis seat 3 loaded to its ceiling by a live lock:
+///
+/// * the filter refuses seat 3 and admits every other genesis seat;
+/// * over eight anchors the race never seats seat 3 or the executor, and always binds (7 of 8
+///   eligible with SW-10's executor term, exactly 875‰), and the fold binds every panel it drew;
+/// * the floor's own panel, seat 3 on it, is inert at the fold: the claim stays `Provisional`;
+/// * with seat 4 loaded too the draw refuses under SW-10 (6 of 8 < 875‰), the base still counting
+///   both loaded seats.
+#[test]
+fn sr7_the_stake_draw_seats_only_what_the_bind_binds() {
+    let mut c = Chain::new(t12());
+    let id = c.floor_claim(0x5701);
+    let genesis = genesis_bonds(&c.p);
+    let (producer, _, _) = floor_producer(&c.p);
+    assert_eq!(genesis[0].0, producer, "the premise: the producer is the first genesis bond");
+    let seat3 = genesis[3].0;
+    let unloaded = c.s.clone();
+    c.s = loaded(&c.sp, &c.s, seat3, h(0x57C3));
+    let daa = c.daa + 1;
+    let claim = c.claim(&id);
+    let policy = draw_policy(&c, &claim, daa);
+    let lock = policy.valid_lock.expect("the Valid lock is armed on testnet-12");
+    assert!(lock.rcore.is_some() && policy.stake.is_some(), "the premise: S-3's filter and the stake draw are both in force");
+    assert!(!lock.admits(&c.s, &seat3), "the filter refuses the loaded seat");
+    for (k, _, _) in genesis.iter().filter(|(k, _, _)| *k != seat3) {
+        assert!(lock.admits(&c.s, k), "every other genesis seat has room");
+    }
+
+    let panel = bundle(&c.p).panel;
+    let floor = c.sp.min_collateral_sompi();
+    let bind = |s: &PalwChainStateV2, anchor: Hash64, seats: Vec<kaspa_consensus_core::palw_state_v2::PalwPanelSeatV2>| {
+        fold(
+            &c.p,
+            &c.sp,
+            s,
+            &ctx(0xCA_0000 + daa, daa, daa, 0),
+            &[PalwConsensusObjectV2::PanelBound { claim: id, anchor, seats }],
+            PalwBlockWorkV3::None,
+            Hash64::default(),
+        )
+        .expect("the block stands")
+    };
+    for i in 0..8u64 {
+        let anchor = h(0x57_A000 + i);
+        let seats = derive_panel_v2_with_policy(&c.s, &panel, &id, anchor, floor, None, c.p.palw_capability_bound_at(daa), policy)
+            .unwrap_or_else(|e: PalwPanelV2Error| panic!("anchor {i}: 7 of 8 eligible with the executor term binds, got {e:?}"));
+        assert_eq!(seats.len(), 5);
+        assert!(
+            seats.iter().all(|s| s.bond != seat3 && s.bond != producer),
+            "anchor {i}: neither the loaded seat nor the executor sits"
+        );
+        let (child, _, skips) = bind(&c.s, anchor, seats);
+        assert!(skips.is_empty(), "anchor {i}: {skips:?}");
+        assert!(
+            matches!(child.claim(&id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
+            "anchor {i}: the fold binds the drawn panel"
+        );
+    }
+
+    // The floor's own panel (genesis seats 1–5) sits the loaded seat. Before the lock it binds;
+    // with it the bind refuses it and, past the audit fence, the object is inert — no panel, the
+    // claim `Provisional`, the block standing.
+    let with_seat3 = c.floor_seats();
+    assert!(with_seat3.iter().any(|(k, _)| *k == seat3));
+    let (control, _, _) = bind(&unloaded, h(0x57_AFFF), seats_of(&with_seat3));
+    assert!(matches!(control.claim(&id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "the control: unloaded, it binds");
+    let (child, _, skips) = bind(&c.s, h(0x57_AFFF), seats_of(&with_seat3));
+    assert!(skips.is_empty());
+    assert!(child.panel(&id).is_none(), "no panel is written");
+    assert!(
+        matches!(child.claim(&id).unwrap().phase, PalwClaimPhaseV2::Provisional),
+        "the bind refuses the seat the draw's filter refuses"
+    );
+
+    // Two loaded: 6 of 8 < 875‰, and the base keeps both.
+    let seat4 = genesis[4].0;
+    let two = Chain { p: c.p.clone(), sp: c.sp.clone(), s: loaded(&c.sp, &c.s, seat4, h(0x57C4)), daa: c.daa, room: false };
+    let policy = draw_policy(&two, &claim, daa);
+    let raced =
+        derive_panel_v2_with_policy(&two.s, &panel, &id, h(0x57_A000), floor, None, two.p.palw_capability_bound_at(daa), policy);
+    match raced {
+        Err(PalwPanelV2Error::InsufficientEligibleStake { eligible, base }) => {
+            assert_eq!(eligible * 8, base * 6, "six of eight equal genesis seats are eligible: {eligible} of {base}")
+        }
+        other => panic!("SW-10 refuses over the one-ledger cut: {other:?}"),
+    }
 }
 
 /// **T15: the lock each counted signer posts is L-1's `lock_{max(k,2)}`** — the V1 quorum door
@@ -401,6 +568,55 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
             }
             _ => assert!(!licensed, "{door}/armed={armed}: inert"),
         }
+    }
+}
+
+/// **T13 under SR-6's door: three of five license, and the row vests only the credited signers**
+/// (the integration's review, 2026-09-24). The vesting fold's own fixtures (`vesting_fold_v1`) sit
+/// three seats, and past `palw_rcore_plus` a three-seat panel licenses only when all three sign, so
+/// the silent seat that suite once left off the row is pinned here, on testnet-12's own five-seat
+/// floor panel: three backed `Valid`, two seats silent. At `Final` nothing enters
+/// `pending_payouts`; the row's seat legs are exactly the three signers; the row copies the door and
+/// `basis_k` S-3 recorded on the claim at the licence (`Quorum`, 3); and B-3's payee clause — the
+/// body v6 reads by name — holds the producer and the three signers and neither silent seat.
+#[test]
+fn t13_three_of_five_license_and_the_row_vests_only_the_credited_signers() {
+    let mut c = Chain::new(t12());
+    let id = c.floor_claim(0x1301);
+    let seats = c.floor_seats();
+    assert_eq!(seats.len(), 5, "the premise: testnet-12's floor panel sits five");
+    let bound = c.bind(id, &seats);
+    let (signers, silent) = seats.split_at(3);
+    let receipts: Vec<_> = signers.iter().map(|(k, _)| valid(id, *k, bound)).collect();
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }]);
+    let licensed = c.claim(&id);
+    assert!(matches!(licensed.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "three backed Valid of five license (SR-6)");
+    assert_eq!((licensed.rcore.licence_door, licensed.rcore.basis_k), (Some(PalwLicenceDoorTagV1::Quorum), 3));
+    c.finalize(id);
+
+    let row = c.s.vesting_row(&id).expect("a Final past palw_rcore_plus names a row").clone();
+    assert_eq!(
+        (Some(row.licence_door), row.basis_k),
+        (licensed.rcore.licence_door, licensed.rcore.basis_k),
+        "the row copies S-3's door and recount"
+    );
+    let legs: BTreeSet<PalwBondKeyV2> = row.seats.iter().map(|(k, _)| *k).collect();
+    let credited: BTreeSet<PalwBondKeyV2> = signers.iter().map(|(k, _)| *k).collect();
+    assert_eq!(legs, credited, "the seat legs are exactly the credited signers; a silent seat is not a leg");
+    let queued: BTreeSet<Hash64> = c.s.pending_payouts_iter().map(|(k, _)| *k).collect();
+    assert!(row.legs().all(|leg| leg.queue_key.is_none_or(|key| !queued.contains(&key))), "nothing entered pending_payouts at Final");
+
+    let raw = raw_depth(&c.p, c.daa);
+    let (producer, _, _) = floor_producer(&c.p);
+    let payee = |bond: &PalwBondKeyV2| palw_bond_is_payee_of_unmatured_row_v1(&c.s, &c.sp, bond, c.daa, raw);
+    assert!(payee(&producer), "the producer is held");
+    for (k, _) in signers {
+        assert!(payee(k), "a credited signer is held");
+        assert_eq!(c.s.vesting_rows_of_payee(k).count(), 1);
+    }
+    for (k, _) in silent {
+        assert!(!payee(k), "a silent seat is not a payee");
+        assert_eq!(c.s.vesting_rows_of_payee(k).count(), 0, "…and no row is keyed to it");
     }
 }
 
