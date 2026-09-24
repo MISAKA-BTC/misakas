@@ -414,6 +414,8 @@ pub mod palw_transcendental;
 pub mod palw_v2;
 pub mod palw_verification_profile_v1;
 pub mod palw_verification_v2;
+/// ADR-0152 V-1…V-8, read side: `getPalwVesting` (op 199) and claim row v3 (phase2-plan P2-10).
+pub mod palw_vesting_read_v1;
 pub mod palw_vesting_v1;
 pub mod palw_weight;
 pub mod palw_work_target_v1;

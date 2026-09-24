@@ -153,6 +153,76 @@ pub fn palw_attempt_prompt_ids_range_v1(anchor: &Hash64, vocab: u64, start: u64,
     out
 }
 
+/// **Why a class is not attributable past `palw_offence_attribution`** (ADR-0152 v3.1 addendum
+/// §4-bis.8) — the registration refusals, by name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PalwAttributableClassErrorV1 {
+    /// Too narrow for the formula (`n_ctx < 16`): no canonical attempt job exists, so J5 could
+    /// never be asked of its claims — `IdentityNotDerivable` must not be a registrant's way out of
+    /// the identity rule.
+    #[error("the class's context is too narrow for the canonical job formula (n_ctx/8 - 1, 2); J5 could never be asked of its claims")]
+    TooNarrow,
+    /// The registration names a canonical job that is not the formula's.
+    #[error("the registered canonical job ({got_prefill}, {got_decode}) is not the formula's ({want_prefill}, {want_decode})")]
+    CanonicalNotTheFormula { got_prefill: u32, got_decode: u32, want_prefill: u32, want_decode: u32 },
+    /// The graph does not make its logits row a provable step output (`palw_logits_head_v1`) —
+    /// every `Float32` class, and any whose last node is not a shipped head over the vocabulary.
+    #[error("the class's logits row is not a provable step output (palw_logits_head_v1): LogitsNotStepOutput could not judge it")]
+    HeadUnproven,
+    /// The graph reaches a Kimi K3 kernel, for which no engine and no golden identity exist.
+    #[error("the class reaches a Kimi K3 kernel, which no engine runs and no golden pins")]
+    KimiKernel,
+    /// A canonical prompt past J5b's inline bound committed in a form `PromptNotAnchored` cannot open.
+    #[error("a canonical prompt of {prefill} ids is past J5b's inline bound and must be committed in the Merkle form")]
+    WidePromptNotMerkle { prefill: u32 },
+}
+
+/// **What a class must be for every claim of it to be attributable** (ADR-0152 v3.1 addendum
+/// §4-bis.8), checked at registration past `palw_offence_attribution`, beside
+/// `verify_class_admission_v9`:
+///
+/// * (a) its canonical job is the formula's ([`palw_attempt_canonical_v1`]) — and a class too narrow
+///   for the formula is refused, so no registrant escapes J5 by choosing a width
+///   (`IdentityNotDerivable` stays a refusal for claims of classes registered before the fence);
+/// * (b) its logits row is a provable step output ([`crate::palw_step::palw_logits_head_v1`]), which
+///   also refuses `Float32`;
+/// * (c) it reaches no Kimi K3 kernel (no engine, no golden identity);
+/// * (d) a canonical prompt past [`PALW_J5_INLINE_PROMPT_IDS_V1`] is committed in the Merkle form
+///   under the network's (`palw_prompt_ids_form_of_class_v1`), so `PromptNotAnchored` can open it.
+///
+/// `is_base` reads the floor's canonical job rather than the formula; the base class is a genesis
+/// row and never reaches the registration gate, and testnet-12's genesis rows pass all four.
+pub fn palw_attributable_class_v1(
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    is_base: bool,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwAttributableClassErrorV1> {
+    use crate::palw_step_refute::{KDESC_KIMI_KDA_STEP, KDESC_KIMI_MLA_FUSED, KDESC_KIMI_MOE_COMBINE, KDESC_KIMI_ROUTER_TOPK};
+    let (prefill, decode) = palw_attempt_canonical_v1(profile, is_base).ok_or(PalwAttributableClassErrorV1::TooNarrow)?;
+    if (canonical.declared_prefill_tokens, canonical.exact_decode_tokens) != (prefill, decode) {
+        return Err(PalwAttributableClassErrorV1::CanonicalNotTheFormula {
+            got_prefill: canonical.declared_prefill_tokens,
+            got_decode: canonical.exact_decode_tokens,
+            want_prefill: prefill,
+            want_decode: decode,
+        });
+    }
+    crate::palw_step::palw_logits_head_v1(profile).ok_or(PalwAttributableClassErrorV1::HeadUnproven)?;
+    let reachable = profile.reachable_kernel_ids_v1();
+    let kimi = [KDESC_KIMI_KDA_STEP, KDESC_KIMI_MLA_FUSED, KDESC_KIMI_ROUTER_TOPK, KDESC_KIMI_MOE_COMBINE];
+    if kimi.iter().any(|k| reachable.contains(&crate::palw_step::kernel_semantics_id_v1(k))) {
+        return Err(PalwAttributableClassErrorV1::KimiKernel);
+    }
+    if prefill > PALW_J5_INLINE_PROMPT_IDS_V1
+        && crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, profile)
+            != crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1
+    {
+        return Err(PalwAttributableClassErrorV1::WidePromptNotMerkle { prefill });
+    }
+    Ok(())
+}
+
 /// **The canonical job `(prefill, decode)` a class is attempted at, as the chain derives it.**
 ///
 /// The base class's is [`crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL`], the job every floor
@@ -233,6 +303,52 @@ pub fn palw_attempt_prompt_root_v1(
     let form = crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, profile);
     crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &ids).ok()
 }
+
+/// **[`palw_attempt_prompt_root_v1`], remembered** (ADR-0152 v3.1 addendum §4-bis.3; the Phase 3
+/// review's heavy-budget finding). A `PromptNotAnchored { Whole }` recomputes an anchor's whole
+/// prompt root — 13.6 ms at 2M — and one block asks it of the processor's gate, the acceptance walk's
+/// rehearsal and the fold, and of every Whole on the same claim. The block's heavy budget charges a
+/// claim ONCE, so a second Whole on it must cost nothing, and that is only true if the root is not
+/// recomputed. The function is pure, so the memo changes no answer, only the time: keyed by
+/// everything the root is a function of (the profile's id, the anchor, the prefill, the class's
+/// form), bounded to [`PALW_PROMPT_ROOT_MEMO_ENTRIES_V1`] entries (a block's budget computes at most
+/// one 2M root, so a handful covers every block a node folds twice).
+pub fn palw_attempt_prompt_root_memo_v1(
+    profile: &PalwShapeProfileV3,
+    anchor: &Hash64,
+    prefill: u32,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Option<Hash64> {
+    use std::sync::{Mutex, OnceLock};
+    type Key = (Hash64, Hash64, u32, Hash64);
+    static MEMO: OnceLock<Mutex<std::collections::VecDeque<(Key, Hash64)>>> = OnceLock::new();
+    let form = crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, profile);
+    let key: Key = (profile.shape_profile_id(), *anchor, prefill, crate::palw_prompt_ids_v1::prompt_ids_form_id_v1(form));
+    let memo = MEMO.get_or_init(|| Mutex::new(std::collections::VecDeque::new()));
+    if let Ok(entries) = memo.lock()
+        && let Some((_, root)) = entries.iter().find(|(k, _)| *k == key)
+    {
+        return Some(*root);
+    }
+    let root = palw_attempt_prompt_root_v1(profile, anchor, prefill, network_form)?;
+    if let Ok(mut entries) = memo.lock() {
+        if entries.len() >= PALW_PROMPT_ROOT_MEMO_ENTRIES_V1 {
+            entries.pop_front();
+        }
+        entries.push_back((key, root));
+    }
+    Some(root)
+}
+
+/// How many whole prompt roots [`palw_attempt_prompt_root_memo_v1`] remembers.
+pub const PALW_PROMPT_ROOT_MEMO_ENTRIES_V1: usize = 8;
+
+/// **The mass a `PromptNotAnchored { Whole }` carrier is priced at, per prompt id** (the Phase 3
+/// review's heavy-budget finding): four — the bytes the flat form would have carried for the same
+/// prompt. The Whole form replaces carrying the prompt with recomputing it, so it pays what carrying
+/// it would have cost; the relay rate turns that into the carrier's burned rent
+/// (`palw_object_rent_ceiling_v2`). At 2M that is 1,048,572 mass.
+pub const PALW_WHOLE_PROMPT_MASS_PER_ID_V1: u64 = 4;
 
 /// **F1's floor rule, whole** (SPEC §4.3 J5): the context and the prompt a floor attempt anchored at
 /// `anchor` must run — [`palw_attempt_context_v1`] over [`palw_attempt_prompt_root_v1`] at the
@@ -443,5 +559,101 @@ mod tests {
             palw_attempt_output_root_v1(&ctx, &ids),
             crate::palw_v2::output_commitment_v2(&ctx.context_hash(), &ids, &crate::palw_v2::rendered_output_hash_v2(&[]))
         );
+    }
+
+    /// **T18w (addendum §4-bis.8): a registration past the fence must be attributable.** The real
+    /// rows pass (A16 graph-v7 at 8,192 and 2,097,152, Qwen3.6 graph-v7 at 512, at the formula's
+    /// job); a canonical that is not the formula, a class too narrow for it, a Float32 class (no
+    /// provable head), a Kimi K3 class and a wide prompt committed flat are each refused by name.
+    #[test]
+    fn t18w_a_registration_is_attributable_or_refused_by_name() {
+        use crate::palw_base0_profile::rc_job_context;
+        use crate::palw_context_ladder::{palw_a16_context_row_profile_v7, palw_qwen36_context_row_profile_v7};
+        use PalwAttributableClassErrorV1 as R;
+        let merkle = PalwPromptIdsFormV1::MerkleV1;
+        for (label, profile) in [
+            ("A16@8192", palw_a16_context_row_profile_v7(8_192).unwrap()),
+            ("A16@2M", palw_a16_context_row_profile_v7(2_097_152).unwrap()),
+            ("Q36@512", palw_qwen36_context_row_profile_v7(512).unwrap()),
+        ] {
+            let (p, d) = palw_attempt_canonical_v1(&profile, false).unwrap();
+            assert_eq!(palw_attributable_class_v1(&profile, &rc_job_context(&profile, p, d), false, merkle), Ok(()), "{label}");
+            assert_eq!(
+                palw_attributable_class_v1(&profile, &rc_job_context(&profile, p - 1, d), false, merkle),
+                Err(R::CanonicalNotTheFormula { got_prefill: p - 1, got_decode: d, want_prefill: p, want_decode: d }),
+                "{label}: a canonical the registrant chose"
+            );
+            let mut float = profile.clone();
+            float.lane = crate::palw_step::PalwStepLaneV1::Float32;
+            assert_eq!(
+                palw_attributable_class_v1(&float, &rc_job_context(&float, p, d), false, merkle),
+                Err(R::HeadUnproven),
+                "{label}"
+            );
+        }
+        // Too narrow: n_ctx 8 has no formula job, whatever it registers.
+        let mut narrow = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        narrow.n_ctx = 8;
+        assert_eq!(palw_attributable_class_v1(&narrow, &rc_job_context(&narrow, 4, 2), false, merkle), Err(R::TooNarrow));
+        // The floor as a genesis base row passes on its own canonical job.
+        let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        assert_eq!(palw_attributable_class_v1(&floor, &rc_job_context(&floor, 8, 4), true, merkle), Ok(()));
+        // Kimi K3.
+        let mut kimi = crate::palw_kimi_k3_profile::kimi_k3_profile_v1(crate::palw_kimi_k3_profile::KIMI_K3_CARD).unwrap();
+        assert_eq!(
+            palw_attributable_class_v1(&kimi, &rc_job_context(&kimi, 8, 2), false, merkle),
+            Err(R::TooNarrow),
+            "the shipped Kimi card registers n_ctx 10: too narrow"
+        );
+        // At a width the formula admits, its graph is refused on its own.
+        kimi.n_ctx = 128;
+        let (p, d) = palw_attempt_canonical_v1(&kimi, false).expect("wide enough for the formula");
+        let verdict = palw_attributable_class_v1(&kimi, &rc_job_context(&kimi, p, d), false, merkle);
+        assert!(matches!(verdict, Err(R::KimiKernel) | Err(R::HeadUnproven)), "a Kimi K3 class is refused: {verdict:?}");
+        let mut kimi_with_head = kimi.clone();
+        kimi_with_head.post_nodes = floor.post_nodes.clone();
+        kimi_with_head.vocab_size = floor.vocab_size;
+        kimi_with_head.logits_scheme_id = floor.logits_scheme_id;
+        kimi_with_head.lane = floor.lane;
+        assert!(crate::palw_step::palw_logits_head_v1(&kimi_with_head).is_some(), "the grafted head is provable");
+        assert_eq!(
+            palw_attributable_class_v1(&kimi_with_head, &rc_job_context(&kimi_with_head, p, d), false, merkle),
+            Err(R::KimiKernel),
+            "a Kimi kernel anywhere in the graph, whatever its head"
+        );
+        // A wide prompt committed flat: the floor's graph at 2M width, not held, on a Flat network.
+        let mut wide = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        wide.n_ctx = 2_097_152;
+        let (p, d) = palw_attempt_canonical_v1(&wide, false).unwrap();
+        assert_eq!(
+            palw_attributable_class_v1(&wide, &rc_job_context(&wide, p, d), false, PalwPromptIdsFormV1::Flat),
+            Err(R::WidePromptNotMerkle { prefill: p })
+        );
+        assert_eq!(palw_attributable_class_v1(&wide, &rc_job_context(&wide, p, d), false, merkle), Ok(()), "and Merkle opens it");
+    }
+
+    /// **testnet-12's genesis rows are attributable** (addendum §4-bis.8: "genesis rows already
+    /// satisfy (a)–(d); a test asserts it"): every row the genesis registers with a carriage passes
+    /// under the network's form, the floor on its own canonical job.
+    #[test]
+    fn t18w_testnet_12s_genesis_rows_are_attributable() {
+        let params = crate::config::params::palw_t12_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-12 is a V2 network")
+        };
+        let form = params.palw_prompt_ids_form_v1();
+        let mut rows = 0;
+        for object in &bundle.genesis_objects {
+            if let crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } = object {
+                let is_base = *class_id == bundle.base_class_id;
+                assert_eq!(
+                    palw_attributable_class_v1(&carriage.profile, &carriage.canonical, is_base, form),
+                    Ok(()),
+                    "genesis class {class_id} (base: {is_base})"
+                );
+                rows += 1;
+            }
+        }
+        assert!(rows >= 2, "testnet-12 registers its model rows with carriages ({rows})");
     }
 }

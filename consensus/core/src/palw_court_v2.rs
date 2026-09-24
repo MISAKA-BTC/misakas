@@ -267,6 +267,17 @@ pub enum PalwCourtV2Error {
     AttnCourt(#[from] crate::palw_attn_court_v1::PalwAttnCourtError),
     #[error("a dissection close is adjudicated inside its session, where the phase it answers lives")]
     DissectionCloseNeedsItsSession,
+    /// **ADR-0152 v3.1 addendum §4-bis.9 (i)**: past `palw_offence_attribution` a decode-token close
+    /// is judged only where the session narrowed to the HEAD of that call (slot `G − 1`) — never at
+    /// a leaf the token was not selected from (a held dissection narrows at a fused attention leaf).
+    #[error("a decode-token close answers the head of its call; the session narrowed to leaf {narrowed} (slot {slot}, not the head)")]
+    DecodeCloseNotAtTheHead { narrowed: u64, slot: u32 },
+    /// **ADR-0152 v3.1 addendum §4-bis.9 (ii)**: past `palw_offence_attribution` a decode-token close
+    /// convicts or is refused — it never acquits. A token that IS its row's selection says nothing
+    /// about whether the row is its step tree's output (F1c's R1: garbage logits whose argmax is the
+    /// committed token), so "no fault" there is not a verdict for the executor.
+    #[error("a decode-token close convicts or is refused; it cannot acquit the executor (its row may not be its step output)")]
+    DecodeCloseCannotAcquit,
     #[error(
         "this ruleset admits no dissection arity that fits its own window ({window_court} DAA) over the widest row its classes \
          register — the court would run out of clock mid-prosecution"
@@ -811,7 +822,39 @@ pub fn adjudicate_court_close_v2(
     step_ladder: u64,
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
-    adjudicate_court_close_v3(state, session_id, proof, court, step_ladder, prompt_ids_form, false)
+    adjudicate_court_close_v3(state, session_id, proof, court, step_ladder, prompt_ids_form, false, false)
+}
+
+/// **The court door's two rules, on their own** (ADR-0152 v3.1 addendum §4-bis.9), so each is
+/// testable apart from a session: (i) where a decode-token close may be judged — the head of the
+/// call the session narrowed to — and (ii) what it may conclude — a conviction, never an acquittal.
+/// Both apply only with `decode_close_convicts_only` (the caller's `palw_offence_attribution` at the
+/// block's DAA); below the fence the court is byte for byte what it was.
+pub fn palw_decode_close_door_v1(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    narrowed: u64,
+    narrowed_slot: u32,
+    decode_close_convicts_only: bool,
+) -> Result<(), PalwCourtV2Error> {
+    if !decode_close_convicts_only {
+        return Ok(());
+    }
+    let head = binding.shape_profile.global_node_count().checked_sub(1);
+    if head != Some(narrowed_slot) {
+        return Err(PalwCourtV2Error::DecodeCloseNotAtTheHead { narrowed, slot: narrowed_slot });
+    }
+    Ok(())
+}
+
+/// Rule (ii) of [`palw_decode_close_door_v1`]: past the fence a decode arm's acquittal is refused.
+pub fn palw_decode_close_verdict_v1(
+    verdict: PalwCourtVerdictV2,
+    decode_close_convicts_only: bool,
+) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
+    if decode_close_convicts_only && verdict == PalwCourtVerdictV2::ChallengerDefeated {
+        return Err(PalwCourtV2Error::DecodeCloseCannotAcquit);
+    }
+    Ok(verdict)
 }
 
 /// [`adjudicate_court_close_v2`] knowing whether the held regime is in force at the block the close
@@ -844,6 +887,10 @@ pub fn adjudicate_court_close_v3(
     prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     // ADR-0119 Decision 4: is the held regime in force at the block's DAA.
     held_regime: bool,
+    // ADR-0152 v3.1 addendum §4-bis.9: `palw_offence_attribution` at the block's DAA — a decode-token
+    // close is then judged only at the head of its call and never acquits
+    // ([`palw_decode_close_door_v1`], [`palw_decode_close_verdict_v1`]).
+    decode_close_convicts_only: bool,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     // The cost gate runs before ANY state is read, which is the cheapest-first ordering a cost
     // bound has to have: an oversized object must be refusable without a lookup, a decode or a
@@ -899,6 +946,7 @@ pub fn adjudicate_court_close_v3(
             if coord.call_index != *position {
                 return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(*position), narrowed });
             }
+            palw_decode_close_door_v1(binding, narrowed, coord.node_slot, decode_close_convicts_only)?;
         }
         // **And the tiled arm, which is the same door.**
         //
@@ -912,6 +960,7 @@ pub fn adjudicate_court_close_v3(
             if coord.call_index != pin.position {
                 return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed });
             }
+            palw_decode_close_door_v1(binding, narrowed, coord.node_slot, decode_close_convicts_only)?;
         }
         // **ADR-0082 Decision 2: the fused terminal is not a recompute, it is the end of an
         // exchange — so it is adjudicated HERE, where the phase it answers lives.**
@@ -960,7 +1009,13 @@ pub fn adjudicate_court_close_v3(
             });
         }
     }
-    adjudicate_close_proof_v2(state, claim, proof, court, step_ladder, prompt_ids_form)
+    let verdict = adjudicate_close_proof_v2(state, claim, proof, court, step_ladder, prompt_ids_form)?;
+    match proof {
+        PalwCourtVerdictProofV2::DecodeToken { .. } | PalwCourtVerdictProofV2::DecodeTokenTiled { .. } => {
+            palw_decode_close_verdict_v1(verdict, decode_close_convicts_only)
+        }
+        _ => Ok(verdict),
+    }
 }
 
 /// The arithmetic half of a close: given the CLAIM the dispute is about, what verdict does this
@@ -1787,6 +1842,39 @@ pub fn map_refutation_outcome(
             Ok(PalwCourtVerdictV2::ChallengerDefeated)
         }
         Err(other) => Err(PalwCourtV2Error::DoesNotAdjudicate(other.to_string())),
+    }
+}
+
+/// **ADR-0152 v3.1 addendum §4-bis.9, Tier A: the court door's two rules.**
+#[cfg(test)]
+mod decode_door_tests {
+    use super::*;
+
+    /// (i) Past the fence a decode-token close is judged only at the head of its call (slot
+    /// `G − 1`); below it, anywhere. (ii) Past the fence it convicts or is refused, never acquits;
+    /// below it, both verdicts stand.
+    #[test]
+    fn a_decode_close_is_judged_at_the_head_and_never_acquits() {
+        let binding = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(
+            &Hash64::from_u64_word(0xD0),
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+        );
+        let head = binding.shape_profile.global_node_count() - 1;
+        assert_eq!(palw_decode_close_door_v1(&binding, 7, head, true), Ok(()), "the head of the call");
+        assert_eq!(
+            palw_decode_close_door_v1(&binding, 7, head - 1, true),
+            Err(PalwCourtV2Error::DecodeCloseNotAtTheHead { narrowed: 7, slot: head - 1 }),
+            "any other slot of the call"
+        );
+        assert_eq!(palw_decode_close_door_v1(&binding, 7, 0, false), Ok(()), "below the fence, as it was");
+        assert_eq!(
+            palw_decode_close_verdict_v1(PalwCourtVerdictV2::ChallengerDefeated, true),
+            Err(PalwCourtV2Error::DecodeCloseCannotAcquit)
+        );
+        assert_eq!(palw_decode_close_verdict_v1(PalwCourtVerdictV2::ExecutorGuilty, true), Ok(PalwCourtVerdictV2::ExecutorGuilty));
+        for verdict in [PalwCourtVerdictV2::ChallengerDefeated, PalwCourtVerdictV2::ExecutorGuilty] {
+            assert_eq!(palw_decode_close_verdict_v1(verdict, false), Ok(verdict), "below the fence, as it was");
+        }
     }
 }
 

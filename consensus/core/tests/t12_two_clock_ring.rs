@@ -454,9 +454,11 @@ fn the_carriage_round_trips_a_non_empty_ring() {
 /// into every root, and the eight Final claims each encode the v22 claim appends (`job_identity`,
 /// `rcore`, at their dormant values). The ring is still never written and still unhashed below the
 /// fence — the property this pin guards — and the R-core+ block is absent. The v21 golden was
-/// `57ef2f17…`.
+/// `57ef2f17…`. Re-pinned once more within v22 for the S-4 review's tail append to
+/// `PalwClaimRcoreV1` (`g_res_sompi`: 16 zero bytes in each of the eight dormant claims); the ring is
+/// untouched, the two assertions above still pin that. The pre-field golden was `d6d07afc…`.
 const DORMANT_GOLDEN_ROOT: &str =
-    "d6d07afc07df5642af7505e3aef83631dda64ebef0c76cdea8df4a9e78bc11a5ba51c30030e3f5ec53cbb964edfbc5bf23322c87acd3d32622ed9181a3b4f376";
+    "96515af1192aeb3a9c6552e0c7734cde005b748ac6d8041e6c37cef57ca7804c1bdd767df81e7c3935b351c90163402ae7d8637454dce94b95cf3d2910a94066";
 
 /// **A network that never armed the fence: the counter still ticks at `Final`, the ring stays empty,
 /// no ring delta is ever written, and the root is the one it had before the ring existed.**

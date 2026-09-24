@@ -233,6 +233,21 @@ impl ConsensusSessionOwned {
         self.consensus.palw_da_duties_v2(mine)
     }
 
+    pub fn palw_disclosure_duties_v1(
+        &self,
+        mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutiesV1 {
+        self.consensus.palw_disclosure_duties_v1(mine)
+    }
+
+    pub fn palw_da_accusation_check_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1> {
+        self.consensus.palw_da_accusation_check_v1(claim, accuser)
+    }
+
     pub fn palw_claim_readers_v2(
         &self,
         claim: kaspa_consensus_core::Hash64,

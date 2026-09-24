@@ -466,12 +466,12 @@ pub(crate) fn render(report: &Report) -> String {
         return out;
     }
     out.push_str(&format!(
-        "\nEnd to end — this node's ledger: {} claims, accepted DAA {}–{} (what was ACTUALLY paid, by the rule at each Final):\n",
+        "\nEnd to end — this node's ledger: {} claims, accepted DAA {}–{} (what each Final NAMED, by the rule at it — paid, or on\n  testnet-12 vested: minted only when the row matures, burned if convicted; `misaka palw vesting` shows which):\n",
         report.ledger_claims, report.ledger_first_daa, report.ledger_last_daa
     ));
     out.push_str(&format!(
         "  {:<28} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>7} {:>12} {:>10} {:>10}\n",
-        "class", "claims", "bound", "licens", "final", "voided", "lic‰", "fin‰", "producer MSK", "panel MSK", "burned MSK"
+        "class", "claims", "bound", "licens", "final", "voided", "lic‰", "fin‰", "producer nmd", "panel nmd", "burned MSK"
     ));
     for row in report.rows.iter().filter(|r| r.ledger.available) {
         let l = &row.ledger;
@@ -485,8 +485,8 @@ pub(crate) fn render(report: &Report) -> String {
             l.voided,
             l.licence_rate_permille,
             l.final_rate_permille,
-            msk(parse_u128(&l.producer_paid_sompi)),
-            msk(parse_u128(&l.panel_paid_sompi)),
+            msk(parse_u128(&l.producer_named_sompi)),
+            msk(parse_u128(&l.panel_named_sompi)),
             msk(parse_u128(&l.burned_sompi))
         ));
     }
@@ -683,7 +683,7 @@ pub(crate) fn json_report(report: &Report) -> serde_json::Value {
         json!({
             "available": l.available, "claims": l.claims, "bound": l.bound, "licensed": l.licensed, "finals": l.finals, "voided": l.voided,
             "redrawn": l.redrawn, "paid_at_acceptance": l.paid_at_acceptance,
-            "escrow_final_sompi": l.escrow_final_sompi, "producer_paid_sompi": l.producer_paid_sompi, "panel_paid_sompi": l.panel_paid_sompi,
+            "escrow_final_sompi": l.escrow_final_sompi, "producer_named_sompi": l.producer_named_sompi, "panel_named_sompi": l.panel_named_sompi,
             "reserve_sompi": l.reserve_sompi, "burned_sompi": l.burned_sompi,
             "attempted_ccu": l.attempted_compute, "final_ccu": l.final_compute, "verification_ccu": l.verification_compute,
             "msk_per_attempted_ccu": l.producer_per_attempted_compute, "panel_msk_per_verification_ccu": l.panel_per_verification_compute,
@@ -905,7 +905,7 @@ mod tests {
             voided: 320,
             redrawn: 493,
             escrow_final_sompi: (escrow * 48).to_string(),
-            producer_paid_sompi: (escrow * 48).to_string(),
+            producer_named_sompi: (escrow * 48).to_string(),
             attempted_compute: (83_102_171_136u128 * 3 * 919).to_string(),
             final_compute: (83_102_171_136u128 * 48).to_string(),
             verification_compute: (83_102_171_136u128 * 5 * 909).to_string(),

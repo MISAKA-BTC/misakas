@@ -53,6 +53,8 @@ mod palw_settlement;
 mod palw_shard_court;
 mod palw_shard_licensing;
 mod palw_verify_context;
+/// ADR-0152 P2-11: `palw vesting` — where a vested reward stands (op 199).
+mod palw_vesting;
 #[cfg(feature = "evm-send")]
 mod prea;
 /// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
@@ -1043,6 +1045,33 @@ enum PalwCmd {
         /// not blocks; larger payments should wait for more anchors.
         #[arg(long, value_name = "N")]
         min_depth: Option<u64>,
+    },
+    /// **ADR-0152: where a vested reward stands** (testnet-12). A Final's reward is named in a
+    /// vesting row, matures on the DAA clock and the second clock's licences, latches, waits its
+    /// turn, moves into the payout queue and is minted by the next coinbase — or burns if convicted
+    /// first. Name a bond (its rows as producer or seat, its reporter rewards, and whether B-3 holds
+    /// its collateral), a payout address, or a claim; none prints the chain's totals and the head of
+    /// the queue. Read-only (`getPalwVesting`, op 199: a node built before it drops the connection).
+    #[command(group(clap::ArgGroup::new("vesting_payee").multiple(false).args(["bond", "address", "claim"])))]
+    Vesting {
+        /// The bond, `<txid>:<index>`.
+        #[arg(long, value_name = "TXID:INDEX")]
+        bond: Option<String>,
+        /// A payout address: every row leg and reporter reward paid there.
+        #[arg(long, value_name = "ADDRESS")]
+        address: Option<String>,
+        /// A 128-hex claim id.
+        #[arg(long, value_name = "CLAIM_ID")]
+        claim: Option<String>,
+        /// At most this many rows (0: the node's cap, 500).
+        #[arg(long, default_value_t = 0)]
+        limit: u32,
+        /// Resume after a previous answer's cursor (`<expiry_daa>:<claim_id>`).
+        #[arg(long, value_name = "CURSOR")]
+        after: Option<String>,
+        /// JSON output (`--output json` does the same).
+        #[arg(long)]
+        json: bool,
     },
     /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
     FpSubmit {
@@ -2578,6 +2607,9 @@ async fn main() -> std::process::ExitCode {
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
         Command::Palw(PalwCmd::RoundLane { bond }) => palw_round_lane(&ctx, bond.as_deref()).await,
         Command::Palw(PalwCmd::Settlement { daa, min_depth }) => palw_settlement::run(&ctx, daa, min_depth).await,
+        Command::Palw(PalwCmd::Vesting { bond, address, claim, limit, after, json }) => {
+            palw_vesting::run(&ctx, bond, address, claim, limit, after, json).await
+        }
         Command::Palw(PalwCmd::Economics {}) => palw_economics::run(&ctx).await,
         Command::Palw(PalwCmd::Registry {}) => palw_registry::run(&ctx).await,
         Command::Palw(PalwCmd::Panel(PalwPanelCmd::Status { class })) => palw_panel::status(&ctx, class.as_deref()).await,
@@ -3052,6 +3084,23 @@ mod cli_surface_tests {
         // The sibling forwarder is deliberately untouched: `validator` forwards to a binary this
         // tree actually builds, which is the difference SA-4 turns on.
         assert!(Cli::command().find_subcommand("validator").is_some());
+    }
+
+    /// **ADR-0152 P2-11 (T52): `palw vesting` names at most one payee** — a bond, an address or a
+    /// claim, or none for the chain's totals.
+    #[test]
+    fn palw_vesting_parses_one_payee_at_most() {
+        let bond = format!("{}:0", "ab".repeat(64));
+        let parsed = Cli::try_parse_from(["misaka", "palw", "vesting", "--bond", &bond, "--limit", "20"]).expect("parses");
+        assert!(
+            matches!(&parsed.command, Command::Palw(PalwCmd::Vesting { bond: Some(b), address: None, limit: 20, .. }) if *b == bond)
+        );
+        let chain = Cli::try_parse_from(["misaka", "palw", "vesting", "--json"]).expect("parses");
+        assert!(matches!(chain.command, Command::Palw(PalwCmd::Vesting { bond: None, address: None, claim: None, json: true, .. })));
+        assert!(
+            Cli::try_parse_from(["misaka", "palw", "vesting", "--bond", &bond, "--claim", &"cd".repeat(64)]).is_err(),
+            "two payees at once are refused before the node is asked"
+        );
     }
 
     /// **ADR-0127: `palw settlement` takes the accepting DAA score and an optional depth to wait

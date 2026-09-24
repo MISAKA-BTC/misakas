@@ -2630,6 +2630,26 @@ pub struct Params {
     /// activating it is a coordinated deploy.
     pub evm_f002_withdraw_cap_activation_daa_score: u64,
 
+    /// **The bridge ledger** (2026-09-24): DAA score at/after which the EVM lane's committed
+    /// `evm_total_native_balance` is the L1's CHECKED ledger of the EVM supply it backed.
+    ///
+    /// The bridge burns on one side and mints on the other; nothing locks. What bounds the UTXOs
+    /// the lane can materialize is therefore only the executor's own correctness: a balance that
+    /// appears in the EVM without a deposit (an interpreter or intercept defect) withdraws like any
+    /// other, and the accumulator that should have noticed saturates instead of refusing. Past
+    /// this fence it refuses: deposits and market sell credits raise the ledger; basefee burns,
+    /// F002 withdrawals and burned (filled) market escrows lower it; a user tx that would drive it below zero is a
+    /// class-2 skip. That is the ceiling a lock-and-mint bridge gets from its pool, without a pool.
+    ///
+    /// A market escrow is the one draw that leaves in two steps: the tx that parks it in the writer
+    /// RESERVES it out of that block's headroom (so the tx can still be skipped), and the committed
+    /// ledger falls only when the child's settlement burns a filled escrow; a refused one is refunded
+    /// inside the EVM and never leaves it.
+    ///
+    /// `u64::MAX` ⇒ inert (the accumulator saturates, execution byte-identical). Hashed into the
+    /// fingerprint only when finite, so every network that leaves it inert fingerprints as before.
+    pub evm_bridge_ledger_activation_daa_score: u64,
+
     /// PREA v1.1 §9 / P0-1: DAA score at/after which the F003 `MLDSA87_VERIFY`
     /// precompile (`MISAKA_MLDSA_VERIFY_PRECOMPILE`) is REGISTERED. `u64::MAX` ⇒
     /// inert (handler not registered, a call to `0x…F003` behaves as a call to an
@@ -6246,6 +6266,7 @@ impl Params {
             evm_activation_daa_score: _,
             evm_gas_pool_v2_activation_daa_score: _,
             evm_f002_withdraw_cap_activation_daa_score: _,
+            evm_bridge_ledger_activation_daa_score: _,
             evm_f003_mldsa_verify_activation_daa_score: _,
             evm_typed_receipt_root_activation_daa_score: _,
         } = self;
@@ -6903,6 +6924,7 @@ impl Params {
             evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_ledger_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score,
             evm_typed_receipt_root_activation_daa_score,
         } = self;
@@ -6915,6 +6937,12 @@ impl Params {
         visit(evm_activation_daa_score);
         visit(evm_gas_pool_v2_activation_daa_score);
         visit(evm_f002_withdraw_cap_activation_daa_score);
+        // The bridge ledger: FINITE-ONLY, the clock floor's rule for a u64 fence. Visiting an inert
+        // `u64::MAX` would put a new value into every preset's schedule id, testnet-11's included;
+        // skipping it leaves every network that does not arm the ledger walking exactly as before.
+        if *evm_bridge_ledger_activation_daa_score != u64::MAX {
+            visit(evm_bridge_ledger_activation_daa_score);
+        }
         visit(evm_f003_mldsa_verify_activation_daa_score);
         visit(evm_typed_receipt_root_activation_daa_score);
 
@@ -7792,6 +7820,7 @@ impl Params {
             evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_ledger_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score,
             evm_typed_receipt_root_activation_daa_score,
         } = self;
@@ -8473,6 +8502,13 @@ impl Params {
             }
         }
 
+        // The bridge ledger: finite-only, like the Some-only fences above, so a network that leaves
+        // it inert (every preset but testnet-12) fingerprints byte-identically to a build without it.
+        if *evm_bridge_ledger_activation_daa_score != u64::MAX {
+            h.write(b"evm_bridge_ledger");
+            h.write(evm_bridge_ledger_activation_daa_score.to_le_bytes());
+        }
+
         // **ADR-0150: the rules, beside the heights.** The arms above hash a fenced rule's HEIGHT
         // and never the rule it turns on, so a build that redefines what a fence admits — at a
         // height nobody moved — fingerprints identically to one that does not, peers with it, and
@@ -8853,6 +8889,7 @@ impl Params {
             evm_activation_daa_score: self.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: self.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: self.evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_ledger_activation_daa_score: self.evm_bridge_ledger_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score: self.evm_f003_mldsa_verify_activation_daa_score,
             // §12 Phase-7: consensus-fixed (the receipts-root encoding is consensus), never overridable.
             evm_typed_receipt_root_activation_daa_score: self.evm_typed_receipt_root_activation_daa_score,
@@ -9861,6 +9898,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_ledger_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
@@ -10111,6 +10149,7 @@ pub const TESTNET_PARAMS: Params = Params {
     evm_gas_pool_v2_activation_daa_score: 2_125_000,
     // M-03 withdrawal cap: inert (u64::MAX) — its activation is a separate coordinated deploy.
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_ledger_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
@@ -10279,6 +10318,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // gas-pool v2 ships inert on every network — a deploy sets a finite testnet score.
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_ledger_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
 };
@@ -15688,7 +15728,7 @@ pub fn palw_t12_base_params() -> Params {
 ///
 /// **The Layer-0 activations are saved and restored around the walk** rather than left to the
 /// `never()` round-trip alone, because `crescendo_activation`, `pq_activation_daa_score` and
-/// `evm_activation_daa_score` are already 0 and the four EVM feature fences are set BELOW by name.
+/// `evm_activation_daa_score` are already 0 and the five EVM feature fences are set BELOW by name.
 /// Restoring them explicitly means this function's effect on the EVM lane is a list one can read,
 /// not a side effect of a generic walk.
 ///
@@ -15920,7 +15960,7 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     params.pq_activation_daa_score = layer0.4;
     params.evm_activation_daa_score = layer0.5;
 
-    // **The four EVM feature fences, armed by NAME rather than by the walk.** Three of them are
+    // **The five EVM feature fences, armed by NAME rather than by the walk.** Four of them are
     // `u64::MAX` on testnet-11 (inert, never scheduled anywhere) and the walk preserves that, so
     // "every future rule from genesis" has to say them out loud:
     //
@@ -15929,6 +15969,8 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     //   blocking the smaller ones behind it;
     // * F002 (audit M-03) — a tx whose withdrawals would push a block over
     //   `MAX_WITHDRAWALS_PER_EVM_BLOCK` is a class-2 skip;
+    // * the bridge ledger (2026-09-24) — `evm_total_native_balance` is the checked ledger of the EVM
+    //   supply the L1 backed, and a tx whose draw it cannot cover is a class-2 skip;
     // * F003 (PREA v1.1 §9) — the `MLDSA87_VERIFY` precompile is registered;
     // * typed receipt root (§12 Phase-7) — the lane commits the EIP-2718 typed receipt root.
     //
@@ -15953,6 +15995,7 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     }
     params.evm_gas_pool_v2_activation_daa_score = 0;
     params.evm_f002_withdraw_cap_activation_daa_score = 0;
+    params.evm_bridge_ledger_activation_daa_score = 0;
     params.evm_f003_mldsa_verify_activation_daa_score = 0;
     params.evm_typed_receipt_root_activation_daa_score = 0;
 
@@ -16271,6 +16314,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // deploy sets a finite activation score (consensus fork — see params docs).
     evm_gas_pool_v2_activation_daa_score: u64::MAX,
     evm_f002_withdraw_cap_activation_daa_score: u64::MAX,
+    evm_bridge_ledger_activation_daa_score: u64::MAX,
     evm_f003_mldsa_verify_activation_daa_score: u64::MAX,
     evm_typed_receipt_root_activation_daa_score: u64::MAX,
     // kaspa-pq: devnet now uses the same MISAKA DNS seeders as mainnet/testnet for automatic

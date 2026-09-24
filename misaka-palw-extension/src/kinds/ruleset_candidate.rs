@@ -114,6 +114,13 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             params.palw_offence_attribution = Some(at);
             params.sync_palw_held_answerability();
         }
+        // ADR-0152 R-core+: the V2 bundle mirrors this height (`rcore_plus_active_at`, the bond
+        // withdrawal delay, the C7 list), and `validate_palw_rcore_plus_v1` refuses the two apart —
+        // set together, as `palw_audit_2026_09_23` is.
+        "palw_rcore_plus" => {
+            params.palw_rcore_plus = Some(at);
+            params.sync_palw_rcore_plus();
+        }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),

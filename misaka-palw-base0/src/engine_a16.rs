@@ -178,7 +178,7 @@ struct LayerParams {
 }
 
 /// **DRILL ONLY: an attention output this engine lies about, and computes downstream FROM**
-/// (ADR-0152 §4-ter N5, `PalwDrillFaultV1::AttnOutput { follow: true }`): the fused attention site
+/// (ADR-0152 §4-ter N5, `PalwFreePromptDrillFaultV1::AttnOutput { follow: true }`): the fused attention site
 /// of `layer` at cache position `position` commits lane `lane` of its output row moved by `delta`,
 /// and every node after it — the rest of the layer, every later layer, every later position through
 /// the cache — reads the moved row. The consistent forger 4-ter F9 names: its checkpoints after the

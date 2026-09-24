@@ -141,6 +141,7 @@ fn main() {
                 anchor,
                 attempt_draw: None,
                 output_root: Some(outcome.output_root),
+                job_pin: None,
             },
         );
         material_file = json!({

@@ -835,7 +835,8 @@ pub trait ConsensusApi: Send + Sync {
     /// **A bond's claims, as its operator reads them** (ADR-0122 §6.5, `getPalwClaims`): the ones
     /// it made (`Executor`) or the ones whose panels seat it (`Seat`), newest first, with the tip
     /// DAA they were read at, whether `limit` left rows out, and the bond's own registry record.
-    /// `None` off `ConsensusV2`.
+    /// `None` off `ConsensusV2`. **The rows alone** — the vesting half is empty; this is the entry
+    /// node policy reads (the panel loop's per-bond phase/deadline reads).
     fn palw_claim_rows_v1(
         &self,
         _bond: crate::palw_state_v2::PalwBondKeyV2,
@@ -843,6 +844,35 @@ pub trait ConsensusApi: Send + Sync {
         _include_terminal: bool,
         _limit: usize,
     ) -> Option<crate::palw_producer_v2::PalwBondClaimsV1> {
+        None
+    }
+
+    /// [`Self::palw_claim_rows_v1`] with **claim row v3's vesting half** (ADR-0152, phase2-plan
+    /// §1.6): each vested Final's stage and row read at the next block, and the rows of the claims
+    /// that retired while they vest. The RPC's entry; it costs a next-block plan and a walk of the
+    /// vesting table's positions, which only a reader that prints them should pay (review of P2-10,
+    /// finding 4).
+    fn palw_claim_rows_with_vesting_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+        _role: crate::palw_producer_v2::PalwClaimRoleV1,
+        _include_terminal: bool,
+        _limit: usize,
+    ) -> Option<crate::palw_producer_v2::PalwBondClaimsV1> {
+        None
+    }
+
+    /// **ADR-0152 V-1…V-8, read side: the vesting table at the tip** (`getPalwVesting`, op 199;
+    /// phase2-plan §1.6): the query's rows with their V-4 maturity, V-7 position and the next
+    /// block's plan, a payee's reporter rewards and B-3 hold, and the chain-wide counters, halt and
+    /// door histogram — all asked at the next block's DAA. `limit` bounds the page (0 = the cap) and
+    /// `after` resumes past a `(expiry_daa, claim_id)` cursor. `None` off `ConsensusV2`.
+    fn palw_vesting_v1(
+        &self,
+        _query: crate::palw_vesting_read_v1::PalwVestingQueryV1,
+        _limit: usize,
+        _after: Option<(u64, crate::Hash64)>,
+    ) -> Option<crate::palw_vesting_read_v1::PalwVestingReadV1> {
         None
     }
 
@@ -855,6 +885,29 @@ pub trait ConsensusApi: Send + Sync {
     /// an open accusation, with the event each must open.
     fn palw_da_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwDaDutyV2> {
         Vec::new()
+    }
+
+    /// **ADR-0152 X7 / DA-4 (Phase 2, P2-7): the R-core court's half** — every unanswered unit of an
+    /// open data-availability session this node must answer, as the claim's producer or as a
+    /// covering signer, and the claims a live lock obliges it to keep the material of. Empty below
+    /// `palw_rcore_plus`, where [`Self::palw_da_duties_v2`] is the court's duty list.
+    fn palw_disclosure_duties_v1(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> crate::palw_producer_v2::PalwDisclosureDutiesV1 {
+        Default::default()
+    }
+
+    /// **ADR-0152 §3.8 (Phase 2, P2-6): what an automatic accusation of `claim` by `accuser` comes
+    /// to** at the tip, for the DAA the virtual's next block folds at — the fold's own gate (C-8, A-6
+    /// included), the named unit's bound, and whether the accuser accused before or the unit is
+    /// answered. `None` when there is no tip state to read (off `ConsensusV2`).
+    fn palw_da_accusation_check_v1(
+        &self,
+        _claim: crate::Hash64,
+        _accuser: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_producer_v2::PalwDaAccusationCheckV1> {
+        None
     }
 
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
@@ -1219,13 +1272,14 @@ pub trait ConsensusApi: Send + Sync {
         Ok(crate::evm::FlatHeadAccount::Stale)
     }
 
-    /// kaspa-pq EVM Lane (§11): the network's three EVM-execution activation fences
-    /// — `(evm_gas_pool_v2, evm_f002_withdraw_cap, evm_f003_mldsa_verify)` activation
-    /// DAA scores. The trace replay MUST run the same gas-pool / withdraw-cap / F003
-    /// regime the accepting block executed under, so it reads these instead of
-    /// assuming inert. Default = all inert (`u64::MAX`).
-    fn evm_activation_fences(&self) -> (u64, u64, u64) {
-        (u64::MAX, u64::MAX, u64::MAX)
+    /// kaspa-pq EVM Lane (§11): the network's four EVM-execution activation fences
+    /// — `(evm_gas_pool_v2, evm_f002_withdraw_cap, evm_bridge_ledger, evm_f003_mldsa_verify)`
+    /// activation DAA scores. The trace replay MUST run the same gas-pool / withdraw-cap /
+    /// bridge-ledger / F003 regime the accepting block executed under (the first three decide
+    /// which txs of the prefix were skipped), so it reads these instead of assuming inert.
+    /// Default = all inert (`u64::MAX`).
+    fn evm_activation_fences(&self) -> (u64, u64, u64, u64) {
+        (u64::MAX, u64::MAX, u64::MAX, u64::MAX)
     }
 
     /// kaspa-pq EVM Lane: the canonical account nonces at the EVM head (the sink's

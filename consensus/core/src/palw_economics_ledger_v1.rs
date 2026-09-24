@@ -1,10 +1,20 @@
-//! **ADR-0132 — the end-to-end economics ledger: what a claim actually cost and what it was
-//! actually paid, node-local, in shadow.**
+//! **ADR-0132 — the end-to-end economics ledger: what a claim actually cost and what its `Final`
+//! named, node-local, in shadow.**
 //!
 //! ADR-0131 prices a claim; this module follows the claim from its acceptance to the sompi its
 //! `Final` named — or to the void that named nothing — and sums, per class, what the producers ran
 //! (class draws × network draws × the draw's compute, ADR-0132 §1–2), what the panels replayed, and
-//! what was paid to whom. The chain keeps a terminal claim only for its retention span, so a node
+//! what was named to whom.
+//!
+//! **Named, not paid** (ADR-0152 R-core+, phase2-plan F10 and §1.6's relabel): below
+//! `palw_rcore_plus` a `Final` queues its sompi for the next coinbase, so "named" and "paid" were one
+//! event and the columns said `paid`. Past it — testnet-12 from genesis — the same sompi VEST: they
+//! are named in a vesting row at `Final`, minted only when the row matures and moves, and burned
+//! instead if a conviction lands inside the window. So the columns are `named_*`: what the rule in
+//! force at the `Final` split, which is the coinbase's sompi below the fence and an upper bound on it
+//! past the fence. Which named sompi were minted and which burned is the delta journal's
+//! (`PalwVestingNoteV1::Moved` / `Burned`), and per payee `getPalwVesting`'s; this ledger does not
+//! restate either. The chain keeps a terminal claim only for its retention span, so a node
 //! that wants a window longer than that writes rows as it sees them (`kaspad`'s recorder) and reads
 //! the totals here. Nothing on the block path reads any of it; a row records a payout as the rule in
 //! force at the claim's `Final` derived it, from the same functions the fold uses, so the ledger's
@@ -127,9 +137,10 @@ pub struct PalwClaimLedgerRowV1 {
     pub seats: u16,
     pub credited_seats: u16,
     /// What the `Final` named, by the rule in force then: producer, seats, reserve; and the
-    /// escrow the price left unminted.
-    pub producer_paid_sompi: u64,
-    pub panel_paid_sompi: u64,
+    /// escrow the price left unminted. Past `palw_rcore_plus` the first three VEST (the module doc):
+    /// named is not paid.
+    pub producer_named_sompi: u64,
+    pub panel_named_sompi: u64,
     pub reserve_sompi: u64,
     pub burned_sompi: u64,
     /// A claim that holds no escrow was paid its carve at acceptance (a merged block below the deep
@@ -262,8 +273,8 @@ pub fn palw_ledger_merge_v1(
             void_reason: String::new(),
             seats: 0,
             credited_seats: 0,
-            producer_paid_sompi: 0,
-            panel_paid_sompi: 0,
+            producer_named_sompi: 0,
+            panel_named_sompi: 0,
             reserve_sompi: 0,
             burned_sompi: 0,
             paid_at_acceptance: obs.escrow_sompi == 0,
@@ -318,8 +329,8 @@ pub fn palw_ledger_merge_v1(
                 });
             }
             let paid = palw_ledger_payout_v1(row.escrow_sompi, rule, row.seats, row.credited_seats);
-            row.producer_paid_sompi = paid.producer_sompi;
-            row.panel_paid_sompi = paid.panel_sompi;
+            row.producer_named_sompi = paid.producer_sompi;
+            row.panel_named_sompi = paid.panel_sompi;
             row.reserve_sompi = paid.reserve_sompi;
             row.burned_sompi = paid.burned_sompi;
         }
@@ -366,8 +377,10 @@ pub struct PalwClassLedgerTotalsV1 {
     pub redrawn: u64,
     pub paid_at_acceptance: u64,
     pub escrow_final_sompi: u128,
-    pub producer_paid_sompi: u128,
-    pub panel_paid_sompi: u128,
+    /// What the `Final`s named the producers and the panels (the module doc: past `palw_rcore_plus`
+    /// these VEST, so they are an upper bound on what was minted, not a record of it).
+    pub producer_named_sompi: u128,
+    pub panel_named_sompi: u128,
     pub reserve_sompi: u128,
     pub burned_sompi: u128,
     /// Σ over every claim of what its producer ran in expectation.
@@ -392,23 +405,23 @@ pub struct PalwClassLedgerTotalsV1 {
 }
 
 impl PalwClassLedgerTotalsV1 {
-    fn rate(paid: u128, compute: u128) -> u128 {
-        if compute == 0 { 0 } else { paid.saturating_mul(PALW_LEDGER_RATE_SCALE_V1) / compute }
+    fn rate(named: u128, compute: u128) -> u128 {
+        if compute == 0 { 0 } else { named.saturating_mul(PALW_LEDGER_RATE_SCALE_V1) / compute }
     }
-    /// `producer_actual_msk / producer_attempted_ccu` (sompi per 10⁹ MAC-eq).
+    /// `producer_named_msk / producer_attempted_ccu` (sompi per 10⁹ MAC-eq).
     pub fn producer_per_attempted_compute(&self) -> u128 {
-        Self::rate(self.producer_paid_sompi, self.attempted_compute)
+        Self::rate(self.producer_named_sompi, self.attempted_compute)
     }
-    /// `panel_actual_msk / panel_verification_ccu`.
+    /// `panel_named_msk / panel_verification_ccu`.
     pub fn panel_per_verification_compute(&self) -> u128 {
-        Self::rate(self.panel_paid_sompi, self.verification_compute)
+        Self::rate(self.panel_named_sompi, self.verification_compute)
     }
-    /// `total_actual_msk / total_attempted_ccu` — the producer's and the panel's pay over what both ran.
+    /// `total_named_msk / total_attempted_ccu` — the producer's and the panel's pay over what both ran.
     pub fn total_per_attempted_compute(&self) -> u128 {
-        Self::rate(self.producer_paid_sompi + self.panel_paid_sompi, self.attempted_compute + self.verification_compute)
+        Self::rate(self.producer_named_sompi + self.panel_named_sompi, self.attempted_compute + self.verification_compute)
     }
     pub fn total_per_final_compute(&self) -> u128 {
-        Self::rate(self.producer_paid_sompi + self.panel_paid_sompi, self.final_compute)
+        Self::rate(self.producer_named_sompi + self.panel_named_sompi, self.final_compute)
     }
     /// `accepted → licensed`, in permille of the claims seen.
     pub fn licence_rate_permille(&self) -> u32 {
@@ -447,7 +460,7 @@ impl PalwClassLedgerTotalsV1 {
     /// `producer + panel + reserve + burned == Σ escrow of the Finals` — the identity every window
     /// must satisfy (ADR-0124 Decision 8: nothing minted, nothing lost).
     pub fn emission_identity_holds(&self) -> bool {
-        self.producer_paid_sompi + self.panel_paid_sompi + self.reserve_sompi + self.burned_sompi == self.escrow_final_sompi
+        self.producer_named_sompi + self.panel_named_sompi + self.reserve_sompi + self.burned_sompi == self.escrow_final_sompi
     }
 }
 
@@ -492,8 +505,8 @@ pub fn palw_class_ledger_totals_v1<'a>(
             t.final_wait_daa_sum += final_daa.saturating_sub(row.accepted_daa);
             t.final_wait_n += 1;
             t.escrow_final_sompi += row.escrow_sompi as u128;
-            t.producer_paid_sompi += row.producer_paid_sompi as u128;
-            t.panel_paid_sompi += row.panel_paid_sompi as u128;
+            t.producer_named_sompi += row.producer_named_sompi as u128;
+            t.panel_named_sompi += row.panel_named_sompi as u128;
             t.reserve_sompi += row.reserve_sompi as u128;
             t.burned_sompi += row.burned_sompi as u128;
         }
@@ -676,7 +689,7 @@ mod tests {
         let facts = dense_facts(0x207f_ffff);
         let mut o = obs(7, 1, 4_500, ESCROW_6001);
         let row = palw_ledger_merge_v1(None, &o, 4_501, facts, |_| rule_6001(DENSE_LEAVES));
-        assert_eq!((row.first_seen_daa, row.bound_daa, row.producer_paid_sompi), (4_501, None, 0));
+        assert_eq!((row.first_seen_daa, row.bound_daa, row.producer_named_sompi), (4_501, None, 0));
         o.bound_daa = Some(4_520);
         o.seats = 5;
         o.credited_seats = 2;
@@ -698,10 +711,10 @@ mod tests {
             rule_6001(DENSE_LEAVES)
         });
         let expected = palw_ledger_payout_v1(ESCROW_6001, rule_6001(DENSE_LEAVES), 5, 3);
-        assert_eq!((row.producer_paid_sompi, row.panel_paid_sompi), (expected.producer_sompi, expected.panel_sompi));
+        assert_eq!((row.producer_named_sompi, row.panel_named_sompi), (expected.producer_sompi, expected.panel_sompi));
         assert_eq!(row.seats, 5, "the duty row's size survives the Final that dropped it");
         let again = palw_ledger_merge_v1(Some(&row), &o, 6_600, facts, |_| panic!("derived once"));
-        assert_eq!(again.producer_paid_sompi, row.producer_paid_sompi);
+        assert_eq!(again.producer_named_sompi, row.producer_named_sompi);
         assert_eq!(again.last_seen_daa, 6_600);
         let merged = palw_ledger_merge_v1(None, &obs(8, 1, 4_500, 0), 4_501, facts, |_| rule_pre());
         assert!(merged.paid_at_acceptance);
@@ -769,7 +782,7 @@ mod tests {
         let b = window(2, 1_000, 200, 52, 148, ESCROW_6001, facts, rule_6001(DENSE_LEAVES), 5, 3);
         let (ta, tb) = (palw_class_ledger_totals_v1(&a, h(1)), palw_class_ledger_totals_v1(&b, h(2)));
         assert_eq!(ta.attempted_compute, tb.attempted_compute, "the same forwards were run");
-        assert_eq!(tb.producer_paid_sompi, 2 * ta.producer_paid_sompi);
+        assert_eq!(tb.producer_named_sompi, 2 * ta.producer_named_sompi);
         assert_eq!(palw_ledger_gap_permille_v1(ta.producer_per_attempted_compute(), tb.producer_per_attempted_compute()), Some(1_000));
         assert_eq!((ta.final_rate_permille(), tb.final_rate_permille()), (130, 260));
         // Licensed but never Final: a licence rate without a Final rate, and no pay.
@@ -778,7 +791,7 @@ mod tests {
             row.licensed_daa = Some(row.accepted_daa + 40);
         }
         let tc = palw_class_ledger_totals_v1(&licensed_only, h(3));
-        assert_eq!((tc.licence_rate_permille(), tc.final_of_licensed_permille(), tc.producer_paid_sompi), (600, 0, 0));
+        assert_eq!((tc.licence_rate_permille(), tc.final_of_licensed_permille(), tc.producer_named_sompi), (600, 0, 0));
     }
 
     /// **The class target and the network's `bits` move attempted compute, never pay.** The dense
@@ -791,7 +804,7 @@ mod tests {
         let a = window(1, 1, 100, 13, 87, ESCROW_6001, dense_facts(0x207f_ffff), rule_6001(DENSE_LEAVES), 5, 3);
         let b = window(1, 1_000, 100, 13, 87, ESCROW_6001, at_max, rule_6001(DENSE_LEAVES), 5, 3);
         let (ta, tb) = (palw_class_ledger_totals_v1(&a, h(1)), palw_class_ledger_totals_v1(&b, h(1)));
-        assert_eq!(ta.producer_paid_sompi, tb.producer_paid_sompi);
+        assert_eq!(ta.producer_named_sompi, tb.producer_named_sompi);
         assert!(
             ta.attempted_compute * 1000 / tb.attempted_compute >= 1_494 && ta.attempted_compute * 1000 / tb.attempted_compute <= 1_496
         );
@@ -800,7 +813,7 @@ mod tests {
         let tight =
             window(1, 2_000, 100, 13, 87, ESCROW_6001, dense_facts(0x207f_ffff / 4 * 4 - 0x0100_0000), rule_6001(DENSE_LEAVES), 5, 3);
         let tt = palw_class_ledger_totals_v1(&tight, h(1));
-        assert_eq!(tt.producer_paid_sompi, ta.producer_paid_sompi);
+        assert_eq!(tt.producer_named_sompi, ta.producer_named_sompi);
         assert!(tt.attempted_compute > ta.attempted_compute, "a tighter network target costs more forwards");
         assert!(tt.avg_network_expected_attempts_q32() > ta.avg_network_expected_attempts_q32());
     }
@@ -817,18 +830,18 @@ mod tests {
             .map(|i| palw_ledger_merge_v1(None, &obs(i, 2, 4_000 + i, ESCROW_6001), 4_001 + i, facts, |_| rule_pre()))
             .collect();
         let t = palw_class_ledger_totals_v1(&never_bound, h(2));
-        assert_eq!((t.bound, t.verification_compute, t.producer_paid_sompi, t.licence_rate_permille()), (0, 0, 0, 0));
+        assert_eq!((t.bound, t.verification_compute, t.producer_named_sompi, t.licence_rate_permille()), (0, 0, 0, 0));
         assert!(t.attempted_compute > 0, "the producer still ran the forwards");
         let bound_incapable = window(2, 100, 50, 0, 0, ESCROW_6001, facts, rule_6001(HYBRID_LEAVES), 5, 0);
         let t = palw_class_ledger_totals_v1(&bound_incapable, h(2));
         assert_eq!(t.verification_compute, 50 * 5 * HYBRID_DRAW, "five seats each replay — if they can");
-        assert_eq!((t.licensed, t.producer_paid_sompi), (0, 0));
+        assert_eq!((t.licensed, t.producer_named_sompi), (0, 0));
         let healthy = window(1, 200, 100, 60, 40, ESCROW_6001, dense_facts(0x207f_ffff), rule_6001(DENSE_LEAVES), 5, 3);
         let outage = window(1, 400, 100, 36, 64, ESCROW_6001, dense_facts(0x207f_ffff), rule_6001(DENSE_LEAVES), 5, 2);
         let (th, to) = (palw_class_ledger_totals_v1(&healthy, h(1)), palw_class_ledger_totals_v1(&outage, h(1)));
         assert_eq!((th.licence_rate_permille(), to.licence_rate_permille()), (600, 360));
         assert!(to.producer_per_attempted_compute() * 1000 / th.producer_per_attempted_compute() == 600);
-        assert!(to.panel_paid_sompi < th.panel_paid_sompi, "two credited seats of five are paid, three go to reserve");
+        assert!(to.panel_named_sompi < th.panel_named_sompi, "two credited seats of five are paid, three go to reserve");
         assert!(to.emission_identity_holds());
     }
 
@@ -910,7 +923,7 @@ mod tests {
         fin.credited_seats = 1;
         let paid = palw_ledger_merge_v1(Some(&row), &fin, 4_101, facts, |_| rule_6001(5));
         assert_eq!(
-            (paid.producer_paid_sompi, paid.panel_paid_sompi, paid.reserve_sompi, paid.burned_sompi),
+            (paid.producer_named_sompi, paid.panel_named_sompi, paid.reserve_sompi, paid.burned_sompi),
             (112_000, 48_000, 0, 460_000),
             "min(620 000, 1.6 M × 0.1) = 160 000: 112 000 to the producer, 48 000 to the one seat, 460 000 never named"
         );
@@ -918,7 +931,7 @@ mod tests {
         let plain = palw_ledger_merge_v1(None, &fin, 4_101, facts, |_| rule_6001(5));
         assert!(!plain.economic_snapshotted);
         let expected = palw_ledger_payout_v1(620_000, rule_6001(5), 1, 1);
-        assert_eq!((plain.producer_paid_sompi, plain.panel_paid_sompi), (expected.producer_sompi, expected.panel_sompi));
+        assert_eq!((plain.producer_named_sompi, plain.panel_named_sompi), (expected.producer_sompi, expected.panel_sompi));
         // The rule itself, over a five-seat panel with three credited: the pool is 48 000, a seat 9 600.
         let rule = PalwLedgerPayoutRuleV1 {
             economic: Some(PalwLedgerEconomicRuleV1 {

@@ -1036,6 +1036,19 @@ pub struct PalwSeatDutyV2 {
     /// pricing check is that the capture it authenticated has exactly this many leaves. Zero on
     /// an attempt.
     pub work_leaves: u64,
+    /// **The job identity the claim recorded** (ADR-0152 v3.1 J-1): the anchor for an attempt, the
+    /// commitment's pin (`palw_fp_job_pin_v1`) for a free prompt; 0 where none was recorded. A seat
+    /// holding a free-prompt capture binds it to this pin before it signs (the 3a review's L-b:
+    /// `PalwClaimRootsV1::job_pin`); carried off the claim record, like the roots.
+    pub job_identity: Hash64,
+}
+
+impl PalwSeatDutyV2 {
+    /// **The free-prompt pin a seat binds a capture to** — the recorded identity of a free-prompt
+    /// claim, and `None` for an attempt (its whole job is the anchor's) or an unrecorded one.
+    pub fn fp_job_pin_v1(&self) -> Option<Hash64> {
+        (self.free_prompt && self.job_identity != Hash64::default()).then_some(self.job_identity)
+    }
 }
 
 /// **Every seat duty this node holds at one chain point** (launch blockers §2).
@@ -1282,6 +1295,271 @@ pub fn palw_da_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParam
     out
 }
 
+/// **ADR-0152 X7 (Phase 2, P2-7): on which side of the disclosure rule a duty is held.**
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PalwDisclosureRoleV1 {
+    /// The claim's producer. It owes every unanswered unit of every open session (DA-4); a
+    /// session it lets run out is its S1 before `Final` and its S3 after (DA-7).
+    Producer,
+    /// A `Valid` signer whose live lock covers the unit (C7). It owes exactly the units a default
+    /// would charge it S4 for (X7, DA-7) — the fold's covering-signer predicate decides both — and
+    /// kaspad answers them once the producer has had its turn.
+    CoveringSigner,
+}
+
+/// **One unit an open R-core data-availability session demands of this node** (ADR-0152 DA-4, X7;
+/// Phase 2, P2-7): what kaspad's responder answers with a `MaterialDisclosedV2`. Past
+/// `Params::palw_rcore_plus` the court's sessions live in `da_sessions` and never touch the claim's
+/// phase (DA-1), so [`palw_da_duties_v2`] — which reads `DefaultDisputed` — finds none there; this is
+/// the R-core court's duty list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwDisclosureDutyV1 {
+    pub claim_id: Hash64,
+    /// The block the claim rides — what an attempt claim's job is derived from, so a node that
+    /// holds no capture re-makes it by replaying that job (the v1 duty carries it for the same reason).
+    pub accepted_block: Hash64,
+    pub class_id: Hash64,
+    pub artifact_root: Hash64,
+    /// The claim's producer.
+    pub executor_bond: PalwBondKeyV2,
+    /// The bond of `mine` that answers and signs: the producer, or the covering signer (X7).
+    pub discloser: PalwBondKeyV2,
+    pub role: PalwDisclosureRoleV1,
+    /// The discloser's place among this unit's covering signers, in bond order (0 for the
+    /// producer). Every signer's node computes the same list, so kaspad can stagger their answers
+    /// by it: one lands, and the rest find the unit answered.
+    pub signer_rank: u16,
+    pub unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    /// The earliest deadline among the open sessions that demand the unit. An answer folded at or
+    /// before it answers every one of them (DA-4); the first block past it defaults the session (DA-7).
+    pub deadline_daa: u64,
+    /// `W_disclose` ([`crate::palw_state_v2::palw_da_disclose_window_daa_v1`]) — what node policy
+    /// divides between the producer's turn and the covering signers'.
+    pub disclose_window_daa: u64,
+    /// The event rows the claim's run is known to hold, as the fold reads them
+    /// ([`crate::palw_da_rcore_v1::palw_da_in_run_rows_v1`]): one accepted `Flat` answers every
+    /// in-run event unit at tile 0 (IMPL-16), so the responder sends one a claim.
+    pub in_run_rows: u32,
+    pub trace_root: Hash64,
+    pub execution_root: Hash64,
+    pub free_prompt: bool,
+    /// The claim's recorded job ([`crate::palw_state_v2::PalwClaimStateV2::job_identity`], M2's J-1):
+    /// a free-prompt answer is built only from a capture whose context reproduces it
+    /// ([`Self::fp_job_pin_v1`]), as a seat's resume is (H-2) — a capture of another job under the
+    /// same id fails the fold's identity checks and would be the answerer's own default.
+    pub job_identity: Hash64,
+}
+
+impl PalwDisclosureDutyV1 {
+    /// The free-prompt pin an answer's capture must reproduce — `None` for an attempt (its whole job
+    /// is the anchor's) or an unrecorded identity; the one reading of
+    /// [`PalwSeatDutyV2::fp_job_pin_v1`].
+    pub fn fp_job_pin_v1(&self) -> Option<Hash64> {
+        (self.free_prompt && self.job_identity != Hash64::default()).then_some(self.job_identity)
+    }
+}
+
+/// **P2-7's read of the tip, once a tick**: the units this node must answer, and the claims whose
+/// material it must keep.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwDisclosureDutiesV1 {
+    /// Soonest deadline first.
+    pub duties: Vec<PalwDisclosureDutyV1>,
+    /// `(claim, trace_retention_daa)` for every claim on which a bond of `mine` holds a live lock
+    /// (X7) while a session can still be open on it
+    /// ([`crate::palw_da_rcore_v1::palw_da_material_owed_v1`]: not voided, `now ≤
+    /// trace_retention_daa`, since DA-8 opens none that would end later). The chain's locks are the
+    /// memory of "I signed `Valid`" (plan P2-7), so the retention they pin survives a restart that
+    /// forgets the seat's own duty book. A producer's own capture is the retention janitor's, by the
+    /// same predicate.
+    pub retain: Vec<(Hash64, u64)>,
+}
+
+/// **ADR-0152 X7 / DA-4 (Phase 2, P2-7): the R-core court's duties of the bonds in `mine` at
+/// `now_daa`** — every unanswered unit of every open session on a claim one of them produced, or on
+/// which one of them holds a covering lock; and the claims a live lock obliges one of them to keep
+/// the material of.
+///
+/// Every reading is the fold's own, so the responder answers exactly what the chain will take and
+/// is charged for: the open sessions and their units (`da_sessions`), whether a unit is answered
+/// ([`crate::palw_da_rcore_v1::palw_da_unit_answered_v1`] over the claim's record and the in-run
+/// rows at `extras`' fences), who may answer (the producer, or a live lock:
+/// [`crate::palw_state_v2::palw_da_discloser_liable_v1`]'s rule) and who a default charges
+/// ([`crate::palw_state_v2::palw_da_covering_signers_v1`], C7). `extras` are the fold's at
+/// `now_daa` — the DAA the answer is expected to fold at. A session past its deadline is left out:
+/// the block at `now_daa` defaults it before any answer in it is read.
+///
+/// Below `palw_rcore_plus` this is empty and [`palw_da_duties_v2`] is the court's duty list, byte
+/// for byte as before.
+pub fn palw_disclosure_duties_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+    mine: &[PalwBondKeyV2],
+    now_daa: u64,
+) -> PalwDisclosureDutiesV1 {
+    use crate::palw_da_rcore_v1::{palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    if !params.rcore_plus_active_at(now_daa) || mine.is_empty() {
+        return PalwDisclosureDutiesV1::default();
+    }
+    let disclose_window_daa = crate::palw_state_v2::palw_da_disclose_window_daa_v1(params);
+    let mut duties = Vec::new();
+    let claims: std::collections::BTreeSet<Hash64> = state.da_deadlines_iter().map(|(_, claim, _)| *claim).collect();
+    for claim_id in claims {
+        let Some(claim) = state.claim(&claim_id) else { continue };
+        // Neither the producer nor a lock holder: nothing here is this node's (and the covering
+        // walk below, a pass over the lock map a unit, is not paid for a stranger's claim).
+        let producer = mine.contains(&claim.bond);
+        if !producer && !mine.iter().any(|bond| state.slashable_lock(*bond, claim_id).is_some()) {
+            continue;
+        }
+        let Some(artifact_root) = state.class(&claim.class_id).map(|class| class.artifact_root) else { continue };
+        let record = state.da_claim(&claim_id).cloned().unwrap_or_default();
+        let in_run_rows = palw_da_in_run_rows_v1(claim, extras.fp_da_pins_active);
+        // Each unanswered unit once, at the earliest deadline among the open sessions demanding it.
+        let mut units: std::collections::BTreeMap<crate::palw_da_rcore_v1::PalwDaUnitV1, u64> = std::collections::BTreeMap::new();
+        for (_, session) in state.da_sessions_of(&claim_id) {
+            if session.deadline_daa < now_daa {
+                continue;
+            }
+            for unit in session.units.iter().filter(|unit| !palw_da_unit_answered_v1(&record, unit, in_run_rows)) {
+                let deadline = units.entry(*unit).or_insert(session.deadline_daa);
+                *deadline = (*deadline).min(session.deadline_daa);
+            }
+        }
+        // A lock holder's covering signers of every unit, from one walk of the lock map a claim.
+        let covering: Vec<Vec<PalwBondKeyV2>> = if producer {
+            Vec::new()
+        } else {
+            let asked: Vec<crate::palw_da_rcore_v1::PalwDaUnitV1> = units.keys().copied().collect();
+            crate::palw_state_v2::palw_da_covering_signers_v1(state, params, extras, &claim_id, &asked, now_daa)
+        };
+        for (index, (unit, deadline_daa)) in units.into_iter().enumerate() {
+            let (discloser, role, signer_rank) = if producer {
+                (claim.bond, PalwDisclosureRoleV1::Producer, 0)
+            } else {
+                match covering[index].iter().enumerate().find(|(_, seat)| mine.contains(seat)) {
+                    Some((rank, seat)) => (*seat, PalwDisclosureRoleV1::CoveringSigner, rank.min(usize::from(u16::MAX)) as u16),
+                    None => continue,
+                }
+            };
+            duties.push(PalwDisclosureDutyV1 {
+                claim_id,
+                accepted_block: claim.accepted_block,
+                class_id: claim.class_id,
+                artifact_root,
+                executor_bond: claim.bond,
+                discloser,
+                role,
+                signer_rank,
+                unit,
+                deadline_daa,
+                disclose_window_daa,
+                in_run_rows,
+                trace_root: claim.trace_root,
+                execution_root: claim.execution_root,
+                free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+                job_identity: claim.job_identity,
+            });
+        }
+    }
+    duties.sort_by(|a, b| (a.deadline_daa, a.claim_id, a.unit).cmp(&(b.deadline_daa, b.claim_id, b.unit)));
+    let mut retain: Vec<(Hash64, u64)> = mine
+        .iter()
+        .flat_map(|bond| state.slashable_locks_of(bond).map(|((seat, claim_id), _)| (*seat, *claim_id)))
+        .filter_map(|(seat, claim_id)| {
+            let claim = state.claim(&claim_id)?;
+            (crate::palw_da_rcore_v1::palw_da_material_owed_v1(claim, now_daa)
+                && crate::palw_state_v2::palw_da_lock_live_v1(state, params, extras, &seat, &claim_id, now_daa))
+            .then_some((claim_id, claim.trace_retention_daa))
+        })
+        .collect();
+    retain.sort_unstable();
+    retain.dedup();
+    PalwDisclosureDutiesV1 { duties, retain }
+}
+
+/// **P2-6: what an automatic data-availability accusation of a claim by `accuser` comes to** — node
+/// policy's read of the fold's own gate at the block the carrier is expected to fold in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwDaAccusationCheckV1 {
+    /// File it: the unit it names (C-9) and what the fold answers the accusation (C-8: the stage the
+    /// session opens at, whether the accuser is a seat of the current panel, DA-6's exposure on its
+    /// free half, the session's deadline).
+    File { unit: crate::palw_da_rcore_v1::PalwDaUnitV1, admission: crate::palw_state_v2::PalwDaAdmissionV1 },
+    /// This accuser has accused the claim already: a session of its own is open on it, or it opened
+    /// one as a seat of the claim's panel before (the fold's `opened_by_seat`, kept until the claim
+    /// record retires). Node policy accuses a claim once per accuser; DA-8's further seat sessions
+    /// are for naming a divergent leaf from a disclosed binding (P2-8d), not for asking again.
+    AccusedBefore,
+    /// The unit it would name is answered on chain already ([`crate::palw_da_rcore_v1::palw_da_unit_answered_v1`]):
+    /// the material is on chain, so a session naming it could only be refuted at the accuser's cost
+    /// (the ADR's DA-7 names the refusal, `DaUnitAlreadyAnswered`, which the fold's opening does not
+    /// yet make — node policy does not wait for it).
+    Answered,
+    /// The fold would refuse it, with its own reason.
+    Refused(crate::palw_state_v2::PalwStateV2Error),
+}
+
+/// **ADR-0152 §3.8 / DA-1 / DA-3 / DA-6 / DA-8 (Phase 2, P2-6): may `accuser` accuse `claim_id` of
+/// withholding at `now_daa`, and is it worth a carrier?** The gate is the fold's own, read through
+/// C-8 ([`crate::palw_state_v2::palw_da_accusation_admissible_v2`], the `da_admission_v1` the fold's
+/// opening reads): the claim accusable at its stage, retention, the accuser's standing, DA-8's caps,
+/// and A-6's room — DA-6's exposure on the accuser's free half, the fold's own
+/// `max(committed, 500‰·C) + accuser + new ≤ C`, the same inequality `palw_rcore_gate_room_of_v1`
+/// computes for the Accuser gate. The named unit ([`crate::palw_da_rcore_v1::PALW_DA_AUTO_NAMED_UNIT_V1`])
+/// is held to the fold's bound (`palw_da_max_accusable_rows_v1`), which C-8 leaves to the object.
+///
+/// Before the gate, the two answers that make a carrier pure cost (plan §5.3: only a successful
+/// conviction repays the filer): an accuser that accused before ([`PalwDaAccusationCheckV1::AccusedBefore`]
+/// — every seat of a withheld claim opens its OWN session, DA-6/DA-9, but each opens it once, so no
+/// storm of duplicates rides), and a named unit already answered on chain. `extras` are the fold's
+/// at `now_daa` (the second clock the room reads, the in-run rows' fence), as the processor resolves
+/// them for the next block. Below `palw_rcore_plus` the answer is the gate's `DaCourtDormant`.
+pub fn palw_da_accusation_check_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+    claim_id: &Hash64,
+    accuser: &PalwBondKeyV2,
+    now_daa: u64,
+) -> PalwDaAccusationCheckV1 {
+    use crate::palw_da_rcore_v1::{PALW_DA_AUTO_NAMED_UNIT_V1, PalwDaUnitV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    use crate::palw_state_v2::{
+        PalwStateV2Error, palw_da_accusation_admissible_v2, palw_da_event_index_v1, palw_da_max_accusable_rows_v1,
+    };
+    if !params.rcore_plus_active_at(now_daa) {
+        return PalwDaAccusationCheckV1::Refused(PalwStateV2Error::DaCourtDormant);
+    }
+    let unit = PALW_DA_AUTO_NAMED_UNIT_V1;
+    let record = state.da_claim(claim_id);
+    if state.da_session(claim_id, accuser).is_some() || record.is_some_and(|record| record.opened_by_seat.contains_key(accuser)) {
+        return PalwDaAccusationCheckV1::AccusedBefore;
+    }
+    if let Some(claim) = state.claim(claim_id) {
+        if let Some(record) = record
+            && palw_da_unit_answered_v1(record, &unit, palw_da_in_run_rows_v1(claim, extras.fp_da_pins_active))
+        {
+            return PalwDaAccusationCheckV1::Answered;
+        }
+        let PalwDaUnitV1::Event { row, tile } = unit else { unreachable!("the automatic unit is an event") };
+        let count = palw_da_max_accusable_rows_v1(claim.trace_chunk_count);
+        if row >= count {
+            return PalwDaAccusationCheckV1::Refused(PalwStateV2Error::DaIndexOutOfRange {
+                claim: *claim_id,
+                index: palw_da_event_index_v1(row, tile),
+                count,
+            });
+        }
+    }
+    match palw_da_accusation_admissible_v2(state, params, extras, claim_id, accuser, now_daa) {
+        Ok(admission) => PalwDaAccusationCheckV1::File { unit, admission },
+        // Unreachable after the session read above; mapped rather than trusted.
+        Err(PalwStateV2Error::DaSessionAlreadyOpen { .. }) => PalwDaAccusationCheckV1::AccusedBefore,
+        Err(e) => PalwDaAccusationCheckV1::Refused(e),
+    }
+}
+
 /// Which claims an operator asks about: the ones its bond made, or the ones its bond judges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwClaimRoleV1 {
@@ -1315,7 +1593,10 @@ pub struct PalwClaimRowV1 {
     pub reserved: u128,
     /// The block lane's escrow (0 for a prompt-lane claim, and for a merged-blue attempt).
     pub escrowed_reward: u64,
-    /// The payout queued for the next coinbase, once the claim is final.
+    /// The payout queued for the next coinbase, once the claim is final — the producer's leg.
+    /// Below `palw_rcore_plus` it is queued at `Final` under the claim id; past it the leg vests and
+    /// is queued only when step 3d moves it, under its A-KEY key (`palw_vesting_payout_key_v1`), for
+    /// the one block before the next coinbase mints it.
     pub payout_pending: Option<u64>,
     pub work_leaves: u64,
     pub open_courts: usize,
@@ -1467,7 +1748,14 @@ pub fn palw_claim_rows_v1(
                 deadline_daa: palw_claim_phase_deadline_v1(claim, state_params, court.map(|c| c.1)),
                 reserved: claim.reserved,
                 escrowed_reward: claim.escrowed_reward,
-                payout_pending: payouts.get(id).copied(),
+                // ADR-0152 A-KEY: a vested Final's producer leg is queued under its own key, never
+                // under the raw claim id (phase2-plan §2.7); below the fence, exactly as before.
+                payout_pending: match claim.phase {
+                    P::Final { final_daa } if state_params.rcore_plus_active_at(final_daa) => {
+                        payouts.get(&crate::palw_vesting_v1::palw_vesting_payout_key_v1(id)).copied()
+                    }
+                    _ => payouts.get(id).copied(),
+                },
                 work_leaves: claim.work_leaves,
                 open_courts: court.map(|c| c.0).unwrap_or(0),
                 exec_lane: palw_claim_exec_lane_v1(state, id),
@@ -1524,6 +1812,64 @@ pub struct PalwBondClaimsV1 {
     pub truncated: bool,
     /// `None`: the registry holds no bond at that outpoint.
     pub bond: Option<PalwBondSummaryV1>,
+    /// **Claim row v3 (ADR-0152 R-core+, phase2-plan §1.6): where each row's vested reward stands**,
+    /// by claim id — only the rows that vested (past `palw_rcore_plus` at their Final). Kept beside
+    /// the rows rather than in [`PalwClaimRowV1`], whose readers build it by hand. Empty from the
+    /// node-policy entry ([`palw_bond_claims_v1`] with no `vesting_at`).
+    pub vesting: std::collections::BTreeMap<Hash64, crate::palw_vesting_read_v1::PalwClaimVestingV1>,
+    /// The rows of claims that RETIRED while their reward still vests (`include_terminal` only):
+    /// retirement comes `claim_retirement` after Final, the row lives until it moves, and from
+    /// retirement on the row is the reward's only record. Newest Final first.
+    pub vesting_only: Vec<crate::palw_vesting_read_v1::PalwVestingRowReadV1>,
+    pub vesting_only_truncated: bool,
+}
+
+/// **`getPalwClaims`' whole answer at one tip** (ADR-0122 §6.5, claim row v3): the rows
+/// ([`palw_claim_rows_v1`]), the bond, and — with `vesting_at` — the vesting half read at the next
+/// block: `(next_daa, raw_depth)`, the DAA the next block folds at and the raw second-clock depth
+/// there, the facts its step 3d reads (`palw_vesting_read_v1`'s I-8 inputs). Below
+/// `palw_rcore_plus` no row exists and the vesting half is empty.
+///
+/// **`vesting_at: None` is the node-policy entry: the rows alone**, the vesting half empty. Only the
+/// RPC asks for claim row v3's half; the panel loop's per-bond reads (`kaspad`'s
+/// `palw_claim_rows_v1` callers read a row's phase and deadline) must not pay for a next-block plan,
+/// up to 500 claim positions and a retired-row read each 30 s per bond, only to drop them
+/// (review of P2-10, finding 4).
+pub fn palw_bond_claims_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    role: PalwClaimRoleV1,
+    include_terminal: bool,
+    limit: usize,
+    vesting_at: Option<(u64, Option<u64>)>,
+) -> PalwBondClaimsV1 {
+    use crate::palw_vesting_read_v1::{PalwVestingReaderV1, palw_vesting_only_rows_v1};
+    let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+    let (rows, truncated) = palw_claim_rows_v1(state, state_params, bond, role, include_terminal, limit);
+    let (vesting, (vesting_only, vesting_only_truncated)) = match vesting_at {
+        Some((next_daa, raw_depth)) => {
+            let reader = PalwVestingReaderV1::new(state, state_params, next_daa, raw_depth);
+            let claims: Vec<(Hash64, Option<&crate::palw_state_v2::PalwClaimStateV2>)> =
+                rows.iter().map(|row| (row.claim_id, state.claim(&row.claim_id))).collect();
+            let only = if include_terminal {
+                palw_vesting_only_rows_v1(&reader, bond, role == PalwClaimRoleV1::Executor, limit)
+            } else {
+                (Vec::new(), false)
+            };
+            (reader.claim_stages(&claims), only)
+        }
+        None => (Default::default(), (Vec::new(), false)),
+    };
+    PalwBondClaimsV1 {
+        tip_daa,
+        rows,
+        truncated,
+        bond: palw_bond_summary_v1(state, bond),
+        vesting,
+        vesting_only,
+        vesting_only_truncated,
+    }
 }
 
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
@@ -1566,6 +1912,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 },
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
                 work_leaves: claim.work_leaves,
+                job_identity: claim.job_identity,
             });
         }
     }

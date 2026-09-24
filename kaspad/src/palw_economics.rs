@@ -348,8 +348,8 @@ mod tests {
             void_reason: String::new(),
             seats: 5,
             credited_seats: 0,
-            producer_paid_sompi: 0,
-            panel_paid_sompi: 0,
+            producer_named_sompi: 0,
+            panel_named_sompi: 0,
             reserve_sompi: 0,
             burned_sompi: 0,
             paid_at_acceptance: false,
@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(rows[0], row(1, 7));
         let mut updated = row(2, 7);
         updated.final_daa = Some(6_020);
-        updated.producer_paid_sompi = 1;
+        updated.producer_named_sompi = 1;
         store.write(std::slice::from_ref(&updated)).unwrap();
         let rows = store.rows();
         assert_eq!(rows.len(), 3, "an upsert, not a second row");

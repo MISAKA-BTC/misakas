@@ -159,6 +159,11 @@ fn qwen36_fixture(h: &H) -> ModelClass {
 /// holds every active class to one and the table to 1000‰), and testnet-12's genesis model row with
 /// the class admitting — the one thing no block of this harness can write.
 fn seed(h: &H, walk: &mut Walk, m: &ModelClass) {
+    seed_profile(h, walk, m.label, &m.profile, m.artifact_root);
+}
+
+/// [`seed`] for a class known by its profile alone (the 2M-sized row, whose producer no test runs).
+fn seed_profile(h: &H, walk: &mut Walk, label: &str, profile: &PalwShapeProfileV3, artifact_root: Hash64) {
     use kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1;
     use kaspa_consensus_core::palw_state_v2::PalwClassStateV2;
     assert_eq!(
@@ -166,11 +171,11 @@ fn seed(h: &H, walk: &mut Walk, m: &ModelClass) {
         PalwAttemptRulesV1::CoreV1,
         "testnet-12's producers run CoreV1 from genesis"
     );
-    let (floor, class_id) = (h.floor(), m.class_id());
-    let fused = kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(&m.profile);
+    let (floor, class_id) = (h.floor(), profile.shape_profile_id());
+    let fused = kaspa_consensus_core::palw_class_admission_v2::palw_profile_has_fused_attention_v1(profile);
     walk.state = h.rebuilt(&walk.state, |c| {
-        assert!(!c.classes.contains_key(&class_id), "{}: the fixture is not a genesis class", m.label);
-        let record = PalwClassStateV2 { artifact_root: m.artifact_root, fused_attention: fused, ..c.classes[&floor].clone() };
+        assert!(!c.classes.contains_key(&class_id), "{label}: the fixture is not a genesis class");
+        let record = PalwClassStateV2 { artifact_root, fused_attention: fused, ..c.classes[&floor].clone() };
         c.classes.insert(class_id, record);
         let target = c.class_targets[&floor].clone();
         c.class_targets.insert(class_id, target);
@@ -210,6 +215,14 @@ enum ModelFault {
     ShortPrefill,
     /// The `Legacy` rule's job for this anchor — an instance's fields in the context — run (J5a).
     LegacyContext,
+    /// **F1c R1**: the honest step tree, logits row 0's interior lane bent without moving its argmax,
+    /// the trace root re-committed (12).
+    BendLogits,
+    /// **F1c T4**: the honest rows, the first token replaced by its row's runner-up, re-committed
+    /// with the output root its ids render to (11 `NotSelected`).
+    TokenNotSelected,
+    /// **F1c T5**: the first token replaced by an id past the vocabulary (11 `OutOfVocab`).
+    TokenOutOfVocab,
 }
 
 struct ModelClaim {
@@ -236,6 +249,7 @@ impl ModelClaim {
             anchor: self.anchor,
             attempt_draw: Some(true),
             output_root: Some(a.output_root),
+            job_pin: None,
         }
     }
 }
@@ -343,11 +357,92 @@ fn open_model_claim(h: &H, walk: &mut Walk, m: &ModelClass, fault: ModelFault, n
             assert_ne!(legacy.context_hash(), job.context_hash(), "an instance's fields enter the Legacy context");
             run(m.legacy.as_ref(), &legacy, &legacy_prompt)
         }
+        ModelFault::BendLogits | ModelFault::TokenNotSelected | ModelFault::TokenOutOfVocab => {
+            f1c_commit(m, fault, &honest, &honest_binding)
+        }
     };
     assert_eq!(binding.committed_execution_root, roots.execution, "the claim's root is its binding's");
     let (claim_id, envelope, _header) = h.fold_own_attempt(walk, header, anchor, pre_pow, &facts, roots);
     assert_eq!(walk.state.claim(&claim_id).unwrap().class_id, m.class_id(), "the claim is the model class's");
     ModelClaim { claim_id, anchor, envelope, binding, material, pin, contradiction }
+}
+
+/// **The F1c producers** over the honest run: its step tree, with rows or ids the class never
+/// produced committed beside it — every root re-derived as the producer would (the tiled trace root,
+/// the execution root, the manifest over the new trace root, the one rendered output root over the
+/// committed ids) — and the proof a filer assembles: the event from the committed rows and the
+/// class's own opening of the head leaf (12), or the tiled decode pin (11).
+fn f1c_commit(
+    m: &ModelClass,
+    fault: ModelFault,
+    honest: &PalwExecutionOutcomeV1,
+    honest_binding: &PalwStepBindingV2,
+) -> (AttemptRoots, PalwStepBindingV2, Vec<u8>, PalwDecodeTokenPinV1, Option<C>) {
+    use kaspa_consensus_core::palw_offence_v1::PalwForgedOutputTiledProofV1 as P;
+    use kaspa_consensus_core::palw_step::{canonical_step_leaf_index, palw_logits_head_coordinate_v1, palw_logits_head_v1};
+    use kaspa_consensus_core::palw_step_refute::{
+        base0_decode_token_select_v1, logits_event_disclosure_v1, tiled_decode_pin_v1, tiled_logits_trace_root_v1,
+    };
+    let retention = misaka_palw_base0::produce::base0_material_decode_any_v1(&honest.material).expect("the capture decodes");
+    let (mut rows, mut ids) = (retention.logits_rows().to_vec(), retention.generated_token_ids().to_vec());
+    let ctx = honest_binding.job_context.clone();
+    let vocab = honest_binding.shape_profile.vocab_size;
+    let top = base0_decode_token_select_v1(&rows[0]) as u32;
+    let runner_up = (0..vocab).filter(|l| *l != top).max_by_key(|l| (rows[0][*l as usize], std::cmp::Reverse(*l))).unwrap();
+    let bent_lane = match fault {
+        ModelFault::BendLogits => {
+            let lane =
+                (1..vocab as usize - 1).find(|l| *l as u32 != top && rows[0][*l] + 1 < rows[0][top as usize]).expect("a lane below");
+            rows[0][lane] += 1;
+            assert_eq!(base0_decode_token_select_v1(&rows[0]) as u32, top, "the argmax does not move");
+            Some(lane as u32)
+        }
+        ModelFault::TokenNotSelected => {
+            ids[0] = runner_up;
+            None
+        }
+        ModelFault::TokenOutOfVocab => {
+            ids[0] = vocab + 3;
+            None
+        }
+        _ => unreachable!("an F1c fault"),
+    };
+    let mut binding = honest_binding.clone();
+    binding.full_logits_trace_root = tiled_logits_trace_root_v1(&ctx, &rows, &ids).expect("rows build a tree");
+    binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&binding);
+    verify_binding_v1(&binding).expect("the re-committed binding verifies");
+    let rows_root = tiled_logits_rows_root_v1(&ctx, &rows).expect("rows build a tree");
+    let pin = PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: ids.clone() });
+    let roots = AttemptRoots {
+        trace: binding.full_logits_trace_root,
+        output: kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(&ctx, &ids),
+        execution: binding.committed_execution_root,
+        manifest: attempt_trace_manifest_root_v1(binding.full_logits_trace_root, honest.trace_chunk_count),
+        chunks: honest.trace_chunk_count,
+    };
+    let contradiction = match (fault, bent_lane) {
+        (ModelFault::BendLogits, Some(lane)) => {
+            let head = palw_logits_head_v1(&binding.shape_profile).expect("the class's head is provable");
+            let tile = lane / head.tile_len;
+            let logits_tile = (lane as usize / kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES) as u8;
+            let event = logits_event_disclosure_v1(&binding, &rows, &ids, 0, logits_tile).expect("the tiled event opens");
+            let coord = palw_logits_head_coordinate_v1(&head, &ctx, 0, tile).expect("a coordinate");
+            let index = canonical_step_leaf_index(&binding.shape_profile, &ctx, &coord).expect("a leaf");
+            let head_opening =
+                m.backend.refutation_for_index(&honest.material, index).expect("the class opens its head").output_opening;
+            C::LogitsNotStepOutput { event, row: 0, head_tile: tile, head_opening }
+        }
+        (ModelFault::TokenNotSelected, _) => C::ForgedOutputTiled {
+            binding: binding.clone(),
+            proof: P::NotSelected { pin: tiled_decode_pin_v1(&ctx, &rows, &ids, 0, top).expect("the pin opens") },
+        },
+        (ModelFault::TokenOutOfVocab, _) => C::ForgedOutputTiled {
+            binding: binding.clone(),
+            proof: P::OutOfVocab { position: 0, tokens: PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: ids.clone() } },
+        },
+        _ => unreachable!("an F1c fault"),
+    };
+    (roots, binding, honest.material.clone(), pin, Some(contradiction))
 }
 
 /// A borrower of `lender`'s trace and execution roots on another template, under a ground output
@@ -513,4 +608,338 @@ async fn t47c_the_moved_legs_and_the_non_formula_contexts_are_refuted() {
         }
         h.reloads(&walk.state);
     }
+}
+
+/// **T18q/T18r on the chain (F1c): kind 4 convicts a model class's logits fault and forged tokens.**
+/// On both families: `LogitsNotStepOutput` (12) on bent logits over the honest step tree, and
+/// `ForgedOutputTiled` (11) on a token not its row's selection (`NotSelected`) and one past the
+/// vocabulary (`OutOfVocab`) — each through the gate, the walk and the fold, the claim voided
+/// `CourtFraud`, its executor charged, and — the execution being proven false — its root recorded and
+/// forfeit.
+#[tokio::test]
+async fn t47d_a_models_logits_and_tokens_are_refuted_by_root() {
+    let h = harness(true);
+    for m in families(&h) {
+        let mut walk = h.genesis_walk();
+        seed(&h, &mut walk, &m);
+        for (n, fault) in [ModelFault::BendLogits, ModelFault::TokenNotSelected, ModelFault::TokenOutOfVocab].into_iter().enumerate() {
+            let claim = open_model_claim(&h, &mut walk, &m, fault, bucket(1 + n as u64));
+            let finding = h.judge_refuted(&walk.state, claim.claim_id, claim.contradiction()).expect("the proof convicts");
+            assert_eq!(finding.forfeit, PalwForfeitScopeV1::ByRoot, "{} {fault:?}", m.label);
+            let (before, _) = h.carry(&mut walk, vec![h.refuted(claim.claim_id, claim.contradiction())]);
+            let root = claim.envelope.attempt.execution_root;
+            assert_refuted_before_final(&h, &before, &walk.state, claim.claim_id, walk.daa, root);
+            assert!(walk.state.palw_execution_root_is_forfeited_v1(&root), "{} {fault:?}: a proven-false root is forfeit", m.label);
+        }
+        h.reloads(&walk.state);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// F1-M 13 on the 2M-sized row: PromptNotAnchored, AnyValid, the heavy budget
+// ---------------------------------------------------------------------------------------------
+
+/// **The 2M-sized class** — the floor's graph at `n_ctx` 2,097,152, registered as a model class of its
+/// own: the formula's canonical job is `(262,143, 2)`, past J5b's inline bound, so a relabelled prompt
+/// is `PromptNotAnchored`'s (13) to prove. No producer of this width runs in a test, and none needs
+/// to: 13 is the route for a prompt root the producer committed WITHOUT a run behind it (R-M1).
+fn wide_profile() -> PalwShapeProfileV3 {
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    let mut profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's graph");
+    profile.n_ctx = 2_097_152;
+    profile
+}
+
+const WIDE_ARTIFACT_ROOT: u64 = 0x2A11_0000;
+
+struct WideClaim {
+    claim_id: Hash64,
+    binding: PalwStepBindingV2,
+    /// The anchor whose prompt the binding commits (the claim's own for the honest twin).
+    prompt_anchor: Hash64,
+}
+
+/// **A 2M-sized claim as its producer commits it**: `CoreV1`'s canonical context for this block's
+/// anchor (J1, J3 and J5a hold) under the prompt root of `prompt_anchor` — another anchor's for the
+/// relabel, the claim's own (`None`) for the honest twin — the legs committed as `verify_binding`
+/// recomputes them, folded as the template block's own attempt.
+fn open_wide_claim(h: &H, walk: &mut Walk, profile: &PalwShapeProfileV3, prompt_anchor: Option<Hash64>, nonce: u64) -> WideClaim {
+    use kaspa_consensus_core::hashing::header::pre_pow_hash_64;
+    use kaspa_consensus_core::palw_attempt_rules_v1::{
+        palw_attempt_canonical_v1, palw_attempt_context_v1, palw_attempt_prompt_root_v1, palw_canonical_checkpoint_profile_v1,
+        palw_int_activation_leg_root_v1,
+    };
+    let header: Header = h.ctx.build_block_template_keeping_time(nonce).block.header.clone();
+    let bond = h.cards[EXECUTOR];
+    let mut facts = h.ctx.consensus.palw_producer_facts_v2(h.floor(), Some(bond.0)).expect("testnet-12 answers for card 0");
+    facts.class_id = profile.shape_profile_id();
+    facts.artifact_root = Hash64::from_u64_word(WIDE_ARTIFACT_ROOT);
+    let pre_pow = pre_pow_hash_64(&header);
+    let anchor = execution_anchor_v3(h.domain, pre_pow, facts.class_id, &bond.0, header.nonce);
+    let prompt_anchor = prompt_anchor.unwrap_or(anchor);
+    let canonical = palw_attempt_canonical_v1(profile, false).expect("the formula");
+    assert_eq!(canonical, (262_143, 2));
+    let root = palw_attempt_prompt_root_v1(profile, &prompt_anchor, canonical.0, h.form()).expect("the prompt commits");
+    let job_context = palw_attempt_context_v1(profile, &anchor, canonical, root);
+    let mut binding = PalwStepBindingV2 {
+        version: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+        state_chunk_map_id: profile.state_chunk_map_id,
+        checkpoint_profile: palw_canonical_checkpoint_profile_v1(profile),
+        activation_leg_root: palw_int_activation_leg_root_v1(&job_context),
+        job_context,
+        shape_profile: profile.clone(),
+        full_logits_trace_root: Hash64::from_u64_word(0x7ACE ^ nonce),
+        step_leaf_count: 64,
+        step_merkle_root: Hash64::from_u64_word(0x57E9 ^ nonce),
+        checkpoint_count: 0,
+        checkpoint_merkle_root: Hash64::default(),
+        committed_execution_root: Hash64::default(),
+    };
+    binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&binding);
+    verify_binding_v1(&binding).expect("the binding verifies");
+    let roots = AttemptRoots {
+        trace: binding.full_logits_trace_root,
+        output: Hash64::from_u64_word(0x0A7 ^ nonce),
+        execution: binding.committed_execution_root,
+        manifest: attempt_trace_manifest_root_v1(binding.full_logits_trace_root, 1),
+        chunks: 1,
+    };
+    let (claim_id, _envelope, _header) = h.fold_own_attempt(walk, header, anchor, pre_pow, &facts, roots);
+    assert_eq!(walk.state.claim(&claim_id).unwrap().job_identity, anchor, "the claim records its anchor");
+    WideClaim { claim_id, binding, prompt_anchor }
+}
+
+impl WideClaim {
+    fn tile(&self, position: u32) -> C {
+        let profile = &self.binding.shape_profile;
+        let ids = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_prompt_ids_v1(
+            &self.prompt_anchor,
+            u64::from(profile.vocab_size),
+            self.binding.job_context.declared_prefill_tokens,
+        );
+        let opening = kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1(&ids, position).expect("an opening");
+        C::PromptNotAnchored {
+            binding: self.binding.clone(),
+            proof: kaspa_consensus_core::palw_offence_v1::PalwPromptProofV1::Tile(opening),
+        }
+    }
+
+    fn whole(&self) -> C {
+        C::PromptNotAnchored { binding: self.binding.clone(), proof: kaspa_consensus_core::palw_offence_v1::PalwPromptProofV1::Whole }
+    }
+}
+
+/// **T18e on the 2M-sized row (13)**: a relabelled prompt root — another anchor's, committed under
+/// this anchor's canonical context — is invisible to 9 (J5b is not inline at 262,143 ids:
+/// `IdentityHolds`), and `PromptNotAnchored` convicts it by a `Tile` and by `Whole`, through kind 4,
+/// by claim; the honest twin (its own anchor's prompt) is `PromptHolds` both ways, refused at the gate
+/// and in the fold.
+#[tokio::test]
+async fn t47e_the_2m_relabel_is_refuted_by_prompt_not_anchored() {
+    let h = harness(true);
+    let profile = wide_profile();
+    for proof in ["tile", "whole"] {
+        let mut walk = h.genesis_walk();
+        seed_profile(&h, &mut walk, "2M-sized", &profile, Hash64::from_u64_word(WIDE_ARTIFACT_ROOT));
+        let honest = open_wide_claim(&h, &mut walk, &profile, None, bucket(1));
+        let relabel = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x13_0DE1)), bucket(2));
+        h.refused(
+            &walk,
+            &h.refuted(relabel.claim_id, C::IdentityMismatch { binding: relabel.binding.clone() }),
+            &E::IdentityHolds.to_string(),
+        );
+        for twin in [honest.tile(0), honest.tile(262_142), honest.whole()] {
+            let object = h.refuted(honest.claim_id, twin);
+            h.refused(&walk, &object, &E::PromptHolds.to_string());
+            assert_eq!(h.fold_refusal(&walk, &object), E::PromptHolds.to_string());
+        }
+        let contradiction = if proof == "tile" { relabel.tile(131_072) } else { relabel.whole() };
+        let finding = h.judge_refuted(&walk.state, relabel.claim_id, contradiction.clone()).expect("13 convicts");
+        assert_eq!((finding.forfeit, finding.identity_fault), (PalwForfeitScopeV1::ByClaim, None), "{proof}");
+        let (before, _) = h.carry(&mut walk, vec![h.refuted(relabel.claim_id, contradiction)]);
+        assert_refuted_before_final(&h, &before, &walk.state, relabel.claim_id, walk.daa, Hash64::default());
+        assert!(matches!(walk.state.claim(&honest.claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional), "the twin is untouched");
+        h.reloads(&walk.state);
+    }
+}
+
+/// **13 is `AnyValid`** (the user's decision of 2026-09-24): on the licensed 2M relabel every `Valid`
+/// signer — the full seat and each partial-mask seat, whose SEAT-S4 opening checked the prompt it
+/// resumed from — is convicted by kind 3; a partial seat presenting an `Incapable` receipt is refused.
+#[tokio::test]
+async fn t47f_a_prompt_fault_convicts_every_valid_signer() {
+    let h = harness(true);
+    let profile = wide_profile();
+    let mut walk = h.genesis_walk();
+    seed_profile(&h, &mut walk, "2M-sized", &profile, Hash64::from_u64_word(WIDE_ARTIFACT_ROOT));
+    let relabel = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x13_0DE2)), bucket(1));
+    h.bind(&mut walk, relabel.claim_id);
+    let licence = h.license_v2(&mut walk, relabel.claim_id);
+    let thirteen = relabel.tile(7);
+    let partial = licence.partials()[0];
+    let receipt = licence.receipt(partial);
+    let incapable =
+        h.v3_verdict(partial, relabel.claim_id, PalwReceiptVerdictV2::Incapable, receipt.receipt.signed_daa, receipt.segments);
+    h.refused(&walk, &h.v2(partial, relabel.claim_id, incapable, thirteen.clone()), &E::PanelFalseValidNotValidVerdict.to_string());
+    let every: Vec<usize> = std::iter::once(licence.full_card()).chain(licence.partials()).collect();
+    let objects: Vec<Obj> =
+        every.iter().map(|&card| h.v2(card, relabel.claim_id, licence.segmented(card), thirteen.clone())).collect();
+    let (licensed, _) = h.carry(&mut walk, objects);
+    assert_seats_convicted_by_claim(&h, &licensed, &walk.state, relabel.claim_id, &every, walk.daa);
+    h.reloads(&walk.state);
+}
+
+/// **T18u: the heavy budget** (addendum §4-bis.3): a block holds one whole-prompt recomputation at the
+/// 2M width. Two `Whole` 13s in one block: the acceptance walk drops the second before any node
+/// computes it, the block standing on the rest (a `Tile` in the same block, cheap, is taken), and the
+/// fold — the second lock — refuses a block that carries both. The charge is the object's, whatever
+/// its kind: a kind-3 `Whole` after a kind-4 `Whole` is dropped the same way.
+#[tokio::test]
+async fn t18u_a_block_recomputes_one_whole_2m_prompt() {
+    let h = harness(true);
+    let profile = wide_profile();
+    let mut walk = h.genesis_walk();
+    seed_profile(&h, &mut walk, "2M-sized", &profile, Hash64::from_u64_word(WIDE_ARTIFACT_ROOT));
+    let c1 = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0001)), bucket(1));
+    let c2 = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0002)), bucket(2));
+    let (w1, w2, t2) = (h.refuted(c1.claim_id, c1.whole()), h.refuted(c2.claim_id, c2.whole()), h.refuted(c2.claim_id, c2.tile(3)));
+    for object in [&w1, &w2, &t2] {
+        h.validate(&walk.state, &walk.next(), object).expect("each alone clears the gate");
+    }
+    let point = walk.next();
+    assert_eq!(
+        h.accepted(&walk.state, &point, &[w1.clone(), w2.clone(), t2.clone()]),
+        vec![w1.clone(), t2.clone()],
+        "the second Whole is dropped"
+    );
+    match h.fold(&walk.state, &point, &[w1.clone(), w2.clone()]) {
+        Err(PalwStateV2Error::ObjectiveOffenceRefused(_, why)) => assert_eq!(why, E::HeavyBudgetExhausted.to_string()),
+        other => panic!("the fold's second lock refuses a block with two: {other:?}"),
+    }
+    let (before, _) = h.carry(&mut walk, vec![w1, t2]);
+    // Both convict in the one block; the executor pays each claim's reservation, escrow and rights,
+    // and past `palw_rcore_plus` S2's `min(10% · C₀, 3 G)` (S-4) — C₀ its collateral before THAT
+    // conviction's first debit, so the second claim is priced after the first's debit.
+    let mut c0 = before.bond(&h.cards[EXECUTOR]).unwrap().collateral;
+    let mut owed = 0u128;
+    for id in [c1.claim_id, c2.claim_id] {
+        assert!(
+            matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "claim {id} is voided CourtFraud"
+        );
+        let row = walk.state.consumed_offence(&palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &id)).expect("a kind-4 row");
+        assert_eq!((row.claim_id, row.execution_root), (id, Hash64::default()), "by claim");
+        let claim = before.claim(&id).unwrap();
+        let forfeit = claim.reserved + h.sp().claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward) + claim.rights_reserved;
+        let nominal = if h.sp().rcore_plus_active_at(point.daa_score) {
+            forfeit + kaspa_consensus_core::palw_state_v2::palw_rcore_s1s2_action_v1(c0, g_of(&walk.state, id))
+        } else {
+            forfeit
+        };
+        let debit = nominal.min(u128::from(c0));
+        owed += debit;
+        c0 -= u64::try_from(debit).unwrap();
+    }
+    let paid = before.bond(&h.cards[EXECUTOR]).unwrap().collateral - walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral;
+    assert_eq!(u128::from(paid), owed, "the executor pays both claims");
+
+    // Kind 3 is charged the same.
+    let c3 = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0003)), bucket(3));
+    let c4 = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0004)), bucket(4));
+    h.bind(&mut walk, c4.claim_id);
+    let licence = h.license_v2(&mut walk, c4.claim_id);
+    let full = licence.full_card();
+    let (w3, w4) = (h.refuted(c3.claim_id, c3.whole()), h.v2(full, c4.claim_id, licence.segmented(full), c4.whole()));
+    let point = walk.next();
+    assert_eq!(h.accepted(&walk.state, &point, &[w3.clone(), w4]), vec![w3], "a kind-3 Whole after a kind-4 one is dropped");
+}
+
+/// **T18u′ (the Phase 3 review's heavy-budget finding): holding the slot costs what it consumes.**
+/// On 2M-sized claims — `X` a relabel an honest filer convicts, `Y` an honest claim:
+///
+/// * **Same claim.** An attacker's Whole on `X` that reaches the recompute and then fails (a kind-3
+///   `Valid` receipt of a bond the panel does not seat) precedes the honest kind-4 Whole on `X`: the
+///   claim was charged once, the root is remembered, and the honest conviction lands in the same
+///   block.
+/// * **Junk costs nothing.** A Whole naming a claim the chain does not have, or accusing a bond that
+///   is not the claim's executor, fails before the recompute and is never charged: the honest Whole
+///   after it lands.
+/// * **Another claim pays.** An attacker's Whole on `Y` (its prompt is honest: `PromptHolds`) is
+///   priced at its prompt's carriage (`palw_object_rent_ceiling_v2`): underpaid, the walk drops it and
+///   the honest Whole on `X` lands; paid in full, it holds the slot — and the attacker paid the relay
+///   rate for 4 bytes a prompt id, 1,048,572 mass at 2M, burned.
+#[tokio::test]
+async fn t18u_holding_the_heavy_slot_costs_what_it_consumes() {
+    use kaspa_consensus_core::palw_state_v2::{palw_object_rent_ceiling_v1, palw_object_rent_ceiling_v2, palw_relay_fee_for_mass_v1};
+    let h = harness(true);
+    let profile = wide_profile();
+    let mut walk = h.genesis_walk();
+    seed_profile(&h, &mut walk, "2M-sized", &profile, Hash64::from_u64_word(WIDE_ARTIFACT_ROOT));
+    let x = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0A11)), bucket(1));
+    let y = open_wide_claim(&h, &mut walk, &profile, None, bucket(2));
+    let honest = h.refuted(x.claim_id, x.whole());
+
+    // Same claim: a stranger's kind-3 Whole on X reaches the recompute (it is well-formed and names
+    // X), then fails; the honest kind-4 on X is not charged again.
+    let mask = PalwSegmentMaskV2::full(4);
+    let stranger =
+        h.v2(BYSTANDER, x.claim_id, h.v3_verdict(BYSTANDER, x.claim_id, PalwReceiptVerdictV2::Valid, walk.daa, mask), x.whole());
+    assert!(h.validate(&walk.state, &walk.next(), &stranger).is_err(), "the stranger's Whole fails");
+    let point = walk.next();
+    assert_eq!(h.accepted(&walk.state, &point, &[stranger.clone(), honest.clone()]), vec![honest.clone()], "the honest Whole lands");
+
+    // Junk costs nothing: a claim the chain does not have, an accused that is not the executor.
+    let mut unknown_payload = h.refuted_payload(x.claim_id, x.whole());
+    unknown_payload.claim_id = Hash64::from_u64_word(0xDEAD_C1A1);
+    let unknown = offence(PalwOffenceKindV1::ExecutorRefuted, h.cards[EXECUTOR], borsh::to_vec(&unknown_payload).unwrap());
+    let wrong_accused = h.refuted_by(BYSTANDER, y.claim_id, y.whole());
+    let point = walk.next();
+    assert_eq!(
+        h.accepted(&walk.state, &point, &[unknown, wrong_accused, honest.clone()]),
+        vec![honest.clone()],
+        "junk that fails before the recompute is never charged"
+    );
+
+    // Another claim pays for the slot it takes.
+    let attacker = h.refuted(y.claim_id, y.whole());
+    h.refused(&walk, &attacker, &E::PromptHolds.to_string());
+    let rent = palw_object_rent_ceiling_v2(&attacker, true);
+    assert_eq!(
+        rent,
+        palw_relay_fee_for_mass_v1(262_143 * kaspa_consensus_core::palw_attempt_rules_v1::PALW_WHOLE_PROMPT_MASS_PER_ID_V1)
+    );
+    assert_eq!(rent, palw_object_rent_ceiling_v2(&honest, true), "the honest filer pays the same carriage");
+    let priced = |objects: Vec<(Obj, u64)>| {
+        let point = walk.next();
+        h.vp().palw_v2_accepted_priced_objects_for_tests(&walk.state, h.sp(), &point, objects, point.block).0
+    };
+    assert_eq!(priced(vec![(attacker.clone(), rent - 1), (honest.clone(), rent)]), vec![honest.clone()], "underpaid: dropped");
+    assert_eq!(priced(vec![(attacker.clone(), rent), (honest.clone(), rent)]), Vec::<Obj>::new(), "paid in full, it holds the slot");
+    assert_eq!(priced(vec![(honest.clone(), rent - 1)]), Vec::<Obj>::new(), "and the honest filer pays it too");
+
+    // Fence-off parity: below `palw_offence_attribution` the rent is the v1 rent (nothing).
+    assert_eq!(palw_object_rent_ceiling_v2(&attacker, false), palw_object_rent_ceiling_v1(&attacker));
+    assert_eq!(palw_object_rent_ceiling_v1(&attacker), 0);
+    let tile = h.refuted(x.claim_id, x.tile(3));
+    assert_eq!(palw_object_rent_ceiling_v2(&tile, true), 0, "a Tile recomputes nothing");
+
+    // And the honest conviction folds.
+    let (before, _) = h.carry(&mut walk, vec![honest]);
+    assert_refuted_before_final(&h, &before, &walk.state, x.claim_id, walk.daa, Hash64::default());
+
+    // The walk and the fold charge alike: two Wholes on ONE licensed claim — the executor refuted by
+    // kind 4 and the full seat by kind 3 — both ride one block and both fold (the claim is charged
+    // once), where two Wholes on two claims do not (`t18u_a_block_recomputes_one_whole_2m_prompt`).
+    let z = open_wide_claim(&h, &mut walk, &profile, Some(Hash64::from_u64_word(0x18_0A12)), bucket(3));
+    h.bind(&mut walk, z.claim_id);
+    let licence = h.license_v2(&mut walk, z.claim_id);
+    let full = licence.full_card();
+    let (licensed, _) =
+        h.carry(&mut walk, vec![h.v2(full, z.claim_id, licence.segmented(full), z.whole()), h.refuted(z.claim_id, z.whole())]);
+    assert!(walk.state.slashable_lock(h.cards[full], z.claim_id).is_none(), "the full seat is convicted");
+    assert!(
+        walk.state.consumed_offence(&palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &z.claim_id)).is_some(),
+        "and the executor refuted, in the same block"
+    );
+    assert!(licensed.bond(&h.cards[full]).unwrap().collateral > walk.state.bond(&h.cards[full]).unwrap().collateral);
 }

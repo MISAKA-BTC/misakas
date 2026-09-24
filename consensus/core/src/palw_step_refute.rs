@@ -3112,6 +3112,81 @@ pub fn tiled_trace_event_disclosure_v1(
     Some((row_roots[row as usize], row_opening, lanes.to_vec(), tile_opening))
 }
 
+/// **The tiled decode-token pin, from the rows a prover holds** (ADR-0152 v3.1 addendum §4-bis.5,
+/// `ForgedOutputTiled`'s `NotSelected` prover): the committed token at `position`, the lane
+/// `beat_lane` said to beat it, both tiles opened in the row's tile tree and the row opened in the
+/// rows tree — through the same tree functions the committing and checking sides use, so a holder
+/// of the rows can always build what [`check_tiled_decode_token_refutation_capped_v1`] opens.
+/// `None` when the position or a lane is not in the rows, or the rows build no tree.
+pub fn tiled_decode_pin_v1(
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    logits_rows: &[Vec<i32>],
+    generated: &[u32],
+    position: u32,
+    beat_lane: u32,
+) -> Option<PalwTiledDecodePinV1> {
+    let ctx_hash = ctx.context_hash();
+    let row = logits_rows.get(position as usize)?;
+    let tiles: Vec<&[i32]> = row.chunks(PALW_LOGITS_TILE_LANES).collect();
+    let tile_leaves: Vec<Hash64> =
+        tiles.iter().enumerate().map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, position, t as u32, lanes)).collect();
+    let row_roots: Vec<Hash64> = logits_rows
+        .iter()
+        .enumerate()
+        .map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes))
+        .collect::<Option<_>>()?;
+    let committed = *generated.get(position as usize)? as usize;
+    let (ct, bt) = (committed / PALW_LOGITS_TILE_LANES, beat_lane as usize / PALW_LOGITS_TILE_LANES);
+    Some(PalwTiledDecodePinV1 {
+        position,
+        generated_token_ids: generated.to_vec(),
+        row_root: *row_roots.get(position as usize)?,
+        row_opening: crate::palw_step_leg::step_opening_v1(&row_roots, position as u64).ok()?,
+        committed_tile_lanes: tiles.get(ct)?.to_vec(),
+        committed_opening: crate::palw_step_leg::step_opening_v1(&tile_leaves, ct as u64).ok()?,
+        beat_tile_lanes: tiles.get(bt)?.to_vec(),
+        beat_opening: crate::palw_step_leg::step_opening_v1(&tile_leaves, bt as u64).ok()?,
+        beat_lane,
+    })
+}
+
+/// **Logits row `row`'s tile `logits_tile`, disclosed in the class's scheme** (ADR-0152 v3.1
+/// addendum §4-bis.6, the event a `LogitsNotStepOutput` carries): `Flat` with every row and id for
+/// the flat scheme (its one tile is 0), `Tiled` with the row and tile openings otherwise
+/// ([`tiled_trace_event_disclosure_v1`]). `None` when the event is not in the rows or the scheme is
+/// neither.
+pub fn logits_event_disclosure_v1(
+    binding: &PalwStepBindingV2,
+    logits_rows: &[Vec<i32>],
+    generated: &[u32],
+    row: u32,
+    logits_tile: u8,
+) -> Option<PalwTraceEventDisclosureV1> {
+    let scheme = binding.shape_profile.logits_scheme_id;
+    if scheme == flat_logits_scheme_id_v1() {
+        if logits_tile != 0 || row as usize >= logits_rows.len() {
+            return None;
+        }
+        return Some(PalwTraceEventDisclosureV1::Flat {
+            binding: Box::new(binding.clone()),
+            pin: PalwBase0DecodeTokensV1 { logits_rows: logits_rows.to_vec(), generated_token_ids: generated.to_vec() },
+        });
+    }
+    if scheme != tiled_logits_scheme_id_v1() {
+        return None;
+    }
+    let (row_root, row_opening, tile_lanes, tile_opening) =
+        tiled_trace_event_disclosure_v1(&binding.job_context, logits_rows, row, logits_tile)?;
+    Some(PalwTraceEventDisclosureV1::Tiled {
+        binding: Box::new(binding.clone()),
+        generated_token_ids: generated.to_vec(),
+        row_root,
+        row_opening,
+        tile_lanes,
+        tile_opening,
+    })
+}
+
 /// **One ref's lane slice for a head-sliced GDN step** — the single derivation the leaf set, the
 /// executor and the cost bound all read (a second copy of this mapping is the "second
 /// name-to-bytes mapping" defect: it fails as a wrong conviction at the first real dispute).
@@ -6951,47 +7026,8 @@ pub(crate) mod tests {
         position: u32,
         beat_lane: u32,
     ) -> PalwTiledDecodePinV1 {
-        use crate::palw_step_leg::PalwStepOpeningV1;
-        let ctx_hash = ctx.context_hash();
-        let decode = logits_rows.len();
-        let row = &logits_rows[position as usize];
-        let tiles: Vec<Vec<i32>> = row.chunks(PALW_LOGITS_TILE_LANES).map(<[i32]>::to_vec).collect();
-        let tile_leaves: Vec<Hash64> =
-            tiles.iter().enumerate().map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, position, t as u32, lanes)).collect();
-        let path_for = |leaves: &[Hash64], index: usize| -> Vec<Hash64> {
-            crate::palw_step_leg::step_merkle_path_v1(leaves, index).expect("the test's trees are inside the leg bounds")
-        };
-        let row_roots: Vec<Hash64> = logits_rows
-            .iter()
-            .enumerate()
-            .map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes).expect("the fixture's rows have lanes"))
-            .collect();
-        let committed = generated[position as usize] as usize;
-        let (ct, bt) = (committed / PALW_LOGITS_TILE_LANES, beat_lane as usize / PALW_LOGITS_TILE_LANES);
-        let _ = decode;
-        PalwTiledDecodePinV1 {
-            position,
-            generated_token_ids: generated.to_vec(),
-            row_root: row_roots[position as usize],
-            row_opening: PalwStepOpeningV1 {
-                leaf_index: position as u64,
-                leaf_hash: row_roots[position as usize],
-                siblings: path_for(&row_roots, position as usize),
-            },
-            committed_tile_lanes: tiles[ct].clone(),
-            committed_opening: PalwStepOpeningV1 {
-                leaf_index: ct as u64,
-                leaf_hash: tile_leaves[ct],
-                siblings: path_for(&tile_leaves, ct),
-            },
-            beat_tile_lanes: tiles[bt].clone(),
-            beat_opening: PalwStepOpeningV1 {
-                leaf_index: bt as u64,
-                leaf_hash: tile_leaves[bt],
-                siblings: path_for(&tile_leaves, bt),
-            },
-            beat_lane,
-        }
+        // Promoted to the prover every challenger now calls (ADR-0152 v3.1 §4-bis.5).
+        tiled_decode_pin_v1(ctx, logits_rows, generated, position, beat_lane).expect("the fixture's rows build the pin")
     }
 
     /// **A disclosure authenticates exactly what the decode close does** (ADR-0062 SA-2; mainnet

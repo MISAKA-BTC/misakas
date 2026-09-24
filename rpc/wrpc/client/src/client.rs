@@ -702,6 +702,7 @@ impl RpcApi for KaspaRpcClient {
             GetPalwModelReadiness,
             GetPalwModelAdmission,
             GetPalwModelCertification,
+            GetPalwVesting,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,

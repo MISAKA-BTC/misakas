@@ -52,10 +52,16 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// **Re-pinned once more by M3** (ADR-0152 DA-4, IMPL-7): the DA-disclosure-v4 context closes
 /// `COMPLETE_V5`, so the bundle's context root, and with it testnet-12's params and identity ids,
 /// moved; the schedule did not (no fence moved). v22 skeleton: `cf57a2e9…` / `2b48d4ee…`.
+///
+/// **Re-pinned once more by the bridge ledger** (`Params::evm_bridge_ledger_activation_daa_score`,
+/// armed on testnet-12 at genesis): it is in testnet-12's params, identity and schedule ids. That it
+/// is the ONLY thing that moved them is pinned by `evm_bridge_ledger_is_t12_only`
+/// (`the_ledger_is_the_only_thing_that_moved_testnet12`), which takes both fences away and lands on
+/// the previous value here. M3: `f5eee474…` / `75666d42…` / `75282ad2…`.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "f5eee4746137d0e40a58fd5e99bfdc47738800550ad313811be7b1eed185821b",
-    "75666d42d34312c76691de9d1f876465e58502e48d38bde1aa3d7cce0906e7c9",
-    "75282ad229d5f8617aa5b3f5b818ddab9defdc893f1276c6a079c080af7debff",
+    "ea2e5a18e28949bec3b605de7f6764be9edd4f432ced6d8632c3d64df891135a",
+    "ad43854c76b2fbec6377e29ed1b8b937168075f6bd6b1f58537ec4590e82454e",
+    "9ebe1dcc0c6c0e2913aeac199e7fd61fc36a412d682481dcd448a4632becc936",
 );
 
 fn shipped(name: &str) -> Params {

@@ -264,6 +264,10 @@ pub enum RpcApiOps {
     GetPalwModelAdmission = 197,
     /// Which chain-certified families cover this class (not activation).
     GetPalwModelCertification = 198,
+    /// ADR-0152 P2-10: the vesting table (R-core+, testnet-12) — a payee's or a claim's rows with
+    /// their maturity and queue position, the next block's moves, the counters and the halt.
+    /// Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwVesting = 199,
 }
 
 impl RpcApiOps {

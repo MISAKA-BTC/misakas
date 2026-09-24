@@ -5416,6 +5416,7 @@ mod tests {
             anchor: run.binding.job_context.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let material: Base0RetainedMaterialV1 = (
@@ -5750,6 +5751,7 @@ mod tests {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let leaf_count = binding.step_leaf_count;
         material.0 = binding;
@@ -6189,6 +6191,7 @@ mod tests {
             anchor: lying.job_context.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let material: Base0RetainedMaterialV1 = (lying, honest.1.clone(), honest.2.clone(), honest.3.clone(), chunks);
         let opening = base0_open_fp_interval_chunkless_v1(
@@ -6745,6 +6748,7 @@ mod tests {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 1..geometry.interval_count {
@@ -7262,6 +7266,7 @@ mod tests {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let kernels = crate::qwen25_a16_backend::a16_interval_kernels_for_tests_v1(&artifact, Some(&plan));
         for index in 0..geometry.interval_count {
@@ -7476,6 +7481,7 @@ mod tests {
             anchor: run.binding.job_context.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let material: Base0RetainedMaterialV1 = (
             run.binding.clone(),
@@ -7798,6 +7804,7 @@ mod tests {
             anchor: run.binding.job_context.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let material: Base0RetainedMaterialV1 = (
             run.binding.clone(),
@@ -8161,6 +8168,7 @@ mod the_rulesets_ladder {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let consulted = std::cell::Cell::new(0u32);
         let memo = crate::fp_recompute::Base0FpSeatMemoV1::default();
@@ -8271,6 +8279,7 @@ mod the_rulesets_ladder {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
 
         let leaves = run.binding.step_leaf_count;

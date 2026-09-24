@@ -192,6 +192,16 @@ pub fn unavailable(claim: Hash64, seat: PalwBondKeyV2, signed_daa: u64) -> PalwS
     receipt(claim, seat, PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: signed_daa }, signed_daa)
 }
 
+/// **The `G_res` a licence in the next block records** (the S-4 review's G freeze): the live
+/// residual gain `palw_rcore_bind_prices_v1` reads — the value `rcore_backed_set` prices the licence
+/// set's locks with — on the current (pre-licence) state, at the next DAA and its extras.
+pub fn licence_g_res(c: &Chain, id: &Hash64) -> u128 {
+    let at = c.daa + 1;
+    let claim = c.claim(id);
+    let seats = c.s.panel(id).map(|panel| panel.seats.len()).unwrap_or(5);
+    kaspa_consensus_core::palw_state_v2::palw_rcore_bind_prices_v1(&c.s, &c.sp, &c.extras_at(at), id, &claim, seats, at).g_res
+}
+
 /// The escrow term `E` of `claim` (option A's reservation of its escrow), as the ledger holds it.
 pub fn escrow(sp: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> u128 {
     sp.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward)

@@ -342,15 +342,15 @@ impl A16DrillLieV1 {
 
     /// The trait's named fault under `ctx`: where its tile lies, or where its engine does.
     fn of_fault_v1(
-        fault: &kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+        fault: &kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1,
         profile: &PalwShapeProfileV3,
         ctx: &PalwJobContextV2,
     ) -> Result<Self, String> {
-        use kaspa_consensus_core::palw_backend::PalwDrillFaultV1;
+        use kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1;
         use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepTableV1};
         match *fault {
-            PalwDrillFaultV1::Leaf { leaf } => Ok(Self::tile_v1(leaf)),
-            PalwDrillFaultV1::AttnOutput { call, layer, position, head, lane, delta, follow } => {
+            PalwFreePromptDrillFaultV1::Leaf { leaf } => Ok(Self::tile_v1(leaf)),
+            PalwFreePromptDrillFaultV1::AttnOutput { call, layer, position, head, lane, delta, follow } => {
                 let fused = profile
                     .attn_nodes
                     .iter()
@@ -1269,7 +1269,7 @@ impl Qwen25A16Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
-        drill_fault: Option<kaspa_consensus_core::palw_backend::PalwDrillFaultV1>,
+        drill_fault: Option<kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1>,
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{
             PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3, palw_fp_run_facts_for_executed_v1,
@@ -2458,7 +2458,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             job,
             prompt_tokens,
             &mut |_| {},
-            Some(kaspa_consensus_core::palw_backend::PalwDrillFaultV1::Leaf { leaf: leaf_index }),
+            Some(kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1::Leaf { leaf: leaf_index }),
         )
     }
 
@@ -2468,7 +2468,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
-        fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+        fault: kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1,
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         self.execute_free_prompt_v1(job, prompt_tokens, &mut |_| {}, Some(fault))
     }
@@ -3515,6 +3515,33 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         digest.opening_v1(index, bytes).ok_or_else(|| format!("leaf {index} does not open against the digest"))
     }
 
+    fn execute_with_drill_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        if let kaspa_consensus_core::palw_backend::PalwDrillFaultV1::StepLeaf(leaf) = fault {
+            return self.execute_with_injected_fault(job, prompt, leaf);
+        }
+        if !self.court_capable {
+            return Err("the v1 class carries no capture to drill".to_string());
+        }
+        // The dense capture on every class, the held one included — the reason is
+        // `execute_with_injected_fault`'s.
+        let (job, prompt) = crate::produce::base0_drill_job_v1(self, self.prompt_ids_form, job, prompt, fault)?;
+        let mut run =
+            a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), &job, &prompt, self.network_ladder)?;
+        let honest_output = self.committed_output_root_v1(&run.binding.job_context, &run.generated_token_ids, run.output_root);
+        run.output_root = honest_output;
+        crate::produce::base0_drill_run_v1(&mut run, fault, |ctx, ids| {
+            self.output_root_for_context_v1(ctx, ids)
+                .unwrap_or_else(|| kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(ctx, ids))
+        })?;
+        let output_root = run.output_root;
+        crate::produce::base0_drill_outcome_v1(&run, output_root, fault)
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,
@@ -3836,6 +3863,7 @@ mod free_prompt_tests {
             anchor: job.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");
@@ -4206,6 +4234,7 @@ mod free_prompt_tests {
             anchor: Hash64::from_u64_word(0xA16C0117),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(
             backend.verify_material(&outcome.material, claim),
@@ -4412,6 +4441,7 @@ mod free_prompt_tests {
                     anchor: Hash64::from_u64_word(0xE95),
                     attempt_draw: None,
                     output_root: None,
+                    job_pin: None,
                 }
             ),
             kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
@@ -4529,6 +4559,7 @@ mod free_prompt_tests {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
@@ -5644,6 +5675,7 @@ mod free_prompt_tests {
                 anchor: job.job_id,
                 attempt_draw: None,
                 output_root: None,
+                job_pin: None,
             };
             let annexed = backend.open_fp_interval_with_close(&outcome.material, 0, &ids, &[leaf]).expect("the annex");
             let generated = backend.fp_committed_output_ids(&outcome.material).expect("the answer's ids");
@@ -5707,6 +5739,7 @@ mod free_prompt_tests {
             anchor: job.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let leaves = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().step_leaf_count;
         let opened = backend.open_fp_interval(&honest.material, 0, &ids).expect("interval 0 opens");
@@ -6226,6 +6259,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let count = honest.fp_interval_count(&capture).expect("a held capture has intervals");
         assert_eq!(Some(count), honest.fp_interval_count_for(positions, decode), "the executor's count is the chain's");
@@ -6305,6 +6339,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_ne!(lying_claim.execution_root, claim.execution_root, "the lie is committed");
         let t = std::time::Instant::now();
@@ -6479,6 +6514,7 @@ mod held_real_row_probe {
             attempt_draw: None,
             // SEAT-S2's field, `None` as SEAT-S2 wrote base0's fixtures: leaf evidence never reads the answer.
             output_root: None,
+            job_pin: None,
         };
         let binding = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes").binding().clone();
         let fused_at = |leaf: u64| {
@@ -6580,6 +6616,7 @@ mod held_real_row_probe {
             attempt_draw: None,
             // SEAT-S2's field, `None` as SEAT-S2 wrote base0's fixtures: leaf evidence never reads the answer.
             output_root: None,
+            job_pin: None,
         };
         let binding = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes").binding().clone();
         let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
@@ -6686,6 +6723,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let mid = honest.fp_interval_count(&capture).expect("intervals") / 2;
         let opening = honest.open_fp_interval(&capture, mid, &ids).expect("the interval opens");
@@ -6724,6 +6762,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let lie = liar.open_fp_interval(&lying_capture, mid, &ids).expect("the liar serves its interval");
         let verdict = honest.verify_fp_interval_opening(&lie, lying_claim, mid, &ids, leaves);
@@ -7152,7 +7191,7 @@ mod aheld_end_to_end {
     };
     use kaspa_consensus_core::palw_attn_dissect::PalwAttnRootClaimV1;
     use kaspa_consensus_core::palw_attn_responder_v1::{PalwAttnAccusedFilingV1, PalwAttnHeldEvidenceV1, PalwAttnHeldFilingV1};
-    use kaspa_consensus_core::palw_backend::PalwDrillFaultV1;
+    use kaspa_consensus_core::palw_backend::PalwFreePromptDrillFaultV1;
     use kaspa_consensus_core::palw_bisect::PalwBisectTurnV1;
     use kaspa_consensus_core::palw_court_v2::{PalwCourtV2Error, PalwCourtVerdictProofV2};
     use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2};
@@ -7340,7 +7379,7 @@ mod aheld_end_to_end {
                 .execute_free_prompt_with_drill_fault_v2(
                     &job,
                     &prompt,
-                    PalwDrillFaultV1::AttnOutput { call, layer, position: 0, head: site.0, lane: site.1, delta, follow },
+                    PalwFreePromptDrillFaultV1::AttnOutput { call, layer, position: 0, head: site.0, lane: site.1, delta, follow },
                 )
                 .expect("the drilled run commits"),
         };
@@ -7667,6 +7706,7 @@ mod aheld_end_to_end {
             anchor: binding.job_context.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let evidence = kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
             &d.backend,
@@ -7746,6 +7786,9 @@ mod aheld_end_to_end {
             &court,
             1 << 26,
             kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            true,
+            // ADR-0152 v3.1 §4-bis.9's decode-close door (`palw_offence_attribution`): read by a
+            // decode-token close only, never by an attention bottom.
             true,
         )
     }

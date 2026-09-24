@@ -654,16 +654,42 @@ pub(crate) fn render(snap: &Snapshot, view: &MinerView, now_unix: i64) -> String
         Some(Ok(w)) => {
             let next = w.next_mature_daa.map(|d| format!(" (next spendable at DAA {})", group(d))).unwrap_or_default();
             out.push_str(&format!(
-                "  {}  spendable {} · maturing {}{next}\n",
+                "  {}  spendable {} · maturing {}{next}{}\n",
                 paint::bold("REWARDS"),
                 catalog::msk(w.spendable_sompi as u128),
-                catalog::msk(w.maturing_sompi as u128)
+                catalog::msk(w.maturing_sompi as u128),
+                w.vesting.as_ref().map(vesting_suffix).unwrap_or_default()
             ));
         }
         Some(Err(e)) => out.push_str(&format!("  {}  {}\n", paint::bold("REWARDS"), paint::dim(&format!("not read: {e}")))),
         None => {}
     }
     out.push_str(&format!("  {}     {}\n", paint::bold("NEXT"), next_step(view)));
+    out
+}
+
+/// **ADR-0152: the REWARDS line's vesting half** — sompi still vesting toward the pay address
+/// (rows, not outputs: minted only once each matures), the earliest move, the reporter rewards,
+/// and B-3's hold on the bond. Burns are not per payee here: `misaka palw vesting` prints the
+/// chain's burned counter.
+pub(crate) fn vesting_suffix(v: &crate::operator::snapshot::VestingFacts) -> String {
+    let mut out = format!(" · vesting {}", catalog::msk(v.vesting_sompi.saturating_add(v.latched_sompi) as u128));
+    if v.rows > 0 {
+        out.push_str(&format!(" in {} row(s)", v.rows));
+    }
+    if let Some(daa) = v.next_move_daa {
+        out.push_str(&format!(", next moves ≥ DAA {}", group(daa)));
+    }
+    let reporter = v.reporter_pending_sompi.saturating_add(v.reporter_awarded_sompi);
+    if reporter > 0 {
+        out.push_str(&format!(" · reporter {}", catalog::msk(reporter as u128)));
+    }
+    if v.halted {
+        out.push_str(" · HALTED (no anchor settling: nothing matures)");
+    }
+    if v.bond_held == Some(true) {
+        out.push_str(" · bond held by B-3");
+    }
     out
 }
 
@@ -1030,6 +1056,28 @@ mod tests {
         let mut i = base(Some(&refused), None);
         i.process = Some((false, 3600));
         assert_eq!(miner_state(&i).state, MinerState::NotProducing, "a node without --palw-produce is not a disabled miner");
+    }
+
+    /// **T52: the REWARDS line shows what vests apart from what is money** (ADR-0152): the rows'
+    /// sompi, the earliest move, the reporter rewards, a halt, and B-3's hold on the bond.
+    #[test]
+    fn t52_the_rewards_line_names_what_still_vests() {
+        let v = crate::operator::snapshot::VestingFacts {
+            vesting_sompi: 40_000_000_000,
+            latched_sompi: 10_000_000_000,
+            rows: 3,
+            next_move_daa: Some(12_345),
+            reporter_pending_sompi: 100_000_000,
+            reporter_awarded_sompi: 0,
+            bond_held: Some(true),
+            halted: false,
+        };
+        assert_eq!(
+            vesting_suffix(&v),
+            " · vesting 500.00 MSK in 3 row(s), next moves ≥ DAA 12,345 · reporter 1.00 MSK · bond held by B-3"
+        );
+        let halted = crate::operator::snapshot::VestingFacts { halted: true, bond_held: None, reporter_pending_sompi: 0, ..v };
+        assert!(vesting_suffix(&halted).ends_with("HALTED (no anchor settling: nothing matures)"));
     }
 
     #[test]

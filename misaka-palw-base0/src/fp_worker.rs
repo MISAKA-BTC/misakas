@@ -346,7 +346,9 @@ pub fn fp_worker_prompt_ids_form_v1(
 /// §4-bis.1, post-edit 4), derived as [`fp_worker_prompt_ids_form_v1`] derives the form: `CoreV1`
 /// where the preset arms `palw_offence_attribution` — every output root this worker commits is
 /// then the one rendered rule the chain holds a free-prompt claim to — and `Legacy` elsewhere.
-pub fn fp_worker_attempt_rules_v1(network_id: &str) -> Result<kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1, String> {
+pub fn fp_worker_attempt_rules_v1(
+    network_id: &str,
+) -> Result<kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1, String> {
     use kaspa_consensus_core::config::params::Params;
     use kaspa_consensus_core::network::NetworkId;
     let net: NetworkId = network_id.parse().map_err(|e| {
@@ -444,6 +446,25 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             return Err("the network id is empty: every committed root hangs off a context hash that absorbs it, and a seat \
                         derives that hash from its node's own network name"
                 .to_string());
+        }
+        // **The backend commits under the network's attempt rule, or this runtime does not start**
+        // (ADR-0152 v3.1 post-edit 4; the 3a review's H-B). A worker whose backend was never told
+        // the rule commits its free-prompt output root under the family key where the chain holds
+        // the one rendered rule, and then anyone can file `OutputMismatch` (10) against the HONEST
+        // executor — measured on the Qwen3.6 worker, which missed the call: Legacy `5fd4d658…`
+        // against the rule's `fa1d1d45…`. So the check is here, in the one constructor every
+        // worker binary goes through, rather than in each binary: the rule is derived from the
+        // network id exactly as the court and the form are, and a network id this build does not
+        // know (a fixture's) runs `Legacy`, the rule of every network that arms no fence.
+        let rule = fp_worker_attempt_rules_v1(&String::from_utf8_lossy(&network_id))
+            .unwrap_or(kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy);
+        if backend.attempt_rules_v1() != rule {
+            return Err(format!(
+                "the backend commits under the {:?} attempt rule and {} runs {rule:?}: every output root this worker \
+                 committed would be one the chain convicts (set it with `with_attempt_rules(fp_worker_attempt_rules_v1(..))`)",
+                backend.attempt_rules_v1(),
+                String::from_utf8_lossy(&network_id)
+            ));
         }
         // Derived from the class's own registration, not written down here: the scheme decides
         // which close arm can adjudicate the class and which recomputation a seat runs, and it
@@ -1153,6 +1174,128 @@ mod tests {
     use super::*;
     use crate::qwen25_a16_backend::Qwen25A16Backend;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    /// **The 3a review's H-B, kept as the regression it found: a worker whose backend was never told
+    /// the network's attempt rule does not start.** The shipped Qwen3.6 worker built its backend
+    /// without `with_attempt_rules`, so on testnet-12 it committed its free-prompt output root under
+    /// the family key where the chain holds the one rendered rule — and anyone could file
+    /// `OutputMismatch` (10) against the honest executor. Measured here as the reviewer did (the two
+    /// roots differ, and only the rule's is `palw_attempt_output_root_v1` over the run's ids), then
+    /// pinned where every worker binary goes through: `FpWorkerRuntime::new` refuses the Legacy
+    /// backend on testnet-12, takes the CoreV1 one, and refuses a CoreV1 backend on a network this
+    /// build does not know (which runs `Legacy`).
+    #[test]
+    fn a_worker_whose_backend_runs_another_rule_does_not_start() {
+        use crate::qwen36_backend::Qwen36Backend;
+        use kaspa_consensus_core::palw_attempt_rules_v1::{PalwAttemptRulesV1, palw_attempt_output_root_v1};
+        use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_held_canonical_v1, qwen36_profile_v7};
+        let geometry = PalwQwen36GeometryV1 {
+            layer_count: 4,
+            full_attention_interval: 4,
+            hidden_dim: 32,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 16,
+            rope_dims: 4,
+            rope_freq_base_bits: 0x4B18_9680,
+            gdn_k_heads: 2,
+            gdn_v_heads: 4,
+            gdn_head_dim: 8,
+            gdn_conv_kernel: 4,
+            n_experts: 8,
+            experts_per_token: 4,
+            moe_dim: 16,
+            shared_dim: 16,
+            attn_output_gate: 1,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 512,
+        };
+        let artifact = std::sync::Arc::new(crate::qwen36::qwen36_dev_fixture(4, 8));
+        let profile = qwen36_profile_v7(geometry).expect("the held graph-v7 projection");
+        let t12 = b"testnet-12".to_vec();
+        assert_eq!(fp_worker_attempt_rules_v1("testnet-12"), Ok(PalwAttemptRulesV1::CoreV1), "testnet-12 runs CoreV1");
+        let backend = |rules: Option<PalwAttemptRulesV1>, net: &[u8]| {
+            let b =
+                Qwen36Backend::from_registered_profile(artifact.clone(), net.to_vec(), profile.clone(), qwen36_held_canonical_v1(32))
+                    .expect("servable");
+            match rules {
+                Some(rules) => b.with_attempt_rules(rules),
+                None => b,
+            }
+        };
+        let runtime = |b: Qwen36Backend, net: &[u8]| {
+            let (tokenizer, _, _) = crate::tokenizer::byte_level_fixture_v1();
+            FpWorkerRuntime::new(
+                b,
+                &profile,
+                tokenizer,
+                FpWorkerFamilyV1 {
+                    model_id: "fixture/Qwen3.6/graph-v7".to_string(),
+                    runtime_identity: profile.shape_profile_id(),
+                    tokenizer_id: Hash64::default(),
+                    vocab: profile.vocab_size,
+                    retention_schema: "misaka.palw.fp-v3-qwen36-retention.v2",
+                    retention_family: "qwen36",
+                    eog_token_names: QWEN_EOG_TOKEN_NAMES,
+                    artifact: None,
+                },
+                net.to_vec(),
+                7,
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            )
+        };
+
+        // The reviewer's measurement: one job, two rules, two roots; only the rule's is the chain's.
+        let ids = [3u32, 1, 4];
+        let prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        let job = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(
+                kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+                &ids,
+            )
+            .expect("the ids commit"),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 2,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        let root_of = |b: &Qwen36Backend| {
+            let out = b.execute_free_prompt(&job, &prompt).expect("the free prompt runs").outcome;
+            let retention = crate::produce::base0_material_decode_any_v1(&out.material).expect("decodes");
+            (out.output_root, palw_attempt_output_root_v1(&retention.binding().job_context, retention.generated_token_ids()))
+        };
+        let (legacy_root, _) = root_of(&backend(None, &t12));
+        let (core_root, rule_root) = root_of(&backend(Some(PalwAttemptRulesV1::CoreV1), &t12));
+        assert_eq!(core_root, rule_root, "the CoreV1 worker commits the one rendered rule");
+        assert_ne!(legacy_root, rule_root, "the Legacy worker's family-key root is one the chain convicts");
+
+        // The constructor, which every worker binary goes through.
+        let refused = runtime(backend(None, &t12), &t12).err().expect("a Legacy backend does not start on testnet-12");
+        assert!(refused.contains("attempt rule"), "{refused}");
+        assert!(runtime(backend(Some(PalwAttemptRulesV1::CoreV1), &t12), &t12).is_ok(), "the CoreV1 backend starts");
+        let fixture_net = b"misaka-palw-rc";
+        assert!(
+            runtime(backend(Some(PalwAttemptRulesV1::CoreV1), fixture_net), fixture_net).is_err(),
+            "an unknown network runs Legacy"
+        );
+        assert!(runtime(backend(None, fixture_net), fixture_net).is_ok());
+    }
 
     /// **The fixture class, built the way `e2e_drill::a16_fixture_v1` builds it**: a two-layer
     /// derived A16 store under the corrected (graph-v2) profile. Small enough to run in CI, and

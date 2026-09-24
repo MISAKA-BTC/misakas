@@ -111,6 +111,7 @@ impl Router {
                 GetPalwModelReadiness,
                 GetPalwModelAdmission,
                 GetPalwModelCertification,
+                GetPalwVesting,
                 GetTokenSupply,
                 GetTokenEmissionInfo,
                 GetValidatorAttestationTarget,

@@ -1829,8 +1829,8 @@ mod mockery {
                 redrawn: mock(),
                 paid_at_acceptance: mock(),
                 escrow_final_sompi: "1".to_string(),
-                producer_paid_sompi: "1".to_string(),
-                panel_paid_sompi: "1".to_string(),
+                producer_named_sompi: "1".to_string(),
+                panel_named_sompi: "1".to_string(),
                 reserve_sompi: "1".to_string(),
                 burned_sompi: "1".to_string(),
                 attempted_compute: "1".to_string(),
@@ -2377,6 +2377,147 @@ mod mockery {
         }
     }
     test!(GetPalwModelCertificationResponse);
+
+    // ADR-0152 P2-10: op 199 and its parts round-trip.
+    impl Mock for GetPalwVestingRequest {
+        fn mock() -> Self {
+            GetPalwVestingRequest {
+                bond: format!("{}:{}", mock_hex(), mock::<u32>()),
+                payout_address: String::new(),
+                claim_id: mock_hex(),
+                limit: mock(),
+                after: format!("{}:{}", mock::<u64>(), mock_hex()),
+            }
+        }
+    }
+    test!(GetPalwVestingRequest);
+
+    impl Mock for RpcPalwVestingLeg {
+        fn mock() -> Self {
+            RpcPalwVestingLeg {
+                kind: "seat".into(),
+                payee_bond: format!("{}:0", mock_hex()),
+                payload: mock_hex(),
+                sompi: mock(),
+                queue_key: mock_hex(),
+            }
+        }
+    }
+    test!(RpcPalwVestingLeg);
+
+    impl Mock for RpcPalwVestingRow {
+        fn mock() -> Self {
+            RpcPalwVestingRow {
+                claim_id: mock_hex(),
+                class_id: mock_hex(),
+                producer_bond: format!("{}:1", mock_hex()),
+                licence_door: "coverage".into(),
+                basis_k: mock(),
+                escrow_sompi: mock(),
+                buyback_bound_sompi: mock(),
+                total_sompi: mock(),
+                reserve_sompi: mock(),
+                final_daa: mock(),
+                expiry_daa: mock(),
+                settled_at_final: mock(),
+                matured_at: mock(),
+                stage: "latched".into(),
+                daa_clock_met: mock(),
+                licences_since_final: mock(),
+                licences_needed: mock(),
+                second_clock_bound_daa: mock(),
+                da_session_open: mock(),
+                mature_now: mock(),
+                lock_live: mock(),
+                moves_ahead: mock(),
+                keys_ahead: mock(),
+                in_next_block: mock(),
+                eta_daa: mock(),
+                eta_estimated: mock(),
+                legs: mock(),
+                legs_sompi: mock(),
+            }
+        }
+    }
+    test!(RpcPalwVestingRow);
+
+    impl Mock for RpcPalwReporterReward {
+        fn mock() -> Self {
+            RpcPalwReporterReward {
+                offence_key: mock_hex(),
+                stage: "pending".into(),
+                reporter_bond: format!("{}:2", mock_hex()),
+                payload: mock_hex(),
+                sompi: mock(),
+                reveal_until: mock(),
+                in_next_block: mock(),
+            }
+        }
+    }
+    test!(RpcPalwReporterReward);
+
+    impl Mock for RpcPalwVestingMove {
+        fn mock() -> Self {
+            RpcPalwVestingMove { source: "row".into(), id: mock_hex(), legs: mock() }
+        }
+    }
+    test!(RpcPalwVestingMove);
+
+    impl Mock for RpcPalwVestingDoorCount {
+        fn mock() -> Self {
+            RpcPalwVestingDoorCount { door: "quorum".into(), rows: mock(), latched_rows: mock(), sompi: mock::<u64>().to_string() }
+        }
+    }
+    test!(RpcPalwVestingDoorCount);
+
+    impl Mock for GetPalwVestingResponse {
+        fn mock() -> Self {
+            GetPalwVestingResponse {
+                available: mock(),
+                rcore_plus_active: mock(),
+                tip_daa: mock(),
+                next_daa: mock(),
+                halted: mock(),
+                second_clock_depth: mock(),
+                second_clock_escaped_depth: mock(),
+                settled_anchors: mock(),
+                measured_ms_per_daa: mock(),
+                created_sompi: mock::<u64>().to_string(),
+                moved_sompi: mock::<u64>().to_string(),
+                burned_sompi: mock::<u64>().to_string(),
+                live_rows: mock(),
+                latched_rows: mock(),
+                live_sompi: mock::<u64>().to_string(),
+                latched_sompi: mock::<u64>().to_string(),
+                latched_behind_head: mock(),
+                reporter_pending_rows: mock(),
+                reporter_awarded_rows: mock(),
+                next_block_moves: mock(),
+                next_block_legs: mock(),
+                next_block_new_keys: mock(),
+                next_block_stopped: "not_latched".into(),
+                next_block_stopped_at: mock_hex(),
+                backlog_keys: mock(),
+                backlog_blocks_est: mock(),
+                licence_histogram: mock(),
+                bond: format!("{}:3", mock_hex()),
+                payout_address: String::new(),
+                claim_id: String::new(),
+                claim_stage: "moved".into(),
+                bond_known: mock(),
+                payee_holds_collateral: mock(),
+                lock_live_rows: mock(),
+                lock_live_last_expiry_daa: mock(),
+                rows: mock(),
+                rows_total: mock(),
+                next_after: format!("{}:{}", mock::<u64>(), mock_hex()),
+                maturing_sompi: mock::<u64>().to_string(),
+                query_latched_sompi: mock::<u64>().to_string(),
+                reporter_rewards: mock(),
+            }
+        }
+    }
+    test!(GetPalwVestingResponse);
 
     impl Mock for RpcPalwModelLifecycle {
         fn mock() -> Self {

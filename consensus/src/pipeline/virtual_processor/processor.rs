@@ -694,6 +694,8 @@ pub struct VirtualStateProcessor {
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_f002_withdraw_cap_activation_daa_score: u64,
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
+    pub(super) evm_bridge_ledger_activation_daa_score: u64,
+    #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_f003_mldsa_verify_activation_daa_score: u64,
     #[cfg_attr(not(feature = "evm"), allow(dead_code))]
     pub(super) evm_typed_receipt_root_activation_daa_score: u64,
@@ -983,6 +985,7 @@ impl VirtualStateProcessor {
             evm_activation_daa_score: params.evm_activation_daa_score,
             evm_gas_pool_v2_activation_daa_score: params.evm_gas_pool_v2_activation_daa_score,
             evm_f002_withdraw_cap_activation_daa_score: params.evm_f002_withdraw_cap_activation_daa_score,
+            evm_bridge_ledger_activation_daa_score: params.evm_bridge_ledger_activation_daa_score,
             evm_f003_mldsa_verify_activation_daa_score: params.evm_f003_mldsa_verify_activation_daa_score,
             evm_typed_receipt_root_activation_daa_score: params.evm_typed_receipt_root_activation_daa_score,
             evm_lane_kpi: EvmLaneKpi::default(),
@@ -2364,6 +2367,7 @@ impl VirtualStateProcessor {
                             Some(seed),
                             self.evm_gas_pool_v2_activation_daa_score,
                             self.evm_f002_withdraw_cap_activation_daa_score,
+                            self.evm_bridge_ledger_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
                             user_gas_cap,
@@ -2412,6 +2416,7 @@ impl VirtualStateProcessor {
                             &own_payload,
                             self.evm_gas_pool_v2_activation_daa_score,
                             self.evm_f002_withdraw_cap_activation_daa_score,
+                            self.evm_bridge_ledger_activation_daa_score,
                             self.evm_f003_mldsa_verify_activation_daa_score,
                             self.evm_typed_receipt_root_activation_daa_score,
                             user_gas_cap,
@@ -2689,6 +2694,7 @@ impl VirtualStateProcessor {
             pending,
             self.evm_gas_pool_v2_activation_daa_score,
             self.evm_f002_withdraw_cap_activation_daa_score,
+            self.evm_bridge_ledger_activation_daa_score,
             self.evm_f003_mldsa_verify_activation_daa_score,
             self.evm_typed_receipt_root_activation_daa_score,
         ))
@@ -2939,6 +2945,7 @@ impl VirtualStateProcessor {
                     Some(seed),
                     self.evm_gas_pool_v2_activation_daa_score,
                     self.evm_f002_withdraw_cap_activation_daa_score,
+                    self.evm_bridge_ledger_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
                     user_gas_cap,
@@ -2982,6 +2989,7 @@ impl VirtualStateProcessor {
                     &own_payload,
                     self.evm_gas_pool_v2_activation_daa_score,
                     self.evm_f002_withdraw_cap_activation_daa_score,
+                    self.evm_bridge_ledger_activation_daa_score,
                     self.evm_f003_mldsa_verify_activation_daa_score,
                     self.evm_typed_receipt_root_activation_daa_score,
                     user_gas_cap,
@@ -3981,6 +3989,8 @@ impl VirtualStateProcessor {
             step_ladder,
             form,
             self.palw_held_context_at(daa_score),
+            // ADR-0152 v3.1 addendum §4-bis.9: the court door.
+            self.palw_offence_attribution_at(daa_score),
         )
         .ok()
     }
@@ -4010,6 +4020,84 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         kaspa_consensus_core::palw_producer_v2::palw_da_duties_v2(&state, state_params, mine)
+    }
+
+    /// **ADR-0152 X7 / DA-4 (Phase 2, P2-7): the R-core court's duties this node holds** — at the
+    /// tip, for the DAA the virtual's next block folds at, under the extras that block folds with
+    /// (the in-run rows' fence, the second clock), so an answer the responder builds is one the fold
+    /// takes from that discloser. Empty below `palw_rcore_plus`.
+    pub fn palw_disclosure_duties_v1_impl(
+        &self,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutiesV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Default::default() };
+        let Some((chain_point, state)) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten() else {
+            return Default::default();
+        };
+        let Some(candidate_daa) = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score) else {
+            return Default::default();
+        };
+        self.palw_disclosure_duties_v1_at(&state, chain_point, candidate_daa, mine)
+    }
+
+    /// [`Self::palw_disclosure_duties_v1_impl`] on a given state, for the block at `now_daa` on
+    /// `chain_point` — the one place the fold's extras are resolved for the duty read (the real-claim
+    /// tests call it on the state they folded).
+    pub(crate) fn palw_disclosure_duties_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        chain_point: kaspa_consensus_core::BlockHash,
+        now_daa: u64,
+        mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutiesV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Default::default() };
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: now_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        kaspa_consensus_core::palw_producer_v2::palw_disclosure_duties_v1(state, state_params, &extras, mine, now_daa)
+    }
+
+    /// **ADR-0152 §3.8 (Phase 2, P2-6): what an automatic accusation of `claim` by `accuser` comes
+    /// to** — at the tip, for the DAA the virtual's next block folds at, under the extras that block
+    /// folds with (the second clock A-6's room reads, the in-run rows' fence), so an accusation the
+    /// seat files is one the fold opens a session for. `None` with no tip state.
+    pub fn palw_da_accusation_check_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let candidate_daa = self.virtual_stores.read().state.get().ok().map(|virtual_state| virtual_state.daa_score)?;
+        Some(self.palw_da_accusation_check_v1_at(&state, chain_point, candidate_daa, &claim, &accuser))
+    }
+
+    /// [`Self::palw_da_accusation_check_v1_impl`] on a given state, for the block at `now_daa` on
+    /// `chain_point` — the one place the fold's extras are resolved for the accusation read (the
+    /// real-claim tests call it on the state they folded). No state params: the court is dormant.
+    pub(crate) fn palw_da_accusation_check_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        chain_point: kaspa_consensus_core::BlockHash,
+        now_daa: u64,
+        claim: &kaspa_consensus_core::Hash64,
+        accuser: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1::Refused(
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::DaCourtDormant,
+            );
+        };
+        let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: chain_point,
+            daa_score: now_daa,
+            blue_score: 0,
+            subsidy: 0,
+        });
+        kaspa_consensus_core::palw_producer_v2::palw_da_accusation_check_v1(state, state_params, &extras, claim, accuser, now_daa)
     }
 
     /// **Who may be served a claim's private material**, at the tip (ADR-0077 Decision 16's
@@ -4415,21 +4503,72 @@ impl VirtualStateProcessor {
         self.palw_class_carriage_store.write().insert(class_id, record).map_err(|e| format!("cannot store the declaration: {e}"))
     }
 
-    /// A bond's claims at the tip (ADR-0122 §6.5). See the trait doc.
+    /// A bond's claims at the tip (ADR-0122 §6.5). See the trait docs. `with_vesting` adds claim
+    /// row v3's vesting half (ADR-0152, phase2-plan §1.6) — the RPC's read only; node policy reads
+    /// the rows alone (review of P2-10, finding 4) — read at the NEXT block: the virtual's DAA and
+    /// the raw second-clock depth there, the two facts the next fold's step 3d reads, as
+    /// `palw_vesting_v1_impl` reads it.
     pub fn palw_claim_rows_v1_impl(
         &self,
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
         include_terminal: bool,
         limit: usize,
+        with_vesting: bool,
     ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
-        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
-        let (rows, truncated) =
-            kaspa_consensus_core::palw_producer_v2::palw_claim_rows_v1(&state, state_params, &bond, role, include_terminal, limit);
-        let bond = kaspa_consensus_core::palw_producer_v2::palw_bond_summary_v1(&state, &bond);
-        Some(kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1 { tip_daa, rows, truncated, bond })
+        let vesting_at = with_vesting.then(|| {
+            let next_daa = self.palw_next_block_daa_for_reads(&state);
+            (next_daa, self.palw_settled_anchor_depth_at(next_daa))
+        });
+        Some(kaspa_consensus_core::palw_producer_v2::palw_bond_claims_v1(
+            &state,
+            state_params,
+            &bond,
+            role,
+            include_terminal,
+            limit,
+            vesting_at,
+        ))
+    }
+
+    /// **The DAA the next block folds at, for a read of the committed tip** (ADR-0152 P2-10): the
+    /// virtual's, never below `tip + 1`. The virtual can trail the PALW tip for a moment (the tip
+    /// store and the virtual state are written apart), and a read must not answer for a block at or
+    /// below the one its state already folded; a virtual state that cannot be read is the same
+    /// floor, not a missing answer — the registration terms' read clamps the same way (review of
+    /// P2-10, finding 4).
+    fn palw_next_block_daa_for_reads(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> u64 {
+        let tip_daa = state.last_point().map(|point| point.daa_score).unwrap_or(0);
+        let floor = tip_daa.saturating_add(1);
+        self.virtual_stores.read().state.get().map(|virtual_state| virtual_state.daa_score).unwrap_or(floor).max(floor)
+    }
+
+    /// **ADR-0152 V-1…V-8, read side: `getPalwVesting` (op 199)** — the vesting table as the next
+    /// block's step 3d will find it (phase2-plan §1.6, P2-10). The committed tip through
+    /// `load_tip_cached` (the read-side rule above), the virtual's DAA as the next block's, and the
+    /// RAW second-clock depth at that DAA (I-8: the pure functions compute the escape themselves).
+    /// Everything else is `palw_vesting_read_v1`, which answers "what moves next" only through
+    /// `palw_vesting_next_block_plan_v1` — never the planner on a committed state.
+    pub fn palw_vesting_v1_impl(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_hashes::Hash64)>,
+    ) -> Option<kaspa_consensus_core::palw_vesting_read_v1::PalwVestingReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let next_daa = self.palw_next_block_daa_for_reads(&state);
+        Some(kaspa_consensus_core::palw_vesting_read_v1::palw_vesting_read_v1(
+            &state,
+            state_params,
+            next_daa,
+            self.palw_settled_anchor_depth_at(next_daa),
+            &query,
+            limit,
+            after,
+        ))
     }
 
     pub fn palw_seat_duties_v2_impl(
@@ -5917,6 +6056,10 @@ impl VirtualStateProcessor {
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
+        // ADR-0152 v3.1 addendum §4-bis.3: prompt ids charged for whole-prompt recomputations, and
+        // the claims already charged (a claim is charged once per block).
+        let mut heavy_prompt_ids_charged = 0u64;
+        let mut heavy_prompt_claims: std::collections::BTreeSet<kaspa_hashes::Hash64> = std::collections::BTreeSet::new();
         // Review of #12: the registrant bonds whose charged registration the gate then refused in
         // this block. Each takes no further slot this block (see the charging site).
         let mut class_registrants_refused: std::collections::BTreeSet<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> =
@@ -6392,6 +6535,56 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 class_registrations_charged += 1;
+            }
+            // **ADR-0152 v3.1 addendum §4-bis.3: the heavy prompt budget, and what holding it costs.**
+            // A `PromptNotAnchored { Whole }` (13) asks every node to recompute an anchor's whole
+            // prompt root (13.6 ms at 2M); a block holds `PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1` of them
+            // — one 2M check. Three rules keep a failing Whole from taking that slot for a fee (the
+            // Phase 3 review):
+            //   * its carrier pays the prompt's carriage as burned rent (`palw_object_rent_ceiling_v2`,
+            //     dropped here when underpaid, as the other rents are);
+            //   * it is charged only if it will REACH the recompute
+            //     (`palw_offence_heavy_prompt_charge_v1`: decoded, the accused named, the target
+            //     resolved, every cheap check of 13 passed) — junk that fails early costs nothing;
+            //   * a claim is charged ONCE per block (the root is remembered), so a failing Whole on a
+            //     claim never costs an honest one on the same claim the slot.
+            // Charged before the gate computes and kept when the gate then refuses; the object that
+            // would breach the budget is dropped and the block stands. The fold charges by the same
+            // function as its second lock.
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { kind, accused, evidence, .. } =
+                &object
+                && self.palw_offence_attribution_at(point.daa_score)
+            {
+                if rent_armed {
+                    let owed = kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v2(&object, true);
+                    if carrier_fee < owed {
+                        info!(
+                            "Block {block}: a whole-prompt PromptNotAnchored was dropped, and the block stands: its carrier paid \
+                             {carrier_fee} sompi and recomputing its prompt rents for {owed}"
+                        );
+                        continue;
+                    }
+                }
+                if let Some(charge) = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_charge_v1(
+                    &folded,
+                    accused,
+                    *kind,
+                    evidence,
+                    self.palw_identity_rules_v1(point.daa_score),
+                ) && !heavy_prompt_claims.contains(&charge.claim_id)
+                {
+                    let (heavy, budget) = (charge.prompt_ids, kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1);
+                    if heavy_prompt_ids_charged.saturating_add(heavy) > budget {
+                        info!(
+                            "Block {block}: a whole-prompt PromptNotAnchored ({heavy} ids) was dropped before it was computed, and \
+                             the block stands: the block has already charged {heavy_prompt_ids_charged} of {budget} \
+                             (PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1)"
+                        );
+                        continue;
+                    }
+                    heavy_prompt_ids_charged += heavy;
+                    heavy_prompt_claims.insert(charge.claim_id);
+                }
             }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);
@@ -7192,7 +7385,9 @@ impl VirtualStateProcessor {
                         .palw_court_params_v2
                         .as_ref()
                         .ok_or_else(|| "a data-availability answer on a network with no V2 court parameters".to_string())?;
-                    let bytes = borsh::to_vec(answer).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    // One count for this gate and for the responder that builds the answer
+                    // (`palw_da_answer_object_v1`, P2-7).
+                    let bytes = kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_bytes_v1(answer);
                     if bytes > court.max_close_bytes() {
                         return Err(format!(
                             "claim {claim}'s answer is {bytes} bytes, above this ruleset's {}-byte close ceiling (DA-8)",
@@ -7416,6 +7611,8 @@ impl VirtualStateProcessor {
                                 // ADR-0119 Decision 4: a fused site's rows open at the claim's
                                 // ladder under the held regime.
                                 self.palw_held_context_at(point.daa_score),
+                                // ADR-0152 v3.1 addendum §4-bis.9: the court door.
+                                self.palw_offence_attribution_at(point.daa_score),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -7723,6 +7920,8 @@ impl VirtualStateProcessor {
                         self.palw_prompt_ids_form_at(point.daa_score),
                         // ADR-0119 Decision 4.
                         self.palw_held_context_at(point.daa_score),
+                        // ADR-0152 v3.1 addendum §4-bis.9: the court door.
+                        self.palw_offence_attribution_at(point.daa_score),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
@@ -8052,6 +8251,23 @@ impl VirtualStateProcessor {
                         bundle.court.turn_deadline_daa(),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
+                    // **ADR-0152 v3.1 addendum §4-bis.8: every claim of the class must be
+                    // attributable.** Past `palw_offence_attribution` a registration is refused
+                    // unless its canonical job is the formula's (a class too narrow for it is
+                    // refused too, so `IdentityNotDerivable` is no registrant's way out of J5), its
+                    // logits row is a provable step output (which refuses Float32), it reaches no
+                    // Kimi K3 kernel, and a canonical prompt past J5b's inline bound is committed in
+                    // the Merkle form. Processor only: the gate decides, the fold never re-derives a
+                    // registration.
+                    if self.palw_offence_attribution_at(point.daa_score) {
+                        kaspa_consensus_core::palw_attempt_rules_v1::palw_attributable_class_v1(
+                            &carriage.profile,
+                            &carriage.canonical,
+                            false,
+                            self.palw_prompt_ids_form_at(point.daa_score),
+                        )
+                        .map_err(|e| format!("class {class_id} is not attributable past palw_offence_attribution: {e}"))?;
+                    }
                 }
                 // **The receipt quorum, verified where the design always said it was** (audit
                 // M-01). `PalwConsensusObjectV2::ReceiptLicensed`'s own doc said it carried "the
@@ -10194,7 +10410,7 @@ impl VirtualStateProcessor {
     /// false `Valid` takes — the V1 `PanelFalseValid` or `PanelFalseValidV2` — is decided by the
     /// object gate and again by the fold, and the two must read one answer: a gate that admitted
     /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
-    fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
+    pub(super) fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
         self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
     }
 

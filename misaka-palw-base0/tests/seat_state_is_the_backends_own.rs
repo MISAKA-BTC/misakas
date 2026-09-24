@@ -147,6 +147,7 @@ fn a_seats_verdict_is_moved_by_no_computation_but_its_own_backends() {
         // SEAT-S2's field, `None` as SEAT-S2 wrote base0's fixtures: an interval verdict never
         // reads the answer.
         output_root: None,
+        job_pin: None,
     };
     let lie = liar.open_fp_interval(&lying_capture, mid, &ids).expect("the liar serves its interval");
 

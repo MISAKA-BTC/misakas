@@ -393,6 +393,80 @@ pub(crate) struct ClaimExtra {
     pub(crate) deadline_daa: Option<u64>,
     pub(crate) escrow_sompi: u64,
     pub(crate) payout_pending_sompi: Option<u64>,
+    /// Claim row v3 (ADR-0152): where a vested Final's reward stands; `None` for a claim that did
+    /// not vest, or from a node older than v3.
+    pub(crate) vesting: Option<VestingExtra>,
+}
+
+/// **Claim row v3's stage of a vested reward** (ADR-0152 R-core+): the row lives unlatched, it
+/// latched and waits its turn, or it moved into the payout queue (minted by the next coinbase).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum VestingStage {
+    Maturing,
+    Latched,
+    Moved,
+}
+
+/// Claim row v3's vesting fields, as the operator screens read them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub(crate) struct VestingExtra {
+    pub(crate) stage: VestingStage,
+    /// The legs of the row that pay the asking bond (0 once moved: the row is gone).
+    pub(crate) payee_sompi: u64,
+    pub(crate) expiry_daa: Option<u64>,
+    pub(crate) licences_since_final: u64,
+    pub(crate) licences_needed: Option<u64>,
+    pub(crate) matured_at: Option<u64>,
+    /// The earliest DAA the row moves: the node's plan when exact, else a lower bound.
+    pub(crate) eta_daa: Option<u64>,
+    pub(crate) eta_estimated: bool,
+}
+
+/// Claim row v3's vesting fields, from a node that serves them (`None` from an older one, whose
+/// rows carry an empty stage, and for a claim that did not vest).
+pub(crate) fn vesting_of(row: &kaspa_rpc_core::RpcPalwClaimRow) -> Option<VestingExtra> {
+    let stage = match row.vesting_stage.as_str() {
+        "maturing" => VestingStage::Maturing,
+        "latched" => VestingStage::Latched,
+        "moved" => VestingStage::Moved,
+        _ => return None,
+    };
+    Some(VestingExtra {
+        stage,
+        payee_sompi: row.vesting_payee_sompi,
+        expiry_daa: row.vesting_expiry_daa,
+        licences_since_final: row.vesting_licences_since_final,
+        licences_needed: row.vesting_licences_needed,
+        matured_at: row.vesting_matured_at,
+        eta_daa: row.vesting_eta_daa,
+        eta_estimated: row.vesting_eta_estimated,
+    })
+}
+
+/// **What a vesting row is waiting for, in one line** (ADR-0152 V-4/V-7): the DAA clock and the
+/// licences still owed while it matures; its turn once latched.
+pub(crate) fn vesting_detail(v: &VestingExtra) -> String {
+    let msk = crate::operator::catalog::msk;
+    let amount = if v.payee_sompi > 0 { format!("reward {} ", msk(v.payee_sompi as u128)) } else { String::new() };
+    match v.stage {
+        VestingStage::Maturing => {
+            let clock = v.expiry_daa.map(|d| format!(" until ≈ DAA {d} (DAA clock)")).unwrap_or_default();
+            let licences = match v.licences_needed {
+                Some(needed) if v.licences_since_final < needed => {
+                    format!(" and {} more licence(s)", needed - v.licences_since_final)
+                }
+                _ => String::new(),
+            };
+            format!("{amount}vesting{clock}{licences} — a conviction before then burns it")
+        }
+        VestingStage::Latched => {
+            let at = v.matured_at.map(|d| format!(" at DAA {d}")).unwrap_or_default();
+            let eta = v.eta_daa.map(|d| format!("; moves {}DAA {d}", if v.eta_estimated { "≥ " } else { "at " })).unwrap_or_default();
+            format!("{amount}matured{at}, waiting its turn to be minted{eta}")
+        }
+        VestingStage::Moved => "vested and minted: a coinbase paid it; the output matures like any coinbase output".to_string(),
+    }
 }
 
 /// **A reading, sharpened by what the node's claim row knows** and the plain claim read does not:
@@ -406,12 +480,31 @@ pub(crate) fn refine(lane: Lane, mut reading: Reading, extra: &ClaimExtra) -> Re
     if lane == Lane::Block && matches!(reading.state, RewardPending | Rewarded) {
         let msk = crate::operator::catalog::msk;
         if let Some(amount) = extra.payout_pending_sompi {
+            // A vested Final's queued sompi are its moved producer leg, not its escrow.
+            let what = if extra.vesting.is_some() { "reward, moved," } else { "escrow" };
             return Reading {
                 state: RewardPending,
-                detail: format!("escrow {} queued for the next coinbase", msk(amount as u128)),
+                detail: format!("{what} {} queued for the next coinbase", msk(amount as u128)),
                 deadline_daa: None,
                 estimated: false,
             };
+        }
+        // ADR-0152 (claim row v3): a vested Final is not paid at Final + 1. While its row lives
+        // the reward is pending on the row's clocks and turn — dated by the node's own plan — and
+        // once the row moved a coinbase minted it.
+        match extra.vesting {
+            Some(v @ VestingExtra { stage: VestingStage::Maturing | VestingStage::Latched, .. }) => {
+                return Reading {
+                    state: RewardPending,
+                    detail: vesting_detail(&v),
+                    deadline_daa: v.eta_daa,
+                    estimated: v.eta_estimated,
+                };
+            }
+            Some(v @ VestingExtra { stage: VestingStage::Moved, .. }) => {
+                return Reading { state: Rewarded, detail: vesting_detail(&v), deadline_daa: None, estimated: false };
+            }
+            None => {}
         }
         if extra.escrow_sompi == 0 {
             return Reading {
@@ -496,6 +589,37 @@ fn rewarded(lane: Lane, r: &GetPalwFreePromptClaimResponse, w: Option<&Windows>,
             )
             .by(closes)
             .estimated()
+        }
+        // ADR-0152 R-core+: a vested Final's reward is minted only once its row matures — at the
+        // earliest the DAA clock's expiry, with a second clock at the latest `2 × window_court`
+        // past it — and a conviction first burns it. The claim read cannot say which, so this is
+        // the window, marked as an estimate; the node's claim row v3 (`refine`) replaces it.
+        Lane::Block if w.is_some_and(|w| w.vests(at)) => {
+            let w = w.expect("checked");
+            let expiry = w.vesting_expiry(at);
+            let latest = if w.second_clock { expiry.saturating_add(w.window_court.saturating_mul(2)) } else { expiry };
+            let spendable = latest.saturating_add(1).saturating_add(coinbase_maturity);
+            if now < spendable {
+                Reading::new(
+                    WorkState::RewardPending,
+                    format!(
+                        "final at DAA {at}; its reward vests — moves no earlier than DAA {expiry}{} and is minted by the \
+                         block after, spendable {coinbase_maturity} DAA after that; a conviction before then burns it",
+                        if w.second_clock { format!(" (the second clock may hold it to DAA {latest})") } else { String::new() }
+                    ),
+                )
+                .by(expiry)
+                .estimated()
+            } else {
+                Reading::new(
+                    WorkState::Rewarded,
+                    format!(
+                        "final at DAA {at}; its vesting window has passed — minted unless a conviction burned it or a \
+                         licence halt still holds it"
+                    ),
+                )
+                .estimated()
+            }
         }
         Lane::Block => {
             let spendable = at.saturating_add(1).saturating_add(coinbase_maturity);
@@ -643,7 +767,15 @@ mod tests {
             receipt_use_window: 600,
             fp_abandon_hold: 600,
             claim_retirement: 3000,
+            vesting_from_daa: None,
+            window_court: 3000,
+            second_clock: false,
         }
+    }
+
+    /// testnet-12's shape: everything vests from genesis, with a second clock.
+    fn t12() -> Windows {
+        Windows { vesting_from_daa: Some(0), window_court: 3_000, second_clock: true, ..t11() }
     }
 
     fn claim(phase: &str, phase_daa: u64) -> GetPalwFreePromptClaimResponse {
@@ -767,6 +899,59 @@ mod tests {
         assert!(paid.detail.starts_with("escrow 1,708.00 MSK paid"), "{}", paid.detail);
         let prompt = at(Lane::Prompt, &prompt_final(8, 0, NOW - 100));
         assert_eq!(refine(Lane::Prompt, prompt.clone(), &ClaimExtra::default()), prompt, "the prompt lane has no escrow to read");
+    }
+
+    /// **T52: `misaka work` quotes the vesting date, never Final + 1** (ADR-0152, phase2-plan F10):
+    /// on a vesting network the claim read alone dates the DAA clock's expiry as the earliest mint;
+    /// the node's claim row v3 then replaces it with the row's own stage and the plan's ETA; a moved
+    /// row reads as minted, and a queued move as queued.
+    #[test]
+    fn t52_a_vested_final_is_dated_by_its_row_not_by_the_next_coinbase() {
+        let w = t12();
+        let fin = classify(Lane::Block, None, None, Some(&claim("final", NOW - 10)), false, Some(&w), 600, NOW);
+        assert_eq!((fin.state, fin.deadline_daa, fin.estimated), (WorkState::RewardPending, Some(NOW - 10 + 3_000), true));
+        assert!(fin.detail.contains("its reward vests — moves no earlier than DAA 12990"), "{}", fin.detail);
+        assert!(fin.detail.contains("(the second clock may hold it to DAA 18990)"), "{}", fin.detail);
+        assert!(!fin.detail.contains("  "), "one sentence, no stray gap: {}", fin.detail);
+        let maturing = VestingExtra {
+            stage: VestingStage::Maturing,
+            payee_sompi: 50_000_000_000,
+            expiry_daa: Some(12_990),
+            licences_since_final: 4,
+            licences_needed: Some(30),
+            matured_at: None,
+            eta_daa: Some(12_990),
+            eta_estimated: true,
+        };
+        let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(maturing), ..Default::default() });
+        assert_eq!((r.state, r.deadline_daa, r.estimated), (WorkState::RewardPending, Some(12_990), true));
+        assert_eq!(
+            r.detail,
+            "reward 500.00 MSK vesting until ≈ DAA 12990 (DAA clock) and 26 more licence(s) — a conviction before then burns it"
+        );
+        let latched = VestingExtra {
+            stage: VestingStage::Latched,
+            matured_at: Some(13_000),
+            eta_daa: Some(13_001),
+            eta_estimated: false,
+            ..maturing
+        };
+        let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(latched), ..Default::default() });
+        assert_eq!((r.state, r.deadline_daa, r.estimated), (WorkState::RewardPending, Some(13_001), false));
+        assert!(r.detail.contains("matured at DAA 13000, waiting its turn to be minted; moves at DAA 13001"), "{}", r.detail);
+        let moved = VestingExtra { stage: VestingStage::Moved, payee_sompi: 0, ..maturing };
+        let r = refine(Lane::Block, fin.clone(), &ClaimExtra { escrow_sompi: 1, vesting: Some(moved), ..Default::default() });
+        assert_eq!(r.state, WorkState::Rewarded);
+        assert!(r.detail.starts_with("vested and minted"), "{}", r.detail);
+        let queued = refine(
+            Lane::Block,
+            fin,
+            &ClaimExtra { escrow_sompi: 1, payout_pending_sompi: Some(7), vesting: Some(moved), ..Default::default() },
+        );
+        assert!(queued.detail.contains("queued for the next coinbase"), "the move's block: the next coinbase mints it");
+        // Where nothing vests, the old date stands.
+        let unvested = classify(Lane::Block, None, None, Some(&claim("final", NOW - 10)), false, Some(&t11()), 600, NOW);
+        assert_eq!(unvested.deadline_daa, Some(NOW - 10 + 1 + 600));
     }
 
     /// The outbox's states, before the chain has a claim.

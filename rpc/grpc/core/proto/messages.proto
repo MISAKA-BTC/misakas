@@ -118,6 +118,7 @@ message KaspadRequest {
     GetPalwModelReadinessRequestMessage getPalwModelReadinessRequest = 1206;
     GetPalwModelAdmissionRequestMessage getPalwModelAdmissionRequest = 1208;
     GetPalwModelCertificationRequestMessage getPalwModelCertificationRequest = 1210;
+    GetPalwVestingRequestMessage getPalwVestingRequest = 1212;
   }
 }
 
@@ -235,6 +236,7 @@ message KaspadResponse {
     GetPalwModelReadinessResponseMessage getPalwModelReadinessResponse = 1207;
     GetPalwModelAdmissionResponseMessage getPalwModelAdmissionResponse = 1209;
     GetPalwModelCertificationResponseMessage getPalwModelCertificationResponse = 1211;
+    GetPalwVestingResponseMessage getPalwVestingResponse = 1213;
   }
 }
 

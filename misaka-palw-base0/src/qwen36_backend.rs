@@ -2775,6 +2775,30 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         digest.opening_v1(index, bytes).ok_or_else(|| format!("leaf {index} does not open against the digest"))
     }
 
+    fn execute_with_drill_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        if let kaspa_consensus_core::palw_backend::PalwDrillFaultV1::StepLeaf(leaf) = fault {
+            return self.execute_with_injected_fault(job, prompt, leaf);
+        }
+        let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
+            return Err("a backend with no registered graph carries no capture to drill".to_string());
+        };
+        let (job, prompt) = crate::produce::base0_drill_job_v1(self, self.prompt_ids_form, job, prompt, fault)?;
+        let mut run = qwen36_execute_for_attempt_capped_v1(&self.artifact, profile, plan, &job, &prompt, self.network_ladder)?;
+        let honest_output = self.committed_output_root_v1(&run.binding.job_context, &run.generated_token_ids, run.output_root);
+        run.output_root = honest_output;
+        crate::produce::base0_drill_run_v1(&mut run, fault, |ctx, ids| {
+            self.output_root_for_context_v1(ctx, ids)
+                .unwrap_or_else(|| kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(ctx, ids))
+        })?;
+        let output_root = run.output_root;
+        crate::produce::base0_drill_outcome_v1(&run, output_root, fault)
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,
@@ -2929,6 +2953,7 @@ mod tests {
                     anchor: Hash64::from_u64_word(7),
                     attempt_draw: None,
                     output_root: None,
+                    job_pin: None,
                 }
             ),
             PalwMaterialVerdictV1::Unverifiable
@@ -2961,6 +2986,7 @@ mod tests {
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
 
         // `rows = 0, generated = 1` — the row a token was selected from is simply absent.
@@ -3054,6 +3080,7 @@ mod tests {
                     anchor,
                     attempt_draw: None,
                     output_root: None,
+                    job_pin: None,
                 }
             ),
             PalwMaterialVerdictV1::Matches
@@ -3108,6 +3135,7 @@ mod tests {
             anchor,
             attempt_draw: Some(draw),
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&short.material, roots(&short, true)), PalwMaterialVerdictV1::Matches);
         assert_eq!(backend.verify_material(&short.material, roots(&short, false)), PalwMaterialVerdictV1::Mismatch);
@@ -3176,6 +3204,7 @@ mod tests {
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
 
@@ -3352,6 +3381,7 @@ mod tests {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&bytes, claim), PalwMaterialVerdictV1::Matches);
         let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
@@ -3924,6 +3954,7 @@ mod tests {
             anchor: job.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");

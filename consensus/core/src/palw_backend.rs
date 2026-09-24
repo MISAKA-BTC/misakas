@@ -129,6 +129,15 @@ pub struct PalwClaimRootsV1 {
     /// check that judges a claim can bind its answer; the replay's own is
     /// [`PalwReplayRootsV1::output_root`], and the comparison is the caller's.
     pub output_root: Option<Hash64>,
+    /// **The job pin a FREE-PROMPT claim recorded** (ADR-0152 v3.1 J-1:
+    /// `palw_fp_job_pin_v1(commitment)`, the claim record's `job_identity`), when the caller has it —
+    /// read from chain state like the roots, never off the material. A seat holding an FP capture
+    /// checks the capture's context reproduces it (`palw_fp_job_pin_of_context_v1`) before it signs
+    /// (the 3a review's L-b): the job id alone let a capture of ANOTHER job under this id through,
+    /// and a full seat that licensed it is then liable for the claim's `IdentityMismatch` (J1, FP
+    /// pin). `None` for an attempt claim (its whole job is `attempt_draw`'s) and for a caller with no
+    /// claim record.
+    pub job_pin: Option<Hash64>,
 }
 
 /// What a seat concluded about served material.
@@ -1199,25 +1208,41 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     }
 
     /// **The free-prompt drill, with the lie named** (ADR-0152 §4-ter N5) — `fault` is either the
-    /// shipped tile lie ([`PalwDrillFaultV1::Leaf`], what [`Self::execute_free_prompt_with_injected_fault`]
+    /// shipped tile lie ([`PalwFreePromptDrillFaultV1::Leaf`], what [`Self::execute_free_prompt_with_injected_fault`]
     /// makes) or a lie in a fused attention output, followed downstream or not
-    /// ([`PalwDrillFaultV1::AttnOutput`]). What this instance serves for the job afterwards replays
+    /// ([`PalwFreePromptDrillFaultV1::AttnOutput`]). What this instance serves for the job afterwards replays
     /// the same lie. Same rule as every drill verb: callers refuse to reach it on a network carrying
     /// value.
     fn execute_free_prompt_with_drill_fault_v2(
         &self,
         _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
         _prompt_tokens: &[usize],
-        _fault: PalwDrillFaultV1,
+        _fault: PalwFreePromptDrillFaultV1,
     ) -> Result<PalwFpRunV1, String> {
         Err("this backend has no free-prompt drill fault".to_string())
     }
+
+    /// **A DRILL fault of any kind** ([`PalwDrillFaultV1`], ADR-0152 v3.1 addendum §4-bis.10) on the
+    /// attempt lane: the job run through this family's own dense capture path — the prompt, context
+    /// or prefill moved before the run, or the rows, ids, legs or roots moved after it — and every
+    /// root the claim carries re-derived from what was committed. `StepLeaf` is
+    /// [`Self::execute_with_injected_fault`]. The same contract: callers refuse to reach this on a
+    /// network carrying value.
+    fn execute_with_drill_fault(
+        &self,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+        _fault: PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        Err("this backend has no drill".to_string())
+    }
 }
 
-/// **DRILL ONLY: the lie a drill run commits** (ADR-0152 §4-ter N5; the trait's contract: never on a
-/// network carrying value).
+/// **DRILL ONLY: the lie a free-prompt drill run commits** (ADR-0152 §4-ter N5; the trait's contract:
+/// never on a network carrying value). The free-prompt lane's own set, apart from the attempt lane's
+/// [`PalwDrillFaultV1`] (v3.1 addendum §4-bis.10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PalwDrillFaultV1 {
+pub enum PalwFreePromptDrillFaultV1 {
     /// The committed tile at `leaf` with its first lane moved by one; the execution honest — the
     /// shipped drill.
     Leaf { leaf: u64 },
@@ -1232,6 +1257,51 @@ pub enum PalwDrillFaultV1 {
     /// lie fed: the consistent forger 4-ter F9 names, whose anchor an honest challenger reaches only
     /// through the filed slice sub-roots.
     AttnOutput { call: u32, layer: u16, position: u32, head: u16, lane: u16, delta: i32, follow: bool },
+}
+
+/// **How a `BendLogits` drill moves a lane** (ADR-0152 v3.1 addendum §4-bis.10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillBendV1 {
+    /// The lane becomes the row's argmax.
+    NewArgmax,
+    /// The lane moves and the argmax does not — the R1 residual: the committed token is still the
+    /// row's selection, so only `LogitsNotStepOutput` (12) sees it.
+    SameArgmax,
+}
+
+/// **The drill faults** (ADR-0152 v3.1 addendum §4-bis.10) — every way a producer can commit
+/// something other than its honest run that F1, F1c and F1-M exist to convict, each produced
+/// through the producer's OWN execution path and committed as the producer commits (every root
+/// re-derived, the material self-consistent), so a drill — and T18p-M — exercises the real commit
+/// and not an injector. The contract of
+/// [`PalwExecutionBackendV1::execute_with_injected_fault`] holds: never on a network carrying value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillFaultV1 {
+    /// One lane of one step tile moved at `leaf` (`execute_with_injected_fault`) — 5.
+    StepLeaf(u64),
+    /// Logits row `row` bent at `lane` (the first interior lane that can move so when `None`) over
+    /// the honest step tree, the trace root re-committed — 12.
+    BendLogits { row: u32, mode: PalwDrillBendV1, lane: Option<u32> },
+    /// Another anchor's prompt run under this job's id and seed — 9 (J5b) or 13 past 4,096 ids.
+    RelabelPrompt { from: Hash64 },
+    /// The job's prefill cut to `n` ids, run — 9 (J5a).
+    ShortPrefill(u32),
+    /// An instance field written into the context (the tokenizer id), run — 9 (J5a).
+    LegacyContextField,
+    /// A prompt root with no preimage committed in the context, run — 9 (J5b) or 13.
+    GarbagePromptRoot,
+    /// The claim's execution root replaced by one no binding reproduces.
+    UnboundExecutionRoot(Hash64),
+    /// The activation leg root replaced, re-committed — 9 (J6).
+    ActivationRoot(Hash64),
+    /// The checkpoint interval replaced, re-committed — 9 (J7).
+    CheckpointInterval(u32),
+    /// Token `pos` replaced by `lane`, re-committed — 8 (flat) or 11 `NotSelected` (tiled).
+    TokenNotSelected { pos: u32, lane: u32 },
+    /// Token `pos` replaced by an id past the vocabulary, re-committed — 8 or 11 `OutOfVocab`.
+    TokenOutOfVocab { pos: u32 },
+    /// The claim's output root replaced — 10.
+    OutputRoot(Hash64),
 }
 
 /// **ADR-0085's path to a leaf's refutation, for a family's own retention**: the leaf's interval

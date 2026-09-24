@@ -716,7 +716,21 @@ pub fn palw_vesting_next_block_plan_v1(
 /// moves, an upper bound on the keys the moves ahead spend: the rows ahead must latch and fit
 /// first, and rows sharing a seat payee in one block share its key.
 pub fn palw_vesting_mint_position_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Option<(usize, usize)> {
-    state.vesting_row(claim_id)?;
+    palw_vesting_mint_positions_v1(state, &BTreeSet::from([*claim_id])).remove(claim_id)
+}
+
+/// [`palw_vesting_mint_position_v1`] for several rows in ONE walk of V-7's order (the RPC's page of
+/// rows, phase2-plan §5.7's read-side cost): the walk stops at the last row asked for, so a page
+/// costs one pass over the rows ahead of it rather than one pass per row. A claim with no row is
+/// absent from the answer. The single-row form is this function, so the two cannot disagree.
+pub fn palw_vesting_mint_positions_v1(
+    state: &PalwChainStateV2,
+    claims: &BTreeSet<Hash64>,
+) -> std::collections::BTreeMap<Hash64, (usize, usize)> {
+    let mut out = std::collections::BTreeMap::new();
+    if claims.is_empty() {
+        return out;
+    }
     let mut moves = 0usize;
     let mut keys = 0usize;
     for (_, payout) in state.reporter_rewards_iter() {
@@ -724,13 +738,16 @@ pub fn palw_vesting_mint_position_v1(state: &PalwChainStateV2, claim_id: &Hash64
         keys += usize::from(payout.amount > 0);
     }
     for row in state.vesting_iter_by_expiry() {
-        if row.claim_id == *claim_id {
-            return Some((moves, keys));
+        if claims.contains(&row.claim_id) {
+            out.insert(row.claim_id, (moves, keys));
+            if out.len() == claims.len() {
+                break;
+            }
         }
         moves += 1;
         keys += row.key_count();
     }
-    None
+    out
 }
 
 /// **V-3's consistency, the rows' own half** (the fold's debug invariant at the end of step 3d):

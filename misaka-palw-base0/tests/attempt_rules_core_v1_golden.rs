@@ -121,6 +121,7 @@ fn check_family(
             anchor,
             attempt_draw: Some(true),
             output_root: Some(outcome.output_root),
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches, "{label}: the seat licenses it");
 
@@ -148,6 +149,7 @@ fn check_family(
             anchor,
             attempt_draw: Some(true),
             output_root: Some(lie.output_root),
+            job_pin: None,
         };
         assert_eq!(
             backend.verify_material(&lie.material, lie_claim),
