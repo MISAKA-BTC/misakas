@@ -16,7 +16,7 @@ one execution span (`span_daa = 1`), so 1,000 DAA is about 33 hours. `kaspa-pq-m
 
 ## 0. What is different from testnet-11
 
-* **A new chain.** The genesis is `d73dbf44…`. A testnet-11 bond does not exist here. A key file
+* **A new chain.** The genesis is `a27f8f44…`. A testnet-11 bond does not exist here. A key file
   can be reused, but its bond has to be registered again on testnet-12.
 * **Its genesis outputs have their own txid.** The premine sits on `5e0d5f1b…` (not the
   `misaka-premine` sentinel every other network and the private testnet-12 instances use), so no

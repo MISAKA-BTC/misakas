@@ -91,7 +91,7 @@ pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 /// | | | | | | **939,063.21001040 MSK** |
 ///
 /// Each term is `gain × concurrent ÷ max_exposure_ratio` (500‰, so ×2). Eight seats take
-/// 7,512,505.68 MSK, **0.0751 % of the 10B cap**, beside the 758M community table, and
+/// 7,512,505.68 MSK, **0.0751 % of the 10B cap**, beside the 858M community table, and
 /// `every_network_genesis_mints_exactly_the_10b_cap` still holds because this is carved OUT of the
 /// main wallet like every other genesis output.
 ///
@@ -483,11 +483,14 @@ pub const TESTNET12_COMMUNITY_ALLOCATIONS: &[(&str, u64)] = &[
     // tetsu31 — LLM あり lane (2026-09-17). Their SECOND entry, and the only double in this table:
     // an ADDED address for the LLM lane, not a changed one.
     ("misakatest:q2lw0t6a4ht75fmmayzama5t5axrnakeqe77yvn2ezuk83e2zul9pyeevr9zmg2lul65s8tu7jgpcrzkh9g5f5mtkeu4um649zkwfupeudn5e7m6", 5_000_000),
+    // operator's instruction (2026-09-24): 100M to this address at the testnet-12 genesis.
+    ("misakatest:qffaadrfjpt9gy3705xhr2n6085767w290lgf0xd55nrj8px2lk8cj8w34scu4y7l5avauhul3lu9apzc6vugkeu3jhkltgrvfk4m6emz4hjtsfy", 100_000_000),
 ];
 
-/// Total testnet-12 community allocation: **758M MSK** — t11's 648M plus maruko's 100M,
-/// nyanmi-1828's 5M and tetsu31's LLM-lane 5M. Pinned by `t12_community_total_is_758m`.
-pub const TESTNET12_COMMUNITY_SOMPI: u64 = 758_000_000 * SOMPI_PER_KASPA;
+/// Total testnet-12 community allocation: **858M MSK** — t11's 648M plus maruko's 100M,
+/// nyanmi-1828's 5M, tetsu31's LLM-lane 5M and the operator's 2026-09-24 100M. Pinned by
+/// `t12_community_table_is_t11_plus_four` (consensus/core/tests/t12_regenesis.rs).
+pub const TESTNET12_COMMUNITY_SOMPI: u64 = 858_000_000 * SOMPI_PER_KASPA;
 
 /// Deterministic sentinel txid for the t12 community UTXOs: ASCII "misaka-t12-community"
 /// (20 bytes) zero-padded to 64. Its own txid, distinct from t11's, so the two tables can never
