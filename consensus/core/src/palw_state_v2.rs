@@ -7303,6 +7303,14 @@ pub enum PalwStateV2Error {
         "a free-prompt claim of class {class} measures {measured_daa} DAA against the cap of {cap_daa} (ADR-0152 §4-quater V2(c))"
     )]
     FreePromptDeadlineOverCap { class: Hash64, measured_daa: u64, cap_daa: u64 },
+    /// **ADR-0152 §4-quater V2(d)** (the review's L3): the claim's own deadline is long (past the
+    /// short challenge window) but the panel room does not hold its class to Final (K-1 keys on the
+    /// class's canonical job; a short class's long free-prompt run is the case) — its licence would
+    /// release the room while seats still replay to `H`.
+    #[error(
+        "a claim of class {class} derives {verify_daa} DAA, past the {hold_daa} DAA a class the panel room releases at licence may take (ADR-0152 §4-quater V2(d), K-1)"
+    )]
+    ClaimDeadlineOutlivesRoomHold { class: Hash64, verify_daa: u64, hold_daa: u64 },
     #[error(
         "the panel has no room for a claim of class {class}: {inflight_replay} of replay in flight against a budget of {budget} over {horizon_spans} spans"
     )]
@@ -11553,10 +11561,26 @@ impl PalwFoldReadV1<'_> {
     ///   past `window_receipt` is refused `FreePromptDeadlineUnmeasured` (a class-level answer);
     /// * (c) with an active row, a free-prompt claim whose measured `D` exceeds D_cap is refused
     ///   `FreePromptDeadlineOverCap` — asked only where the claim's `work_leaves` are known
-    ///   (`per_claim`, the free-prompt arm), since the class gate carries none.
+    ///   (`per_claim`, the free-prompt arm), since the class gate carries none;
+    /// * (d) (the review's L3) a claim whose own `D` is long (past 120, so its `H` can outlive
+    ///   `L + 120`) on a class the panel room does NOT hold to Final ([`palw_panel_holds_to_final_v1`]:
+    ///   K-1 keys on the class's canonical job, which a short class's long free-prompt run does not
+    ///   move) is refused `ClaimDeadlineOutlivesRoomHold` — the licence would release the room while
+    ///   seats still replay. Refused here rather than making K-1 read the free-prompt profile: the
+    ///   room's hold stays a function of the registry row. Asked wherever the claim's `D` is known
+    ///   (an attempt, the free-prompt arm, or a class with no row).
     ///
     /// Every other testnet-12 genesis class passes and behaves as it did: the floor (no registry row,
     /// no class-derived term) and the 8k row (`D` 15, its largest free-prompt run 75).
+    ///
+    /// **TODO(ADR-0153, before any MoE registration — the review's L1): V2c, the paging predicate**
+    /// (§4-quater.4 NM (iii), refused at registration beside `verify_class_admission_v9` as V2b), is
+    /// not here. When it lands it must key on `artifact_bytes` — the bytes a seat pages — and NOT on
+    /// `working_set_bytes`, which for a mixture counts only the resident experts and would call a
+    /// paging MoE class resident. **And node N-8** (readiness self-selection) must compare a host's
+    /// `m·T` with the claim's `receipt_window_daa` (`W_r = max(window_receipt, D)`), never with the
+    /// raw `verify_daa`: for a short class `D` (15 for the 8k row) is far below the 600 DAA the chain
+    /// actually gives a seat, and a node reading `D` would deselect itself from classes it can serve.
     fn check_class_verify_admits_v1(
         &self,
         class_id: &Hash64,
@@ -11597,6 +11621,24 @@ impl PalwFoldReadV1<'_> {
                 {
                     return Err(PalwStateV2Error::FreePromptDeadlineUnmeasured { class: *class_id, derived_daa, open_daa });
                 }
+            }
+        }
+        // (d) The room must hold what the claim's horizon can outlive. `D` is known for an attempt, in
+        // the free-prompt arm (`per_claim`), and on the derived branch (a class-level free-prompt `D`);
+        // the class gate's free-prompt shape under a measured row carries no size, and its arm asks.
+        let d_known = matches!(shape, PalwClaimVerifyShapeV1::Attempt)
+            || per_claim
+            || self.params.class_verify_row_at(class_id, now_daa).is_none();
+        if d_known {
+            let verify_daa = self.params.claim_verify_daa_v1(self.state, class_id, shape, now_daa);
+            if verify_daa > crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_LONG_D_DAA_V1
+                && !palw_panel_holds_to_final_v1(self.params, self.state, class_id)
+            {
+                return Err(PalwStateV2Error::ClaimDeadlineOutlivesRoomHold {
+                    class: *class_id,
+                    verify_daa,
+                    hold_daa: crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_LONG_D_DAA_V1,
+                });
             }
         }
         Ok(())
@@ -13630,6 +13672,11 @@ impl<'a> TransitionBuilder<'a> {
     /// is the claim's own (a free-prompt claim's run included), judged at the bound it is credited
     /// from; the credit only moves the bound forward, so the fence and any measured row that priced
     /// the claim still price it.
+    ///
+    /// **Receipts signed before the shift no longer verify** (`signed_daa < bound_daa`): every seat
+    /// re-signs for the new bound, which is a new duty key on the node. The node must therefore keep a
+    /// seat's replay result per (claim, job) — N-2's resumable replay — so a re-sign never costs a
+    /// second replay (the review's INFO; a flag-day item: no launch class is long-D).
     fn credit_verify_pause_v6(&mut self, claim_id: Hash64, paused_since: u64, now_daa: u64) {
         let Some(panel) = self.state.panels.get(&claim_id).cloned() else { return };
         if !self.params.class_verify_deadline_active_at(panel.bound_daa) {
@@ -54433,6 +54480,57 @@ pub(crate) mod tests {
                 matches!(ask(&not_yet, &s, two_m, a), Err(PalwStateV2Error::ClassDeadlineUnmeasured { .. })),
                 "before its activation"
             );
+        }
+
+        /// **V2(d), the review's L3: a short class's long free-prompt run is refused by name.** A class
+        /// whose canonical job derives 15 DAA (not long-D, so K-1 releases its room at licence) with a
+        /// published context whose largest run derives between 120 and 600: its free-prompt claim —
+        /// at the class gate and in the free-prompt arm alike — is `ClaimDeadlineOutlivesRoomHold`,
+        /// since its `H` could outlive `L + 120` with the room already released; its attempt passes.
+        /// If the room holds the class (C7's list names it), the claim passes; below the fence nothing
+        /// is asked.
+        #[test]
+        fn v2d_a_short_class_s_long_free_prompt_run_is_refused_by_name() {
+            let short_fp = h64(0x5F);
+            // The context whose largest run lands in (120, 600]: the tiny profile's history cost grows
+            // with n², so a doubling search finds it.
+            let (n_ctx, fp_d) = (17..=22)
+                .map(|shift| 1u32 << shift)
+                .flat_map(|base| [base, base + base / 2])
+                .find_map(|n| {
+                    let mut s = PalwChainStateV2::genesis();
+                    s.fp_work_profiles.insert(short_fp, Box::new(profile(n)));
+                    palw_class_fp_verify_daa_v1(&s, &short_fp).filter(|d| *d > 120 && *d <= 600).map(|d| (n, d))
+                })
+                .expect("a context whose largest run derives past 120 and inside 600");
+            let mut s = PalwChainStateV2::genesis();
+            s.set_model_lifecycle_for_tests(short_fp, row(15, 5));
+            s.fp_work_profiles.insert(short_fp, Box::new(profile(n_ctx)));
+            let (on, off) = (t12_like(true), t12_like(false));
+            assert!(!palw_class_needs_measured_row_v1(&on, &s, &short_fp), "the premise: not NM (15, and not held)");
+            assert!(!palw_panel_holds_to_final_v1(&on, &s, &short_fp), "the premise: K-1 releases the room (canonical 15)");
+            let extras = PalwTransitionExtrasV1::default();
+            let ask = |p: &PalwStateParamsV2, shape, per_claim| {
+                TransitionBuilder::new(&s, p, false, false, false, false, &extras)
+                    .check_class_verify_admits_v1(&short_fp, 100, shape, per_claim)
+            };
+            let fp = PalwClaimVerifyShapeV1::FreePrompt { work_leaves: 10 };
+            for per_claim in [false, true] {
+                assert_eq!(
+                    ask(&on, fp, per_claim),
+                    Err(PalwStateV2Error::ClaimDeadlineOutlivesRoomHold {
+                        class: short_fp,
+                        verify_daa: fp_d,
+                        hold_daa: PALW_CLASS_VERIFY_LONG_D_DAA_V1
+                    }),
+                    "n_ctx {n_ctx}: the free-prompt claim (per_claim {per_claim})"
+                );
+                assert_eq!(ask(&off, fp, per_claim), Ok(()), "below the fence nothing is asked");
+            }
+            assert_eq!(ask(&on, PalwClaimVerifyShapeV1::Attempt, false), Ok(()), "its attempt is the canonical job's 15");
+            let held = t12_like(true).with_rcore_plus_mirrors(Some(0), 12_900, vec![short_fp]);
+            assert!(palw_panel_holds_to_final_v1(&held, &s, &short_fp));
+            assert_eq!(ask(&held, fp, true), Ok(()), "a class the room holds to Final may take the long run");
         }
 
         /// **V4: the one floor.** Past the fence a licensed claim's Final floor is `max(L + wc, H)`:

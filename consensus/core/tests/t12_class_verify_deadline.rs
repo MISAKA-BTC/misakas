@@ -422,3 +422,100 @@ fn every_global_timer_keeps_its_value_and_only_the_class_derived_deadline_moves(
     assert_eq!((on.receipt_window_for_claim_v1(&s, &id2m, a, 0), twin.receipt_window_for_claim_v1(&s, &id2m, a, 0)), (13_995, 2_799));
     assert_eq!((on.receipt_window_for_claim_v1(&s, &short, a, 0), twin.receipt_window_for_claim_v1(&s, &short, a, 0)), (600, 600));
 }
+
+/// **Every launch class keeps a short deadline on both lanes** (adopted from the review's
+/// `review_probe_launch_class_deadlines`). For each testnet-12 genesis class other than the NM 2M row,
+/// with its free-prompt profile published (its genesis registration's, or BASE-0's for the floor):
+/// the attempt's `D` and the class's largest free-prompt run are both at most the short challenge
+/// window (so `H ≤ L + 120` and no Final moves), the receipt window is the global 600 on both lanes,
+/// and the class is not NM and not held to Final — so none of V2 (a)–(d) refuses it.
+#[test]
+fn every_launch_class_keeps_a_short_deadline_on_both_lanes() {
+    let p = t12();
+    let (sp, s) = (bundle(&p).state, genesis_state(&p));
+    let classes = genesis_classes(&p);
+    let floor = classes[0].0;
+    let (_, id2m) = model_classes(&p);
+    let mut seen = 0;
+    for (class, leaves, _, _) in &classes {
+        if *class == id2m {
+            continue;
+        }
+        let profile = bundle(&p)
+            .genesis_objects
+            .iter()
+            .find_map(|o| match o {
+                PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. } if class_id == class => {
+                    Some(carriage.profile.clone())
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                (*class == floor).then(|| {
+                    kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+                        kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+                    )
+                    .expect("BASE-0's profile")
+                })
+            })
+            .expect("every launch class has a profile");
+        let published = edited(&sp, &s, |carriage| {
+            carriage.fp_work_profiles.insert(*class, Box::new(profile.clone()));
+        });
+        let (a, fp) = (PalwClaimVerifyShapeV1::Attempt, PalwClaimVerifyShapeV1::FreePrompt { work_leaves: *leaves });
+        let (d_a, d_fp) = (sp.claim_verify_daa_v1(&published, class, a, 1_000), sp.claim_verify_daa_v1(&published, class, fp, 1_000));
+        println!("class {class}: n_ctx {}, D attempt {d_a}, D free prompt {d_fp}", profile.n_ctx);
+        assert!(d_a <= 120 && d_fp <= 120, "{class}: a launch class's deadlines stay inside the short window ({d_a}, {d_fp})");
+        for shape in [a, fp] {
+            assert_eq!(sp.receipt_window_for_claim_v1(&published, class, shape, 1_000), 600, "{class}: {shape:?}");
+        }
+        assert!(!palw_class_needs_measured_row_v1(&sp, &published, class), "{class}: not NM");
+        assert!(!kaspa_consensus_core::palw_state_v2::palw_panel_holds_to_final_v1(&sp, &published, class), "{class}: not held");
+        seen += 1;
+    }
+    assert!(seen >= 2, "the floor and the 8k row");
+}
+
+/// **An 8k attempt licensed before its horizon Finals as before** (adopted from the review's
+/// `review_probe_8k_attempt_licensed_before_its_horizon`). Licensed at `B + 3`, inside its
+/// `H = B + 16` — the realistic case, a canonical 8k replay takes minutes: its Final deadline is the
+/// twin's `L + 120`; its licence-time locks are dated from `H` (V5), so the two states differ between
+/// the licence and Final; the Final re-dates every lock from `F`, and the roots agree again.
+#[test]
+fn an_8k_attempt_licensed_before_its_horizon_finals_as_before() {
+    let (mut roots_at_licence, mut roots_at_final, mut locks) = (Vec::new(), Vec::new(), Vec::new());
+    for armed in [true, false] {
+        let p = if armed { t12() } else { off(&t12()) };
+        let (short, _) = model_classes(&p);
+        let mut c = model_chain(p, short, 1);
+        let id = model_claim(&mut c, short, 1, 0x16);
+        let seats = honest_seats(&c.p, 5);
+        let b = c.daa + 1;
+        ready_step(
+            &mut c,
+            short,
+            b,
+            &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xAC_0000 + b), seats: seats_of(&seats) }],
+        );
+        let l = b + 3;
+        ready_step(
+            &mut c,
+            short,
+            l,
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, b)).collect() }],
+        );
+        assert_eq!(c.s.deadline_of(&id), Some(l + 120), "armed {armed}: the Final deadline is L + 120");
+        locks.push(c.s.slashable_lock(seats[0].0, id).expect("locked").expiry_daa);
+        roots_at_licence.push(c.s.state_root());
+        ready_step(&mut c, short, l + 121, &[]);
+        assert!(matches!(c.claim(&id).phase, PalwClaimPhaseV2::Final { final_daa } if final_daa == l + 121), "armed {armed}");
+        assert_eq!(c.s.slashable_lock(seats[0].0, id).expect("locked").expiry_daa, l + 121 + c.sp.window_court(), "armed {armed}");
+        roots_at_final.push(c.s.state_root());
+        if armed {
+            assert_eq!(locks[0], (l - 3) + 16 + c.sp.window_court(), "V5: dated from H = B + 16");
+        }
+    }
+    assert_eq!(locks[1] + 13, locks[0], "the twin dates the lock from L = B + 3");
+    assert_ne!(roots_at_licence[0], roots_at_licence[1], "between the licence and Final the lock differs");
+    assert_eq!(roots_at_final[0], roots_at_final[1], "the Final re-dates it: the states agree again");
+}

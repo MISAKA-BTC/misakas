@@ -32,6 +32,19 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             )),
         }
     }
+    /// A fence `validate_palw_v2` refuses anywhere but at genesis: a candidate at a height is refused
+    /// by name, before any fingerprint is printed for a ruleset no build can run.
+    fn genesis_only(name: &str, at: ForkActivation) -> Result<(), String> {
+        if at == ForkActivation::always() {
+            Ok(())
+        } else {
+            Err(format!(
+                "`{name}` is genesis-only: it is armed at genesis or not at all, so a candidate at a height ({}) is a \
+                 regenesis, not a flag day",
+                at.daa_score()
+            ))
+        }
+    }
     match name {
         "palw_bootstrap_activation" => params.palw_bootstrap_activation = Some(at),
         "palw_unavailable_abstains" => params.palw_unavailable_abstains = Some(at),
@@ -109,11 +122,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
         "palw_clock_floor" => params.palw_clock_floor = Some(at),
         "palw_offence_attribution" => params.palw_offence_attribution = Some(at),
-        // ADR-0152 §4-quater: the bundle carries the height beside the fence; `validate_palw_v2` refuses
-        // the two apart, so they are set together.
-        "palw_class_verify_deadline" => {
-            params.palw_class_verify_deadline = Some(at);
-            params.sync_palw_class_verify_deadline();
+        // ADR-0152 R-core+: the V2 bundle mirrors this height (`rcore_plus_active_at`, the bond
+        // withdrawal delay, the C7 list), and `validate_palw_rcore_plus_v1` refuses the two apart —
+        // set together, as `palw_audit_2026_09_23` is.
+        "palw_rcore_plus" => {
+            params.palw_rcore_plus = Some(at);
+            params.sync_palw_rcore_plus();
         }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
@@ -122,6 +136,15 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         // The V2 bundle carries this height (and the lane's span) beside the fence;
         // `validate_palw_v2` refuses the two apart, so they are set together.
         "palw_class_receipt_window" => params.set_palw_class_receipt_window(Some(at)),
+        // ADR-0152 §4-quater: genesis-only (the pruning depth its deadlines need is a genesis fact), so a
+        // height is refused here by name rather than left to surface as a validation failure; at
+        // genesis the bundle carries the height beside the fence and `validate_palw_v2` refuses the two
+        // apart, so they are set together.
+        "palw_class_verify_deadline" => {
+            genesis_only(name, at)?;
+            params.palw_class_verify_deadline = Some(at);
+            params.sync_palw_class_verify_deadline();
+        }
         "palw_execution_quanta" => params.palw_execution_quanta = Some(at),
         "palw_public_model_source_required" => {
             params.palw_public_model_source_required =
@@ -330,9 +353,29 @@ mod tests {
                         "{name}: setting by name did not land on the fence the list reads"
                     );
                 }
-                Err(why) => assert!(why.contains("companion value"), "{name}: {why}"),
+                // A genesis-only fence is refused at a height by name (ADR-0152 §4-quater).
+                Err(why) => assert!(why.contains("companion value") || why.contains("is genesis-only"), "{name}: {why}"),
             }
         }
         assert!(set_fence_by_name(&mut params.clone(), "palw_no_such_fence", ForkActivation::always()).is_err());
+    }
+
+    /// **The class-verify-deadline fence is refused at a height and set, with its bundle mirror, at
+    /// genesis** (the §4-quater review's L5): it is genesis-only, so a candidate naming a height is a
+    /// regenesis and is refused by name before any fingerprint is printed.
+    #[test]
+    fn the_class_verify_deadline_fence_is_refused_at_a_height_and_mirrored_at_genesis() {
+        let params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
+        let name = "palw_class_verify_deadline";
+        let at_height = set_fence_by_name(&mut params.clone(), name, ForkActivation::new(9_000_000));
+        assert!(at_height.as_ref().is_err_and(|why| why.contains("is genesis-only")), "{at_height:?}");
+        let mut armed = params.clone();
+        set_fence_by_name(&mut armed, name, ForkActivation::always()).expect("genesis is accepted");
+        let after = armed.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+        assert_eq!(after, Some(ForkActivation::always()), "set by name");
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &armed.palw_consensus_mode else {
+            panic!("testnet-11 is ConsensusV2")
+        };
+        assert_eq!(bundle.state.class_verify_deadline_from_daa(), Some(0), "the bundle mirrors the fence");
     }
 }

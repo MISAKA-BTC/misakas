@@ -56,17 +56,29 @@ pub fn t12_2m_flag_day_row() -> kaspa_consensus_core::palw_class_verify_deadline
     row
 }
 
+/// **`p`'s pruning depth raised to hold the claim lattice at D_cap** (ADR-0152 §4-quater E-11), laid
+/// out as every V2 preset's depth is — what a measured row requires of the ruleset. testnet-12's real
+/// depth is the regenesis params' (P-1, ≈ 74,920 on the design's R_eff reading), at or above this.
+pub fn with_d_cap_pruning(p: &mut Params) {
+    let b = bundle(p);
+    let lattice = kaspa_consensus_core::config::params::palw_class_verify_lattice_daa_v1(&b, p.palw_da_court);
+    let depth = kaspa_consensus_core::config::params::palw_v2_pruning_depth_for_lattice_v1(&p.blockrate, &b, lattice);
+    p.blockrate.pruning_depth = p.blockrate.pruning_depth.max(depth);
+}
+
 /// **testnet-12 past ADR-0153's flag day, as a fixture: the 2M row open under a measured row.** At
 /// launch the 2M row is closed — ADR-0152 §4-quater V2 refuses every 2M claim on every lane until a
 /// flag day installs a measured `PalwClassVerifyRowV1` (U-D1) — so a test whose premise is a LIVE 2M
 /// claim (the C7 room hold, its static cap, its staged reserve, its DA court) runs here, the only
 /// configuration in which such a claim exists. [`t12_2m_flag_day_row`] measures the derived deadline,
 /// so the class-derived rules (the receipt window `W_r = 13,995`, `Final` no earlier than
-/// `bound + 13,996`) are the ones a 2M claim will meet.
+/// `bound + 13,996`) are the ones a 2M claim will meet; and the pruning depth holds the lattice at
+/// D_cap ([`with_d_cap_pruning`]), which a ruleset with a measured row must (E-11).
 pub fn t12_2m_open() -> Params {
     let mut p = t12();
     p.palw_class_verify_rows = Box::leak(Box::new([t12_2m_flag_day_row()]));
     p.sync_palw_class_verify_deadline();
+    with_d_cap_pruning(&mut p);
     p.validate_palw_v2().expect("the flag-day fixture validates");
     p
 }

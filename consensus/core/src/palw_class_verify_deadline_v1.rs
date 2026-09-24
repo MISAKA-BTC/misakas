@@ -18,6 +18,26 @@
 //! testnet-12 (wrong: a fifth of the window the derivation meant — the 2M row got 2,799 DAA instead
 //! of 13,995). Past the fence a span is counted as `PALW_CLASS_VERIFY_REF_SPAN_DAA_V1` =
 //! ⌈600,000 ms / 120,000 ms⌉ = 5 DAA on every network, whatever the lane's span.
+//!
+//! # Not in this change — owed before the flag day that opens a long-D class (ADR-0153)
+//!
+//! No testnet-12 genesis class is long-D except the 2M row, which V2 keeps closed, so none of these
+//! binds at launch; each binds the first time a class with `D` past 120 takes a claim (a post-genesis
+//! registration, or the 2M row's measured row):
+//!
+//! * **Retention vs the court (the review's L5).** The producer's trace retention is pinned at
+//!   admission to the global `bind + receipt + challenge + court` = A + 5,400, but a class with `D` in
+//!   (120, 600] can be redrawn, bound late and Final at `H`, and a court opened just before that Final
+//!   runs to about A + 5,402 — two DAA past what the producer was obliged to keep. §4-quater's `R_eff`
+//!   (the DA and court gates, the held dissection) is the fix; it is dormant here.
+//! * **V6 invalidates receipts already signed.** Advancing `panels[c].bound_daa` by a DA pause makes
+//!   every receipt signed before the shift fail the `signed_daa ≥ bound_daa` check, so each seat must
+//!   re-sign. A seat must not have to REPLAY again for that: node N-2 must keep its replay result per
+//!   (claim, job), not per duty key (which the new `bound_daa` changes).
+//! * **V2c at registration** (paging classes, keyed on `artifact_bytes`, see
+//!   `PalwFoldReadV1::check_class_verify_admits_v1`'s TODO), **P-1** (the regenesis pruning depth, at
+//!   or above `palw_class_verify_lattice_daa_v1`, which a measured row already requires — E-11), and
+//!   **SR-1b's `daa ≥ H`** on its supplementary path.
 
 use crate::Hash64;
 use crate::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, PalwModelWorkV1, palw_verification_window_spans_v1};

@@ -471,6 +471,7 @@ fn past_the_deadline_fence_a_999_span_row_is_closed_unmeasured_and_held_once_mea
     let mut measured = p.clone();
     measured.palw_class_verify_rows = Box::leak(Box::new([row]));
     measured.sync_palw_class_verify_deadline();
+    with_d_cap_pruning(&mut measured);
     measured.validate_palw_v2().expect("the measured row validates");
     let at = window_walk_on(measured, PALW_RCORE_C7_WINDOW_SPANS_V1 - 1);
     println!("999 spans, measured, shipped rules: {at:?}");
