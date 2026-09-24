@@ -109,6 +109,12 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_clock_cursor" => params.palw_clock_cursor = Some(at),
         "palw_clock_floor" => params.palw_clock_floor = Some(at),
         "palw_offence_attribution" => params.palw_offence_attribution = Some(at),
+        // ADR-0152 §4-quater: the bundle carries the height beside the fence; `validate_palw_v2` refuses
+        // the two apart, so they are set together.
+        "palw_class_verify_deadline" => {
+            params.palw_class_verify_deadline = Some(at);
+            params.sync_palw_class_verify_deadline();
+        }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
         "palw_objective_offence" => params.palw_objective_offence = Some(at),

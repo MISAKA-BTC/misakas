@@ -108,7 +108,10 @@ fn committed_of(c: &Chain, s: &PalwChainStateV2, bond: &PalwBondKeyV2, at: u64) 
 /// free half and admitted once the bond has room. `committed + accuser ≤ C` after every block.
 #[test]
 fn m1_work_and_accusations_share_one_invariant() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (_, id2m) = model_classes(&p);
     let mut c = model_chain(p.clone(), id2m, 1);
     let claim = model_claim(&mut c, id2m, 1, 0xB101);
@@ -282,7 +285,10 @@ fn l4_the_capability_declaration_reads_the_one_ledger() {
 }
 
 /// **L5: a lock whose claim outlives its clocks stays committed, and the re-date at Final moves
-/// nothing.** A seat's `lock_3` is written at the licence with `expiry = licence + window_court`. A
+/// nothing.** A seat's `lock_3` is written at the licence with `expiry = max(licence, H) + window_court`
+/// (ADR-0152 §4-quater V5: a floor claim licensed one DAA after its bind is still inside its 10-DAA
+/// verification deadline, so its lock is dated from `H = bound + 11`, restated from `licence +
+/// window_court` when the fence landed; the checkpoints below read the lock's own expiry). A
 /// court whose turns keep it open past that — the carriage stands in for the played rungs: a session
 /// with its backstop at `licence + 4·window_court` and its next rung after it — holds the claim
 /// licensed past the DAA expiry and past the second clock's bound (`expiry + 2·window_court`). The
@@ -299,7 +305,13 @@ fn l5_a_lock_outliving_its_clocks_is_still_committed_and_the_final_moves_nothing
     let seat = c.floor_seats()[0].0;
     let lock = *c.s.slashable_lock(seat, claim).expect("the seat's lock");
     let wc = c.sp.window_court();
-    assert_eq!(lock.expiry_daa, licensed_daa + wc, "the premise: the lock's DAA clock is the licence's");
+    let horizon = kaspa_consensus_core::palw_state_v2::palw_claim_verify_horizon_v1(&c.s, &c.sp, &claim, &c.claim(&claim))
+        .expect("testnet-12 arms the class-verify-deadline fence");
+    assert_eq!(
+        lock.expiry_daa,
+        licensed_daa.max(horizon) + wc,
+        "the premise: the lock's DAA clock is the licence's, floored at the verification horizon (V5)"
+    );
     let duty = c.s.panel_duty_row_of(&claim).expect("duty row").seat_exposure;
     assert!(lock.amount > duty, "the premise: the lock tops the duty up (the whole-gain price)");
     // The court that outlives the lock's clocks.
@@ -335,7 +347,7 @@ fn l5_a_lock_outliving_its_clocks_is_still_committed_and_the_final_moves_nothing
     let delay = c.sp.withdrawal_delay_daa();
     let before = committed_of(&c, &c.s, &seat, c.daa);
     assert_eq!(before - c.s.reserved_exposure(&seat), lock.amount - duty, "the lock's excess over its duty");
-    for at in [licensed_daa + wc + 1, licensed_daa + 3 * wc] {
+    for at in [lock.expiry_daa + 1, licensed_daa + 3 * wc] {
         c.step_at(at, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
         assert!(matches!(c.claim(&claim).phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the court holds it at {at}");
         let escaped =
@@ -367,7 +379,10 @@ fn l5_a_lock_outliving_its_clocks_is_still_committed_and_the_final_moves_nothing
 /// the accuser gate still offers keeps it (`committed + accuser + room ≤ C`).
 #[test]
 fn m1_the_invariant_holds_across_interleavings() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (_, id2m) = model_classes(&p);
     let total = |c: &Chain, b: &PalwBondKeyV2, at: u64| {
         (kaspa_consensus_core::palw_state_v2::palw_bond_committed_v1(&c.s, b, at, None, c.sp.window_court()), palw_accuser_exposure_v1(&c.s, b), u128::from(c.s.bond(b).unwrap().collateral))

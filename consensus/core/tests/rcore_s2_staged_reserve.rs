@@ -148,7 +148,10 @@ fn t27_u1_the_8k_row_holds_on_incapable_and_releases_on_full_service() {
 /// `Valid`s, the quorum door, basis 3, every seat served, and still held; Final releases it.
 #[test]
 fn u1_a_c7_claim_holds_the_escrow_to_final_on_a_full_service_licence() {
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let (_, id2m) = model_classes(&p);
     assert_eq!(p.palw_rcore_conservative_classes, &[id2m], "the premise: C7 is the 2M row");
     let mut c = model_chain(p, id2m, 1);

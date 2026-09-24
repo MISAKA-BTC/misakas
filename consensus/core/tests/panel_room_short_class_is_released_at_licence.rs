@@ -141,7 +141,10 @@ fn beside_it_the_2m_row_is_still_held_to_final_at_its_cap_of_one() {
     const P2M_SECOND: u64 = 9_402;
     const PSHORT: u64 = 9_403;
     const PSHORT_SECOND: u64 = 9_404;
-    let p = t12();
+    // ADR-0152 §4-quater (U-D1): the 2M row is closed at launch, so a live 2M claim exists only past the flag day
+    // that installs its measured row — this test's premise runs there (`t12_2m_open`, measuring the derived
+    // 13,995-DAA deadline).
+    let p = t12_2m_open();
     let b = bundle(&p);
     let sp = b.state.clone();
     let (short, id2m) = model_classes(&p);
@@ -205,9 +208,18 @@ fn beside_it_the_2m_row_is_still_held_to_final_at_its_cap_of_one() {
     let (second_2m, second_2m_id) = second(id2m, P2M_SECOND, pwu_2m, 0x52_03);
     let (second_short, second_short_id) = second(short, PSHORT_SECOND, 1_000, 0x52_04);
 
-    // One block past the later licence's challenge window: both licensed claims are Final.
+    // One block past the later Final deadline: both licensed claims are Final.
+    // Restated for ADR-0152 §4-quater V4: a licensed claim Finals one block past its DL-1 deadline, now
+    // `max(L + wc, H)` — for a 2M claim the verification horizon `bound + 13,996`, far past `L + 120`.
     let last = *licences.last().unwrap();
-    daa = last + sp.window_challenge_at(last) + 1;
+    let final_at = s
+        .claims_iter()
+        .filter(|(_, c)| !c.phase.is_terminal())
+        .filter_map(|(id, _)| s.deadline_of(id))
+        .max()
+        .expect("both licensed claims owe a Final deadline");
+    assert!(final_at > last + sp.window_challenge_at(last), "the 2M claim's horizon is the later deadline");
+    daa = final_at + 1;
     s = rd(&s, daa - 1);
     s = go(&p, &sp, &s, &ctx(0x5200_0000 + daa, daa, daa, 0), &[], PalwBlockWorkV3::None, Hash64::default()).expect("the sweep").0;
     let final_now = read(&s, daa);

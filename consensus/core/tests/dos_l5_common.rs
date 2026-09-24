@@ -34,6 +34,43 @@ pub fn t12() -> Params {
     Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12))
 }
 
+/// **The measured row ADR-0153's flag day would install for testnet-12's 2M row, as a fixture**
+/// (ADR-0152 §4-quater.10): `a_R` at the registry's own reference rate over the canonical job's
+/// 262,145 positions (`b_R` folded into it, no fixed term), so the row's canonical `D` is the derived
+/// 13,995 DAA — the same deadline, measured — and λ the row's declared canonical leaves over those
+/// positions, so a free-prompt claim of `work_leaves` is priced at its share of the job. Active from
+/// genesis.
+pub fn t12_2m_flag_day_row() -> kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClassVerifyRowV1 {
+    let class_id = kaspa_consensus_core::config::params::PALW_T12_RCORE_CONSERVATIVE_CLASSES[0];
+    let leaves = genesis_classes(&t12()).iter().find(|c| c.0 == class_id).expect("the 2M row").1;
+    let row = kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClassVerifyRowV1 {
+        class_id,
+        activation_daa: 0,
+        a_r_ps: 3_203_188_000_000,
+        b_r_ps: 0,
+        t_fixed_ms: 0,
+        canonical_positions: 262_145,
+        leaves_per_position: leaves.div_ceil(262_145).max(1),
+    };
+    assert_eq!(row.daa(262_145), 13_995, "the fixture measures the derived deadline");
+    row
+}
+
+/// **testnet-12 past ADR-0153's flag day, as a fixture: the 2M row open under a measured row.** At
+/// launch the 2M row is closed — ADR-0152 §4-quater V2 refuses every 2M claim on every lane until a
+/// flag day installs a measured `PalwClassVerifyRowV1` (U-D1) — so a test whose premise is a LIVE 2M
+/// claim (the C7 room hold, its static cap, its staged reserve, its DA court) runs here, the only
+/// configuration in which such a claim exists. [`t12_2m_flag_day_row`] measures the derived deadline,
+/// so the class-derived rules (the receipt window `W_r = 13,995`, `Final` no earlier than
+/// `bound + 13,996`) are the ones a 2M claim will meet.
+pub fn t12_2m_open() -> Params {
+    let mut p = t12();
+    p.palw_class_verify_rows = Box::leak(Box::new([t12_2m_flag_day_row()]));
+    p.sync_palw_class_verify_deadline();
+    p.validate_palw_v2().expect("the flag-day fixture validates");
+    p
+}
+
 pub fn bundle(p: &Params) -> PalwConsensusParamsV2 {
     match &p.palw_consensus_mode {
         PalwConsensusMode::ConsensusV2(b) => b.clone(),

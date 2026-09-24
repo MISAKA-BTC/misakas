@@ -52,7 +52,22 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// **Re-pinned once more by M3** (ADR-0152 DA-4, IMPL-7): the DA-disclosure-v4 context closes
 /// `COMPLETE_V5`, so the bundle's context root, and with it testnet-12's params and identity ids,
 /// moved; the schedule did not (no fence moved). v22 skeleton: `cf57a2e9…` / `2b48d4ee…`.
+///
+/// **Re-pinned once more by ADR-0152 §4-quater**: `palw_class_verify_deadline` is armed on
+/// testnet-12 from genesis and named (Some-only) in all three ids, so testnet-12 with this fence taken
+/// away moved with it. The value is testnet-12 with this fence alone taken away (the deadline fence
+/// still armed); with BOTH taken away testnet-12 is exactly the M3 value below
+/// ([`T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE`]), which pins that the deadline fence is the only
+/// thing that moved it.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
+    "8c1b6da8d04f7f0f5b74906bdb2c5890845c0dcc2dbb6d0ddef84677d43df47b",
+    "e14dce009fcec4463be7945aca4b2fd6f32f6afda16bd8ab47f7c6c8702582b6",
+    "7d9a75c47eb74812efbfa12a937736f108fb46c2cac9152ad926088e1671c866",
+);
+
+/// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the M3 value of
+/// [`T12_BEFORE_THE_ATTRIBUTION`], unchanged: the class-verify-deadline fence moved nothing else.
+const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
     "f5eee4746137d0e40a58fd5e99bfdc47738800550ad313811be7b1eed185821b",
     "75666d42d34312c76691de9d1f876465e58502e48d38bde1aa3d7cce0906e7c9",
     "75282ad229d5f8617aa5b3f5b818ddab9defdc893f1276c6a079c080af7debff",
@@ -132,6 +147,15 @@ fn the_fence_moves_testnet12s_fingerprint_and_nothing_else_did() {
     assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "the ruleset a node announces names the fence");
     assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one: two identities");
     assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and the schedule the operator log names it");
+    let mut without_both = without.clone();
+    without_both.palw_class_verify_deadline = None;
+    without_both.sync_palw_class_verify_deadline();
+    let both = ids(&without_both);
+    assert_eq!(
+        (both.0.as_str(), both.1.as_str(), both.2.as_str()),
+        T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE,
+        "with the deadline fence taken away too, testnet-12 is the M3 parent: that fence moved nothing else"
+    );
 }
 
 /// **Genesis or not at all**: a fence at any later height is refused by `validate_palw_v2`, and

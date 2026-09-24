@@ -262,7 +262,12 @@ fn withheld_through_two_panels(go: FoldFn) -> Withheld {
         .unwrap()
         .0;
     let others_bound = all_bonds_reserved(&s, &keys) - others_baseline;
-    let receipt_window = sp.receipt_window_for_claim_v1(&s, &floor, daa);
+    let receipt_window = sp.receipt_window_for_claim_v1(
+        &s,
+        &floor,
+        kaspa_consensus_core::palw_class_verify_deadline_v1::PalwClaimVerifyShapeV1::of_claim(s.claim(&id).unwrap()),
+        daa,
+    );
 
     // ProducerDefaulted with a full Unavailable quorum: the old consensus withholding charge.
     let unavailable: Vec<PalwSeatReceiptV2> = seats1
