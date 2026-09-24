@@ -1036,6 +1036,19 @@ pub struct PalwSeatDutyV2 {
     /// pricing check is that the capture it authenticated has exactly this many leaves. Zero on
     /// an attempt.
     pub work_leaves: u64,
+    /// **The job identity the claim recorded** (ADR-0152 v3.1 J-1): the anchor for an attempt, the
+    /// commitment's pin (`palw_fp_job_pin_v1`) for a free prompt; 0 where none was recorded. A seat
+    /// holding a free-prompt capture binds it to this pin before it signs (the 3a review's L-b:
+    /// `PalwClaimRootsV1::job_pin`); carried off the claim record, like the roots.
+    pub job_identity: Hash64,
+}
+
+impl PalwSeatDutyV2 {
+    /// **The free-prompt pin a seat binds a capture to** — the recorded identity of a free-prompt
+    /// claim, and `None` for an attempt (its whole job is the anchor's) or an unrecorded one.
+    pub fn fp_job_pin_v1(&self) -> Option<Hash64> {
+        (self.free_prompt && self.job_identity != Hash64::default()).then_some(self.job_identity)
+    }
 }
 
 /// **Every seat duty this node holds at one chain point** (launch blockers §2).
@@ -1566,6 +1579,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 },
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
                 work_leaves: claim.work_leaves,
+                job_identity: claim.job_identity,
             });
         }
     }

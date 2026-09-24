@@ -297,14 +297,24 @@ pub struct PalwExecFinalV1 {
     /// accepted_blue_score`), past `Params::palw_offence_attribution`; 0 below it. ADR-0152 v3.1
     /// (the Phase 1–2 review's M-1): the order in which Finals of ONE execution root were accepted,
     /// so the mint's collapse of a root's Finals keeps the EARLIEST-accepted claim's
-    /// ([`palw_exec_final_acceptance_order_v1`]) — the lender's, whose block a borrower had to see
-    /// before it could copy the root — and not the lowest claim id, which a borrower grinds for free.
-    /// At 0 on every Final (below the fence) the order is the claim id alone: the mint as it was.
+    /// ([`palw_exec_final_acceptance_order_v1`]) rather than the lowest claim id, which a borrower
+    /// grinds for free (a nonce bucket).
+    ///
+    /// **It is not a proof of who ran the work** (the 3a review's M): in a DAG the lender's block
+    /// need not be ordered first. A borrower's block that is a SIBLING of the lender's (same
+    /// parents) can land on the selected chain first while the lender's is merged a blue score
+    /// later, and then the borrower is the earlier-accepted Final. The order closes the free
+    /// claim-id grind; the protection of the honest lender is the by-claim forfeiture's transfer
+    /// ([`palw_execution_schedule_forfeit_claim_v1`]) together with conviction timing — a borrowed
+    /// root answers another job, which J1 refutes (the peer's filer files same-root / different-
+    /// identity pairs). At 0 on every Final (below the fence) the order is the claim id alone: the
+    /// mint as it was.
     pub accepted_blue_score: u64,
 }
 
 /// **The order in which a root's Finals were accepted** (ADR-0152 v3.1, the Phase 1–2 review's
-/// M-1): earliest acceptance first, the claim id breaking a tie. ONE ordering for the three places
+/// M-1): earliest acceptance first, the claim id breaking a tie. Acceptance order, not authorship:
+/// see [`PalwExecFinalV1::accepted_blue_score`] for why a DAG sibling can precede the lender. ONE ordering for the three places
 /// that pick a root's representative — the bounded and the windowed mint's collapse, and the
 /// successor a by-claim forfeiture hands the representative's unspent tickets to
 /// ([`palw_execution_schedule_forfeit_claim_v1`]) — so they cannot disagree about whose the
@@ -623,6 +633,17 @@ pub fn palw_execution_snapshot_forfeit_v1(snapshot: &PalwExecSnapshotV1, forfeit
 /// lineage names the Final that now holds it. A ticket already spent (`spent(round)`: its round's
 /// permit was accepted on this chain) leaves with the convicted claim: what it bought is not
 /// reachable here. With no successor every ticket of the claim leaves, as before.
+///
+/// **Two limits, stated so a network that widens the lane does not inherit them silently** (the 3a
+/// review's L-c, L-d; neither moves testnet-12, whose ticket rounds grant one permit):
+/// * `spent(round)` is the caller's reading of "this ticket's round was used", and the state's
+///   caller reads permit index 0 only (`round_permit_used(span, round, 0)`) — exact while a ticket
+///   round grants index 0 alone (`palw_execution_ticket_permits_v1`); under a wider ticket lane it
+///   must read the index the ticket held;
+/// * the heir takes the tickets the REPRESENTATIVE minted — their count is the representative's
+///   credit, rounded under the representative's claim id — not a re-mint over its own credit. Finals
+///   of one root credit the class's canonical work and agree today; a network whose credit can
+///   differ between two Finals of one root must re-mint here instead.
 pub fn palw_execution_schedule_forfeit_claim_v1(
     schedule: &PalwExecScheduleV1,
     claim_id: &Hash64,

@@ -66,6 +66,7 @@ fn check_backend(label: &str, backend: &dyn PalwExecutionBackendV1, form: PalwPr
             anchor,
             attempt_draw: Some(draw),
             output_root: None,
+            job_pin: None,
         };
 
         // The honest held attempt: a fold, licensed.
@@ -146,6 +147,7 @@ fn the_dense_branches_share_the_rule() {
             anchor,
             attempt_draw: Some(false),
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&honest.material, roots), PalwMaterialVerdictV1::Matches, "{label}: honest");
         let skipped = PalwJobContextV2 { exact_decode_tokens: job.exact_decode_tokens - 1, ..job.clone() };

@@ -629,6 +629,23 @@ impl PalwExecutionBackendV1 for Base0Backend {
         }
     }
 
+    fn execute_with_drill_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        if let kaspa_consensus_core::palw_backend::PalwDrillFaultV1::StepLeaf(leaf) = fault {
+            return self.execute_with_injected_fault(job, prompt, leaf);
+        }
+        let (job, prompt) = crate::produce::base0_drill_job_v1(self, self.prompt_ids_form, job, prompt, fault)?;
+        let mut run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, &job, &prompt, self.network_ladder)
+            .map_err(|e| e.to_string())?;
+        crate::produce::base0_drill_run_v1(&mut run, fault, kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1)?;
+        let output_root = run.output_root;
+        crate::produce::base0_drill_outcome_v1(&run, output_root, fault)
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,
@@ -1392,6 +1409,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
     }
@@ -1507,6 +1525,7 @@ mod tests {
             anchor,
             attempt_draw: draw,
             output_root: None,
+            job_pin: None,
         };
         let full = backend.execute(&canonical, &prompt).expect("the canonical job runs");
         let short = backend.execute(&one_forward, &prompt).expect("the one-forward job runs");
@@ -1556,6 +1575,7 @@ mod tests {
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, mine), PalwMaterialVerdictV1::Matches);
 
@@ -1700,6 +1720,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(
             backend.verify_material(&lying.material, its_own),
@@ -1736,6 +1757,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
 
         assert_eq!(backend.verify_material(b"not material at all", claim), PalwMaterialVerdictV1::Unverifiable);
@@ -1792,6 +1814,7 @@ mod tests {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&capture, roots), PalwMaterialVerdictV1::Matches);
         let attempt_anchor = PalwClaimRootsV1 { anchor: Hash64::from_u64_word(0xA71E), ..roots };
@@ -1903,6 +1926,7 @@ mod tests {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&lying.outcome.material, roots), PalwMaterialVerdictV1::Matches);
 
@@ -2053,6 +2077,7 @@ mod tests {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let build = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1, leaf: u64| {
             let work = backend.capture_shape(&run.outcome.material).expect("a shape").step_leaf_count;
@@ -2120,6 +2145,7 @@ mod tests {
                 anchor: fp_job_id_v3(&job),
                 attempt_draw: None,
                 output_root: None,
+                job_pin: None,
             };
             let opening = backend.open_fp_interval(capture, 0, &ids).expect("interval 0 opens");
             let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, &ids, work);
@@ -2251,6 +2277,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let draw = palw_fp_interval_draw_v1(
             &job.network_domain,

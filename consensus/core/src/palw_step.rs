@@ -2038,6 +2038,93 @@ pub(crate) fn canonical_step_leaf_index_walked_v1(
 }
 
 // =============================================================================================
+// ADR-0152 v3.1 F1c (addendum §4-bis.6): the logits head
+// =============================================================================================
+
+/// **The node a class's logits row IS** — the last post node, when the class's graph makes that a
+/// provable identity: slot `G − 1` of the global node table ([`PalwShapeProfileV3::global_node_count`]),
+/// its tile width, and how many head tiles one logits row cuts into.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwLogitsHeadV1 {
+    pub slot: u32,
+    pub tile_len: u32,
+    pub tiles: u32,
+}
+
+/// Most lanes a head's vocabulary may have: the tiled close carries a logits tile's index as a
+/// `u8` (`lo / 4096`), and `2^20 / 4096 = 256`.
+pub const PALW_LOGITS_HEAD_MAX_VOCAB_V1: u32 = 1 << 20;
+
+/// **`palw_logits_head_v1(profile)`: the law `LogitsNotStepOutput` (12) stands on** (ADR-0152 v3.1
+/// addendum §4-bis.6). For a class whose graph passes this predicate, every committed logits row
+/// `r` and head tile `t` satisfy
+///
+/// ```text
+/// committed_step_leaf[canonical_step_leaf_index(profile, ctx, (r, G − 1, r == 0 ? P − 1 : 0, t))]
+///   == step_tile_leaf_hash_v1(ctx, profile, { coord, value_count: hi − lo, values_le: i32_le(logits[r][lo..hi]) })
+/// ```
+///
+/// with `lo = t · tile_len`, `hi = min(lo + tile_len, V)` — the row a token is selected from IS the
+/// last post node's committed output. Required, all of:
+///
+/// * the lane is `Int32` (a `Float32` class's logits are an event-tree summary, not a step output);
+/// * slot `G − 1` resolves outside every layer and is `post_nodes.last()`;
+/// * it is a `MatMulQuant` under one of the three shipped head kernels (the floor's, A16's, Qwen3.6's
+///   grouped matmul) — the kernels whose output lanes the families' logits rows are;
+/// * its output is `Fixed { vocab }`;
+/// * the logits scheme is flat, or tiled with `4096 % tile_len == 0` (a head tile never straddles a
+///   logits tile) and `vocab ≤ 2^20` ([`PALW_LOGITS_HEAD_MAX_VOCAB_V1`]).
+///
+/// `None` otherwise — and past `palw_offence_attribution` admission refuses such a class
+/// (addendum §4-bis.8 (b)), so no class on the chain can hold its logits outside the rule.
+pub fn palw_logits_head_v1(profile: &PalwShapeProfileV3) -> Option<PalwLogitsHeadV1> {
+    use crate::palw_step_refute::{
+        KDESC_A16_MATMUL_REQUANT, KDESC_BASE0_MATMUL, KDESC_Q36_MATMUL_GROUPED, PALW_LOGITS_TILE_LANES, flat_logits_scheme_id_v1,
+        tiled_logits_scheme_id_v1,
+    };
+    if profile.lane != PalwStepLaneV1::Int32 {
+        return None;
+    }
+    let slot = profile.global_node_count().checked_sub(1)?;
+    let (node, layer) = profile.resolve_node_slot(slot)?;
+    if layer.is_some() || profile.post_nodes.last() != Some(node) {
+        return None;
+    }
+    if node.op_kind != PalwStepOpKindV1::MatMulQuant {
+        return None;
+    }
+    let heads = [KDESC_BASE0_MATMUL, KDESC_A16_MATMUL_REQUANT, KDESC_Q36_MATMUL_GROUPED];
+    if !heads.iter().any(|k| kernel_semantics_id_v1(k) == node.kernel_semantics_id) {
+        return None;
+    }
+    let vocab = profile.vocab_size;
+    if node.out_len != (PalwStepOutLenV1::Fixed { elements: vocab }) || vocab == 0 || node.tile_len == 0 {
+        return None;
+    }
+    if profile.logits_scheme_id == tiled_logits_scheme_id_v1() {
+        if !(PALW_LOGITS_TILE_LANES as u32).is_multiple_of(node.tile_len) || vocab > PALW_LOGITS_HEAD_MAX_VOCAB_V1 {
+            return None;
+        }
+    } else if profile.logits_scheme_id != flat_logits_scheme_id_v1() {
+        return None;
+    }
+    Some(PalwLogitsHeadV1 { slot, tile_len: node.tile_len, tiles: vocab.div_ceil(node.tile_len) })
+}
+
+/// **The coordinate of logits row `row`'s head tile `head_tile`** — call `row`, the head slot, the
+/// last prefill position on the prefill call (the one position whose post nodes run) and position
+/// 0 on a decode call.
+pub fn palw_logits_head_coordinate_v1(
+    head: &PalwLogitsHeadV1,
+    context: &PalwJobContextV2,
+    row: u32,
+    head_tile: u32,
+) -> Option<PalwStepCoordinateV1> {
+    let position = if row == 0 { context.declared_prefill_tokens.checked_sub(1)? } else { 0 };
+    Some(PalwStepCoordinateV1 { call_index: row, node_slot: head.slot, position, tile_index: head_tile })
+}
+
+// =============================================================================================
 // Tests
 // =============================================================================================
 

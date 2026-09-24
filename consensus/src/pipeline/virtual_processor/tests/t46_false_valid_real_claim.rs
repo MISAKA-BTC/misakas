@@ -692,6 +692,29 @@ impl H {
         }
     }
 
+    /// **`LogitsNotStepOutput` (12) against `claim`** at the head tile holding `lane` of logits row
+    /// `row`: the event from the rows the claim committed (its pin — the flat scheme opens every row),
+    /// and the head leaf opened by the floor's own prover from the capture whose step tree the claim
+    /// committed.
+    fn logits_not_step_output(&self, claim: &RealClaim, row: u32, lane: u32) -> C {
+        use kaspa_consensus_core::palw_step::{canonical_step_leaf_index, palw_logits_head_coordinate_v1, palw_logits_head_v1};
+        let head = palw_logits_head_v1(&claim.binding.shape_profile).expect("the floor's head is provable");
+        let tile = lane / head.tile_len;
+        let pin = claim.pin.as_ref().expect("the committed rows");
+        let event = kaspa_consensus_core::palw_step_refute::logits_event_disclosure_v1(
+            &claim.binding,
+            &pin.logits_rows,
+            &pin.generated_token_ids,
+            row,
+            0,
+        )
+        .expect("the flat event opens");
+        let coord = palw_logits_head_coordinate_v1(&head, &claim.binding.job_context, row, tile).expect("a coordinate");
+        let index = canonical_step_leaf_index(&claim.binding.shape_profile, &claim.binding.job_context, &coord).expect("a leaf");
+        let head_opening = self.backend.refutation_for_index(&claim.material, index).expect("the floor opens its head").output_opening;
+        C::LogitsNotStepOutput { event, row, head_tile: tile, head_opening }
+    }
+
     /// `ExecutorRefuted` against card 0 — every claim here is card 0's but the M-1 borrowers' — on `claim`.
     fn refuted(&self, claim: Hash64, contradiction: C) -> Obj {
         self.refuted_by(EXECUTOR, claim, contradiction)
@@ -3669,6 +3692,39 @@ async fn t18c_before_licence_the_executor_is_refuted() {
         eprintln!("[t18c(iv)] {route}: {why}");
         h.refused(&walk, &h.refuted(bent.claim_id, contradiction), &why.to_string());
     }
+    // **F1c: `LogitsNotStepOutput` (12) convicts it** — the bent lanes hash to a head leaf the claim
+    // did not commit. By root: the execution is proven false. Every other row and head tile holds.
+    let (row, lane) = bent_lane(&bent);
+    let twelve = h.logits_not_step_output(&bent, row, lane);
+    let finding = h.judge_refuted(&walk.state, bent.claim_id, twelve.clone()).expect("12 convicts the R1 residual");
+    assert_eq!(finding.forfeit, PalwForfeitScopeV1::ByRoot);
+    let tl = kaspa_consensus_core::palw_step::palw_logits_head_v1(&bent.binding.shape_profile).unwrap().tile_len;
+    let vocab = bent.binding.shape_profile.vocab_size;
+    for other_lane in [0, lane.saturating_sub(tl), lane + tl, vocab - 1].into_iter().filter(|l| *l / tl != lane / tl && *l < vocab) {
+        assert_eq!(
+            h.judge_refuted(&walk.state, bent.claim_id, h.logits_not_step_output(&bent, row, other_lane)),
+            Err(E::LogitsHold),
+            "lane {other_lane}'s head tile holds"
+        );
+    }
+    let (before, _) = h.carry(&mut walk, vec![h.refuted(bent.claim_id, twelve)]);
+    let root = bent.envelope.attempt.execution_root;
+    assert_refuted_before_final(&h, &before, &walk.state, bent.claim_id, walk.daa, root);
+    assert!(walk.state.palw_execution_root_is_forfeited_v1(&root), "a proven-false execution's root is forfeit");
+    h.reloads(&walk.state);
+}
+
+/// The (row, lane) a `GarbageLogits` claim bent — its committed rows against the capture's honest
+/// ones.
+fn bent_lane(claim: &RealClaim) -> (u32, u32) {
+    let (_, _, honest_rows, ..) = misaka_palw_base0::produce::base0_material_decode_v1(&claim.material).expect("the capture decodes");
+    let rows = &claim.pin.as_ref().expect("the committed rows").logits_rows;
+    for (r, (bent, honest)) in rows.iter().zip(honest_rows.iter()).enumerate() {
+        if let Some(lane) = bent.iter().zip(honest.iter()).position(|(a, b)| a != b) {
+            return (r as u32, lane as u32);
+        }
+    }
+    panic!("the claim bends a lane");
 }
 
 /// **T18c (ii): a root with no preimage is answered by nobody** — an event accusation runs out and
@@ -3771,6 +3827,7 @@ async fn t18e_the_floor_relabel_is_refuted_by_j5() {
             anchor: claim.anchor,
             attempt_draw: Some(true),
             output_root: Some(claim.envelope.attempt.output_root),
+            job_pin: None,
         },
     );
     assert_eq!(verdict, kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Mismatch, "a seat refuses the relabel");
@@ -4291,6 +4348,158 @@ mod m3_da_court {
 }
 
 // ---------------------------------------------------------------------------------------------
+// F1c / F1-M through kind 3: which Valid signers a job fault and a logits fault reach
+// ---------------------------------------------------------------------------------------------
+
+/// What a CLAIM-proving conviction of `seats` must have written (9, 13 — forfeiture by claim): each
+/// seat's lock taken first and its bond reduced by exactly it, one kind-3 row with the lock as the
+/// debit and `collected`, the claim named and root 0; the claim voided `CourtFraud`, its executor
+/// charged; the root NOT forfeit (it may be an honest lender's).
+fn assert_seats_convicted_by_claim(
+    h: &H,
+    licensed: &PalwChainStateV2,
+    s: &PalwChainStateV2,
+    claim_id: Hash64,
+    seats: &[usize],
+    daa: u64,
+) {
+    let claim = licensed.claim(&claim_id).expect("the licensed claim").clone();
+    // S-4 on this line (past `palw_rcore_plus`): each seat's S4 is its lock plus `min(25% · C₀, 3 G)`,
+    // and the conviction's first kind-3 row also carries the executor's S2 leg (the forfeit plus
+    // `min(10% · C₀, 3 G)`), as `assert_convicted_before_final` reads it; below the fence the lock alone.
+    let rcore = h.sp().rcore_plus_active_at(daa);
+    let g = g_of(s, claim_id);
+    let (executor_nominal, executor_debit) = s2_charge(h, licensed, claim_id, g, daa);
+    for (i, &card) in seats.iter().enumerate() {
+        let seat = h.cards[card];
+        let lock = *licensed.slashable_lock(seat, claim_id).expect("the Valid seat locked at the licence");
+        assert!(s.slashable_lock(seat, claim_id).is_none(), "card {card}'s lock is taken");
+        let (nominal, debit) = s4_charge(h, licensed, seat, lock.amount, g, daa);
+        assert_eq!(
+            s.bond(&seat).unwrap().collateral as u128,
+            licensed.bond(&seat).unwrap().collateral as u128 - debit,
+            "card {card}'s bond is reduced by exactly S4's charge"
+        );
+        let row =
+            s.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &claim_id)).expect("one row under the (seat, claim) key");
+        let (first_nominal, first_debit) = if rcore && i == 0 { (executor_nominal, executor_debit) } else { (0, 0) };
+        assert_eq!(
+            (row.kind, row.amount as u128, row.collected as u128, row.claim_id, row.execution_root, row.accepted_daa),
+            (PalwOffenceKindV1::PanelFalseValidV2, nominal + first_nominal, debit + first_debit, claim_id, Hash64::default(), daa),
+            "card {card}: kind 3, S4 (and the first row the executor's leg), the claim, root 0"
+        );
+    }
+    assert!(
+        matches!(s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "the claim is voided CourtFraud"
+    );
+    assert!(
+        s.bond(&h.cards[EXECUTOR]).unwrap().collateral < licensed.bond(&h.cards[EXECUTOR]).unwrap().collateral,
+        "the executor pays"
+    );
+    assert!(!s.palw_execution_root_is_forfeited_v1(&claim.execution_root), "a claim-proving fault forfeits no root");
+}
+
+impl H {
+    /// Card `card`'s receipt on `claim` with `verdict` under `mask`, in the V3 form, signed by its key.
+    fn v3_verdict(
+        &self,
+        card: usize,
+        claim: Hash64,
+        verdict: PalwReceiptVerdictV2,
+        signed_daa: u64,
+        mask: PalwSegmentMaskV2,
+    ) -> PalwFalseValidReceiptV1 {
+        let message = palw_receipt_message_v3(self.domain, claim, verdict, signed_daa, mask);
+        PalwFalseValidReceiptV1::Segmented(PalwSeatReceiptV3 {
+            receipt: PalwSeatReceiptV2 {
+                claim,
+                verdict,
+                seat_bond: self.cards[card],
+                signed_daa,
+                signature: sign(card, message.as_byte_slice(), PALW_RECEIPT_V3_MLDSA87_CONTEXT),
+            },
+            segments: mask,
+        })
+    }
+}
+
+/// **T46u (F1c): a logits fault is a whole-execution fault** — `LogitsNotStepOutput` (12) on a
+/// licensed `GarbageLogits` claim convicts the full-mask seat and no partial one (a partial seat
+/// never sees the logits trace): every partial seat is refused `SiteNotAttested`.
+#[tokio::test]
+async fn t46u_a_logits_fault_convicts_the_full_seat_only() {
+    let h = harness(true);
+    let (mut walk, claim, licence) = h.licensed(Fault::GarbageLogits);
+    let (row, lane) = bent_lane(&claim);
+    let twelve = h.logits_not_step_output(&claim, row, lane);
+    for partial in licence.partials() {
+        h.refused(&walk, &h.v2(partial, claim.claim_id, licence.segmented(partial), twelve.clone()), &E::SiteNotAttested.to_string());
+    }
+    let full = licence.full_card();
+    let (licensed, _) = h.carry(&mut walk, vec![h.v2(full, claim.claim_id, licence.segmented(full), twelve)]);
+    assert_convicted_before_final(&h, &licensed, &walk.state, claim.claim_id, &[full], walk.daa);
+    h.reloads(&walk.state);
+}
+
+/// **T18z (the user's decision of 2026-09-24): 9's job faults are `AnyValid`** — on the floor's real
+/// relabel claim (J5b: another anchor's prompt under this anchor, licensed by a colluding panel), the
+/// full seat AND every partial-mask `Valid` signer is convicted by kind 3: each checked the binding's
+/// job field by field in its SEAT-S4 opening before it signed. A partial seat presenting a receipt
+/// that is not `Valid` (Unavailable, Incapable) is refused `PanelFalseValidNotValidVerdict`; a bond
+/// the panel does not seat is refused `SegmentMaskNotAssigned` for a partial mask, and its full-mask
+/// `Valid` — a receipt no licence carried — is dropped by the fold (it holds no lock); and 9's J4, a
+/// trace root beside the binding, stays `Whole`: a partial seat is not liable for it.
+#[tokio::test]
+async fn t18z_a_job_fault_convicts_every_valid_signer() {
+    let h = harness(true);
+    let (mut walk, claim, licence) = h.licensed(Fault::Relabel);
+    let id = claim.claim_id;
+    let nine = claim.contradiction();
+    let payload =
+        borsh::to_vec(&h.v2_payload(licence.partials()[0], id, licence.segmented(licence.partials()[0]), nine.clone())).unwrap();
+    let finding =
+        palw_check_panel_false_valid_v2(&walk.state, &h.cards[licence.partials()[0]], &payload, false, false, h.rules(), None)
+            .expect("a partial seat is liable for a job fault");
+    assert_eq!(finding.site, PalwFaultSiteV1::AnyValid);
+    // Not a Valid: refused, whatever the mask.
+    let partial = licence.partials()[1];
+    let mask = licence.receipt(partial).segments;
+    let signed = licence.receipt(partial).receipt.signed_daa;
+    for verdict in [PalwReceiptVerdictV2::Incapable, PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: signed }] {
+        let object = h.v2(partial, id, h.v3_verdict(partial, id, verdict, signed, mask), nine.clone());
+        h.refused(&walk, &object, &E::PanelFalseValidNotValidVerdict.to_string());
+    }
+    // A bond the panel does not seat.
+    let stranger_partial = h.v2(BYSTANDER, id, h.v3_verdict(BYSTANDER, id, PalwReceiptVerdictV2::Valid, signed, mask), nine.clone());
+    h.refused(&walk, &stranger_partial, &E::SegmentMaskNotAssigned.to_string());
+    let stranger_full = h.v2(
+        BYSTANDER,
+        id,
+        h.v3_verdict(BYSTANDER, id, PalwReceiptVerdictV2::Valid, signed, PalwSegmentMaskV2::full(licence.assignment.segments)),
+        nine.clone(),
+    );
+    assert!(h.accepted(&walk.state, &walk.next(), std::slice::from_ref(&stranger_full)).is_empty(), "the walk drops a lockless Valid");
+    assert!(h.fold_refusal(&walk, &stranger_full).contains("no Valid lock"), "the fold: it holds no lock");
+    // Every Valid signer, the four partial seats and the full one, in one block.
+    let every: Vec<usize> = std::iter::once(licence.full_card()).chain(licence.partials()).collect();
+    let objects: Vec<Obj> = every.iter().map(|&card| h.v2(card, id, licence.segmented(card), nine.clone())).collect();
+    let (licensed, _) = h.carry(&mut walk, objects);
+    assert_seats_convicted_by_claim(&h, &licensed, &walk.state, id, &every, walk.daa);
+    h.reloads(&walk.state);
+
+    // 9's J4 is not a job fault: Whole.
+    let (walk, trace_swap, licence) = h.licensed_at_nonce(Fault::TraceSwap, bucket(7));
+    for partial in licence.partials() {
+        h.refused(
+            &walk,
+            &h.v2(partial, trace_swap.claim_id, licence.segmented(partial), trace_swap.contradiction()),
+            &E::SiteNotAttested.to_string(),
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // The Phase 1–2 review's M-1: an honest lender keeps its root's tickets
 // ---------------------------------------------------------------------------------------------
 
@@ -4396,9 +4605,10 @@ async fn t18m_a_shared_roots_tickets_are_the_earliest_accepted_finals() {
 }
 
 /// **T18n (review M-1, the insurance): a convicted representative's UNSPENT tickets pass to the
-/// root's remaining Final.** The one case the acceptance order cannot decide is a tie — a borrower
-/// accepted by the SAME chain block as its lender (its own block merging the lender's), where the
-/// claim id breaks it and the borrower grinds it. A schedule minted over that tie holds every ticket
+/// root's remaining Final.** The acceptance order is not authorship (the 3a review's M): a borrower
+/// accepted by the same chain block as its lender ties and wins by its ground id, and a borrower
+/// whose block is a DAG sibling of the lender's can be accepted FIRST. Either way the schedule holds
+/// every ticket under the borrower — modelled here as the tie. A schedule minted over that tie holds every ticket
 /// under the borrower, and one of them is spent (its round's permit accepted on this chain). The
 /// borrower is refuted by kind 4 after `Final` (`IdentityMismatch`: its binding answers the lender's
 /// anchor) and forfeits by claim: its Final leaves the schedule, the spent ticket leaves with it,

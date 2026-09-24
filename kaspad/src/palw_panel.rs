@@ -3707,6 +3707,7 @@ impl PalwPanelService {
             anchor,
             attempt_draw: self.attempt_draw_for_claim(session, accepted_block),
             output_root: None,
+            job_pin: None,
         };
         let work = ReplayWork::Attempt(job, prompt);
         let (backend, outcome) = offload(backend, move |b| work.run(b)).await?;
@@ -5239,6 +5240,7 @@ impl PalwPanelService {
                     anchor,
                     attempt_draw,
                     output_root: None,
+                    job_pin: None,
                 };
                 let pool_has_it = materials
                     .get(&duty.claim_id)
@@ -6787,6 +6789,8 @@ impl PalwPanelService {
                                     anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
                                     attempt_draw: None,
                                     output_root: Some(duty.output_root),
+                                    // ADR-0152 v3.1 J-1 (the 3a review's L-b): the pin the claim recorded.
+                                    job_pin: duty.fp_job_pin_v1(),
                                 };
                                 if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
                                     continue;
@@ -7157,6 +7161,7 @@ impl PalwPanelService {
                                     anchor,
                                     attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
                                     output_root: Some(duty.output_root),
+                                    job_pin: duty.fp_job_pin_v1(),
                                 },
                             );
                             if arm != PalwMaterialArmV1::Nothing {
@@ -7206,6 +7211,7 @@ impl PalwPanelService {
                                     anchor,
                                     attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
                                     output_root: Some(duty.output_root),
+                                    job_pin: duty.fp_job_pin_v1(),
                                 },
                             );
                             if arm != PalwMaterialArmV1::Nothing {
@@ -9703,6 +9709,8 @@ impl PalwPanelService {
             anchor,
             attempt_draw: None,
             output_root: Some(duty.output_root),
+            // ADR-0152 v3.1 J-1 (the 3a review's L-b): the pin the claim recorded.
+            job_pin: duty.fp_job_pin_v1(),
         };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
@@ -10126,6 +10134,7 @@ impl PalwPanelService {
             anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
             backend.as_ref(),
@@ -10633,6 +10642,9 @@ impl PalwPanelService {
                         anchor: *job_id,
                         attempt_draw: None,
                         output_root: Some(duty.output_root),
+                        // The 3a review's L-b: the pin the claim RECORDED (chain state, never the
+                        // material), so a capture of another job under this id is not its own.
+                        job_pin: duty.fp_job_pin_v1(),
                     };
                     let proof = payloads.iter().find(|bytes| {
                         palw_fp_capture_decode_v1(bytes, form).is_some_and(|payload| {
@@ -10923,6 +10935,17 @@ impl PalwPanelService {
     ) -> Option<(kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
         let (material, ids) = self.fp_committed_answer_v1(backend, duty, held)?;
         let ctx = backend.fp_job_context_for_executed_v1(&material.job, ids.len().min(u32::MAX as usize) as u32)?;
+        // **The job the claim RECORDED, not only the one its answer authenticates** (the M2 Phase 3
+        // review's H-2): a producer that commits job J, executes a same-shaped J′ and commits J′'s
+        // roots serves J′'s material, whose answer authenticates — and a seat resuming under J′'s
+        // context would sign a Valid that J1-FP (`AnyValid`) convicts. The claim's pin
+        // (`palw_fp_job_pin_v1(commitment)`, read off chain state as the duty's `job_identity`) must be
+        // the context's own. `None` — no pin recorded (below `palw_offence_attribution`) — is the old path.
+        if let Some(pin) = duty.fp_job_pin_v1()
+            && kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx) != pin
+        {
+            return None;
+        }
         Some((material, ctx))
     }
 
@@ -11815,6 +11838,7 @@ mod seat_duty_panel_key_tests {
             quanta: 0,
             free_prompt: false,
             work_leaves: 0,
+            job_identity: Hash64::default(),
         }
     }
 
@@ -12632,6 +12656,7 @@ mod seat_r_tests {
             quanta: 0,
             free_prompt: false,
             work_leaves: 0,
+            job_identity: Hash64::default(),
         }
     }
 
@@ -13135,6 +13160,7 @@ mod seat_r_tests {
             anchor,
             attempt_draw: Some(draw),
             output_root: Some(claim.output_root),
+            job_pin: None,
         };
         for arm in [PalwSeatArmV1::AttemptMaterial, PalwSeatArmV1::RetainedMaterial] {
             assert_eq!(
@@ -13203,6 +13229,7 @@ mod seat_r_tests {
             anchor,
             attempt_draw: Some(draw),
             output_root: Some(run.output_root),
+            job_pin: None,
         };
         let arm = |seat_r: bool, bytes: &[u8], roots: PalwClaimRootsV1| {
             palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, &backend, bytes, roots)
@@ -13235,6 +13262,7 @@ mod seat_r_tests {
                 anchor,
                 attempt_draw: Some(draw),
                 output_root: Some(run.output_root),
+                job_pin: None,
             };
             assert_eq!(backend.verify_material(&bytes, roots), PalwMaterialVerdictV1::Matches, "bend #{bend}: the residual");
             assert_eq!(arm(false, &bytes, roots), PalwMaterialArmV1::Licenses, "bend #{bend}: below the fences, as today");
@@ -14461,6 +14489,13 @@ mod seat_s_tests {
         assert!(context.contains("backend.fp_job_context_for_executed_v1(&material.job, ids.len()"), "at the answer's length");
         assert!(!context.contains("fp_job_context_v1(&material.job)"), "never the ceiling");
         assert!(!context.contains("fp_job_material_for_claim("), "never a held job the answer did not bind");
+        // The M2 Phase 3 review's H-2: the context must reproduce the pin the claim recorded, or a
+        // same-shaped job J′ whose answer authenticates is resumed under J′ and convicted by J1-FP.
+        assert!(context.contains("if let Some(pin) = duty.fp_job_pin_v1()"), "H-2: the recorded pin is read off the duty");
+        assert!(
+            context.contains("palw_fp_job_pin_of_context_v1(&ctx) != pin") && context.contains("return None;"),
+            "H-2: a context whose pin is not the claim's resumes nothing"
+        );
         let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
         let unanswered = block.find("// No job the answer authenticated, so no context to authenticate an").expect("the route's None arm");
         let arm = &block[unanswered..unanswered + block[unanswered..].find("PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }").unwrap()];

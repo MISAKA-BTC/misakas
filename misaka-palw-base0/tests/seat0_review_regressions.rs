@@ -144,7 +144,7 @@ fn legacy_rows_only_material_is_not_licensed_on_a_court_capable_a16_class() {
             let bytes = qwen25_a16_material_encode_v1(&run);
             let verdict = backend.verify_material(
                 &bytes,
-                PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw), output_root: None },
+                PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw), output_root: None, job_pin: None },
             );
             eprintln!("A16 held v7 legacy draw={draw} seed={seed}: {} bytes, verdict {verdict:?}", bytes.len());
             if verdict == PalwMaterialVerdictV1::Matches {
@@ -206,7 +206,7 @@ fn legacy_rows_only_material_is_not_licensed_on_a_registered_qwen36_class() {
             let bytes = qwen36_material_encode_v1(&run);
             let verdict = backend.verify_material(
                 &bytes,
-                PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw), output_root: None },
+                PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: Some(draw), output_root: None, job_pin: None },
             );
             eprintln!("Qwen3.6 held v7 legacy draw={draw} seed={seed}: verdict {verdict:?}");
             licensed += usize::from(verdict == PalwMaterialVerdictV1::Matches);
@@ -264,6 +264,7 @@ fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> BentFoldAttempt {
             anchor,
             attempt_draw: Some(draw),
             output_root: None,
+            job_pin: None,
         },
     );
     let replay = backend.execute_for_verdict(&job, &prompt).expect("the seat's replay runs");
@@ -287,6 +288,7 @@ fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> BentFoldAttempt {
             anchor,
             attempt_draw: Some(draw),
             output_root: None,
+            job_pin: None,
         };
         let verdict = backend.verify_material(&bytes, roots);
         eprintln!(
@@ -390,6 +392,7 @@ fn crafted_profile_is_refused_not_a_panic_on_the_floor_fp_route() {
         anchor: binding.job_context.job_id,
         attempt_draw: None,
         output_root: None,
+        job_pin: None,
     };
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| backend.verify_material(&bytes, roots)));
     eprintln!("verify_material on the crafted profile: {result:?}");
@@ -552,6 +555,7 @@ fn liveness_other_graph_versions() {
                     anchor,
                     attempt_draw: Some(draw),
                     output_root: None,
+                    job_pin: None,
                 },
             );
             let rules = seat_rules_on(&out.material, *family);
@@ -595,6 +599,7 @@ fn liveness_other_graph_versions() {
                         anchor: fp_job_id_v3(&job),
                         attempt_draw: None,
                         output_root: None,
+                        job_pin: None,
                     },
                 );
                 let rules = seat_rules_on(&run.outcome.material, *family);
