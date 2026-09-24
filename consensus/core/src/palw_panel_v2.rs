@@ -355,6 +355,19 @@ pub enum PalwPanelV2Error {
     OutsiderHasNotAnswered { claim: Hash64, seat: PalwBondKeyV2 },
 }
 
+impl PalwPanelV2Error {
+    /// **The set is sound; it is just not a licence.** `validate_receipt_coverage_v2` returns these
+    /// three only after every receipt in the set has passed its own checks (a seat, once, signed,
+    /// inside the window, its assigned mask, a real obligation): too few `Valid` (`NoQuorum`), a
+    /// segment attested fewer than twice (`CoverageShort`), or a quorum still waiting on its outsider
+    /// (`OutsiderHasNotAnswered`). An assembler that adds one receipt to a sound set and gets one of
+    /// them back therefore knows the receipt is sound, and keeps it. Every other refusal names a
+    /// receipt that poisons any set it is in — or a claim no set can license.
+    pub fn is_receipt_set_shortfall(&self) -> bool {
+        matches!(self, Self::NoQuorum { .. } | Self::CoverageShort { .. } | Self::OutsiderHasNotAnswered { .. })
+    }
+}
+
 /// **ADR-0100 Decision 4: the stratified draw, from chain state.** The eligible bonds are the flat
 /// draw's (`palw_panel_eligible_bonds_v2`, one spelling), each carrying the shards of the claim's
 /// class it declared (`BondShardsDeclared`); a bond that declared none is not a candidate. The
@@ -1762,6 +1775,173 @@ where
         return Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable });
     }
     Err(PalwPanelV2Error::NoQuorum { valid, unavailable, needed: params.quorum() })
+}
+
+/// `validate_receipt_coverage_v2`'s answer on one receipt set, as the licence selection asks it.
+pub type PalwCoverageVerdictV2 = Result<PalwReceiptQuorumV2, PalwPanelV2Error>;
+
+/// **The order a node tries receipts in** — the one policy of the licence selection
+/// ([`palw_select_coverage_licence_v2`], [`palw_select_optimistic_licence_v2`]).
+///
+/// The full-replay seat's `Valid` first, because the optimistic door cannot open without it; then
+/// the outsider's `Valid`, because an outsider-judged claim's licence must carry it (ADR-0147) and
+/// the optimistic door has room for one rider beside the full seat; then every other `Valid`; then
+/// every other verdict. Arrival order within each rank, so of two receipts from one seat its `Valid`
+/// is tried first.
+pub fn palw_licence_candidate_order_v2(
+    candidates: &[PalwSeatReceiptV3],
+    full_seat: Option<PalwBondKeyV2>,
+    outsider: Option<PalwBondKeyV2>,
+) -> Vec<&PalwSeatReceiptV3> {
+    let rank = |signed: &PalwSeatReceiptV3| match signed.receipt.verdict {
+        PalwReceiptVerdictV2::Valid if full_seat == Some(signed.receipt.seat_bond) => 0u8,
+        PalwReceiptVerdictV2::Valid if outsider == Some(signed.receipt.seat_bond) => 1,
+        PalwReceiptVerdictV2::Valid => 2,
+        _ => 3,
+    };
+    let mut ordered: Vec<&PalwSeatReceiptV3> = candidates.iter().collect();
+    // A stable sort: arrival order survives inside a rank.
+    ordered.sort_by_key(|signed| rank(signed));
+    ordered
+}
+
+/// Every sound receipt of `ordered`, with `coverage`'s verdict on the set (`None` when none is).
+/// A candidate is kept when the set with it added is a licence or a shortfall
+/// ([`PalwPanelV2Error::is_receipt_set_shortfall`]) and dropped when it poisons the set — including
+/// a second receipt from a seat already kept (`DuplicateSeat`).
+fn palw_sound_receipts_v2<C>(ordered: &[&PalwSeatReceiptV3], coverage: &C) -> (Vec<PalwSeatReceiptV3>, Option<PalwCoverageVerdictV2>)
+where
+    C: Fn(&[PalwSeatReceiptV3]) -> PalwCoverageVerdictV2,
+{
+    let mut kept: Vec<PalwSeatReceiptV3> = Vec::with_capacity(ordered.len());
+    let mut verdict = None;
+    for candidate in ordered {
+        kept.push((*candidate).clone());
+        let answer = coverage(&kept);
+        let sound = match &answer {
+            Ok(_) => true,
+            Err(refusal) => refusal.is_receipt_set_shortfall(),
+        };
+        if sound {
+            verdict = Some(answer);
+        } else {
+            kept.pop();
+        }
+    }
+    (kept, verdict)
+}
+
+/// **The coverage licence (`ReceiptLicensedV2`) a node offers, if any** — the licence selection's
+/// first door (the 2026-09-24 licence-stall fix).
+///
+/// **Node policy.** The selection decides which set an assembler submits, never what a block
+/// accepts, so a fleet that mixes it with the assembler it replaces forks nothing. That assembler
+/// added receipts in ARRIVAL order and dropped any whose addition came back as anything but
+/// `NoQuorum`. On the shipped panel (five seats, quorum three, four segments needing two
+/// attestations each) three or four `Valid`s are `CoverageShort`, so every pool froze at its first
+/// two `Valid`s: this licence could never form, and the optimistic one formed only when the
+/// full-replay seat was among the first two to arrive. About half the floor claims of testnet-12
+/// stayed `PanelBound`, and the pool, append-only, never let one recover.
+///
+/// **Nothing here counts receipts.** `coverage` is `validate_receipt_coverage_v2` at the carrying
+/// point, bound exactly as the acceptance arm binds it, and every set is put to it: which receipts
+/// count toward the quorum and which segments they cover is that function's answer, so a change to
+/// what counts is made there and the selection follows it. The one policy held here is the order
+/// ([`palw_licence_candidate_order_v2`]).
+///
+/// A sound receipt added to a sound set never takes coverage away — it adds a `Valid` or an
+/// abstention, and nothing past the quorum is refused for being too many — so the largest sound set
+/// is `Licensed` exactly when some set of these receipts is. It is offered when it is, and when
+/// `licenses` (the fold's answer: `palw_v2_object_licenses_claim_v1` past the audit fence, where a
+/// set a seat cannot back is inert) agrees. This door is tried first, so offering an inert set here
+/// would keep the optimistic door from ever being tried.
+pub fn palw_select_coverage_licence_v2<C, F>(
+    candidates: &[PalwSeatReceiptV3],
+    coverage: C,
+    licenses: F,
+) -> Option<Vec<PalwSeatReceiptV3>>
+where
+    C: Fn(&[PalwSeatReceiptV3]) -> PalwCoverageVerdictV2,
+    F: Fn(&[PalwSeatReceiptV3]) -> bool,
+{
+    let ordered = palw_licence_candidate_order_v2(candidates, None, None);
+    let (sound, verdict) = palw_sound_receipts_v2(&ordered, &coverage);
+    (matches!(verdict, Some(Ok(PalwReceiptQuorumV2::Licensed { .. }))) && licenses(&sound)).then_some(sound)
+}
+
+/// **The optimistic licence (`OptimisticLicensed`) a node offers, if any** — the licence
+/// selection's second door; see [`palw_select_coverage_licence_v2`] for what the selection is and
+/// why it counts nothing itself.
+///
+/// The door takes a set with the full-replay seat's `Valid` whose coverage verdict is `Ok` or
+/// `NoQuorum` ([`crate::palw_optimistic_licence_v2::palw_optimistic_licence_admits_v2`], the
+/// predicate its acceptance arm calls). So a licence exists exactly when the full seat's `Valid` is
+/// sound — that receipt alone is a set the door takes — and the selection offers the first of these
+/// that the door takes and `licenses` agrees to:
+///
+/// 1. every sound receipt — all five `Valid`s when all five validated, which cover;
+/// 2. the full seat's `Valid`, then each other sound receipt in order that the door still takes
+///    beside what is kept — on the shipped panel one more `Valid` (the next is `CoverageShort`) and
+///    any other verdicts;
+/// 3. the full seat's `Valid` alone, for a rider the fold will not license (a seat that cannot post
+///    its lock).
+///
+/// Never a set the door refuses: not three or four `Valid`s short of coverage, and not a set
+/// without the full seat's `Valid`, wherever in the pool it arrived.
+pub fn palw_select_optimistic_licence_v2<C, F>(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    // ADR-0147: `Params::palw_admission_independence`'s height, as `coverage` is bound with it.
+    independence_daa: Option<u64>,
+    candidates: &[PalwSeatReceiptV3],
+    coverage: C,
+    licenses: F,
+) -> Option<Vec<PalwSeatReceiptV3>>
+where
+    C: Fn(&[PalwSeatReceiptV3]) -> PalwCoverageVerdictV2,
+    F: Fn(&[PalwSeatReceiptV3]) -> bool,
+{
+    use crate::palw_optimistic_licence_v2::{palw_optimistic_full_seat_bond_v2, palw_optimistic_licence_admits_v2};
+    let panel = state.panel(claim_id)?;
+    let seats: Vec<PalwBondKeyV2> = panel.seats.iter().map(|seat| seat.bond).collect();
+    let assignment = crate::palw_verification_v2::palw_segment_assignment_v2(panel.anchor, *claim_id, seats.len() as u16);
+    let full = palw_optimistic_full_seat_bond_v2(&assignment, &seats)?;
+    let outsider = palw_panel_outsider_bond_v1(state, claim_id, independence_daa);
+    let ordered = palw_licence_candidate_order_v2(candidates, Some(full), outsider);
+    let (sound, sound_verdict) = palw_sound_receipts_v2(&ordered, &coverage);
+    let head = sound
+        .first()
+        .filter(|signed| signed.receipt.seat_bond == full && matches!(signed.receipt.verdict, PalwReceiptVerdictV2::Valid))?
+        .clone();
+    let admits = |set: &[PalwSeatReceiptV3], verdict: &PalwCoverageVerdictV2| {
+        palw_optimistic_licence_admits_v2(panel.anchor, *claim_id, &seats, set, verdict)
+    };
+
+    // 1. Every sound receipt.
+    if sound_verdict.as_ref().is_some_and(|verdict| admits(&sound, verdict)) && licenses(&sound) {
+        return Some(sound);
+    }
+    // 2. The full seat, and each rider the door still takes. `kept` is `sound` in its own order with
+    //    riders left out, so it is `sound` again only when none was — already refused above.
+    let alone = vec![head];
+    let alone_verdict = coverage(&alone);
+    let (mut kept, mut kept_verdict) = (alone.clone(), alone_verdict.clone());
+    for rider in &sound[1..] {
+        let mut attempt = kept.clone();
+        attempt.push(rider.clone());
+        let verdict = coverage(&attempt);
+        if admits(&attempt, &verdict) {
+            (kept, kept_verdict) = (attempt, verdict);
+        }
+    }
+    if kept.len() < sound.len() && admits(&kept, &kept_verdict) && licenses(&kept) {
+        return Some(kept);
+    }
+    // 3. The full seat alone, unless it was one of the sets already refused.
+    if kept.len() > 1 && admits(&alone, &alone_verdict) && licenses(&alone) {
+        return Some(alone);
+    }
+    None
 }
 
 pub fn validate_supplementary_receipts_v1<V>(
@@ -3920,6 +4100,329 @@ mod tests {
         };
         assert!(matches!(check(vec![outsider]), Err(PalwPanelV2Error::NotASeat(_))));
         assert!(matches!(check(vec![by_duty[0].clone(), by_duty[0].clone()]), Err(PalwPanelV2Error::DuplicateSeat(_))));
+    }
+
+    /// The five-seat fixture with each seat's duty receipt (`Valid`, its assigned mask), the full
+    /// seat's among them, and the coverage check bound as the processor binds it.
+    struct LicenceSelectionFixture {
+        state: PalwChainStateV2,
+        claim_id: Hash64,
+        sp: PalwStateParamsV2,
+        p: PalwPanelParamsV2,
+        net: Hash64,
+        seats: Vec<PalwPanelSeatV2>,
+        bonds: Vec<PalwBondKeyV2>,
+        anchor: Hash64,
+        full_seat: usize,
+        by_duty: Vec<PalwSeatReceiptV3>,
+    }
+
+    impl LicenceSelectionFixture {
+        const SIGNED_DAA: u64 = 108;
+
+        fn new() -> Self {
+            let (state, claim_id, sp, p, net, seats) = five_seat_licensed_fixture();
+            let panel = state.panel(&claim_id).unwrap();
+            let bonds: Vec<PalwBondKeyV2> = panel.seats.iter().map(|seat| seat.bond).collect();
+            let anchor = panel.anchor;
+            let a = crate::palw_verification_v2::palw_segment_assignment_v2(anchor, claim_id, seats.len() as u16);
+            let by_duty = seats
+                .iter()
+                .enumerate()
+                .map(|(i, seat)| PalwSeatReceiptV3 {
+                    receipt: PalwSeatReceiptV2 {
+                        claim: claim_id,
+                        verdict: PalwReceiptVerdictV2::Valid,
+                        seat_bond: seat.bond,
+                        signed_daa: Self::SIGNED_DAA,
+                        signature: state.bond(&seat.bond).unwrap().pubkey.clone(),
+                    },
+                    segments: a.mask_of(i as u16),
+                })
+                .collect();
+            Self { state, claim_id, sp, p, net, seats, bonds, anchor, full_seat: a.full_seat as usize, by_duty }
+        }
+
+        fn check(&self, receipts: &[PalwSeatReceiptV3]) -> PalwCoverageVerdictV2 {
+            let verify = |key: &[u8], _m: &[u8], sig: &[u8], _c: &[u8]| key == sig;
+            validate_receipt_coverage_v2(
+                &self.state,
+                &self.p,
+                &self.sp,
+                &ctx(9, 130, 9),
+                self.net,
+                &self.claim_id,
+                receipts,
+                verify,
+                false,
+                None,
+            )
+        }
+
+        /// The optimistic door as the acceptance arm asks it.
+        fn door(&self, receipts: &[PalwSeatReceiptV3]) -> bool {
+            crate::palw_optimistic_licence_v2::palw_optimistic_licence_admits_v2(
+                self.anchor,
+                self.claim_id,
+                &self.bonds,
+                receipts,
+                &self.check(receipts),
+            )
+        }
+
+        /// The fold, asked as the processor asks it before it offers a set.
+        fn folds(&self, object: PalwConsensusObjectV2, audit: bool) -> bool {
+            let extras = crate::palw_state_v2::PalwTransitionExtrasV1 {
+                verification_v2_active: true,
+                verification_s2_active: true,
+                audit_2026_09_23_active: audit,
+                ..Default::default()
+            };
+            crate::palw_state_v2::palw_v2_object_licenses_claim_v1(
+                &self.state,
+                &self.sp,
+                &ctx(9, 130, 9),
+                &object,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+        }
+
+        fn optimistic<F: Fn(&[PalwSeatReceiptV3]) -> bool>(
+            &self,
+            pool: &[PalwSeatReceiptV3],
+            licenses: F,
+        ) -> Option<Vec<PalwSeatReceiptV3>> {
+            palw_select_optimistic_licence_v2(
+                &self.state,
+                &self.claim_id,
+                None,
+                pool,
+                |r: &[PalwSeatReceiptV3]| self.check(r),
+                licenses,
+            )
+        }
+
+        fn coverage(&self, pool: &[PalwSeatReceiptV3]) -> Option<Vec<PalwSeatReceiptV3>> {
+            palw_select_coverage_licence_v2(pool, |r: &[PalwSeatReceiptV3]| self.check(r), |_: &[PalwSeatReceiptV3]| true)
+        }
+
+        fn valid_count(receipts: &[PalwSeatReceiptV3]) -> usize {
+            receipts.iter().filter(|r| matches!(r.receipt.verdict, PalwReceiptVerdictV2::Valid)).count()
+        }
+    }
+
+    fn permutations(items: &[usize]) -> Vec<Vec<usize>> {
+        if items.len() <= 1 {
+            return vec![items.to_vec()];
+        }
+        let mut out = Vec::new();
+        for (i, first) in items.iter().enumerate() {
+            let mut rest = items.to_vec();
+            rest.remove(i);
+            for mut tail in permutations(&rest) {
+                tail.insert(0, *first);
+                out.push(tail);
+            }
+        }
+        out
+    }
+
+    /// **The licence stall, reproduced and now closed** (2026-09-24). The audit's verifier replayed
+    /// the processor's two greedy loops against this validator, for the pool order a stuck
+    /// testnet-12 floor claim had, and found the optimistic licence built only when the full-replay
+    /// seat's `Valid` was among the first two in the pool and the coverage licence never. The loops
+    /// are gone; this runs the selection that replaced them (`palw_select_*_licence_v2`, which both
+    /// processor assemblers call) with the full seat at every pool position, and keeps the acceptance
+    /// facts the fix rests on.
+    #[test]
+    fn verifier_greedy_assembler_drops_a_late_full_seat() {
+        let f = LicenceSelectionFixture::new();
+        let full = f.by_duty[f.full_seat].clone();
+        let partials: Vec<_> = f.by_duty.iter().enumerate().filter(|(i, _)| *i != f.full_seat).map(|(_, r)| r.clone()).collect();
+
+        // The acceptance facts. The optimistic arm takes `Ok` or `NoQuorum`, so {full, one partial}
+        // and all five are accepted, and three or four `Valid`s are refused as `CoverageShort`.
+        let with = |n: usize| {
+            let mut v = vec![full.clone()];
+            v.extend(partials.iter().take(n).cloned());
+            v
+        };
+        assert!(matches!(f.check(&with(0)), Err(PalwPanelV2Error::NoQuorum { .. })));
+        assert!(matches!(f.check(&with(1)), Err(PalwPanelV2Error::NoQuorum { .. })));
+        assert!(matches!(f.check(&with(2)), Err(PalwPanelV2Error::CoverageShort { .. })));
+        assert!(matches!(f.check(&with(3)), Err(PalwPanelV2Error::CoverageShort { .. })));
+        assert!(matches!(f.check(&with(4)), Ok(PalwReceiptQuorumV2::Licensed { valid: 5 })));
+        assert!(f.door(&with(0)) && f.door(&with(1)) && !f.door(&with(2)) && !f.door(&with(3)) && f.door(&with(4)));
+
+        for pos in 0..5usize {
+            // The whole panel filed, the full seat at `pos`: both doors open, each with all five.
+            let mut pool = partials.clone();
+            pool.insert(pos, full.clone());
+            let optimistic = f.optimistic(&pool, |_| true).unwrap_or_else(|| panic!("full seat at {pos}: no optimistic licence"));
+            assert!(f.door(&optimistic), "full seat at {pos}: the optimistic set is one the door takes");
+            assert_eq!(optimistic.len(), 5, "full seat at {pos}: all five validated, so all five ride");
+            let coverage = f.coverage(&pool).unwrap_or_else(|| panic!("full seat at {pos}: no coverage licence"));
+            assert!(matches!(f.check(&coverage), Ok(PalwReceiptQuorumV2::Licensed { valid: 5 })));
+
+            // d0815709's pool when it stalled: four receipts, the full seat's arriving late. The
+            // optimistic licence forms from the full seat and one partial; coverage cannot.
+            let mut stalled = partials[..3].to_vec();
+            stalled.insert(pos.min(3), full.clone());
+            let optimistic = f.optimistic(&stalled, |_| true).unwrap_or_else(|| panic!("full seat at {pos} of four: no licence"));
+            assert_eq!(optimistic.len(), 2, "full seat at {pos} of four: the full seat and one partial");
+            assert_eq!(optimistic[0], full, "the full seat's Valid is taken first");
+            assert!(f.door(&optimistic));
+            assert!(f.coverage(&stalled).is_none(), "four receipts cannot cover a four-segment cut twice");
+        }
+    }
+
+    /// **The selection offers a licence exactly when some set of the pool is one — and only a set
+    /// its door accepts and the fold licenses.** Every arrival order of every subset of the five
+    /// duty receipts (325 pools), against a brute force over every subset of each pool with the
+    /// acceptance predicates: the optimistic door both as the shared predicate and as the arm's own
+    /// spelling (`Ok` or `NoQuorum`), and coverage's `Licensed`.
+    #[test]
+    fn the_licence_selection_offers_exactly_what_the_doors_accept_in_every_arrival_order() {
+        let f = LicenceSelectionFixture::new();
+        let quorum = f.p.quorum() as usize;
+        let mut pools = 0;
+        for mask in 1u32..(1 << 5) {
+            let members: Vec<usize> = (0..5).filter(|i| mask & (1 << i) != 0).collect();
+            let pick = |sub: u32| -> Vec<PalwSeatReceiptV3> {
+                (0..5).filter(|i| sub & (1 << i) != 0).map(|i| f.by_duty[i].clone()).collect()
+            };
+            let subsets = || (1u32..(1 << 5)).filter(move |sub| sub & !mask == 0);
+            let optimistic_exists = subsets().any(|sub| f.door(&pick(sub)));
+            let coverage_exists = subsets().any(|sub| matches!(f.check(&pick(sub)), Ok(PalwReceiptQuorumV2::Licensed { .. })));
+            let has_full = members.contains(&f.full_seat);
+            assert_eq!(optimistic_exists, has_full, "{members:?}: the full seat's Valid is necessary and sufficient");
+            assert_eq!(coverage_exists, members.len() == 5, "{members:?}: coverage needs the whole panel");
+
+            for order in permutations(&members) {
+                pools += 1;
+                let pool: Vec<PalwSeatReceiptV3> = order.iter().map(|i| f.by_duty[*i].clone()).collect();
+                let optimistic = f.optimistic(&pool, |_| true);
+                assert_eq!(optimistic.is_some(), optimistic_exists, "{order:?}");
+                if let Some(set) = &optimistic {
+                    assert!(f.door(set), "{order:?}: the shared predicate");
+                    assert!(
+                        matches!(f.check(set), Ok(_) | Err(PalwPanelV2Error::NoQuorum { .. })),
+                        "{order:?}: the arm's own spelling of the door"
+                    );
+                    let valid = LicenceSelectionFixture::valid_count(set);
+                    assert!(valid < quorum || valid == 5, "{order:?}: never {valid} Valids short of coverage");
+                    let expected = if members.len() == 5 { 5 } else { members.len().min(2) };
+                    assert_eq!(set.len(), expected, "{order:?}");
+                    assert_eq!(set[0], f.by_duty[f.full_seat], "{order:?}: the full seat first");
+                    if set.len() == 2 {
+                        let first_partial = order.iter().find(|i| **i != f.full_seat).unwrap();
+                        assert_eq!(set[1], f.by_duty[*first_partial], "{order:?}: the rider is the first partial to arrive");
+                    }
+                    for audit in [false, true] {
+                        let object = PalwConsensusObjectV2::OptimisticLicensed { claim: f.claim_id, receipts: set.clone() };
+                        assert!(f.folds(object, audit), "{order:?}: the fold licenses it (audit fence {audit})");
+                    }
+                }
+                let coverage = f.coverage(&pool);
+                assert_eq!(coverage.is_some(), coverage_exists, "{order:?}");
+                if let Some(set) = &coverage {
+                    assert!(matches!(f.check(set), Ok(PalwReceiptQuorumV2::Licensed { valid: 5 })), "{order:?}");
+                    for audit in [false, true] {
+                        let object = PalwConsensusObjectV2::ReceiptLicensedV2 { claim: f.claim_id, receipts: set.clone() };
+                        assert!(f.folds(object, audit), "{order:?}: the fold licenses it (audit fence {audit})");
+                    }
+                }
+            }
+        }
+        assert_eq!(pools, 325, "5 + 20 + 60 + 120 + 120 arrival orders");
+    }
+
+    /// **A receipt that poisons the set, or repeats a seat, is dropped — it does not take the
+    /// licence with it.** A forged copy of the full seat's `Valid` ahead of the real one, a partial
+    /// signed over a neighbour's mask, and a second copy of a partial.
+    #[test]
+    fn the_licence_selection_drops_a_poisoned_receipt_and_a_repeated_seat() {
+        let f = LicenceSelectionFixture::new();
+        let full = f.by_duty[f.full_seat].clone();
+        let partials: Vec<_> = f.by_duty.iter().enumerate().filter(|(i, _)| *i != f.full_seat).map(|(_, r)| r.clone()).collect();
+        let mut forged = full.clone();
+        forged.receipt.signature = vec![0xFF; 4];
+        let mut stolen = partials[1].clone();
+        stolen.segments = partials[0].segments;
+        assert!(matches!(f.check(std::slice::from_ref(&forged)), Err(PalwPanelV2Error::ReceiptSignatureInvalid)));
+        assert!(matches!(f.check(std::slice::from_ref(&stolen)), Err(PalwPanelV2Error::MaskNotAssigned { .. })));
+
+        let pool = vec![forged.clone(), stolen.clone(), partials[0].clone(), partials[0].clone(), full.clone()];
+        assert_eq!(f.optimistic(&pool, |_| true), Some(vec![full.clone(), partials[0].clone()]));
+        assert_eq!(f.coverage(&pool), None);
+
+        let mut whole = pool.clone();
+        whole.extend(partials.iter().cloned());
+        let optimistic = f.optimistic(&whole, |_| true).expect("the whole panel");
+        assert_eq!(optimistic.len(), 5);
+        assert!(!optimistic.contains(&forged) && !optimistic.contains(&stolen));
+        let coverage = f.coverage(&whole).expect("the whole panel covers");
+        assert_eq!(coverage.len(), 5);
+        assert!(matches!(f.check(&coverage), Ok(PalwReceiptQuorumV2::Licensed { valid: 5 })));
+    }
+
+    /// **A rider the fold will not license does not cost the claim its licence** — past the audit
+    /// fence a `Valid` whose seat cannot post its lock makes the whole set inert. The selection falls
+    /// back to the full seat alone, and offers nothing only when the fold refuses that too.
+    #[test]
+    fn the_optimistic_selection_falls_back_past_a_rider_the_fold_refuses() {
+        let f = LicenceSelectionFixture::new();
+        let full = f.by_duty[f.full_seat].clone();
+        let partials: Vec<_> = f.by_duty.iter().enumerate().filter(|(i, _)| *i != f.full_seat).map(|(_, r)| r.clone()).collect();
+        let unbacked = partials[0].receipt.seat_bond;
+        let fold = |set: &[PalwSeatReceiptV3]| set.iter().all(|r| r.receipt.seat_bond != unbacked);
+
+        // Three `Valid`s (the full seat and two partials): the greedy set rides the unbacked seat.
+        let pool = vec![partials[0].clone(), partials[1].clone(), full.clone()];
+        assert_eq!(f.optimistic(&pool, fold), Some(vec![full.clone()]));
+        // The whole panel: all five are refused by the fold, then {full, the unbacked seat}.
+        let mut whole = partials.clone();
+        whole.push(full.clone());
+        assert_eq!(f.optimistic(&whole, fold), Some(vec![full.clone()]));
+        // A rider the fold takes is kept.
+        let pool = vec![partials[1].clone(), full.clone()];
+        assert_eq!(f.optimistic(&pool, fold), Some(vec![full.clone(), partials[1].clone()]));
+        // A full seat the fold refuses (it cannot post the whole gain): nothing is offered, so the
+        // collector falls through to the next door.
+        assert_eq!(f.optimistic(&whole, |_| false), None);
+    }
+
+    /// **The order is the selection's one policy**: the full seat's `Valid`, the outsider's `Valid`,
+    /// every other `Valid`, then everything else — each rank in arrival order.
+    #[test]
+    fn the_licence_candidate_order_is_full_seat_then_outsider_then_valid_then_the_rest() {
+        let f = LicenceSelectionFixture::new();
+        let full = f.seats[f.full_seat].bond;
+        let others: Vec<PalwBondKeyV2> = f.bonds.iter().copied().filter(|b| *b != full).collect();
+        let outsider = others[2];
+        let receipt = |seat: PalwBondKeyV2, verdict: PalwReceiptVerdictV2| PalwSeatReceiptV3 {
+            receipt: PalwSeatReceiptV2 { claim: f.claim_id, verdict, seat_bond: seat, signed_daa: 108, signature: vec![1] },
+            segments: crate::palw_verification_v2::PalwSegmentMaskV2::single(0),
+        };
+        let unavailable = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 107 };
+        let pool = vec![
+            receipt(others[0], unavailable),
+            receipt(others[1], PalwReceiptVerdictV2::Valid),
+            receipt(full, PalwReceiptVerdictV2::Incapable),
+            receipt(outsider, PalwReceiptVerdictV2::Valid),
+            receipt(others[0], PalwReceiptVerdictV2::Valid),
+            receipt(full, PalwReceiptVerdictV2::Valid),
+        ];
+        let positions = |ordered: Vec<&PalwSeatReceiptV3>| -> Vec<usize> {
+            ordered.iter().map(|r| pool.iter().position(|p| std::ptr::eq(p, *r)).unwrap()).collect()
+        };
+        assert_eq!(positions(palw_licence_candidate_order_v2(&pool, Some(full), Some(outsider))), vec![5, 3, 1, 4, 0, 2]);
+        assert_eq!(positions(palw_licence_candidate_order_v2(&pool, Some(full), None)), vec![5, 1, 3, 4, 0, 2]);
+        assert_eq!(positions(palw_licence_candidate_order_v2(&pool, None, None)), vec![1, 3, 4, 5, 0, 2]);
     }
 
     #[test]

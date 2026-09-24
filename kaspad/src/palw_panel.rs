@@ -272,6 +272,19 @@ fn seat_reask_daa_v1(receipt_window_daa: u64) -> u64 {
     (receipt_window_daa / 4).clamp(1, 25)
 }
 
+/// **Which bound panel a seat duty is a duty to** — the claim, the DAA it bound at, and the anchor
+/// its panel was drawn from (the 2026-09-24 licence-stall fix, its second half).
+///
+/// `bound_daa` alone told a redraw from the first panel but not two SIBLINGS: the anchor is found
+/// by walking the candidate block's own chain, so two blocks at the anchor slot bind two different
+/// panels at the same DAA, and a seat on both answered the first and was told "already answered"
+/// by the second — whose mask, and often whose seats, differ. The anchor names the panel (it is
+/// what the draw and the segment assignment are functions of), so a re-bound panel is a new duty
+/// and the seat judges it; the same panel seen again is not.
+fn seat_duty_panel_key_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2) -> (Hash64, u64, Hash64) {
+    (duty.claim_id, duty.bound_daa, duty.panel_anchor)
+}
+
 fn court_move_round_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwCourtDutyV2) -> u32 {
     const DISSECTION: u32 = 1 << 31;
     const ROOT_CLAIM: u32 = 1 << 30;
@@ -2983,18 +2996,27 @@ impl PalwPanelService {
         > = HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         let mut receipts_v3: HashMap<Hash64, Vec<PalwSeatReceiptV3>> = HashMap::new();
+        // When each claim's V3 receipts were first seen here, so the sweep can bound that pool by
+        // age. It was never swept: every gossiped V3 receipt (an ML-DSA-87 signature, ~4.6 KB) of
+        // every claim stayed for the life of the process.
+        let mut receipts_v3_seen: HashMap<Hash64, u64> = HashMap::new();
         // **Keyed by the PANEL, not by the claim** (ADR-0060's redraw, found while landing
         // ADR-0065 D4). A claim whose panel concludes nothing is revived once and binds a SECOND
         // panel anchored on the sweep, which is the mechanism D4 leans on when a seat cannot be
         // fed. Keyed by claim id alone this set said "already answered" to that second panel and
         // the seat filed nothing — so the redraw dealt new seats and then silenced any of them
         // that had sat on the first panel. `bound_daa` is what distinguishes the two: the redraw
-        // re-binds at the sweep's own score.
-        let mut answered: HashSet<(Hash64, u64)> = HashSet::new();
+        // re-binds at the sweep's own score. It does not distinguish two SIBLING panels, bound at
+        // one DAA by two blocks at the anchor slot, so the key carries the anchor too
+        // (`seat_duty_panel_key_v1`, the 2026-09-24 licence-stall fix).
+        let mut answered: HashSet<(Hash64, u64, Hash64)> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
         // Attempt claims this seat has replayed once (ADR-0084 Decision 7): a replay that did not
         // reproduce the claim's roots is not re-run every tick — the opening lane decides from there.
-        let mut replayed: HashSet<Hash64> = HashSet::new();
+        // Once per PANEL, keyed as `answered` is: a seat re-judging a re-bound panel that found its
+        // claim already replayed fell through to the pull and, at half the window, to `Unavailable`
+        // on a claim it had verified — and the new panel's segment assignment is not the old one's.
+        let mut replayed: HashSet<(Hash64, u64, Hash64)> = HashSet::new();
         // When this seat last pulled for a claim it holds no material for, so a slow answer is
         // not re-asked every 2-second tick.
         let mut requested: HashMap<Hash64, u64> = HashMap::new();
@@ -3190,6 +3212,9 @@ impl PalwPanelService {
             // (audit M2-2).
             for claim in materials.keys() {
                 first_seen.entry(*claim).or_insert(current_daa);
+            }
+            for claim in receipts_v3.keys() {
+                receipts_v3_seen.entry(*claim).or_insert(current_daa);
             }
 
             // **Build the class registration FIRST — the comment always said "ahead of
@@ -4596,7 +4621,7 @@ impl PalwPanelService {
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
             for duty in &duties {
-                if answered.contains(&(duty.claim_id, duty.bound_daa)) || current_daa > duty.receipt_deadline {
+                if answered.contains(&seat_duty_panel_key_v1(duty)) || current_daa > duty.receipt_deadline {
                     continue;
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
@@ -5257,7 +5282,7 @@ impl PalwPanelService {
                         // graph-v5 attempt is 784 MB of tiles the seat never fetches and one
                         // execution it can afford — the producer's own cost.
                         let resolved = if current_daa >= duty.bound_daa.saturating_add(PALW_ATTEMPT_REPLAY_GRACE_DAA)
-                            && replayed.insert(duty.claim_id)
+                            && replayed.insert(seat_duty_panel_key_v1(duty))
                         {
                             if self.consensus_config.params.palw_verification_v2_at(current_daa) {
                                 match self
@@ -5490,7 +5515,7 @@ impl PalwPanelService {
                     }
                     receipts.entry(duty.claim_id).or_default().push(inner);
                     receipts_v3.entry(duty.claim_id).or_default().push(receipt);
-                    answered.insert((duty.claim_id, duty.bound_daa));
+                    answered.insert(seat_duty_panel_key_v1(duty));
                     self.flow_context.broadcast_palw_seat_receipt(bytes).await;
                     continue;
                 }
@@ -5516,7 +5541,7 @@ impl PalwPanelService {
                     own_receipts.insert(duty.claim_id, (receipt.clone(), duty.receipt_deadline));
                 }
                 receipts.entry(duty.claim_id).or_default().push(receipt);
-                answered.insert((duty.claim_id, duty.bound_daa));
+                answered.insert(seat_duty_panel_key_v1(duty));
                 self.flow_context.broadcast_palw_seat_receipt(bytes).await;
             }
 
@@ -6127,6 +6152,15 @@ impl PalwPanelService {
                 live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim))
             });
             receipts.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
+            // The V3 pool is read by the collector only for a claim still in `receipts`, so it keeps
+            // exactly those, the live ones, and anything seen inside the retention bound — a peer's
+            // receipt can arrive before this node has seen the bind that makes the claim its duty.
+            receipts_v3.retain(|claim, _| {
+                live.contains(claim)
+                    || receipts.contains_key(claim)
+                    || receipts_v3_seen.get(claim).is_some_and(|seen| current_daa <= seen.saturating_add(PANEL_POOL_RETENTION_DAA))
+            });
+            receipts_v3_seen.retain(|claim, _| receipts_v3.contains_key(claim));
             // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
             // keep become the thing that grows.
             first_seen.retain(|claim, _| materials.contains_key(claim) || receipts.contains_key(claim) || live.contains(claim));
@@ -6136,7 +6170,9 @@ impl PalwPanelService {
             // of these lines exist. Dropping a non-live entry cannot cause a double-file: a claim
             // leaves `live` only once no duty names it, and the duty loop refuses anything past
             // `receipt_deadline` regardless of what this set remembers.
-            answered.retain(|(claim, _)| live.contains(claim));
+            answered.retain(|(claim, _, _)| live.contains(claim));
+            // The same argument for `replayed`, which only the duty loop reads, for a live duty.
+            replayed.retain(|(claim, _, _)| live.contains(claim));
             // ADR-0124 Decision 2: a receipt this seat may still carry itself lives exactly as long
             // as its window; the chain refuses anything past `receipt_deadline` regardless.
             own_receipts.retain(|_, (_, deadline)| current_daa <= *deadline);
@@ -8802,6 +8838,53 @@ mod seat_reask_tests {
             assert!((1..=25).contains(&reask));
             assert!(reask < window / 2, "window {window}: the second ask at +{reask} is not before the accusation at +{}", window / 2);
         }
+    }
+}
+
+#[cfg(test)]
+mod seat_duty_panel_key_tests {
+    use super::seat_duty_panel_key_v1;
+    use kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2;
+    use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+    use kaspa_consensus_core::tx::TransactionOutpoint;
+    use kaspa_hashes::Hash64;
+
+    fn duty(claim: u64, bound_daa: u64, anchor: u64) -> PalwSeatDutyV2 {
+        let h = Hash64::from_u64_word;
+        PalwSeatDutyV2 {
+            accepted_block: h(1),
+            claim_id: h(claim),
+            class_id: h(2),
+            artifact_root: h(3),
+            seat_bond: PalwBondKeyV2(TransactionOutpoint::new(h(4), 0)),
+            executor_bond: PalwBondKeyV2(TransactionOutpoint::new(h(5), 0)),
+            execution_root: h(6),
+            trace_root: h(7),
+            output_root: h(8),
+            bound_daa,
+            receipt_deadline: bound_daa + 600,
+            panel_anchor: h(anchor),
+            seat_index: 2,
+            panel_seat_count: 5,
+            pwu: 1_000,
+            quanta: 0,
+            free_prompt: false,
+            work_leaves: 0,
+        }
+    }
+
+    /// **A seat answers each PANEL once** (the 2026-09-24 licence-stall fix). Two sibling blocks at
+    /// the anchor slot bind two panels for one claim at one DAA; keyed by `(claim, bound_daa)` the
+    /// seat that answered the first was told "already answered" by the second and never filed for
+    /// it. The anchor tells them apart; the redraw's DAA still does; and the same panel seen again on
+    /// a later tick is the same duty.
+    #[test]
+    fn a_rebound_panel_is_a_new_duty_and_the_same_panel_is_not() {
+        let first = seat_duty_panel_key_v1(&duty(9, 120, 0xA1));
+        assert_ne!(first, seat_duty_panel_key_v1(&duty(9, 120, 0xA2)), "a sibling panel at the same DAA is a new duty");
+        assert_ne!(first, seat_duty_panel_key_v1(&duty(9, 720, 0xA1)), "a redraw is a new duty");
+        assert_ne!(first, seat_duty_panel_key_v1(&duty(8, 120, 0xA1)), "another claim is another duty");
+        assert_eq!(first, seat_duty_panel_key_v1(&duty(9, 120, 0xA1)), "the same panel is answered once");
     }
 }
 
