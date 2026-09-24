@@ -17,23 +17,30 @@
 //!
 //! 1. **The served capture is the claim's**: the family's own `verify_material` against the roots the
 //!    seat arms read (`PalwClaimRootsV1`: the claim's roots, the block's anchor and draw, the recorded
-//!    job pin). A capture that fails it but carries the claim's own binding goes to step 5 alone: a
-//!    family's seat rule refuses exactly the garbage-logits lie (base0's SEAT-0 head rule: committed
-//!    rows that are not the head's step outputs), so that producer's capture never verifies anywhere.
-//!    Anything else is not the committed execution and proves nothing about the producer.
-//! 2. **The local capture answers the same job and disagrees**: its shape (job context, leaf count) is
-//!    the served one's, and it does NOT reproduce the claim's roots. A seat whose local run is of
-//!    another job, or whose run agrees with the claim, has no mismatch to prove and abstains — the
-//!    liveness half of "the mismatch must be the seat's replay against the claim's committed roots,
-//!    under the claim's job".
+//!    job pin). A capture that fails it but carries the claim's own binding (authenticated: its
+//!    committed root is the claim's and its fields rebuild it, `verify_binding_v1`) goes to step 5
+//!    alone: a family's seat rule refuses exactly the garbage-logits lie (base0's SEAT-0 head rule:
+//!    committed rows that are not the head's step outputs), so that producer's capture never
+//!    verifies anywhere. Anything else is not the committed execution and proves nothing about the
+//!    producer. [`palw_replay_served_standing_v1`] is the same reading, exported so a node sorts its
+//!    gossiped candidates by it before it pays for a replay.
+//! 2. **The local capture answers the same job and disagrees**: the served capture is one the family
+//!    lays out (`capture_shape`; bytes in a retention it does not read are
+//!    [`PalwReplayNothingV1::ServedNotBisectable`]), the local one's
+//!    shape (job context, leaf count) is the served one's, and it does NOT reproduce the claim's
+//!    roots. A seat whose local run is of another job, or whose run agrees with the claim, has no
+//!    mismatch to prove and abstains — the liveness half of "the mismatch must be the seat's replay
+//!    against the claim's committed roots, under the claim's job".
 //! 3. **Bisect** ([`palw_replay_bisect_v1`]): the family's prefix commitment
 //!    (`PalwExecutionBackendV1::bisect_prefix_state` — the verb ADR-0027's ladder is built on) of both
 //!    captures at the pinned midpoint (`palw_bisect::bisect_midpoint_v1`, the ladder's own), one
 //!    whole-space rung and `⌈log₂ n⌉` halvings: `O(log n)` rungs, each reserved by the caller before it
-//!    runs, and a budget no caller can exceed ([`palw_replay_bisect_rungs_v1`]). It returns the FIRST
-//!    leaf the two step trees disagree at: every leaf before it is the honest execution's, so the step
-//!    there read honest inputs and wrote a wrong output — which is exactly what a step refutation
-//!    proves.
+//!    runs, and a budget no caller can exceed ([`palw_replay_bisect_rungs_v1`]). A stop that is this
+//!    host's (a rung the ledger refused, the local prefix unreadable —
+//!    [`PalwReplayNothingV1::is_this_hosts`]) is reported as such, with the rungs it spent, so the
+//!    caller runs the claim again instead of settling it. It returns the FIRST leaf the two step
+//!    trees disagree at: every leaf before it is the honest execution's, so the step there read
+//!    honest inputs and wrote a wrong output — which is exactly what a step refutation proves.
 //! 4. **At that leaf**:
 //!    * a fused-attention leaf (`palw_da_step_leaf_is_fused_v1`, the fold's own predicate) is P2-8e's
 //!      held dissection — [`PalwReplayFindingV1::NeedsDissection`], ONE hook, not implemented here
@@ -136,6 +143,30 @@ pub enum PalwReplayBisectStopV1 {
     RungRefused { rung: u32, why: String },
 }
 
+impl PalwReplayBisectStopV1 {
+    /// **The rungs the search spent before it stopped** — what a finding reports (the review's
+    /// finding 3: a stop used to report 0 whatever it had read). A refused rung did not run; an
+    /// unreadable one was reserved and read; a spent budget is the budget.
+    pub fn rungs_spent(&self) -> u32 {
+        match self {
+            Self::EmptySpace | Self::SpaceTooWide(_) => 0,
+            Self::StepTreesAgree { rungs } => *rungs,
+            Self::Unreadable { rung, .. } => rung.saturating_add(1),
+            Self::OverBudget { budget } => *budget,
+            Self::RungRefused { rung, .. } => *rung,
+        }
+    }
+
+    /// **Is the stop a condition of THIS HOST rather than a fact about the claim?** A rung the
+    /// ledger refused (memory pressure from the seat's own replays) or this seat's own execution's
+    /// prefix it could not read says nothing of the producer — the caller runs the claim again
+    /// (the review's finding 3: it used to settle the case for good). Every other stop is the
+    /// claim's: its space, its step trees, its served prefix.
+    pub fn is_this_hosts(&self) -> bool {
+        matches!(self, Self::RungRefused { .. } | Self::Unreadable { side: PalwReplaySideV1::Local, .. })
+    }
+}
+
 /// **The bisection itself** — the first leaf of `[0, step_leaf_count)` at which the served and the
 /// local executions' prefix commitments part.
 ///
@@ -230,6 +261,14 @@ pub enum PalwReplayNothingV1 {
     /// The served capture neither reproduces the claim's roots nor carries its binding: there is no
     /// committed execution in hand.
     ServedNotTheClaims,
+    /// The served bytes carry the claim's binding (it authenticates against the claim's execution
+    /// root) in a retention this family does not lay out — `capture_shape` refuses it: base0's floor
+    /// reads the dense tuple only, so a folded (v2) retention served for a floor claim. Not the
+    /// claim's capture as its family holds it (the floor retains dense on both lanes; the model
+    /// tiers fold and their `capture_shape` / `bisect_prefix_state` read the fold), so nothing is
+    /// located or filed from it — and a node sorts such bytes out before it replays anything
+    /// ([`PalwReplayServedStandingV1::NotBisectable`]).
+    ServedNotBisectable,
     /// The local capture is not of the served job's shape (another job context, another leaf count,
     /// bytes this family does not read): this seat's replay answers another question — it abstains.
     LocalNotTheJob(String),
@@ -249,6 +288,15 @@ pub enum PalwReplayNothingV1 {
     LogitsScanOverBudget,
     /// The served capture discloses no binding (the family has no DA responder).
     NoBinding(String),
+}
+
+impl PalwReplayNothingV1 {
+    /// **Is this "nothing" this host's condition, not the claim's?** Only a bisection stop that is
+    /// ([`PalwReplayBisectStopV1::is_this_hosts`]): the caller treats it as a failed run, which the
+    /// claim's second run may redo, never as a finding that settles the claim.
+    pub fn is_this_hosts(&self) -> bool {
+        matches!(self, Self::Bisect(stop) if stop.is_this_hosts())
+    }
 }
 
 /// **What the builder concluded.** `rungs` is the bisection's spend (0 where none ran).
@@ -291,6 +339,51 @@ fn served_binding_v1(backend: &dyn PalwExecutionBackendV1, served: &[u8]) -> Res
     backend.disclose_trace_event(served, u32::MAX, u8::MAX).map(|disclosure| disclosure.binding().clone())
 }
 
+/// **Whether a served capture's BINDING is the claim's** — its committed execution root is the
+/// claim's and its fields rebuild that root (`palw_step_leg::verify_binding_v1`, the fold's own
+/// authentication of a held binding). Nothing about the body: that is `verify_material`'s, or —
+/// for a capture no seat rule verifies — the fold's predicate on whatever is opened from it.
+fn binding_is_the_claims_v1(binding: &PalwStepBindingV2, execution_root: &Hash64) -> bool {
+    binding.committed_execution_root == *execution_root && crate::palw_step_leg::verify_binding_v1(binding).is_ok()
+}
+
+/// **Where a served capture stands before anything is paid for it** (the review's findings 1 and 5).
+/// A node's pool takes any gossiped bytes, so its filer sorts them first — by the SAME reading the
+/// builder's own gate makes of a capture that fails the seat rule ([`palw_replay_contradiction_v1`]
+/// step 1), and the family's own shape read (its step 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwReplayServedStandingV1 {
+    /// No binding reads off it, or its binding is not the claim's (another execution's root, or
+    /// fields that do not rebuild the claim's): bytes anyone could have gossiped. Skipped, never a
+    /// reason to stop looking — the claim's own capture may arrive later.
+    NotTheClaims,
+    /// The claim's own binding, in a retention this family does not lay out
+    /// ([`PalwReplayNothingV1::ServedNotBisectable`]). Skipped like `NotTheClaims`: it costs no
+    /// replay and stops nothing.
+    NotBisectable,
+    /// The claim's binding, in a retention the family bisects: worth a replay.
+    Bisectable,
+}
+
+/// **[`PalwReplayServedStandingV1`] of `served` against the claim's `execution_root`** — a decode
+/// and a hash of the binding; no replay, no verification of the body.
+pub fn palw_replay_served_standing_v1(
+    backend: &dyn PalwExecutionBackendV1,
+    served: &[u8],
+    execution_root: &Hash64,
+) -> PalwReplayServedStandingV1 {
+    match served_binding_v1(backend, served) {
+        Ok(binding) if binding_is_the_claims_v1(&binding, execution_root) => {
+            if backend.capture_shape(served).is_some() {
+                PalwReplayServedStandingV1::Bisectable
+            } else {
+                PalwReplayServedStandingV1::NotBisectable
+            }
+        }
+        _ => PalwReplayServedStandingV1::NotTheClaims,
+    }
+}
+
 /// A leaf's refutation off `capture`, on the lane the claim runs on.
 fn refutation_at_v1(
     backend: &dyn PalwExecutionBackendV1,
@@ -326,11 +419,15 @@ pub fn palw_replay_contradiction_v1<G>(
         Err(why) if verified => return nothing(PalwReplayNothingV1::NoBinding(why), 0),
         Err(_) => return nothing(PalwReplayNothingV1::ServedNotTheClaims, 0),
     };
-    if !verified && binding.committed_execution_root != claim.target.execution_root {
+    if !verified && !binding_is_the_claims_v1(&binding, &claim.target.execution_root) {
         return nothing(PalwReplayNothingV1::ServedNotTheClaims, 0);
     }
-    // 2. The local capture is the same job, and disagrees with the claim.
-    let (Some(served_shape), Some(local_shape)) = (backend.capture_shape(served), backend.capture_shape(local)) else {
+    // 2. The local capture is the same job, and disagrees with the claim. A served capture the
+    // family cannot lay out is the claim's retention form, named apart from this seat's own replay.
+    let Some(served_shape) = backend.capture_shape(served) else {
+        return nothing(PalwReplayNothingV1::ServedNotBisectable, 0);
+    };
+    let Some(local_shape) = backend.capture_shape(local) else {
         return nothing(PalwReplayNothingV1::LocalNotTheJob("a capture this family does not read".into()), 0);
     };
     if served_shape.job_context != local_shape.job_context {
@@ -376,7 +473,10 @@ pub fn palw_replay_contradiction_v1<G>(
         Err(PalwReplayBisectStopV1::StepTreesAgree { rungs }) => {
             return logits_not_step_output_v1(backend, served, local, &binding, claim, rungs);
         }
-        Err(stop) => return nothing(PalwReplayNothingV1::Bisect(stop), 0),
+        Err(stop) => {
+            let rungs = stop.rungs_spent();
+            return nothing(PalwReplayNothingV1::Bisect(stop), rungs);
+        }
     };
     // 4. P2-8e's one hook: a fused-attention leaf goes to a held dissection, never to a unit or a
     // one-step proof (the fold's own predicate, DA-3's `DaUnitNeedsDissection`).
@@ -625,5 +725,40 @@ mod tests {
             Err(PalwReplayBisectStopV1::Unreadable { side: PalwReplaySideV1::Local, index: 64, rung: 0 })
         );
         assert_eq!(palw_replay_bisect_v1(0, 7, prefix(0, None), |_| Ok::<(), String>(())), Err(PalwReplayBisectStopV1::EmptySpace));
+    }
+
+    /// **A stop says what it spent, and whether it is this host's** (the review's finding 3): a rung
+    /// the ledger refused and an unreadable LOCAL prefix are this host's conditions — the caller runs
+    /// the claim again — and report the rungs actually read; an unreadable SERVED prefix, agreeing
+    /// trees and a spent budget are the claim's.
+    #[test]
+    fn a_stop_reports_its_rungs_and_whether_it_is_this_hosts() {
+        let refused =
+            palw_replay_bisect_v1(64, 7, prefix(64, Some(3)), |rung| if rung < 2 { Ok(()) } else { Err("full".to_string()) })
+                .unwrap_err();
+        assert_eq!((refused.rungs_spent(), refused.is_this_hosts()), (2, true));
+        assert!(PalwReplayNothingV1::Bisect(refused).is_this_hosts());
+        let local = palw_replay_bisect_v1(
+            64,
+            7,
+            |side, i| (side == PalwReplaySideV1::Served || i < 64).then_some(Hash64::from_u64_word(i)),
+            |_| Ok::<(), String>(()),
+        )
+        .unwrap_err();
+        assert_eq!((local.rungs_spent(), local.is_this_hosts()), (1, true), "{local}");
+        let served = palw_replay_bisect_v1(
+            64,
+            7,
+            |side, i| (side == PalwReplaySideV1::Local).then_some(Hash64::from_u64_word(i)),
+            |_| Ok::<(), String>(()),
+        )
+        .unwrap_err();
+        assert_eq!((served.rungs_spent(), served.is_this_hosts()), (1, false), "the claim's prefix: {served}");
+        let over = palw_replay_bisect_v1(64, 3, prefix(64, Some(3)), |_| Ok::<(), String>(())).unwrap_err();
+        assert_eq!((over.rungs_spent(), over.is_this_hosts()), (3, false));
+        let agree = palw_replay_bisect_v1(64, 7, prefix(64, None), |_| Ok::<(), String>(())).unwrap_err();
+        assert_eq!((agree.rungs_spent(), agree.is_this_hosts()), (1, false));
+        assert!(!PalwReplayNothingV1::ServedNotBisectable.is_this_hosts());
+        assert!(!PalwReplayNothingV1::LocalReproduces.is_this_hosts());
     }
 }

@@ -1560,6 +1560,71 @@ pub fn palw_da_accusation_check_v1(
     }
 }
 
+/// **P2-8d: what a `StepLeaf` demand of a claim by `accuser` comes to** — node policy's read of the
+/// fold's own opening for a `DefaultAccusedHeld` naming one divergent leaf (DA-3, J-6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PalwDaStepLeafDemandCheckV1 {
+    /// File it: what the fold answers the accusation (C-8) — a seat of the current panel or not; a
+    /// non-seat demand is admitted too (DA-3: a named `StepLeaf` is free, from a seat or not, within
+    /// DA-8's budgets).
+    File { admission: crate::palw_state_v2::PalwDaAdmissionV1 },
+    /// This accuser's own session on the claim is open (its row-0 accusation, still unanswered): the
+    /// fold refuses a second one (`DaSessionAlreadyOpen`) until it closes — ask again after.
+    SessionOpen,
+    /// The named leaf is answered on chain: the fold refuses the session (`DaUnitAlreadyAnswered`),
+    /// and it has adjudicated the leaf's evidence already (a guilty one convicted the claim).
+    Answered,
+    /// The fold would refuse it, with its own reason.
+    Refused(crate::palw_state_v2::PalwStateV2Error),
+}
+
+/// **ADR-0152 DA-3 / DA-8 / J-6 (Phase 2, P2-8d): may `accuser` demand step leaf `leaf` of
+/// `claim_id` at `now_daa`?** The P2-8b review's finding 2: the demand used to be asked through
+/// P2-6's read ([`palw_da_accusation_check_v1`]), which answers for ITS unit — row 0 — and stops
+/// before C-8 on two rules that are node policy for an automatic accusation, not the fold's for a
+/// named leaf: once per accuser (`opened_by_seat` — DA-8 gives a seat four sessions a claim, and the
+/// J-6 garbage path's SECOND session is exactly this demand) and row 0 answered. So a seat that had
+/// accused row 0 was told `AccusedBefore` and dropped a demand the fold admits, and a non-seat's
+/// `File` was settled.
+///
+/// This asks the fold's own gates for the named unit, and nothing else: the accuser's open session
+/// (the fold's `DaSessionAlreadyOpen`), the named leaf answered (its `DaUnitAlreadyAnswered`, the
+/// same predicate `open_da_session_rcore_v1` reads), then C-8 itself
+/// ([`crate::palw_state_v2::palw_da_accusation_admissible_v2`]: stage, retention, standing, DA-8's
+/// budgets, A-6's room). The unit's stateless bounds and the binding's identity rule stay the
+/// builder's and the fold's (`palw_da_held_accusation_object_v1`). Below `palw_rcore_plus`:
+/// `DaCourtDormant`.
+pub fn palw_da_step_leaf_demand_check_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+    claim_id: &Hash64,
+    accuser: &PalwBondKeyV2,
+    leaf: u64,
+    now_daa: u64,
+) -> PalwDaStepLeafDemandCheckV1 {
+    use crate::palw_da_rcore_v1::{PalwDaUnitV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    use crate::palw_state_v2::{PalwStateV2Error, palw_da_accusation_admissible_v2};
+    if !params.rcore_plus_active_at(now_daa) {
+        return PalwDaStepLeafDemandCheckV1::Refused(PalwStateV2Error::DaCourtDormant);
+    }
+    if state.da_session(claim_id, accuser).is_some() {
+        return PalwDaStepLeafDemandCheckV1::SessionOpen;
+    }
+    let named = PalwDaUnitV1::Held(crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf });
+    if let (Some(claim), Some(record)) = (state.claim(claim_id), state.da_claim(claim_id))
+        && palw_da_unit_answered_v1(record, &named, palw_da_in_run_rows_v1(claim, extras.fp_da_pins_active))
+    {
+        return PalwDaStepLeafDemandCheckV1::Answered;
+    }
+    match palw_da_accusation_admissible_v2(state, params, extras, claim_id, accuser, now_daa) {
+        Ok(admission) => PalwDaStepLeafDemandCheckV1::File { admission },
+        // Unreachable after the session read above; mapped rather than trusted.
+        Err(PalwStateV2Error::DaSessionAlreadyOpen { .. }) => PalwDaStepLeafDemandCheckV1::SessionOpen,
+        Err(e) => PalwDaStepLeafDemandCheckV1::Refused(e),
+    }
+}
+
 /// Which claims an operator asks about: the ones its bond made, or the ones its bond judges.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwClaimRoleV1 {

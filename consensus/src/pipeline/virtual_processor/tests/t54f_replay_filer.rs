@@ -19,8 +19,11 @@
 //!   (SEAT-0's head rule is the lie) yet carries the claim's binding, and the builder files
 //!   `LogitsNotStepOutput` (12), the suite's own contradiction, which folds with S2.
 //! * **P2-8d** — the divergent leaf is located but the served material cannot open it: the seat's
-//!   `StepLeaf` demand opens a session through P2-6's read (whose `Answered` names row 0, not this
-//!   unit), and the silent producer defaults: S1, the `DaDefault` record, every accuser uncharged.
+//!   `StepLeaf` demand is asked of the fold's gates for THAT unit (`palw_da_step_leaf_demand_check_v1`
+//!   — never P2-6's row-0 read, which tells the seat that already accused row 0 `AccusedBefore`),
+//!   opens the J-6 garbage path's second session of the SAME seat, and the silent producer defaults:
+//!   S1, the `DaDefault` record, every accuser uncharged; the producer that answers it from its capture
+//!   hands the fold the guilty leaf, and the claim voids `CourtFraud`.
 //! * **Liveness** — an honest claim yields nothing, and a seat whose own replay is WRONG never
 //!   convicts an honest producer: the proof it builds from the served capture holds.
 //!
@@ -32,6 +35,7 @@ use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwMaterialVerdictV1
 use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_offence_id_v1};
 use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
 use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as Check;
+use kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1 as Demand;
 use kaspa_consensus_core::palw_replay_refute_v1::{
     PalwReplayClaimV1, PalwReplayFindingV1, PalwReplayNothingV1, PalwReplaySiteV1, palw_replay_bisect_rungs_v1,
     palw_replay_contradiction_v1, palw_replay_executor_refuted_object_v1,
@@ -90,6 +94,13 @@ fn replay(
 /// This seat's own replay of the claim's job: the floor's run, the job the anchor implies.
 fn local_run(h: &H, claim: &RealClaim) -> Vec<u8> {
     h.backend.execute(&claim.job, &claim.prompt).expect("the seat replays the claim's job").material
+}
+
+/// The node's read of card `card`'s `StepLeaf` demand of `leaf` at the next block — the fold's gates
+/// for the named unit, through the processor's own extras.
+fn demand_check(h: &H, walk: &Walk, claim: Hash64, card: usize, leaf: u64) -> Demand {
+    let point = walk.next();
+    h.vp().palw_da_step_leaf_demand_check_v1_at(&walk.state, point.block, point.daa_score, &claim, &h.cards[card], leaf)
 }
 
 /// Card `card`'s event accusation of row 0 — the ONE builder P2-6's seats file with.
@@ -279,56 +290,83 @@ impl PalwExecutionBackendV1 for LeafOpeningsWithheld<'_> {
     }
 }
 
-/// **P2-8d (T54f's demand half, DA-3, J-6): a divergent leaf the served material cannot prove is
-/// demanded, and a silent producer defaults.**
-///
-/// A real garbage-trace claim, bound. Another seat of the panel accused row 0 and the producer answered
-/// it, so P2-6's read for the filing seat is `Answered` — about row 0, not this unit, and before C-8 —
-/// which the filer does not take for a refusal. The builder locates the lie's leaf on the claim's own
-/// verified capture, cannot open it, and returns the demand under the claim's binding; the ONE held
-/// builder signs it; it clears the gate, the walk and the fold and opens a SEAT session whose named unit
-/// is `StepLeaf { leaf }` (free past `palw_rcore_plus`, beside the fold's drawn width-1 ranges). The
-/// producer discloses nothing: the first block past the deadline voids the claim
-/// `ProducerWithholding`, takes S1 (the whole commitment) and records the `DaDefault`; the filer's
-/// exposure returns and the refuted accuser's held exposure is refunded — nobody but the producer pays.
-/// A unit the binding does not commit is refused by the builder before any carrier.
-#[tokio::test]
-async fn t54f_p2_8d_an_unprovable_divergent_leaf_is_demanded_and_a_silent_producer_defaults() {
-    let h = harness(true);
+/// **The J-6 garbage path up to the demand, on the SAME seat** (the P2-8b review's finding 2): a real
+/// garbage-trace claim, bound; seat PANEL[0] accuses row 0 (P2-6's builder) and, while that session
+/// is open, the demand read says `SessionOpen` (wait: the fold refuses a second session of one
+/// accuser); the garbage producer answers row 0 from its self-consistent capture (P2-7's builder) and
+/// the session closes refuted. P2-6's read now says `AccusedBefore` for that seat — the rule that
+/// dropped this demand — while the demand read, the fold's own gates for the named leaf, says
+/// `File` for it as a seat, and `File` for a bystander as a non-seat (DA-3). The builder locates
+/// the lie's leaf on the verified capture and, the leaf's proof unopenable from what was served,
+/// demands it. Returns the walk, the claim, the leaf, the seat and the demand's binding.
+fn j6_up_to_the_demand(h: &H) -> (Walk, RealClaim, u64, usize, PalwStepBindingV2) {
     let mut walk = h.genesis_walk();
     let claim = h.open_claim(&mut walk, Fault::Step);
     let id = claim.claim_id;
     let leaf = claim.fault_leaf.unwrap();
     h.bind(&mut walk, id);
-    let (filer, other) = (PANEL[0], PANEL[1]);
-    h.carry(&mut walk, vec![accuse_row_0(&h, id, other)]);
-    h.carry(&mut walk, vec![producer_answers_row_0(&h, &claim)]);
+    let seat = PANEL[0];
+    h.carry(&mut walk, vec![accuse_row_0(h, id, seat)]);
+    assert_eq!(demand_check(h, &walk, id, seat, leaf), Demand::SessionOpen, "its row-0 session is open: wait");
+    h.carry(&mut walk, vec![producer_answers_row_0(h, &claim)]);
+    assert!(walk.state.da_session(&id, &h.cards[seat]).is_none(), "the row-0 session is refuted and closed");
     let point = walk.next();
     assert_eq!(
-        h.vp().palw_da_accusation_check_v1_at(&walk.state, point.block, point.daa_score, &id, &h.cards[filer]),
-        Check::Answered,
-        "P2-6's read names row 0, answered on chain — not the filer's unit"
+        h.vp().palw_da_accusation_check_v1_at(&walk.state, point.block, point.daa_score, &id, &h.cards[seat]),
+        Check::AccusedBefore,
+        "P2-6's read: once per accuser — the rule that settled this demand before the fix"
     );
+    let Demand::File { admission } = demand_check(h, &walk, id, seat, leaf) else {
+        panic!("the fold admits the same seat's second session: {:?}", demand_check(h, &walk, id, seat, leaf))
+    };
+    assert!(admission.accuser_is_seat, "a seat's session (DA-8: four a claim)");
+    let Demand::File { admission } = demand_check(h, &walk, id, BYSTANDER, leaf) else { panic!("a non-seat files too (DA-3)") };
+    assert!(!admission.accuser_is_seat);
     let withheld = LeafOpeningsWithheld(&h.backend);
-    let (finding, _) = replay(&h, &walk, &claim, &withheld, &claim.material, &local_run(&h, &claim));
+    let (finding, _) = replay(h, &walk, &claim, &withheld, &claim.material, &local_run(h, &claim));
     let PalwReplayFindingV1::DemandLeaf { leaf: named, binding, .. } = finding else { panic!("a demand: {finding:?}") };
     assert_eq!((named, &*binding), (leaf, &claim.binding), "the lie's leaf, under the claim's own binding");
-    let execution_root = claim.envelope.attempt.execution_root;
-    let demand = |leaf: u64| {
-        kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_accusation_object_v1(
-            &h.domain,
-            id,
-            &execution_root,
-            PalwHeldMissingV1::StepLeaf { leaf },
-            (*binding).clone(),
-            h.cards[filer],
-            h.form(),
-            |message, context| Some(sign(filer, message, context)),
-        )
-    };
+    (walk, claim, leaf, seat, *binding)
+}
+
+/// The seat's `StepLeaf` demand, as the ONE held builder signs it with the seat's card.
+fn demand_object(
+    h: &H,
+    claim: &RealClaim,
+    card: usize,
+    leaf: u64,
+    binding: &PalwStepBindingV2,
+) -> Result<Obj, kaspa_consensus_core::palw_da_rcore_v1::PalwDaHeldAccusationBuildErrorV1> {
+    kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_accusation_object_v1(
+        &h.domain,
+        claim.claim_id,
+        &claim.envelope.attempt.execution_root,
+        PalwHeldMissingV1::StepLeaf { leaf },
+        binding.clone(),
+        h.cards[card],
+        h.form(),
+        |message, context| Some(sign(card, message, context)),
+    )
+}
+
+/// **P2-8d (T54f's demand half, DA-3, J-6): a divergent leaf the served material cannot prove is
+/// demanded by the same seat that accused row 0, and a silent producer defaults.**
+///
+/// [`j6_up_to_the_demand`], then: a unit the binding does not commit is refused by the builder before
+/// any carrier; the demand clears the gate, the walk and the fold and opens the seat's SECOND session,
+/// whose named unit is `StepLeaf { leaf }` (free past `palw_rcore_plus`, beside the fold's drawn
+/// width-1 ranges) and which pauses the claim; the read then says `SessionOpen`. The producer discloses
+/// nothing: the first block past the deadline voids the claim `ProducerWithholding`, takes S1 (the
+/// whole commitment) and records the `DaDefault`; the seat's exposure returns and its refuted row-0
+/// exposure is refunded — nobody but the producer pays.
+#[tokio::test]
+async fn t54f_p2_8d_an_unprovable_divergent_leaf_is_demanded_and_a_silent_producer_defaults() {
+    let h = harness(true);
+    let (mut walk, claim, leaf, seat, binding) = j6_up_to_the_demand(&h);
+    let id = claim.claim_id;
     assert!(
         matches!(
-            demand(claim.binding.step_leaf_count),
+            demand_object(&h, &claim, seat, claim.binding.step_leaf_count, &binding),
             Err(kaspa_consensus_core::palw_da_rcore_v1::PalwDaHeldAccusationBuildErrorV1::Refused(_))
         ),
         "a leaf the binding does not commit is refused before a carrier"
@@ -337,12 +375,14 @@ async fn t54f_p2_8d_an_unprovable_divergent_leaf_is_demanded_and_a_silent_produc
     let producer_before = walk.state.bond(&producer).unwrap().collateral;
     let commitment =
         kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(h.sp(), walk.state.claim(&id).unwrap()).unwrap();
-    let collateral: Vec<u64> = [filer, other].iter().map(|card| walk.state.bond(&h.cards[*card]).unwrap().collateral).collect();
-    h.carry(&mut walk, vec![demand(leaf).expect("the ONE held builder builds it")]);
-    let session = walk.state.da_session(&id, &h.cards[filer]).expect("the demand opened a session").clone();
+    let collateral = walk.state.bond(&h.cards[seat]).unwrap().collateral;
+    h.carry(&mut walk, vec![demand_object(&h, &claim, seat, leaf, &binding).expect("the ONE held builder builds it")]);
+    let session = walk.state.da_session(&id, &h.cards[seat]).expect("the demand opened the seat's second session").clone();
     assert_eq!(session.units[0], PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf }), "the named leaf (DA-3)");
     assert!(session.accuser_is_seat, "a seat's session");
+    assert_eq!(walk.state.da_claim(&id).unwrap().opened_by_seat.get(&h.cards[seat]), Some(&2), "the same seat's second");
     assert_eq!(walk.state.deadline_of(&id), None, "it pauses the claim (DA-5)");
+    assert_eq!(demand_check(&h, &walk, id, seat, leaf), Demand::SessionOpen, "its demand is on chain: nothing more to file");
     h.reloads(&walk.state);
     // The producer is silent: the first block past the deadline.
     let point = walk.at(session.deadline_daa + 1);
@@ -356,10 +396,75 @@ async fn t54f_p2_8d_an_unprovable_divergent_leaf_is_demanded_and_a_silent_produc
     assert_eq!(u128::from(producer_before - walk.state.bond(&producer).unwrap().collateral), commitment, "S1: the whole commitment");
     let record = walk.state.consumed_offence(&palw_da_offence_id_v1(&producer.0, &id)).expect("the DaDefault");
     assert_eq!(record.kind, PalwOffenceKindV1::DaDefault);
-    for (card, before) in [filer, other].into_iter().zip(collateral) {
-        assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[card]), 0, "card {card}'s exposure is returned");
-        assert_eq!(walk.state.bond(&h.cards[card]).unwrap().collateral, before, "card {card} pays nothing");
-    }
+    assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[seat]), 0, "the seat's exposure is returned");
+    assert_eq!(walk.state.bond(&h.cards[seat]).unwrap().collateral, collateral, "the seat pays nothing");
+    assert!(
+        !matches!(demand_check(&h, &walk, id, seat, leaf), Demand::File { .. }),
+        "a voided claim is demanded no more: {:?}",
+        demand_check(&h, &walk, id, seat, leaf)
+    );
+    h.reloads(&walk.state);
+}
+
+/// **J-6 completed by the fold: the producer that answers the demand hands it the guilty leaf.** The
+/// same seat's demand as above; the garbage producer answers the named `StepLeaf` from its own capture
+/// (P2-7's ONE held builder — the honest-looking evidence of its lie); the fold adjudicates it and the
+/// verdict convicts: the claim voids `CourtFraud`, the producer is charged, the seat pays nothing (its
+/// sessions released, its refuted row-0 exposure returned). No further filing is needed after a demand
+/// is answered, and the read then settles it (the leaf answered, or the claim no longer accusable).
+#[tokio::test]
+async fn t54f_p2_8d_a_demand_the_producer_answers_convicts_it_court_fraud() {
+    use kaspa_consensus_core::palw_da_rcore_v1::{
+        palw_da_answer_object_v1, palw_da_held_answer_v1, palw_da_held_disclosure_from_capture_v1,
+    };
+    let h = harness(true);
+    let (mut walk, claim, leaf, seat, binding) = j6_up_to_the_demand(&h);
+    let id = claim.claim_id;
+    let producer = h.cards[EXECUTOR];
+    let producer_before = walk.state.bond(&producer).unwrap().collateral;
+    let collateral = walk.state.bond(&h.cards[seat]).unwrap().collateral;
+    h.carry(&mut walk, vec![demand_object(&h, &claim, seat, leaf, &binding).expect("built")]);
+    assert!(walk.state.da_session(&id, &h.cards[seat]).is_some(), "the demand's session");
+    // The producer answers the named leaf from its capture, as P2-7's responder does on the attempt lane.
+    let record = walk.state.claim(&id).unwrap().clone();
+    let prompt: Vec<u32> = claim.prompt.iter().map(|t| u32::try_from(*t).expect("a u32 id")).collect();
+    let roots = PalwClaimRootsV1 { output_root: None, ..roots_of(&h, &claim) };
+    let missing = PalwHeldMissingV1::StepLeaf { leaf };
+    let (answer_binding, disclosure) = palw_da_held_disclosure_from_capture_v1(
+        &h.backend,
+        &claim.material,
+        &prompt,
+        roots,
+        record.work_leaves,
+        missing,
+        h.form(),
+        || h.backend.disclose_trace_event(&claim.material, u32::MAX, u8::MAX).map(|d| d.binding().clone()),
+    )
+    .expect("the producer's capture opens the leaf it lied at");
+    let answer = palw_da_answer_object_v1(
+        &h.domain,
+        id,
+        PalwDaUnitV1::Held(missing),
+        palw_da_held_answer_v1(id, missing, answer_binding, disclosure),
+        producer,
+        h.bundle.court.max_close_bytes(),
+        |message, context| Some(sign(EXECUTOR, message, context)),
+    )
+    .expect("the ONE answer builder builds it");
+    h.carry(&mut walk, vec![answer]);
+    assert!(
+        matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "the guilty leaf convicts: {:?}",
+        walk.state.claim(&id).unwrap().phase
+    );
+    assert!(walk.state.bond(&producer).unwrap().collateral < producer_before, "the producer is charged");
+    assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[seat]), 0, "the seat's exposure is returned");
+    assert!(walk.state.bond(&h.cards[seat]).unwrap().collateral >= collateral, "the seat nets >= 0 (V3S-06)");
+    assert!(
+        matches!(demand_check(&h, &walk, id, seat, leaf), Demand::Answered | Demand::Refused(_)),
+        "settled: {:?}",
+        demand_check(&h, &walk, id, seat, leaf)
+    );
     h.reloads(&walk.state);
 }
 

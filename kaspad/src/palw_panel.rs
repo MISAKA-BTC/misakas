@@ -68,6 +68,21 @@ use kaspa_utils::triggers::SingleTrigger;
 #[path = "palw_filer_replay.rs"]
 mod palw_filer_replay;
 
+/// **Take the host ledger's reservation for a replay of `role`** — the body of
+/// [`PalwPanelService::reserve_replay_v1`], free of the service so a blocking task that prices its
+/// own need (the replay filer's, which decodes its candidates off the loop) takes it through the
+/// same one rule. Held for the replay's life; `Err` is the hold's sentence.
+fn reserve_replay_on_host_v1(
+    role: &'static str,
+    need: &crate::palw_backends::PalwRoleMemoryNeedV1,
+    class_id: Hash64,
+    job: Hash64,
+) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
+    crate::palw_memory_ledger::host_ledger_v1()
+        .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
+        .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
+}
+
 const PALW_PANEL: &str = "palw-panel";
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
@@ -3483,9 +3498,7 @@ impl PalwPanelService {
         class_id: Hash64,
         job: Hash64,
     ) -> Result<crate::palw_memory_ledger::PalwMemoryReservationV1, String> {
-        crate::palw_memory_ledger::host_ledger_v1()
-            .reserve(crate::palw_memory_ledger::PalwMemoryReservationKeyV1 { role, class_id, job }, need.total_bytes())
-            .map_err(|refusal| format!("a {role} replay needs {} and {refusal}", need.describe()))
+        reserve_replay_on_host_v1(role, need, class_id, job)
     }
 
     fn fee_state_path(&self) -> PathBuf {

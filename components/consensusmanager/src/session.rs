@@ -248,6 +248,15 @@ impl ConsensusSessionOwned {
         self.consensus.palw_da_accusation_check_v1(claim, accuser)
     }
 
+    pub fn palw_da_step_leaf_demand_check_v1(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        accuser: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        leaf: u64,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwDaStepLeafDemandCheckV1> {
+        self.consensus.palw_da_step_leaf_demand_check_v1(claim, accuser, leaf)
+    }
+
     pub fn palw_claim_readers_v2(
         &self,
         claim: kaspa_consensus_core::Hash64,
