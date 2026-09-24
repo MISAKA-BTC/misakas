@@ -2606,8 +2606,11 @@ fn palw_da_accuser_fits_v1(
 /// (`seat_da_answer_landed`: the processor passes
 /// [`crate::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`], `false` in this build — so both
 /// are dormant; the producer's DA-7 charge, the record and the reward are not).
-pub fn palw_da_signer_liability_armed_v1(params: &PalwStateParamsV2, seat_da_answer_landed: bool) -> bool {
-    seat_da_answer_landed && params.rcore_plus_from_daa().is_some()
+///
+/// Read at the conviction's own DAA (`now_daa`): `palw_rcore_plus` ACTIVE there, not merely scheduled
+/// (M3 review, LOW) — on testnet-12 the fence is at genesis, so the two agree at every DAA.
+pub fn palw_da_signer_liability_armed_v1(params: &PalwStateParamsV2, seat_da_answer_landed: bool, now_daa: u64) -> bool {
+    seat_da_answer_landed && params.rcore_plus_active_at(now_daa)
 }
 
 /// **ADR-0152 DA-7: what one default charges** — the S tier inputs S-4's conviction funnel reads:
@@ -2735,6 +2738,19 @@ pub fn palw_rcore_lock_vested_v1(g_res: u128, escrowed_reward: u64, buyback_boun
     crate::palw_economic_safety_v1::palw_seat_lock_required_v2(g_res, k).saturating_add(escrow_term)
 }
 
+/// **L-1 as the fold arms it once the vesting rows land: the buyback bound at its CAP** (the S
+/// re-review). `s = 5% · E` ([`crate::palw_model_market_v1::palw_model_buyback_slice_v1`]) whatever
+/// the pair's state at the licence: a pair can open between the licence and the `Final`, and a lock
+/// priced on a closed pair's `s = 0` would then be short by about `s / k′`. `g_res` arrives carrying
+/// the claim's current `s` (`buyback_bound`) and is re-based onto the cap — `g_res − s + s_cap`, the
+/// escrow term on `E − s_cap` — so the price never depends on the pair. [`palw_rcore_lock_vested_v1`]
+/// stays the ADR's formula in its own `s`. Saturating.
+pub fn palw_rcore_lock_vested_at_cap_v1(g_res: u128, escrowed_reward: u64, buyback_bound: u64, basis_k: u8) -> u128 {
+    let cap = crate::palw_model_market_v1::palw_model_buyback_slice_v1(escrowed_reward);
+    let g_res_at_cap = g_res.saturating_sub(u128::from(buyback_bound)).saturating_add(u128::from(cap));
+    palw_rcore_lock_vested_v1(g_res_at_cap, escrowed_reward, cap, basis_k)
+}
+
 /// **L-1 without vesting rows: the lock on the WHOLE gain** — `palw_seat_lock_required_v2(gain, k′)`
 /// with `gain = G = w + R + E` (`palw_max_fraud_gain_v1`) and `k′ = max(basis_k, 2)`, so `k′`
 /// colluding locks out-value the whole gain with the 10% margin (the S review's H1). The buyback bound
@@ -2748,10 +2764,11 @@ pub fn palw_rcore_lock_unvested_v1(gain: u128, basis_k: u8) -> u128 {
 /// never carries a claim to Final). `g_res` is the residual gain `w + R + s` (the lock's fraud facts
 /// plus the buyback bound). While [`PALW_RCORE_VESTING_ROWS_LANDED_V1`] is `false` the lock is priced
 /// on the whole gain ([`palw_rcore_lock_unvested_v1`]); once it is `true`, on the residual with the
-/// escrow's 100‰ term ([`palw_rcore_lock_vested_v1`]). Saturating.
+/// escrow's 100‰ term and the buyback bound at its cap ([`palw_rcore_lock_vested_at_cap_v1`]).
+/// Saturating.
 pub fn palw_rcore_lock_v1(g_res: u128, escrowed_reward: u64, buyback_bound: u64, basis_k: u8) -> u128 {
     if PALW_RCORE_VESTING_ROWS_LANDED_V1 {
-        palw_rcore_lock_vested_v1(g_res, escrowed_reward, buyback_bound, basis_k)
+        palw_rcore_lock_vested_at_cap_v1(g_res, escrowed_reward, buyback_bound, basis_k)
     } else {
         // `G = G_res − s + E`: the residual less the buyback bound it carries, plus the escrow.
         palw_rcore_lock_unvested_v1(
@@ -10702,7 +10719,7 @@ impl PalwFoldReadV1<'_> {
         }
         let full = palw_claim_bond_reservation_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("da reward base"))?;
         let producer_collateral = state.bonds.get(&claim.bond).map(|bond| bond.collateral).unwrap_or(0);
-        let g = self.rcore_g_res(claim).saturating_add(u128::from(claim.escrowed_reward));
+        let g = self.rcore_g_res(claim_id, claim).saturating_add(u128::from(claim.escrowed_reward));
         let exposure = palw_da_session_exposure_v1(palw_da_stage_reward_base_v1(stage, full, producer_collateral, g), floor);
         // A-6: the accuser's free half — a seat whose 500‰ is full of locks can still accuse, and no
         // bond accuses past its collateral (review M1: courts and the one ledger counted).
@@ -13040,6 +13057,41 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
+    /// **The vesting map's ONE write path** (ADR-0152 V-3; M3 review F4) — the row and its
+    /// `Vesting` delta entry together, as every other rooted map's writer.
+    ///
+    /// TODO(integration with the vesting stream, rcore/int-1 `70bf2056`): the vesting work's
+    /// `write_vesting` — the same name and signature, which also keeps the ordered expiry and payee
+    /// indexes (`vesting_index_insert`/`_remove`) — replaces this body; DELETE this one then. Until
+    /// that lands no index exists on this line, so the map and the journal are all there is to keep.
+    fn write_vesting(&mut self, key: Hash64, new: Option<crate::palw_vesting_v1::PalwVestingRowV1>) {
+        let old = match &new {
+            Some(row) => self.state.vesting.insert(key, row.clone()),
+            None => self.state.vesting.remove(&key),
+        };
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::Vesting { key, old, new });
+        }
+    }
+
+    /// **Every `Valid` lock on `claim_id`, by its signers** — looked up per seat of the claim's panel
+    /// (and, should the panel be gone, per signer its liability row lists), never by a scan of the
+    /// whole lock map (M3 review, LOW). A lock is written only by a seat of the claim's current panel
+    /// (the licence doors), so the two sets agree; the result is in key order.
+    fn claim_locks_v1(&self, claim_id: &Hash64) -> Vec<((PalwBondKeyV2, Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1)> {
+        let mut signers: Vec<PalwBondKeyV2> =
+            self.state.panels.get(claim_id).map(|panel| panel.seats.iter().map(|seat| seat.bond).collect()).unwrap_or_default();
+        if let Some(row) = self.state.panel_liabilities.get(claim_id) {
+            signers.extend(row.valid_signers.iter().map(|(seat, _)| PalwBondKeyV2(*seat)));
+        }
+        signers.sort();
+        signers.dedup();
+        signers
+            .into_iter()
+            .filter_map(|seat| self.state.slashable_locks.get(&(seat, *claim_id)).map(|lock| ((seat, *claim_id), *lock)))
+            .collect()
+    }
+
     /// **DA-5 / L-3 (V3S-02, V3S-04): the row and the locks follow a session.** The claim's vesting row
     /// (if it has one) is re-keyed to `max(expiry, until)` and every live lock of its `Valid` signers
     /// re-dated to at least `until` (`until` = the session's deadline + `window_challenge_at`), so a
@@ -13051,22 +13103,17 @@ impl<'a> TransitionBuilder<'a> {
         if let Some(row) = self.state.vesting.get(&claim_id).cloned()
             && row.expiry_daa < until
         {
-            let old = Some(row.clone());
-            let new = Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: until, ..row });
-            self.state.vesting.insert(claim_id, new.clone().expect("some"));
-            self.entries.push(PalwDeltaEntryV2::Vesting { key: claim_id, old, new });
+            // Through the vesting stream's ONE write path (M3 review F4), which keeps its expiry and
+            // payee indexes with the row.
+            self.write_vesting(claim_id, Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: until, ..row }));
         }
         let settled_now = self.state.settled_attempt_finals;
         let depth = self.second_clock_depth(now_daa);
         let window_court = self.params.window_court;
         let stale: Vec<((PalwBondKeyV2, Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1)> = self
-            .state
-            .slashable_locks
-            .iter()
-            .filter(|((_, claim), lock)| {
-                *claim == claim_id && lock.expiry_daa < until && lock.is_live_v3(now_daa, settled_now, depth, window_court)
-            })
-            .map(|(key, lock)| (*key, *lock))
+            .claim_locks_v1(&claim_id)
+            .into_iter()
+            .filter(|(_, lock)| lock.expiry_daa < until && lock.is_live_v3(now_daa, settled_now, depth, window_court))
             .collect();
         for (key, lock) in stale {
             self.write_slashable_lock(key, Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa: until, ..lock }));
@@ -13123,8 +13170,10 @@ impl<'a> TransitionBuilder<'a> {
         let unanswered: Vec<crate::palw_da_rcore_v1::PalwDaUnitV1> =
             session.units.iter().filter(|unit| !palw_da_unit_answered_v1(&record, unit, in_run)).copied().collect();
         if unanswered.is_empty() {
-            // Unreachable: the last answer refuted and closed it. A fold every node runs on peer input
-            // closes it the way that answer would have, rather than charging anybody.
+            // Unreachable: a session never opens on an answered named unit (`open_da_session_rcore_v1`,
+            // M3 review F3), and the answer that completes a session's units refutes and closes it in
+            // its own block. A fold every node runs on peer input closes one anyway the way that
+            // answer would have, rather than charging anybody.
             return self.da_close_session_v1(claim_id, accuser, true, true, now);
         }
         let stage = match claim.phase {
@@ -13149,19 +13198,17 @@ impl<'a> TransitionBuilder<'a> {
         let depth = self.second_clock_depth(now);
         let window_court = self.params.window_court;
         let covering: Vec<PalwBondKeyV2> = if matches!(stage, PalwDaStageV1::Live)
-            || !palw_da_signer_liability_armed_v1(self.params, self.extras.seat_da_answer_landed)
+            || !palw_da_signer_liability_armed_v1(self.params, self.extras.seat_da_answer_landed, now)
         {
             Vec::new()
         } else {
-            self.state
-                .slashable_locks
-                .iter()
-                .filter(|((_, c), lock)| {
-                    *c == claim_id
-                        && lock.is_live_v3(now, settled_now, depth, window_court)
+            self.claim_locks_v1(&claim_id)
+                .into_iter()
+                .filter(|(_, lock)| {
+                    lock.is_live_v3(now, settled_now, depth, window_court)
                         && unanswered.iter().any(|unit| palw_da_unit_covered_by_v1(unit, lock.attested, lock.segments))
                 })
-                .map(|((seat, _), _)| *seat)
+                .map(|((seat, _), _)| seat)
                 .collect()
         };
         let g = self.claim_g_v1(&claim_id).map(|g| g.g_res.saturating_add(u128::from(g.escrowed_reward))).unwrap_or(0);
@@ -13184,7 +13231,7 @@ impl<'a> TransitionBuilder<'a> {
     ///    included — from uncommitted stake if the escrow was released, X7); the claim voids;
     ///    `FinalRow` → S3: `min(25% · C₀, 3 G)`, the vesting row burned (the vesting work's
     ///    `burn_vesting_row`), the `Final` reversed while the record exists (#8) and the liability
-    ///    marked.
+    ///    marked — both as `ProducerWithholding`, the default it is, never `CourtFraud` (M3 review F1).
     /// 3. **The `DaDefault` record** (kind 5, N6) under
     ///    [`crate::palw_da_rcore_v1::palw_da_offence_id_v1`]`(producer, claim)`, `execution_root = 0`,
     ///    with the producer's actual debit as `collected` and `claim_id`; the claim's unminted round
@@ -13244,8 +13291,13 @@ impl<'a> TransitionBuilder<'a> {
                 let action = palw_da_producer_action_v1(before, charge.g);
                 self.slash_bond(charge.producer, action)?;
                 self.burn_vesting_row(claim_id, offence_id, PalwOffenceKindV1::DaDefault)?;
-                self.reverse_convicted_final(ctx, claim_id)?;
-                self.mark_liability_convicted(claim_id, now);
+                // **The reversal records what was confirmed — the WITHHOLDING, never a proof** (M3
+                // review F1): a `CourtFraud` void here would let kind 3's `CourtFraud { voided_daa }`
+                // convict every honest full-mask signer for the producer's silence, whatever
+                // `PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1` says. `ProducerWithholding` leaves N9's
+                // `da_confirmed` gate as the ONLY route from a DA default to a signer.
+                self.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::ProducerWithholding)?;
+                self.mark_liability_convicted(claim_id, now, PalwVoidReasonV2::ProducerWithholding);
                 self.da_release_all_v1(claim_id, true, now)?;
                 action
             }
@@ -13986,7 +14038,7 @@ impl<'a> TransitionBuilder<'a> {
             // then this is a no-op like the rest of the forfeiture).
             self.forfeit_minted_round_rights(&recorded_root);
             // #8: the named claim's own `Final` — its weight, its probe pass, its usage.
-            self.reverse_convicted_final(ctx, claim_id)?;
+            self.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::CourtFraud)?;
         }
         Ok(())
     }
@@ -14039,7 +14091,7 @@ impl<'a> TransitionBuilder<'a> {
             evidence,
             self.params.fp_decode_rules_at(ctx.daa_score),
             false,
-            self.identity_rules_v1(),
+            self.identity_rules_v1(ctx.daa_score),
             None,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
@@ -14099,6 +14151,7 @@ impl<'a> TransitionBuilder<'a> {
     /// binding that is not the claim's, which the unit's own check refuses anyway).
     fn da_binding_answers_another_job_v1(
         &self,
+        now_daa: u64,
         claim_id: &Hash64,
         binding: &crate::palw_step_leg::PalwStepBindingV2,
     ) -> Option<String> {
@@ -14106,7 +14159,7 @@ impl<'a> TransitionBuilder<'a> {
             return None;
         }
         let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&self.state, claim_id)?;
-        match crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(&target, binding, self.identity_rules_v1(), false) {
+        match crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(&target, binding, self.identity_rules_v1(now_daa), false) {
             Ok(Some(fault)) => Some(format!("the binding answers another job or class ({})", fault.code())),
             Ok(None) | Err(_) => None,
         }
@@ -14114,11 +14167,11 @@ impl<'a> TransitionBuilder<'a> {
 
     /// The identity rules the attribution adjudicators read: the network's prompt-id form and the
     /// base class (F1's J5 derives the base class's canonical job).
-    fn identity_rules_v1(&self) -> crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+    fn identity_rules_v1(&self, now_daa: u64) -> crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
         crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
             prompt_ids_form: self.extras.prompt_ids_form_v1(),
             base_class_id: self.params.base_class_id(),
-            da_signer_liability: palw_da_signer_liability_armed_v1(self.params, self.extras.seat_da_answer_landed),
+            da_signer_liability: palw_da_signer_liability_armed_v1(self.params, self.extras.seat_da_answer_landed, now_daa),
         }
     }
 
@@ -14164,12 +14217,12 @@ impl<'a> TransitionBuilder<'a> {
                     self.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
                 }
                 PalwClaimPhaseV2::Final { .. } => {
-                    self.reverse_convicted_final(ctx, claim_id)?;
-                    self.mark_liability_convicted(claim_id, ctx.daa_score);
+                    self.reverse_convicted_final(ctx, claim_id, PalwVoidReasonV2::CourtFraud)?;
+                    self.mark_liability_convicted(claim_id, ctx.daa_score, PalwVoidReasonV2::CourtFraud);
                 }
-                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score),
+                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score, PalwVoidReasonV2::CourtFraud),
             },
-            None => self.mark_liability_convicted(claim_id, ctx.daa_score),
+            None => self.mark_liability_convicted(claim_id, ctx.daa_score, PalwVoidReasonV2::CourtFraud),
         }
         Ok(())
     }
@@ -14229,7 +14282,7 @@ impl<'a> TransitionBuilder<'a> {
             evidence,
             self.params.fp_decode_rules_at(ctx.daa_score),
             false,
-            self.identity_rules_v1(),
+            self.identity_rules_v1(ctx.daa_score),
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
         let claim_id = finding.target.claim_id;
@@ -14266,14 +14319,18 @@ impl<'a> TransitionBuilder<'a> {
     /// conviction's DAA — the reason a court's own finding of a false execution writes — lets a
     /// `CourtFraud` contradiction bind every co-signer through the row, as it does for a claim a
     /// court voided. A row that already records a void keeps it: that is what happened first.
-    fn mark_liability_convicted(&mut self, claim_id: Hash64, daa: u64) {
+    ///
+    /// `reason` is what the conviction PROVED: `CourtFraud` for a proof of the execution; a DA-7
+    /// default after `Final` writes `ProducerWithholding` (M3 review F1) — a confirmed silence, which
+    /// only N9's `da_confirmed` gate may turn against a signer, never a `CourtFraud` contradiction.
+    fn mark_liability_convicted(&mut self, claim_id: Hash64, daa: u64, reason: PalwVoidReasonV2) {
         let Some(row) = self.state.panel_liabilities.get(&claim_id) else { return };
         if row.voided_daa.is_some() || row.void_reason.is_some() {
             return;
         }
         let mut marked = row.clone();
         marked.voided_daa = Some(daa);
-        marked.void_reason = Some(PalwVoidReasonV2::CourtFraud);
+        marked.void_reason = Some(reason);
         self.write_panel_liability(claim_id, Some(marked));
     }
 
@@ -14399,12 +14456,16 @@ impl<'a> TransitionBuilder<'a> {
     ///   block's coinbase has already carried; and the receipt census, a retarget measurement of
     ///   blocks that were in fact produced.
     ///
+    /// **The void's reason is the caller's** (M3 review F1): `CourtFraud` for a conviction that proved
+    /// the execution false, `ProducerWithholding` for a DA-7 default after `Final` — the one reason
+    /// kind 3 can name against a signer only through N9's `da_confirmed` gate.
+    ///
     /// Only the NAMED claim, never its siblings by root: the forfeiture of downstream rights is by
     /// root (ADR-0151, #5, #7), but voiding a `Final` another producer reached on the same root
     /// would let one self-convicted copy strip an honest claim's weight. A claim already retired,
     /// or not `Final`, is left alone: its weight moved to `retired_safe_weight` with no record left
     /// to re-derive it from, or it has counted nothing yet.
-    fn reverse_convicted_final(&mut self, ctx: &PalwBlockContextV2, id: Hash64) -> Result<(), PalwStateV2Error> {
+    fn reverse_convicted_final(&mut self, ctx: &PalwBlockContextV2, id: Hash64, reason: PalwVoidReasonV2) -> Result<(), PalwStateV2Error> {
         let Some(claim) = self.state.claims.get(&id).cloned() else { return Ok(()) };
         let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { return Ok(()) };
         let weight = match &claim.source {
@@ -14419,7 +14480,7 @@ impl<'a> TransitionBuilder<'a> {
         self.note_model_probe(&claim, false);
         self.uncount_claim_usage(&id, &claim);
         let mut voided = claim.clone();
-        voided.phase = PalwClaimPhaseV2::Voided { voided_daa: ctx.daa_score, reason: PalwVoidReasonV2::CourtFraud };
+        voided.phase = PalwClaimPhaseV2::Voided { voided_daa: ctx.daa_score, reason };
         if let PalwClaimSourceV2::FreePrompt { spent, .. } = &mut voided.source {
             spent.clear();
         }
@@ -17148,12 +17209,19 @@ impl<'a> TransitionBuilder<'a> {
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
         // **ADR-0152 DA-6 (M3): a void ends every open DA session on the claim, exposure returned**;
-        // a void that IS a conviction (`CourtFraud`, a proven fraud; `ProducerWithholding`, which past
-        // `palw_rcore_plus` only a DA default writes) refunds the refuted exposure held too. A
-        // `CourtDefault` is no conviction (the court's default is not its verdict), so it refunds
-        // nothing, and the held exposure burns at retirement unless a later conviction lands.
+        // a void the PRODUCER is charged for as a fraud refunds the refuted exposure held too:
+        // `CourtFraud` (a proven fraud), `ProducerWithholding` (past `palw_rcore_plus` only a DA default
+        // writes it) and `CourtDefault` (M3 review, item 5). A court default is no proof against the
+        // signers (kind 3 refuses it by name), but it IS the producer's default on its own defence,
+        // charged exactly as `CourtFraud` — and DA-6's promise is that a filer whose accusations the
+        // producer answered on the garbage path, before defaulting in the court they led to, nets at
+        // least zero. Burning that exposure at retirement would charge the honest filer for the
+        // producer's silence.
         if self.params.rcore_plus_active_at(voided_daa) {
-            let convicted = matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding);
+            let convicted = matches!(
+                reason,
+                PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::CourtDefault
+            );
             self.da_release_all_v1(id, convicted, voided_daa)?;
         }
         let mut voided = claim.clone();
@@ -18563,6 +18631,22 @@ fn open_da_session_rcore_v1(
     }
     let admission = builder.read().da_admission_v1(&claim_id, &accuser, ctx.daa_score)?;
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    // **M3 review F3: no session opens on a unit the chain already holds the answer to.** Such a
+    // session could never be ended — every answer to it is `DaUnitAlreadyAnswered` — so a seat's
+    // would pause the claim for the whole disclose window, and it would close "refuted" at its
+    // deadline with the accuser's exposure held and burned at retirement. The accusation's signature
+    // binds only (domain, claim, index, accuser), so without this a third party could REPLAY an
+    // answered accusation to burn its accuser's stake and spend its seat's session budget: a refuted
+    // session's units are all answered, so this refuses every replay of one.
+    if builder.state.da_claims.get(&claim_id).is_some_and(|record| {
+        crate::palw_da_rcore_v1::palw_da_unit_answered_v1(
+            record,
+            &named,
+            crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active),
+        )
+    }) {
+        return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
+    }
     let seed = palw_da_draw_seed_v1(&ctx.block, &claim_id, &accuser);
     let drawn = match (named, binding) {
         (PalwDaUnitV1::Event { row, tile }, None) => {
@@ -18596,7 +18680,7 @@ fn open_da_session_rcore_v1(
             }
             crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, &missing, binding, form)
                 .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, binding) {
+            if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, binding) {
                 return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
             }
             let chunks_of = |checkpoint: u32| -> Option<u64> {
@@ -18727,7 +18811,7 @@ fn apply_da_answer_v1(
                 crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, disclosure.binding()) {
+            if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, disclosure.binding()) {
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
             }
             matches!(disclosure, crate::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. })
@@ -18755,7 +18839,7 @@ fn apply_da_answer_v1(
                 builder.extras.prompt_ids_form_v1(),
             )
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
-            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, &carriage.binding) {
+            if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &carriage.binding) {
                 return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
             }
             // ADR-0111 Decision 4: a leaf's evidence is adjudicated by the one-move verdict.
@@ -20968,7 +21052,7 @@ fn apply_object(
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
             // F1 (SPEC §4.6): an accusation whose binding fails the claim's identity is not about
             // this claim's job — its filer proves that with `ExecutorRefuted`, not with a session.
-            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, &accusation.binding) {
+            if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &accusation.binding) {
                 return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
             }
             // **ADR-0111 Decision 3: a leaf's evidence is demanded by a seat, once.** The seat of
@@ -21049,7 +21133,7 @@ fn apply_object(
             )
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
             // F1 (SPEC §4.6): an identity-faulty binding is not an answer about this claim's job.
-            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, &disclosure.binding) {
+            if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, &claim_id, &disclosure.binding) {
                 return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
             }
             // **ADR-0111 Decision 4: a leaf's evidence is adjudicated, by the one-move verdict.**
@@ -22981,7 +23065,7 @@ fn apply_object(
             // producer can open the lender's events verbatim; past the fence that binding fails the
             // identity rule and is no answer — the session runs out, and the claim voids for
             // withholding with the accuser uncharged.
-            if let Some(why) = builder.da_binding_answers_another_job_v1(claim_id, disclosure.binding()) {
+            if let Some(why) = builder.da_binding_answers_another_job_v1(ctx.daa_score, claim_id, disclosure.binding()) {
                 return Err(PalwStateV2Error::DaOpeningRefused { claim: *claim_id, why });
             }
             // **Only the accuser pays** (SA-4). Not the dissenting seats, not the `Unavailable`
@@ -52315,6 +52399,15 @@ pub(crate) mod tests {
             }
             assert_eq!(palw_rcore_lock_vested_v1(300, 50, 100, 2), 166, "a buyback above the escrow leaves no escrow term");
             assert_eq!(palw_rcore_lock_vested_v1(300, 1_001, 0, 3), 111 + 34, "the escrow term rounds up");
+            // The armed price takes s at its cap (5% · E = 50): re-based to G_res = 300 − 100 + 50 =
+            // 250, whatever s the pair gave — lock_3 = (250/3 + 1) · 1.1 = 92 plus ⌈100‰ · 950 / 3⌉ = 32.
+            assert_eq!(palw_rcore_lock_vested_at_cap_v1(300, 1_000, 100, 3), palw_rcore_lock_vested_v1(250, 1_000, 50, 3));
+            assert_eq!(palw_rcore_lock_vested_at_cap_v1(300, 1_000, 100, 3), 92 + 32);
+            assert_eq!(
+                palw_rcore_lock_vested_at_cap_v1(200, 1_000, 0, 3),
+                palw_rcore_lock_vested_at_cap_v1(250, 1_000, 50, 3),
+                "a closed pair (s = 0) and an open one (s = cap) price one lock"
+            );
             // Without vesting rows: G = 300 − 100 + 1000 = 1,200; lock_3 = (400 + 1) · 1.1 = 441,
             // lock_2 = (600 + 1) · 1.1 = 661 — k′ locks out-value G by the margin.
             assert!(!PALW_RCORE_VESTING_ROWS_LANDED_V1, "H1: no build arms the residual pricing before its rows");

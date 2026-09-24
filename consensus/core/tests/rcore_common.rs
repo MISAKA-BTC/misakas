@@ -52,13 +52,17 @@ pub struct Chain {
     pub daa: u64,
     /// Whether steps fold with `panel_room`'s extras (the model classes' gate) or `dos_l5`'s.
     pub room: bool,
+    /// Whether steps fold with `palw_offence_attribution` armed as the processor resolves it on
+    /// testnet-12 (`dos_l5`'s extras hold it dormant, deliberately, for the V1-route suites): the
+    /// court's defaults are then `CourtDefault` and kinds 3 and 4 are admitted.
+    pub attribution: bool,
 }
 
 impl Chain {
     pub fn new(p: Params) -> Self {
         let sp = bundle(&p).state.clone();
         let s = genesis_state(&p);
-        Self { p, sp, s, daa: 1_000, room: false }
+        Self { p, sp, s, daa: 1_000, room: false, attribution: false }
     }
 
     /// One block at `daa`: folded, re-applied, reverted, reloaded.
@@ -84,13 +88,15 @@ impl Chain {
     /// execution rights `R`, the S review's L1), or `panel_room`'s (the model classes' gate) on a
     /// model chain.
     pub fn extras_at(&self, daa: u64) -> PalwTransitionExtrasV1 {
-        if self.room {
+        let mut e = if self.room {
             room_extras(&self.p, daa)
         } else {
             let mut e = extras(&self.p, daa);
             e.round_lane = processor_round_lane(&self.p, daa);
             e
-        }
+        };
+        e.offence_attribution_active = self.attribution && self.p.palw_offence_attribution_active_at(daa);
+        e
     }
 
     /// One block on `parent` with this chain's extras ([`Self::extras_at`]), unchecked — the probe a

@@ -13,6 +13,12 @@ pub enum ConfigError {
     )]
     PalwStateVersionCannotRunNetwork(String, u16),
 
+    /// ADR-0152 (the S re-review's N1): a network that arms `palw_rcore_plus` needs the vesting rows.
+    #[error(
+        "Configuration: {0} arms ADR-0152 R-core+ (palw_rcore_plus) and the vesting rows have not landed in this build (PALW_RCORE_VESTING_ROWS_LANDED_V1 = false); R-core+ then prices seat locks on the whole gain and floor licences can stall — build from the integration line that flips PALW_RCORE_VESTING_ROWS_LANDED_V1"
+    )]
+    PalwRcoreVestingRowsNotLanded(String),
+
     #[error("Configuration: --addpeer and --connect cannot be used together")]
     MixedConnectAndAddPeers,
 

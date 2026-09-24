@@ -435,9 +435,11 @@ impl H {
         kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
             prompt_ids_form: self.form(),
             base_class_id: self.floor(),
+            // testnet-12 arms `palw_rcore_plus` at genesis, so DAA 0 reads what every later DAA does.
             da_signer_liability: kaspa_consensus_core::palw_state_v2::palw_da_signer_liability_armed_v1(
                 self.sp(),
                 kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+                0,
             ),
         }
     }

@@ -11,7 +11,9 @@
 //!
 //! M2. Where the claim's line has an open pair, a Final buys `s` (5% of `E`) from it; `s` never vests,
 //! so the residual gain carries it: `G_res = w + R + s` and the escrow term is on `E − s`. Pricing
-//! `s = 0` made the residual lock cheaper by about `s / k`.
+//! `s = 0` made the residual lock cheaper by about `s / k`. The S re-review: a pair can open between
+//! the licence and the Final, so the price the vesting build arms (`palw_rcore_lock_vested_at_cap_v1`)
+//! takes `s` at its cap, `5% · E`, whatever the pair's state at the licence.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test rcore_whole_gain_and_buyback
 
@@ -22,7 +24,8 @@ use common::*;
 use kaspa_consensus_core::palw_model_lines_v1::PalwArtifactOwnerV1;
 use kaspa_consensus_core::palw_model_market_v1::{PalwModelMarketV1, palw_model_buyback_slice_v1};
 use kaspa_consensus_core::palw_state_v2::{
-    PALW_RCORE_VESTING_ROWS_LANDED_V1, palw_rcore_bind_prices_v1, palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1,
+    PALW_RCORE_VESTING_ROWS_LANDED_V1, palw_rcore_bind_prices_v1, palw_rcore_lock_vested_at_cap_v1, palw_rcore_lock_vested_v1,
+    palw_rcore_seat_lock_v1,
 };
 
 const MSK: u128 = 100_000_000;
@@ -156,6 +159,13 @@ fn m2_an_open_pair_puts_the_buyback_bound_in_the_residual_gain() {
         msk_of(dropped)
     );
     assert!(dropped > 50 * MSK, "the deviation's discount was ≈ 53 MSK");
+    // The S re-review: the price the vesting build arms takes `s` at its cap whatever the pair's state
+    // — the pair open at the licence and a pair that opens only before the Final are priced alike.
+    let armed_open = palw_rcore_lock_vested_at_cap_v1(with.g_res, claim.escrowed_reward, s, 3);
+    let armed_closed = palw_rcore_lock_vested_at_cap_v1(without.g_res, claim.escrowed_reward, 0, 3);
+    assert_eq!(armed_closed, armed_open, "the armed price does not depend on the pair's state at the licence");
+    assert_eq!(armed_open, residual_with, "it is the open pair's price: s = 5% · E is the cap");
+    assert!(armed_closed > residual_s0, "a closed pair at the licence no longer discounts the lock");
     assert_eq!(
         palw_rcore_seat_lock_v1(&open, &c.sp, &e, &id, &claim, 3),
         palw_rcore_seat_lock_v1(&c.s, &c.sp, &e, &id, &claim, 3),
