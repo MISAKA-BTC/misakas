@@ -238,6 +238,14 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// where that derivation lives for each family.
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String>;
 
+    /// **Which attempt rule this backend runs** (ADR-0152 v3.1 J-5, addendum §4-bis.1): its family's
+    /// own (`Legacy`, the default) or the chain's `CoreV1` — the job an anchor implies and the rendered
+    /// rule every `output_root` is committed by. A node sets it once, from its params
+    /// ([`crate::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1`]), on every backend it resolves,
+    /// so its producer, its seats and the chain's identity checks read one rule. A family whose Legacy
+    /// rule IS `CoreV1` (the floor) keeps the default no-op.
+    fn set_attempt_rules_v1(&mut self, _rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1) {}
+
     /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;

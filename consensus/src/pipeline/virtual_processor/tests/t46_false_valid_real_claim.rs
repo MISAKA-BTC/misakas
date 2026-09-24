@@ -3508,3 +3508,8 @@ async fn t18k_forfeiture_by_claim_leaves_the_lenders_rights() {
     assert_eq!((row.amount, row.execution_root), (0, Hash64::default()), "no post-Final executor debit here (R-core's S3), root 0");
     h.reloads(s);
 }
+
+/// **F1-M's Tier C on the model classes** (ADR-0152 v3.1 addendum §4-bis) — a child of this suite,
+/// so it runs on this harness, these doors and these assertions rather than a copy of them.
+#[path = "t47_model_class_attribution.rs"]
+mod t47_model_class_attribution;

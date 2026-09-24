@@ -154,6 +154,10 @@ pub struct Qwen36Backend {
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     /// This instance's seat state and walk; nothing outside the instance reaches it.
     seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
+    /// **Which attempt rule this instance runs** (ADR-0152 v3.1, addendum §4-bis.1): the family's own
+    /// (`Legacy`) or the chain's `CoreV1` — the job an anchor implies and the rendered rule of every
+    /// output root. Set by the node from its params (`set_attempt_rules_v1`); `Legacy` by default.
+    attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
 }
 
 impl Qwen36Backend {
@@ -246,6 +250,7 @@ impl Qwen36Backend {
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            attempt_rules: Default::default(),
         }
     }
 
@@ -270,6 +275,23 @@ impl Qwen36Backend {
 
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
         self.prompt_ids_form
+    }
+
+    /// Builder form of [`PalwExecutionBackendV1::set_attempt_rules_v1`].
+    pub fn with_attempt_rules(mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) -> Self {
+        self.attempt_rules = rules;
+        self
+    }
+
+    /// **The output root this instance commits for `ids` under `ctx`**: `CoreV1`'s one rendered rule,
+    /// or — `Legacy` — the family's own, which the executor already computed (`legacy`).
+    fn committed_output_root_v1(&self, ctx: &PalwJobContextV2, ids: &[u32], legacy: Hash64) -> Hash64 {
+        match self.attempt_rules {
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 => {
+                kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(ctx, ids)
+            }
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy => legacy,
+        }
     }
 
     /// **The class's ladder** (ADR-0119 Decision 1; ADR-0121 Decision 1): the network's for every
@@ -321,6 +343,7 @@ impl Qwen36Backend {
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            attempt_rules: Default::default(),
         }
     }
 
@@ -364,6 +387,7 @@ impl Qwen36Backend {
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            attempt_rules: Default::default(),
         })
     }
 
@@ -1344,6 +1368,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         &self.model_id
     }
 
+    fn set_attempt_rules_v1(&mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) {
+        self.attempt_rules = rules;
+    }
+
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
         let (prefill, decode) = self.canonical_job;
         let shape = &self.artifact.shape;
@@ -1353,6 +1381,25 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
                 prefill as usize + decode as usize,
                 shape.max_position
             ));
+        }
+        // **CoreV1 (ADR-0152 v3.1 J-5): the chain's job, over this class's registered profile** — as
+        // the dense tier's (see there): the formula canonical, the core prompt, no artifact field.
+        if self.attempt_rules == kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 {
+            let profile = self.profile.as_ref().ok_or_else(|| "CoreV1 derives a job from the class's registered profile, and this instance holds none".to_string())?;
+            let formula = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(profile, false);
+            if formula != Some(self.canonical_job) {
+                return Err(format!(
+                    "the class's canonical job {:?} is not CoreV1's formula {formula:?}: the chain would convict it as another job",
+                    self.canonical_job
+                ));
+            }
+            return kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_job_for_anchor_v1(
+                profile,
+                &anchor,
+                self.canonical_job,
+                self.prompt_ids_form,
+            )
+            .ok_or_else(|| "the canonical prompt does not commit under the class's form".to_string());
         }
         let prompt = qwen36_prompt_for_anchor(anchor, shape.vocab, prefill);
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
@@ -1412,7 +1459,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             work_leaves: Some(run.binding.step_leaf_count),
-            output_root: Some(run.output_root),
+            output_root: Some(self.committed_output_root_v1(&run.binding.job_context, &run.generated_token_ids, run.output_root)),
         })
     }
 
@@ -1557,7 +1604,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             crate::memory_phase::execution_phase_v1(|| crate::memory_phase::material_line_v1(material.len(), folds));
             return Ok(PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
-                output_root: run.output_root,
+                output_root: self.committed_output_root_v1(&run.binding.job_context, &run.generated_token_ids, run.output_root),
                 execution_root: run.execution_root,
                 trace_manifest_root: run.trace_manifest_root,
                 trace_chunk_count: run.trace_chunk_count,
@@ -1728,7 +1775,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
-                output_root: run.output_root,
+                output_root: self.committed_output_root_v1(&run.binding.job_context, &run.generated_token_ids, run.output_root),
                 execution_root: run.execution_root,
                 trace_manifest_root: fp_trace_manifest_root,
                 trace_chunk_count: fp_trace_chunk_count,
@@ -2515,7 +2562,8 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
 
     /// `output_root` from the answer's ids under `context` (ADR-0078 X6; ADR-0084).
     fn output_root_for_context_v1(&self, context: &PalwJobContextV2, output_token_ids: &[u32]) -> Option<Hash64> {
-        Some(output_commitment_v2(&context.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids)))
+        let legacy = output_commitment_v2(&context.context_hash(), output_token_ids, &rendered_output_hash_v1(output_token_ids));
+        Some(self.committed_output_root_v1(context, output_token_ids, legacy))
     }
 
     /// **ADR-0093 as built: the fused site's evidence out of this capture** — the hybrid tier's twin
@@ -2741,7 +2789,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
         Ok(PalwExecutionOutcomeV1 {
             trace_root: run.trace_root,
-            output_root: run.output_root,
+            output_root: self.committed_output_root_v1(&run.binding.job_context, &run.generated_token_ids, run.output_root),
             execution_root: run.execution_root,
             trace_manifest_root: run.trace_manifest_root,
             trace_chunk_count: run.trace_chunk_count,

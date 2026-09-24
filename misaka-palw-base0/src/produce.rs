@@ -44,7 +44,8 @@ use kaspa_hashes::Hash64;
 /// here for every existing caller.
 pub use kaspa_consensus_core::palw_step_refute::{base0_logits_trace_root_v1, PALW_BASE0_DOMAIN_LOGITS_TRACE};
 
-pub const PALW_BASE0_DOMAIN_ACTIVATION_LEG: &[u8] = b"misaka-palw/base0/activation-leg/v1";
+/// Re-exported, not re-typed: the activation leg moved to core (ADR-0152 v3.1 J6) with its domain.
+pub use kaspa_consensus_core::palw_attempt_rules_v1::PALW_INT_ACTIVATION_LEG_DOMAIN_V1 as PALW_BASE0_DOMAIN_ACTIVATION_LEG;
 pub const PALW_BASE0_DOMAIN_TRACE_MANIFEST: &[u8] = b"misaka-palw/base0/trace-manifest/v1";
 
 /// Why an execution could not become an attempt.
@@ -102,15 +103,11 @@ impl std::error::Error for ProduceError {}
 /// Not `Hash64::default()`, which is indistinguishable from a field nobody set — the difference
 /// between "this class declares no taps" and "somebody forgot" is the difference between a
 /// commitment and an omission, and only one of them can be argued about later.
+///
+/// Moved to consensus core (ADR-0152 v3.1 J6: the chain holds a binding to it) with the byte string
+/// and the preimage unchanged; this name delegates.
 pub fn base0_activation_leg_root_v1(ctx: &PalwJobContextV2) -> Hash64 {
-    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_ACTIVATION_LEG).to_state();
-    h.update(ctx.context_hash().as_byte_slice());
-    h.update(&(ctx.declared_prefill_tokens as u64).to_le_bytes());
-    h.update(&(ctx.exact_decode_tokens as u64).to_le_bytes());
-    h.update(b"no-taps");
-    let mut out = [0u8; 64];
-    out.copy_from_slice(h.finalize().as_bytes());
-    Hash64::from_bytes(out)
+    kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(ctx)
 }
 
 /// Re-exported, not re-typed. The derivation moved to `kaspa_consensus_core::palw_attempt_v2`;
