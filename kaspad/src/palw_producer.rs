@@ -19,8 +19,9 @@
 //!
 //! # The loop, and what each step costs
 //!
-//! 1. Read [`PalwProducerFactsV2`] and pre-flight against them — wrong key, spent budget or a full
-//!    exposure ceiling are all knowable before an inference is spent.
+//! 1. Read [`PalwProducerFactsV2`] and pre-flight against them — wrong key, spent budget, a full
+//!    exposure ceiling or (past R-core+) a bond under the producer floor are all knowable before an
+//!    inference is spent ([`palw_producer_ready_v1`]).
 //! 2. Build a template. Its `pre_pow_hash` anchors the JOB (`base0_rc_job_anchor_v1`), so one
 //!    template is one job.
 //! 3. Run the job — one inference, measured at ~40 ms on the RC floor.
@@ -285,6 +286,297 @@ fn log_producer_hold_v1(detail: &str, loud: bool, since_progress: std::time::Dur
     } else {
         info!("[{PALW_PRODUCER}] holding: {detail}");
     }
+}
+
+/// **Why the attempt lane holds — as the chain would refuse the attempt** (ADR-0152 v3.1 post-edit
+/// 11, U2 / P6; T08's node half).
+///
+/// Past `Params::palw_rcore_plus` admission (items 7b and 8) and the fold (`apply_attempt`:
+/// `ProducerBelowFloor`, then `AttemptExposureCeiling`) measure a bond by two numbers the old
+/// pre-check never read: the producer floor, and the one committed ledger (own commitments,
+/// registration and every `max(duty, live lock)`). Both refusals are non-fatal for a block's own
+/// attempt — the fold skips it and the block stands — so a producer still asking
+/// `reserved_exposure` mined blocks whose work became no claim: an inference spent, and nothing in
+/// the log to say why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PalwProducerHoldV1 {
+    /// One of `ready_to_produce`'s verdicts, by the sentence it returns (`PALW_NOT_READY_*_V2`). The
+    /// operator CLI matches those constants, so the committed-ledger hold is reported under
+    /// `PALW_NOT_READY_EXPOSURE_FULL_V2` too — it IS that hold, measured on the ledger the chain
+    /// reads — and only the bracket's numbers say which ledger.
+    NotReady(&'static str),
+    /// **U2 (S-SPEC §10a): the bond's posted collateral is `shortfall` sompi below the producer
+    /// floor `floor`** (`PalwProducerBondFactsV2::producer_floor_shortfall`, the fold's own
+    /// function). The fold skips every attempt under it for as long as the bond lives, so there is
+    /// nothing to wait for — and nothing to top up either: no object raises a registered bond's
+    /// collateral (`BondRegistered` and `BondRetireRequested` are the only bond writers, and "one
+    /// key, one bond" refuses a second registration from the same key, retired or not). Registration
+    /// is refused below the same floor (`palw_bond_registration_floor_v1`) and kaspad sizes a bond
+    /// at or above it, so the one way a bond gets here is a slash. The sentence therefore names the
+    /// shortfall (the spec's words) and then the only way out: a bond of at least `floor` under a
+    /// NEW key.
+    BelowProducerFloor { shortfall: u64, floor: u64 },
+    /// **SW-10: the eligible stake a claim of this class by this bond would draw its panel from is
+    /// below the draw's floor** (`PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1`), so a claim made now binds
+    /// no panel at its anchor (SW-8) and voids at `BindTimeout`. Raised only where
+    /// [`palw_class_eligible_stake_at_floor_v1`] answers, which today it never does.
+    EligibleStakeBelowFloor,
+}
+
+impl std::fmt::Display for PalwProducerHoldV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotReady(sentence) => f.write_str(sentence),
+            // No " [" in this sentence: `misaka-cli`'s `hold_from_log` cuts the sentence from the
+            // numbers at the last one, and prints a sentence it does not know whole — so the way
+            // out reaches an operator even through a CLI that predates it.
+            Self::BelowProducerFloor { shortfall, floor } => write!(
+                f,
+                "top up {shortfall} sompi to reach the producer floor — but a registered bond's collateral cannot be raised, so \
+                 register a bond of at least {floor} sompi under a NEW key (`misaka key gen --out <new seed>`, then `misaka mining \
+                 setup --key-file <new seed>`) and produce with that one; `misaka bond retire` releases what this bond still holds"
+            ),
+            Self::EligibleStakeBelowFloor => write!(
+                f,
+                "the eligible stake this bond's claim would draw its panel from is below the draw's {}‰ floor, so a claim made now \
+                 would void at BindTimeout",
+                kaspa_consensus_core::palw_panel_v2::PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1
+            ),
+        }
+    }
+}
+
+/// **What the pre-check reads past `Params::palw_rcore_plus`, besides the facts** — `None` below
+/// the fence, so the old path has nothing new it could read ([`palw_rcore_plus_reads_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PalwRcorePlusReadsV1 {
+    /// The producer floor: the bundle's `min_collateral_sompi`, the number
+    /// `palw_bond_producer_floor_shortfall_v1` measures posted collateral against. Only the hold's
+    /// sentence reads it — the size a replacement bond must post; WHETHER the bond holds is the
+    /// facts' shortfall, the fold's own answer.
+    pub producer_floor: u64,
+    /// [`palw_class_eligible_stake_at_floor_v1`]'s answer; `None` (unknown) never holds.
+    pub eligible_stake_at_floor: Option<bool>,
+}
+
+/// [`PalwRcorePlusReadsV1`] for a candidate at `candidate_daa`, or `None` where the fence is not in
+/// force there ([`palw_rcore_plus_producer_floor_v1`] decides which).
+pub(crate) fn palw_rcore_plus_reads_v1(
+    params: &kaspa_consensus_core::config::params::Params,
+    session: &kaspa_consensusmanager::ConsensusProxy,
+    class_id: Hash64,
+    executor_bond: &TransactionOutpoint,
+    candidate_daa: u64,
+) -> Option<PalwRcorePlusReadsV1> {
+    palw_rcore_plus_producer_floor_v1(params, candidate_daa).map(|producer_floor| PalwRcorePlusReadsV1 {
+        producer_floor,
+        eligible_stake_at_floor: palw_class_eligible_stake_at_floor_v1(session, class_id, executor_bond, candidate_daa),
+    })
+}
+
+/// **The producer floor where `palw_rcore_plus` is in force at `candidate_daa`, else `None`** — the
+/// one place the pre-check asks which side of the fence it is on. `palw_rcore_plus_fence` is `Some`
+/// only on a `ConsensusV2` network, so the bundle the floor is read from exists exactly when the
+/// fence can be in force; its `min_collateral_sompi` is what the fold's
+/// `palw_bond_producer_floor_shortfall_v1` measures against.
+pub(crate) fn palw_rcore_plus_producer_floor_v1(
+    params: &kaspa_consensus_core::config::params::Params,
+    candidate_daa: u64,
+) -> Option<u64> {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        return None;
+    };
+    params.palw_rcore_plus_active_at(candidate_daa).then(|| bundle.state.min_collateral_sompi())
+}
+
+/// **The attempt lane's pre-check, on the ledger the chain measures it by** (ADR-0152 P6).
+///
+/// Below the fence (`rcore_plus` is `None`) — testnet-11, devnet, mainnet — this IS
+/// `PalwProducerFactsV2::ready_to_produce`, byte for byte: the `reserved_exposure` ledger, no floor,
+/// no stake question. Past it, in the order the fold refuses: the key and the bond (unchanged), then
+/// the producer floor (`apply_attempt` checks it before the class gate), the class gate, the epoch
+/// budget, the committed room (`has_committed_room`, the exact inequality admission item 8 and the
+/// fold's ceiling apply to `committed`), and last the eligible-stake answer. The stake question is
+/// not a refusal of the attempt — the fold accepts it and the draw voids it later — so it is asked
+/// only after every question that is.
+///
+/// **Not yet the RPC's verdict.** `getPalwProducerFacts`' `not_ready_reason` still answers
+/// `ready_to_produce`, so past the fence it can say "ready" for a bond this node holds; closing that
+/// needs the verdict in consensus-core, where the RPC and this loop can both call it.
+pub(crate) fn palw_producer_ready_v1(
+    facts: &PalwProducerFactsV2,
+    local_pubkey: &[u8],
+    rcore_plus: Option<PalwRcorePlusReadsV1>,
+) -> Result<(), PalwProducerHoldV1> {
+    use kaspa_consensus_core::palw_producer_v2::{
+        PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_CLASS_NOT_ADMITTING_V2, PALW_NOT_READY_EPOCH_BUDGET_V2,
+        PALW_NOT_READY_EXPOSURE_FULL_V2,
+    };
+    let Some(reads) = rcore_plus else {
+        return facts.ready_to_produce(local_pubkey).map_err(PalwProducerHoldV1::NotReady);
+    };
+    facts.ready_to_spend_receipts(local_pubkey).map_err(PalwProducerHoldV1::NotReady)?;
+    let bond = facts.bond.as_ref().ok_or(PalwProducerHoldV1::NotReady(PALW_NOT_READY_BOND_UNKNOWN_V2))?;
+    if let Some(shortfall) = bond.producer_floor_shortfall {
+        return Err(PalwProducerHoldV1::BelowProducerFloor { shortfall, floor: reads.producer_floor });
+    }
+    if facts.class_admission_refusal.is_some() {
+        return Err(PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2));
+    }
+    if !facts.has_epoch_room() {
+        return Err(PalwProducerHoldV1::NotReady(PALW_NOT_READY_EPOCH_BUDGET_V2));
+    }
+    if !bond.has_committed_room() {
+        return Err(PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2));
+    }
+    if reads.eligible_stake_at_floor == Some(false) {
+        return Err(PalwProducerHoldV1::EligibleStakeBelowFloor);
+    }
+    Ok(())
+}
+
+/// **The `holding:` line's detail**, which is also the runtime's `producer_reason` — the sentence,
+/// then the numbers that tell one cause of it from another.
+///
+/// Below the fence the bracket is the one this loop has always printed (`exposure=reserved/ceiling
+/// per_claim=…`, which `misaka-cli`'s `HoldNumbers::from_bracket` reads). Past it `exposure=` carries
+/// the COMMITTED ledger — the number the chain compares with the ceiling — marked `ledger=committed`,
+/// and a bond under the producer floor adds `floor_shortfall=`: a reader of the old bracket would see
+/// room on a bond the fold refuses, which is the confusion this whole change exists to end.
+pub(crate) fn palw_producer_hold_detail_v1(facts: &PalwProducerFactsV2, hold: &PalwProducerHoldV1, rcore_plus_active: bool) -> String {
+    format!(
+        "{hold} [class={} epoch={} produced={} budget={}{}{}]",
+        facts.class_id,
+        facts.epoch_index,
+        facts.epoch_produced_blocks,
+        facts.epoch_budget_blocks,
+        match &facts.bond {
+            Some(bond) if rcore_plus_active => format!(
+                " exposure={}/{} per_claim={} ledger=committed{}",
+                bond.committed,
+                bond.exposure_ceiling,
+                bond.claim_exposure,
+                bond.producer_floor_shortfall.map(|shortfall| format!(" floor_shortfall={shortfall}")).unwrap_or_default()
+            ),
+            Some(bond) => format!(" exposure={}/{} per_claim={}", bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure),
+            None => String::new(),
+        },
+        // Route-matrix #7: the gate's own words when it is the registry that holds.
+        facts.class_admission_refusal.as_deref().map(|why| format!(" registry=\"{why}\"")).unwrap_or_default()
+    )
+}
+
+/// **Room for one canonical free-prompt claim, asked before its inference is run** (the panel's
+/// `build_canonical_claim`; ADR-0152 P6).
+///
+/// Past `palw_rcore_plus` the fold refuses a `FreePromptCommitted` below the producer floor
+/// (`ProducerBelowFloor`, the FP arm's own check) and prices it against the one committed ledger
+/// (`palw_fp_bond_room_v2`), so the pre-check reads the same two numbers — `claim_exposure` still
+/// standing in for the commitment's own reservation, as it always has here. That stand-in is the
+/// attempt lane's price, not the FP arm's, so this is an estimate that saves the inference; the
+/// fold's exact answer is asked after it ([`palw_canonical_claim_bond_room_v1`]). Below the fence:
+/// the `reserved_exposure` inequality and its sentence, byte for byte.
+pub(crate) fn palw_canonical_claim_room_v1(
+    bond: &kaspa_consensus_core::palw_producer_v2::PalwProducerBondFactsV2,
+    rcore_plus: Option<PalwRcorePlusReadsV1>,
+) -> Result<(), String> {
+    let Some(reads) = rcore_plus else {
+        if bond.reserved_exposure.saturating_add(bond.claim_exposure) > bond.exposure_ceiling {
+            return Err(format!(
+                "no exposure room for a canonical claim: bond backs {} and one claim needs {} against a ceiling of {}",
+                bond.reserved_exposure, bond.claim_exposure, bond.exposure_ceiling
+            ));
+        }
+        return Ok(());
+    };
+    if let Some(shortfall) = bond.producer_floor_shortfall {
+        return Err(format!("holding: {}", PalwProducerHoldV1::BelowProducerFloor { shortfall, floor: reads.producer_floor }));
+    }
+    if !bond.has_committed_room() {
+        return Err(format!(
+            "no exposure room for a canonical claim: bond commits {} on the one committed ledger and one claim needs {} against a \
+             ceiling of {}",
+            bond.committed, bond.claim_exposure, bond.exposure_ceiling
+        ));
+    }
+    if reads.eligible_stake_at_floor == Some(false) {
+        return Err(format!("holding: {}", PalwProducerHoldV1::EligibleStakeBelowFloor));
+    }
+    Ok(())
+}
+
+/// **The canonical claim against the fold's own room, once its price is known** (ADR-0152 P6; the
+/// P6 review's finding 4).
+///
+/// The node's price answer (`palw_fp_commitment_price_v1` with the bond) carries `bond_room` —
+/// `palw_fp_bond_room_v2`, the FP arm's `ceiling − backed` on the one committed ledger, capability
+/// exposure included, at the virtual's DAA and raw depth — and the fold refuses
+/// `FreePromptExposureCeiling` exactly when `backed + reserved + rights_reserved > ceiling`. So
+/// `reserved + rights_reserved > bond_room` is that refusal, known before the carrier is built or a
+/// fee is spent; the estimate before the inference ([`palw_canonical_claim_room_v1`]) prices with
+/// the attempt lane's number and can be off either way. A `bond_room` saturated at 0 (backing over
+/// the ceiling) refuses any claim that reserves a sompi, as the fold does. `None` — a bond the chain
+/// does not hold — says nothing here; the fold's own refusal of that is elsewhere.
+///
+/// Below the fence this asks nothing, so the canonical lane there is byte-identical to before.
+pub(crate) fn palw_canonical_claim_bond_room_v1(
+    price: &kaspa_consensus_core::palw_state_v2::PalwFpCommitmentPriceV1,
+    bond_room: Option<u128>,
+    rcore_plus_active: bool,
+) -> Result<(), String> {
+    if !rcore_plus_active {
+        return Ok(());
+    }
+    let Some(room) = bond_room else { return Ok(()) };
+    let holds = price.reserved.saturating_add(price.rights_reserved);
+    if holds > room {
+        return Err(format!(
+            "the chain would refuse this canonical claim (FreePromptExposureCeiling): it holds {holds} sompi ({} reserved + {} \
+             receipt rights) against {room} of room on the one committed ledger",
+            price.reserved, price.rights_reserved
+        ));
+    }
+    Ok(())
+}
+
+/// **SEAM — ADR-0152 SW-8 / SW-10: would a claim of `class_id` by `executor_bond`, anchored at
+/// `candidate_daa`, draw its panel from eligible stake at or above the draw's 875‰ floor?** (the
+/// 2026-09-24 audit, on SW-8's anchor-block-only binding.)
+///
+/// A claim binds its panel at its anchor block alone (SW-8), and the stake-weighted draw refuses
+/// (`InsufficientEligibleStake`) where the operators eligible to sit on it weigh less than
+/// `PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1` of every operator that could sit — so an attempt accepted
+/// while that holds voids at `BindTimeout`, its escrow burned, however honest its work. The audit
+/// asked the producer to see that before it spends the inference.
+///
+/// **Keyed by the executor, not the class alone.** The draw refuses a seat sharing the executor's
+/// `pubkey` or `operator_id` (`palw_panel_eligible_bonds_v2`'s executor exclusion), so the eligible
+/// weight is this claim's, not the class's: a producer that is itself a large share of the class's
+/// eligible stake can pass a class-wide test and still fall under 875‰ on its own claim.
+///
+/// **No consensus read answers it yet, and this node adds none**: the stake-weighted draw (M4) is
+/// not wired — `palw_panel_draw_policy_at` leaves `PalwPanelDrawPolicyV1::stake` at `None` and
+/// nothing computes SW-10's refusal — so this answers `None` (unknown), which never holds. The read
+/// it needs is a `ConsensusApi` call beside `palw_producer_facts_v2`, keyed `(class_id,
+/// executor_bond, candidate_daa)` and answered at the tip's state under the draw policy
+/// `palw_panel_draw_policy_at(candidate_daa)` resolves with `stake: Some(PalwPanelStakeDrawV1::V1)`:
+/// SW-10's two weights — the eligible operators' for this claim (the draw's own
+/// `palw_panel_eligible_bonds_*` filter with the executor's key and operator excluded, one-ledger
+/// room included, each weighted `min(posted MSK, weight_cap_msk)`) and the base weight (Active, at
+/// the producer floor, registered before the anchor, capable) — or the comparison against
+/// `eligible_floor_permille` itself, computed by the one function the draw's refusal calls.
+///
+/// Liveness: on testnet-12, the only network that arms the fence, heartbeat blocks keep the DAA
+/// moving while every producer holds, and the room that makes a bond eligible is released on the
+/// DAA clock (the second clock's hold is bounded by `2 × window_court`), so a hold on this answer
+/// cannot become the deadlock the floor's epoch-budget exemption exists to prevent.
+pub(crate) fn palw_class_eligible_stake_at_floor_v1(
+    _session: &kaspa_consensusmanager::ConsensusProxy,
+    _class_id: Hash64,
+    _executor_bond: &TransactionOutpoint,
+    _candidate_daa: u64,
+) -> Option<bool> {
+    None
 }
 
 impl PalwProducerService {
@@ -663,27 +955,19 @@ impl PalwProducerService {
                 }
                 continue;
             }
-            if let Err(why) = facts.ready_to_produce(&self.verification_key()) {
+            // **ADR-0152 P6: past `palw_rcore_plus` the pre-check reads the ledger the fold reads** —
+            // the producer floor and the committed room, resolved at the candidate's DAA (the one
+            // `facts` were built for) — and below it `ready_to_produce` unchanged. See
+            // `palw_producer_ready_v1`.
+            let rcore_plus = palw_rcore_plus_reads_v1(&self.consensus_config.params, &session, facts.class_id, &bond, facts.daa_score);
+            if let Err(hold) = palw_producer_ready_v1(&facts, &self.verification_key(), rcore_plus) {
                 // **The reason alone is not a diagnosis.** "this class's epoch budget is already
                 // spent" is what a class that exhausted its cap says AND what a class that was
                 // never granted one says, and those are opposite problems: the first resolves at
                 // the next boundary, the second is a class holding share with no entry in the
                 // budget table. Telling them apart took reading consensus source; the numbers that
                 // separate them are right here, so carry them.
-                let detail = format!(
-                    "{why} [class={} epoch={} produced={} budget={}{}{}]",
-                    facts.class_id,
-                    facts.epoch_index,
-                    facts.epoch_produced_blocks,
-                    facts.epoch_budget_blocks,
-                    match &facts.bond {
-                        Some(bond) =>
-                            format!(" exposure={}/{} per_claim={}", bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure),
-                        None => String::new(),
-                    },
-                    // Route-matrix #7: the gate's own words when it is the registry that holds.
-                    facts.class_admission_refusal.as_deref().map(|why| format!(" registry=\"{why}\"")).unwrap_or_default()
-                );
+                let detail = palw_producer_hold_detail_v1(&facts, &hold, rcore_plus.is_some());
                 // Once per change, then no more than once every 5 minutes while it persists: a
                 // hold that never changes is still worth seeing in a log an operator scrolls.
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
@@ -1347,7 +1631,7 @@ mod tests {
         let worker = &production[production.find("pub async fn worker(").expect("the worker")..];
         let receipt = worker.find("self.produce_receipt(").expect("the receipt lane");
         let hold = worker.find("if let Some(why) = &self.class_refusal").expect("the attempt lane's hold");
-        let attempt = worker.find("facts.ready_to_produce(").expect("the attempt lane");
+        let attempt = worker.find("palw_producer_ready_v1(&facts,").expect("the attempt lane");
         assert!(receipt < hold && hold < attempt, "the refusal holds the attempt lane after the receipt lane has run");
     }
     use kaspa_consensus_core::config::Config;
@@ -1381,6 +1665,528 @@ mod tests {
         assert!(devnet.params.palw_da_court.is_none(), "devnet's data-availability court is deliberately dormant");
         for daa in [0u64, 1, scheduled, u64::MAX] {
             assert!(!palw_da_court_in_force_v1(&devnet, daa), "devnet has no data-availability court at DAA {daa}");
+        }
+    }
+}
+
+/// **ADR-0152 P6 (post-edit 11, U2): the producer's pre-check against the chain's refusal** — T08's
+/// node half, at the pure-function level: the facts `palw_producer_facts_v4` builds (the builder the
+/// consensus API calls), the decision [`palw_producer_ready_v1`] takes on them, and what admission
+/// and the fold do with an attempt built from those same facts on the same state at the same DAA.
+///
+/// Every state here is built by the fold from objects and attempts — this crate cannot write a
+/// chain state's ledgers by hand, and should not. So a bond is put under the producer floor by
+/// evaluating it against a floor above what it registered (the shape `palw_producer_v2`'s own v4
+/// test uses; on a live network a slash is what does it), and its committed room is spent by a
+/// claim of its own the fold has already recorded. `palw_producer_t12_tests` runs the same decision
+/// on testnet-12's own fold, with a live seat lock the fold wrote.
+#[cfg(test)]
+mod p6_tests {
+    use super::{
+        PalwProducerHoldV1, PalwRcorePlusReadsV1, palw_canonical_claim_bond_room_v1, palw_canonical_claim_room_v1,
+        palw_producer_hold_detail_v1, palw_producer_ready_v1, palw_rcore_plus_producer_floor_v1,
+    };
+    use kaspa_consensus_core::palw_admission_v2::{
+        PalwAdmissionParamsV2, PalwAdmissionV2Error, PalwEpochBudgetFencesV1, check_palw_attempt_admission_v2,
+    };
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1,
+        challenge_v2, class_ticket_v3, execution_anchor_v3,
+    };
+    use kaspa_consensus_core::palw_producer_v2::{PALW_NOT_READY_EXPOSURE_FULL_V2, PalwProducerFactsV2, palw_producer_facts_v4};
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwConsensusObjectV2, PalwPwuRuleV2, PalwStateParamsV2,
+        PalwTransitionExtrasV1, apply_palw_transition_v2, apply_palw_transition_v2_with_extras,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+
+    fn h64(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    const NET: u64 = 0x4E45_5457;
+    /// The producer's local verification key — the one bond 1 registers.
+    const KEY: [u8; 4] = [7; 4];
+    /// The key a bond registered to replace bond 1 names (a key registers one bond).
+    const KEY_2: [u8; 4] = [8; 4];
+    /// The candidate block's DAA: the one the facts are read for and the chain judges the attempt at.
+    const CANDIDATE: u64 = 101;
+    /// Collateral far above any claim here, for the cases the ceiling is not the question in.
+    const AMPLE: u64 = 1_000_000;
+
+    /// `palw_producer_v2`'s contract fixture with the producer floor and the fence as arguments:
+    /// `palw_rcore_plus` armed at genesis (the only way it arms) or not at all, and the 500‰ ceiling
+    /// on both the state and the admission side, as `palw_mode_v2` requires of every bundle.
+    fn params(floor: u64, rcore_plus: bool) -> PalwStateParamsV2 {
+        let p = PalwStateParamsV2::new(500, 100, 100, 100, 100, 1_000, h64(1), 4, 1_000, floor, 100, 100)
+            .unwrap()
+            .with_fp_exposure_ceiling(500)
+            .unwrap();
+        if rcore_plus { p.with_rcore_plus_mirrors(Some(0), 0, Vec::new()) } else { p }
+    }
+
+    fn admission() -> PalwAdmissionParamsV2 {
+        PalwAdmissionParamsV2::new(500).unwrap()
+    }
+
+    /// The pre-check's reads past the fence, with `floor` the one `params(floor, true)` holds.
+    fn past(floor: u64, eligible_stake_at_floor: Option<bool>) -> Option<PalwRcorePlusReadsV1> {
+        Some(PalwRcorePlusReadsV1 { producer_floor: floor, eligible_stake_at_floor })
+    }
+
+    /// Where `misaka-cli`'s `hold_from_log` cuts a `holding:` detail into sentence and numbers.
+    fn cli_sentence(detail: &str) -> &str {
+        detail.rfind(" [").map(|i| &detail[..i]).unwrap_or(detail)
+    }
+
+    fn outpoint(n: u64) -> TransactionOutpoint {
+        TransactionOutpoint { transaction_id: TransactionId::from_u64_word(n), index: 0 }
+    }
+
+    fn bond_registered(n: u64, key: [u8; 4], operator: u8, collateral: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::BondRegistered {
+            bond: PalwBondKeyV2(outpoint(n)),
+            pubkey: key.to_vec(),
+            operator_pubkey: vec![operator; 8],
+            collateral,
+            payout_payload: h64(0x9A11),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        }
+    }
+
+    /// The fence on, as every network that arms R-core+ also arms the audit fence at or below it.
+    fn extras() -> PalwTransitionExtrasV1 {
+        PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..Default::default() }
+    }
+
+    /// One floor class on the derived pwu rule and bond 1 posting `collateral` — registered under a
+    /// floor of one sompi, so the floor a test judges it by is the test's choice — and then
+    /// `prior_claims` claims of bond 1's own, each its own block's attempt, recorded by the fold on
+    /// the side of the fence the test is on.
+    fn state(collateral: u64, prior_claims: u64, rcore_plus: bool) -> PalwChainStateV2 {
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
+                initial_target: u128::MAX / 4,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            bond_registered(1, KEY, 0x21, collateral),
+        ];
+        let registry = params(1, rcore_plus);
+        let ctx = PalwBlockContextV2 { block: Hash64::from_u64_word(1), daa_score: 100, blue_score: 1, subsidy: 0 };
+        let mut state = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &registry, &ctx, &objects, None).unwrap().0;
+        for prior in 1..=prior_claims {
+            let env = attempt(&facts(&state, &registry, 1), 1, prior);
+            let ctx =
+                PalwBlockContextV2 { block: Hash64::from_u64_word(10 + prior), daa_score: 100, blue_score: 1 + prior, subsidy: 0 };
+            state =
+                apply_palw_transition_v2_with_extras(&state, &registry, &ctx, &[], Some(&env), false, false, false, false, &extras())
+                    .unwrap()
+                    .0;
+            assert!(state.claim(&attempt_id_v2(&env.attempt)).is_some(), "prior claim {prior} is recorded");
+        }
+        state
+    }
+
+    /// The facts the consensus API hands the producer (`palw_producer_facts_v2_impl` calls v4).
+    fn facts(state: &PalwChainStateV2, p: &PalwStateParamsV2, bond: u64) -> PalwProducerFactsV2 {
+        palw_producer_facts_v4(
+            state,
+            p,
+            &admission(),
+            Hash64::from_u64_word(1),
+            CANDIDATE,
+            h64(1),
+            Some(&PalwBondKeyV2(outpoint(bond))),
+            None,
+            None,
+            None,
+            true,
+            0,
+            None,
+        )
+        .expect("the floor class is registered")
+    }
+
+    /// An attempt built from nothing but `facts`, its class ticket won — the producer's own loop.
+    /// `salt` separates one execution from another, so each is its own claim.
+    fn attempt(facts: &PalwProducerFactsV2, bond: u64, salt: u64) -> PalwAttemptEnvelopeV2 {
+        let bond_facts = facts.bond.as_ref().expect("a registered bond");
+        let mut env = PalwAttemptEnvelopeV2 {
+            attempt: PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain: h64(NET),
+                challenge: challenge_v2(h64(NET), h64(0x5050_4800), 7, 1, facts.class_id, &outpoint(bond)),
+                class_id: facts.class_id,
+                executor_bond: outpoint(bond),
+                executor_pubkey: bond_facts.registered_pubkey.clone(),
+                operator_id: bond_facts.operator_id,
+                artifact_root: facts.artifact_root,
+                trace_root: h64(31),
+                output_root: h64(32),
+                execution_root: h64(41),
+                pwu: facts.pwu,
+                trace_manifest_root: attempt_trace_manifest_root_v1(h64(31), 1),
+                trace_chunk_count: 1,
+                trace_retention_daa: 999_999,
+            },
+            signature: vec![0x5A; kaspa_consensus_core::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let anchor = execution_anchor_v3(h64(NET), h64(0x5050_4800), facts.class_id, &outpoint(bond), 1);
+        let won = (0u64..100_000).any(|n| {
+            env.attempt.trace_root = h64(0x3100_0000_0000_0000u64.wrapping_add(salt << 32).wrapping_add(n));
+            class_ticket_v3(&env.attempt, anchor) <= facts.class_target
+        });
+        assert!(won, "a quarter-of-the-space target is winnable in 1e5 tries");
+        env
+    }
+
+    /// **What the chain does with that attempt at the candidate block**: admission's verdict, and
+    /// whether the fold — the block's own attempt, audit fence on — records a claim for it. A floor
+    /// or ceiling refusal of an own attempt is non-fatal, so the fold's answer is the claim's
+    /// absence, not an error.
+    fn chain(
+        state: &PalwChainStateV2,
+        p: &PalwStateParamsV2,
+        facts: &PalwProducerFactsV2,
+        bond: u64,
+    ) -> (Result<(), PalwAdmissionV2Error>, bool) {
+        let env = attempt(facts, bond, 0);
+        let ctx = PalwBlockContextV2 { block: Hash64::from_u64_word(2), daa_score: CANDIDATE, blue_score: 100, subsidy: 0 };
+        let admitted =
+            check_palw_attempt_admission_v2(state, p, &admission(), &ctx, &env, PalwEpochBudgetFencesV1::default()).map(|_| ());
+        let (next, _) = apply_palw_transition_v2_with_extras(state, p, &ctx, &[], Some(&env), false, false, false, false, &extras())
+            .expect("a refused own attempt is skipped, never fatal");
+        (admitted, next.claim(&attempt_id_v2(&env.attempt)).is_some())
+    }
+
+    /// One claim's exposure on this fixture, as the facts price it.
+    fn one_claim() -> u128 {
+        let state = state(AMPLE, 0, true);
+        facts(&state, &params(1, true), 1).bond.unwrap().claim_exposure
+    }
+
+    /// **U2: a bond under the producer floor holds with the top-up it is short, the sentence names
+    /// the one way out — a bond at the floor under a new key, since nothing raises a registered
+    /// bond's collateral — and the producer draws again once that bond is registered.** The old
+    /// pre-check mined it — room is not what is short — and the chain refused it at both layers.
+    #[test]
+    fn a_bond_under_the_producer_floor_holds_naming_its_shortfall_and_draws_once_a_bond_at_the_floor_is_registered() {
+        let floor = AMPLE + AMPLE / 4;
+        let p = params(floor, true);
+        let state = state(AMPLE, 0, true);
+        let f = facts(&state, &p, 1);
+        let bond = f.bond.as_ref().unwrap();
+        assert_eq!(bond.producer_floor_shortfall, Some(250_000));
+        assert!(bond.has_committed_room(), "room is not what holds it");
+        assert_eq!(f.ready_to_produce(&KEY), Ok(()), "the old pre-check would have run the inference");
+
+        let hold = palw_producer_ready_v1(&f, &KEY, past(floor, None)).unwrap_err();
+        assert_eq!(hold, PalwProducerHoldV1::BelowProducerFloor { shortfall: 250_000, floor });
+        let detail = palw_producer_hold_detail_v1(&f, &hold, true);
+        assert!(format!("holding: {detail}").starts_with("holding: top up 250000 sompi to reach the producer floor — "), "{detail}");
+        // The way out, with the size it must post: the review's finding 1 — "top up" alone is an
+        // instruction no object on this chain can carry out.
+        assert!(detail.contains("a registered bond's collateral cannot be raised"), "{detail}");
+        assert!(detail.contains(&format!("register a bond of at least {floor} sompi under a NEW key")), "{detail}");
+        assert!(detail.contains(" floor_shortfall=250000"), "{detail}");
+        // `misaka-cli` cuts the sentence at the last " [": it must get the whole sentence (a CLI
+        // that does not know it prints it verbatim) and the numbers after it.
+        assert_eq!(cli_sentence(&detail), hold.to_string());
+
+        let (admitted, folded) = chain(&state, &p, &f, 1);
+        assert!(
+            matches!(
+                admitted,
+                Err(PalwAdmissionV2Error::ProducerBelowFloor { collateral: AMPLE, floor: chain_floor, .. }) if chain_floor == floor
+            ),
+            "{admitted:?}"
+        );
+        assert!(!folded, "the fold skips it (`ProducerBelowFloor`): the block would have carried no claim");
+
+        // Re-registered at the floor — the producer pointed at bond 2 and its key (no object tops a
+        // bond up, and a key registers one bond).
+        let ctx = PalwBlockContextV2 { block: Hash64::from_u64_word(3), daa_score: 100, blue_score: 50, subsidy: 0 };
+        let state = apply_palw_transition_v2(&state, &p, &ctx, &[bond_registered(2, KEY_2, 0x22, floor)], None).unwrap().0;
+        let f = facts(&state, &p, 2);
+        assert_eq!(f.bond.as_ref().unwrap().producer_floor_shortfall, None);
+        assert_eq!(palw_producer_ready_v1(&f, &KEY_2, past(floor, None)), Ok(()));
+        let (admitted, folded) = chain(&state, &p, &f, 2);
+        assert_eq!(admitted, Ok(()));
+        assert!(folded, "and the claim lands");
+    }
+
+    /// **SR-7: a bond whose committed room is spent holds where the `reserved_exposure` check
+    /// passed** — the case that proves the switch. Everything a bond stands behind that is not its
+    /// own claims (registration, and every seat `Valid` lock above its duty) is committed and never
+    /// reserved, so the old ledger shows room the chain does not grant. The facts here are the
+    /// fixture's, with `committed` carrying what one live seat lock adds, to pin the boundary and
+    /// the sentences; `palw_producer_t12_tests` reaches the same hold through testnet-12's fold, with
+    /// a lock the fold wrote, and checks admission and the fold refuse there too.
+    #[test]
+    fn a_bond_whose_committed_room_is_spent_holds_where_the_reserved_exposure_check_passed() {
+        let p = params(1, true);
+        let state = state(AMPLE, 0, true);
+        let clean = facts(&state, &p, 1);
+        let mut f = clean.clone();
+        let bond = f.bond.as_mut().unwrap();
+        let lock = bond.exposure_ceiling - bond.committed - bond.claim_exposure + 1;
+        bond.committed += lock;
+        let bond = f.bond.as_ref().unwrap();
+        assert!(bond.has_exposure_room(), "the old ledger still shows room");
+        assert_eq!(f.ready_to_produce(&KEY), Ok(()), "and the old pre-check would have run the inference");
+        assert!(!bond.has_committed_room());
+
+        let hold = palw_producer_ready_v1(&f, &KEY, past(1, None)).unwrap_err();
+        assert_eq!(hold, PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2));
+        let detail = palw_producer_hold_detail_v1(&f, &hold, true);
+        let numbers =
+            format!(" exposure={}/{} per_claim={} ledger=committed]", bond.committed, bond.exposure_ceiling, bond.claim_exposure);
+        assert!(detail.starts_with(PALW_NOT_READY_EXPOSURE_FULL_V2) && detail.ends_with(&numbers), "{detail}");
+        assert_eq!(
+            palw_canonical_claim_room_v1(bond, past(1, None)),
+            Err(format!(
+                "no exposure room for a canonical claim: bond commits {} on the one committed ledger and one claim needs {} against \
+                 a ceiling of {}",
+                bond.committed, bond.claim_exposure, bond.exposure_ceiling
+            ))
+        );
+        assert_eq!(palw_canonical_claim_room_v1(bond, None), Ok(()), "the canonical claim's old check saw room too");
+
+        // One sompi less and the claim fits exactly: `committed + claim == ceiling` is room.
+        let mut f = clean;
+        let bond = f.bond.as_mut().unwrap();
+        bond.committed += lock - 1;
+        assert_eq!(palw_producer_ready_v1(&f, &KEY, past(1, None)), Ok(()));
+    }
+
+    /// **T08, node half: the node holds exactly when the chain refuses, and for the chain's reason**,
+    /// over the floor's three sides (met, one sompi short, a quarter short) × the committed room's
+    /// three (ample; spent by a recorded claim to the sompi the next one needs; one sompi short of
+    /// it). The floor is reported first because `apply_attempt` and admission both ask it first.
+    #[test]
+    fn the_nodes_decision_is_the_chains_refusal_on_the_same_state() {
+        let claim = u64::try_from(one_claim()).unwrap();
+        assert!(claim > 0, "the fixture prices a claim");
+        // Collateral whose 500‰ ceiling is exactly two claims (the recorded one and the candidate),
+        // or two claims less one sompi.
+        let rooms = [("ample", AMPLE, 0), ("exact", 4 * claim, 1), ("one over", 4 * claim - 2, 1)];
+        let mut holds = 0;
+        for (room, collateral, prior) in rooms {
+            let state = state(collateral, prior, true);
+            for (side, floor) in [("met", collateral), ("one short", collateral + 1), ("quarter short", collateral + collateral / 4)] {
+                let p = params(floor, true);
+                let f = facts(&state, &p, 1);
+                assert_eq!(f.bond.as_ref().unwrap().committed, u128::from(prior * claim), "{room}: the recorded claim is committed");
+                let node = palw_producer_ready_v1(&f, &KEY, past(floor, None));
+                let (admitted, folded) = chain(&state, &p, &f, 1);
+                let case = format!("room {room}, floor {side}: node={node:?} admission={admitted:?} fold={folded}");
+                assert_eq!(node.is_ok(), admitted.is_ok(), "{case}");
+                assert_eq!(node.is_ok(), folded, "{case}");
+                match (&node, &admitted) {
+                    (Ok(()), Ok(())) => {}
+                    (
+                        Err(PalwProducerHoldV1::BelowProducerFloor { shortfall, floor: node_floor }),
+                        Err(PalwAdmissionV2Error::ProducerBelowFloor { collateral: posted, floor: chain_floor, .. }),
+                    ) => {
+                        assert_eq!(
+                            (*shortfall, *node_floor, *posted, *chain_floor),
+                            (floor - collateral, floor, collateral, floor),
+                            "{case}"
+                        );
+                    }
+                    (
+                        Err(PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2)),
+                        Err(PalwAdmissionV2Error::ExposureCeilingExceeded { .. }),
+                    ) => {}
+                    _ => panic!("the node and the chain disagree on the reason — {case}"),
+                }
+                holds += usize::from(node.is_err());
+            }
+        }
+        assert_eq!(holds, 7, "the two short floors under every room, and the met floor one sompi over");
+    }
+
+    /// **Below the fence the old checks stand byte for byte** — testnet-11, devnet and mainnet do not
+    /// move. A bond under what would be the floor is not held (the facts' floor is dormant, and the
+    /// chain takes the attempt); the decision is `ready_to_produce`'s on every variation, including
+    /// facts whose `committed` and floor fields would hold past the fence; the bracket is the one
+    /// this loop always printed; the canonical claim's room check is the old inequality; and the
+    /// fold's-room check after its price asks nothing. (Below the fence the pre-check has no reads to
+    /// be handed — `palw_rcore_plus_reads_v1` is `None` there, `the_fence_side_is_read_from_the_networks_params`.)
+    #[test]
+    fn below_the_fence_the_pre_check_is_ready_to_produce_byte_for_byte() {
+        let p = params(AMPLE + 1, false);
+        let state = state(AMPLE, 1, false);
+        let f = facts(&state, &p, 1);
+        let bond = f.bond.as_ref().unwrap();
+        assert_eq!(bond.producer_floor_shortfall, None, "the floor is dormant below the fence");
+        assert_eq!(palw_producer_ready_v1(&f, &KEY, None), Ok(()));
+        let (admitted, folded) = chain(&state, &p, &f, 1);
+        assert_eq!(admitted, Ok(()));
+        assert!(folded, "the chain below the fence takes what the old pre-check passes");
+
+        // Every verdict `ready_to_produce` can give, plus the two fields the fence-off path must not
+        // read, set to values that would hold past it.
+        let variations: Vec<Box<dyn Fn(&mut PalwProducerFactsV2)>> = vec![
+            Box::new(|_| {}),
+            Box::new(|f| f.bond = None),
+            Box::new(|f| f.bond.as_mut().unwrap().registered_pubkey = vec![9; 4]),
+            Box::new(|f| f.class_admission_refusal = Some("class … is Prefetching under the model registry".to_string())),
+            Box::new(|f| {
+                f.is_base_class = false;
+                f.epoch_budget_blocks = 0;
+            }),
+            Box::new(|f| {
+                let bond = f.bond.as_mut().unwrap();
+                bond.reserved_exposure = bond.exposure_ceiling;
+            }),
+            Box::new(|f| {
+                let bond = f.bond.as_mut().unwrap();
+                bond.committed = u128::MAX;
+                bond.producer_floor_shortfall = Some(5);
+            }),
+        ];
+        for vary in &variations {
+            let mut f = f.clone();
+            vary(&mut f);
+            let old = f.ready_to_produce(&KEY);
+            let new = palw_producer_ready_v1(&f, &KEY, None);
+            assert_eq!(new, old.map_err(PalwProducerHoldV1::NotReady));
+            if let (Err(why), Err(hold)) = (old, &new) {
+                // The bracket exactly as the worker formatted it before this change.
+                let before = format!(
+                    "{why} [class={} epoch={} produced={} budget={}{}{}]",
+                    f.class_id,
+                    f.epoch_index,
+                    f.epoch_produced_blocks,
+                    f.epoch_budget_blocks,
+                    match &f.bond {
+                        Some(bond) =>
+                            format!(" exposure={}/{} per_claim={}", bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure),
+                        None => String::new(),
+                    },
+                    f.class_admission_refusal.as_deref().map(|why| format!(" registry=\"{why}\"")).unwrap_or_default()
+                );
+                assert_eq!(palw_producer_hold_detail_v1(&f, hold, false), before);
+            }
+            // The canonical claim's room check, likewise.
+            if let Some(bond) = &f.bond {
+                let old_room = if bond.reserved_exposure.saturating_add(bond.claim_exposure) > bond.exposure_ceiling {
+                    Err(format!(
+                        "no exposure room for a canonical claim: bond backs {} and one claim needs {} against a ceiling of {}",
+                        bond.reserved_exposure, bond.claim_exposure, bond.exposure_ceiling
+                    ))
+                } else {
+                    Ok(())
+                };
+                assert_eq!(palw_canonical_claim_room_v1(bond, None), old_room);
+            }
+        }
+        // The price's room check: nothing below the fence, however far over the room.
+        assert_eq!(palw_canonical_claim_bond_room_v1(&fp_price(u128::MAX, 1), Some(0), false), Ok(()));
+    }
+
+    /// **The SW-10 seam holds only on a known shortfall, and only past the fence**, after every
+    /// question the fold refuses on. Its answer is `None` on every build today
+    /// (`palw_class_eligible_stake_at_floor_v1`), so it moves nothing yet; this pins what it does once
+    /// a consensus read answers.
+    #[test]
+    fn the_eligible_stake_answer_holds_only_when_it_is_known_to_be_short() {
+        let p = params(1, true);
+        let state = state(AMPLE, 0, true);
+        let f = facts(&state, &p, 1);
+        assert_eq!(palw_producer_ready_v1(&f, &KEY, past(1, None)), Ok(()), "unknown never holds");
+        assert_eq!(palw_producer_ready_v1(&f, &KEY, past(1, Some(true))), Ok(()));
+        let hold = palw_producer_ready_v1(&f, &KEY, past(1, Some(false))).unwrap_err();
+        assert_eq!(hold, PalwProducerHoldV1::EligibleStakeBelowFloor);
+        assert!(hold.to_string().contains("875‰"), "{hold}");
+        assert!(!hold.to_string().contains(" ["), "the CLI's cut: {hold}");
+        // A refusal of the attempt itself is reported first.
+        let mut short = f.clone();
+        short.bond.as_mut().unwrap().producer_floor_shortfall = Some(3);
+        let floor_hold = PalwProducerHoldV1::BelowProducerFloor { shortfall: 3, floor: 1 };
+        assert_eq!(palw_producer_ready_v1(&short, &KEY, past(1, Some(false))), Err(floor_hold.clone()));
+        let bond = f.bond.as_ref().unwrap();
+        assert_eq!(palw_canonical_claim_room_v1(bond, past(1, None)), Ok(()));
+        assert_eq!(palw_canonical_claim_room_v1(bond, past(1, Some(false))), Err(format!("holding: {hold}")));
+        // And the canonical claim asks the floor first too, in the attempt lane's words.
+        let canonical = palw_canonical_claim_room_v1(short.bond.as_ref().unwrap(), past(1, Some(false))).unwrap_err();
+        assert_eq!(canonical, format!("holding: {floor_hold}"));
+        assert!(canonical.starts_with("holding: top up 3 sompi to reach the producer floor — "), "{canonical}");
+    }
+
+    /// A free-prompt price holding `reserved + rights_reserved`.
+    fn fp_price(reserved: u128, rights_reserved: u128) -> kaspa_consensus_core::palw_state_v2::PalwFpCommitmentPriceV1 {
+        kaspa_consensus_core::palw_state_v2::PalwFpCommitmentPriceV1 {
+            quanta: 1,
+            pwu: 1,
+            rights_reserved,
+            reserved,
+            priced_in_compute: true,
+            derived_work: None,
+        }
+    }
+
+    /// **The review's finding 4: past the fence a canonical claim is held to the fold's own room once
+    /// its price is known** — the FP arm refuses `backed + reserved + rights_reserved > ceiling`, and
+    /// the node's price answer carries `bond_room = ceiling − backed` (`palw_fp_bond_room_v2`), so
+    /// the claim fits exactly when `reserved + rights_reserved <= bond_room`. Rights count: they are
+    /// what the ledger holds beside the reservation.
+    #[test]
+    fn past_the_fence_a_priced_canonical_claim_is_held_to_the_folds_own_room() {
+        let room = 1_000u128;
+        assert_eq!(palw_canonical_claim_bond_room_v1(&fp_price(room, 0), Some(room), true), Ok(()), "exactly the room fits");
+        assert_eq!(palw_canonical_claim_bond_room_v1(&fp_price(room - 10, 10), Some(room), true), Ok(()));
+        let over = palw_canonical_claim_bond_room_v1(&fp_price(room - 10, 11), Some(room), true).unwrap_err();
+        assert_eq!(
+            over,
+            "the chain would refuse this canonical claim (FreePromptExposureCeiling): it holds 1001 sompi (990 reserved + 11 receipt \
+             rights) against 1000 of room on the one committed ledger"
+        );
+        // Backing already over the ceiling reads as room 0, and the fold refuses any sompi there.
+        assert!(palw_canonical_claim_bond_room_v1(&fp_price(1, 0), Some(0), true).is_err());
+        // A room the answer did not carry (no bond asked about, or one the chain does not hold) says
+        // nothing here; overflow saturates rather than wrapping into room.
+        assert_eq!(palw_canonical_claim_bond_room_v1(&fp_price(u128::MAX, u128::MAX), None, true), Ok(()));
+        assert!(palw_canonical_claim_bond_room_v1(&fp_price(u128::MAX, u128::MAX), Some(u128::MAX - 1), true).is_err());
+    }
+
+    /// **The fence side is the network's**: testnet-12 arms `palw_rcore_plus` at genesis and hands the
+    /// pre-check its bundle's floor — the `min_collateral_sompi` the fold measures a bond against —
+    /// and testnet-11, devnet and mainnet hand it nothing, so their producers keep `ready_to_produce`.
+    #[test]
+    fn the_fence_side_is_read_from_the_networks_params() {
+        use kaspa_consensus_core::config::params::Params;
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        let PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { panic!("testnet-12 is a ConsensusV2 network") };
+        assert!(t12.palw_rcore_plus_active_at(0), "the premise: testnet-12 arms R-core+ at genesis");
+        for daa in [0u64, 1, 1_000_000] {
+            assert_eq!(palw_rcore_plus_producer_floor_v1(&t12, daa), Some(bundle.state.min_collateral_sompi()));
+        }
+        assert_eq!(
+            bundle.state.min_collateral_sompi(),
+            kaspa_consensus_core::palw_state_v2::palw_bond_registration_floor_v1(bundle.state.min_collateral_sompi(), true),
+            "the floor a replacement bond is told to post is the one registration asks"
+        );
+        for (name, p) in [
+            ("testnet-11", kaspa_consensus_core::config::params::palw_rc_shipped_params()),
+            ("testnet-11 identity", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
+            ("devnet", kaspa_consensus_core::config::params::devnet_shipped_params()),
+            ("mainnet", Params::from(NetworkId::new(NetworkType::Mainnet))),
+        ] {
+            for daa in [0u64, 1, 1_000_000, u64::MAX] {
+                assert_eq!(palw_rcore_plus_producer_floor_v1(&p, daa), None, "{name} at DAA {daa} keeps the old pre-check");
+            }
         }
     }
 }
