@@ -955,7 +955,7 @@ impl PalwHeldCourtV1 {
             let rejected = self.rejected.get(&duty.claim_id).cloned().unwrap_or_default();
             let objects = session.map(|s| s.objects.as_slice()).unwrap_or(&[]);
             if palw_held_filing_of_duty_v1(objects, duty, host.opening_cap(&duty.class_id, current_daa), &rejected).is_none() {
-                if !session.and_then(|s| s.looked_daa).is_some_and(|at| current_daa < at.saturating_add(HELD_CHAIN_RELOOK_DAA)) {
+                if session.and_then(|s| s.looked_daa).is_none_or(|at| current_daa >= at.saturating_add(HELD_CHAIN_RELOOK_DAA)) {
                     reads.push(PalwHeldChainReadV1 {
                         session_id: duty.session_id,
                         claim_id: duty.claim_id,
