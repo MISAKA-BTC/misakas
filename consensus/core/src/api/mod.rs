@@ -916,6 +916,19 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **ADR-0152 v3.1 N10 (Phase 2, P2-8c): what filing this `PanelFalseValidV2` object comes to**
+    /// at the tip, for the block the virtual's next block folds at — the ONE adjudicator
+    /// (`palw_check_panel_false_valid_v2`), then the processor's gate with the signature, then the
+    /// fold itself on the tip (as the licence assembler asks `palw_v2_object_licenses_claim_v1`), so
+    /// a filer never pays a carrier for an object the fold refuses. `None` when there is no tip state
+    /// to read (off `ConsensusV2`). Node policy's read; never what a block accepts.
+    fn palw_false_valid_filing_check_v1(
+        &self,
+        _object: crate::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<crate::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        None
+    }
+
     /// **What a node's receipt pool reads off the tip** (node policy, the 2026-09-24 launch review's
     /// receipt-pool flush): the bound panel of each asked claim the tip holds `PanelBound`, and the
     /// registered key of each asked bond — see [`crate::palw_panel_v2::PalwReceiptPoolFactsV1`].

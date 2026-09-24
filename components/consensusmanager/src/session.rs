@@ -255,6 +255,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_claim_readers_v2(claim)
     }
 
+    /// ADR-0152 v3.1 N10 (P2-8c): what filing this `PanelFalseValidV2` object comes to at the tip.
+    pub fn palw_false_valid_filing_check_v1(
+        &self,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        self.consensus.palw_false_valid_filing_check_v1(object)
+    }
+
     /// What a node's receipt pool reads off the tip: the bound panels of `claims`, the registered
     /// keys of `bonds`. One store-tip read for the whole batch, on the panel's cadence.
     pub fn palw_receipt_pool_facts_v1(

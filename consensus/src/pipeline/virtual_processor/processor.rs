@@ -4113,6 +4113,90 @@ impl VirtualStateProcessor {
         state.claim_readers_v2(&claim)
     }
 
+    /// **ADR-0152 v3.1 N10 (Phase 2, P2-8c): what filing this `PanelFalseValidV2` object comes to**
+    /// — at the tip, at the point the licence assembler asks from (the tip block, the virtual's DAA
+    /// and blue score), so a conviction the filer sends is one the next block folds. `None` with no
+    /// tip state.
+    pub fn palw_false_valid_filing_check_v1_impl(
+        &self,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let virtual_state = self.lkg_virtual_state.load();
+        let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: tip_block,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: 0,
+        };
+        Some(self.palw_false_valid_filing_check_v1_at(&state, &point, object))
+    }
+
+    /// [`Self::palw_false_valid_filing_check_v1_impl`] on a given state at `point` — the one place the
+    /// three answers are asked in order (the real-claim tests call it on the state they folded):
+    ///
+    /// 1. **the adjudicator, classified** (`palw_false_valid_filing_check_v1`): the (seat, claim) key,
+    ///    then `palw_check_panel_false_valid_v2` without the signature, under the rules and decode
+    ///    switch the gate and the fold read at `point` — so a liability refusal (`NotLiable`) and an
+    ///    open court (`Wait`) are told apart from every other refusal;
+    /// 2. **the gate** (`palw_v2_validate_objects`): the signature under this chain's domain and the
+    ///    seat's registered key, `Active` or `Retiring`;
+    /// 3. **the fold** (`palw_v2_apply_one_object_v1` on the tip): the lock the seat must still hold
+    ///    or the liability row that lists it, the heavy-prompt budget, and S-4's funnel — so the
+    ///    answer is the fold's own and cannot drift from it.
+    ///
+    /// `Dormant` below `Params::palw_rcore_plus` (P2-8c, like everything Phase 2 adds, lives past
+    /// it; the fence requires `palw_offence_attribution`, so kind 3 exists wherever this answers).
+    pub(crate) fn palw_false_valid_filing_check_v1_at(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1 {
+        use kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1 as Check;
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Check::Dormant };
+        if !self.palw_rcore_plus_at(point.daa_score) {
+            return Check::Dormant;
+        }
+        let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+            kind: kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2,
+            accused,
+            evidence,
+            ..
+        } = object
+        else {
+            return Check::Refused("not a PanelFalseValidV2 filing".into());
+        };
+        let check = kaspa_consensus_core::palw_false_valid_filing_v1::palw_false_valid_filing_check_v1(
+            state,
+            accused,
+            evidence,
+            state_params.fp_decode_rules_at(point.daa_score),
+            self.palw_identity_rules_v1(point.daa_score),
+        );
+        if !matches!(check, Check::File { .. }) {
+            return check;
+        }
+        if let Err(why) = self.palw_v2_validate_objects(state, state_params, point, std::slice::from_ref(object)) {
+            return Check::Refused(why);
+        }
+        match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_object_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        ) {
+            Ok(_) => check,
+            Err(why) => Check::Refused(why.to_string()),
+        }
+    }
+
     /// What a node's receipt pool reads off the tip — see the trait doc. Node policy: a read.
     pub fn palw_receipt_pool_facts_v1_impl(
         &self,

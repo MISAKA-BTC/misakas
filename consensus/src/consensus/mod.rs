@@ -2242,6 +2242,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_claim_readers_v2_impl(claim)
     }
 
+    fn palw_false_valid_filing_check_v1(
+        &self,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<kaspa_consensus_core::palw_false_valid_filing_v1::PalwFalseValidFilingCheckV1> {
+        self.virtual_processor.palw_false_valid_filing_check_v1_impl(&object)
+    }
+
     fn palw_receipt_pool_facts_v1(
         &self,
         claims: Vec<kaspa_consensus_core::Hash64>,
