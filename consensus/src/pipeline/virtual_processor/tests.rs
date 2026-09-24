@@ -16200,3 +16200,7 @@ mod t12_stake_draw_integration;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;
+// ADR-0152 Phase 2, P2-1: B-3's vesting term at every UTXO site (T23 processor half, T05 bond half).
+mod p2_b3_vesting_payee_gate;
+// ADR-0152 Phase 2, P2-2: the mint path on real testnet-12 blocks (T58, T03, T47, T25, T05, T29).
+mod p2_mint_path;

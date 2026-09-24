@@ -3890,6 +3890,13 @@ impl VirtualStateProcessor {
     /// nor the drain asks which phase enqueued an entry, so a payout to some party other than the
     /// producer (an accuser that voided a claim, say) needs a transition that writes one, not a
     /// new mechanism on the paying side.
+    ///
+    /// **Past `Params::palw_rcore_plus` (ADR-0152 V-2, testnet-12) `Final` names a vesting ROW, not
+    /// a payout**: the same producer, seat and reserve amounts, with the payees fixed at `Final`
+    /// (I-5), held until V-4 matures the row; the payout is named at maturity, when step 3d moves the
+    /// row's legs into the queue `palw_v2_payout_outputs` renders — so "which claims became
+    /// spendable" is then "which rows matured", and the reporter reward (ADR-0152 §3.6 R), the other
+    /// non-producer payee this paragraph anticipated, reaches the queue through the same step.
     /// **The escrows a block's coinbase must pay, from its parent's committed queue.**
     ///
     /// `state` is the SELECTED PARENT's state, not this block's: a claim that reaches `Final` is
@@ -4835,13 +4842,21 @@ impl VirtualStateProcessor {
     /// (audit3 H3). Reads the materialized tip, so it answers the same question
     /// `palw_v2_locked_bond_outpoints` answers on the block path — one predicate, two callers.
     pub fn palw_locked_bond_outpoints_v2_impl(&self) -> Vec<TransactionOutpoint> {
+        self.palw_locked_bond_outpoints_v2_at(self.lkg_virtual_state.load().daa_score)
+    }
+
+    /// [`Self::palw_locked_bond_outpoints_v2_impl`] at an explicit DAA: the wallet's answer is the
+    /// tip's `palw_v2_locked_bond_outpoints` at the node's virtual DAA, and nothing else — split out
+    /// so ADR-0152 T23 can hold the wallet's set, the block path's and the burn obligations to
+    /// `palw_bond_collateral_is_locked_v6` at the DAAs B-3 turns on (`F + 2,999`, `F + 3,000`, a
+    /// licence halt, a carried row) without a chain that long.
+    pub(super) fn palw_locked_bond_outpoints_v2_at(&self, now_daa: u64) -> Vec<TransactionOutpoint> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else {
             return Vec::new();
         };
         let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip_cached(state_params) else {
             return Vec::new();
         };
-        let now_daa = self.lkg_virtual_state.load().daa_score;
         let mut out: Vec<TransactionOutpoint> = self.palw_v2_locked_bond_outpoints(&state, now_daa).into_iter().collect();
         // Deterministic order, so two nodes answering the same question give the same answer and a
         // paging caller cannot be handed a shuffled set.
@@ -4954,6 +4969,20 @@ impl VirtualStateProcessor {
     /// resolved at its own DAA, the expression `apply_attempt` stores — is withheld anyway and never
     /// released: burned, as a skipped merged blue's is. An admitted attempt's claim is found and
     /// withheld from its record exactly as before, so the figure moves only for a skipped one.
+    ///
+    /// **Past `Params::palw_rcore_plus` (ADR-0152 V-2) nothing here moves: withholding stays at
+    /// acceptance, and only the RELEASE is deferred.** The release path is `Final → vesting row →
+    /// step 3d at maturity → pending_payouts → the next block's coinbase`
+    /// ([`Self::palw_v2_payout_outputs`], unchanged): `Final` names the escrow in a row instead of
+    /// the queue, a conviction inside the conviction window burns the row (V-5) — withheld here and
+    /// never minted, exactly as a void's forfeit — and only a matured row's legs reach a coinbase.
+    /// So every sompi withheld here ends in exactly one of: minted from a row, a live row, a row
+    /// burned (or a void's forfeit, or a skipped attempt's carve), the work-price remainder named
+    /// nowhere, the ADR-0091 buyback slice, or `panel_reserve_sompi` — V-3's coinbase identity (T03,
+    /// which attributes the minted term by coinbase position against the parent queue's keys, since
+    /// one payout script receives round fees, vesting mints and seat pay alike). Reporter rewards and
+    /// market rows are minted from the same queue and are NOT in that identity: they are funded by
+    /// slashes and by sinks, never by this carve.
     pub(super) fn palw_v2_escrow_withheld_at(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -4963,7 +4992,16 @@ impl VirtualStateProcessor {
             .claims_iter()
             .filter(|(_, claim)| claim.accepted_block == block)
             .fold(0u64, |acc, (_, claim)| acc.saturating_add(claim.escrowed_reward));
-        recorded.saturating_add(self.palw_v2_skipped_own_attempt_carve(state, block))
+        let skipped = self.palw_v2_skipped_own_attempt_carve(state, block);
+        // One carve, withheld once: from the claim the fold admitted, or as the carve of the attempt
+        // it skipped — never both. Only an attempt escrows (a free-prompt claim records 0), and an
+        // attempt's claim is recorded against its CARRYING block, so a block whose own attempt was
+        // skipped has no escrowing claim accepted in it. T03's identity counts each carve once.
+        debug_assert!(
+            recorded == 0 || skipped == 0,
+            "block {block}: an attempt's carve is withheld from its claim or as skipped, not both"
+        );
+        recorded.saturating_add(skipped)
     }
 
     /// The carve of `block`'s own attempt where the fold skipped it — see
@@ -5332,21 +5370,71 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// **The PALW payouts a block's coinbase mints: the first [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] rows
+    /// of the SELECTED PARENT's `pending_payouts`, in key order — and nothing else, on every network**
+    /// (ADR-0042 Decision 10; ADR-0152 V-4 "on moving a row", V-7; phase2-plan F1, §2.7).
+    ///
+    /// **Where the rows come from.** Below `Params::palw_rcore_plus` a claim's `Final` writes them:
+    /// the producer's share under the raw `claim_id`, each credited seat's under its payee key
+    /// (`0xFE`, accumulated), beside the market's fee legs and the carrier refunds (`0xFF`). **Past it
+    /// (testnet-12) `Final` writes no row at all** — it names a vesting row (V-2), and step 3d of a
+    /// LATER block's fold moves the row's legs into this queue once V-4 matures it: the producer's leg
+    /// under its A-KEY key (`palw_vesting_payout_key_v1`, `0x00`), each seat's under the same `0xFE`
+    /// payee key, the reserve into `panel_reserve_sompi` (never a row); a reporter reward the same way
+    /// under `palw_reporter_payout_key_v1`. So the release path is `Final → row → 3d → queue → this`,
+    /// and this function did not change for it: a moved leg is minted byte-identically on the build
+    /// and the validate path because both render the one committed queue (T58's build == validate).
+    ///
+    /// **The queue lemma** (phase2-plan F2, ADR-0152 V-7, T58): past `palw_rcore_plus` step 3d is the
+    /// ONLY writer of a key below the market's `0xFF` (the market and the refunds key under it; a
+    /// Final writes a row); it creates at most [`palw_vesting_v1::PALW_V2_VESTING_LEGS_PER_BLOCK`]
+    /// (= this width) new keys per block (the planner's one exception, a row wider than that, needs a
+    /// panel of more than seven seats); and step 1b of the next block drains this very prefix. So the
+    /// non-market part of every committed queue is at most this width, every non-market row is in the
+    /// prefix rendered here, and **every leg is minted exactly one block after its move**.
+    /// Carry-over lives in the vesting table, never in the queue; the `0x00` A-KEY prefix is what
+    /// keeps a producer leg whose raw `claim_id` begins `0xFF` out of the market's tail (T47). Debug
+    /// builds assert the lemma here, at the one site whose correctness rests on it.
+    ///
+    /// **Rules for any later change** (phase2-plan §2.7, F6): never render anything from `vesting`
+    /// directly — a row is not money until 3d has moved it into this queue (V-6); and never mutate a
+    /// template's coinbase outputs after it is built, because the EVM lane's commitment
+    /// (`evm_template_fields`) is derived after the coinbase and never re-reads it — a future path
+    /// that must do so re-derives through `evm_template_fields`, as `heartbeat_recommit_evm_for_stamp`
+    /// does.
+    ///
+    /// [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`]: kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK
+    /// [`palw_vesting_v1::PALW_V2_VESTING_LEGS_PER_BLOCK`]: kaspa_consensus_core::palw_vesting_v1::PALW_V2_VESTING_LEGS_PER_BLOCK
     fn palw_v2_payout_outputs(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Vec<TransactionOutput> {
+        use kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK;
+        // The queue lemma, where it holds: past `palw_rcore_plus` at the block that committed
+        // `state`. Every testnet-12 panel has five seats, so a row costs at most six keys and the
+        // planner's full-width head belt (a row wider than the budget) never fires; a preset that
+        // armed R-core+ with a panel of more than seven seats would trip this, and should — its rows
+        // would then wait in the queue, which is M-10's delay, not a mint of the wrong amount.
+        debug_assert!(
+            !state.last_point().is_some_and(|point| self.palw_rcore_plus_at(point.daa_score))
+                || kaspa_consensus_core::palw_vesting_v1::palw_vesting_non_market_rows_waiting_v1(state)
+                    <= PALW_V2_MAX_PAYOUTS_PER_BLOCK,
+            "the queue lemma (ADR-0152 V-7, T58): past palw_rcore_plus the non-market part of a committed queue fits one drain"
+        );
         // The SAME prefix the transition drains — see `PALW_V2_MAX_PAYOUTS_PER_BLOCK`. Both sides
         // read the selected parent's queue in `BTreeMap` key order, so "the first N" names one set
         // on every node. Paying more than the transition clears would pay a claim twice; clearing
         // more than the coinbase pays would destroy the reward the escrow exists to deliver.
-        state
+        let outputs: Vec<TransactionOutput> = state
             .pending_payouts_iter()
-            .take(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK)
+            .take(PALW_V2_MAX_PAYOUTS_PER_BLOCK)
             .map(|(_, payout)| {
                 TransactionOutput::new(
                     payout.amount,
                     kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
                 )
             })
-            .collect()
+            .collect();
+        // `PALW_V2_COINBASE_EXTRA_OUTPUTS` budgets the coinbase for exactly this many.
+        debug_assert!(outputs.len() <= PALW_V2_MAX_PAYOUTS_PER_BLOCK, "the coinbase renders one drain's width");
+        outputs
     }
 
     /// **ADR-0042 Decisions 7 and 8's consumers: every lifecycle object is ADJUDICATED before it
@@ -5911,6 +5999,17 @@ impl VirtualStateProcessor {
         // EXACTLY: accepted moves' rows are in `folded`, owed refunds are reserved, and a refused
         // move promises nothing — the review's starvation, where a cheap refused buy took two
         // phantom rows from the valid moves after it, is gone. Below it, the old promise counter.
+        //
+        // **Past `palw_rcore_plus` the queue also grows at step 3d — after every object, 3′ and 3c —
+        // by the matured vesting legs and reporter rewards it moves** (ADR-0152 V-4/V-7; phase2-plan
+        // F4). Nothing here reserves for them, and nothing needs to: the count below is the queue as
+        // the fold's step 3 sees it (`palw_v2_pre_object_base_v1` mirrors steps 1b–2, and past the
+        // fence a `Final` in step 2 writes a row, not a payout — I-3), which is exactly what the
+        // fold's own market room reads; 3d's moves are exempt from `PALW_V2_MAX_PENDING_PAYOUTS`
+        // (M-10) and bounded instead by V-7's per-block budget, so a committed queue holds at most
+        // the cap plus one drain. Were a fold path ever to write the queue BEFORE 3d, this rehearsal
+        // would have to reserve those rows the way it reserves refunds. T29 pins the agreement with a
+        // 1,016-row queue, a row maturing in the same block, and a same-block conviction.
         let exact_queue = audit_active && self.palw_audit_2026_09_23_at(point.daa_score);
         let mut certifications_graded = 0usize;
         // ADR-0080 design A, W9: how many declared closes this block has already completed.
@@ -13445,6 +13544,28 @@ impl VirtualStateProcessor {
         }
         self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
         Ok(())
+    }
+
+    /// [`Self::validate_mempool_transaction`] as if the virtual stood at `virtual_daa_score` — the
+    /// virtual UTXO set, median time and PALW tip as they are, only the DAA the policy reads moved.
+    /// Test-only: ADR-0152 T23/T05 ask the mempool's bond gate at the DAAs B-3 turns on, and T25
+    /// asks the coinbase-maturity policy at a minted leg's `M + 599` and `M + 600`, without mining
+    /// the six hundred blocks between.
+    #[cfg(test)]
+    pub(super) fn validate_mempool_transaction_at_daa_for_tests(
+        &self,
+        mutable_tx: &mut MutableTransaction,
+        virtual_daa_score: u64,
+    ) -> TxResult<()> {
+        let virtual_read = self.virtual_stores.read();
+        let virtual_state = virtual_read.state.get().unwrap();
+        self.validate_mempool_transaction_impl(
+            mutable_tx,
+            &virtual_read.utxo_set,
+            virtual_daa_score,
+            virtual_state.past_median_time,
+            &Default::default(),
+        )
     }
 
     pub fn validate_mempool_transaction(&self, mutable_tx: &mut MutableTransaction, args: &TransactionValidationArgs) -> TxResult<()> {

@@ -4483,3 +4483,9 @@ async fn t18n_a_convicted_representatives_unspent_tickets_pass_to_the_lender() {
 /// so it runs on this harness, these doors and these assertions rather than a copy of them.
 #[path = "t47_model_class_attribution.rs"]
 mod t47_model_class_attribution;
+
+/// **ADR-0152 Phase 2, T29's processor half** — a same-block conviction and maturity on this
+/// suite's real claim and real conviction: the rehearsal and the fold agree, and the burn comes
+/// before step 3d. A child of this suite for the reason `t47_model_class_attribution` is.
+#[path = "p2_t29_conviction_and_maturity.rs"]
+mod p2_t29_conviction_and_maturity;

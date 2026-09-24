@@ -269,7 +269,19 @@ pub(crate) struct BondSpendFilter<'a> {
     palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
 }
 
-impl BondSpendFilter<'_> {
+impl<'a> BondSpendFilter<'a> {
+    /// The PALW half alone, as the chain walk builds it from the selected parent's state (the DNS
+    /// view absent) — test-only, so ADR-0152 T23/T05 can hand the block path's per-transaction check
+    /// the processor's own locked set and burn obligations at a DAA of their choosing.
+    #[cfg(test)]
+    pub(crate) fn palw_only_for_tests(
+        daa_score: u64,
+        palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
+        palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
+    ) -> Self {
+        Self { bond_view: None, daa_score, palw_locked, palw_burns }
+    }
+
     /// **What this transaction must leave unclaimed, in total.** The sum over its inputs of every
     /// released PALW bond's slashed sompi — usually zero, because usually no input is a bond.
     fn burn_owed(&self, tx: &Transaction) -> u64 {
