@@ -923,6 +923,7 @@ pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_COURT_OFFENCE_KEY_DOMAIN_V1,
     PALW_REPORTER_COMMIT_DOMAIN_V1,
     PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
+    PALW_REPORTER_COMMITMENT_DOMAIN_V1,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -960,6 +961,10 @@ pub const PALW_COURT_OFFENCE_KEY_DOMAIN_V1: &[u8] = b"misaka-palw/court-offence-
 pub const PALW_REPORTER_COMMIT_DOMAIN_V1: &[u8] = b"misaka-palw/reporter-commit/message/v1";
 /// R-3: the reporter-commit ML-DSA-87 context, the first of `COMPLETE_V5`'s two additions.
 pub const PALW_REPORTER_COMMIT_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/reporter-commit/mldsa87/v1";
+/// R-3: the domain a reporter's commitment hash is keyed under ([`palw_reporter_commitment_v1`]) —
+/// a hashing domain, separate from the message tag above, so a commitment preimage is never a
+/// signing message. S-1; in `PALW_STATE_V2_ALL_DOMAINS`, which no id hashes.
+pub const PALW_REPORTER_COMMITMENT_DOMAIN_V1: &[u8] = b"misaka-palw/reporter-commit/commitment/v1";
 // TODO(M3, ADR-0152 DA-4): `PALW_DA_OFFENCE_KEY_DOMAIN_V1` and the DA-disclosure-v4 ML-DSA-87
 // context (`PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT`) are M3's and not defined in this tree; when M3
 // lands them they join `PALW_STATE_V2_ALL_DOMAINS` above and the context is appended to
@@ -2295,6 +2300,413 @@ pub fn palw_bond_free_collateral_v1(bond: &PalwBondStateV2, held: u128, collater
 /// decision moves every reader at once.
 pub fn palw_bond_registration_floor_v1(min_collateral_sompi: u64, _audit_2026_09_23_active: bool) -> u64 {
     min_collateral_sompi
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0152 v3.1 R-core+ (S-1): the one committed-collateral ledger's API (S-SPEC §2, §10a)
+// ---------------------------------------------------------------------------------------------
+//
+// Every function here is pure in `(params, state)` (Phase 2 plan I-8): the accessors that take
+// `params` take the second clock's RAW depth (`extras.settled_anchor_depth`, the processor's
+// `palw_settled_anchor_depth_at`) and compute the liveness escape themselves, so the fold, the
+// processor, the draw and kaspad reach one number from one input. Below `Params::palw_rcore_plus`
+// no consensus rule reads any of them; every writer that does is gated on the fence.
+
+/// **SR-1: what one claim commits on its producer's bond at `now_daa`** (ADR-0152 v3.1 SR-1, three
+/// arguments; post-edit 10(a)).
+///
+/// | phase | commitment |
+/// |---|---|
+/// | `Provisional`, `PanelBound`, `ReceiptLicensed`, `DefaultDisputed` | `full − esc` if `claim.rcore.escrow_released`, else `full` |
+/// | `Voided`, a free-prompt `BindTimeout` on its abandon hold at `now_daa` | `full` |
+/// | `Final`, every other `Voided` | `0` |
+///
+/// `full` is [`palw_claim_bond_reservation_v1`] (`w + esc + rr`, kept: it is also the forfeit) and
+/// `esc` is [`PalwStateParamsV2::claim_escrow_reservation_v1`]. `DefaultDisputed` stays in the
+/// live row until M3 retires that phase past the fence (DA-2). Below the fence `escrow_released` is
+/// never set, so this is today's ledger term on every path: exactly what `reserve_for_claim` adds,
+/// what `release_for_claim` / `release_abandon_hold` give back, and what the load re-derivation
+/// sums. `None` on arithmetic overflow, as the reservation it wraps.
+pub fn palw_claim_commitment_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, now_daa: u64) -> Option<u128> {
+    match &claim.phase {
+        PalwClaimPhaseV2::Final { .. } => Some(0),
+        PalwClaimPhaseV2::Voided { .. } => {
+            if palw_claim_is_on_abandon_hold_v2(claim, params, now_daa) {
+                palw_claim_bond_reservation_v1(params, claim)
+            } else {
+                Some(0)
+            }
+        }
+        PalwClaimPhaseV2::Provisional
+        | PalwClaimPhaseV2::PanelBound { .. }
+        | PalwClaimPhaseV2::ReceiptLicensed { .. }
+        | PalwClaimPhaseV2::DefaultDisputed { .. } => {
+            let full = palw_claim_bond_reservation_v1(params, claim)?;
+            if claim.rcore.escrow_released {
+                full.checked_sub(params.claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward))
+            } else {
+                Some(full)
+            }
+        }
+    }
+}
+
+/// **A seat's duty on one claim**: the duty row's `seat_exposure` where `bond` is one of the row's
+/// seats, else `0` (a claim with no row — never bound, redrawn, terminal — owes no seat anything).
+/// What A-1's `max(duty, lock)` subtracts from a live lock, so the duty is never counted twice.
+pub fn palw_seat_duty_of_v1(state: &PalwChainStateV2, claim_id: &Hash64, bond: &PalwBondKeyV2) -> u128 {
+    state.panel_duties.get(claim_id).filter(|row| row.seats.contains_key(bond)).map(|row| row.seat_exposure).unwrap_or(0)
+}
+
+/// **A-1: everything `bond` stands behind at `now_daa`** (ADR-0152 v3.1 A-1; S-SPEC §2, §3.1).
+///
+/// `reserved_exposure(bond) + registration_exposure(bond) + Σ` over the bond's slashable locks that
+/// are live at `(now_daa, settled_attempt_finals, escaped_depth, window_court)` of the lock's excess
+/// over the bond's duty on that claim ([`palw_seat_duty_of_v1`]).
+///
+/// Duties stay inside `reserved_exposure` (S-SPEC §3.1, §9 P2: `reserve_seat_duties` still writes
+/// them there), and `reserved_exposure` holds the bond's own claims' commitments
+/// ([`palw_claim_commitment_v1`]), so this is A-1's value term for term: own commitments +
+/// registration + Σ `max(duty, live lock)` per `(seat, claim)` — a duty alone; a duty beside its
+/// lock; a lock alone once the duty is released at Final. Court reservations leave
+/// `reserved_exposure` past the fence (A-6, S-3) and are read by [`palw_accuser_exposure_v1`];
+/// `DefaultDisputed`'s accuser term stays inside until M3 retires that phase.
+///
+/// `escaped_depth` is the depth AFTER the liveness escape ([`palw_second_clock_depth_v1`]); callers
+/// holding the raw depth use [`palw_bond_committed_raw_v1`]. Saturating. Cost
+/// `O(log n + locks_of(bond))`.
+pub fn palw_bond_committed_v1(
+    state: &PalwChainStateV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    escaped_depth: Option<u64>,
+    window_court: u64,
+) -> u128 {
+    let settled_now = state.settled_attempt_finals;
+    let lock_excess = state
+        .slashable_locks
+        .range((*bond, ZERO_HASH64)..)
+        .take_while(|((holder, _), _)| holder == bond)
+        .filter(|(_, lock)| lock.is_live_v3(now_daa, settled_now, escaped_depth, window_court))
+        .map(|((_, claim_id), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(state, claim_id, bond)))
+        .fold(0u128, u128::saturating_add);
+    state.reserved_exposure(bond).saturating_add(state.registration_exposure(bond)).saturating_add(lock_excess)
+}
+
+/// [`palw_bond_committed_v1`] from the second clock's RAW depth: the escape is computed here, from
+/// the state's anchor ring and `params.window_court()`, exactly as the fold's
+/// `second_clock_depth` and the processor's `palw_second_clock_depth_at` compute it.
+pub fn palw_bond_committed_raw_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> u128 {
+    let escaped = palw_second_clock_depth_v1(raw_depth, &state.recent_anchor_daas, now_daa, params.window_court());
+    palw_bond_committed_v1(state, bond, now_daa, escaped, params.window_court())
+}
+
+/// **PROMISED (S-SPEC §2): a bond's free slashable stake** — its posted collateral less
+/// [`palw_bond_committed_v1`] at the escaped depth, through [`palw_bond_free_collateral_v1`] (net of
+/// `slashed` past `palw_audit_2026_09_23`, as every view reads it). A missing bond is `0`.
+///
+/// This is not headroom (the 500‰ ceiling is [`palw_bond_headroom_v1`]) and it does not subtract
+/// accuser exposure ([`palw_accuser_room_v1`] does). It is the stake-weighted draw's eligibility
+/// input (SW-1, P7) and the reading an RPC shows.
+pub fn palw_bond_free_slashable_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> u128 {
+    let Some(record) = state.bonds.get(bond) else { return 0 };
+    let committed = palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth);
+    palw_bond_free_collateral_v1(record, committed, params.bond_collateral_is_net_v1())
+}
+
+/// **A bond's headroom under the 500‰ ceiling**: `collateral × fp_max_exposure_ratio_permille / 1000
+/// − committed`, saturating — the room every work gate (`apply_attempt`, admission item 8, the FP
+/// lane, the bind and the draw) measures a new commitment against past the fence (SR-7, A-3). The
+/// ceiling reads `collateral` as the attempt ceiling does. A missing bond is `0`.
+pub fn palw_bond_headroom_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> u128 {
+    let Some(record) = state.bonds.get(bond) else { return 0 };
+    let ceiling = (record.collateral as u128).saturating_mul(params.fp_max_exposure_ratio_permille as u128) / 1000;
+    ceiling.saturating_sub(palw_bond_committed_raw_v1(state, params, bond, now_daa, raw_depth))
+}
+
+/// **A-6: what `bond` holds as an accuser** — the claim's `reserved` of every court it has open as
+/// the challenger (the same expression `write_court` releases), read through the derived
+/// `courts_by_challenger` index. M3 adds the bond's open DA sessions and its refuted exposure held
+/// (DA-6). A session whose claim is gone contributes nothing, as the release gives nothing back.
+pub fn palw_accuser_exposure_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> u128 {
+    state
+        .courts_by_challenger
+        .range((*bond, ZERO_HASH64)..)
+        .take_while(|(challenger, _)| challenger == bond)
+        .filter_map(|(_, session_id)| state.court_sessions.get(session_id))
+        .filter_map(|session| state.claims.get(&session.claim))
+        .map(|claim| claim.reserved)
+        .fold(0u128, u128::saturating_add)
+}
+
+/// **A-6: the room an accuser still has on its free half** — [`palw_bond_free_slashable_v1`] less
+/// [`palw_accuser_exposure_v1`], saturating. Opening a court (or, from M3, a DA session) past the
+/// fence requires its new exposure to fit here: `committed + accuser + new ≤ collateral × 1000‰`.
+pub fn palw_accuser_room_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> u128 {
+    palw_bond_free_slashable_v1(state, params, bond, now_daa, raw_depth).saturating_sub(palw_accuser_exposure_v1(state, bond))
+}
+
+/// **B-3: the withdrawal gate past `palw_rcore_plus`** (the Phase 2 plan §2.3 signature).
+///
+/// `v5(escaped depth) || (rcore && accuser_exposure > 0) || (rcore && payee of an unmatured row)`,
+/// where the escaped depth is computed here from `raw_depth` (I-8). v5's live-duty clause —
+/// `reserved_exposure > 0` or any live lock — IS B-3's first clause under this ledger: past the
+/// fence `reserved_exposure` holds own commitments (the abandon hold included) and duties, and every
+/// lock is live or not on its own clocks; registration exposure is in neither (IMPL-8). Below the
+/// fence this is v5 exactly, with the escape the processor used to compute itself.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_bond_collateral_is_locked_v6(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    now_daa: u64,
+    withdrawal_delay_daa: u64,
+    raw_depth: Option<u64>,
+    duty_gate: bool,
+) -> bool {
+    let rcore = params.rcore_plus_active_at(now_daa);
+    debug_assert!(
+        !rcore || withdrawal_delay_daa == params.withdrawal_delay_daa(),
+        "past R-core+ the processor's withdrawal delay is the mirrored one (DA lattice included)"
+    );
+    let window_court = params.window_court();
+    let escaped = palw_second_clock_depth_v1(raw_depth, &state.recent_anchor_daas, now_daa, window_court);
+    palw_bond_collateral_is_locked_v5(state, key, bond, now_daa, withdrawal_delay_daa, escaped, duty_gate, window_court)
+        || (rcore && palw_accuser_exposure_v1(state, key) > 0)
+        || (rcore && palw_bond_is_payee_of_unmatured_row_v1(state, params, key, now_daa, raw_depth))
+}
+
+/// **B-3's third clause: is `key` the payee of a vesting row not yet mature by V-4(a)?** The body is
+/// the vesting work's (the payee index, O(log n), I-12); S ships `false` so v6 is v5 plus the accuser
+/// clause until it lands.
+pub fn palw_bond_is_payee_of_unmatured_row_v1(
+    _state: &PalwChainStateV2,
+    _params: &PalwStateParamsV2,
+    _key: &PalwBondKeyV2,
+    _now_daa: u64,
+    _raw_depth: Option<u64>,
+) -> bool {
+    false
+}
+
+/// L-1's escrow term, in permille of the vested-but-unbought escrow per load-bearing signer.
+pub const PALW_RCORE_ESCROW_LOCK_PERMILLE_V1: u128 = 100;
+
+/// **L-1: what one counted `Valid` signer locks** — `palw_seat_lock_required_v2(g_res, k′) +
+/// ⌈100‰ · (escrowed_reward − buyback_bound) / k′⌉` with `k′ = max(basis_k, 2)` (Q-3's recount;
+/// `lock_1` is gone: S2 never carries a claim to Final). `g_res` is the residual fraud gain
+/// `palw_max_fraud_gain_v1(facts) − escrowed_reward` (the escrow vests and is burned by a
+/// conviction, so a signer backs only its unvested margin). Saturating.
+pub fn palw_rcore_lock_v1(g_res: u128, escrowed_reward: u64, buyback_bound: u64, basis_k: u8) -> u128 {
+    let k = u64::from(basis_k.max(PALW_RCORE_FINAL_BASIS_K_V1));
+    let vested = u128::from(escrowed_reward.saturating_sub(buyback_bound));
+    let escrow_term = vested.saturating_mul(PALW_RCORE_ESCROW_LOCK_PERMILLE_V1).div_ceil(1_000u128.saturating_mul(u128::from(k)));
+    crate::palw_economic_safety_v1::palw_seat_lock_required_v2(g_res, k).saturating_add(escrow_term)
+}
+
+/// **L-4: what each seat reserves at bind** — `min(max(λ-term, lock_2), commitment_at_bind /
+/// seat_count)`. For an attempt `commitment_at_bind` is `w + E` (`rr` = 0), which is L-4 verbatim;
+/// for a free-prompt claim it is `w + rr`, its forfeit, so `seat_count × duty ≤ forfeit` holds on
+/// both lanes (the ≤ 1 amplification bound, F14). A panel of no seats owes nothing per seat
+/// beyond the whole commitment.
+pub fn palw_rcore_duty_bind_v1(lambda_term: u128, lock_2: u128, commitment_at_bind: u128, seat_count: usize) -> u128 {
+    lambda_term.max(lock_2).min(commitment_at_bind / (seat_count.max(1) as u128))
+}
+
+/// **L-4b, generalized: what a seat must have room for to be drawn and bound** — `max(duty_bind,
+/// lock_2)`. On floor and 8k attempts that is the duty (`lock_2 ≤ duty`); on 2M and on the FP lane
+/// (`lock_2` prices `rr`) it is `lock_2`, so a counted `Valid` is backed by construction.
+pub fn palw_rcore_seat_eligibility_v1(duty_bind: u128, lock_2: u128) -> u128 {
+    duty_bind.max(lock_2)
+}
+
+/// **Q-3's recount** (ADR-0152 v3.1 L1724, verbatim): `min(3, min over segments s of #masks that
+/// cover s)`, where `masks` are the attested masks of the DISTINCT counted `Valid` signers (a V2
+/// receipt carries the full mask, a V3 receipt its own). V1 is `min(3, #Valid)`; coverage in the
+/// shipped geometry is 2; an S2 set of the full seat and one partial is 1. A cut of `0` segments is
+/// read as one segment, so an empty set is `0`, never "every segment vacuously covered".
+pub fn palw_receipt_set_basis_k_v1(masks: &[crate::palw_verification_v2::PalwSegmentMaskV2], segments: u16) -> u8 {
+    let cap = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as usize;
+    let segments = segments.clamp(1, crate::palw_verification_v2::PALW_VERIFICATION_V2_MAX_SEGMENTS);
+    (0..segments).map(|segment| masks.iter().filter(|mask| mask.covers(segment)).count().min(cap)).min().unwrap_or(0) as u8
+}
+
+/// **T-2(c): does a claim count as licensed for the panel room?** `ReceiptLicensed` and, where a
+/// door was recorded (past the fence), a recount of at least [`PALW_RCORE_FINAL_BASIS_K_V1`] — so an
+/// S2 licence keeps its replay charged. Below the fence `licence_door` is never written, so this is
+/// today's rule, `ReceiptLicensed`.
+pub fn palw_rcore_counts_licensed_v1(claim: &PalwClaimStateV2) -> bool {
+    matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })
+        && (claim.rcore.licence_door.is_none() || claim.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1)
+}
+
+/// **C7, the one conservative set** (ADR-0152 SR-5, post-edit 5): a class whose verification window
+/// is at least `PALW_RCORE_C7_WINDOW_SPANS_V1` spans (`palw_panel_held_to_final_v1`, the room's
+/// hold) UNITED with `Params::palw_rcore_conservative_classes` (the mirror). At testnet-12 genesis
+/// both select exactly the 2M row; below the fence the list is empty.
+pub fn palw_rcore_class_is_c7_v1(params: &PalwStateParamsV2, state: &PalwChainStateV2, class_id: &Hash64) -> bool {
+    params.rcore_conservative_classes().contains(class_id)
+        || state.model_lifecycles.get(class_id).is_some_and(crate::palw_work_target_v1::palw_panel_held_to_final_v1)
+}
+
+/// **SR-1 / SR-1b: may this claim's escrow term be released now?** All of:
+/// * the recorded door is Quorum or Coverage (S2 holds; ShardPart is dormant on testnet-12);
+/// * `basis_k ≥ 2` (Q-3);
+/// * every seat of `panels[claim]` served: `served_mask` is the full mask of the panel's seat count
+///   (a carried `Valid` only; ≤ 32 seats, asserted);
+/// * no `Unavailable`/`Incapable` (M4: `Sampled`) was carried (`!unserved_seen`);
+/// * the claim was never redrawn (`rebound_daa` is `None`);
+/// * the class is not C7 ([`palw_rcore_class_is_c7_v1`]; U1: the 2M escrow is held to Final).
+///
+/// A claim without a panel record releases nothing.
+pub fn palw_rcore_release_due_v1(
+    params: &PalwStateParamsV2,
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+) -> bool {
+    use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+    let rcore = &claim.rcore;
+    if !matches!(rcore.licence_door, Some(PalwLicenceDoorTagV1::Quorum | PalwLicenceDoorTagV1::Coverage))
+        || rcore.basis_k < PALW_RCORE_FINAL_BASIS_K_V1
+        || rcore.unserved_seen
+        || claim.rebound_daa.is_some()
+        || palw_rcore_class_is_c7_v1(params, state, &claim.class_id)
+    {
+        return false;
+    }
+    let Some(panel) = state.panels.get(claim_id) else { return false };
+    let seats = panel.seats.len();
+    debug_assert!(seats <= 32, "a served mask is a u32: a panel has at most 32 seats");
+    if seats == 0 || seats > 32 {
+        return false;
+    }
+    rcore.served_mask == crate::palw_verification_v2::PalwSegmentMaskV2::full(seats as u16).0
+}
+
+/// **DL-1 (S's rows): a claim's one deadline**, a pure function of rooted data and the last point's
+/// DAA (`last_daa`, the state's `last_point` at load or the block being folded). These are today's
+/// rows, bit for bit — the bind deadline from the bind base, the receipt deadline, none while a
+/// court is open on a licence, `max(licensed + window_challenge_at(licensed), last)` for a licence,
+/// the disclose deadline, and a terminal record's abandon hold or retirement — so the arm sites,
+/// `rebuild_deadline_index_v2`, `expected_deadline` and `assert_deadline_consistency` can read one
+/// function. M3 adds the DA rows and M4 the `basis_k < 2` row.
+pub fn palw_rcore_deadline_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim_id: &Hash64,
+    claim: &PalwClaimStateV2,
+    last_daa: Option<u64>,
+) -> Result<Option<u64>, PalwStateV2Error> {
+    let open_courts = state.open_courts_by_claim.get(claim_id).copied().unwrap_or(0);
+    Ok(match claim.phase {
+        PalwClaimPhaseV2::Provisional => {
+            Some(claim.bind_base_daa().checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?)
+        }
+        PalwClaimPhaseV2::PanelBound { bound_daa } => Some(
+            bound_daa
+                .checked_add(params.receipt_window_for_claim_v1(state, &claim.class_id, bound_daa))
+                .ok_or(PalwStateV2Error::Overflow("receipt deadline"))?,
+        ),
+        PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => None,
+        PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
+            let floor = licensed_daa
+                .checked_add(params.window_challenge_at(licensed_daa))
+                .ok_or(PalwStateV2Error::Overflow("challenge deadline"))?;
+            Some(floor.max(last_daa.unwrap_or(0)))
+        }
+        PalwClaimPhaseV2::DefaultDisputed { accused_daa, .. } => Some(
+            accused_daa
+                .checked_add(palw_da_disclose_window_daa_v1(params))
+                .ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?,
+        ),
+        PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => terminal_deadline_at_v1(claim, params, last_daa)?,
+    })
+}
+
+/// **§3.6: the key a `CourtConviction` (kind 6) is recorded under** — `H(domain ‖ claim_id)`, one per
+/// claim (the shard-court sites carry no session; S-SPEC P10).
+pub fn palw_court_offence_key_v1(claim_id: &Hash64) -> Hash64 {
+    let mut state = keyed(PALW_COURT_OFFENCE_KEY_DOMAIN_V1);
+    state.update(claim_id.as_byte_slice());
+    finish(state)
+}
+
+/// **R-3: a reporter's commitment** — `H(domain ‖ offence_key ‖ evidence_id ‖ reporter ‖ salt)`. It
+/// binds the consumed evidence's `evidence_id` as well as the key (v3.1 N12), so a commitment to a
+/// predictable ledger id alone cannot win.
+pub fn palw_reporter_commitment_v1(offence_key: &Hash64, evidence_id: &Hash64, reporter: &PalwBondKeyV2, salt: &[u8; 32]) -> Hash64 {
+    let mut state = keyed(PALW_REPORTER_COMMITMENT_DOMAIN_V1);
+    state.update(offence_key.as_byte_slice());
+    state.update(evidence_id.as_byte_slice());
+    state.update(&borsh::to_vec(reporter).expect("a bond key is borsh-serializable"));
+    state.update(salt);
+    finish(state)
+}
+
+/// **R-3: what a reporter signs under `PALW_REPORTER_COMMIT_MLDSA87_CONTEXT`** to post a commitment
+/// (`ReporterCommitted`, tag 53): the message tag, the network, the commitment and the reporter.
+pub fn palw_reporter_commit_message_v1(network_domain: &Hash64, commitment: &Hash64, reporter: &PalwBondKeyV2) -> Vec<u8> {
+    let mut message = PALW_REPORTER_COMMIT_DOMAIN_V1.to_vec();
+    message.extend_from_slice(network_domain.as_byte_slice());
+    message.extend_from_slice(commitment.as_byte_slice());
+    message.extend_from_slice(&borsh::to_vec(reporter).expect("a bond key is borsh-serializable"));
+    message
+}
+
+/// **U2 / B-4: how far a bond's posted collateral is below the producer floor** (S-SPEC §10a;
+/// post-edit 11). `None` = it meets `min_collateral_sompi`, or the fence is dormant at `now_daa`;
+/// `Some(floor)` for a bond the state does not hold; otherwise `Some(floor − posted)`. "Posted" is
+/// the bond's current collateral after slashes (net past `palw_audit_2026_09_23`, as every view
+/// reads it), not its free stake: the floor is a capital predicate on the account, not on its room.
+pub fn palw_bond_producer_floor_shortfall_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+) -> Option<u64> {
+    if !params.rcore_plus_active_at(now_daa) {
+        return None;
+    }
+    let floor = params.min_collateral_sompi();
+    let Some(record) = state.bonds.get(bond) else { return Some(floor) };
+    let posted = if params.bond_collateral_is_net_v1() { record.collateral } else { record.collateral.saturating_sub(record.slashed) };
+    (posted < floor).then(|| floor - posted)
+}
+
+/// [`palw_bond_producer_floor_shortfall_v1`] as a predicate: `true` where it is `None`.
+pub fn palw_bond_meets_producer_floor_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    bond: &PalwBondKeyV2,
+    now_daa: u64,
+) -> bool {
+    palw_bond_producer_floor_shortfall_v1(state, params, bond, now_daa).is_none()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -6164,6 +6576,11 @@ pub enum PalwStateV2Error {
     /// the same object first, so a block carrying one stands.
     #[error("{0} is declared by the v22 layout (ADR-0152 R-core+) and refused until its owner lands it")]
     RcoreObjectNotLanded(&'static str),
+    /// **ADR-0152 U2 (B-4, S-SPEC §10a): a producer whose posted collateral is below the producer
+    /// floor** (`min_collateral_sompi`) past `Params::palw_rcore_plus`. Non-fatal for the block's own
+    /// attempt, as `AttemptExposureCeiling` is: the attempt is skipped and the block stands.
+    #[error("bond {bond:?} posts {collateral} sompi, below the producer floor of {floor}: top up before producing")]
+    ProducerBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -6558,6 +6975,16 @@ pub struct PalwChainStateV2 {
     /// rebuildable from the group records (each carries `assembly_deadline_daa`), so never
     /// serialized and never hashed.
     court_close_deadlines: BTreeSet<(u64, (Hash64, PalwCourtSideV1))>,
+    /// **ADR-0152 A-6 (S-SPEC 1g): `(challenger bond, session)` for every open court** — what
+    /// [`palw_accuser_exposure_v1`] and B-3's accuser clause read in `O(log n)`. Maintained by
+    /// `write_court`, rebuilt from the sessions by every load and delta path, never hashed.
+    courts_by_challenger: BTreeSet<(PalwBondKeyV2, Hash64)>,
+    /// **R-3's per-bond cap (S-SPEC 1g): open reporter commitments per reporter bond.** Maintained by
+    /// the `reporter_commitments` writer, rebuilt from that map, never hashed.
+    commitments_by_reporter: BTreeMap<PalwBondKeyV2, u32>,
+    /// **R-3's prune queue (S-SPEC 1g): `(committed_daa, commitment)`**, so step 2's prune is one range
+    /// cut. Same maintenance as `commitments_by_reporter`.
+    commitments_by_daa: BTreeSet<(u64, Hash64)>,
 }
 
 impl PalwChainStateV2 {
@@ -6645,6 +7072,9 @@ impl PalwChainStateV2 {
             open_courts_by_claim: BTreeMap::new(),
             court_deadlines: BTreeSet::new(),
             court_close_deadlines: BTreeSet::new(),
+            courts_by_challenger: BTreeSet::new(),
+            commitments_by_reporter: BTreeMap::new(),
+            commitments_by_daa: BTreeSet::new(),
         }
     }
 
@@ -8091,6 +8521,11 @@ impl PalwChainStateV2 {
         self.reporter_commitments.get(commitment)
     }
 
+    /// R-3's cap: how many reporter commitments `reporter` holds open (the derived index, S-SPEC 1g).
+    pub fn reporter_open_commitments(&self, reporter: &PalwBondKeyV2) -> u32 {
+        self.commitments_by_reporter.get(reporter).copied().unwrap_or(0)
+    }
+
     /// Row 11: the awarded reporter rewards step 3d has yet to move, in key order.
     pub fn reporter_rewards_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwPayoutV2)> {
         self.reporter_rewards.iter()
@@ -8764,6 +9199,15 @@ impl PalwChainStateV2 {
         if court_close_deadlines != self.court_close_deadlines {
             return Err(PalwStateV2Error::CarriageInconsistent("close-assembly deadline index differs from the groups".into()));
         }
+        // ADR-0152 R-core+ (S-SPEC 1g): the accuser and reporter indexes against the maps they index.
+        if palw_courts_by_challenger_of_v1(&self.court_sessions) != self.courts_by_challenger {
+            return Err(PalwStateV2Error::CarriageInconsistent("court-challenger index differs from the sessions".into()));
+        }
+        if palw_commitment_indexes_of_v1(&self.reporter_commitments)
+            != (self.commitments_by_reporter.clone(), self.commitments_by_daa.clone())
+        {
+            return Err(PalwStateV2Error::CarriageInconsistent("reporter-commitment indexes differ from the commitments".into()));
+        }
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
@@ -9009,12 +9453,22 @@ fn terminal_deadline_of(
     params: &PalwStateParamsV2,
     last_point: Option<&PalwBlockContextV2>,
 ) -> Result<Option<u64>, PalwStateV2Error> {
+    terminal_deadline_at_v1(claim, params, last_point.map(|point| point.daa_score))
+}
+
+/// [`terminal_deadline_of`] on the last point's DAA alone — the form DL-1
+/// ([`palw_rcore_deadline_v1`]) reads, so the two cannot drift.
+fn terminal_deadline_at_v1(
+    claim: &PalwClaimStateV2,
+    params: &PalwStateParamsV2,
+    last_daa: Option<u64>,
+) -> Result<Option<u64>, PalwStateV2Error> {
     let Some(terminal_daa) = terminal_daa_of(claim) else {
         return Ok(None);
     };
     if params.fp_abandon_hold_daa > 0 && abandon_hold_may_hold_a_deadline(claim) {
         let release_at = terminal_daa.checked_add(params.fp_abandon_hold_daa).ok_or(PalwStateV2Error::Overflow("abandon hold"))?;
-        if last_point.is_none_or(|point| point.daa_score <= release_at) {
+        if last_daa.is_none_or(|daa| daa <= release_at) {
             return Ok(Some(release_at));
         }
     }
@@ -10085,6 +10539,15 @@ impl PalwFoldReadV1<'_> {
         counted.saturating_add(u32::from(self.own_attempt_class == Some(*class_id)))
     }
 
+    /// **ADR-0152 T-2(a)'s reading (S-SPEC 1g): `bond`'s claims of `class_id` in flight that do not
+    /// count as licensed** — the tally's `unlicensed_by_bond`, through the same cache as the room.
+    #[allow(dead_code)]
+    fn bond_class_unlicensed(&self, class_id: &Hash64, bond: &PalwBondKeyV2) -> u32 {
+        self.with_inflight_index(|index| {
+            index.get(class_id).and_then(|tally| tally.unlicensed_by_bond.get(bond).copied()).unwrap_or(0)
+        })
+    }
+
     /// Read the in-flight index (audit #13b), building it from the live claims on first use.
     /// Outside the fold (no cache) the index is built for this one read.
     fn with_inflight_index<R>(&self, read: impl FnOnce(&BTreeMap<Hash64, PalwInflightTallyV1>) -> R) -> R {
@@ -10098,6 +10561,13 @@ impl PalwFoldReadV1<'_> {
             None => read(&build()),
         }
     }
+}
+
+/// **ADR-0152 T-2(a) for a reader outside the fold** (S-SPEC 1g): `bond`'s claims of `class_id` in
+/// flight that do not count as licensed ([`palw_rcore_counts_licensed_v1`]), from the index the
+/// fold's room reads, walked from `state`.
+pub fn palw_bond_class_unlicensed_v1(state: &PalwChainStateV2, class_id: &Hash64, bond: &PalwBondKeyV2) -> u32 {
+    palw_inflight_index_build_v1(state).get(class_id).and_then(|tally| tally.unlicensed_by_bond.get(bond).copied()).unwrap_or(0)
 }
 
 /// **What one `Valid` signature on `claim` must lock, as the fold that binds it computes it** —
@@ -10432,7 +10902,7 @@ impl PalwGatedClaimV1 {
 /// One class's claims in flight, by lane — the value `TransitionBuilder::inflight_index` holds.
 /// `u64` so an increment never wraps; readers clamp to `u32` exactly where the walk clamped its
 /// `count()`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PalwInflightTallyV1 {
     attempts: u64,
     free_prompts: u64,
@@ -10444,6 +10914,11 @@ struct PalwInflightTallyV1 {
     licensed_attempts: u64,
     licensed_free_prompts: u64,
     licensed_free_prompt_quanta: u64,
+    /// **ADR-0152 T-2(a)'s index (S-SPEC 1g): this class's claims in flight that do NOT count as
+    /// licensed ([`palw_rcore_counts_licensed_v1`]), per producing bond** — attempts and free-prompt
+    /// claims alike, one per claim. Derived with the rest of the tally (the walk and `write_claim`'s
+    /// note), never hashed; read by the per-bond share (`⌈c_class / 2⌉`).
+    unlicensed_by_bond: BTreeMap<PalwBondKeyV2, u32>,
 }
 
 impl PalwInflightTallyV1 {
@@ -10503,6 +10978,14 @@ fn palw_inflight_index_note_v1(index: &mut BTreeMap<Hash64, PalwInflightTallyV1>
     }
     if licensed {
         *licensed_slot = if add { licensed_slot.saturating_add(1) } else { licensed_slot.saturating_sub(1) };
+    }
+    // ADR-0152 T-2(a) (S-SPEC 1g): the per-bond unlicensed count, on T-2(c)'s licence predicate.
+    if !palw_rcore_counts_licensed_v1(claim) {
+        let count = tally.unlicensed_by_bond.entry(claim.bond).or_insert(0);
+        *count = if add { count.saturating_add(1) } else { count.saturating_sub(1) };
+        if *count == 0 {
+            tally.unlicensed_by_bond.remove(&claim.bond);
+        }
     }
     if let Some(quanta) = quanta {
         tally.free_prompt_quanta =
@@ -11529,6 +12012,50 @@ impl<'a> TransitionBuilder<'a> {
             }
         };
         self.entries.push(PalwDeltaEntryV2::PanelLiability { key, old, new });
+    }
+
+    /// **R-3's open commitments** (ADR §6 row 13): the one writer of `reporter_commitments`, keeping
+    /// both derived indexes (S-SPEC 1g) in lockstep with the map. S-1 lands it with its indexes;
+    /// the reporter objects (tags 53/54) and step 2's prune are its callers.
+    #[allow(dead_code)]
+    fn write_reporter_commit(&mut self, key: Hash64, new: Option<PalwReporterCommitV1>) {
+        let old = match new {
+            Some(record) => self.state.reporter_commitments.insert(key, record),
+            None => self.state.reporter_commitments.remove(&key),
+        };
+        if old == new {
+            return;
+        }
+        if let Some(previous) = &old {
+            self.state.commitments_by_daa.remove(&(previous.committed_daa, key));
+            if let Some(count) = self.state.commitments_by_reporter.get_mut(&previous.reporter) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    self.state.commitments_by_reporter.remove(&previous.reporter);
+                }
+            }
+        }
+        if let Some(record) = &new {
+            self.state.commitments_by_daa.insert((record.committed_daa, key));
+            let count = self.state.commitments_by_reporter.entry(record.reporter).or_insert(0);
+            *count = count.saturating_add(1);
+        }
+        self.entries.push(PalwDeltaEntryV2::ReporterCommit { key, old, new });
+    }
+
+    /// **The vesting work's burn hook** (S-SPEC §2, P5): burn `claim_id`'s vesting row for a
+    /// conviction and say how much it held — `Some(burned)` iff a row existed and is now deleted
+    /// (S3's once-per-claim marker), `None` for no row (a free-prompt claim, a row already moved or
+    /// already burned). The body is the vesting work's, which also emits `VestingNote::Burned`; S
+    /// ships `Ok(None)` and the conviction funnel (S-4) is its caller.
+    #[allow(dead_code)]
+    fn burn_vesting_row(
+        &mut self,
+        _claim_id: Hash64,
+        _offence_id: Hash64,
+        _kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    ) -> Result<Option<u64>, PalwStateV2Error> {
+        Ok(None)
     }
 
     /// [`PalwFoldReadV1::panel_valid_lock_required`], on this fold's inputs.
@@ -14083,6 +14610,13 @@ impl<'a> TransitionBuilder<'a> {
             let next = court_next_deadline_v2(&self.state, record);
             self.state.court_deadlines.insert((next, key));
         }
+        // ADR-0152 A-6 (S-SPEC 1g): the challenger index follows the session, old out, new in.
+        if let Some(previous) = &old {
+            self.state.courts_by_challenger.remove(&(previous.challenger_bond, key));
+        }
+        if let Some(record) = &new {
+            self.state.courts_by_challenger.insert((record.challenger_bond, key));
+        }
         let removed = new.is_none();
         self.entries.push(PalwDeltaEntryV2::Court { key, old, new });
         // **ADR-0080 design A: a close group is a row ABOUT a session, so it dies with it.**
@@ -15677,6 +16211,25 @@ pub fn apply_palw_transition_v7(
     }
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: parent.last_point, new: Some(*ctx) });
     builder.state.last_point = Some(*ctx);
+
+    // ADR-0152 R-core+ (S-SPEC §4): the derived indexes the writers maintain incrementally are the
+    // ones a load or a delta rebuilds — checked in debug builds after every block.
+    #[cfg(debug_assertions)]
+    {
+        debug_assert_eq!(
+            palw_courts_by_challenger_of_v1(&builder.state.court_sessions),
+            builder.state.courts_by_challenger,
+            "the court-challenger index drifted"
+        );
+        debug_assert_eq!(
+            palw_commitment_indexes_of_v1(&builder.state.reporter_commitments),
+            (builder.state.commitments_by_reporter.clone(), builder.state.commitments_by_daa.clone()),
+            "the reporter-commitment indexes drifted"
+        );
+        if let Some(cached) = builder.inflight_index.get_mut().as_ref() {
+            debug_assert_eq!(*cached, palw_inflight_index_build_v1(&builder.state), "the in-flight index drifted from its walk");
+        }
+    }
 
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
     Ok((builder.state, delta, merged_skips))
@@ -22715,6 +23268,32 @@ fn rebuild_deadline_free_indices(state: &mut PalwChainStateV2) {
     state.court_deadlines = court_deadlines;
     state.open_courts_by_claim = open_courts;
     state.court_close_deadlines = state.court_close_groups.iter().map(|(key, group)| (group.assembly_deadline_daa, *key)).collect();
+    // ADR-0152 R-core+ (S-SPEC 1g): the accuser and reporter indexes, from the maps they summarize.
+    state.courts_by_challenger = palw_courts_by_challenger_of_v1(&state.court_sessions);
+    let (by_reporter, by_daa) = palw_commitment_indexes_of_v1(&state.reporter_commitments);
+    state.commitments_by_reporter = by_reporter;
+    state.commitments_by_daa = by_daa;
+}
+
+/// `(challenger, session)` for every open court — the one derivation `rebuild_deadline_free_indices`
+/// and the consistency check share (S-SPEC 1g).
+fn palw_courts_by_challenger_of_v1(sessions: &BTreeMap<Hash64, PalwCourtSessionStateV2>) -> BTreeSet<(PalwBondKeyV2, Hash64)> {
+    sessions.iter().map(|(id, session)| (session.challenger_bond, *id)).collect()
+}
+
+/// The two reporter-commitment indexes of R-3 (S-SPEC 1g), from the rooted map alone.
+#[allow(clippy::type_complexity)]
+fn palw_commitment_indexes_of_v1(
+    commitments: &BTreeMap<Hash64, PalwReporterCommitV1>,
+) -> (BTreeMap<PalwBondKeyV2, u32>, BTreeSet<(u64, Hash64)>) {
+    let mut by_reporter: BTreeMap<PalwBondKeyV2, u32> = BTreeMap::new();
+    let mut by_daa = BTreeSet::new();
+    for (commitment, record) in commitments {
+        let count = by_reporter.entry(record.reporter).or_insert(0);
+        *count = count.saturating_add(1);
+        by_daa.insert((record.committed_daa, *commitment));
+    }
+    (by_reporter, by_daa)
 }
 
 /// Rebuild ALL indices from primary data. The deadline index needs params (window arithmetic);
@@ -23037,6 +23616,31 @@ const PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1: u8 = 0xB3;
 /// counters, once any is non-empty or non-zero. Rooted. Absent on every chain until the writers
 /// land, so a carriage without R-core+ data is byte-identical to one before this tail existed.
 const PALW_CARRIAGE_RCORE_PLUS_TAIL_V1: u8 = 0xB4;
+
+/// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
+/// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
+/// snapshot written by another `PALW_STATE_V2_VERSION` has other record layouts, so decoding it fails
+/// deep inside some map with a message that names neither version. `None` for fewer than two bytes.
+pub fn palw_carriage_version_of_v1(carriage_borsh: &[u8]) -> Option<u16> {
+    Some(u16::from_le_bytes([*carriage_borsh.first()?, *carriage_borsh.get(1)?]))
+}
+
+/// **ADR-0152 T80: the startup refusal for a datadir this build cannot fold** — `Some(why)` when the
+/// stored carriage is not at [`PALW_STATE_V2_VERSION`], naming both versions and what to do (a
+/// testnet-11 datadir, version 20, belongs to the `main` binary `1f98d3bf`; this build is v22's).
+/// `None` when the version matches (the full decode and the consistency checks still follow).
+pub fn palw_carriage_version_refusal_v1(carriage_borsh: &[u8]) -> Option<String> {
+    let found = palw_carriage_version_of_v1(carriage_borsh);
+    if found == Some(PALW_STATE_V2_VERSION) {
+        return None;
+    }
+    let found = found.map_or_else(|| "unreadable".to_string(), |v| v.to_string());
+    Some(format!(
+        "this datadir holds PALW state carriage version {found}, and this build folds only version {PALW_STATE_V2_VERSION} \
+         (ADR-0152 R-core+, testnet-12). A state is never migrated in place: a testnet-11 datadir (version 20) runs on the \
+         `main` binary 1f98d3bf; for this build's network, wipe the datadir and resync from peers announcing its fingerprint"
+    ))
+}
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -23705,6 +24309,9 @@ impl PalwStateCarriageV2 {
             open_courts_by_claim: BTreeMap::new(),
             court_deadlines: BTreeSet::new(),
             court_close_deadlines: BTreeSet::new(),
+            courts_by_challenger: BTreeSet::new(),
+            commitments_by_reporter: BTreeMap::new(),
+            commitments_by_daa: BTreeSet::new(),
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
@@ -48303,6 +48910,8 @@ pub(crate) mod tests {
             s.reporter_counters = PalwReporterCountersV1 { awarded_sompi: 7, forgone_sompi: 8 };
             s.vesting.insert(h64(0x7101), vesting_row(h64(0x7101)));
             s.vesting_counters = PalwVestingCountersV1 { created: 9, moved: 10, burned: 11 };
+            // S-1: the derived indexes over what was just inserted, as any load would build them.
+            rebuild_deadline_free_indices(&mut s);
             s
         }
 
@@ -48676,6 +49285,567 @@ pub(crate) mod tests {
             assert_eq!(bytes, borsh::to_vec(&p).unwrap(), "the mirrors are not in the bundle's bytes");
             let decoded: PalwStateParamsV2 = borsh::from_slice(&bytes).unwrap();
             assert_eq!(decoded, p, "and decode to the dormant values");
+        }
+    }
+
+    /// **ADR-0152 v3.1 R-core+, S-1: the one ledger's API** (S-SPEC §2, §10a) — each function against
+    /// hand-built states, and the ones that re-state a rule the fold already runs (v6 below the fence,
+    /// DL-1's rows) against that rule.
+    mod rcore_s1_api {
+        use super::*;
+        use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+        use crate::palw_panel_var_v1::PalwSlashableLockV1;
+        use crate::palw_verification_v2::PalwSegmentMaskV2;
+
+        const W: u128 = 50;
+        const ESC: u64 = 700;
+
+        /// testnet-12's shape in miniature: the escrow reserved from genesis (option A), the ceiling
+        /// at 500‰, a 600-DAA free-prompt abandon hold, and R-core+ armed at genesis with C7 = h64(0x2B).
+        fn rcore_params() -> PalwStateParamsV2 {
+            PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 600)
+                .unwrap()
+                .with_fp_exposure_ceiling(500)
+                .unwrap()
+                .with_escrow_backed_exposure_from_daa(Some(0))
+                .with_rcore_plus_mirrors(Some(0), 12_900, vec![h64(0x2B)])
+        }
+
+        /// The same bundle with the fence dormant (every other network's shape).
+        fn dormant_params() -> PalwStateParamsV2 {
+            rcore_params().with_rcore_plus_mirrors(None, 0, Vec::new())
+        }
+
+        fn claim(phase: PalwClaimPhaseV2) -> PalwClaimStateV2 {
+            PalwClaimStateV2 {
+                source: PalwClaimSourceV2::Attempt,
+                class_id: h64(0xC1),
+                bond: bond_key(1),
+                pwu: 10,
+                accepted_daa: 100,
+                rebound_daa: None,
+                accepted_blue_score: 100,
+                accepted_block: block(100),
+                trace_root: h64(31),
+                output_root: h64(32),
+                execution_root: h64(41),
+                trace_chunk_count: 4,
+                trace_retention_daa: 999_999,
+                reserved: W,
+                immature_contribution: 0,
+                escrowed_reward: ESC,
+                work_leaves: 0,
+                work_id: None,
+                phase,
+                rights_reserved: 0,
+                job_identity: Hash64::default(),
+                rcore: PalwClaimRcoreV1::default(),
+            }
+        }
+
+        fn bond(collateral: u64, status: PalwBondStatusV2) -> PalwBondStateV2 {
+            PalwBondStateV2 {
+                pubkey: vec![7; 4],
+                operator_id: op_id(21),
+                collateral,
+                slashed: 0,
+                status,
+                registered_daa: 0,
+                payout_payload: h64(0x9A11),
+                capable_classes: Default::default(),
+            }
+        }
+
+        fn lock(claim_id: Hash64, amount: u128, expiry_daa: u64) -> PalwSlashableLockV1 {
+            PalwSlashableLockV1 {
+                claim: claim_id,
+                amount,
+                expiry_daa,
+                settled_at_final: 0,
+                attested: PalwSegmentMaskV2::NONE,
+                segments: 0,
+            }
+        }
+
+        fn ladder() -> crate::palw_bisect::PalwBisectLadderV1 {
+            crate::palw_bisect::PalwBisectLadderV1::open(
+                &h64(0x31),
+                &h64(0x32),
+                &h64(0x33),
+                &h64(0x34),
+                crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+                8,
+                20,
+                24,
+            )
+            .unwrap()
+        }
+
+        fn licensed(door: PalwLicenceDoorTagV1, basis_k: u8, served_mask: u32) -> PalwClaimStateV2 {
+            let mut c = claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 });
+            c.rcore =
+                PalwClaimRcoreV1 { licence_door: Some(door), basis_k, escrow_released: false, served_mask, unserved_seen: false };
+            c
+        }
+
+        fn panel(seats: u64) -> PalwPanelStateV2 {
+            PalwPanelStateV2 {
+                anchor: h64(77),
+                seats: (0..seats).map(|n| PalwPanelSeatV2 { bond: bond_key(10 + n), operator_id: op_id(30 + n) }).collect(),
+                bound_daa: 110,
+            }
+        }
+
+        /// **SR-1's table, row by row** — and below the fence (no escrow term, the flag never set) the
+        /// same expression the ledger has always reserved.
+        #[test]
+        fn the_commitment_is_sr1s_table() {
+            let p = rcore_params();
+            let full = W + ESC as u128;
+            for phase in [
+                PalwClaimPhaseV2::Provisional,
+                PalwClaimPhaseV2::PanelBound { bound_daa: 110 },
+                PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 },
+                PalwClaimPhaseV2::DefaultDisputed {
+                    accused_daa: 121,
+                    missing_event_index: 0,
+                    accuser: bond_key(2),
+                    accuser_exposure: 1,
+                    resumed: Box::new(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 }),
+                },
+            ] {
+                let mut c = claim(phase.clone());
+                assert_eq!(palw_claim_commitment_v1(&p, &c, 130), Some(full), "{phase:?}, held");
+                assert_eq!(palw_claim_commitment_v1(&p, &c, 130), palw_claim_bond_reservation_v1(&p, &c), "held = today's term");
+                c.rcore.escrow_released = true;
+                assert_eq!(palw_claim_commitment_v1(&p, &c, 130), Some(W), "{phase:?}, released");
+            }
+            let mut fin = claim(PalwClaimPhaseV2::Final { final_daa: 140 });
+            fin.rcore.escrow_released = true;
+            assert_eq!(palw_claim_commitment_v1(&p, &fin, 140), Some(0));
+            for reason in [PalwVoidReasonV2::CourtFraud, PalwVoidReasonV2::ReceiptTimeout, PalwVoidReasonV2::BindTimeout] {
+                let v = claim(PalwClaimPhaseV2::Voided { voided_daa: 140, reason });
+                assert_eq!(palw_claim_commitment_v1(&p, &v, 140), Some(0), "{reason:?}: an attempt holds nothing once voided");
+            }
+            // C2's abandon hold: a free-prompt BindTimeout holds `w + rr` through `voided + 600`
+            // inclusive (the sweep's boundary) and nothing after.
+            let mut fp = claim(PalwClaimPhaseV2::Voided { voided_daa: 140, reason: PalwVoidReasonV2::BindTimeout });
+            fp.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
+            fp.escrowed_reward = 0;
+            fp.rights_reserved = 900;
+            assert_eq!(palw_claim_commitment_v1(&p, &fp, 740), Some(W + 900), "on its hold at release_at");
+            assert_eq!(palw_claim_commitment_v1(&p, &fp, 741), Some(0), "released one DAA later");
+            // Dormant (below option A's height the escrow term is 0): the flag cannot move anything.
+            let q = dormant_params().with_escrow_backed_exposure_from_daa(None);
+            let mut c = claim(PalwClaimPhaseV2::Provisional);
+            assert_eq!(palw_claim_commitment_v1(&q, &c, 130), Some(W));
+            c.rcore.escrow_released = true;
+            assert_eq!(palw_claim_commitment_v1(&q, &c, 130), Some(W));
+        }
+
+        /// A bond with every term of A-1: its own ledger, a registration, a lock beside a larger duty,
+        /// a lock above its duty, a lock with no duty, an expired lock and another bond's lock.
+        fn ledger_state() -> PalwChainStateV2 {
+            let mut s = PalwChainStateV2::genesis();
+            let b = bond_key(1);
+            s.bonds.insert(b, bond(5_000, PalwBondStatusV2::Active));
+            s.bonds.insert(bond_key(2), bond(5_000, PalwBondStatusV2::Active));
+            s.reserved_exposure.insert(b, 1_000);
+            s.registration_exposure.insert(b, 200);
+            s.panel_duties.insert(h64(0xD1), PalwPanelDutyRowV1 { seats: [(b, 0)].into_iter().collect(), seat_exposure: 250 });
+            s.panel_duties.insert(h64(0xD2), PalwPanelDutyRowV1 { seats: [(b, 0)].into_iter().collect(), seat_exposure: 400 });
+            s.slashable_locks.insert((b, h64(0xD1)), lock(h64(0xD1), 300, 10_000)); // excess 50
+            s.slashable_locks.insert((b, h64(0xD2)), lock(h64(0xD2), 100, 10_000)); // under its duty: 0
+            s.slashable_locks.insert((b, h64(0xD3)), lock(h64(0xD3), 120, 10_000)); // no duty: 120
+            s.slashable_locks.insert((b, h64(0xD4)), lock(h64(0xD4), 999, 100)); // expired by now
+            s.slashable_locks.insert((bond_key(2), h64(0xD1)), lock(h64(0xD1), 777, 10_000)); // someone else's
+            s
+        }
+
+        /// **A-1's number, term by term**, and the three views built on it.
+        #[test]
+        fn committed_is_own_ledger_plus_registration_plus_live_lock_excess_over_duty() {
+            let p = rcore_params();
+            let s = ledger_state();
+            let b = bond_key(1);
+            assert_eq!(palw_bond_committed_v1(&s, &b, 1_000, None, p.window_court()), 1_000 + 200 + 50 + 120);
+            assert_eq!(palw_bond_committed_raw_v1(&s, &p, &b, 1_000, None), 1_370);
+            // Free slashable is the posted collateral less that (net: option A is armed).
+            assert_eq!(palw_bond_free_slashable_v1(&s, &p, &b, 1_000, None), 5_000 - 1_370);
+            // Headroom is the 500‰ ceiling less it.
+            assert_eq!(palw_bond_headroom_v1(&s, &p, &b, 1_000, None), 2_500 - 1_370);
+            // A missing bond has nothing.
+            assert_eq!(palw_bond_free_slashable_v1(&s, &p, &bond_key(9), 1_000, None), 0);
+            assert_eq!(palw_bond_headroom_v1(&s, &p, &bond_key(9), 1_000, None), 0);
+            // A duty row whose claim is `b`'s own lock but which does not seat `b` subtracts nothing.
+            let mut t = s.clone();
+            t.panel_duties
+                .insert(h64(0xD3), PalwPanelDutyRowV1 { seats: [(bond_key(2), 0)].into_iter().collect(), seat_exposure: 120 });
+            assert_eq!(palw_bond_committed_v1(&t, &b, 1_000, None, p.window_court()), 1_370);
+            // The expired lock is live again under the second clock while no anchor has settled
+            // since it began and the escape has not fired (the raw depth, escaped here).
+            let mut u = s.clone();
+            u.recent_anchor_daas = vec![900];
+            u.settled_attempt_finals = 1;
+            assert_eq!(palw_bond_committed_raw_v1(&u, &p, &b, 1_000, Some(5)), 1_370 + 999, "held by the second clock");
+            assert_eq!(palw_bond_committed_raw_v1(&u, &p, &b, 1_000 + 2 * p.window_court(), Some(5)), 1_370, "escaped");
+        }
+
+        /// **A-6: an accuser's exposure is its open courts' `reserved`, read by the challenger index**,
+        /// and its room is the free half less that.
+        #[test]
+        fn accuser_exposure_reads_the_challenger_index_and_the_room_is_the_free_half_less_it() {
+            let p = rcore_params();
+            let mut s = ledger_state();
+            let b = bond_key(1);
+            let mut courted = claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 });
+            courted.reserved = 77;
+            s.claims.insert(h64(0xE1), courted);
+            let extras = PalwTransitionExtrasV1::default();
+            let mut b_builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
+            let session = PalwCourtSessionStateV2 {
+                claim: h64(0xE1),
+                challenger_bond: b,
+                opened_daa: 20,
+                deadline_daa: 520,
+                ladder: ladder(),
+                dissection: None,
+            };
+            b_builder.write_court(h64(0xE2), Some(session)).unwrap();
+            let s2 = b_builder.state.clone();
+            assert_eq!(palw_accuser_exposure_v1(&s2, &b), 77);
+            assert_eq!(palw_accuser_exposure_v1(&s2, &bond_key(2)), 0);
+            let free = palw_bond_free_slashable_v1(&s2, &p, &b, 1_000, None);
+            assert_eq!(palw_accuser_room_v1(&s2, &p, &b, 1_000, None), free - 77);
+            // The index the writer kept is the one a load rebuilds.
+            let mut rebuilt = s2.clone();
+            rebuild_deadline_free_indices(&mut rebuilt);
+            assert_eq!(rebuilt.courts_by_challenger, s2.courts_by_challenger);
+            // Closing the session drops it from the index.
+            b_builder.write_court(h64(0xE2), None).unwrap();
+            assert_eq!(palw_accuser_exposure_v1(&b_builder.state, &b), 0);
+            assert!(b_builder.state.courts_by_challenger.is_empty());
+        }
+
+        /// **B-3: v6 is v5 below the fence, on every bond of a varied state** (T23's fold half, as a
+        /// property over hand-made states), and past it adds the accuser clause.
+        #[test]
+        fn v6_is_v5_below_the_fence_and_adds_the_accuser_clause_past_it() {
+            let dormant = dormant_params();
+            let armed = rcore_params();
+            let mut s = ledger_state();
+            s.recent_anchor_daas = vec![300, 900];
+            s.settled_attempt_finals = 4;
+            let retiring = |since| PalwBondStatusV2::Retiring { since_daa: since, settled_at_since: 1 };
+            for (n, status) in [(3u64, retiring(0)), (4, retiring(990)), (5, PalwBondStatusV2::Active), (6, retiring(100))] {
+                s.bonds.insert(bond_key(n), bond(1_000, status));
+            }
+            s.reserved_exposure.insert(bond_key(6), 5);
+            let delay = 12_900;
+            for now in [1_000u64, 14_000, 20_000] {
+                for raw in [None, Some(3), Some(10)] {
+                    for duty_gate in [false, true] {
+                        for (key, record) in s.bonds.iter() {
+                            let escaped = palw_second_clock_depth_v1(raw, &s.recent_anchor_daas, now, dormant.window_court());
+                            let v5 = palw_bond_collateral_is_locked_v5(
+                                &s,
+                                key,
+                                record,
+                                now,
+                                delay,
+                                escaped,
+                                duty_gate,
+                                dormant.window_court(),
+                            );
+                            let v6 = palw_bond_collateral_is_locked_v6(&s, &dormant, key, record, now, delay, raw, duty_gate);
+                            assert_eq!(v6, v5, "below the fence: {key:?} now={now} raw={raw:?} gate={duty_gate}");
+                            let v6_armed = palw_bond_collateral_is_locked_v6(&s, &armed, key, record, now, delay, raw, duty_gate);
+                            assert_eq!(v6_armed, v5, "past it with no court and no row: {key:?}");
+                        }
+                    }
+                }
+            }
+            // A retired-and-released bond that holds an open court is locked past the fence only.
+            let key = bond_key(3);
+            let record = s.bonds.get(&key).unwrap().clone();
+            let mut courted = claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 });
+            courted.reserved = 9;
+            s.claims.insert(h64(0xE1), courted);
+            s.court_sessions.insert(
+                h64(0xE2),
+                PalwCourtSessionStateV2 {
+                    claim: h64(0xE1),
+                    challenger_bond: key,
+                    opened_daa: 20,
+                    deadline_daa: 520,
+                    ladder: ladder(),
+                    dissection: None,
+                },
+            );
+            rebuild_deadline_free_indices(&mut s);
+            assert!(!palw_bond_collateral_is_locked_v6(&s, &dormant, &key, &record, 20_000, delay, None, true), "below: v5 only");
+            assert!(
+                palw_bond_collateral_is_locked_v6(&s, &armed, &key, &record, 20_000, delay, None, true),
+                "past: the accuser clause holds it"
+            );
+            assert!(
+                !palw_bond_is_payee_of_unmatured_row_v1(&s, &armed, &key, 20_000, None),
+                "the payee clause is the vesting work's stub"
+            );
+        }
+
+        /// **L-1, L-4 and L-4b's prices** by hand, and `k′ = max(basis_k, 2)`: no lock is priced at 1.
+        #[test]
+        fn the_lock_the_duty_and_the_eligibility_are_the_adrs_formulas() {
+            // lock_3: (300/3 + 1) · 1.1 = 111, plus ⌈100‰ · (1000 − 100) / 3⌉ = 30.
+            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 3), 141);
+            // lock_2: (300/2 + 1) · 1.1 = 166, plus ⌈100‰ · 900 / 2⌉ = 45.
+            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 2), 211);
+            for k in [0u8, 1] {
+                assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, k), 211, "k = {k} prices at 2");
+            }
+            assert_eq!(palw_rcore_lock_v1(300, 1_000, 100, 7), palw_rcore_lock_v1(300, 1_000, 100, 7), "deterministic");
+            assert_eq!(palw_rcore_lock_v1(300, 50, 100, 2), 166, "a buyback above the escrow leaves no escrow term");
+            assert_eq!(palw_rcore_lock_v1(300, 1_001, 0, 3), 111 + 34, "the escrow term rounds up");
+            // duty_bind = min(max(λ, lock_2), commitment / seats), never over the commitment (≤ 1).
+            assert_eq!(palw_rcore_duty_bind_v1(256, 160, 3_201, 5), 256, "floor: λ binds");
+            assert_eq!(palw_rcore_duty_bind_v1(100, 459, 3_201, 5), 459, "8k: lock_2 binds");
+            assert_eq!(palw_rcore_duty_bind_v1(100, 33_379, 62_943, 5), 12_588, "2M: the cap binds");
+            assert_eq!(palw_rcore_duty_bind_v1(100, 33_379, 62_943, 0), 33_379, "no seats: the whole commitment caps it");
+            for (lambda, lock2, commit, n) in [(256u128, 160u128, 3_201u128, 5usize), (1, 459, 3_201, 5), (1, 33_379, 62_943, 5)] {
+                assert!(palw_rcore_duty_bind_v1(lambda, lock2, commit, n) * n as u128 <= commit, "the ≤ 1 bound");
+            }
+            assert_eq!(palw_rcore_seat_eligibility_v1(256, 160), 256);
+            assert_eq!(palw_rcore_seat_eligibility_v1(12_588, 33_379), 33_379);
+        }
+
+        /// **Q-3's recount over the shipped geometries**: V1 is `min(3, #Valid)`, coverage is 2, an
+        /// S2 set of the full seat and one partial is 1, nothing is 0.
+        #[test]
+        fn the_recount_is_q3s_function() {
+            let full = PalwSegmentMaskV2::full(4);
+            assert_eq!(palw_receipt_set_basis_k_v1(&[full; 5], 4), 3, "five full: capped at 3");
+            assert_eq!(palw_receipt_set_basis_k_v1(&[full; 3], 4), 3);
+            assert_eq!(palw_receipt_set_basis_k_v1(&[full; 2], 4), 2);
+            let coverage: Vec<PalwSegmentMaskV2> = std::iter::once(full).chain((0..4).map(PalwSegmentMaskV2::single)).collect();
+            assert_eq!(palw_receipt_set_basis_k_v1(&coverage, 4), 2, "the full seat plus each segment's unique holder");
+            assert_eq!(palw_receipt_set_basis_k_v1(&[full, PalwSegmentMaskV2::single(0)], 4), 1, "S2: the full seat and one partial");
+            assert_eq!(palw_receipt_set_basis_k_v1(&[PalwSegmentMaskV2::single(0); 3], 4), 0, "a segment nobody attested");
+            assert_eq!(palw_receipt_set_basis_k_v1(&[], 4), 0);
+            assert_eq!(palw_receipt_set_basis_k_v1(&[], 0), 0, "zero segments is one segment, not a vacuous 3");
+            assert_eq!(palw_receipt_set_basis_k_v1(&[full; 2], 0), 2);
+        }
+
+        /// **T-2(c)'s predicate and SR-1's release, one condition at a time.**
+        #[test]
+        fn counts_licensed_and_release_due_are_the_adrs_conditions() {
+            let p = rcore_params();
+            let mut s = PalwChainStateV2::genesis();
+            s.panels.insert(h64(0xA0), panel(5));
+            let all = 0b1_1111u32;
+            let good = licensed(PalwLicenceDoorTagV1::Quorum, 3, all);
+            assert!(palw_rcore_counts_licensed_v1(&good));
+            assert!(palw_rcore_release_due_v1(&p, &s, &h64(0xA0), &good));
+            assert!(palw_rcore_release_due_v1(&p, &s, &h64(0xA0), &licensed(PalwLicenceDoorTagV1::Coverage, 2, all)));
+            // The licence predicate: no door recorded (below the fence) counts as today's rule.
+            assert!(palw_rcore_counts_licensed_v1(&claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1 })));
+            assert!(!palw_rcore_counts_licensed_v1(&licensed(PalwLicenceDoorTagV1::Optimistic, 1, 1)), "S2 stays charged");
+            assert!(!palw_rcore_counts_licensed_v1(&claim(PalwClaimPhaseV2::PanelBound { bound_daa: 1 })));
+            // Each release condition, broken alone.
+            let mut cases: Vec<(&str, PalwClaimStateV2)> = vec![
+                ("S2 door", licensed(PalwLicenceDoorTagV1::Optimistic, 3, all)),
+                ("shard door", licensed(PalwLicenceDoorTagV1::ShardPart { quorum_per_shard: 3 }, 3, all)),
+                ("basis 1", licensed(PalwLicenceDoorTagV1::Coverage, 1, all)),
+                ("a seat unserved", licensed(PalwLicenceDoorTagV1::Quorum, 3, 0b0_1111)),
+            ];
+            let mut unserved = good.clone();
+            unserved.rcore.unserved_seen = true;
+            cases.push(("an Unavailable carried", unserved));
+            let mut redrawn = good.clone();
+            redrawn.rebound_daa = Some(105);
+            cases.push(("redrawn", redrawn));
+            let mut c7 = good.clone();
+            c7.class_id = h64(0x2B);
+            cases.push(("C7 by the list", c7));
+            let mut no_door = good.clone();
+            no_door.rcore.licence_door = None;
+            cases.push(("no door", no_door));
+            for (why, c) in &cases {
+                assert!(!palw_rcore_release_due_v1(&p, &s, &h64(0xA0), c), "{why} holds the escrow");
+            }
+            assert!(!palw_rcore_release_due_v1(&p, &s, &h64(0xA9), &good), "no panel record releases nothing");
+            // C7 by the window rule (the room's hold): a lifecycle row of ≥ 1,000 spans.
+            let mut t = s.clone();
+            let row = crate::palw_model_registry_v1::PalwModelLifecycleRowV1 {
+                state: crate::palw_model_registry_v1::PalwModelLifecycleV1::Probation { probes_passed: 0 },
+                work: Default::default(),
+                profile: crate::palw_model_registry_v1::PalwDerivedProfileV1 {
+                    verification_window_spans: crate::palw_work_target_v1::PALW_RCORE_C7_WINDOW_SPANS_V1,
+                    ..Default::default()
+                },
+                since_span: 0,
+                probes_passed: 0,
+                probes_failed: 0,
+                probes_passed_this_span: 0,
+                probes_failed_this_span: 0,
+                ready_seats: 0,
+                inflight_claims: 0,
+                utilization_permille: 0,
+                admission_milli: 0,
+                cap_utilization_permille: 0,
+                priced_share_permille: 0,
+            };
+            t.model_lifecycles.insert(h64(0xC1), row);
+            assert!(palw_rcore_class_is_c7_v1(&p, &t, &h64(0xC1)));
+            assert!(!palw_rcore_release_due_v1(&p, &t, &h64(0xA0), &good), "C7 by the window rule");
+        }
+
+        /// **DL-1's rows are today's rows**: over a state holding every phase, the function
+        /// reproduces the index `rebuild_deadline_index_v2` builds.
+        #[test]
+        fn dl1_reproduces_todays_deadline_index() {
+            let p = rcore_params().with_claim_retirement_daa(2_000).unwrap();
+            let mut s = PalwChainStateV2::genesis();
+            s.last_point = Some(ctx(5, 700, 700));
+            let mut claims = vec![
+                (h64(0xF1), claim(PalwClaimPhaseV2::Provisional)),
+                (h64(0xF2), claim(PalwClaimPhaseV2::PanelBound { bound_daa: 110 })),
+                (h64(0xF3), claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 })),
+                (h64(0xF4), claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 690 })),
+                (h64(0xF5), claim(PalwClaimPhaseV2::Final { final_daa: 200 })),
+                (h64(0xF6), claim(PalwClaimPhaseV2::Voided { voided_daa: 300, reason: PalwVoidReasonV2::CourtFraud })),
+            ];
+            let mut redrawn = claim(PalwClaimPhaseV2::Provisional);
+            redrawn.rebound_daa = Some(650);
+            claims.push((h64(0xF7), redrawn));
+            for voided in [150u64, 50] {
+                let mut fp = claim(PalwClaimPhaseV2::Voided { voided_daa: voided, reason: PalwVoidReasonV2::BindTimeout });
+                fp.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
+                claims.push((h64(0xF8 + voided), fp));
+            }
+            claims.push((
+                h64(0xFA),
+                claim(PalwClaimPhaseV2::DefaultDisputed {
+                    accused_daa: 680,
+                    missing_event_index: 0,
+                    accuser: bond_key(2),
+                    accuser_exposure: 0,
+                    resumed: Box::new(PalwClaimPhaseV2::PanelBound { bound_daa: 110 }),
+                }),
+            ));
+            for (id, c) in claims {
+                s.claims.insert(id, c);
+            }
+            rebuild_deadline_free_indices(&mut s);
+            rebuild_deadline_index_v2(&mut s, &p).unwrap();
+            let last = s.last_point.map(|point| point.daa_score);
+            let mut dl1 = BTreeSet::new();
+            for (id, c) in &s.claims {
+                if let Some(at) = palw_rcore_deadline_v1(&s, &p, id, c, last).unwrap() {
+                    dl1.insert((at, *id));
+                }
+            }
+            assert_eq!(dl1, s.deadlines, "one deadline function");
+        }
+
+        /// **The keys and the reporter's commitment**: deterministic, domain-separated, and binding
+        /// every input — the evidence id included (N12).
+        #[test]
+        fn the_offence_key_and_the_reporter_commitment_bind_their_inputs() {
+            let k = palw_court_offence_key_v1(&h64(1));
+            assert_eq!(k, palw_court_offence_key_v1(&h64(1)));
+            assert_ne!(k, palw_court_offence_key_v1(&h64(2)));
+            assert_ne!(k, h64(1));
+            let salt = [7u8; 32];
+            let c = palw_reporter_commitment_v1(&h64(1), &h64(2), &bond_key(3), &salt);
+            assert_eq!(c, palw_reporter_commitment_v1(&h64(1), &h64(2), &bond_key(3), &salt));
+            for other in [
+                palw_reporter_commitment_v1(&h64(9), &h64(2), &bond_key(3), &salt),
+                palw_reporter_commitment_v1(&h64(1), &h64(9), &bond_key(3), &salt),
+                palw_reporter_commitment_v1(&h64(1), &h64(2), &bond_key(9), &salt),
+                palw_reporter_commitment_v1(&h64(1), &h64(2), &bond_key(3), &[8u8; 32]),
+            ] {
+                assert_ne!(c, other, "every input binds");
+            }
+            let m = palw_reporter_commit_message_v1(&h64(5), &c, &bond_key(3));
+            assert!(m.starts_with(PALW_REPORTER_COMMIT_DOMAIN_V1));
+            assert_ne!(m, palw_reporter_commit_message_v1(&h64(6), &c, &bond_key(3)), "the network binds");
+            assert_ne!(PALW_REPORTER_COMMITMENT_DOMAIN_V1, PALW_REPORTER_COMMIT_DOMAIN_V1);
+        }
+
+        /// **U2's producer floor** (§10a): dormant below the fence, `Some(floor)` for an unknown bond,
+        /// the shortfall below the floor, `None` at or above it.
+        #[test]
+        fn the_producer_floor_is_dormant_below_the_fence_and_a_shortfall_past_it() {
+            let p = rcore_params();
+            let floor = p.min_collateral_sompi();
+            assert_eq!(floor, 100);
+            let mut s = PalwChainStateV2::genesis();
+            s.bonds.insert(bond_key(1), bond(100, PalwBondStatusV2::Active));
+            s.bonds.insert(bond_key(2), bond(60, PalwBondStatusV2::Active));
+            assert_eq!(palw_bond_producer_floor_shortfall_v1(&s, &p, &bond_key(1), 5), None);
+            assert!(palw_bond_meets_producer_floor_v1(&s, &p, &bond_key(1), 5));
+            assert_eq!(palw_bond_producer_floor_shortfall_v1(&s, &p, &bond_key(2), 5), Some(40));
+            assert!(!palw_bond_meets_producer_floor_v1(&s, &p, &bond_key(2), 5));
+            assert_eq!(palw_bond_producer_floor_shortfall_v1(&s, &p, &bond_key(9), 5), Some(floor), "unknown bond");
+            let q = dormant_params();
+            for key in [bond_key(1), bond_key(2), bond_key(9)] {
+                assert_eq!(palw_bond_producer_floor_shortfall_v1(&s, &q, &key, 5), None, "dormant: {key:?}");
+                assert!(palw_bond_meets_producer_floor_v1(&s, &q, &key, 5));
+            }
+        }
+
+        /// **The reporter-commitment indexes (S-SPEC 1g)**: the writer keeps them, a delta revert and
+        /// re-apply rebuild the same ones, and the consistency check refuses a drifted one.
+        #[test]
+        fn the_reporter_commitment_indexes_follow_the_writer_revert_and_rebuild() {
+            let p = rcore_params();
+            let parent = PalwChainStateV2::genesis();
+            let extras = PalwTransitionExtrasV1::default();
+            let mut b = TransitionBuilder::new(&parent, &p, false, false, false, false, &extras);
+            b.write_reporter_commit(h64(0x71), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 10 }));
+            b.write_reporter_commit(h64(0x72), Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 12 }));
+            b.write_reporter_commit(h64(0x73), Some(PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 11 }));
+            b.write_reporter_commit(h64(0x72), None);
+            assert_eq!(b.state.reporter_open_commitments(&bond_key(1)), 1);
+            assert_eq!(b.state.reporter_open_commitments(&bond_key(2)), 1);
+            assert_eq!(b.state.commitments_by_daa.iter().copied().collect::<Vec<_>>(), vec![(10, h64(0x71)), (11, h64(0x73))]);
+            let child = b.state.clone();
+            let delta = PalwStateDeltaV2 { point: ctx(1, 1, 1), entries: b.entries };
+            let reapplied = apply_delta_v2(&parent, &delta, &p).unwrap();
+            assert_eq!(reapplied, child, "the indexes a delta rebuilds are the ones the writer kept");
+            assert_eq!(revert_delta_v2(&child, &delta, &p).unwrap(), parent);
+            let mut drifted = child.clone();
+            drifted.commitments_by_reporter.insert(bond_key(1), 2);
+            assert!(matches!(drifted.assert_internal_consistency(&p), Err(PalwStateV2Error::CarriageInconsistent(_))));
+        }
+
+        /// **T-2(a)'s index (S-SPEC 1g)**: per bond, the class's claims in flight that do not count as
+        /// licensed — a quorum licence without a recorded door (today's rule) leaves the count, an S2
+        /// licence does not.
+        #[test]
+        fn unlicensed_by_bond_counts_what_t2c_does_not_count_as_licensed() {
+            let mut s = PalwChainStateV2::genesis();
+            let mut s2 = licensed(PalwLicenceDoorTagV1::Optimistic, 1, 1);
+            s2.bond = bond_key(1);
+            let rows = vec![
+                (h64(0xB1), claim(PalwClaimPhaseV2::Provisional)),
+                (h64(0xB2), claim(PalwClaimPhaseV2::PanelBound { bound_daa: 110 })),
+                (h64(0xB3), claim(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 120 })),
+                (h64(0xB4), s2),
+                (h64(0xB5), licensed(PalwLicenceDoorTagV1::Coverage, 2, 0b1_1111)),
+                (h64(0xB6), claim(PalwClaimPhaseV2::Final { final_daa: 130 })),
+            ];
+            for (id, c) in rows {
+                s.claims.insert(id, c);
+            }
+            let mut other = claim(PalwClaimPhaseV2::Provisional);
+            other.bond = bond_key(2);
+            s.claims.insert(h64(0xB7), other);
+            rebuild_deadline_free_indices(&mut s);
+            assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC1), &bond_key(1)), 3, "Provisional, PanelBound, S2");
+            assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC1), &bond_key(2)), 1);
+            assert_eq!(palw_bond_class_unlicensed_v1(&s, &h64(0xC9), &bond_key(1)), 0);
         }
     }
 }

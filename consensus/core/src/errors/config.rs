@@ -7,6 +7,12 @@ pub enum ConfigError {
     )]
     EvmLaneRequiresEvmBuild(String),
 
+    /// ADR-0152 T80: testnet-11 runs PALW state version 20; this build folds only its own version.
+    #[error(
+        "Configuration: {0} runs PALW state version 20 on the `main` binary 1f98d3bf; this kaspad folds PALW state version {1} (ADR-0152 R-core+) and cannot run that network — start testnet-11 nodes from main 1f98d3bf"
+    )]
+    PalwStateVersionCannotRunNetwork(String, u16),
+
     #[error("Configuration: --addpeer and --connect cannot be used together")]
     MixedConnectAndAddPeers,
 

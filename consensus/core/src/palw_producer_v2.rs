@@ -41,12 +41,32 @@ pub struct PalwProducerBondFactsV2 {
     pub exposure_ceiling: u128,
     /// What ONE attempt at [`PalwProducerFactsV2::pwu`] would add to `reserved_exposure`.
     pub claim_exposure: u128,
+    /// **ADR-0152 SR-7 (S-SPEC §2, P6): what the attempt ceiling measures this bond's backing as at
+    /// the candidate DAA** — past `Params::palw_rcore_plus` the one committed ledger
+    /// (`palw_bond_committed_v1` at the escaped depth of the raw depth [`palw_producer_facts_v4`]
+    /// was handed), below it `reserved_exposure + registration_exposure` (admission item 8's
+    /// `reserved`). Admission and the fold refuse `committed + claim_exposure > exposure_ceiling`,
+    /// so a node that pre-checks against this never mines an attempt the chain refuses (T08).
+    pub committed: u128,
+    /// **ADR-0152 U2 (S-SPEC §10a): the producer floor's shortfall** —
+    /// `palw_bond_producer_floor_shortfall_v1` at the candidate DAA: `None` meets the floor (or the
+    /// fence is dormant), `Some(sompi)` is how far the posted collateral is below it. Past the fence
+    /// admission and the fold refuse the attempt (`ProducerBelowFloor`, non-fatal for the own
+    /// attempt) while this is `Some`.
+    pub producer_floor_shortfall: Option<u64>,
 }
 
 impl PalwProducerBondFactsV2 {
     /// Is there ceiling left for one more claim? Admission item 8 is `reserved + claim <= ceiling`.
     pub fn has_exposure_room(&self) -> bool {
         self.reserved_exposure.saturating_add(self.claim_exposure) <= self.exposure_ceiling
+    }
+
+    /// **The ceiling as admission and the fold measure it** (ADR-0152 SR-7): `committed + claim <=
+    /// ceiling`. Equal to [`Self::has_exposure_room`] below the fence up to registration exposure,
+    /// which admission item 8 always counted.
+    pub fn has_committed_room(&self) -> bool {
+        self.committed.saturating_add(self.claim_exposure) <= self.exposure_ceiling
     }
 }
 
@@ -275,8 +295,48 @@ pub fn palw_producer_facts_v2(
 /// floor's draw as the registry will write it, read only while the floor has no row (ADR-0149 §5).
 /// Without it a fence armed at the registry's height would leave the floor with no facts on the
 /// first blocks past it, and every producer holding at once is a chain that has stopped.
+///
+/// [`palw_producer_facts_v4`] with no second-clock depth — the facts as kaspad reads them until it
+/// switches to v4 (ADR-0152 P6). Every field v3 always filled is unchanged; `committed` is read at
+/// the DAA clock alone.
 #[allow(clippy::too_many_arguments)]
 pub fn palw_producer_facts_v3(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    admission: &PalwAdmissionParamsV2,
+    chain_point: BlockHash,
+    daa_score: u64,
+    class_id: Hash64,
+    bond: Option<&PalwBondKeyV2>,
+    work_target_floor: Option<u128>,
+    canonical_work_daa: Option<u64>,
+    base_known_draw: Option<u128>,
+    audit_2026_09_23_active: bool,
+    claim_escrow: u64,
+) -> Option<PalwProducerFactsV2> {
+    palw_producer_facts_v4(
+        state,
+        state_params,
+        admission,
+        chain_point,
+        daa_score,
+        class_id,
+        bond,
+        work_target_floor,
+        canonical_work_daa,
+        base_known_draw,
+        audit_2026_09_23_active,
+        claim_escrow,
+        None,
+    )
+}
+
+/// **ADR-0152 S-SPEC §2: the producer's facts with the one committed ledger** — v3's arguments plus
+/// the second clock's RAW depth at the candidate DAA (`palw_settled_anchor_depth_at`), from which
+/// [`PalwProducerBondFactsV2::committed`] reads live locks at the escaped depth exactly as the fold
+/// and admission do. Also fills the producer floor's shortfall (U2).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_producer_facts_v4(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
     admission: &PalwAdmissionParamsV2,
@@ -295,6 +355,8 @@ pub fn palw_producer_facts_v3(
     // the caller that holds the coinbase schedule. The headroom counts it through the same
     // reservation the ledger and the ceiling read; 0 where no escrow is priced.
     claim_escrow: u64,
+    // ADR-0152: the second clock's RAW depth at `daa_score` (`None` below the audit fence).
+    raw_depth: Option<u64>,
 ) -> Option<PalwProducerFactsV2> {
     let class = state.class(&class_id)?;
     // ADR-0137: past the work target a model class draws against `MAX · min(1, CCU / W₀)` from
@@ -359,6 +421,12 @@ pub fn palw_producer_facts_v3(
                 })
                 // Option A: the escrow term, outside the attempts factor, exactly as the ceiling adds it.
                 .saturating_add(state_params.claim_escrow_reservation_v1(daa_score, claim_escrow)),
+            committed: if state_params.rcore_plus_active_at(daa_score) {
+                crate::palw_state_v2::palw_bond_committed_raw_v1(state, state_params, key, daa_score, raw_depth)
+            } else {
+                state.reserved_exposure(key).saturating_add(state.registration_exposure(key))
+            },
+            producer_floor_shortfall: crate::palw_state_v2::palw_bond_producer_floor_shortfall_v1(state, state_params, key, daa_score),
         })
     });
     Some(PalwProducerFactsV2 {
@@ -442,6 +510,66 @@ mod tests {
         ];
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(1), daa_score: 100, blue_score: 1, subsidy: 0 };
         apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx, &objects, None).unwrap().0
+    }
+
+    /// **ADR-0152 S-SPEC §2 / §10a: v4 hands the producer the ledger admission measures it by** —
+    /// below `palw_rcore_plus` admission item 8's `reserved + registration`, past it the one
+    /// committed ledger at the escaped depth of the raw depth given — and the producer floor's
+    /// shortfall (U2). v3 is v4 without a depth, field for field.
+    #[test]
+    fn v4_reports_the_committed_ledger_and_the_producer_floor() {
+        let state = state();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let bond_key = PalwBondKeyV2(bond_outpoint());
+        let facts = |params: &PalwStateParamsV2, raw: Option<u64>| {
+            palw_producer_facts_v4(
+                &state,
+                params,
+                &admission,
+                crate::BlockHash::from_u64_word(1),
+                101,
+                h64(1),
+                Some(&bond_key),
+                None,
+                None,
+                None,
+                false,
+                0,
+                raw,
+            )
+            .expect("facts")
+        };
+        let below = facts(&state_params(), Some(3));
+        let bond = below.bond.as_ref().unwrap();
+        assert_eq!(bond.committed, state.reserved_exposure(&bond_key) + state.registration_exposure(&bond_key));
+        assert_eq!(bond.producer_floor_shortfall, None, "dormant below the fence");
+        let v3 = palw_producer_facts_v3(
+            &state,
+            &state_params(),
+            &admission,
+            crate::BlockHash::from_u64_word(1),
+            101,
+            h64(1),
+            Some(&bond_key),
+            None,
+            None,
+            None,
+            false,
+            0,
+        )
+        .unwrap();
+        assert_eq!(v3, facts(&state_params(), None), "v3 is v4 with no depth");
+        let armed = state_params().with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+        let past = facts(&armed, Some(3));
+        let bond = past.bond.as_ref().unwrap();
+        assert_eq!(bond.committed, crate::palw_state_v2::palw_bond_committed_raw_v1(&state, &armed, &bond_key, 101, Some(3)));
+        assert_eq!(bond.producer_floor_shortfall, None, "1,000,000 posted against a 1,000 floor");
+        assert!(bond.has_committed_room());
+        // The same bond against a 2,000,000 floor is 1,000,000 short.
+        let high_floor = PalwStateParamsV2::new(500, 100, 100, 100, 100, 1_000, h64(1), 4, 1_000, 2_000_000, 100, 100)
+            .unwrap()
+            .with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+        assert_eq!(facts(&high_floor, None).bond.unwrap().producer_floor_shortfall, Some(1_000_000));
     }
 
     /// **Build an attempt from NOTHING but the facts, and see whether the chain takes it.**

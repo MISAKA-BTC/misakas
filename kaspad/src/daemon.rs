@@ -124,6 +124,18 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
         }
     }
 
+    // **ADR-0152 T80: testnet-11 is refused at startup, by name.** Its chain folds PALW state version
+    // 20 (`main`, 1f98d3bf); this build's version is hashed first into every state root, so it could
+    // only fail later — deep in a carriage decode or at the first header's root — with a message that
+    // names neither version. The t11 rollback binary stays `main`.
+    let network = args.network();
+    if network == kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11) {
+        return Err(ConfigError::PalwStateVersionCannotRunNetwork(
+            network.to_string(),
+            kaspa_consensus_core::palw_state_v2::PALW_STATE_V2_VERSION,
+        ));
+    }
+
     if !args.connect_peers.is_empty() && !args.add_peers.is_empty() {
         return Err(ConfigError::MixedConnectAndAddPeers);
     }
@@ -2119,6 +2131,27 @@ mod tests {
             palw_panel_state_dir(&resolved, network).is_absolute(),
             "so the gate's existence check is asked about an absolute path"
         );
+    }
+
+    /// **ADR-0152 T80: kaspad refuses testnet-11's parameters at startup** with a message naming both
+    /// state versions and the binary that runs t11; testnet-12 and the default network pass.
+    #[test]
+    fn t80_testnet_11_is_refused_at_startup_by_name() {
+        let refused = validate_args(&parse(&["--testnet", "--netsuffix=11"]));
+        match refused {
+            Err(ConfigError::PalwStateVersionCannotRunNetwork(net, version)) => {
+                assert_eq!(version, kaspa_consensus_core::palw_state_v2::PALW_STATE_V2_VERSION);
+                assert!(net.contains("11"), "{net}");
+                let message = ConfigError::PalwStateVersionCannotRunNetwork(net, version).to_string();
+                assert!(message.contains("1f98d3bf") && message.contains("version 20"), "{message}");
+            }
+            other => panic!("testnet-11 must be refused by name, got {other:?}"),
+        }
+        assert!(
+            !matches!(validate_args(&parse(&["--testnet", "--netsuffix=12"])), Err(ConfigError::PalwStateVersionCannotRunNetwork(..))),
+            "testnet-12 is this build's network"
+        );
+        assert!(validate_args(&parse(&[])).is_ok(), "the default network is untouched");
     }
 
     #[test]

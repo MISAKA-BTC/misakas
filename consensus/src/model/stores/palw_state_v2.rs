@@ -428,6 +428,11 @@ impl DbPalwStateV2Store {
         let Some(record) = self.pruning_snapshot_record()? else {
             return Ok(None);
         };
+        // ADR-0152 T80: a snapshot of another state version is refused by name, before a decode that
+        // would fail somewhere inside it without saying why.
+        if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(&record.carriage_borsh) {
+            return Err(StoreError::DataInconsistency(format!("palw v2 pruning snapshot: {why}")));
+        }
         let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 pruning snapshot does not decode: {e}")))?;
         let armed = self.uncertified_weightless_at(&carriage);
@@ -485,6 +490,11 @@ impl DbPalwStateV2Store {
             return Ok(None); // the row moved between the key read and the record read
         }
         self.pruning_snapshot_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        // ADR-0152 T80: a snapshot of another state version is refused by name, before a decode that
+        // would fail somewhere inside it without saying why.
+        if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(&record.carriage_borsh) {
+            return Err(StoreError::DataInconsistency(format!("palw v2 pruning snapshot: {why}")));
+        }
         let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 pruning snapshot does not decode: {e}")))?;
         let armed = self.uncertified_weightless_at(&carriage);
@@ -539,6 +549,11 @@ impl DbPalwStateV2Store {
     /// cannot come to hold two different ideas of what a tip row means.
     fn materialize_tip(&self, record: &PalwStateTipRecordV2, params: &PalwStateParamsV2) -> StoreResult<PalwChainStateV2> {
         self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
+        // ADR-0152 T80: a snapshot of another state version is refused by name, before a decode that
+        // would fail somewhere inside it without saying why.
+        if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(&record.carriage_borsh) {
+            return Err(StoreError::DataInconsistency(format!("palw v2 tip snapshot: {why}")));
+        }
         let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 tip snapshot does not decode: {e}")))?;
         let armed = self.uncertified_weightless_at(&carriage);
@@ -841,5 +856,48 @@ mod tests {
         assert!(!restarted.has_delta(c1.block).unwrap(), "stale rows are discarded");
         assert!(restarted.tip_record().unwrap().is_none(), "and the tip goes with them — both or neither");
         assert_eq!(restarted.schema.read().unwrap(), PALW_STATE_V2_STORE_SCHEMA_VERSION);
+    }
+
+    /// **ADR-0152 T80: a datadir written at another PALW state version is refused by name** — before
+    /// any decode, with both versions and the binary that runs testnet-11 in the message — instead of
+    /// failing somewhere inside the carriage (every record layout moved with v22). The same row at
+    /// this build's version loads.
+    #[test]
+    fn t80_a_carriage_of_another_state_version_is_refused_by_name() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+        let p = params();
+        let c1 = ctx(0xB1, 100, 100);
+        let (child, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c1, &registrations(), None).unwrap();
+        let good = borsh::to_vec(&PalwStateCarriageV2::from_state(&child)).unwrap();
+        assert_eq!(
+            kaspa_consensus_core::palw_state_v2::palw_carriage_version_of_v1(&good),
+            Some(kaspa_consensus_core::palw_state_v2::PALW_STATE_V2_VERSION)
+        );
+        for version in [20u16, 21] {
+            let mut stale = good.clone();
+            stale[..2].copy_from_slice(&version.to_le_bytes());
+            let mut batch = WriteBatch::default();
+            store
+                .set_tip_record_batch(
+                    &mut batch,
+                    PalwStateTipRecordV2 { block: c1.block, state_root: child.state_root(), carriage_borsh: stale },
+                )
+                .unwrap();
+            db.write(batch).unwrap();
+            let fresh = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+            let message = match fresh.load_tip(&p) {
+                Err(StoreError::DataInconsistency(message)) => message,
+                other => panic!("version {version}: refused by name, got {other:?}"),
+            };
+            assert!(message.contains(&format!("carriage version {version}")), "{message}");
+            assert!(message.contains("1f98d3bf") && message.contains("version 22"), "{message}");
+        }
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, c1.block, &child).unwrap();
+        db.write(batch).unwrap();
+        let fresh = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        assert_eq!(fresh.load_tip(&p).unwrap().expect("the tip loads").1, child, "this build's own version loads");
     }
 }
