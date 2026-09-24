@@ -1226,6 +1226,7 @@ fn eligible_weight_never_exceeds_the_protocol_budget() {
     // And the volume side: the fold refuses by name, off a room it does not let a class widen.
     let fold = include_str!("palw_state_v2.rs");
     let body = &fold[..fold.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+    assert!(body.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
     assert!(body.contains("ClassNotAdmitting"), "a class that does not admit is refused by name");
     assert!(body.contains("panel_room_v1"), "and the room a class has is the network's replay budget, not an allowance of its own");
 }
@@ -1574,6 +1575,7 @@ fn a_derived_basis_changes_the_unit_the_collateral_is_denominated_in() {
 fn the_difficulty_seed_reads_no_registrant_declaration() {
     let source = include_str!("palw_state_v2.rs");
     let fold = &source[..source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+    assert!(fold.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
 
     let sites: Vec<&str> = fold.match_indices("attempt_target_seed_v1(").map(|(at, _)| &fold[at.saturating_sub(220)..at]).collect();
     assert!(sites.len() >= 2, "both live seeding sites are still here ({})", sites.len());
@@ -1603,6 +1605,7 @@ fn the_difficulty_seed_reads_no_registrant_declaration() {
 fn the_price_unit_stays_raw_because_it_is_a_denominator() {
     let source = include_str!("palw_state_v2.rs");
     let fold = &source[..source.find("\n#[cfg(test)]").expect("the tests follow the fold")];
+    assert!(fold.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
     let at = fold.find("fn work_price_unit_at(").expect("the work price is still here");
     let end = fold[at..].find("\n    /// ").map(|n| at + n).unwrap_or(fold.len());
     let body = &fold[at..end];
@@ -1650,6 +1653,9 @@ fn every_construction_of_the_admission_fences_names_the_canonical_work_height() 
     let mut checked = 0;
     for (name, source) in sources {
         let body = source.find("\n#[cfg(test)]").map(|at| &source[..at]).unwrap_or(source);
+        if name == "palw_state_v2.rs" {
+            assert!(body.lines().count() > 30_000, "the whole fold is scanned, not a prefix a column-0 `#[cfg(test)]` cut short");
+        }
         for (at, _) in body.match_indices("PalwEpochBudgetFencesV1 {") {
             // The literal runs from its opening brace to the one that balances it. Cutting on an
             // indentation guess is what the first draft of this test did, and it read the wrong

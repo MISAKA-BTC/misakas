@@ -3736,6 +3736,22 @@ impl Params {
                      the P-B1 refund route (ADR-0152-adjacent: Activation Pool)",
                 ));
             }
+            // The fix round's L5: the rest of what the rules read, at genesis too — the execution lane
+            // (the span R2 staggers and (a) dates by, and the seed anchor the jury is drawn from),
+            // readiness V2 (the possession proof (a) pays and F4 dates), the panel economy (the panel
+            // floor (a) asks and the credited seats (b) pays) and one-bond-per-operator (the unit (a)
+            // and (b) pay once each).
+            if !(at_genesis(self.palw_execution_lane.map(|lane| lane.activation))
+                && at_genesis(self.palw_readiness_v2)
+                && at_genesis(self.palw_panel_economy)
+                && at_genesis(self.palw_operator_id_unique))
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool is armed without palw_execution_lane, palw_readiness_v2, palw_panel_economy and \
+                     palw_operator_id_unique all armed at genesis: the pool dates by the lane's spans, pays verified \
+                     possession, asks the panel floor and pays each operator once (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
             if let Some(why) = pool.terms.refusal() {
                 return Err(PalwModeV2Error::Invalid(why));
             }

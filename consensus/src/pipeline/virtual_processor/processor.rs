@@ -4240,6 +4240,7 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_activation_pool_v1::palw_activation_pool_read_v1(
             &state,
             &class_id,
+            &state_params.base_class_id(),
             self.palw_activation_pool_at(tip_daa),
             tip_daa,
             schedule,

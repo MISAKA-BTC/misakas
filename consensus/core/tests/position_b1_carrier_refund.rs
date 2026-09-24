@@ -282,15 +282,20 @@ fn top_up_carrier(class: Hash64, payer: Hash64, amount: u64, nonce: u32) -> Tran
 fn a_refused_top_up_is_paid_back_and_a_folded_one_is_the_pools() {
     let mut c = Chain::t12(true);
     assert!(c.p.palw_activation_pool_at(1).is_some(), "testnet-12 arms the pool");
-    let genesis_class = *c.state.classes_iter().map(|(id, _)| id).next().expect("testnet-12 registers its models at genesis");
-    let (payer_a, payer_b, payer_c) = (h(0xA0A), h(0xB0B), h(0xC0C));
+    let floor = c.sp.base_class_id();
+    let genesis_class =
+        *c.state.classes_iter().map(|(id, _)| id).find(|id| **id != floor).expect("testnet-12 registers its models at genesis");
+    let (payer_a, payer_b, payer_c, payer_d) = (h(0xA0A), h(0xB0B), h(0xC0C), h(0xD0D));
     let missing = top_up_carrier(h(0xDEAD), payer_a, 50 * MSK, 1);
     let dust = top_up_carrier(genesis_class, payer_b, MSK - 1, 2);
     let kept = top_up_carrier(genesis_class, payer_c, 50 * MSK, 3);
-    let refunds = c.block(&[missing.clone(), dust.clone(), kept.clone()]);
+    let on_floor = top_up_carrier(floor, payer_d, 50 * MSK, 4);
+    let refunds = c.block(&[missing.clone(), dust.clone(), kept.clone(), on_floor.clone()]);
     println!("[pool] refunds {:?}", refunds.iter().map(|r| (r.payee, r.amount)).collect::<Vec<_>>());
     assert_eq!(c.owed(&missing), Some((payer_a, 50 * MSK)), "a top-up of no class is paid back whole");
     assert_eq!(c.owed(&dust), Some((payer_b, MSK - 1)), "a top-up under the least is paid back whole");
+    assert_eq!(c.owed(&on_floor), Some((payer_d, 50 * MSK)), "a top-up of the floor is paid back whole (F3)");
+    assert!(c.state.activation_pool(&floor).is_none(), "and the floor has no pool");
     assert_eq!(c.owed(&kept), None, "a folded top-up is a donation");
     let pool = c.state.activation_pool(&genesis_class).cloned().expect("the genesis class's pool opened");
     assert_eq!((pool.funded_sompi, pool.bonus_sompi, pool.prep_sompi), (50 * MSK, 50 * MSK, 0));

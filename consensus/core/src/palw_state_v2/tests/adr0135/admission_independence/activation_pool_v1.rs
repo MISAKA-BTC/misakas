@@ -87,9 +87,10 @@ fn to_audit(funded: u64, holders: &[u64]) -> ToAudit {
 /// The jury Kimi's audit draws, recomputed from outside the fold (ADR-0147's population rule), as
 /// bond numbers in draw order.
 fn drawn(t: &ToAudit) -> Vec<u64> {
-    use crate::palw_model_registry_v1::palw_admission_jury_seed_v1;
+    // Past the pool's fence the jury's seed leaves the anchor's block hash out (the fix round's F2).
+    use crate::palw_model_registry_v1::palw_admission_jury_seed_v2;
     let anchor = t.before.round_seed_anchor().unwrap();
-    let seed = palw_admission_jury_seed_v1(&kimi_id(), t.audit, &anchor.block, &anchor.execution_key);
+    let seed = palw_admission_jury_seed_v2(&kimi_id(), t.audit, &anchor.execution_key);
     let cutoff = (t.audit - 1) * SPAN;
     let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = t
         .before
@@ -129,19 +130,19 @@ fn a_listing_opens_an_empty_pool_and_a_top_up_splits_by_alpha_while_it_is_a_cand
         (counters.funded_sompi, counters.prep_sompi, counters.bonus_sompi),
         (300 * MSK as u128, 120 * MSK as u128, 180 * MSK as u128)
     );
-    // A top-up of a class past Candidate is all bonus: the floor is Active and nobody bought it.
-    let f = fold(kimi_work());
+    // **The review's P5 / the fix round's F3: the floor takes no top-up** — its row is never a
+    // Candidate's and never leaves Active, so no rule could pay a pool of it; refused (and paid back).
     let floor_top_up = PalwConsensusObjectV2::ActivationPoolFunded { class_id: h64(1), amount: 5 * MSK, sink_index: 1 };
-    let s = step_checked(&t.before, &t.ctx_at(t.audit), &[floor_top_up], None, &pooled(Some(f))).unwrap();
-    let floor_pool = s.activation_pool(&h64(1)).cloned().expect("a genesis class's pool opens with its first top-up");
-    assert_eq!((floor_pool.prep_sompi, floor_pool.bonus_sompi), (0, 5 * MSK), "no Candidate audit can pay it: all bonus");
-    assert_eq!(floor_pool.opened_daa, t.audit * SPAN);
+    let refused = fold_step(&t.before, &params(), &t.ctx_at(t.audit), &[floor_top_up], None, &pooled(Some(fold(kimi_work()))));
+    assert!(matches!(refused, Err(PalwStateV2Error::ActivationPoolOnFloor(id)) if id == h64(1)), "{:?}", refused.map(|_| ()));
 }
 
-/// **The fold refuses a top-up below the fence, of a class the state does not hold, of a Frozen
-/// class, and under the least top-up** — each refusal a carrier the P-B1 route pays back.
+/// **The fold refuses a top-up below the fence, of a class the state does not hold, of the floor, and
+/// under the least top-up** — each refusal a carrier the P-B1 route pays back — **and folds one of a
+/// Frozen class into its row's `withheld`** (the fix round's F6: accounted, never refunded), which the
+/// mempool still refuses to relay.
 #[test]
-fn a_top_up_is_refused_dormant_missing_frozen_or_below_the_least() {
+fn a_top_up_is_refused_dormant_missing_floor_or_below_the_least_and_a_frozen_one_is_withheld() {
     let (_, root) = inventory();
     let p = params();
     let s1 =
@@ -157,8 +158,13 @@ fn a_top_up_is_refused_dormant_missing_frozen_or_below_the_least() {
         refused(&s1, top_up(MSK - 1), &pooled(None)),
         PalwStateV2Error::ActivationPoolTopUpBelowMinimum { amount, min, .. } if amount == MSK - 1 && min == MSK
     ));
+    let floor = PalwConsensusObjectV2::ActivationPoolFunded { class_id: h64(1), amount: 5 * MSK, sink_index: 1 };
+    assert!(matches!(refused(&s1, floor, &pooled(None)), PalwStateV2Error::ActivationPoolOnFloor(_)));
     let frozen = step_checked(&s1, &ctx(2, 101, 2), &[freeze(kimi_id())], None, &pooled(None)).unwrap();
-    assert!(matches!(refused(&frozen, top_up(5 * MSK), &pooled(None)), PalwStateV2Error::FrozenClass(_)));
+    let withheld = step_checked(&frozen, &ctx(3, 102, 3), &[top_up(5 * MSK)], None, &pooled(None)).unwrap();
+    let pool = withheld.activation_pool(&kimi_id()).cloned().unwrap();
+    assert_eq!((pool.funded_sompi, pool.withheld_sompi, pool.prep_sompi, pool.bonus_sompi), (5 * MSK, 5 * MSK, 0, 0));
+    assert!(pool.is_balanced() && withheld.activation_pool_counters().is_balanced());
     // The mempool asks the fold's own question of a carrier (P-B3's gate), and takes one queue row
     // for it (P-B1's budget: the refund it may need).
     let carrier = crate::tx::Transaction::new(
@@ -174,15 +180,21 @@ fn a_top_up_is_refused_dormant_missing_frozen_or_below_the_least() {
         })
         .unwrap(),
     );
-    assert!(matches!(
-        palw_model_market_carrier_refusal_v1(&frozen, &p, &carrier, || pooled(None)),
-        Some(PalwStateV2Error::FrozenClass(_))
-    ));
+    assert!(
+        matches!(palw_model_market_carrier_refusal_v1(&frozen, &p, &carrier, || pooled(None)), Some(PalwStateV2Error::FrozenClass(_))),
+        "the fold withholds it; a node does not relay or mine it"
+    );
     assert_eq!(palw_model_market_carrier_refusal_v1(&s1, &p, &carrier, || pooled(None)), None, "a live listing takes it");
     assert_eq!(palw_model_carrier_payout_rows_v1(&carrier), Some(1));
     // A refused top-up's refund is read off its carrier's own outputs, as a buy's is (P-B1): this
-    // carrier pays no P2PKH-ML-DSA-87 output, so it names none; with change it names the change.
+    // carrier pays no P2PKH-ML-DSA-87 output, so it names none — and so it is not block-valid (the
+    // review's P4, the fix round's F6: the sink rule refuses it); with change it names the change.
     assert_eq!(crate::palw_lifecycle_objects_v2::palw_model_carrier_refund_v1(&carrier, &top_up(5 * MSK)), None);
+    assert!(
+        crate::palw_activation_pool_v1::palw_activation_sink_binding_refusal_v1(&carrier)
+            .is_some_and(|(_, why)| why.contains("P2PKH-ML-DSA-87")),
+        "a carrier a refusal could not pay back is refused at block validity"
+    );
     let mut with_change = carrier.clone();
     with_change.outputs.insert(0, crate::tx::TransactionOutput::new(1, crate::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x44; 64])));
     let refund = crate::palw_lifecycle_objects_v2::palw_model_carrier_refund_v1(&with_change, &top_up(5 * MSK)).expect("a payee");
@@ -243,20 +255,33 @@ fn a_prepared_juror_is_paid_when_the_quorum_fails() {
     assert_eq!(payout_of(&once, jury[1]), Some(a));
 }
 
-/// **(a) pays capacity that can serve, proven before the seed existed** (the review's C3/A2-i and M6):
-/// a ready juror below the panel floor, and one whose row was proved in the span before the audit,
-/// are not paid — both still count toward the jury's verdict, which is readiness and not pay.
+/// **(a) pays capacity that can serve, proven before the seed existed** (the review's C3/A2-i and M6,
+/// and the review's P2 / the fix round's F4): a ready juror below the panel floor is not paid, and
+/// neither is one whose proof NAMES `S − 2` — as the landing window lets it — but LANDED in `S − 1`,
+/// after the anchor that seeds the audit (a block of the span before, here the seeding block). Both
+/// still count toward the jury's verdict, which is readiness and not pay.
 #[test]
-fn a_juror_below_the_panel_floor_or_proved_after_s_minus_2_is_not_paid() {
+fn a_juror_below_the_panel_floor_or_whose_proof_landed_after_s_minus_2_is_not_paid() {
     let all: Vec<u64> = SYBILS.chain(HONEST).collect();
     let mut t = to_audit(1_000 * MSK, &all);
     let jury = drawn(&t);
     // Juror 0: ready, but 600 sompi — above the readiness bar (3 × 100), below the panel floor (1,000).
     t.before.bonds.get_mut(&bond_key(jury[0])).unwrap().collateral = 600;
-    // Juror 1: ready, its row proved at S − 1 (after the seed's span began).
-    let late = t.before.seat_readiness.get_mut(&(bond_key(jury[1]), kimi_id())).unwrap();
-    late.proved_span = t.audit - 1;
-    late.proved_daa = (t.audit - 1) * SPAN;
+    // Juror 1: a fresh proof naming S − 2, landed in a block of S − 1 AFTER the seeding block.
+    let (operands, _) = inventory();
+    let late = proof(&operands, bond_key(jury[1]), t.audit - 2);
+    let landed_late =
+        step_checked(&t.before, &ctx(t.next, (t.audit - 1) * SPAN + 7, t.next), &[late], None, &pooled(Some(fold(kimi_work()))))
+            .unwrap();
+    assert_eq!(landed_late.round_seed_anchor().map(|anchor| anchor.span), Some(t.audit - 1), "the anchor still stands");
+    assert_eq!(
+        landed_late.seat_readiness(&bond_key(jury[1]), &kimi_id()).map(|row| row.proved_span),
+        Some(t.audit - 2),
+        "it names S − 2"
+    );
+    assert_eq!(landed_late.activation_readiness_landed(&kimi_id(), &bond_key(jury[1])), Some(t.audit - 1), "and landed at S − 1");
+    t.before = landed_late;
+    t.next += 1;
     let audit = step_checked(&t.before, &t.ctx_at(t.audit), &[], None, &pooled(Some(fold(kimi_work())))).unwrap();
     assert_eq!(
         audit.model_lifecycle(&kimi_id()).map(|row| row.state),
@@ -264,7 +289,11 @@ fn a_juror_below_the_panel_floor_or_proved_after_s_minus_2_is_not_paid() {
         "all five ready: seated"
     );
     assert_eq!(payout_of(&audit, jury[0]), None, "below the panel floor: no panel can draw it");
-    assert_eq!(payout_of(&audit, jury[1]), None, "proved after S − 2: the anchor's producer could have fed it");
+    assert_eq!(payout_of(&audit, jury[1]), None, "landed after S − 2: built with the seed in hand, whatever span it names");
+    assert!(
+        audit.activation_readiness_landed(&kimi_id(), &bond_key(jury[2])).is_none(),
+        "seated: the class's landing records leave with its Candidate state"
+    );
     let pool = audit.activation_pool(&kimi_id()).cloned().unwrap();
     assert_eq!(pool.prep_paid.len(), 3, "the other three, whatever the verdict");
     assert!(pool.prep_paid.iter().all(|op| *op != op_id(29)), "never the registrant's operator (the population excludes it)");
@@ -311,9 +340,11 @@ fn the_audit_pays_at_most_five_times_a_and_a_ramps_with_the_pools_age() {
     assert_eq!(pool.paid_sompi, 5 * 3 * MSK, "prep 30 MSK: 3 MSK each, 15 in all");
 }
 
-/// **A full payout queue defers (a) whole, and marks nobody** — the next audit pays.
+/// **A full payout queue defers (a)'s FLUSH, never the decision** (the fix round's F5): the audit
+/// marks the five prepared jurors and moves `5a` from `prep` into `scheduled`, writes no queue row,
+/// and a later block with room flushes it — conserved at every step.
 #[test]
-fn a_full_queue_defers_the_preparation_reward_without_marking_anyone() {
+fn a_full_queue_defers_the_preparation_reward_flush_and_a_block_with_room_pays_it() {
     let all: Vec<u64> = SYBILS.chain(HONEST).collect();
     let t = to_audit(1_000 * MSK, &all);
     let mut full = t.before.clone();
@@ -340,9 +371,24 @@ fn a_full_queue_defers_the_preparation_reward_without_marking_anyone() {
     )
     .unwrap();
     let pool = audit.activation_pool(&kimi_id()).cloned().unwrap();
-    assert!(pool.prep_paid.is_empty(), "nobody marked paid");
-    assert_eq!(pool.paid_sompi, 0);
+    let a = palw_activation_prep_cap_v1(&terms(), t.audit * SPAN - 100);
+    assert_eq!(pool.prep_paid.len(), 5, "decided and marked: the money is committed to them");
+    assert_eq!((pool.scheduled_sompi, pool.paid_sompi), (5 * a, 0), "owed, not yet in the queue");
+    assert_eq!(audit.activation_pool_scheduled_iter().count(), 5);
     assert!(audit.pending_payouts_iter().all(|(key, _)| key.as_byte_slice()[..2] != PALW_ACTIVATION_POOL_PAYOUT_KEY_PREFIX_V1));
+    assert!(pool.is_balanced() && audit.activation_pool_counters().is_balanced());
+    audit.assert_internal_consistency(&p).expect("I5: the scheduled map sums to the row's scheduled");
+    // Room again: every filler gone; the next block flushes the five (8 − 0 − 0 new keys of width).
+    let mut room = audit.clone();
+    room.pending_payouts.retain(|key, _| key.as_byte_slice()[0] != 0x10);
+    let flushed =
+        step_checked(&room, &ctx(t.next + 1, t.audit * SPAN + 1, t.next + 1), &[], None, &pooled(Some(fold(kimi_work())))).unwrap();
+    let pool = flushed.activation_pool(&kimi_id()).cloned().unwrap();
+    assert_eq!((pool.scheduled_sompi, pool.paid_sompi), (0, 5 * a));
+    assert_eq!(flushed.activation_pool_scheduled_iter().count(), 0);
+    for n in drawn(&t) {
+        assert_eq!(payout_of(&flushed, n), Some(a), "juror {n}'s row");
+    }
 }
 
 /// Kimi walked on past its audit: seated, then `Probation` with seven ready seats — the state (b)
@@ -365,6 +411,11 @@ fn in_probation(funded: u64) -> (PalwChainStateV2, u64, u64) {
     (probation, t.audit + 1, t.next + 2)
 }
 
+/// Bond `n`'s credit on probe claim `claim`.
+fn credit(n: u64, claim: Hash64) -> PalwActivationCreditV1 {
+    PalwActivationCreditV1 { operator: op_id(20 + n), bond: bond_key(n), claim }
+}
+
 /// The next boundary with the row one probe short of `ActiveLimited` credited `credited`.
 fn to_active_limited(state: &PalwChainStateV2, credited: &[u64], span: u64, next: u64) -> PalwChainStateV2 {
     let mut s = state.clone();
@@ -373,7 +424,7 @@ fn to_active_limited(state: &PalwChainStateV2, credited: &[u64], span: u64, next
     s.set_model_lifecycle_for_tests(kimi_id(), row);
     let mut pool = s.activation_pools.get(&kimi_id()).cloned().unwrap();
     for n in credited {
-        palw_sorted_insert_v1(&mut pool.probe_credited, op_id(20 + n));
+        pool.credit(credit(*n, h64(0xC1A1)));
     }
     s.activation_pools.insert(kimi_id(), pool);
     step_checked(&s, &ctx(next, span * SPAN, next), &[], None, &pooled(Some(fold(kimi_work())))).unwrap()
@@ -407,7 +458,7 @@ fn the_activation_bonus_pays_the_credited_operators_at_active_limited_and_only_n
     row.state = PalwModelLifecycleV1::Held;
     held.set_model_lifecycle_for_tests(kimi_id(), row);
     let mut dirty = held.activation_pools.get(&kimi_id()).cloned().unwrap();
-    dirty.probe_credited = vec![op_id(40)];
+    dirty.probe_credited = vec![credit(20, h64(0xC1A2))];
     held.activation_pools.insert(kimi_id(), dirty);
     let back = step_checked(&held, &ctx(next + 1, (span + 2) * SPAN, next + 1), &[], None, &pooled(Some(fold(kimi_work())))).unwrap();
     assert!(matches!(back.model_lifecycle(&kimi_id()).map(|row| row.state), Some(PalwModelLifecycleV1::Probation { .. })));
@@ -420,11 +471,40 @@ fn the_activation_bonus_pays_the_credited_operators_at_active_limited_and_only_n
     assert_eq!(payout_of(&again, 2), None, "a paid operator is not paid again");
     assert!(pool_again.bonus_paid.contains(&op_id(25)) && pool_again.bonus_paid.len() == 4);
     assert_eq!(pool_again.bonus_sompi, pool.bonus_sompi - b2);
+    // Past Candidate a sponsor's top-up is all bonus: (a) has no payee left.
+    let sponsored = step_checked(
+        &again,
+        &ctx(next + 3, (span + 3) * SPAN + 1, next + 3),
+        &[top_up(10 * MSK)],
+        None,
+        &pooled(Some(fold(kimi_work()))),
+    )
+    .unwrap();
+    let after = sponsored.activation_pool(&kimi_id()).cloned().unwrap();
+    assert_eq!((after.prep_sompi, after.bonus_sompi), (0, pool_again.bonus_sompi + 10 * MSK));
 }
 
-/// **(b) deferred by a full queue keeps its list and pays at the next span with room.**
+/// **(b) pays the CREDITED bond's payload** (the fix round's L3), not whichever bond of the operator
+/// registered first: an operator credited by a bond paying elsewhere is paid there.
 #[test]
-fn a_full_queue_defers_the_activation_bonus_and_the_next_span_pays_it() {
+fn the_activation_bonus_pays_the_credited_bonds_payload() {
+    let (mut probation, span, next) = in_probation(1_000 * MSK);
+    // Operator 22's credited seat is bond 2; point bond 2's payee somewhere its operator's other
+    // bonds (none here, one bond per operator) could not be confused with.
+    probation.bonds.get_mut(&bond_key(2)).unwrap().payout_payload = h64(0x2222);
+    let active = to_active_limited(&probation, &[2], span + 1, next);
+    let row = active
+        .pending_payouts_iter()
+        .find(|(key, _)| **key == palw_activation_pool_payout_key_v1(&h64(0x2222)))
+        .map(|(_, row)| row.amount);
+    assert!(row.is_some_and(|amount| amount > 0), "paid to the credited bond's payload");
+    assert_eq!(payout_of(&active, 2), None, "not to a payload read off the operator");
+}
+
+/// **(b)'s flush waits for a full queue; the decision does not** (F5): scheduled and marked at
+/// `Probation → ActiveLimited`, flushed at the next span with room.
+#[test]
+fn a_full_queue_defers_the_activation_bonus_flush_and_the_next_span_pays_it() {
     let (probation, span, next) = in_probation(1_000 * MSK);
     let mut full = probation.clone();
     let mut filler = 0u64;
@@ -435,18 +515,19 @@ fn a_full_queue_defers_the_activation_bonus_and_the_next_span_pays_it() {
         full.pending_payouts.insert(Hash64::from_bytes(key), PalwPayoutV2 { payload: h64(1), amount: 1 });
         filler += 1;
     }
+    let paid_before = probation.activation_pool(&kimi_id()).unwrap().paid_sompi;
     let deferred = to_active_limited(&full, &[2, 3], span + 1, next);
     let pool = deferred.activation_pool(&kimi_id()).cloned().unwrap();
-    assert!(pool.bonus_paid.is_empty() && pool.probe_credited.len() == 2, "nobody marked; the list waits");
+    assert_eq!(pool.bonus_paid.len(), 2, "decided and marked");
+    assert!(pool.probe_credited.is_empty() && pool.scheduled_sompi > 0, "owed");
+    assert_eq!(pool.paid_sompi, paid_before, "and not in the queue");
+    assert_eq!(payout_of(&deferred, 2), None);
     let mut room = deferred.clone();
-    let fillers: Vec<Hash64> = room.pending_payouts.keys().filter(|key| key.as_byte_slice()[0] == 0x10).copied().take(8).collect();
-    for key in fillers {
-        room.pending_payouts.remove(&key);
-    }
+    room.pending_payouts.retain(|key, _| key.as_byte_slice()[0] != 0x10);
     let paid = step_checked(&room, &ctx(next + 1, (span + 2) * SPAN, next + 1), &[], None, &pooled(Some(fold(kimi_work())))).unwrap();
     let pool = paid.activation_pool(&kimi_id()).cloned().unwrap();
-    assert_eq!(pool.bonus_paid.len(), 2, "paid at the next span with room, ActiveLimited or not");
-    assert!(pool.probe_credited.is_empty());
+    assert_eq!(pool.scheduled_sompi, 0, "flushed at the next span with room");
+    assert!(payout_of(&paid, 2).is_some() && payout_of(&paid, 3).is_some());
 }
 
 /// **Frozen moves the budgets to the row's own `withheld`, never to `panel_reserve_sompi`** (the
@@ -486,14 +567,17 @@ fn an_empty_pool_map_leaves_every_root_unchanged() {
     }
     assert_eq!(roots[0], roots[1], "an empty map roots as the build without it");
     // And one row does move it: the block is Some-only, not absent.
-    let t = to_audit(0, &[]);
+    let t = to_audit(0, &[2, 3]);
+    assert_eq!(t.before.activation_readiness_landed(&kimi_id(), &bond_key(2)), Some(t.audit - 2), "a Candidate's landing is recorded");
     let mut cleared = t.before.clone();
     cleared.activation_pools.clear();
     cleared.activation_pool_counters = Default::default();
+    cleared.activation_readiness_landed.clear();
     assert_ne!(cleared.state_root(), t.before.state_root(), "a pool row is in the root");
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&t.before)).unwrap();
     let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
     assert_eq!(back.activation_pools, t.before.activation_pools, "the 0xB5 tail round-trips");
+    assert_eq!(back.activation_readiness_landed, t.before.activation_readiness_landed, "the landing records with it");
     assert_eq!(back.into_state(&params(), Some(t.before.state_root())).unwrap().state_root(), t.before.state_root());
 }
 
@@ -511,6 +595,10 @@ fn the_pool_invariants_are_checked_on_import() {
     refused(&|s| s.activation_pools.get_mut(&kimi_id()).unwrap().prep_sompi += 1);
     refused(&|s| s.activation_pool_counters.paid_sompi += 1);
     refused(&|s| s.activation_pools.get_mut(&kimi_id()).unwrap().prep_paid = vec![h64(2), h64(1)]);
+    // I5: a scheduled payout the row does not account for.
+    refused(&|s| {
+        s.activation_pool_scheduled.insert((kimi_id(), h64(0x9A02)), 7);
+    });
     refused(&|s| {
         let row = s.activation_pools.get(&kimi_id()).cloned().unwrap();
         s.activation_pools.insert(h64(0xDEAD), row.clone());
@@ -568,9 +656,21 @@ fn a_probe_final_credits_its_credited_seats_operators() {
     let (s5, d5) =
         apply_palw_transition_v2_with_extras(&s4, &p, &ctx(5, 124, 5), &[], None, false, false, false, false, &extras).unwrap();
     assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the premise: a Final");
-    let mut credited = vec![op_id(21), op_id(22)];
-    credited.sort();
-    assert_eq!(s5.activation_pool(&h64(1)).unwrap().probe_credited, credited, "the two Valid seats' operators, not the silent third");
+    let mut credited = vec![
+        PalwActivationCreditV1 { operator: op_id(21), bond: bond_key(1), claim: claim_id },
+        PalwActivationCreditV1 { operator: op_id(22), bond: bond_key(2), claim: claim_id },
+    ];
+    credited.sort_by_key(|credit| credit.operator);
+    assert_eq!(
+        s5.activation_pool(&h64(1)).unwrap().probe_credited,
+        credited,
+        "the two Valid seats' operators, with their credited bonds and the claim, not the silent third"
+    );
     assert!(d5.entries.iter().any(|entry| matches!(entry, PalwDeltaEntryV2::ActivationPool { .. })));
     assert_eq!(revert_delta_v2(&s5, &d5, &p).unwrap().state_root(), s4.state_root(), "and it reverts with its block");
+    // **The fix round's L2: a conviction of that Final takes its credits back** — they were earned
+    // serving a claim a court has since proved false.
+    let mut b = TransitionBuilder::new(&s5, &p, false, false, false, false, &extras);
+    b.reverse_convicted_final(&ctx(6, 125, 6), claim_id, PalwVoidReasonV2::CourtFraud).expect("the Final reverses");
+    assert!(b.state.activation_pool(&h64(1)).unwrap().probe_credited.is_empty(), "the convicted Final's credits are gone");
 }

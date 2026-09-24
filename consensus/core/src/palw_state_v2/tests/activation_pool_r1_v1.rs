@@ -298,3 +298,31 @@ fn r1_testnet_11_resolves_no_pool_and_keeps_the_old_walk() {
     }
     assert_eq!(dormant[1], 0, "with R1 forced, no genesis row is reclaimed");
 }
+
+/// **The pool's fix round, L4: a Dormant class registered again re-enters as a registration.** R2
+/// stops stepping a Dormant class's row, so the row a re-registration finds is the one its class held
+/// when it went quiet — `Active` here. Past the fence the registration rewrites it to the entry state
+/// (`Candidate`, the jury a registration owes), and keeps the class's pool; the pool-off twin keeps
+/// the stale `Active` row, as the old rule always did.
+#[test]
+fn l4_a_dormant_class_registered_again_re_enters_as_a_candidate() {
+    let p = palw_t12_shipped_params();
+    let b = bundle_of(&p);
+    let mut rows = Vec::new();
+    for extras in [card_extras(&p, None), card_extras(&p, Some(false))] {
+        let s0 = genesis_of(&b, true, &extras);
+        let (class_id, reg) = bought(&b, &s0, 71_003);
+        let mut s1 = fold_at(&b, &s0, 2, 2, std::slice::from_ref(&reg), &extras);
+        let mut row = s1.model_lifecycle(&class_id).cloned().expect("a row");
+        row.state = PalwModelLifecycleV1::Active;
+        s1.set_model_lifecycle_for_tests(class_id, row);
+        let (mut block, mut daa) = (2u64, 2u64);
+        let s = idle(&b, s1, &mut block, &mut daa, u64::from(b.state.reclaim_epochs()) + 1, &extras);
+        assert!(is_dormant(&s, &class_id), "the premise: reclaimed");
+        let again = fold_at(&b, &s, block + 1, daa + 1, &[reg], &extras);
+        assert!(matches!(again.class(&class_id).map(|c| &c.status), Some(PalwClassStatusV2::Active)), "registered again");
+        rows.push((again.model_lifecycle(&class_id).map(|row| row.state), again.activation_pool(&class_id).is_some()));
+    }
+    assert_eq!(rows[0], (Some(PalwModelLifecycleV1::Candidate), true), "past the fence: a Candidate again, its pool kept");
+    assert_eq!(rows[1], (Some(PalwModelLifecycleV1::Active), false), "the old rule keeps the stale row");
+}

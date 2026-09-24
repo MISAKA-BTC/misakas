@@ -2423,6 +2423,8 @@ mod mockery {
                 total_paid_sompi: mock(),
                 total_withheld_sompi: mock(),
                 total_available_sompi: mock(),
+                scheduled_sompi: mock(),
+                class_is_floor: mock(),
             }
         }
     }

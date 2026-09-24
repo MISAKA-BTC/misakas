@@ -1426,6 +1426,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwActivationPoolResponse>, protowire
         total_paid_sompi: item.total_paid_sompi,
         total_withheld_sompi: item.total_withheld_sompi,
         total_available_sompi: item.total_available_sompi,
+        scheduled_sompi: item.scheduled_sompi,
+        class_is_floor: item.class_is_floor,
         error: None,
     }
 });
@@ -3389,6 +3391,8 @@ try_from!(item: &protowire::GetPalwActivationPoolResponseMessage, RpcResult<kasp
         total_paid_sompi: item.total_paid_sompi,
         total_withheld_sompi: item.total_withheld_sompi,
         total_available_sompi: item.total_available_sompi,
+        scheduled_sompi: item.scheduled_sompi,
+        class_is_floor: item.class_is_floor,
     }
 });
 try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {

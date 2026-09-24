@@ -46,6 +46,9 @@ pub(crate) fn sponsor_refusal(r: &GetPalwActivationPoolResponse, amount: u64) ->
     if !r.class_found {
         return Some(format!("this chain holds no class {}", r.class_id));
     }
+    if r.class_is_floor {
+        return Some(format!("class {} is the floor: no rule pays an Activation Pool of it", r.class_id));
+    }
     if r.class_status == "frozen" {
         return Some(format!("class {} is Frozen: a proven-bad class takes no sponsor", r.class_id));
     }
@@ -92,7 +95,13 @@ pub async fn pool(ctx: &Ctx, class_text: &str) -> CliResult {
             "  activation     {} — (b): paid at Probation → ActiveLimited to the operators credited on its probes",
             msk(r.bonus_sompi)
         );
-        println!("  funded         {} (paid {}, withheld {})", msk(r.funded_sompi), msk(r.paid_sompi), msk(r.withheld_sompi));
+        println!(
+            "  funded         {} (paid {}, owed and queued next {}, withheld {})",
+            msk(r.funded_sompi),
+            msk(r.paid_sompi),
+            msk(r.scheduled_sompi),
+            msk(r.withheld_sompi)
+        );
         println!("  opened         DAA {}", r.opened_daa);
         if r.prep_reward_now_sompi > 0 {
             println!("  (a) now        {} per prepared juror (cap {})", msk(r.prep_reward_now_sompi), msk(r.prep_cap_now_sompi));
@@ -204,6 +213,10 @@ mod tests {
         assert!(
             sponsor_refusal(&GetPalwActivationPoolResponse { pool_armed: false, ..live.clone() }, 1 << 40)
                 .is_some_and(|why| why.contains("does not arm"))
+        );
+        assert!(
+            sponsor_refusal(&GetPalwActivationPoolResponse { class_is_floor: true, ..live.clone() }, 1 << 40)
+                .is_some_and(|why| why.contains("floor"))
         );
         assert!(
             sponsor_refusal(&GetPalwActivationPoolResponse { class_found: false, ..live.clone() }, 1 << 40)

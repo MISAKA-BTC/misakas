@@ -11275,6 +11275,10 @@ pub struct GetPalwActivationPoolResponse {
     pub total_withheld_sompi: u64,
     /// Chain-wide `prep + bonus` over every pool (the counters, saturated to u64).
     pub total_available_sompi: u64,
+    /// Decided and owed, not yet flushed into the payout queue (the fix round's F5).
+    pub scheduled_sompi: u64,
+    /// The class is the network's floor, which takes no top-up (F3).
+    pub class_is_floor: bool,
 }
 
 impl Serializer for GetPalwActivationPoolResponse {
@@ -11314,6 +11318,8 @@ impl Serializer for GetPalwActivationPoolResponse {
         store!(u64, &self.total_paid_sompi, writer)?;
         store!(u64, &self.total_withheld_sompi, writer)?;
         store!(u64, &self.total_available_sompi, writer)?;
+        store!(u64, &self.scheduled_sompi, writer)?;
+        store!(bool, &self.class_is_floor, writer)?;
         Ok(())
     }
 }
@@ -11356,6 +11362,8 @@ impl Deserializer for GetPalwActivationPoolResponse {
             total_paid_sompi: load!(u64, reader)?,
             total_withheld_sompi: load!(u64, reader)?,
             total_available_sompi: load!(u64, reader)?,
+            scheduled_sompi: load!(u64, reader)?,
+            class_is_floor: load!(bool, reader)?,
         })
     }
 }

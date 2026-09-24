@@ -471,6 +471,27 @@ pub fn palw_admission_jury_seed_v1(class_id: &Hash64, span: u64, anchor_block: &
     finish64(state)
 }
 
+/// **ADR-0147's jury seed without the anchor's block hash** (ADR-0152-adjacent: Activation Pool, the
+/// fix round's F2) — `H(domain ‖ class ‖ span ‖ anchor execution key)`, under its own domain.
+///
+/// [`palw_admission_jury_seed_v1`] hashes the anchor's chain block as well, and ADR-0130's own
+/// argument for the lane (`PalwExecSeedAnchorV1`) is that a block hash is not seed material: every
+/// nonce of the header's bucket and every timestamp gives the same winning draw and a different
+/// hash, so the anchor's producer re-rolls it for free. Measured on the review's probe (P1): five
+/// colluding operators of twenty seat a jury majority on 7.24 % of free re-rolls — and once the
+/// Activation Pool pays drawn jurors, choosing the jury is choosing the payees. Past
+/// `Params::palw_activation_pool` the jury is drawn from this seed; moving it costs another
+/// execution that wins its draw. Below the fence the v1 seed, byte for byte.
+pub const PALW_ADMISSION_JURY_SEED_V2_DOMAIN: &[u8] = b"misaka-palw/admission-jury/seed/v2";
+
+pub fn palw_admission_jury_seed_v2(class_id: &Hash64, span: u64, execution_key: &Hash64) -> Hash64 {
+    let mut state = keyed64(PALW_ADMISSION_JURY_SEED_V2_DOMAIN);
+    state.update(class_id.as_byte_slice());
+    state.update(&span.to_le_bytes());
+    state.update(execution_key.as_byte_slice());
+    finish64(state)
+}
+
 /// `PalwManifestVerdictV1`, as a flag the observation carries (`Valid` or not).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PalwManifestVerdictV1Flag {

@@ -2759,7 +2759,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             opened_daa: pool.opened_daa,
             prep_paid: hex_ids(&pool.prep_paid),
             bonus_paid: hex_ids(&pool.bonus_paid),
-            probe_credited: hex_ids(&pool.probe_credited),
+            probe_credited: pool.probe_credited.iter().map(|credit| credit.operator.to_string()).collect(),
             registrant_operator: read.registrant_operator.map(|id| id.to_string()).unwrap_or_default(),
             prep_reward_now_sompi: read.prep_reward_now_sompi,
             prep_cap_now_sompi: read.prep_cap_now_sompi,
@@ -2777,6 +2777,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             total_paid_sompi: saturated(read.counters.paid_sompi),
             total_withheld_sompi: saturated(read.counters.withheld_sompi),
             total_available_sompi: saturated(read.counters.prep_sompi.saturating_add(read.counters.bonus_sompi)),
+            scheduled_sompi: pool.scheduled_sompi,
+            class_is_floor: read.class_is_floor,
         })
     }
 

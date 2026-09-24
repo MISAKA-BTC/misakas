@@ -2801,5 +2801,7 @@ message GetPalwActivationPoolResponseMessage {
   uint64 totalPaidSompi = 32;
   uint64 totalWithheldSompi = 33;
   uint64 totalAvailableSompi = 34;
+  uint64 scheduledSompi = 35;
+  bool classIsFloor = 36;
   RPCError error = 1000;
 }
