@@ -58,6 +58,12 @@ fn gate(armed: bool) -> Gate {
     } else {
         let mut params = config.params.clone();
         params.palw_offence_attribution = None;
+        // ADR-0152: R-core+ is armed above this fence on testnet-12 and refuses to stand without
+        // it, so the fence-off twin takes R-core+ off too (every R-core+ writer is dormant, so the
+        // twin folds exactly as it did before the v22 skeleton).
+        params.palw_rcore_plus = None;
+        params.palw_rcore_conservative_classes = &[];
+        params.sync_palw_rcore_plus();
         ConfigBuilder::new(params).skip_proof_of_work().build()
     };
     config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
@@ -176,6 +182,14 @@ impl Gate {
                 locked_sompi: 0,
                 expiry_daa: 1_000_000,
                 settled_at_final: 0,
+                job_identity: kaspa_consensus_core::Hash64::default(),
+                free_prompt: false,
+                trace_root: kaspa_consensus_core::Hash64::default(),
+                segment_count: 0,
+                licence_door: None,
+                basis_k: 0,
+                g_res_sompi: 0,
+                escrowed_reward: 0,
             },
         );
         carriage.into_state(&self.bundle.state, None).expect("consistent")

@@ -74,16 +74,22 @@ const BIND_FORCED_ID_ON_OWN_ROOT: &str = "Ok(())";
 const BIND_REAL_SHAPED: &str = "Ok(())";
 /// The licensed claim's state root, the seat's lock and collateral, and the state root and
 /// collateral after the V1 fold convicts that seat on the real-shaped object.
+///
+/// **The three roots re-pinned once for ADR-0152's v22 skeleton**: `PALW_STATE_V2_VERSION` 21 -> 22
+/// and the record appends (the claim's `job_identity`/`rcore`, the lock's `attested`/`segments`, the
+/// consumed offence's `collected`/`claim_id`, all dormant) move every root; the lock, both
+/// collaterals and every verdict string are unchanged, which is the parity this file pins. v21:
+/// licensed `5406163a…`, after the conviction `9c9d4a01…`, the next empty block `4c1670c8…`.
 const ROOT_LICENSED: &str =
-    "5406163a915839d561d18b1acc5bbd0409a8cf562d2e7d6e2f2810009c824f35242857ff5d596d0985dd3bd4b94fa9332fa383e4e7ab44c19a3c749065edb96a";
+    "fa02c3ffa9521e5c8daed3ff4ebdf689da96217c6dc4741e4cf09b347cb861b2258376fb6d1f2d412e6460b301ab0c15e804bacc9bb14caa59396cf841856770";
 const SEAT_LOCK_SOMPI: u128 = 162_677_341;
 const SEAT_COLLATERAL_BEFORE: u64 = 1_000_000_000_000;
 const ROOT_AFTER_V1_CONVICTION: &str =
-    "9c9d4a01c0d6249cdd52d8ef770a7cd6b2af3f99ce7183934eadd33ffb2656680736d49eea868c26a0ed1b794edff088fd0f4798d3f668e9b5cdac29d0b102f7";
+    "46e8997848ab4d0636d2ddcb0c65bd05f5fec6e863433c53b82b851e488feaaae66b4200b463d7d66c30fa77c22559f8d0444430f4f46c95920b74d9e47bdec5";
 const SEAT_COLLATERAL_AFTER: u64 = 999_837_322_659;
 /// The root the next block folds to when it carries nothing.
 const ROOT_EMPTY_NEXT: &str =
-    "4c1670c8e0ecce4eba5fc1a8cea158eade81e4750fcf289c85f77259a5a41615a4f0a0add15cdb9ac9bca78f0a462b0b5c9a9bf215cd688677087392dc7dfcbc";
+    "a5b94a7ab98bad42ddb2e28fd44a387d7e31dce1f745acac9e5fda30e5894563102c49264b5c3ddd7a69a1e1b39f4779093847246e795b2e7cdff424e0b284e5";
 
 // ---- The fixture ---------------------------------------------------------------------------------
 

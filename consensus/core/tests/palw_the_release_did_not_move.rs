@@ -39,8 +39,13 @@ use kaspa_consensus_core::config::params::{
 /// every V2 bundle's state, so both ids move on every V2 preset while the schedule id does not (the
 /// audit's fence is `None` here, and Some-only). The params-id pin in `config::params` moved in
 /// `cca52e92`; this file was missed there. Previous: params `33bdff0b…`, identity `ca11f05d…`.
-const T11_CONSENSUS_PARAMS_ID: &str = "c99bb4f43891dc637e4d5634816c46b33d89f07a381875e2ce54bd3ef80ac74a";
-const T11_CONSENSUS_IDENTITY_ID: &str = "19dbdbb8afd374aafa14f7fd7457fac7304a19df697706f69b34be0e1e995d4e";
+///
+/// **And once more for ADR-0152's v22 skeleton** (`PALW_STATE_V2_VERSION` 21 -> 22, hashed into the
+/// V2 arm): the params and identity ids move with the version alone — `palw_rcore_plus` and C7's list
+/// are Some-only / non-empty-only and absent here — and the schedule id does not move. Previous:
+/// params `c99bb4f4…`, identity `19dbdbb8…`.
+const T11_CONSENSUS_PARAMS_ID: &str = "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29";
+const T11_CONSENSUS_IDENTITY_ID: &str = "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f";
 /// **Re-pinned 2026-09-23 for ADR-0151's `palw_economic_safety`, and only this one of the three.**
 ///
 /// `consensus_schedule_id` writes every score `for_each_fence` visits, and a `None` Some-only fence

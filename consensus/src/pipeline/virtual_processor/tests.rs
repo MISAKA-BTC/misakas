@@ -16172,6 +16172,9 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 // this module so it reuses `TestContext` and the harness identities.
 mod t12_clock_floor;
 mod t12_offence_attribution_gate;
+// ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
+// refused by the fold until their owners land them.
+mod t12_rcore_skeleton_gate;
 mod t12_round_lane_e2e;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.

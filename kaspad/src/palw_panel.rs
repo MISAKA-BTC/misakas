@@ -90,6 +90,9 @@ pub(crate) fn own_claim_events_v1(
                     R::CourtFraud => "court_fraud",
                     R::ProducerWithholding => "producer_withholding",
                     R::NoCapablePanel => "no_capable_panel",
+                    // ADR-0152 v22 skeleton: declared (SR-9, Q-5), written by no rule yet.
+                    R::UnavailableQuorum => "unavailable_quorum",
+                    R::NotReplayBacked => "not_replay_backed",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -6439,6 +6442,12 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassManifestV2 { .. } => "ClassManifestV2",
         PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         PalwConsensusObjectV2::OptimisticLicensed { .. } => "OptimisticLicensed",
+        // ADR-0152 v22 skeleton: declared; the chain drops each until its owner lands it, and no
+        // path in this node builds one yet.
+        PalwConsensusObjectV2::ReporterCommitted { .. } => "ReporterCommitted",
+        PalwConsensusObjectV2::ReporterRevealed { .. } => "ReporterRevealed",
+        PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => "MaterialDisclosedV2",
+        PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => "PanelUnavailableQuorum",
         PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => "ModelLineBenefitsDeclared",
         PalwConsensusObjectV2::ModelBuy { .. } => "ModelBuy",

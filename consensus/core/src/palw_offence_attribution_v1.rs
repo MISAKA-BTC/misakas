@@ -649,6 +649,8 @@ mod tests {
             work_id: None,
             phase,
             rights_reserved: 0,
+            job_identity: Hash64::default(),
+            rcore: crate::palw_state_v2::PalwClaimRcoreV1::default(),
         }
     }
 
@@ -677,6 +679,14 @@ mod tests {
             locked_sompi: 3,
             expiry_daa: 5_000,
             settled_at_final: 0,
+            job_identity: Hash64::default(),
+            free_prompt: false,
+            trace_root: Hash64::default(),
+            segment_count: 0,
+            licence_door: None,
+            basis_k: 0,
+            g_res_sompi: 0,
+            escrowed_reward: 0,
         }
     }
 

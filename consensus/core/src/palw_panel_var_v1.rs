@@ -13,8 +13,10 @@
 //! posts `palw_state_v2::palw_bond_registration_floor_v1` — the producer floor, by the user's
 //! decision on 2026-09-24 DoS audit #12 (c).)
 
+use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
 use crate::palw_offence_v1::{PALW_PANEL_COLLUDING_QUORUM_V1, palw_min_slashable_per_colluding_seat_v1};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwClaimStateV2, PalwVoidReasonV2};
+use crate::palw_verification_v2::PalwSegmentMaskV2;
 use crate::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
 use std::collections::BTreeMap;
@@ -183,6 +185,15 @@ pub struct PalwSlashableLockV1 {
     /// the lock stays live until BOTH the DAA clock has run its window AND that many further
     /// anchors have settled; below it the field is carried and never read.
     pub settled_at_final: u64,
+    /// **ADR-0152 v3.1 L-3 / Q-6 (v22 row 9): the segments this seat's `Valid` attested** — the
+    /// full mask for a V1/V2 receipt, a V3 receipt's own mask (SR-10), so a conviction charges the
+    /// lock only for a fault inside what the seat vouched for. Appended by the v22 skeleton;
+    /// [`PalwSegmentMaskV2::NONE`] on every lock until S-3's `lock_valid_seat` writes it past
+    /// `Params::palw_rcore_plus`. The record stays `Copy`.
+    pub attested: PalwSegmentMaskV2,
+    /// **The claim's segment cut when the lock was written** (`palw_segment_count_v2(seat_count)`,
+    /// v22 row 9), so `attested` can be placed after the panel record is gone. 0 until S-3 writes it.
+    pub segments: u16,
 }
 
 impl PalwSlashableLockV1 {
@@ -267,6 +278,31 @@ pub struct PalwPanelLiabilityRecordV1 {
     pub expiry_daa: u64,
     /// The settled-anchor count when the liability began — see [`PalwSlashableLockV1::settled_at_final`].
     pub settled_at_final: u64,
+    // ---- ADR-0152 v3.1 v22 row 7 (M2, the audit's SPEC §4.1): the attribution copies. Declared by
+    // the v22 skeleton and written by nobody yet: M2's `persist_panel_liability` writes them only
+    // where `offence_attribution_active`, and they are 0 / false everywhere else. ----
+    /// The claim's recorded job identity (`PalwClaimStateV2::job_identity`); 0 = not recorded.
+    pub job_identity: Hash64,
+    /// The claim's lane: `true` for a free-prompt claim (the identity checks J1/J5 read it).
+    pub free_prompt: bool,
+    /// The claim's committed trace root (identity check J4).
+    pub trace_root: Hash64,
+    /// `palw_segment_count_v2(panel.seats.len())`, or 0 — places a V3 receipt after retirement.
+    pub segment_count: u16,
+    // ---- ADR-0152 v3.1 v22 row 8 (S): what the conviction funnel reads after the claim retires.
+    // Declared by the v22 skeleton; written by S at Final and at void past `Params::palw_rcore_plus`
+    // (S-3), `None` / 0 on every record until then. ----
+    /// The door of the Final-basis licence set, copied from `claim.rcore.licence_door`; `None` for
+    /// a claim voided before any licence (R8).
+    pub licence_door: Option<PalwLicenceDoorTagV1>,
+    /// Q-3's recount of that set (`claim.rcore.basis_k`); 0 when unlicensed.
+    pub basis_k: u8,
+    /// **The residual fraud gain** `palw_max_fraud_gain_v1(facts) − escrowed_reward`, priced from the
+    /// facts the lock was priced from, so IMPL-15's `G = g_res_sompi + escrowed_reward` is
+    /// computable after the claim record retires (S-SPEC 1a row 4).
+    pub g_res_sompi: u128,
+    /// The claim's escrowed reward at Final or void (S-SPEC 1a row 5).
+    pub escrowed_reward: u64,
 }
 
 /// Evidence window after Final: locks (and PanelFalseValid bind) last until this DAA.
@@ -362,7 +398,17 @@ impl PalwSlashableExposureLedgerV1 {
         if self.available(&bond, now_daa) < required {
             return false;
         }
-        self.locks.insert((bond, claim), PalwSlashableLockV1 { claim, amount: required, expiry_daa, settled_at_final: 0 });
+        self.locks.insert(
+            (bond, claim),
+            PalwSlashableLockV1 {
+                claim,
+                amount: required,
+                expiry_daa,
+                settled_at_final: 0,
+                attested: PalwSegmentMaskV2::NONE,
+                segments: 0,
+            },
+        );
         true
     }
 
@@ -583,6 +629,14 @@ mod tests {
             locked_sompi: 4,
             expiry_daa: expiry,
             settled_at_final: 0,
+            job_identity: Hash64::default(),
+            free_prompt: false,
+            trace_root: Hash64::default(),
+            segment_count: 0,
+            licence_door: None,
+            basis_k: 0,
+            g_res_sompi: 0,
+            escrowed_reward: 0,
         };
         assert!(palw_liability_still_locks_v1(&record, 124), "Final is not immunity");
         assert!(palw_liability_still_locks_v1(&record, 143));
@@ -700,6 +754,8 @@ mod tests {
             work_id: None,
             phase: PalwClaimPhaseV2::Provisional,
             rights_reserved: 0,
+            job_identity: Hash64::default(),
+            rcore: crate::palw_state_v2::PalwClaimRcoreV1::default(),
         }
     }
 
@@ -835,7 +891,14 @@ mod tests {
     #[test]
     fn the_second_clock_holds_a_lock_for_at_most_two_court_windows_past_its_expiry() {
         let (window_court, depth) = (3_000u64, 30u64);
-        let lock = PalwSlashableLockV1 { claim: Hash64::from_u64_word(1), amount: 7, expiry_daa: 10_000, settled_at_final: 5 };
+        let lock = PalwSlashableLockV1 {
+            claim: Hash64::from_u64_word(1),
+            amount: 7,
+            expiry_daa: 10_000,
+            settled_at_final: 5,
+            attested: PalwSegmentMaskV2::NONE,
+            segments: 0,
+        };
         let bound = lock.expiry_daa + 2 * window_court;
         // Fewer than `depth` anchors since the liability began, throughout.
         let settled = 5 + depth - 1;
@@ -867,8 +930,14 @@ mod tests {
         assert!(prunable(expiry + wc, short, None), "an escaped second clock leaves the DAA horizon");
         assert!(!prunable(expiry + 2 * wc - 1, short, Some(depth)), "the second clock still holds it");
         assert!(prunable(expiry + 2 * wc, short, Some(depth)), "and not past its 2 x window_court bound");
-        let lock =
-            PalwSlashableLockV1 { claim: Hash64::from_u64_word(1), amount: 7, expiry_daa: expiry, settled_at_final: settled_at };
+        let lock = PalwSlashableLockV1 {
+            claim: Hash64::from_u64_word(1),
+            amount: 7,
+            expiry_daa: expiry,
+            settled_at_final: settled_at,
+            attested: PalwSegmentMaskV2::NONE,
+            segments: 0,
+        };
         let record = PalwPanelLiabilityRecordV1 {
             claim_id: Hash64::from_u64_word(1),
             work_id: Hash64::from_u64_word(2),
@@ -882,6 +951,14 @@ mod tests {
             locked_sompi: 7,
             expiry_daa: expiry,
             settled_at_final: settled_at,
+            job_identity: Hash64::default(),
+            free_prompt: false,
+            trace_root: Hash64::default(),
+            segment_count: 0,
+            licence_door: None,
+            basis_k: 0,
+            g_res_sompi: 0,
+            escrowed_reward: 0,
         };
         for now in [expiry - 1, expiry, expiry + wc - 1, expiry + wc, expiry + 2 * wc - 1, expiry + 2 * wc, expiry + 3 * wc] {
             for settled_now in [short, full] {
@@ -892,5 +969,68 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// **ADR-0152 v22: the lock's and the liability row's appends ride last, in the ADR's order**
+    /// (S-SPEC 1a rows 2–7): the lock gains `attested` then `segments` after `settled_at_final` and
+    /// stays `Copy`; the row gains M2's four (`job_identity`, `free_prompt`, `trace_root`,
+    /// `segment_count`) then S's four (`licence_door`, `basis_k`, `g_res_sompi`, `escrowed_reward`).
+    #[test]
+    fn the_v22_lock_and_liability_appends_round_trip_in_order() {
+        let lock = PalwSlashableLockV1 {
+            claim: Hash64::from_u64_word(1),
+            amount: 7,
+            expiry_daa: 8,
+            settled_at_final: 9,
+            attested: PalwSegmentMaskV2(0x0102_0304),
+            segments: 0x0506,
+        };
+        let copied = lock; // `Copy`: the fold copies locks out of the map.
+        let bytes = borsh::to_vec(&copied).unwrap();
+        assert_eq!(borsh::from_slice::<PalwSlashableLockV1>(&bytes).unwrap(), lock);
+        assert_eq!(bytes.len(), 64 + 16 + 8 + 8 + 4 + 2);
+        assert_eq!(&bytes[64 + 16 + 8 + 8..], &[0x04, 0x03, 0x02, 0x01, 0x06, 0x05], "`attested` then `segments`, last");
+
+        let record = PalwPanelLiabilityRecordV1 {
+            claim_id: claim(1),
+            work_id: claim(2),
+            class_id: claim(3),
+            execution_root: claim(4),
+            output_root: claim(5),
+            executor_bond: bond(6),
+            voided_daa: None,
+            void_reason: None,
+            valid_signers: Vec::new(),
+            locked_sompi: 7,
+            expiry_daa: 8,
+            settled_at_final: 9,
+            job_identity: claim(10),
+            free_prompt: true,
+            trace_root: claim(11),
+            segment_count: 0x0C0D,
+            licence_door: Some(PalwLicenceDoorTagV1::Coverage),
+            basis_k: 2,
+            g_res_sompi: 0x0E,
+            escrowed_reward: 0x0F,
+        };
+        let bytes = borsh::to_vec(&record).unwrap();
+        assert_eq!(borsh::from_slice::<PalwPanelLiabilityRecordV1>(&bytes).unwrap(), record);
+        let tail = [
+            claim(10).as_byte_slice().to_vec(),
+            vec![1],
+            claim(11).as_byte_slice().to_vec(),
+            0x0C0Du16.to_le_bytes().to_vec(),
+            vec![1, 1], // Some(Coverage)
+            vec![2],
+            0x0Eu128.to_le_bytes().to_vec(),
+            0x0Fu64.to_le_bytes().to_vec(),
+        ]
+        .concat();
+        assert!(bytes.ends_with(&tail), "M2's four then S's four, after `settled_at_final`");
+        let head = bytes.len() - tail.len();
+        assert_eq!(&bytes[head - 8..head], &9u64.to_le_bytes(), "`settled_at_final` stays right before them");
+        // A claim voided before any licence has no door (R8).
+        let unlicensed = PalwPanelLiabilityRecordV1 { licence_door: None, basis_k: 0, ..record };
+        assert_eq!(borsh::from_slice::<PalwPanelLiabilityRecordV1>(&borsh::to_vec(&unlicensed).unwrap()).unwrap(), unlicensed);
     }
 }

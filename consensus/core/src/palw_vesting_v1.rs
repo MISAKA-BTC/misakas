@@ -7,11 +7,17 @@
 //! (V-5), and the reward counts as recoverable value only because nothing can move it out early
 //! (V-6: a row is not a UTXO, not collateral, not committed stake).
 //!
-//! This module carries the TYPE only, so the audit session's S can write its stubs
-//! (`vesting_row(&claim_id) -> Option<&PalwVestingRowV1>`, `burn_vesting_row`) against it before
-//! the rows themselves land (the same arrangement as P7's `PalwPanelStakeDrawV1`). The map, the
-//! counters, the `Vesting`/`VestingNote` delta entries (71–73, after S's 66–70), step 3d and A-KEY
-//! land with the vesting work; nothing here is in any state root yet.
+//! This module carries the TYPES only, so the audit session's S can write its stubs
+//! (`vesting_row(&claim_id) -> Option<&PalwVestingRowV1>`, `burn_vesting_row`) against them before
+//! the rows themselves land (the same arrangement as P7's `PalwPanelStakeDrawV1`).
+//!
+//! **The v22 skeleton (ADR-0152 v3.1 §6 rows 10, 17, 25) declared the layout around them**: the
+//! rooted map `PalwChainStateV2::vesting` (`claim_id → PalwVestingRowV1`) and the three counters
+//! ([`PalwVestingCountersV1`]) sit after S's five rooted items in the one R-core+ root block and
+//! carriage tail, and the delta journal carries `Vesting` (71), `VestingNote` (72, apply and revert
+//! are no-ops; payload [`PalwVestingNoteV1`], phase2-plan §2.5) and `VestingCounters` (73). Every
+//! writer is dormant: the map is empty and the counters are zero on every network until the
+//! vesting work (V-1…V-8, step 3d, A-KEY) lands, so none of it is hashed or carried yet.
 //!
 //! **The attribution fields are copies** (v3.1 N8, agreed with the audit): `job_identity`,
 //! `free_prompt`, `trace_root` and `segment_count` are copied at Final from the claim record and its
@@ -22,6 +28,7 @@
 use kaspa_hashes::Hash64;
 
 use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+use crate::palw_offence_v1::PalwOffenceKindV1;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwPayoutV2};
 
 /// **One Final claim's vested reward** (ADR-0152 V-1, v3.1), exactly the ADR's field list and order.
@@ -64,6 +71,101 @@ pub struct PalwVestingRowV1 {
     pub settled_at_final: u64,
     /// The maturity latch (X29): set once, never cleared.
     pub matured_at: Option<u64>,
+}
+
+/// **The vesting counters** (ADR-0152 v3.1 V-3; v22 row 17's `vesting_created_sompi`,
+/// `vesting_moved_sompi`, `vesting_burned_sompi`): every sompi a row was created with, moved into
+/// `pending_payouts` by step 3d, or burned by a conviction, in that order. One struct, encoded and
+/// hashed as the three `u128`s in that order; rooted in the R-core+ block after S's items, and
+/// journaled whole by `PalwDeltaEntryV2::VestingCounters` (73). Zero on every network until the
+/// vesting writers land — and zero is not hashed (the block is Some-only).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwVestingCountersV1 {
+    pub created: u128,
+    pub moved: u128,
+    pub burned: u128,
+}
+
+impl PalwVestingCountersV1 {
+    /// All three zero: the dormant value, which the R-core+ root block does not hash.
+    pub fn is_zero(&self) -> bool {
+        self.created == 0 && self.moved == 0 && self.burned == 0
+    }
+}
+
+/// Which leg of a vesting move a [`PalwVestingLegV1`] is (phase2-plan §2.2). Appended only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwVestingLegKindV1 {
+    Producer,
+    Seat,
+    Reserve,
+    Reporter,
+}
+
+/// **One leg of a vesting move** (phase2-plan §2.2): one queue write, or the reserve. Carried in
+/// the journal-only [`PalwVestingNoteV1`], so its encoding is part of the v22 delta layout.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwVestingLegV1 {
+    pub kind: PalwVestingLegKindV1,
+    /// `None` for the reserve.
+    pub payee_bond: Option<PalwBondKeyV2>,
+    /// Fixed at Final (a row's legs) or at conviction (a reporter's).
+    pub payload: Hash64,
+    pub amount: u64,
+    /// The `pending_payouts` key the leg lands on; `None` for the reserve.
+    pub queue_key: Option<Hash64>,
+}
+
+impl PalwVestingLegV1 {
+    /// I-4: a leg spends the per-block budget iff it is a queue write of a positive amount.
+    pub fn takes_budget(&self) -> bool {
+        self.queue_key.is_some() && self.amount > 0
+    }
+}
+
+/// Where a vesting move came from (phase2-plan §2.2).
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwVestingSourceV1 {
+    Reporter { offence_id: Hash64 },
+    Row { claim_id: Hash64 },
+}
+
+/// **The cause of a vesting change, journaled and never applied** (phase2-plan §2.5; the payload of
+/// `PalwDeltaEntryV2::VestingNote`, 72). A row deletion looks the same whether the row moved or
+/// burned, and both can happen in one block; the note says which, the way
+/// `palw_escrow_destroyed_by_delta_v2` reads facts off the delta instead of keeping running totals
+/// in the root. Apply and revert are no-ops. Declared by the v22 skeleton; no writer emits one yet.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwVestingNoteV1 {
+    Latched {
+        claim_id: Hash64,
+        matured_at: u64,
+    },
+    /// Queue keys included.
+    Moved {
+        source: PalwVestingSourceV1,
+        legs: Vec<PalwVestingLegV1>,
+    },
+    Burned {
+        claim_id: Hash64,
+        offence_id: Hash64,
+        kind: PalwOffenceKindV1,
+        sompi: u64,
+        legs: Vec<PalwVestingLegV1>,
+    },
+    /// S4′: one seat's share of a row burned.
+    ShareBurned {
+        claim_id: Hash64,
+        seat: PalwBondKeyV2,
+        offence_id: Hash64,
+        sompi: u64,
+    },
+    ReporterAwarded {
+        offence_id: Hash64,
+        reporter: PalwBondKeyV2,
+        payload: Hash64,
+        sompi: u64,
+    },
 }
 
 #[cfg(test)]
@@ -117,5 +219,80 @@ mod tests {
         // reserve, final_daa, expiry_daa, settled_at_final, matured_at (Some: 1 + 8)
         assert_eq!(bytes.len(), prefix + seats + 8 + 8 + 8 + 8 + 1 + 8);
         assert_eq!(bytes[prefix - payout - 8 - 8 - 1 - 1], 1, "licence_door Coverage is tag 1");
+    }
+
+    /// The counters encode as the ADR's three `u128`s, in the order created, moved, burned.
+    #[test]
+    fn the_vesting_counters_encode_as_three_u128_in_the_adr_order() {
+        let c = PalwVestingCountersV1 { created: 1, moved: 2, burned: 3 };
+        let bytes = borsh::to_vec(&c).unwrap();
+        let mut want = Vec::new();
+        for v in [1u128, 2, 3] {
+            want.extend_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(bytes, want);
+        assert_eq!(borsh::from_slice::<PalwVestingCountersV1>(&bytes).unwrap(), c);
+        assert!(PalwVestingCountersV1::default().is_zero() && !c.is_zero());
+    }
+
+    /// Every note variant round-trips, at its positional tag (phase2-plan §2.5's order).
+    #[test]
+    fn every_vesting_note_round_trips_at_its_tag() {
+        let r = row();
+        let leg = PalwVestingLegV1 {
+            kind: PalwVestingLegKindV1::Seat,
+            payee_bond: Some(r.producer_bond),
+            payload: Hash64::from_bytes([9; 64]),
+            amount: 5,
+            queue_key: Some(Hash64::from_bytes([8; 64])),
+        };
+        assert!(leg.takes_budget());
+        let reserve = PalwVestingLegV1 { kind: PalwVestingLegKindV1::Reserve, payee_bond: None, queue_key: None, ..leg.clone() };
+        assert!(!reserve.takes_budget());
+        let notes = [
+            (0u8, PalwVestingNoteV1::Latched { claim_id: r.claim_id, matured_at: 3 }),
+            (
+                1,
+                PalwVestingNoteV1::Moved {
+                    source: PalwVestingSourceV1::Row { claim_id: r.claim_id },
+                    legs: vec![leg.clone(), reserve],
+                },
+            ),
+            (
+                2,
+                PalwVestingNoteV1::Burned {
+                    claim_id: r.claim_id,
+                    offence_id: Hash64::from_bytes([4; 64]),
+                    kind: PalwOffenceKindV1::CourtConviction,
+                    sompi: 7,
+                    legs: vec![leg.clone()],
+                },
+            ),
+            (
+                3,
+                PalwVestingNoteV1::ShareBurned {
+                    claim_id: r.claim_id,
+                    seat: r.producer_bond,
+                    offence_id: Hash64::from_bytes([4; 64]),
+                    sompi: 1,
+                },
+            ),
+            (
+                4,
+                PalwVestingNoteV1::ReporterAwarded {
+                    offence_id: Hash64::from_bytes([4; 64]),
+                    reporter: r.producer_bond,
+                    payload: Hash64::from_bytes([5; 64]),
+                    sompi: 2,
+                },
+            ),
+        ];
+        for (tag, note) in notes {
+            let bytes = borsh::to_vec(&note).unwrap();
+            assert_eq!(bytes[0], tag, "{note:?}");
+            assert_eq!(borsh::from_slice::<PalwVestingNoteV1>(&bytes).unwrap(), note);
+        }
+        let source = PalwVestingSourceV1::Reporter { offence_id: Hash64::from_bytes([1; 64]) };
+        assert_eq!(borsh::from_slice::<PalwVestingSourceV1>(&borsh::to_vec(&source).unwrap()).unwrap(), source);
     }
 }

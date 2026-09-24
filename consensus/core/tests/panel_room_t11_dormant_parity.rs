@@ -300,7 +300,13 @@ fn run(p: &Params, force_audit_off: bool) -> String {
 }
 
 /// The dump the parent (4064364e) writes, as its BLAKE2b-256, its length and its line count.
-const PARENT_DUMP_BLAKE2B_256: &str = "50f81bb0d6d8df4e070415b6fd2eb13040c08a0affc51deb67b166b6da0e59ea";
+///
+/// **Re-pinned once for ADR-0152's v22 skeleton**, whose `PALW_STATE_V2_VERSION` 21 -> 22 and claim
+/// record appends move every state root the dump prints (`genesis root …`, `  root …`) and nothing
+/// else it prints: the length and the line count are the parent's to the byte, as they must be when
+/// only fixed-width 128-hex roots changed. Derived from the build under test (the parent cannot print
+/// a v22 root); the v21 digest was `50f81bb0…`.
+const PARENT_DUMP_BLAKE2B_256: &str = "8254eab6f35a92cc9e73f85d2282d5a12c1d54dd29b9c8ba532195588d8e85a7";
 const PARENT_DUMP_BYTES: usize = 686_879;
 const PARENT_DUMP_LINES: usize = 1_953;
 

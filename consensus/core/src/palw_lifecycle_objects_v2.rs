@@ -448,6 +448,18 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::MaterialDisclosed { .. } => Err(
             "a data-availability disclosure must carry the producer's signature — unsigned, a third party could bind a producer to material it never published",
         ),
+        // **ADR-0152 v3.1 §6 row 24, the v22 skeleton: tags 53–56 ride, and fold nothing.** They
+        // decode now, so this stateless table decides whether a carrier is block-valid; it admits
+        // them, and the acceptance layer (`palw_v2_validate_objects`) drops each by name while the
+        // fold refuses it — a block carrying one stands, as a block carrying any object the chain
+        // refuses at acceptance does. Their shape rules (a present signature for 53 and 55, a
+        // bounded receipt list for 56, the close ceiling for 55) are their owners' to add with the
+        // rule (S-7, M3, S-5), before M5 freezes the layout; a shape refused here is a BLOCK rule,
+        // and adding one to a live chain would be a fork, so none is guessed at now.
+        PalwConsensusObjectV2::ReporterCommitted { .. }
+        | PalwConsensusObjectV2::ReporterRevealed { .. }
+        | PalwConsensusObjectV2::MaterialDisclosedV2 { .. }
+        | PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => Ok(()),
     }
 }
 
@@ -1607,6 +1619,33 @@ mod tests {
                 },
             ),
             (52, PalwConsensusObjectV2::OptimisticLicensed { claim: h64(18), receipts: Vec::new() }),
+            // ADR-0152 v3.1 §6 row 24, the v22 skeleton: appended at frozen tags.
+            (53, PalwConsensusObjectV2::ReporterCommitted { commitment: h64(19), reporter: bond(7), signature: sig() }),
+            (54, PalwConsensusObjectV2::ReporterRevealed { offence_key: h64(20), reporter: bond(7), salt: [5u8; 32] }),
+            (
+                55,
+                PalwConsensusObjectV2::MaterialDisclosedV2 {
+                    claim: h64(21),
+                    unit: crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 3 },
+                    answer: Box::new(crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                        version: 1,
+                        claim: h64(21),
+                        missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepRange { first: 0, count: 1 },
+                        binding: shard_accusation().refutation.binding,
+                        disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                            opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                                first_leaf_index: 0,
+                                leaf_hashes: vec![h64(14)],
+                                siblings: vec![],
+                            },
+                        },
+                        signature: sig(),
+                    }),
+                    discloser: bond(7),
+                    signature: sig(),
+                },
+            ),
+            (56, PalwConsensusObjectV2::PanelUnavailableQuorum { claim: h64(22), receipts: Vec::new() }),
         ]);
         for (discriminant, object) in pinned {
             assert_eq!(borsh::to_vec(&object).unwrap()[0], discriminant, "{object:?}");

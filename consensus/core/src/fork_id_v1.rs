@@ -622,6 +622,10 @@ mod tests {
             // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
             // schedule.
             "palw_offence_attribution" => params.palw_offence_attribution = Some(at),
+            // ADR-0152 R-core+: genesis-only and refused without thirteen other fences by
+            // `validate_palw_v2`, which the probe does not run — it asks only the hashers and the
+            // schedule.
+            "palw_rcore_plus" => params.palw_rcore_plus = Some(at),
             "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
             "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
             "palw_objective_offence" => params.palw_objective_offence = Some(at),

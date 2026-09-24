@@ -178,7 +178,14 @@ fn every_exit_is_released_on_the_daa_clock_after_two_court_windows_without_a_lic
     let since = last - delay; // retired long enough ago that the delay has elapsed by `last`
     assert!(expiry < e - 1 && since + delay < e - 1);
 
-    let lock = PalwSlashableLockV1 { claim: h(1), amount: 1, expiry_daa: expiry, settled_at_final: s0 };
+    let lock = PalwSlashableLockV1 {
+        claim: h(1),
+        amount: 1,
+        expiry_daa: expiry,
+        settled_at_final: s0,
+        attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+        segments: 0,
+    };
     let liability = PalwPanelLiabilityRecordV1 {
         claim_id: h(1),
         work_id: h(2),
@@ -192,6 +199,14 @@ fn every_exit_is_released_on_the_daa_clock_after_two_court_windows_without_a_lic
         locked_sompi: 1,
         expiry_daa: expiry,
         settled_at_final: s0,
+        job_identity: kaspa_consensus_core::Hash64::default(),
+        free_prompt: false,
+        trace_root: kaspa_consensus_core::Hash64::default(),
+        segment_count: 0,
+        licence_door: None,
+        basis_k: 0,
+        g_res_sompi: 0,
+        escrowed_reward: 0,
     };
     let retiring = bond(2, 0, PalwBondStatusV2::Retiring { since_daa: since, settled_at_since: s0 });
 
@@ -261,7 +276,14 @@ fn every_exit_waits_for_attempt_finals_with_no_upper_bound() {
     let delay = b.bond.withdrawal_delay_daa();
     let s0 = 1_234u64;
 
-    let lock = PalwSlashableLockV1 { claim: h(1), amount: 1, expiry_daa: 10_000, settled_at_final: s0 };
+    let lock = PalwSlashableLockV1 {
+        claim: h(1),
+        amount: 1,
+        expiry_daa: 10_000,
+        settled_at_final: s0,
+        attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+        segments: 0,
+    };
     let retiring = bond(1, 0, PalwBondStatusV2::Retiring { since_daa: 10_000, settled_at_since: s0 });
     for now in [10_000u64, 10_000 + delay, 1_000_000_000, u64::MAX - 1] {
         assert!(lock.is_live_v2(now, s0 + depth - 1, Some(depth)), "lock live at DAA {now}");

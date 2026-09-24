@@ -234,7 +234,27 @@ use std::collections::{BTreeMap, BTreeSet};
 /// folds moves except the version itself; but a class record is inside the state root and a 19
 /// build would neither decode this one nor root it identically, so the number moves and the
 /// ADR-0043 golden vectors move with it.
-pub const PALW_STATE_V2_VERSION: u16 = 21;
+///
+/// **Version 22 (2026-09-24, ADR-0152 v3.1 R-core+ §6: the v22 skeleton).** ONE layout, declared
+/// whole before any of its logic lands, so M2 (F1), S (the fold's charging half), the vesting work,
+/// M3 (the DA court) and M4 (F4, the stake draw) append rules into it without touching it again —
+/// no v23 comes before the regenesis. What moves:
+/// * `PalwClaimStateV2` gains M2's `job_identity` and S's `rcore: PalwClaimRcoreV1` (five fields,
+///   Borsh byte-identical to ADR rows 2–6 as flat fields);
+/// * `PalwPanelLiabilityRecordV1` gains M2's four attribution copies and S's `licence_door`,
+///   `basis_k`, `g_res_sompi`, `escrowed_reward`; `PalwSlashableLockV1` gains `attested` and
+///   `segments`; `PalwConsumedOffenceV1` gains `collected` and `claim_id`;
+/// * the offence kinds 4–6, the void reasons 5–6, the objects 53–56 and the delta entries 66–73
+///   are appended at frozen indices;
+/// * the state gains S's five rooted items and the vesting map and counters, in one Some-only root
+///   block and one carriage tail.
+///
+/// Every writer is dormant: no fold rule, gate, price or payout reads any of it on any network, and
+/// on testnet-12 (the one network that arms `Params::palw_rcore_plus`) each new object and kind is
+/// refused by name until its owner lands it. A state holding none of the new data roots exactly as
+/// the version bump alone gives; the record appends move every inhabited root that holds a claim,
+/// a lock, a liability row or a consumed offence.
+pub const PALW_STATE_V2_VERSION: u16 = 22;
 
 /// **Where a class's receipt-lane target starts** (ADR-0074 follow-up): one draw in two per
 /// quantum, whatever the class's attempt-lane `initial_target` says. See the `ClassRegistered`
@@ -896,7 +916,54 @@ pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
     PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
     PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    // ADR-0152 v3.1 §6 row 31 (the v22 skeleton): R-core+'s hashing domains and its one signing
+    // context. The reporter-commit context is what makes `PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5`
+    // a superset of V4 (`the_committed_context_set_is_derived_not_retyped`). M3's two — the DA
+    // offence-key domain and the DA-disclosure-v4 context — join this list when M3 lands them.
+    PALW_COURT_OFFENCE_KEY_DOMAIN_V1,
+    PALW_REPORTER_COMMIT_DOMAIN_V1,
+    PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
 ];
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0152 v3.1 R-core+: the v22 skeleton's constants and domains (S-SPEC 1f)
+// ---------------------------------------------------------------------------------------------
+//
+// Declared by the v22 skeleton so S-1…S-8 read one spelling of each number; nothing reads any of
+// them yet on any network. `PALW_RCORE_C7_WINDOW_SPANS_V1` (1,000) is already declared beside the
+// window rule it names (`crate::palw_work_target_v1`, C7's restore) and is not restated here.
+
+/// S2/S3's action multiple `m` (ADR §3.6, user decision m ≥ 3): an action tier charges `m × G`.
+pub const PALW_RCORE_ACTION_MULTIPLE_V1: u64 = 3;
+/// S1/S2's action cap, in permille of the accused's collateral.
+pub const PALW_RCORE_S1S2_ACTION_PERMILLE_V1: u64 = 100;
+/// S3/S4's action cap, in permille of the accused's collateral.
+pub const PALW_RCORE_S3S4_ACTION_PERMILLE_V1: u64 = 250;
+/// X11's strike epoch: strikes are counted per aligned `⌊daa / 1,000⌋`.
+pub const PALW_RCORE_STRIKE_EPOCH_DAA_V1: u64 = 1_000;
+/// X11's strike window: a strike older than this is dropped when the bond's next one is written.
+pub const PALW_RCORE_STRIKE_WINDOW_DAA_V1: u64 = 7_500;
+/// X11: the strike that adds the action tier (the third inside the window).
+pub const PALW_RCORE_STRIKE_THRESHOLD_V1: u32 = 3;
+/// Q-3: the Final-basis `k` a licence set must recount to.
+pub const PALW_RCORE_FINAL_BASIS_K_V1: u8 = 2;
+/// R-3: open reporter commitments one bond may hold.
+pub const PALW_REPORTER_OPEN_COMMITMENTS_PER_BOND_V1: u32 = 64;
+/// R: the reporter's share of what a conviction collected, in basis points. A constant, not a
+/// parameter; T24 holds it equal to `DnsParams::slashing_reporter_reward_bps` on testnet-12.
+pub const PALW_RCORE_REPORTER_REWARD_BPS_V1: u16 = 1_000;
+
+/// §3.6: the key a `CourtConviction` (kind 6) is recorded under — `H(domain ‖ claim_id)`, keyed on
+/// the claim because the shard-court sites carry no session (S-SPEC P10). Declared; unread.
+pub const PALW_COURT_OFFENCE_KEY_DOMAIN_V1: &[u8] = b"misaka-palw/court-offence-key/v1";
+/// R-3: the message a reporter's commitment signs (`ReporterCommitted`, tag 53). Declared; unread.
+pub const PALW_REPORTER_COMMIT_DOMAIN_V1: &[u8] = b"misaka-palw/reporter-commit/message/v1";
+/// R-3: the reporter-commit ML-DSA-87 context, the first of `COMPLETE_V5`'s two additions.
+pub const PALW_REPORTER_COMMIT_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/reporter-commit/mldsa87/v1";
+// TODO(M3, ADR-0152 DA-4): `PALW_DA_OFFENCE_KEY_DOMAIN_V1` and the DA-disclosure-v4 ML-DSA-87
+// context (`PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT`) are M3's and not defined in this tree; when M3
+// lands them they join `PALW_STATE_V2_ALL_DOMAINS` above and the context is appended to
+// `crate::palw_mode_v2::PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5` after the reporter-commit context.
 
 fn keyed(domain: &[u8]) -> blake2b_simd::State {
     Params::new().hash_length(64).key(domain).to_state()
@@ -1171,6 +1238,27 @@ pub struct PalwStateParamsV2 {
     /// copy disagrees with it.
     #[borsh(skip)]
     escrow_backed_exposure_from_daa: Option<u64>,
+    /// **ADR-0152 v3.1 §6 (IMPL-6, row 26): `Params::palw_rcore_plus`'s height**, mirrored here by
+    /// `Params::sync_palw_rcore_plus` because the fold's load-time re-derivations (and every view
+    /// the processor and kaspad call without transition extras) must read the fence from the
+    /// params they are handed. `None` on every network but testnet-12. Skipped by borsh for
+    /// `short_challenge_window_from_daa`'s reason: the fence is what `Params::consensus_params_id`
+    /// hashes (Some-only), and `validate_palw_v2` refuses a bundle whose copy disagrees with it.
+    /// Declared by the v22 skeleton; no rule reads it yet.
+    #[borsh(skip)]
+    rcore_plus_from_daa: Option<u64>,
+    /// **The bond withdrawal delay the processor enforces, DA lattice included** —
+    /// `palw_v2_bond_withdrawal_delay_at_v1(bundle, palw_da_court, 0)` (12,900 on testnet-12), NOT
+    /// `bundle.bond.withdrawal_delay_daa()` (R-2, B-3; ADR post-edit 10(d)). Mirrored by the same
+    /// setter, borsh-skipped for the same reason, 0 where `palw_rcore_plus` is not armed. Unread.
+    #[borsh(skip)]
+    withdrawal_delay_daa: u64,
+    /// **C7's list** (`Params::palw_rcore_conservative_classes`, new in the S spec): the classes the
+    /// fold holds to Final beside the window rule (SR-1 condition 4, the 2M hold). Mirrored by the
+    /// same setter, borsh-skipped for the same reason; empty where `palw_rcore_plus` is not armed.
+    /// Unread by the fold until S-2.
+    #[borsh(skip)]
+    rcore_conservative_classes: Vec<Hash64>,
 }
 
 /// **ADR-0133 §11.3: when a class's receipt deadline becomes its own, and in what units.**
@@ -1292,6 +1380,9 @@ impl PalwStateParamsV2 {
             fp_decode_rules_daa: None,
             class_receipt_window: None,
             escrow_backed_exposure_from_daa: None,
+            rcore_plus_from_daa: None,
+            withdrawal_delay_daa: 0,
+            rcore_conservative_classes: Vec::new(),
         })
     }
 
@@ -1635,6 +1726,44 @@ impl PalwStateParamsV2 {
     /// `Params::sync_palw_escrow_backed_exposure`.
     pub fn with_escrow_backed_exposure_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.escrow_backed_exposure_from_daa = from_daa;
+        self
+    }
+
+    /// ADR-0152 R-core+: `Params::palw_rcore_plus`'s height, if the network arms it (the mirror).
+    pub fn rcore_plus_from_daa(&self) -> Option<u64> {
+        self.rcore_plus_from_daa
+    }
+
+    /// ADR-0152 R-core+: whether the fence is in force at `daa_score`. `false` on every network but
+    /// testnet-12. Declared by the v22 skeleton for S's writers; nothing reads it yet.
+    pub fn rcore_plus_active_at(&self, daa_score: u64) -> bool {
+        self.rcore_plus_from_daa.is_some_and(|from| daa_score >= from)
+    }
+
+    /// ADR-0152 R-core+: the withdrawal delay the processor enforces, DA lattice included (the
+    /// mirror; 0 where the fence is not armed).
+    pub fn withdrawal_delay_daa(&self) -> u64 {
+        self.withdrawal_delay_daa
+    }
+
+    /// ADR-0152 R-core+: C7's list (the mirror; empty where the fence is not armed).
+    pub fn rcore_conservative_classes(&self) -> &[Hash64] {
+        &self.rcore_conservative_classes
+    }
+
+    /// ADR-0152 R-core+: sets the three mirrors at once — the V2 bundle's copy of
+    /// `Params::palw_rcore_plus`, of the withdrawal delay the processor enforces, and of
+    /// `Params::palw_rcore_conservative_classes`, written by `Params::sync_palw_rcore_plus` and by
+    /// nothing else, so the three cannot drift apart.
+    pub fn with_rcore_plus_mirrors(
+        mut self,
+        from_daa: Option<u64>,
+        withdrawal_delay_daa: u64,
+        conservative_classes: Vec<Hash64>,
+    ) -> Self {
+        self.rcore_plus_from_daa = from_daa;
+        self.withdrawal_delay_daa = withdrawal_delay_daa;
+        self.rcore_conservative_classes = conservative_classes;
         self
     }
 
@@ -2563,6 +2692,14 @@ pub enum PalwVoidReasonV2 {
     /// ADR-0135: the bind window closed with fewer ready seats than a panel needs — the class's
     /// capacity failed, not the producer. Appended last (borsh discriminant 4).
     NoCapablePanel,
+    /// **ADR-0152 v3.1 SR-9 (v22 row 22): the second panel returned a quorum of `Unavailable`**
+    /// (`PanelUnavailableQuorum`, tag 56) — S0′, charged as a second `ReceiptTimeout`. Borsh
+    /// discriminant 5. Declared by the v22 skeleton; written by S-5, by nobody yet.
+    UnavailableQuorum,
+    /// **ADR-0152 v3.1 Q-5 (v22 row 22): the second panel's licence set was not replay-backed** —
+    /// S0′, charged as a second `ReceiptTimeout`. Borsh discriminant 6. Declared by S; written by M4,
+    /// by nobody yet.
+    NotReplayBacked,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -2757,6 +2894,36 @@ pub struct PalwClaimStateV2 {
     /// a fraud or withholding void: the free-prompt lane's counterpart of that term, which is zero for a
     /// commitment. Appended last — the v21 layout, which has not shipped, changes with it.
     pub rights_reserved: u128,
+    /// **ADR-0152 v3.1 J-1 (v22 row 1; the audit's SPEC §4.1, M2): the job this claim's execution
+    /// answered** — for an attempt, the carrying header's `execution_anchor_v3`; for a free-prompt
+    /// claim, `palw_fp_job_pin_v1(commitment)`. 0 = not recorded, which never convicts. Declared by
+    /// the v22 skeleton and written by nobody yet: M2's `apply_attempt` and FP claim path write it,
+    /// and only where `offence_attribution_active`.
+    pub job_identity: Hash64,
+    /// **ADR-0152 v3.1 R-core+'s per-claim fields (v22 rows 2–6, S-SPEC 1b)**, nested so a redraw
+    /// resets them with one assignment and the claim literals keep one line each; Borsh encodes the
+    /// nested struct as its five fields in order, byte-identical to the ADR's flat rows. Rides the
+    /// existing `Claim` delta entry. Declared by the v22 skeleton; `Default` on every claim until S's
+    /// licence doors write it past `Params::palw_rcore_plus`.
+    pub rcore: PalwClaimRcoreV1,
+}
+
+/// **R-core+'s per-claim record** (ADR-0152 v3.1 §6 rows 2–6; S-SPEC 1b), nested in
+/// [`PalwClaimStateV2::rcore`]. Every field is written by S (and, for `licence_door`'s upgrade,
+/// `served_mask`'s V3 door and `unserved_seen`'s `Sampled`, by M4) past `Params::palw_rcore_plus`;
+/// the v22 skeleton declares it and nothing writes it, so it is `Default` on every claim.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClaimRcoreV1 {
+    /// Row 2: the door of the claim's first licence; F4's upgrade rewrites it. `None` = unlicensed.
+    pub licence_door: Option<crate::palw_economic_safety_v1::PalwLicenceDoorTagV1>,
+    /// Row 3: Q-3's recount of the licence set (0 = unlicensed).
+    pub basis_k: u8,
+    /// Row 4: SR-1/SR-1b released the escrow term at licence. Monotone (SR-4).
+    pub escrow_released: bool,
+    /// Row 5: bit `i` = seat `i` of `panels[claim].seats` carried a backed `Valid` (≤ 32 seats).
+    pub served_mask: u32,
+    /// Row 6: a latch — a carried `Unavailable` or `Incapable` (M4 adds `Sampled`).
+    pub unserved_seen: bool,
 }
 
 /// **What a claim holds on its bond**: its weight (`reserved`), option A's escrow term past its
@@ -4284,6 +4451,56 @@ pub enum PalwConsensusObjectV2 {
         claim: Hash64,
         receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
     },
+    // ---- ADR-0152 v3.1 §6 row 24: the v22 skeleton's four objects, at frozen tags 53–56. Each is
+    // DECLARED only: `palw_v2_validate_objects` drops it by name and the fold refuses it by name
+    // (`PalwStateV2Error::RcoreObjectNotLanded`) on every network, testnet-12 included, until its
+    // owner lands the rule. A block carrying one stands; the object folds nothing. ----
+    /// **R-3: a reporter commits to an offence before revealing it** (tag 53) —
+    /// `commitment = H(PALW_REPORTER_COMMIT_DOMAIN_V1 ‖ …)`, signed by `reporter` under
+    /// [`PALW_REPORTER_COMMIT_MLDSA87_CONTEXT`]. Owner S (S-7).
+    ReporterCommitted {
+        commitment: Hash64,
+        reporter: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **R-3: the reveal of a commitment** (tag 54): the offence key it named and the salt that
+    /// opens it. Owner S (S-7).
+    ReporterRevealed {
+        offence_key: Hash64,
+        reporter: PalwBondKeyV2,
+        salt: [u8; 32],
+    },
+    /// **DA-4: any locked signer's answer to a DA session** (tag 55), declared here so tag 56 keeps
+    /// its number. DA-4 names `unit: PalwDaUnitV1` and `answer: PalwDaAnswerV1`, which are M3's and
+    /// not in this tree, so the skeleton declares the closest existing types — the held half of
+    /// each (`PalwHeldMissingV1`, `PalwHeldDisclosureCarriageV1`); **M3 refines both before M5**
+    /// (ADR row 24). Written by M3.
+    MaterialDisclosedV2 {
+        claim: Hash64,
+        unit: crate::palw_held_da_v1::PalwHeldMissingV1,
+        answer: Box<crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1>,
+        discloser: PalwBondKeyV2,
+        signature: Vec<u8>,
+    },
+    /// **SR-9: the second panel returned a quorum of `Unavailable`** (tag 56): the receipts that
+    /// show it, voiding the claim `UnavailableQuorum` (S0′). Owner S (S-5).
+    PanelUnavailableQuorum {
+        claim: Hash64,
+        receipts: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    },
+}
+
+/// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
+/// every object a network could fold before v22. One predicate for the fold's refusal and the
+/// processor's gate, so the two cannot disagree about which objects are declared-not-landed.
+pub fn palw_rcore_object_name_v1(object: &PalwConsensusObjectV2) -> Option<&'static str> {
+    match object {
+        PalwConsensusObjectV2::ReporterCommitted { .. } => Some("ReporterCommitted (tag 53)"),
+        PalwConsensusObjectV2::ReporterRevealed { .. } => Some("ReporterRevealed (tag 54)"),
+        PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => Some("MaterialDisclosedV2 (tag 55)"),
+        PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => Some("PanelUnavailableQuorum (tag 56)"),
+        _ => None,
+    }
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -5942,6 +6159,62 @@ pub enum PalwStateV2Error {
         "class {class}'s registrant {bond:?} cannot burn {burn} sompi: it already backs {already} of {collateral} collateral plus this registration's reservation"
     )]
     ClassRegistrationBurnUnaffordable { class: Hash64, bond: PalwBondKeyV2, burn: u64, already: u128, collateral: u64 },
+    /// **ADR-0152 v3.1 §6, the v22 skeleton: an object the v22 layout declares (tags 53–56) whose
+    /// owner has not landed its rule.** Refused by name on every network; the processor's gate drops
+    /// the same object first, so a block carrying one stands.
+    #[error("{0} is declared by the v22 layout (ADR-0152 R-core+) and refused until its owner lands it")]
+    RcoreObjectNotLanded(&'static str),
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0152 v3.1 R-core+: the v22 skeleton's rooted records (S-SPEC 1d; ADR §6 rows 11–13, 17)
+// ---------------------------------------------------------------------------------------------
+
+/// **A conviction's reporter reward, waiting out its reveal window** (ADR §6 row 12; R-3/R-4).
+/// Keyed by the offence key in `PalwChainStateV2::reward_pending`. The consumed DAA and the accused
+/// are not stored here: they are read from `consumed_offences[offence_key]`, which is never pruned.
+/// Declared by the v22 skeleton; written by S-7, by nobody yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwPendingRewardV1 {
+    pub amount: u64,
+    pub reveal_until: u64,
+    /// The evidence the winning commitment must bind (v3.1 N12).
+    pub evidence_id: Hash64,
+    pub best: Option<PalwRewardWinnerV1>,
+}
+
+/// The earliest revealed commitment for a pending reward (R-3's order: `committed_daa`, then
+/// `commitment`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwRewardWinnerV1 {
+    pub committed_daa: u64,
+    pub commitment: Hash64,
+    pub reporter: PalwBondKeyV2,
+    pub payload: Hash64,
+}
+
+/// **One open reporter commitment** (ADR §6 row 13; R-3), keyed by the commitment hash in
+/// `PalwChainStateV2::reporter_commitments`; pruned 3,000 DAA after `committed_daa`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwReporterCommitV1 {
+    pub reporter: PalwBondKeyV2,
+    pub committed_daa: u64,
+}
+
+/// **The reporter half of row 17's counters**: every sompi awarded to a winning reporter and every
+/// sompi forgone because no commitment won, in that order. Rooted in the R-core+ block, journaled
+/// whole by `PalwDeltaEntryV2::ReporterCounters` (70). Zero until S-7 writes it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwReporterCountersV1 {
+    pub awarded_sompi: u128,
+    pub forgone_sompi: u128,
+}
+
+impl PalwReporterCountersV1 {
+    /// Both zero: the dormant value, which the R-core+ root block does not hash.
+    pub fn is_zero(&self) -> bool {
+        self.awarded_sompi == 0 && self.forgone_sompi == 0
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -6238,6 +6511,29 @@ pub struct PalwChainStateV2 {
     /// everything inside it ([`palw_anchor_ring_prune_count_v1`]), which is exactly what a query
     /// from any anchor a live panel can still be validated at needs.
     recent_anchor_daas: Vec<u64>,
+    // ---- ADR-0152 v3.1 R-core+ (the v22 skeleton; S-SPEC 1d, ADR §6 rows 10–13, 16–17) ----
+    //
+    // Primary data, rooted in ONE block after `panel_liabilities` and carried in ONE tail (`0xB4`),
+    // both written only when any item below is non-empty or non-zero — so a state holding none of
+    // it roots and carries exactly as the version bump alone gives. Landing order, frozen at M5:
+    // S's five, then the vesting map and its counters; M3's `da_sessions` and `da_claims` append
+    // after them. Every writer is dormant: nothing writes any of these on any network yet.
+    /// Row 16 (S1, X11): per bond, the DAA of the first S1 in each aligned `⌊daa / 1,000⌋` epoch;
+    /// ≤ 8 live, entries older than 7,500 DAA dropped when the bond's next strike is written.
+    withholding_strikes: BTreeMap<PalwBondKeyV2, Vec<u64>>,
+    /// Row 12 (R-3, R-4): a conviction's reporter reward in its reveal window, by offence key.
+    reward_pending: BTreeMap<Hash64, PalwPendingRewardV1>,
+    /// Row 13 (R-3): the open reporter commitments, by commitment hash.
+    reporter_commitments: BTreeMap<Hash64, PalwReporterCommitV1>,
+    /// Row 11 (R-4): a closed reveal window's award, by offence key — S writes it at step 2 and
+    /// step 3d moves it into `pending_payouts` and deletes it.
+    reporter_rewards: BTreeMap<Hash64, PalwPayoutV2>,
+    /// Row 17, the reporter half.
+    reporter_counters: PalwReporterCountersV1,
+    /// Row 10 (V-1): one Final claim's vested reward, by claim id; outlives claim retirement.
+    vesting: BTreeMap<Hash64, crate::palw_vesting_v1::PalwVestingRowV1>,
+    /// Row 17, the vesting half: created, moved, burned.
+    vesting_counters: crate::palw_vesting_v1::PalwVestingCountersV1,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -6336,6 +6632,13 @@ impl PalwChainStateV2 {
             retired_safe_weight: 0,
             settled_attempt_finals: 0,
             recent_anchor_daas: Vec::new(),
+            withholding_strikes: BTreeMap::new(),
+            reward_pending: BTreeMap::new(),
+            reporter_commitments: BTreeMap::new(),
+            reporter_rewards: BTreeMap::new(),
+            reporter_counters: PalwReporterCountersV1::default(),
+            vesting: BTreeMap::new(),
+            vesting_counters: crate::palw_vesting_v1::PalwVestingCountersV1::default(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -7770,6 +8073,56 @@ impl PalwChainStateV2 {
         &self.recent_anchor_daas
     }
 
+    // ---- ADR-0152 R-core+ (the v22 skeleton): read accessors. Every map is empty and every
+    // counter zero on every network until its writer lands. ----
+
+    /// Row 16: a bond's live S1 strikes (the DAA of the first S1 in each aligned epoch).
+    pub fn withholding_strikes(&self, bond: &PalwBondKeyV2) -> Option<&[u64]> {
+        self.withholding_strikes.get(bond).map(|v| v.as_slice())
+    }
+
+    /// Row 12: the reporter reward pending on an offence key.
+    pub fn reward_pending(&self, offence_key: &Hash64) -> Option<&PalwPendingRewardV1> {
+        self.reward_pending.get(offence_key)
+    }
+
+    /// Row 13: an open reporter commitment.
+    pub fn reporter_commitment(&self, commitment: &Hash64) -> Option<&PalwReporterCommitV1> {
+        self.reporter_commitments.get(commitment)
+    }
+
+    /// Row 11: the awarded reporter rewards step 3d has yet to move, in key order.
+    pub fn reporter_rewards_iter(&self) -> impl Iterator<Item = (&Hash64, &PalwPayoutV2)> {
+        self.reporter_rewards.iter()
+    }
+
+    /// Row 17, the reporter half.
+    pub fn reporter_counters(&self) -> PalwReporterCountersV1 {
+        self.reporter_counters
+    }
+
+    /// Row 10: a Final claim's vesting row (S-SPEC P5's `vesting_row`).
+    pub fn vesting_row(&self, claim_id: &Hash64) -> Option<&crate::palw_vesting_v1::PalwVestingRowV1> {
+        self.vesting.get(claim_id)
+    }
+
+    /// Row 17, the vesting half.
+    pub fn vesting_counters(&self) -> crate::palw_vesting_v1::PalwVestingCountersV1 {
+        self.vesting_counters
+    }
+
+    /// **Does this state hold any R-core+ data?** The one predicate the root block and the
+    /// carriage tail are both guarded by, so the two cannot disagree about when the block exists.
+    fn has_rcore_plus_data(&self) -> bool {
+        !self.withholding_strikes.is_empty()
+            || !self.reward_pending.is_empty()
+            || !self.reporter_commitments.is_empty()
+            || !self.reporter_rewards.is_empty()
+            || !self.reporter_counters.is_zero()
+            || !self.vesting.is_empty()
+            || !self.vesting_counters.is_zero()
+    }
+
     pub fn safe_frontier(&self) -> (u64, BlockHash) {
         (self.safe_frontier_blue_score, self.safe_frontier)
     }
@@ -7971,6 +8324,21 @@ impl PalwChainStateV2 {
         if !self.panel_liabilities.is_empty() {
             state.update(b"panel_liabilities/v1");
             state.update(collection_root(b"panel_liabilities", &self.panel_liabilities).as_byte_slice());
+        }
+        // **ADR-0152 v3.1 R-core+ (the v22 skeleton): ONE block, after the last collection block,
+        // hashed only when any of its items is non-empty or non-zero** — so a state holding none of
+        // it (every state on every network until the writers land) roots exactly as the version
+        // bump alone gives. Once present, every item is hashed, empty ones included, in landing
+        // order: S's five, then the vesting map and counters; M3 appends its two here.
+        if self.has_rcore_plus_data() {
+            state.update(b"rcore_plus/v1");
+            state.update(collection_root(b"withholding_strikes", &self.withholding_strikes).as_byte_slice());
+            state.update(collection_root(b"reward_pending", &self.reward_pending).as_byte_slice());
+            state.update(collection_root(b"reporter_commitments", &self.reporter_commitments).as_byte_slice());
+            state.update(collection_root(b"reporter_rewards", &self.reporter_rewards).as_byte_slice());
+            state.update(&borsh::to_vec(&self.reporter_counters).expect("PalwReporterCountersV1 is borsh-serializable"));
+            state.update(collection_root(b"vesting", &self.vesting).as_byte_slice());
+            state.update(&borsh::to_vec(&self.vesting_counters).expect("PalwVestingCountersV1 is borsh-serializable"));
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -9080,6 +9448,52 @@ pub enum PalwDeltaEntryV2 {
     /// and refuses unless it is no later than the entry now first.
     AnchorDaaPruned {
         daa: u64,
+    },
+    // ---- ADR-0152 v3.1 R-core+ (the v22 skeleton; S-SPEC 1c/§4, ADR §6 row 25): appended from 66
+    // in landing order — S's five, then the vesting three; M3's `DaSession`/`DaClaim` follow from
+    // 74. Apply and revert are written for every one, and no writer emits any yet. ----
+    /// A bond's S1 strike list was written or dropped (66).
+    Strikes {
+        key: PalwBondKeyV2,
+        old: Option<Vec<u64>>,
+        new: Option<Vec<u64>>,
+    },
+    /// A pending reporter reward was written or dropped (67).
+    RewardPending {
+        key: Hash64,
+        old: Option<PalwPendingRewardV1>,
+        new: Option<PalwPendingRewardV1>,
+    },
+    /// A reporter commitment was written or pruned (68).
+    ReporterCommit {
+        key: Hash64,
+        old: Option<PalwReporterCommitV1>,
+        new: Option<PalwReporterCommitV1>,
+    },
+    /// An awarded reporter reward was written (step 2) or moved out by step 3d (69).
+    ReporterReward {
+        key: Hash64,
+        old: Option<PalwPayoutV2>,
+        new: Option<PalwPayoutV2>,
+    },
+    /// The reporter counters moved (70).
+    ReporterCounters {
+        old: PalwReporterCountersV1,
+        new: PalwReporterCountersV1,
+    },
+    /// A vesting row was written, latched, moved or burned (71).
+    Vesting {
+        key: Hash64,
+        old: Option<crate::palw_vesting_v1::PalwVestingRowV1>,
+        new: Option<crate::palw_vesting_v1::PalwVestingRowV1>,
+    },
+    /// **The cause of a vesting change (72), journaled only**: apply and revert are no-ops, so a
+    /// reader of the delta can tell a moved row from a burned one (phase2-plan §2.5).
+    VestingNote(crate::palw_vesting_v1::PalwVestingNoteV1),
+    /// The vesting counters moved (73).
+    VestingCounters {
+        old: crate::palw_vesting_v1::PalwVestingCountersV1,
+        new: crate::palw_vesting_v1::PalwVestingCountersV1,
     },
 }
 
@@ -11204,6 +11618,10 @@ impl<'a> TransitionBuilder<'a> {
                 amount: required,
                 expiry_daa,
                 settled_at_final: self.state.settled_attempt_finals,
+                // ADR-0152 v22 skeleton: S-3 writes the attested mask and the segment cut here past
+                // `palw_rcore_plus`; until then no lock records them.
+                attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                segments: 0,
             }),
         );
         Ok(())
@@ -11349,6 +11767,17 @@ impl<'a> TransitionBuilder<'a> {
                 locked_sompi,
                 expiry_daa,
                 settled_at_final: self.state.settled_attempt_finals,
+                // ADR-0152 v22 skeleton: M2 copies the four attribution fields here where
+                // `offence_attribution_active`, and S-3 the door, the basis and the residual gain
+                // past `palw_rcore_plus`. Until they land no row records any of them.
+                job_identity: Hash64::default(),
+                free_prompt: false,
+                trace_root: Hash64::default(),
+                segment_count: 0,
+                licence_door: None,
+                basis_k: 0,
+                g_res_sompi: 0,
+                escrowed_reward: 0,
             }),
         );
         Ok(())
@@ -11369,6 +11798,16 @@ impl<'a> TransitionBuilder<'a> {
         if !self.extras.objective_offence_at(ctx.daa_score) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
+        // **ADR-0152 v3.1 §6, the v22 skeleton: kinds 4, 5 and 6 are declared, not landed.** Refused
+        // by name on every network before anything else is read, so no ledger key, slash or
+        // forfeiture can be reached through one until its owner (M2: 4; M3: 5; S-4: 6) replaces this
+        // refusal with the rule. The processor's gate refuses the same kinds first.
+        if kind.is_declared_not_landed_v1() {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                evidence_id,
+                crate::palw_offence_v1::PalwOffenceVerifyError::KindNotLanded(kind.not_landed_reason_v1()).to_string(),
+            ));
+        }
         // **ADR-0152 v2 F2: past `palw_offence_attribution` a false `Valid` has ONE route.** The V1
         // kind is refused by name — its evidence convicts on `job_id == claim_id`, a fixed point no
         // real claim reaches, while a hand-signed V2 receipt still clears it for the state-bound
@@ -11385,6 +11824,10 @@ impl<'a> TransitionBuilder<'a> {
                 }
                 PalwOffenceKindV1::PanelFalseValidV2 => return self.consume_false_valid_v2(ctx, accused, evidence_id, evidence),
                 PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
+                // Refused above; listed so a routing change that forgets them fails to compile.
+                PalwOffenceKindV1::ExecutorRefuted
+                | PalwOffenceKindV1::DaDefault
+                | PalwOffenceKindV1::CourtConviction => {}
             }
         } else if matches!(kind, PalwOffenceKindV1::PanelFalseValidV2) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
@@ -11488,6 +11931,14 @@ impl<'a> TransitionBuilder<'a> {
                     crate::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string(),
                 ));
             }
+            // ADR-0152 v22 skeleton: refused at the top of this function on every network; an
+            // `Err` here too, never `unreachable!`, for the reason the arm above gives.
+            PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {
+                return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                    offence_id,
+                    crate::palw_offence_v1::PalwOffenceVerifyError::KindNotLanded(kind.not_landed_reason_v1()).to_string(),
+                ));
+            }
         };
         self.slash_bond(accused, amount as u128)?;
         // ADR-0151: recorded only where the bundle is armed, so a dormant network's
@@ -11501,6 +11952,9 @@ impl<'a> TransitionBuilder<'a> {
                 amount,
                 accepted_daa: ctx.daa_score,
                 execution_root: recorded_root,
+                // ADR-0152 v22 skeleton: S-4's conviction funnel records these past `palw_rcore_plus`.
+                collected: 0,
+                claim_id: Hash64::default(),
             }),
         );
         // **2026-09-24 DoS audit #7 and #8: what a conviction takes back.** Both behind the audit
@@ -11606,6 +12060,9 @@ impl<'a> TransitionBuilder<'a> {
                 amount,
                 accepted_daa: ctx.daa_score,
                 execution_root: recorded_root,
+                // ADR-0152 v22 skeleton: S-4's conviction funnel records these past `palw_rcore_plus`.
+                collected: 0,
+                claim_id: Hash64::default(),
             }),
         );
         if finding.execution_proving {
@@ -13929,6 +14386,10 @@ impl<'a> TransitionBuilder<'a> {
         let escrow_forfeit = match reason {
             PalwVoidReasonV2::CourtFraud => true,
             PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
+            // ADR-0152 v3.1 S0′ (v22 skeleton): both are a second failed panel and are charged as the
+            // second `ReceiptTimeout` is. No writer emits either yet (S-5 writes 5, M4 writes 6), so
+            // this arm is unreachable on every network until they land.
+            PalwVoidReasonV2::UnavailableQuorum | PalwVoidReasonV2::NotReplayBacked => self.extras.audit_2026_09_23_active,
             PalwVoidReasonV2::BindTimeout | PalwVoidReasonV2::NoCapablePanel => false,
         };
         // A free-prompt claim's receipt rights (#5) are its fraud gain as the escrow is an attempt's,
@@ -19244,6 +19705,16 @@ fn apply_object(
             builder.lock_valid_receipts(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Coverage)?;
             builder.license_claim(*claim_id, claim, ctx.daa_score)?;
         }
+        // **ADR-0152 v3.1 §6, the v22 skeleton: tags 53–56 are declared, not landed.** Refused by
+        // name on every network — `Params::palw_rcore_plus` arms none of them — until each owner
+        // replaces its arm with the rule (S-7: 53/54; M3: 55; S-5: 56). The processor's gate drops
+        // them first, so a block carrying one stands and folds nothing for it.
+        PalwConsensusObjectV2::ReporterCommitted { .. }
+        | PalwConsensusObjectV2::ReporterRevealed { .. }
+        | PalwConsensusObjectV2::MaterialDisclosedV2 { .. }
+        | PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => {
+            return Err(PalwStateV2Error::RcoreObjectNotLanded(palw_rcore_object_name_v1(object).unwrap_or("an R-core+ object")));
+        }
         PalwConsensusObjectV2::OptimisticLicensed { claim: claim_id, receipts } => {
             if !builder.extras.verification_s2_active {
                 return Err(PalwStateV2Error::VerificationV2Dormant);
@@ -19894,6 +20365,10 @@ fn apply_object(
                 work_id: Some(work_id),
                 phase: PalwClaimPhaseV2::Provisional,
                 rights_reserved,
+                // ADR-0152 v22 skeleton: M2's `palw_fp_job_pin_v1` lands here past
+                // `palw_offence_attribution`; R-core+'s fields are dormant.
+                job_identity: Hash64::default(),
+                rcore: PalwClaimRcoreV1::default(),
             };
             builder.reserve_for_claim(&claim)?;
             let fp_pwu = claim.pwu;
@@ -21850,6 +22325,10 @@ fn apply_attempt(
         phase: PalwClaimPhaseV2::Provisional,
         // An attempt's cash gain is its escrow; it mints no receipt quanta.
         rights_reserved: 0,
+        // ADR-0152 v22 skeleton: M2 writes the job identity here past `palw_offence_attribution`;
+        // until then it is not recorded, and R-core+'s fields are dormant.
+        job_identity: Hash64::default(),
+        rcore: PalwClaimRcoreV1::default(),
     };
     // **2026-09-23 audit, finding 17: the ceiling holds on the state the claim actually joins.**
     //
@@ -22078,6 +22557,28 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
                 }
                 state.recent_anchor_daas.remove(0);
             }
+        }
+        // ADR-0152 R-core+ (the v22 skeleton): the same verify-then-install discipline as every
+        // keyed entry above; the two counters as `SettledFinals`; the note installs nothing.
+        PalwDeltaEntryV2::Strikes { key, old, new } => swap_write!(state.withholding_strikes, key, old, new),
+        PalwDeltaEntryV2::RewardPending { key, old, new } => swap_write!(state.reward_pending, key, old, new),
+        PalwDeltaEntryV2::ReporterCommit { key, old, new } => swap_write!(state.reporter_commitments, key, old, new),
+        PalwDeltaEntryV2::ReporterReward { key, old, new } => swap_write!(state.reporter_rewards, key, old, new),
+        PalwDeltaEntryV2::ReporterCounters { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.reporter_counters != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("reporter counters do not match the delta's expectation"));
+            }
+            state.reporter_counters = *install;
+        }
+        PalwDeltaEntryV2::Vesting { key, old, new } => swap_write!(state.vesting, key, old, new),
+        PalwDeltaEntryV2::VestingNote(_) => {}
+        PalwDeltaEntryV2::VestingCounters { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.vesting_counters != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("vesting counters do not match the delta's expectation"));
+            }
+            state.vesting_counters = *install;
         }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
@@ -22426,6 +22927,17 @@ pub struct PalwStateCarriageV2 {
     pub consumed_offences: BTreeMap<Hash64, crate::palw_offence_v1::PalwConsumedOffenceV1>,
     pub slashable_locks: BTreeMap<(PalwBondKeyV2, Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1>,
     pub panel_liabilities: BTreeMap<Hash64, crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
+    /// **ADR-0152 v3.1 R-core+ (the v22 skeleton).** A twenty-first tagged tail (`0xB4`), encoded
+    /// only when any item is non-empty or non-zero ([`Self::has_rcore_plus_tail`], the root block's
+    /// own guard); all rooted. S's five, then the vesting map and counters, in landing order; M3
+    /// appends its two after them.
+    pub withholding_strikes: BTreeMap<PalwBondKeyV2, Vec<u64>>,
+    pub reward_pending: BTreeMap<Hash64, PalwPendingRewardV1>,
+    pub reporter_commitments: BTreeMap<Hash64, PalwReporterCommitV1>,
+    pub reporter_rewards: BTreeMap<Hash64, PalwPayoutV2>,
+    pub reporter_counters: PalwReporterCountersV1,
+    pub vesting: BTreeMap<Hash64, crate::palw_vesting_v1::PalwVestingRowV1>,
+    pub vesting_counters: crate::palw_vesting_v1::PalwVestingCountersV1,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -22518,6 +23030,10 @@ const PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1: u8 = 0xB2;
 /// settled no anchor writes a carriage byte-identical to one before this tail existed. The v21
 /// layout gained the ring before any network shipped v21.
 const PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1: u8 = 0xB3;
+/// ADR-0152 v3.1 R-core+ (the v22 skeleton): S's five rooted items and the vesting map and
+/// counters, once any is non-empty or non-zero. Rooted. Absent on every chain until the writers
+/// land, so a carriage without R-core+ data is byte-identical to one before this tail existed.
+const PALW_CARRIAGE_RCORE_PLUS_TAIL_V1: u8 = 0xB4;
 
 impl borsh::BorshSerialize for PalwStateCarriageV2 {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -22657,11 +23173,33 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.settled_attempt_finals.serialize(writer)?;
             self.recent_anchor_daas.serialize(writer)?;
         }
+        if self.has_rcore_plus_tail() {
+            PALW_CARRIAGE_RCORE_PLUS_TAIL_V1.serialize(writer)?;
+            self.withholding_strikes.serialize(writer)?;
+            self.reward_pending.serialize(writer)?;
+            self.reporter_commitments.serialize(writer)?;
+            self.reporter_rewards.serialize(writer)?;
+            self.reporter_counters.serialize(writer)?;
+            self.vesting.serialize(writer)?;
+            self.vesting_counters.serialize(writer)?;
+        }
         Ok(())
     }
 }
 
 impl PalwStateCarriageV2 {
+    /// ADR-0152 R-core+: the tail's guard — the same predicate as the root block's
+    /// (`PalwChainStateV2::has_rcore_plus_data`), over the carriage's copies.
+    fn has_rcore_plus_tail(&self) -> bool {
+        !self.withholding_strikes.is_empty()
+            || !self.reward_pending.is_empty()
+            || !self.reporter_commitments.is_empty()
+            || !self.reporter_rewards.is_empty()
+            || !self.reporter_counters.is_zero()
+            || !self.vesting.is_empty()
+            || !self.vesting_counters.is_zero()
+    }
+
     fn has_lines_tail(&self) -> bool {
         !self.model_lines.is_empty()
             || !self.model_versions.is_empty()
@@ -22735,6 +23273,14 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut seen_objective_offence = false;
         let mut seen_settled_finals = false;
         let mut seen_round_scheduler = false;
+        let mut withholding_strikes = BTreeMap::new();
+        let mut reward_pending = BTreeMap::new();
+        let mut reporter_commitments = BTreeMap::new();
+        let mut reporter_rewards = BTreeMap::new();
+        let mut reporter_counters = PalwReporterCountersV1::default();
+        let mut vesting = BTreeMap::new();
+        let mut vesting_counters = crate::palw_vesting_v1::PalwVestingCountersV1::default();
+        let mut seen_rcore_plus = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -22830,6 +23376,16 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     settled_attempt_finals = u64::deserialize_reader(reader)?;
                     recent_anchor_daas = Vec::<u64>::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_RCORE_PLUS_TAIL_V1 if !seen_rcore_plus => {
+                    seen_rcore_plus = true;
+                    withholding_strikes = BTreeMap::deserialize_reader(reader)?;
+                    reward_pending = BTreeMap::deserialize_reader(reader)?;
+                    reporter_commitments = BTreeMap::deserialize_reader(reader)?;
+                    reporter_rewards = BTreeMap::deserialize_reader(reader)?;
+                    reporter_counters = PalwReporterCountersV1::deserialize_reader(reader)?;
+                    vesting = BTreeMap::deserialize_reader(reader)?;
+                    vesting_counters = crate::palw_vesting_v1::PalwVestingCountersV1::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -22914,6 +23470,13 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             panel_liabilities,
             settled_attempt_finals,
             recent_anchor_daas,
+            withholding_strikes,
+            reward_pending,
+            reporter_commitments,
+            reporter_rewards,
+            reporter_counters,
+            vesting,
+            vesting_counters,
         })
     }
 }
@@ -22976,6 +23539,13 @@ impl PalwStateCarriageV2 {
             consumed_offences: state.consumed_offences.clone(),
             slashable_locks: state.slashable_locks.clone(),
             panel_liabilities: state.panel_liabilities.clone(),
+            withholding_strikes: state.withholding_strikes.clone(),
+            reward_pending: state.reward_pending.clone(),
+            reporter_commitments: state.reporter_commitments.clone(),
+            reporter_rewards: state.reporter_rewards.clone(),
+            reporter_counters: state.reporter_counters,
+            vesting: state.vesting.clone(),
+            vesting_counters: state.vesting_counters,
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -23106,6 +23676,13 @@ impl PalwStateCarriageV2 {
             consumed_offences: self.consumed_offences,
             slashable_locks: self.slashable_locks,
             panel_liabilities: self.panel_liabilities,
+            withholding_strikes: self.withholding_strikes,
+            reward_pending: self.reward_pending,
+            reporter_commitments: self.reporter_commitments,
+            reporter_rewards: self.reporter_rewards,
+            reporter_counters: self.reporter_counters,
+            vesting: self.vesting,
+            vesting_counters: self.vesting_counters,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -38946,6 +39523,16 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::SettledFinals { .. } => "settled_finals",
                     PalwDeltaEntryV2::AnchorDaaPushed { .. } => "anchor_daa_pushed",
                     PalwDeltaEntryV2::AnchorDaaPruned { .. } => "anchor_daa_pruned",
+                    // ADR-0152 v22 skeleton: declared, emitted by no writer yet — their own round
+                    // trip is `every_v22_delta_entry_round_trips_and_reverts`.
+                    PalwDeltaEntryV2::Strikes { .. } => "strikes",
+                    PalwDeltaEntryV2::RewardPending { .. } => "reward_pending",
+                    PalwDeltaEntryV2::ReporterCommit { .. } => "reporter_commit",
+                    PalwDeltaEntryV2::ReporterReward { .. } => "reporter_reward",
+                    PalwDeltaEntryV2::ReporterCounters { .. } => "reporter_counters",
+                    PalwDeltaEntryV2::Vesting { .. } => "vesting",
+                    PalwDeltaEntryV2::VestingNote(_) => "vesting_note",
+                    PalwDeltaEntryV2::VestingCounters { .. } => "vesting_counters",
                 });
             }
         }
@@ -39017,6 +39604,28 @@ pub(crate) mod tests {
             // 2026-09-24 DoS audit, appended last.
             (64, PalwDeltaEntryV2::AnchorDaaPushed { daa: 0 }),
             (65, PalwDeltaEntryV2::AnchorDaaPruned { daa: 0 }),
+            // ADR-0152 v3.1 R-core+ (the v22 skeleton), appended in landing order: S's five, then the
+            // vesting three. M3's `DaSession`/`DaClaim` take 74 and 75. The pin moves from 65 to 73.
+            (66, PalwDeltaEntryV2::Strikes { key: bond_key(1), old: None, new: None }),
+            (67, PalwDeltaEntryV2::RewardPending { key, old: None, new: None }),
+            (68, PalwDeltaEntryV2::ReporterCommit { key, old: None, new: None }),
+            (69, PalwDeltaEntryV2::ReporterReward { key, old: None, new: None }),
+            (
+                70,
+                PalwDeltaEntryV2::ReporterCounters { old: PalwReporterCountersV1::default(), new: PalwReporterCountersV1::default() },
+            ),
+            (71, PalwDeltaEntryV2::Vesting { key, old: None, new: None }),
+            (
+                72,
+                PalwDeltaEntryV2::VestingNote(crate::palw_vesting_v1::PalwVestingNoteV1::Latched { claim_id: key, matured_at: 1 }),
+            ),
+            (
+                73,
+                PalwDeltaEntryV2::VestingCounters {
+                    old: crate::palw_vesting_v1::PalwVestingCountersV1::default(),
+                    new: crate::palw_vesting_v1::PalwVestingCountersV1::default(),
+                },
+            ),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -39243,7 +39852,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&21u16.to_le_bytes()); // version_le(2) = 21, restated from the ADR (20 was ADR-0082 C-5's `fused_attention`; 21 is the 2026-09-23 audit's settled-finals counter and the settled-at fields on the retiring bond, the slashable lock and the panel liability)
+            s.update(&22u16.to_le_bytes()); // version_le(2) = 22 (ADR-0152's v22 skeleton), restated from the ADR (20 was ADR-0082 C-5's `fused_attention`; 21 is the 2026-09-23 audit's settled-finals counter and the settled-at fields on the retiring bond, the slashable lock and the panel liability)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -39388,6 +39997,8 @@ pub(crate) mod tests {
                 work_id: None,
                 phase: PalwClaimPhaseV2::Provisional,
                 rights_reserved: 0,
+                job_identity: Hash64::default(),
+                rcore: PalwClaimRcoreV1::default(),
             },
         );
         state.claims.insert(
@@ -39413,6 +40024,8 @@ pub(crate) mod tests {
                 work_id: None,
                 phase: PalwClaimPhaseV2::Final { final_daa: 60 },
                 rights_reserved: 0,
+                job_identity: Hash64::default(),
+                rcore: PalwClaimRcoreV1::default(),
             },
         );
         state.pending_payouts.insert(h64(0xEE), PalwPayoutV2 { payload: h64(0xA1), amount: 9 });
@@ -39600,6 +40213,17 @@ pub(crate) mod tests {
             consumed_offences: _,
             slashable_locks: _,
             panel_liabilities: _,
+            // ADR-0152 v3.1 R-core+ (the v22 skeleton): one guarded block after the panel
+            // liabilities, empty in this fixture (every writer is dormant), so the ADR-0043 list is
+            // the version bump's alone; `the_rcore_plus_block_is_some_only_and_carried` holds their
+            // place and their separation.
+            withholding_strikes: _,
+            reward_pending: _,
+            reporter_commitments: _,
+            reporter_rewards: _,
+            reporter_counters: _,
+            vesting: _,
+            vesting_counters: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -39729,15 +40353,23 @@ pub(crate) mod tests {
     /// escrow half), so the inhabited root moved for the claim record's new bytes and the empty root
     /// (no claims) did not — the pair separating the two signals again. The ring-only inhabited root
     /// was `4dc676ac…` and the rights-only one `0e0a7f73…`; the merged root moves for both.
+    ///
+    /// A tenth, for ADR-0152 v3.1's v22 skeleton (R-core+): `PALW_STATE_V2_VERSION` 21 -> 22, one
+    /// layout declared whole. The EMPTY root moves for the version alone — the R-core+ block is
+    /// Some-only and this state holds none of it, so the empty root is exactly what the bump alone
+    /// gives (the ADR-0043 second implementation, which has no R-core+ block, still agrees with it).
+    /// The INHABITED root moves for the version and for the fixture's two claims, each of which now
+    /// encodes `job_identity` (64 zero bytes) and `rcore` (the five default fields, 8 bytes). The
+    /// v21 pair was empty `d34ae7ed…`, inhabited `a7243081…`.
     #[test]
-    fn the_version_21_state_root_golden_vectors() {
+    fn the_version_22_state_root_golden_vectors() {
         let empty = PalwChainStateV2::genesis().state_root().to_string();
         let full = m02_populated_state().state_root().to_string();
-        let want_empty = "d34ae7ed8a71a6269f19f4ca14d7b1c63cae3508b36f6e74d0ecf43e84a8af79333723fec55c8d3e6eab5a9bbc6e4818faf39dbfe675f8967c715fd3b1d94f9e";
-        let want_full = "a7243081d36e8172ba449b150b90f07e870f4cc761d741b40726d687e52dafdb2c7d5bf63ea261ef94165aea184e953615a6f31e1ab841f4943e5de208431bef";
+        let want_empty = "63e5e4480416252619a5ee106aeeb32fb884bba58b5660c990396970e6f2f5fa26d8780b2901567db8c539291aaca64eb4c0a8dab75d0436238d8fbe65553529";
+        let want_full = "0da12dc1829334fdb15b6f1a35b10a19740f9957ee63056ed15c899bf393c091df2b4044314b52b0a4fe52fab0660e1b1eda3648f22cc735833a685df737f1ba";
         assert!(
             empty == want_empty && full == want_full,
-            "a version-21 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
+            "a version-22 root moved: empty {empty} (want {want_empty}); inhabited {full} (want {want_full})"
         );
     }
 
@@ -47582,6 +48214,442 @@ pub(crate) mod tests {
         assert!(s6.shard_licensing_of(&claim_id).is_some_and(|progress| progress.is_licensed(0)));
         assert_eq!(s6.slashable_lock(bond_key(4), claim_id).map(|lock| lock.amount), Some(shard_price));
     }
+
+    // ---- ADR-0152 v3.1 R-core+: the v22 skeleton ---------------------------------------------
+    //
+    // One layout declared whole with every writer dormant (S-SPEC §1, ADR §6). What these pin: the
+    // appended record fields round-trip at the tail of their records; the enum slots sit at their
+    // frozen indices; every new delta entry applies and reverts to the exact parent and root; the
+    // R-core+ root block and carriage tail are Some-only, carried, and separate every item; and the
+    // fold refuses every new object and offence kind by name.
+    mod rcore_v22_skeleton {
+        use super::*;
+        use crate::palw_vesting_v1::{PalwVestingCountersV1, PalwVestingNoteV1, PalwVestingRowV1, PalwVestingSourceV1};
+
+        fn vesting_row(claim_id: Hash64) -> PalwVestingRowV1 {
+            PalwVestingRowV1 {
+                claim_id,
+                producer_bond: bond_key(1),
+                class_id: h64(0xC1),
+                execution_root: h64(0x73),
+                artifact_root: h64(0xAF),
+                job_identity: h64(0x7A),
+                free_prompt: false,
+                trace_root: h64(0x71),
+                segment_count: 4,
+                licence_door: crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::Quorum,
+                basis_k: 2,
+                escrowed_reward: 12,
+                buyback_bound: 3,
+                producer: PalwPayoutV2 { payload: h64(0xA1), amount: 9 },
+                seats: vec![(bond_key(2), PalwPayoutV2 { payload: h64(0xA2), amount: 1 })],
+                reserve: 2,
+                final_daa: 60,
+                expiry_daa: 3_060,
+                settled_at_final: 4,
+                matured_at: None,
+            }
+        }
+
+        fn pending() -> PalwPendingRewardV1 {
+            PalwPendingRewardV1 {
+                amount: 5,
+                reveal_until: 90,
+                evidence_id: h64(0x6702),
+                best: Some(PalwRewardWinnerV1 {
+                    committed_daa: 3,
+                    commitment: h64(0x6703),
+                    reporter: bond_key(2),
+                    payload: h64(0x6704),
+                }),
+            }
+        }
+
+        /// Every R-core+ rooted item inhabited on top of `base`.
+        fn inhabited(base: &PalwChainStateV2) -> PalwChainStateV2 {
+            let mut s = base.clone();
+            s.withholding_strikes.insert(bond_key(1), vec![1_000, 2_000]);
+            s.reward_pending.insert(h64(0x6701), pending());
+            s.reporter_commitments.insert(h64(0x6801), PalwReporterCommitV1 { reporter: bond_key(2), committed_daa: 4 });
+            s.reporter_rewards.insert(h64(0x6901), PalwPayoutV2 { payload: h64(0x6902), amount: 6 });
+            s.reporter_counters = PalwReporterCountersV1 { awarded_sompi: 7, forgone_sompi: 8 };
+            s.vesting.insert(h64(0x7101), vesting_row(h64(0x7101)));
+            s.vesting_counters = PalwVestingCountersV1 { created: 9, moved: 10, burned: 11 };
+            s
+        }
+
+        /// **The claim's two appends ride last, and `rcore` is byte-identical to ADR rows 2–6 flat**
+        /// (S-SPEC 1b): the nested struct encodes as its five fields in order, and a claim's encoding
+        /// ends with `job_identity` then those five.
+        #[test]
+        fn the_claim_appends_job_identity_then_rcore_byte_identical_to_the_flat_rows() {
+            let rcore = PalwClaimRcoreV1 {
+                licence_door: Some(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::ShardPart { quorum_per_shard: 0x0203 }),
+                basis_k: 3,
+                escrow_released: true,
+                served_mask: 0x0A0B_0C0D,
+                unserved_seen: true,
+            };
+            let flat = (rcore.licence_door, rcore.basis_k, rcore.escrow_released, rcore.served_mask, rcore.unserved_seen);
+            assert_eq!(borsh::to_vec(&rcore).unwrap(), borsh::to_vec(&flat).unwrap(), "nested == flat, byte for byte");
+            assert_eq!(borsh::to_vec(&PalwClaimRcoreV1::default()).unwrap(), vec![0, 0, 0, 0, 0, 0, 0, 0], "the dormant value");
+            let mut claim = m02_populated_state().claims.get(&h64(0xE1)).unwrap().clone();
+            assert_eq!((claim.job_identity, claim.rcore), (Hash64::default(), PalwClaimRcoreV1::default()), "dormant");
+            claim.job_identity = h64(0x10B);
+            claim.rcore = rcore;
+            let bytes = borsh::to_vec(&claim).unwrap();
+            assert_eq!(borsh::from_slice::<PalwClaimStateV2>(&bytes).unwrap(), claim);
+            let rcore_bytes = borsh::to_vec(&rcore).unwrap();
+            let tail = [h64(0x10B).as_byte_slice(), rcore_bytes.as_slice()].concat();
+            assert!(bytes.ends_with(&tail), "`job_identity` then `rcore` after `rights_reserved`");
+            let head = bytes.len() - tail.len();
+            assert_eq!(&bytes[head - 16..head], &claim.rights_reserved.to_le_bytes(), "`rights_reserved` stays right before them");
+        }
+
+        /// **The enum slots sit at their frozen indices** (S-SPEC 1c): void reasons 5 and 6.
+        #[test]
+        fn the_v22_void_reasons_are_pinned() {
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::UnavailableQuorum).unwrap(), vec![5]);
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::NotReplayBacked).unwrap(), vec![6]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[7]).is_err(), "no eighth reason");
+        }
+
+        /// **Every new delta entry (66–73) round-trips through borsh, applies onto its parent and
+        /// reverts to it exactly** — the state and its root — and refuses a parent it was not
+        /// computed from. The note (72) applies and reverts as a no-op.
+        #[test]
+        fn every_v22_delta_entry_round_trips_applies_and_reverts() {
+            let p = params();
+            let point = ctx(0x5B, 200, 200);
+            // The derived indices rebuilt once, exactly as apply and revert rebuild them, so a
+            // parent compares equal to its own round trip field for field.
+            let rebuilt = |s: &PalwChainStateV2| apply_delta_v2(s, &PalwStateDeltaV2 { point, entries: Vec::new() }, &p).unwrap();
+            let base = rebuilt(&m02_populated_state());
+            let full = rebuilt(&inhabited(&base));
+            let key = h64(0x5A);
+            // (entry, the parent it is computed from)
+            let cases: Vec<(&str, PalwDeltaEntryV2, PalwChainStateV2)> = vec![
+                ("strikes: write", PalwDeltaEntryV2::Strikes { key: bond_key(2), old: None, new: Some(vec![3_000]) }, base.clone()),
+                (
+                    "strikes: rewrite",
+                    PalwDeltaEntryV2::Strikes { key: bond_key(1), old: Some(vec![1_000, 2_000]), new: Some(vec![2_000, 9_000]) },
+                    full.clone(),
+                ),
+                ("reward pending", PalwDeltaEntryV2::RewardPending { key, old: None, new: Some(pending()) }, base.clone()),
+                (
+                    "reward pending: drop",
+                    PalwDeltaEntryV2::RewardPending { key: h64(0x6701), old: Some(pending()), new: None },
+                    full.clone(),
+                ),
+                (
+                    "reporter commit",
+                    PalwDeltaEntryV2::ReporterCommit {
+                        key,
+                        old: None,
+                        new: Some(PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 7 }),
+                    },
+                    base.clone(),
+                ),
+                (
+                    "reporter reward",
+                    PalwDeltaEntryV2::ReporterReward { key, old: None, new: Some(PalwPayoutV2 { payload: h64(0x5C), amount: 3 }) },
+                    base.clone(),
+                ),
+                (
+                    "reporter counters",
+                    PalwDeltaEntryV2::ReporterCounters {
+                        old: PalwReporterCountersV1::default(),
+                        new: PalwReporterCountersV1 { awarded_sompi: 1, forgone_sompi: 2 },
+                    },
+                    base.clone(),
+                ),
+                ("vesting", PalwDeltaEntryV2::Vesting { key, old: None, new: Some(vesting_row(key)) }, base.clone()),
+                (
+                    "vesting: latch",
+                    PalwDeltaEntryV2::Vesting {
+                        key: h64(0x7101),
+                        old: Some(vesting_row(h64(0x7101))),
+                        new: Some(PalwVestingRowV1 { matured_at: Some(99), ..vesting_row(h64(0x7101)) }),
+                    },
+                    full.clone(),
+                ),
+                (
+                    "vesting note",
+                    PalwDeltaEntryV2::VestingNote(PalwVestingNoteV1::Moved {
+                        source: PalwVestingSourceV1::Row { claim_id: key },
+                        legs: Vec::new(),
+                    }),
+                    full.clone(),
+                ),
+                (
+                    "vesting counters",
+                    PalwDeltaEntryV2::VestingCounters {
+                        old: PalwVestingCountersV1 { created: 9, moved: 10, burned: 11 },
+                        new: PalwVestingCountersV1 { created: 9, moved: 12, burned: 11 },
+                    },
+                    full.clone(),
+                ),
+            ];
+            for (name, entry, parent) in cases {
+                let delta = PalwStateDeltaV2 { point, entries: vec![entry.clone()] };
+                let bytes = borsh::to_vec(&delta).unwrap();
+                assert_eq!(borsh::from_slice::<PalwStateDeltaV2>(&bytes).unwrap(), delta, "{name}: the row is the delta");
+                let child = apply_delta_v2(&parent, &delta, &p).unwrap_or_else(|e| panic!("{name}: applies ({e})"));
+                if matches!(entry, PalwDeltaEntryV2::VestingNote(_)) {
+                    assert_eq!(child, parent, "{name}: journal-only, the state does not move");
+                } else {
+                    assert_ne!(child.state_root(), parent.state_root(), "{name}: the write moves the root");
+                }
+                let back = revert_delta_v2(&child, &delta, &p).unwrap_or_else(|e| panic!("{name}: reverts ({e})"));
+                assert_eq!(back, parent, "{name}: revert restores the parent");
+                assert_eq!(back.state_root(), parent.state_root(), "{name}: and its root");
+                // A delta computed from another parent is refused, never half-applied.
+                if !matches!(entry, PalwDeltaEntryV2::VestingNote(_)) {
+                    assert!(
+                        matches!(apply_delta_v2(&child, &delta, &p), Err(PalwStateV2Error::DeltaMismatch(_))),
+                        "{name}: applied twice is a mismatch"
+                    );
+                }
+            }
+        }
+
+        /// **The R-core+ block is Some-only, carried, and separates every item** (S-SPEC 1d, ADR §6).
+        ///
+        /// * A state with none of it roots exactly as the version bump alone gives: the ADR-0043
+        ///   second implementation, which has no R-core+ block, agrees with it on the empty state.
+        /// * Inhabiting ANY one item turns the block on and moves the root and the carriage.
+        /// * With every item inhabited, the carriage round-trips byte for byte and reloads under the
+        ///   committed root; each item's perturbation moves the root and the carriage, and no two
+        ///   collide.
+        #[test]
+        fn the_rcore_plus_block_is_some_only_carried_and_separating() {
+            let p = params();
+            let empty = PalwChainStateV2::genesis();
+            assert!(!empty.has_rcore_plus_data());
+            assert_eq!(adr_0043_spec_root(&PalwStateCarriageV2::from_state(&empty)), empty.state_root(), "the bump alone");
+            let empty_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&empty)).unwrap();
+
+            // Each item alone turns the block (and the tail) on.
+            type Seed = (&'static str, Box<dyn Fn(&mut PalwChainStateV2)>);
+            let seeds: Vec<Seed> = vec![
+                (
+                    "withholding_strikes",
+                    Box::new(|s| {
+                        s.withholding_strikes.insert(bond_key(1), vec![1]);
+                    }),
+                ),
+                (
+                    "reward_pending",
+                    Box::new(|s| {
+                        s.reward_pending.insert(h64(1), pending());
+                    }),
+                ),
+                (
+                    "reporter_commitments",
+                    Box::new(|s| {
+                        s.reporter_commitments.insert(h64(1), PalwReporterCommitV1 { reporter: bond_key(1), committed_daa: 1 });
+                    }),
+                ),
+                (
+                    "reporter_rewards",
+                    Box::new(|s| {
+                        s.reporter_rewards.insert(h64(1), PalwPayoutV2 { payload: h64(2), amount: 1 });
+                    }),
+                ),
+                ("reporter_counters", Box::new(|s| s.reporter_counters.forgone_sompi = 1)),
+                (
+                    "vesting",
+                    Box::new(|s| {
+                        s.vesting.insert(h64(1), vesting_row(h64(1)));
+                    }),
+                ),
+                ("vesting_counters", Box::new(|s| s.vesting_counters.burned = 1)),
+            ];
+            let mut alone_roots = std::collections::BTreeSet::new();
+            for (name, seed) in &seeds {
+                let mut s = empty.clone();
+                seed(&mut s);
+                assert!(s.has_rcore_plus_data(), "{name}");
+                assert_ne!(s.state_root(), empty.state_root(), "{name} alone turns the block on");
+                let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap();
+                // The empty carriage is a strict prefix: no tail when nothing is inhabited, and the
+                // R-core+ tail (`0xB4`) is appended after every older one.
+                assert!(bytes.len() > empty_bytes.len() && bytes.starts_with(&empty_bytes), "{name} alone turns the tail on");
+                assert_eq!(bytes[empty_bytes.len()], PALW_CARRIAGE_RCORE_PLUS_TAIL_V1, "{name}: the tail byte");
+                assert_eq!(borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap(), PalwStateCarriageV2::from_state(&s), "{name}");
+                assert!(alone_roots.insert(s.state_root()), "{name} alone collides with another item alone");
+            }
+
+            // Every item inhabited: the carriage round-trips and reloads under the committed root.
+            let full = inhabited(&empty);
+            let root = full.state_root();
+            let carriage = PalwStateCarriageV2::from_state(&full);
+            let bytes = borsh::to_vec(&carriage).unwrap();
+            let decoded: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(decoded, carriage, "the tail round-trips");
+            assert_eq!(borsh::to_vec(&decoded).unwrap(), bytes, "byte for byte");
+            let loaded = decoded.into_state(&p, Some(root)).expect("the carriage reloads under its committed root");
+            assert_eq!(loaded, full);
+            assert_eq!(loaded.state_root(), root);
+            // A second tail of the same tag is refused rather than misread.
+            let mut doubled = bytes.clone();
+            doubled.extend_from_slice(&bytes[empty_bytes.len()..]);
+            assert!(borsh::from_slice::<PalwStateCarriageV2>(&doubled).is_err(), "one R-core+ tail at most");
+
+            // Each item's perturbation moves the root and the carriage; none collide.
+            let full = inhabited(&m02_populated_state());
+            let base_root = full.state_root();
+            let base_bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&full)).unwrap();
+            type Perturb = (&'static str, Box<dyn Fn(&mut PalwChainStateV2)>);
+            let perturbations: Vec<Perturb> = vec![
+                ("withholding_strikes", Box::new(|s| s.withholding_strikes.get_mut(&bond_key(1)).unwrap().push(3_000))),
+                ("reward_pending", Box::new(|s| s.reward_pending.get_mut(&h64(0x6701)).unwrap().amount += 1)),
+                ("reporter_commitments", Box::new(|s| s.reporter_commitments.get_mut(&h64(0x6801)).unwrap().committed_daa += 1)),
+                ("reporter_rewards", Box::new(|s| s.reporter_rewards.get_mut(&h64(0x6901)).unwrap().amount += 1)),
+                ("reporter_counters", Box::new(|s| s.reporter_counters.awarded_sompi += 1)),
+                ("vesting", Box::new(|s| s.vesting.get_mut(&h64(0x7101)).unwrap().reserve += 1)),
+                ("vesting_counters", Box::new(|s| s.vesting_counters.created += 1)),
+            ];
+            let mut roots_seen = std::collections::BTreeSet::new();
+            roots_seen.insert(base_root);
+            for (name, perturb) in perturbations {
+                let mut s = full.clone();
+                perturb(&mut s);
+                assert_ne!(s.state_root(), base_root, "{name} is primary data and must move the root");
+                assert_ne!(borsh::to_vec(&PalwStateCarriageV2::from_state(&s)).unwrap(), base_bytes, "{name} must move the carriage");
+                assert!(roots_seen.insert(s.state_root()), "{name}'s perturbation collides with another");
+            }
+        }
+
+        /// **The fold refuses every v22 object (tags 53–56) by name, on every configuration** — the
+        /// dormant fold and the armed-offence fold alike — and folds nothing for it.
+        #[test]
+        fn the_fold_refuses_every_v22_object_by_name() {
+            let p = params();
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            let objects = [
+                PalwConsensusObjectV2::ReporterCommitted { commitment: h64(1), reporter: bond_key(1), signature: vec![1] },
+                PalwConsensusObjectV2::ReporterRevealed { offence_key: h64(2), reporter: bond_key(1), salt: [3; 32] },
+                PalwConsensusObjectV2::MaterialDisclosedV2 {
+                    claim: h64(4),
+                    unit: crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
+                    answer: Box::new(crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                        version: 1,
+                        claim: h64(4),
+                        missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
+                        binding: crate::palw_step_refute::tests::skeleton_refutation().binding,
+                        disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                            opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                                first_leaf_index: 0,
+                                leaf_hashes: vec![],
+                                siblings: vec![],
+                            },
+                        },
+                        signature: vec![1],
+                    }),
+                    discloser: bond_key(1),
+                    signature: vec![1],
+                },
+                PalwConsensusObjectV2::PanelUnavailableQuorum { claim: h64(5), receipts: Vec::new() },
+            ];
+            let armed =
+                PalwTransitionExtrasV1 { objective_offence_daa: Some(0), offence_attribution_active: true, ..Default::default() };
+            for (tag, object) in (53u8..).zip(objects.iter()) {
+                assert_eq!(borsh::to_vec(object).unwrap()[0], tag, "{object:?}");
+                assert!(palw_rcore_object_name_v1(object).is_some());
+                for extras in [PalwTransitionExtrasV1::default(), armed.clone()] {
+                    let err = apply_palw_transition_v2_with_extras(
+                        &s1,
+                        &p,
+                        &ctx(2, 101, 2),
+                        std::slice::from_ref(object),
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &extras,
+                    )
+                    .expect_err("a declared-not-landed object is refused");
+                    assert!(matches!(err, PalwStateV2Error::RcoreObjectNotLanded(_)), "tag {tag}: {err}");
+                }
+            }
+            // Nothing a pre-v22 network folds is named by the predicate.
+            let licence = PalwConsensusObjectV2::OptimisticLicensed { claim: h64(1), receipts: vec![] };
+            assert!(palw_rcore_object_name_v1(&licence).is_none());
+        }
+
+        /// **The fold refuses a filed `ObjectiveOffence` of kind 4, 5 or 6 by name** where the ledger
+        /// is armed (below it, the ledger's own dormancy refuses first), whatever its evidence.
+        #[test]
+        fn the_fold_refuses_offence_kinds_4_5_6_by_name() {
+            use crate::palw_offence_v1::PalwOffenceKindV1;
+            let p = params();
+            let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+            for kind in [PalwOffenceKindV1::ExecutorRefuted, PalwOffenceKindV1::DaDefault, PalwOffenceKindV1::CourtConviction] {
+                let evidence = vec![7u8; 9];
+                let object = PalwConsensusObjectV2::ObjectiveOffence {
+                    kind,
+                    accused: bond_key(1),
+                    evidence_id: crate::palw_offence_v1::palw_offence_evidence_digest_v1(&evidence),
+                    evidence,
+                };
+                for attribution in [false, true] {
+                    let extras = PalwTransitionExtrasV1 {
+                        objective_offence_daa: Some(0),
+                        offence_attribution_active: attribution,
+                        ..Default::default()
+                    };
+                    let err = apply_palw_transition_v2_with_extras(
+                        &s1,
+                        &p,
+                        &ctx(2, 101, 2),
+                        std::slice::from_ref(&object),
+                        None,
+                        false,
+                        false,
+                        false,
+                        false,
+                        &extras,
+                    )
+                    .expect_err("a declared-not-landed kind is refused");
+                    let named = matches!(
+                        &err,
+                        PalwStateV2Error::ObjectiveOffenceRefused(_, why) if why.contains("declared by the v22 skeleton")
+                    );
+                    assert!(named, "{kind:?} (attribution {attribution}): {err}");
+                }
+                let err = apply_palw_transition_v2_with_extras(
+                    &s1,
+                    &p,
+                    &ctx(2, 101, 2),
+                    std::slice::from_ref(&object),
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &PalwTransitionExtrasV1::default(),
+                )
+                .expect_err("dormant ledger");
+                assert!(matches!(err, PalwStateV2Error::ObjectiveOffenceDormant), "{kind:?}: {err}");
+            }
+        }
+
+        /// **The three mirrors are borsh-skipped** (IMPL-6): a bundle's state params encode — and so
+        /// its ruleset id hashes — identically with and without them, and decode dormant.
+        #[test]
+        fn the_rcore_plus_mirrors_are_borsh_skipped() {
+            let p = params();
+            let mirrored = p.clone().with_rcore_plus_mirrors(Some(0), 12_900, vec![h64(0x2B)]);
+            assert!(mirrored.rcore_plus_active_at(0) && !p.rcore_plus_active_at(u64::MAX));
+            assert_eq!((mirrored.withdrawal_delay_daa(), mirrored.rcore_conservative_classes()), (12_900, [h64(0x2B)].as_slice()));
+            let bytes = borsh::to_vec(&mirrored).unwrap();
+            assert_eq!(bytes, borsh::to_vec(&p).unwrap(), "the mirrors are not in the bundle's bytes");
+            let decoded: PalwStateParamsV2 = borsh::from_slice(&bytes).unwrap();
+            assert_eq!(decoded, p, "and decode to the dormant values");
+        }
+    }
 }
 
 /// **ADR-0151: the forfeiture set is DERIVED, so it reverts with the conviction.**
@@ -47607,6 +48675,8 @@ mod adr0151_forfeiture_is_derived {
             amount: 10,
             accepted_daa: 42,
             execution_root: root,
+            collected: 0,
+            claim_id: Hash64::default(),
         };
         state.consumed_offences.insert(key, convicted);
         assert_eq!(state.palw_forfeited_execution_roots_v1(), [root].into_iter().collect::<std::collections::BTreeSet<_>>());
@@ -47621,6 +48691,8 @@ mod adr0151_forfeiture_is_derived {
                 amount: 7,
                 accepted_daa: 43,
                 execution_root: root,
+                collected: 0,
+                claim_id: Hash64::default(),
             },
         );
         assert_eq!(state.palw_forfeited_execution_roots_v1().len(), 1, "one root, one forfeiture");
@@ -47639,6 +48711,8 @@ mod adr0151_forfeiture_is_derived {
                 amount: 1,
                 accepted_daa: 43,
                 execution_root: Hash64::default(),
+                collected: 0,
+                claim_id: Hash64::default(),
             },
         );
         assert!(state.palw_forfeited_execution_roots_v1().is_empty());

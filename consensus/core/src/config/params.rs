@@ -1337,6 +1337,32 @@ pub struct Params {
     /// forfeiture the other three define. `Some(0)` on testnet-12 only; `None` elsewhere; hashed
     /// Some-only, so every other preset fingerprints byte-identically to a build without it.
     pub palw_offence_attribution: Option<ForkActivation>,
+    /// **ADR-0152 v3.1 (R-core+): a bond is standing stake, a claim reserves until its licence, and
+    /// a reward vests until its conviction window closes.** The v22 skeleton declares the fence and
+    /// every field, enum slot, delta entry and rooted map its rules write — and none of the rules:
+    /// every S, vesting, M3 and M4 writer is absent, so arming it changes no fold behaviour yet, only
+    /// the encodings the v22 layout moves on every network and the ids below.
+    ///
+    /// Genesis-only, and refused unless every prerequisite the ADR lists (§6 "Prerequisites") is
+    /// armed at or below it — `palw_offence_attribution`, `palw_admission_independence`,
+    /// `palw_audit_2026_09_23`, `palw_economic_safety`, `palw_objective_offence`,
+    /// `palw_panel_economy`, `palw_panel_exposure_floor`, `palw_unavailable_abstains`,
+    /// `palw_clock_floor` and `palw_clock_cursor`, `palw_verification_v2`, `palw_da_court` and
+    /// `palw_operator_id_unique` — with `palw_settled_anchor_depth` set, `palw_shard_licensing` unset,
+    /// the bundle's context root `COMPLETE_V5`, and the bundle's three mirrors equal to the params
+    /// (`sync_palw_rcore_plus`). `Some(0)` on testnet-12 only; `None` elsewhere; hashed Some-only
+    /// (the `palw_clock_floor` pattern), so every other preset's schedule and ruleset ids are
+    /// byte-identical to a build without it.
+    pub palw_rcore_plus: Option<ForkActivation>,
+    /// **ADR-0152 v3.1 C7's list: the classes R-core+ holds to Final beside the window rule** (the
+    /// 2M hold, SR-1 condition 4). Testnet-12: the 2M genesis row's class id. Non-empty only with
+    /// `palw_rcore_plus` armed, and a subset of testnet-12's genesis held rows; hashed into the
+    /// params id only when non-empty, so every other preset's fingerprint is unchanged.
+    ///
+    /// A `&'static` slice, not the S spec's `Vec`: `Params` holds no heap field, and the const
+    /// presets built by struct update (`..TESTNET_PARAMS`) cannot carry one (a `Vec` gives the type
+    /// drop glue a const cannot evaluate). The bundle's mirror is the `Vec` the spec names.
+    pub palw_rcore_conservative_classes: &'static [crate::Hash64],
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -3605,7 +3631,9 @@ impl Params {
             }
         }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
-            return Ok(());
+            // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
+            // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
+            return self.validate_palw_rcore_plus_v1();
         };
         bundle.validate()?;
         // **ADR-0103 Decision 1: a ladder past the bisection's clock is a network on which no
@@ -3897,7 +3925,10 @@ impl Params {
             // changes at it; and the fingerprint writes the V4 root beside the fence's height, so
             // two builds that spell a V4 context differently cannot share an identity — the M-8 rule,
             // kept by the fence rather than by the bundle.
-            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v4() && activation.is_active(0) {
+            // ADR-0152 IMPL-7: V5 is V4 plus R-core+'s contexts, so it satisfies this gate as a superset.
+            if !crate::palw_mode_v2::palw_v2_signature_contexts_root_covers_v4(&bundle.signature_contexts_root)
+                && activation.is_active(0)
+            {
                 return Err(PalwModeV2Error::Invalid(
                     "palw_held_context is armed from genesis but the bundle's signature_contexts_root is not the COMPLETE_V4 \
                      set: the checkpoint court and the held DA court sign under contexts only V4 commits to (ADR-0103)",
@@ -4434,7 +4465,8 @@ impl Params {
                 ));
             }
         }
-        Ok(())
+        // ADR-0152 R-core+, last (see the non-V2 return above).
+        self.validate_palw_rcore_plus_v1()
     }
 
     pub fn validate_palw_v1(&self) -> Result<(), crate::palw_registry::PalwRegistryError> {
@@ -4676,6 +4708,10 @@ impl Params {
         // ADR-0152 v2 F2's attribution fence: Some-only hashed, so the same collapse.
         if self.palw_offence_attribution == Some(ForkActivation::never()) {
             self.palw_offence_attribution = None;
+        }
+        // ADR-0152 R-core+: Some-only hashed, so the same collapse.
+        if self.palw_rcore_plus == Some(ForkActivation::never()) {
+            self.palw_rcore_plus = None;
         }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
@@ -5182,6 +5218,146 @@ impl Params {
         if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
             bundle.state = bundle.state.clone().with_escrow_backed_exposure_from_daa(from_daa);
         }
+    }
+
+    /// **ADR-0152 R-core+: mirror `palw_rcore_plus`, the withdrawal delay the processor enforces and
+    /// C7's list into the V2 bundle** — the three `#[borsh(skip)]` copies on `PalwStateParamsV2`, in
+    /// one setter so they cannot drift (IMPL-6, ADR row 26). The delay is
+    /// `palw_v2_bond_withdrawal_delay_at_v1(bundle, palw_da_court, 0)`: the bond's delay plus the DA
+    /// lattice, not `bundle.bond.withdrawal_delay_daa()`. Where the fence is not armed all three are
+    /// the dormant values (`None`, 0, empty). Called after a bundle is assembled over a preset that
+    /// armed the fence, beside `sync_palw_escrow_backed_exposure`; `validate_palw_v2` refuses a
+    /// ruleset whose copies disagree, so a missed call is a startup refusal.
+    pub fn sync_palw_rcore_plus(&mut self) {
+        let from_daa = self.palw_rcore_plus.filter(|f| *f != ForkActivation::never()).map(|f| f.daa_score());
+        let da_court = self.palw_da_court;
+        let classes = if from_daa.is_some() { self.palw_rcore_conservative_classes.to_vec() } else { Vec::new() };
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
+            let delay = if from_daa.is_some() { palw_v2_bond_withdrawal_delay_at_v1(bundle, da_court, 0) } else { 0 };
+            bundle.state = bundle.state.clone().with_rcore_plus_mirrors(from_daa, delay, classes);
+        }
+    }
+
+    /// **ADR-0152 v3.1 §6: what `palw_rcore_plus` refuses** (T24's fence part). Called by
+    /// `validate_palw_v2` before any later rule, and public so T24 can name each refusal alone.
+    /// Below the fence it checks only that nothing of R-core+ is set: a C7 list without the fence,
+    /// or a bundle whose mirrors are not the dormant values.
+    pub fn validate_palw_rcore_plus_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::PalwModeV2Error::Invalid;
+        let Some(fence) = self.palw_rcore_plus.filter(|f| *f != ForkActivation::never()) else {
+            if !self.palw_rcore_conservative_classes.is_empty() {
+                return Err(Invalid(
+                    "palw_rcore_conservative_classes is non-empty without palw_rcore_plus armed: C7 is R-core+'s hold, and \
+                     nothing reads it below the fence",
+                ));
+            }
+            if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+                && (bundle.state.rcore_plus_from_daa().is_some()
+                    || bundle.state.withdrawal_delay_daa() != 0
+                    || !bundle.state.rcore_conservative_classes().is_empty())
+            {
+                return Err(Invalid(
+                    "the V2 bundle carries R-core+ mirrors without palw_rcore_plus armed: mirror the fence with \
+                     Params::sync_palw_rcore_plus after the bundle is assembled",
+                ));
+            }
+            return Ok(());
+        };
+        // Genesis only, the audit fence's rule: R-core+ re-prices every live claim's reservation, and
+        // a crossing would leave claims reserved under one ledger and released under another.
+        if fence.daa_score() != 0 {
+            return Err(Invalid(
+                "palw_rcore_plus may only be armed at genesis (DAA 0): a crossing would reserve a live claim under one \
+                 ledger and release it under another",
+            ));
+        }
+        let armed_below =
+            |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() <= fence.daa_score());
+        // ADR §6 "Prerequisites (X15, F20)", one refusal each so T24 can name the one it removed.
+        let prerequisites: [(bool, &'static str); 13] = [
+            (
+                armed_below(self.palw_offence_attribution),
+                "palw_rcore_plus is armed without palw_offence_attribution at or below it: R-core+'s tiers read F1/F2's records",
+            ),
+            (
+                armed_below(self.palw_admission_independence),
+                "palw_rcore_plus is armed without palw_admission_independence at or below it: the stake draw relies on its cut",
+            ),
+            (
+                armed_below(self.palw_audit_2026_09_23),
+                "palw_rcore_plus is armed without palw_audit_2026_09_23 at or below it: the one ledger extends its rate room",
+            ),
+            (armed_below(self.palw_economic_safety), "palw_rcore_plus is armed without palw_economic_safety at or below it"),
+            (
+                armed_below(self.palw_objective_offence),
+                "palw_rcore_plus is armed without palw_objective_offence at or below it: ExecutorRefuted rides its ledger",
+            ),
+            (armed_below(self.palw_panel_economy), "palw_rcore_plus is armed without palw_panel_economy at or below it"),
+            (
+                armed_below(self.palw_panel_exposure_floor.map(|floor| floor.activation)),
+                "palw_rcore_plus is armed without palw_panel_exposure_floor at or below it",
+            ),
+            (
+                armed_below(self.palw_unavailable_abstains),
+                "palw_rcore_plus is armed without palw_unavailable_abstains at or below it: A-4's premise",
+            ),
+            (armed_below(self.palw_clock_floor), "palw_rcore_plus is armed without palw_clock_floor at or below it"),
+            (armed_below(self.palw_clock_cursor), "palw_rcore_plus is armed without palw_clock_cursor at or below it"),
+            (
+                armed_below(self.palw_verification_v2),
+                "palw_rcore_plus is armed without palw_verification_v2 at or below it: Q-1's V3 receipts",
+            ),
+            (armed_below(self.palw_da_court), "palw_rcore_plus is armed without palw_da_court at or below it"),
+            (
+                armed_below(self.palw_operator_id_unique),
+                "palw_rcore_plus is armed without palw_operator_id_unique at or below it: the stake draw weighs one operator's bond",
+            ),
+        ];
+        if let Some((_, why)) = prerequisites.iter().find(|(armed, _)| !armed) {
+            return Err(Invalid(why));
+        }
+        if self.palw_settled_anchor_depth.is_none() {
+            return Err(Invalid(
+                "palw_rcore_plus is armed without palw_settled_anchor_depth: vesting and the locks mature on the second clock",
+            ));
+        }
+        if self.palw_shard_licensing.is_some_and(|f| f != ForkActivation::never()) {
+            return Err(Invalid(
+                "palw_rcore_plus is armed beside palw_shard_licensing: Q-3's basis recount has no rule for a licence by parts",
+            ));
+        }
+        // C7 is a subset of testnet-12's genesis held rows: the hold names classes the chain
+        // registered at genesis, never a class a later registration could bring.
+        if !self.palw_rcore_conservative_classes.is_empty() {
+            let held = palw_t12_genesis_held_class_ids_v1();
+            if self.palw_rcore_conservative_classes.iter().any(|class| !held.contains(class)) {
+                return Err(Invalid(
+                    "palw_rcore_conservative_classes names a class that is not one of testnet-12's genesis held rows \
+                     (PALW_T12_GENESIS_HELD_ROWS)",
+                ));
+            }
+        }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
+            // IMPL-7: the reporter-commit (and, with M3, the DA-disclosure-v4) context is only in V5.
+            if bundle.signature_contexts_root != crate::palw_mode_v2::palw_v2_signature_contexts_root_v5() {
+                return Err(Invalid(
+                    "palw_rcore_plus is armed but the bundle's signature_contexts_root is not the COMPLETE_V5 set: R-core+'s \
+                     reporter commitments sign under a context only V5 commits to (ADR-0152 IMPL-7)",
+                ));
+            }
+            // IMPL-6: the three mirrors are the params, byte for byte (the escrow mirror's rule).
+            let delay = palw_v2_bond_withdrawal_delay_at_v1(bundle, self.palw_da_court, 0);
+            if bundle.state.rcore_plus_from_daa() != Some(fence.daa_score())
+                || bundle.state.withdrawal_delay_daa() != delay
+                || bundle.state.rcore_conservative_classes() != self.palw_rcore_conservative_classes
+            {
+                return Err(Invalid(
+                    "palw_rcore_plus, the processor's withdrawal delay or palw_rcore_conservative_classes disagree with the V2 \
+                     bundle's mirrors: mirror them with Params::sync_palw_rcore_plus after the bundle is assembled",
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn set_palw_short_challenge_window(&mut self, at: Option<ForkActivation>) {
@@ -5782,6 +5958,20 @@ impl Params {
         self.palw_audit_2026_09_23_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// ADR-0152 R-core+'s fence, resolved off a ConsensusV2 ruleset.
+    pub fn palw_rcore_plus_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_rcore_plus) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Whether R-core+ is in force at `daa_score`. `false` on every preset but testnet-12. The v22
+    /// skeleton arms nothing behind it yet.
+    pub fn palw_rcore_plus_active_at(&self, daa_score: u64) -> bool {
+        self.palw_rcore_plus_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
     /// Whether a false `Valid` is judged by `palw_check_panel_false_valid_v2` at `daa_score`
     /// (`PalwTransitionExtrasV1::offence_attribution_active`): the V1 kind refused, the V2 kind
     /// admitted. `false` on every preset but testnet-12.
@@ -5910,6 +6100,8 @@ impl Params {
             palw_clock_cursor,
             palw_clock_floor,
             palw_offence_attribution,
+            palw_rcore_plus,
+            palw_rcore_conservative_classes: _,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6009,6 +6201,7 @@ impl Params {
             ("palw_clock_cursor", *palw_clock_cursor),
             ("palw_clock_floor", *palw_clock_floor),
             ("palw_offence_attribution", *palw_offence_attribution),
+            ("palw_rcore_plus", *palw_rcore_plus),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -6365,6 +6558,12 @@ impl Params {
             h.write(b"palw_offence_attribution");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0152 R-core+, NAMED for the same reason and Some-only: every other preset's schedule
+        // id is byte-identical to a build without the fence.
+        if let Some(activation) = self.palw_rcore_plus {
+            h.write(b"palw_rcore_plus");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -6557,6 +6756,8 @@ impl Params {
             palw_clock_cursor,
             palw_clock_floor,
             palw_offence_attribution,
+            palw_rcore_plus,
+            palw_rcore_conservative_classes: _,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6860,6 +7061,10 @@ impl Params {
         }
         // ADR-0152 v2 F2's attribution fence: SOME-ONLY, as the floor above and for its reason.
         if let Some(activation) = palw_offence_attribution.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0152 R-core+: SOME-ONLY, as the floor above and for its reason.
+        if let Some(activation) = palw_rcore_plus.as_mut() {
             fork(activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
@@ -7444,6 +7649,8 @@ impl Params {
             palw_clock_cursor,
             palw_clock_floor,
             palw_offence_attribution,
+            palw_rcore_plus,
+            palw_rcore_conservative_classes,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7727,6 +7934,20 @@ impl Params {
             h.write(b"palw_offence_attribution");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0152 R-core+: the height only, Some-only, for the floor's reason; and C7's list only
+        // when non-empty (IMPL-6), so every other preset fingerprints byte-identically to a build
+        // without either field.
+        if let Some(activation) = palw_rcore_plus {
+            h.write(b"palw_rcore_plus");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if !palw_rcore_conservative_classes.is_empty() {
+            h.write(b"palw_rcore_conservative_classes");
+            h.write((palw_rcore_conservative_classes.len() as u64).to_le_bytes());
+            for class in palw_rcore_conservative_classes.iter() {
+                h.write(class.as_byte_slice());
+            }
+        }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
         if let Some(activation) = palw_artifact_root_ownership {
             h.write(b"palw_artifact_root_ownership");
@@ -7994,10 +8215,12 @@ impl Params {
             // verified under is in the identity two nodes compare. A bundle that states V4 (every
             // mint that takes the regime from genesis) commits them through the ruleset id already,
             // and its identity does not move.
+            // ADR-0152 IMPL-7: a bundle stating V5 commits V4's contexts through the ruleset id too.
             let v4 = crate::palw_mode_v2::palw_v2_signature_contexts_root_v4();
             if !matches!(
                 palw_consensus_mode,
-                crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if bundle.signature_contexts_root == v4
+                crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)
+                    if crate::palw_mode_v2::palw_v2_signature_contexts_root_covers_v4(&bundle.signature_contexts_root)
             ) {
                 h.write(b"palw_held_context/contexts");
                 h.write(v4.as_bytes());
@@ -8481,6 +8704,11 @@ impl Params {
             // Rides with `palw_economic_safety`, which an override drops below: armed without it,
             // `validate_palw_v2` would refuse the result.
             palw_offence_attribution: None,
+            // ADR-0152 R-core+ (S-SPEC §5): CARRIED, like the audit fence, never reset — an
+            // overridden testnet-12 then fails `validate_palw_v2` on the prerequisites the override
+            // dropped, instead of silently disarming R-core+.
+            palw_rcore_plus: self.palw_rcore_plus,
+            palw_rcore_conservative_classes: self.palw_rcore_conservative_classes,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -9481,6 +9709,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_clock_floor: None,
     palw_offence_attribution: None,
+    palw_rcore_plus: None,
+    palw_rcore_conservative_classes: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -9697,6 +9927,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_clock_floor: None,
     palw_offence_attribution: None,
+    palw_rcore_plus: None,
+    palw_rcore_conservative_classes: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -9895,6 +10127,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_clock_floor: None,
     palw_offence_attribution: None,
+    palw_rcore_plus: None,
+    palw_rcore_conservative_classes: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -11229,6 +11463,46 @@ pub const PALW_T12_GENESIS_HELD_ROWS: [PalwGenesisHeldRowV1; 2] = [
         artifact_root: PALW_T12_GENESIS_QWEN25_A16_2M_ARTIFACT_ROOT,
     },
 ];
+
+/// **The class ids of testnet-12's genesis held rows** ([`PALW_T12_GENESIS_HELD_ROWS`]): each row's
+/// graph-v7 profile id at its own width — the id its registration binds (`class_id =
+/// profile.shape_profile_id()`). What ADR-0152's C7 list must be a subset of.
+pub fn palw_t12_genesis_held_class_ids_v1() -> Vec<crate::Hash64> {
+    PALW_T12_GENESIS_HELD_ROWS
+        .iter()
+        .filter_map(|row| {
+            let profile = match row.family {
+                PalwGenesisHeldFamilyV1::DenseA16 => crate::palw_context_ladder::palw_a16_context_row_profile_v7(row.n_ctx),
+                PalwGenesisHeldFamilyV1::HybridQwen36 => crate::palw_context_ladder::palw_qwen36_context_row_profile_v7(row.n_ctx),
+            };
+            profile.ok().map(|p| p.shape_profile_id())
+        })
+        .collect()
+}
+
+/// **ADR-0152 C7 on testnet-12: `[the 2M class id]`**, pinned — the dense genesis row at
+/// [`PALW_T12_DENSE_N_CTX`], held to Final (U1: "2M held to Final"; the 8k row releases per SR-1).
+/// A literal because `Params` is built in `const` presets; `the_t12_c7_list_is_the_2m_row` holds it
+/// equal to [`palw_t12_rcore_conservative_classes_v1`]'s derivation, so a moved profile id fails by
+/// name instead of pointing C7 at nothing.
+/// `74c67e63…902f7a`, the 2M row's class id at this build's graph-v7 profile.
+pub const PALW_T12_RCORE_CONSERVATIVE_CLASSES: [crate::Hash64; 1] = [crate::Hash64::from_bytes(PALW_T12_2M_CLASS_ID_BYTES)];
+const PALW_T12_2M_CLASS_ID_BYTES: [u8; 64] = [
+    0x74, 0xc6, 0x7e, 0x63, 0xd9, 0xc0, 0x3d, 0xaa, 0x05, 0x88, 0x0c, 0x5d, 0x8a, 0x47, 0xb3, 0x54,
+    0xca, 0x20, 0xe9, 0x52, 0xb1, 0xa2, 0xd4, 0x9c, 0x10, 0x7a, 0xbe, 0x14, 0xf8, 0x90, 0xa9, 0xc5,
+    0x07, 0x90, 0x37, 0x1b, 0xb7, 0x15, 0xc7, 0xce, 0xa3, 0x3a, 0xe8, 0xac, 0x92, 0x13, 0xa3, 0xa6,
+    0x3d, 0xa4, 0x09, 0x07, 0x0c, 0xb2, 0xc9, 0x8b, 0x8e, 0x86, 0x15, 0x98, 0xdb, 0x90, 0x2f, 0x7a,
+];
+
+/// ADR-0152 C7 on testnet-12, derived: the 2M row's class id (its graph-v7 profile id at
+/// [`PALW_T12_DENSE_N_CTX`]).
+pub fn palw_t12_rcore_conservative_classes_v1() -> Vec<crate::Hash64> {
+    PALW_T12_GENESIS_HELD_ROWS
+        .iter()
+        .filter(|row| row.family == PalwGenesisHeldFamilyV1::DenseA16 && row.n_ctx == PALW_T12_DENSE_N_CTX)
+        .filter_map(|row| crate::palw_context_ladder::palw_a16_context_row_profile_v7(row.n_ctx).ok().map(|p| p.shape_profile_id()))
+        .collect()
+}
 
 pub fn palw_rc_qwen25_a16_is_registered() -> bool {
     PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
@@ -14664,7 +14938,13 @@ pub fn palw_held_context_mint_v1(mut params: Params, ladder: u64) -> Result<Para
             "the held regime is a ConsensusV2 ruleset; this base carries no V2 bundle",
         ));
     };
-    bundle.signature_contexts_root = crate::palw_mode_v2::palw_v2_signature_contexts_root_v4();
+    // ADR-0152 IMPL-7: a network that arms R-core+ commits to V5, which is V4 plus R-core+'s
+    // contexts — the held regime's three are in both.
+    bundle.signature_contexts_root = if params.palw_rcore_plus.is_some_and(|f| f != ForkActivation::never()) {
+        crate::palw_mode_v2::palw_v2_signature_contexts_root_v5()
+    } else {
+        crate::palw_mode_v2::palw_v2_signature_contexts_root_v4()
+    };
     bundle.trace_format_version = crate::palw_mode_v2::PALW_V2_TRACE_FORMAT_VERSION_MERKLE_IDS;
     let court = bundle.court;
     bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
@@ -15519,6 +15799,13 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // the V1 payload whose job-id check no real claim can pass is refused. The objective-offence
     // ledger and Verification V2 it rides on are testnet-11's heights, moved to 0 by pass 2.
     params.palw_offence_attribution = Some(at);
+    // **ADR-0152 v3.1 R-core+** (`Params::palw_rcore_plus`), by name: every prerequisite it is
+    // refused without is armed at 0 by this pass or by pass 2's walk, and C7 is the 2M row (U1).
+    // The v22 skeleton lands the fence with every writer dormant, so arming it moves testnet-12's
+    // encodings and ids and no fold behaviour. The bundle's mirrors are re-made by
+    // `sync_palw_rcore_plus` where the bundle is assembled.
+    params.palw_rcore_plus = Some(at);
+    params.palw_rcore_conservative_classes = &PALW_T12_RCORE_CONSERVATIVE_CLASSES;
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -15748,7 +16035,10 @@ pub fn palw_v2_params_on_base(
         // Read from the fence rather than from the height: a fence scheduled for DAA 8,000 still
         // means this chain will verify that context, and the root cannot be re-minted at 8,000.
         let ever = |f: Option<ForkActivation>| f.is_some_and(|a| a != ForkActivation::never());
-        bundle.signature_contexts_root = if ever(base.palw_held_context) {
+        bundle.signature_contexts_root = if ever(base.palw_rcore_plus) {
+            // ADR-0152 IMPL-7: R-core+'s contexts are only in V5, and V5 is V4 plus them.
+            crate::palw_mode_v2::palw_v2_signature_contexts_root_v5()
+        } else if ever(base.palw_held_context) {
             crate::palw_mode_v2::palw_v2_signature_contexts_root_v4()
         } else if ever(base.palw_shard_court) {
             crate::palw_mode_v2::palw_v2_signature_contexts_root_v3()
@@ -15880,6 +16170,9 @@ pub fn palw_v2_params_on_base(
     // Option A (2026-09-23 audit U2), for the same reason and in the same place: the height from which
     // a claim's escrow is reserved on its bond is `palw_audit_2026_09_23`'s, mirrored.
     params.sync_palw_escrow_backed_exposure();
+    // ADR-0152 R-core+, for the same reason and in the same place: the fence's height, the
+    // processor's withdrawal delay and C7's list, mirrored onto the bundle this function built.
+    params.sync_palw_rcore_plus();
     params.validate_palw_v2()?;
     Ok(params)
 }
@@ -16028,6 +16321,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_clock_cursor: None,
     palw_clock_floor: None,
     palw_offence_attribution: None,
+    palw_rcore_plus: None,
+    palw_rcore_conservative_classes: &[],
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -16219,6 +16514,24 @@ mod consensus_params_id_tests {
         assert_ne!(t12.consensus_identity_id(), without.consensus_identity_id(), "in force from block one separates identities");
         assert_ne!(t12.consensus_params_id(), without.consensus_params_id(), "testnet-12's ruleset names the fence");
         assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and so does its schedule");
+    }
+
+    /// **ADR-0152 C7 on testnet-12 is the 2M row, pinned and derived** (U1): the literal
+    /// `PALW_T12_RCORE_CONSERVATIVE_CLASSES` the const preset carries is the 2M dense row's class id,
+    /// one of testnet-12's genesis held rows, and not the 8k row's.
+    #[test]
+    fn the_t12_c7_list_is_the_2m_row() {
+        let derived = palw_t12_rcore_conservative_classes_v1();
+        assert_eq!(
+            derived.as_slice(),
+            PALW_T12_RCORE_CONSERVATIVE_CLASSES.as_slice(),
+            "the pinned C7 list is the 2M row's derived class id: {:?}",
+            derived.iter().map(|h| h.to_string()).collect::<Vec<_>>()
+        );
+        let held = palw_t12_genesis_held_class_ids_v1();
+        assert_eq!(held.len(), PALW_T12_GENESIS_HELD_ROWS.len(), "every held row derives");
+        assert_eq!(held[1], PALW_T12_RCORE_CONSERVATIVE_CLASSES[0], "the second held row is the 2M row");
+        assert_ne!(held[0], PALW_T12_RCORE_CONSERVATIVE_CLASSES[0], "the 8k row is released per SR-1, not held");
     }
 
     #[test]
@@ -20514,7 +20827,11 @@ mod consensus_params_id_tests {
                 // **And again the same day, for the economic audit's state schema v21**
                 // (`PALW_STATE_V2_VERSION` 20 -> 21, hashed into the bundle; `palw_audit_2026_09_23`
                 // itself is Some-only and dormant here). Previous: 33bdff0b….
-                "c99bb4f43891dc637e4d5634816c46b33d89f07a381875e2ce54bd3ef80ac74a",
+                // **And once more for ADR-0152's v22 skeleton** (`PALW_STATE_V2_VERSION` 21 -> 22,
+                // hashed into the V2 arm): the one re-pin the version forces on every V2 preset.
+                // `palw_rcore_plus` and C7's list are Some-only / non-empty-only and absent here, so
+                // nothing else moved. Previous: c99bb4f4….
+                "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -20544,7 +20861,9 @@ mod consensus_params_id_tests {
             // preset carries the RC court root through the same bundle builder, so it moves with it.
             // Previous: 61286b15588eb253b9a7f64997935c919b604b07d1973d4d2366084f06f524f5.
             // …and once more the same day for the economic audit's state schema v21. Previous: 3894d83e….
-            ("devnet", DEVNET_PARAMS, "9acd42be5357a25ee08c1c7037d1610ef00107e8bd47eb59e6c6a6f91c31f502"),
+            // …and once more for ADR-0152's v22 skeleton (`PALW_STATE_V2_VERSION` 21 -> 22, the V2
+            // arm's version hash; the R-core+ fence is absent here). Previous: 9acd42be….
+            ("devnet", DEVNET_PARAMS, "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

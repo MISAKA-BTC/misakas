@@ -70,7 +70,17 @@ fn a_slash_liability_expires_on_the_heartbeat_clock() {
 
     let mut ledger = PalwSlashableExposureLedgerV1 { posted: BTreeMap::new(), locks: BTreeMap::new() };
     ledger.posted.insert(bond, locked);
-    ledger.locks.insert((bond, claim), PalwSlashableLockV1 { claim, amount: locked, expiry_daa: expiry, settled_at_final: 0 });
+    ledger.locks.insert(
+        (bond, claim),
+        PalwSlashableLockV1 {
+            claim,
+            amount: locked,
+            expiry_daa: expiry,
+            settled_at_final: 0,
+            attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+            segments: 0,
+        },
+    );
 
     assert!(!ledger.withdraw_allowed(&bond, final_daa), "the lie is fresh: the bond is pinned");
     assert!(!ledger.withdraw_allowed(&bond, expiry - 1), "one DAA short: still pinned");

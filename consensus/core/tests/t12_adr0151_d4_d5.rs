@@ -42,6 +42,8 @@ fn d4_the_liability_ledger_is_armed_from_genesis() {
         expiry_daa: 100,
         // 2026-09-23 audit: the second clock's start; `is_live` below is the DAA-only rule.
         settled_at_final: 0,
+        attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+        segments: 0,
     };
     assert!(lock.is_live(99), "a lock is live until its own expiry, not until the claim resolves");
     assert!(!lock.is_live(100));

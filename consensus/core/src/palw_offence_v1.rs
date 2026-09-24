@@ -56,6 +56,49 @@ pub enum PalwOffenceKindV1 {
     /// Appended last, so no existing row or payload moves; admitted only past
     /// `Params::palw_offence_attribution`, where [`Self::PanelFalseValid`] is refused.
     PanelFalseValidV2 = 3,
+    /// **ADR-0152 v3.1 J-4 (the audit's SPEC §4.4, M2): the claim's executor is refuted by an
+    /// objective contradiction of its own committed execution** — the executor's conviction, filed
+    /// without a receipt, keyed `(4, executor, H("misaka-palw/executor-refuted-key/v1" ‖ claim_id))`.
+    ///
+    /// **Declared by the v22 skeleton, not yet admitted anywhere.** The slot is fixed now so the
+    /// explicit-discriminant enum cannot be renumbered by whichever of M2, S and M3 lands first; a
+    /// filed object of this kind is refused by name at every gate and in the fold
+    /// ([`PalwOffenceVerifyError::KindNotLanded`]) until M2 lands its adjudicator.
+    ExecutorRefuted = 4,
+    /// **ADR-0152 v3.1 DA-7: a data-availability session defaulted** — the producer's S1 and the
+    /// silent signers' S4, recorded on the ledger with the collected amount (R-2). Declared by S
+    /// (the v22 skeleton), written by M3; refused by name until then, as [`Self::ExecutorRefuted`].
+    DaDefault = 5,
+    /// **ADR-0152 v3.1 §3.6 (IMPL-3, N6): a court conviction, recorded on the ledger** so the
+    /// conviction funnel (R-2) has one row per court void with its `collected` amount and its
+    /// `claim_id` (keyed on the claim, S-SPEC P10: the shard-court sites carry no session). Declared
+    /// and written by S; refused by name until S-4 lands the funnel, as [`Self::ExecutorRefuted`].
+    CourtConviction = 6,
+}
+
+impl PalwOffenceKindV1 {
+    /// **Is this a v22 slot whose owner has not landed its logic yet?** (ADR-0152 v3.1 §6, the
+    /// v22 skeleton.) Kinds 4, 5 and 6 are declared so their discriminants are frozen, and every
+    /// gate refuses a filed object of one of them by this one predicate — the processor's gate,
+    /// the fold, the ledger-id function and the verify function — until its owner replaces the
+    /// refusal with the rule. `false` for every kind a network could consume before v22.
+    pub fn is_declared_not_landed_v1(self) -> bool {
+        matches!(self, Self::ExecutorRefuted | Self::DaDefault | Self::CourtConviction)
+    }
+
+    /// The owner-named refusal for a kind [`Self::is_declared_not_landed_v1`] answers `true` for.
+    pub fn not_landed_reason_v1(self) -> &'static str {
+        match self {
+            Self::ExecutorRefuted => "ExecutorRefuted (kind 4) is declared by the v22 skeleton and admitted only once M2 lands it",
+            Self::DaDefault => "DaDefault (kind 5) is declared by the v22 skeleton and written only by M3's DA court",
+            Self::CourtConviction => {
+                "CourtConviction (kind 6) is declared by the v22 skeleton and written only by S's conviction funnel"
+            }
+            Self::ExecutorEquivocation | Self::PanelFalseValid | Self::CourtExecutorGuilty | Self::PanelFalseValidV2 => {
+                "this kind is landed"
+            }
+        }
+    }
 }
 
 /// The chain's memory that this offence has already been paid.
@@ -77,6 +120,15 @@ pub struct PalwConsumedOffenceV1 {
     /// forfeiture set is a function of it (`palw_forfeited_execution_roots_v1`), not a second ledger
     /// that could disagree with it.
     pub execution_root: crate::Hash64,
+    /// **ADR-0152 v3.1 R-2 / V-2b (v22 row 18): what the conviction actually took** — the debit
+    /// `slash_bond` collected from the accused, which the reporter reward (`r × collected`) and the
+    /// burn are priced from. Appended by the v22 skeleton; 0 on every record until S's conviction
+    /// funnel (S-4) writes it past `Params::palw_rcore_plus`.
+    pub collected: u64,
+    /// **The claim the conviction is about** (v22 row 18; zero for `ExecutorEquivocation`, which is
+    /// about a key, not a claim). A `CourtConviction` is keyed on it (S-SPEC P10). Appended by the
+    /// v22 skeleton; zero until S-4 writes it.
+    pub claim_id: crate::Hash64,
 }
 
 /// **A panel seat signed Valid, and the same claim has an objective Invalid.**
@@ -193,6 +245,12 @@ pub fn palw_ledger_evidence_id_v1(kind: PalwOffenceKindV1, evidence: &[u8], name
         // Keyed per (seat, claim) by `palw_false_valid_offence_id_v2`, never by the bytes: one
         // Valid is one offence whatever contradiction or wrapper a filer attaches to it.
         PalwOffenceKindV1::PanelFalseValidV2 => Err(PalwOffenceVerifyError::AttributionDormant),
+        // ADR-0152 v22 skeleton: declared, keyed by their owners when they land (kind 4 by
+        // `H(executor-refuted-key ‖ claim_id)`, 6 by claim, 5 by the DA session) — never by bytes
+        // before then.
+        PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {
+            Err(PalwOffenceVerifyError::KindNotLanded(kind.not_landed_reason_v1()))
+        }
     }
 }
 
@@ -376,6 +434,11 @@ pub enum PalwOffenceVerifyError {
     ReporterSlotNotArmed,
     #[error("the false-Valid evidence is above the byte ceiling this ruleset prices")]
     EvidenceTooLarge,
+    // ---- ADR-0152 v3.1 §6, the v22 skeleton ----------------------------------------------------
+    /// A kind the v22 layout declares (4, 5, 6) whose owner has not landed its rule: refused by
+    /// name at every gate ([`PalwOffenceKindV1::is_declared_not_landed_v1`]).
+    #[error("{0}")]
+    KindNotLanded(&'static str),
 }
 
 /// **The processor's cryptographic gate** (ADR-0144 §9). A named kind and an evidence id are
@@ -418,6 +481,11 @@ where
         // Never through this gate: past `palw_offence_attribution` the processor sends it to
         // `palw_check_panel_false_valid_v2`, and below it the kind does not exist.
         PalwOffenceKindV1::PanelFalseValidV2 => Err(PalwOffenceVerifyError::AttributionDormant),
+        // ADR-0152 v22 skeleton: declared slots, refused by name on every network until their
+        // owners land them (M2: 4; M3: 5; S: 6).
+        PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {
+            Err(PalwOffenceVerifyError::KindNotLanded(kind.not_landed_reason_v1()))
+        }
     }
 }
 
@@ -1033,6 +1101,68 @@ mod tests {
         assert_eq!(kinds.len(), 4, "ADR-0144 §9: no quality, cache, speedup, delay or unavailability kind");
         for kind in kinds {
             assert_eq!(borsh::to_vec(&kind).expect("a kind serializes"), vec![kind as u8], "{kind:?}: the tag is the discriminant");
+            assert!(!kind.is_declared_not_landed_v1(), "{kind:?} is landed");
         }
+    }
+
+    /// **The v22 skeleton's three slots sit at their frozen discriminants and are refused by name**
+    /// (ADR-0152 v3.1 §6 row 19): `ExecutorRefuted = 4` (M2), `DaDefault = 5` (M3), `CourtConviction =
+    /// 6` (S). The tag byte is the discriminant, a sixth-past tag does not decode, and the ledger id
+    /// and the verify gate both refuse each with `KindNotLanded` whatever bytes it carries.
+    #[test]
+    fn the_v22_offence_kind_slots_are_pinned_and_refused_until_landed() {
+        let pinned = [
+            (4u8, PalwOffenceKindV1::ExecutorRefuted),
+            (5u8, PalwOffenceKindV1::DaDefault),
+            (6u8, PalwOffenceKindV1::CourtConviction),
+        ];
+        let accused = TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([7u8; 64]), index: 1 };
+        for (tag, kind) in pinned {
+            assert_eq!(kind as u8, tag);
+            assert_eq!(borsh::to_vec(&kind).unwrap(), vec![tag], "{kind:?}");
+            assert_eq!(borsh::from_slice::<PalwOffenceKindV1>(&[tag]).unwrap(), kind);
+            assert!(kind.is_declared_not_landed_v1());
+            let evidence = b"any bytes at all";
+            assert!(matches!(
+                palw_ledger_evidence_id_v1(kind, evidence, &Hash64::from_u64_word(1)),
+                Err(PalwOffenceVerifyError::KindNotLanded(_))
+            ));
+            assert!(matches!(
+                palw_verify_objective_offence_v1(
+                    kind,
+                    &accused,
+                    &palw_offence_evidence_digest_v1(evidence),
+                    evidence,
+                    &[],
+                    true,
+                    b"net",
+                    crate::palw_step::PALW_STEP_MAX_LEAVES,
+                    |_, _, _, _| true,
+                ),
+                Err(PalwOffenceVerifyError::KindNotLanded(_))
+            ));
+        }
+        assert!(borsh::from_slice::<PalwOffenceKindV1>(&[7]).is_err(), "no eighth kind");
+    }
+
+    /// The consumed-offence record's two v22 appends ride last, after `execution_root`, in order.
+    #[test]
+    fn the_consumed_offence_record_appends_collected_and_claim_id() {
+        let record = PalwConsumedOffenceV1 {
+            kind: PalwOffenceKindV1::CourtConviction,
+            accused: TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_bytes([3u8; 64]), index: 9 },
+            amount: 11,
+            accepted_daa: 12,
+            execution_root: Hash64::from_u64_word(13),
+            collected: 0x0102_0304_0506_0708,
+            claim_id: Hash64::from_u64_word(14),
+        };
+        let bytes = borsh::to_vec(&record).unwrap();
+        assert_eq!(borsh::from_slice::<PalwConsumedOffenceV1>(&bytes).unwrap(), record);
+        // kind (1) + outpoint (64 + 4) + amount (8) + accepted_daa (8) + execution_root (64), then the two.
+        let prefix = 1 + 64 + 4 + 8 + 8 + 64;
+        assert_eq!(bytes.len(), prefix + 8 + 64);
+        assert_eq!(&bytes[prefix..prefix + 8], &0x0102_0304_0506_0708u64.to_le_bytes(), "`collected` follows `execution_root`");
+        assert_eq!(&bytes[prefix + 8..], Hash64::from_u64_word(14).as_byte_slice(), "`claim_id` is last");
     }
 }

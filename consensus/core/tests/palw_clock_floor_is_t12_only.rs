@@ -13,17 +13,23 @@ use kaspa_consensus_core::config::params::{
 };
 
 /// `(network, consensus_params_id, consensus_identity_id, consensus_schedule_id)` at `0b14bf80`.
+///
+/// **Re-pinned once for ADR-0152's v22 skeleton**: `PALW_STATE_V2_VERSION` 21 -> 22 is hashed into
+/// the V2 arm of `consensus_params_id`, so testnet-11's and devnet's params and identity ids move
+/// with the version (the one re-pin it forces on every V2 preset); every schedule id, and all of
+/// mainnet (no V2 bundle), are the `0b14bf80` values still. v21: testnet-11 `c99bb4f4…` /
+/// `19dbdbb8…`, devnet `9acd42be…`. The floor itself still moves none of them.
 const BEFORE_THE_FLOOR: &[(&str, &str, &str, &str)] = &[
     (
         "testnet-11",
-        "c99bb4f43891dc637e4d5634816c46b33d89f07a381875e2ce54bd3ef80ac74a",
-        "19dbdbb8afd374aafa14f7fd7457fac7304a19df697706f69b34be0e1e995d4e",
+        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
+        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
         "devnet",
-        "9acd42be5357a25ee08c1c7037d1610ef00107e8bd47eb59e6c6a6f91c31f502",
-        "9acd42be5357a25ee08c1c7037d1610ef00107e8bd47eb59e6c6a6f91c31f502",
+        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
+        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
         "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
     ),
     (

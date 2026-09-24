@@ -17,18 +17,19 @@ use kaspa_consensus_core::config::params::{
 
 /// `(network, consensus_params_id, consensus_identity_id, consensus_schedule_id)` of the presets
 /// that do not arm the fence, at `5bf72b46` (= `BEFORE_THE_FLOOR`, whose numbers that commit
-/// still produces).
+/// still produces) — **re-pinned once for ADR-0152's v22 skeleton**, whose version bump moves
+/// testnet-11's and devnet's params and identity ids and nothing else (see `BEFORE_THE_FLOOR`).
 const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
     (
         "testnet-11",
-        "c99bb4f43891dc637e4d5634816c46b33d89f07a381875e2ce54bd3ef80ac74a",
-        "19dbdbb8afd374aafa14f7fd7457fac7304a19df697706f69b34be0e1e995d4e",
+        "bd633ce933974d4134676efbdaf46b269dc2fb78f007e0907479aabd4d743f29",
+        "44cb8fd729e9575a6e3b1e72c466b8abce4b9ecd81bb556685c9ba225487117f",
         "5a1d8d5679e0e8d7e9022255668fd5d4b3e4c8a6c367acf3882c6a3d480d8b64",
     ),
     (
         "devnet",
-        "9acd42be5357a25ee08c1c7037d1610ef00107e8bd47eb59e6c6a6f91c31f502",
-        "9acd42be5357a25ee08c1c7037d1610ef00107e8bd47eb59e6c6a6f91c31f502",
+        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
+        "7a27f341e49902ebb5e15ea79a45806fbd37b65daaddf8f0a5a10a15f9bfd4a8",
         "edd80c01c791d225d602b9136f539f4dfeb506ba1b3071b177b0d873a661142f",
     ),
     (
@@ -41,10 +42,16 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 
 /// testnet-12's `(consensus_params_id, consensus_identity_id, consensus_schedule_id)` at `5bf72b46`,
 /// the build before the fence. testnet-12 with the fence taken away must still be exactly this.
+///
+/// **Re-pinned once for ADR-0152's v22 skeleton**, which moved testnet-12 itself: the version, the
+/// `palw_rcore_plus` fence and C7's list, and the bundle's `COMPLETE_V5` context root are all in its
+/// ids. The value is testnet-12 at v22 with this fence alone taken away (R-core+ still armed), so the
+/// property is unchanged: this fence is exactly the difference. v21: `39d512cf…` / `f7db37bf…` /
+/// `b16bf05a…`.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "39d512cf32f0d88a8ae5446d6c31ba6f49d35a7d20cad1679f0399b0433bbab9",
-    "f7db37bfa2a8775f36c4301853f1786dc0ca41bc24fc682de198eb4bb869db8e",
-    "b16bf05ab109d608e05432e43e66969b6fad7ee7ac5b4e6703a9b0c64b14213a",
+    "cf57a2e9ae416542c53e14dc5944f84bf76b23ffef6ea1bb01b1898aeb71ef00",
+    "2b48d4ee10c15af9cd6e4f267e92472232e3b7d71c13ce57ecb5af592866a85c",
+    "75282ad229d5f8617aa5b3f5b818ddab9defdc893f1276c6a079c080af7debff",
 );
 
 fn shipped(name: &str) -> Params {
@@ -136,5 +143,10 @@ fn a_later_height_is_refused_by_validation() {
     }
     let mut never = t12.clone();
     never.palw_offence_attribution = Some(ForkActivation::never());
+    // ADR-0152: R-core+ is armed above this fence on testnet-12 and refuses to stand without it, so
+    // the absence that validates is the fence's with R-core+ taken off too.
+    never.palw_rcore_plus = None;
+    never.palw_rcore_conservative_classes = &[];
+    never.sync_palw_rcore_plus();
     never.validate_palw_v2().expect("never() is absence, and absence validates");
 }

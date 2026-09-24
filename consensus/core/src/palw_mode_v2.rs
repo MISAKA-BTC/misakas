@@ -252,6 +252,52 @@ pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4: &[&[u8]] = &[
     crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
 ];
 
+/// **The complete set, plus R-core+'s contexts** (ADR-0152 v3.1 §6, IMPL-7). The reporter-commit
+/// context (R-3) and the DA-disclosure-v4 context (DA-4) are new ML-DSA-87 contexts, and V4 cannot
+/// grow (`the_committed_context_set_is_derived_not_retyped` pins it as V3 plus exactly three), so
+/// `Params::palw_rcore_plus` arms only over a bundle that commits to this set: V4 in V4's order,
+/// then the additions — a prefix is visibly a superset. A V5 network runs everything V4 names.
+///
+/// **One addition today, two when M3 lands.** The DA-disclosure-v4 context is M3's and is not
+/// defined in this tree; the v22 skeleton commits the reporter-commit context and leaves M3's slot
+/// named below. Testnet-12's genesis bundle states this root, so M3's append re-mints testnet-12's
+/// ruleset id once more before M5 freezes the set — no other network commits to V5.
+pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5: &[&[u8]] = &[
+    // — V2, in order —
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_RESPONDER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_ATTN_CHALLENGER_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_CLOSE_DECLARATION_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_SPEND_CONTEXT,
+    crate::palw_carriage::PALW_CARRIAGE_MLDSA87_COMMITMENT_CONTEXT,
+    crate::palw_slash::PALW_S_MLDSA87_ATTESTATION_CONTEXT,
+    // — the one-move court —
+    crate::palw_shard_court_v1::PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+    // — per-shard licensing (ADR-0100 Decision 4): the registrant's plan, a bond's shards —
+    crate::palw_shard_licensing_v1::PALW_SHARD_PLAN_MLDSA87_CONTEXT,
+    crate::palw_shard_licensing_v1::PALW_BOND_SHARDS_MLDSA87_CONTEXT,
+    // — the held regime (ADR-0103): the checkpoint court and the held DA court's two moves —
+    crate::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_MLDSA87_ACCUSE_CONTEXT,
+    crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
+    crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
+    // — R-core+ (ADR-0152 IMPL-7): the reporter's commitment (R-3) —
+    crate::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
+    // TODO(M3, ADR-0152 DA-4): `PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT` is appended here, after
+    // the reporter-commit context, when M3 defines it.
+];
+
 /// The families whose ML-DSA-87 contexts the ConsensusV2 acceptance layer verifies signatures
 /// from — the SOURCE the committed set is checked against, so the set is derived from the
 /// per-family registries every family already maintains rather than re-typed a second time.
@@ -342,10 +388,23 @@ pub fn palw_v2_signature_contexts_root_v4() -> Hash64 {
     palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4)
 }
 
-/// **Does this committed root include every context the one-move court needs?** V3 does, and V4 is
-/// V3 plus the held regime's three — so a fence that needs V3 is satisfied by either.
+/// The root of [`PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5`] — what a network that arms
+/// `Params::palw_rcore_plus` (ADR-0152) commits to at genesis. Testnet-12 alone.
+pub fn palw_v2_signature_contexts_root_v5() -> Hash64 {
+    palw_v2_signature_contexts_root_of(PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5)
+}
+
+/// **Does this committed root include every context the one-move court needs?** V3 does, V4 is
+/// V3 plus the held regime's three, and V5 is V4 plus R-core+'s — so a fence that needs V3 is
+/// satisfied by any of the three.
 pub fn palw_v2_signature_contexts_root_covers_v3(root: &Hash64) -> bool {
-    *root == palw_v2_signature_contexts_root_v3() || *root == palw_v2_signature_contexts_root_v4()
+    *root == palw_v2_signature_contexts_root_v3() || palw_v2_signature_contexts_root_covers_v4(root)
+}
+
+/// **Does this committed root include every context the held regime needs?** V4 does, and V5 is V4
+/// plus R-core+'s (ADR-0152 IMPL-7: "the held-context gate accepts V5 as a superset").
+pub fn palw_v2_signature_contexts_root_covers_v4(root: &Hash64) -> bool {
+    *root == palw_v2_signature_contexts_root_v4() || *root == palw_v2_signature_contexts_root_v5()
 }
 
 pub const PALW_MODE_V2_ALL_DOMAINS: &[&[u8]] = &[PALW_RULESET_ID_V2_DOMAIN];
@@ -1196,6 +1255,7 @@ impl PalwConsensusParamsV2 {
             && self.signature_contexts_root != palw_v2_signature_contexts_root_v2()
             && self.signature_contexts_root != palw_v2_signature_contexts_root_v3()
             && self.signature_contexts_root != palw_v2_signature_contexts_root_v4()
+            && self.signature_contexts_root != palw_v2_signature_contexts_root_v5()
         {
             return Err(PalwModeV2Error::Invalid("signature_contexts_root is not a context set this binary signs under"));
         }
@@ -1222,13 +1282,15 @@ impl PalwConsensusParamsV2 {
         // **ADR-0103: the advertised prompt cap past the wire frame's** — a held mint's, and only
         // over the set that commits to the regime's contexts (`Params::validate_palw_v2` then asks
         // for the fence from genesis, as it does for the ladder).
-        if self.freeprompt.prompt_cap_is_past_the_frame_v1() && self.signature_contexts_root != palw_v2_signature_contexts_root_v4() {
+        if self.freeprompt.prompt_cap_is_past_the_frame_v1()
+            && !palw_v2_signature_contexts_root_covers_v4(&self.signature_contexts_root)
+        {
             return Err(PalwModeV2Error::Invalid(
                 "the free-prompt cap is past the wire frame's and the bundle does not commit to the held regime's contexts (ADR-0103)",
             ));
         }
         if self.state.window_court() <= worst_case {
-            let held_contexts = self.signature_contexts_root == palw_v2_signature_contexts_root_v4();
+            let held_contexts = palw_v2_signature_contexts_root_covers_v4(&self.signature_contexts_root);
             let held_clock = self
                 .court
                 .worst_case_duration_held_daa(0, crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4)
@@ -2161,7 +2223,8 @@ pub(crate) mod tests {
             .flat_map(|family| family.iter().copied())
             .filter(|d| is_mldsa87_signing_context(d))
             .collect();
-        let committed: BTreeSet<&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4.iter().copied().collect();
+        // ADR-0152 IMPL-7: the widest set, V5, is what the acceptance families are derived against.
+        let committed: BTreeSet<&[u8]> = PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5.iter().copied().collect();
 
         let missing: Vec<String> = derived.difference(&committed).map(|d| String::from_utf8_lossy(d).into_owned()).collect();
         assert!(missing.is_empty(), "the acceptance layer verifies under contexts the ruleset id does not commit to: {missing:?}");
@@ -2171,7 +2234,7 @@ pub(crate) mod tests {
         // The convention the filter rests on, asserted in BOTH directions so it is a rule and not
         // a habit: every committed entry ends `mldsa87/v1`, and nothing in these registries that
         // ends `mldsa87/v1` is anything but a signing context.
-        for c in PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4 {
+        for c in PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5 {
             assert!(is_mldsa87_signing_context(c), "a committed context breaks the naming convention: {}", String::from_utf8_lossy(c));
         }
 
@@ -2206,14 +2269,29 @@ pub(crate) mod tests {
             ],
             "V4 is V3 then the held regime's three contexts (ADR-0103)"
         );
+        // And V4 opens V5 (ADR-0152 IMPL-7): R-core+'s reporter-commit context. M3's DA-disclosure-v4
+        // context is the second addition and lands with M3; this list learns it then.
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5[..PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4.len()],
+            PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4
+        );
+        assert_eq!(
+            &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4.len()..],
+            &[crate::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT],
+            "V5 is V4 then R-core+'s reporter-commit context (ADR-0152 IMPL-7; M3 appends DA-disclosure-v4)"
+        );
         let roots = [
             palw_v2_signature_contexts_root(),
             palw_v2_signature_contexts_root_v2(),
             palw_v2_signature_contexts_root_v3(),
             palw_v2_signature_contexts_root_v4(),
+            palw_v2_signature_contexts_root_v5(),
         ];
         let distinct: BTreeSet<Hash64> = roots.iter().copied().collect();
-        assert_eq!(distinct.len(), roots.len(), "four sets, four roots");
+        assert_eq!(distinct.len(), roots.len(), "five sets, five roots");
+        assert!(palw_v2_signature_contexts_root_covers_v4(&palw_v2_signature_contexts_root_v5()), "V5 covers the held regime");
+        assert!(palw_v2_signature_contexts_root_covers_v3(&palw_v2_signature_contexts_root_v5()), "and the one-move court");
+        assert!(!palw_v2_signature_contexts_root_covers_v4(&palw_v2_signature_contexts_root_v3()));
 
         // The market families are excluded ON PURPOSE and the exclusion is stated, not silent:
         // their objects are refused wholesale unless `Params::palw_model_market` / `palw_model_lines`

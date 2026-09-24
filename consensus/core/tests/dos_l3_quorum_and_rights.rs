@@ -522,7 +522,14 @@ fn dos_l3_forfeiture_reaches_a_minted_schedule() {
 /// terminal claim (Final or Voided, palw_state_v2.rs:12049/12090) adds a liability row, forever.
 #[test]
 fn dos_l3_liability_and_lock_rows_are_never_pruned() {
-    let lock = PalwSlashableLockV1 { claim: Hash64::from_u64_word(1), amount: 1, expiry_daa: 1, settled_at_final: 1 };
+    let lock = PalwSlashableLockV1 {
+        claim: Hash64::from_u64_word(1),
+        amount: 1,
+        expiry_daa: 1,
+        settled_at_final: 1,
+        attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+        segments: 0,
+    };
     let key = (bond(1), Hash64::from_u64_word(1));
     let lock_bytes = borsh::to_vec(&key).unwrap().len() + borsh::to_vec(&lock).unwrap().len();
     let row = |signers: usize| PalwPanelLiabilityRecordV1 {
@@ -538,6 +545,14 @@ fn dos_l3_liability_and_lock_rows_are_never_pruned() {
         locked_sompi: 1,
         expiry_daa: 1,
         settled_at_final: 1,
+        job_identity: kaspa_consensus_core::Hash64::default(),
+        free_prompt: false,
+        trace_root: kaspa_consensus_core::Hash64::default(),
+        segment_count: 0,
+        licence_door: None,
+        basis_k: 0,
+        g_res_sompi: 0,
+        escrowed_reward: 0,
     };
     let row3 = borsh::to_vec(&row(3)).unwrap().len() + 64;
     let row5 = borsh::to_vec(&row(5)).unwrap().len() + 64;

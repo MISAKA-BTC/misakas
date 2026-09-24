@@ -440,6 +440,9 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::CourtFraud => "court_fraud",
                 R::ProducerWithholding => "producer_withholding",
                 R::NoCapablePanel => "no_capable_panel",
+                // ADR-0152 v22 skeleton: declared (SR-9, Q-5), written by no rule yet.
+                R::UnavailableQuorum => "unavailable_quorum",
+                R::NotReplayBacked => "not_replay_backed",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }

@@ -449,8 +449,14 @@ fn the_carriage_round_trips_a_non_empty_ring() {
 /// pre-merge root was `1fba7da1…`. Checked against the other side, not taken from the merge: this
 /// exact scenario folded on a `git archive` of 50565f55 (which has no ring) also gives `57ef2f17…`,
 /// so the merge added no byte to the dormant path.
+///
+/// **Re-pinned once for ADR-0152's v22 skeleton**: `PALW_STATE_V2_VERSION` 21 -> 22 is hashed first
+/// into every root, and the eight Final claims each encode the v22 claim appends (`job_identity`,
+/// `rcore`, at their dormant values). The ring is still never written and still unhashed below the
+/// fence — the property this pin guards — and the R-core+ block is absent. The v21 golden was
+/// `57ef2f17…`.
 const DORMANT_GOLDEN_ROOT: &str =
-    "57ef2f1762083bc481742907c3e9c1f269a80013fca57a7016af012c67b53fa648bfcff6d006c63204252243535e2ca6c46296e4a40c0eeff143d3e1d4844859";
+    "d6d07afc07df5642af7505e3aef83631dda64ebef0c76cdea8df4a9e78bc11a5ba51c30030e3f5ec53cbb964edfbc5bf23322c87acd3d32622ed9181a3b4f376";
 
 /// **A network that never armed the fence: the counter still ticks at `Final`, the ring stays empty,
 /// no ring delta is ever written, and the root is the one it had before the ring existed.**

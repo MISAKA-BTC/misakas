@@ -6982,6 +6982,20 @@ impl VirtualStateProcessor {
         };
         for object in objects {
             match object {
+                // **ADR-0152 v3.1 §6, the v22 skeleton: tags 53–56 are declared, not landed.**
+                // Dropped by name on every network, testnet-12 included, before anything else is
+                // read — the fold refuses the same objects (`RcoreObjectNotLanded`), so the gate and
+                // the fold agree, and the block carrying one stands. Each owner replaces this arm
+                // with its acceptance rule (S-7: 53/54; M3: 55; S-5: 56).
+                Obj::ReporterCommitted { .. }
+                | Obj::ReporterRevealed { .. }
+                | Obj::MaterialDisclosedV2 { .. }
+                | Obj::PanelUnavailableQuorum { .. } => {
+                    return Err(format!(
+                        "{} is declared by the v22 layout (ADR-0152 R-core+) and refused until its owner lands it",
+                        kaspa_consensus_core::palw_state_v2::palw_rcore_object_name_v1(object).unwrap_or("an R-core+ object")
+                    ));
+                }
                 Obj::PanelBound { claim, anchor, seats } => {
                     let claim_record = state.claim(claim).ok_or_else(|| format!("panel names unknown claim {claim}"))?;
                     let anchor_fact = self
@@ -8124,6 +8138,15 @@ impl VirtualStateProcessor {
                     if !self.palw_objective_offence_at(point.daa_score) {
                         return Err("an objective offence is not armed on this network (ADR-0144 §9)".into());
                     }
+                    // **ADR-0152 v3.1 §6, the v22 skeleton: kinds 4, 5 and 6 are declared, not
+                    // landed** — refused by name on every network before any evidence is read, as
+                    // the fold refuses them, until M2 (4), M3 (5) and S-4 (6) land their rules.
+                    if kind.is_declared_not_landed_v1() {
+                        return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::KindNotLanded(
+                            kind.not_landed_reason_v1(),
+                        )
+                        .to_string());
+                    }
                     let record = state
                         .bond(accused)
                         .ok_or_else(|| "an objective offence names a PALW bond this chain does not have".to_string())?;
@@ -8193,6 +8216,10 @@ impl VirtualStateProcessor {
                                 continue;
                             }
                             PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
+                            // Refused above; listed so a routing change that forgets them fails to compile.
+                            PalwOffenceKindV1::ExecutorRefuted
+                            | PalwOffenceKindV1::DaDefault
+                            | PalwOffenceKindV1::CourtConviction => {}
                         }
                     } else if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 = kind {
                         return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string());
@@ -14756,6 +14783,11 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::ClassManifestV2 { .. } => "ClassManifestV2",
         O::ReceiptLicensedV2 { .. } => "ReceiptLicensedV2",
         O::OptimisticLicensed { .. } => "OptimisticLicensed",
+        // ADR-0152 v22 skeleton: declared, dropped at acceptance until landed.
+        O::ReporterCommitted { .. } => "ReporterCommitted",
+        O::ReporterRevealed { .. } => "ReporterRevealed",
+        O::MaterialDisclosedV2 { .. } => "MaterialDisclosedV2",
+        O::PanelUnavailableQuorum { .. } => "PanelUnavailableQuorum",
         O::SeatReadinessProvedV2 { .. } => "SeatReadinessProvedV2",
         O::ObjectiveOffence { .. } => "ObjectiveOffence",
         O::ModelBuy { .. } => "ModelBuy",

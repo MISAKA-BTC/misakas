@@ -79,11 +79,26 @@ fn liability(claim: u64, signers: usize, expiry_daa: u64, settled_at_final: u64)
         locked_sompi: 1_000_000_000,
         expiry_daa,
         settled_at_final,
+        job_identity: kaspa_consensus_core::Hash64::default(),
+        free_prompt: false,
+        trace_root: kaspa_consensus_core::Hash64::default(),
+        segment_count: 0,
+        licence_door: None,
+        basis_k: 0,
+        g_res_sompi: 0,
+        escrowed_reward: 0,
     }
 }
 
 fn lock(claim: u64, expiry_daa: u64, settled_at_final: u64) -> PalwSlashableLockV1 {
-    PalwSlashableLockV1 { claim: h(claim), amount: 1_000_000_000, expiry_daa, settled_at_final }
+    PalwSlashableLockV1 {
+        claim: h(claim),
+        amount: 1_000_000_000,
+        expiry_daa,
+        settled_at_final,
+        attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+        segments: 0,
+    }
 }
 
 /// A state holding `claims` expired liabilities (both clocks run out) and `locks_per_claim` expired
@@ -116,8 +131,11 @@ fn bytes_per_never_pruned_entry() {
     let lv = borsh::to_vec(&lock(1, 100, 0)).unwrap().len();
     println!("slashable_locks entry: key {lk} B + value {lv} B = {} B", lk + lv);
     // The shapes the formula below depends on — if these move, re-derive the growth numbers.
-    assert_eq!(borsh::to_vec(&liability(1, 0, 100, 0)).unwrap().len(), 426);
-    assert_eq!(lk + lv, 228);
+    // ADR-0152's v22 skeleton appended 157 B to the liability row (M2's job identity, lane, trace
+    // root and segment count: 64 + 1 + 64 + 2; S's door, basis, residual gain and escrow: 1 + 1 + 16
+    // + 8, all at their dormant values) and 6 B to the lock (`attested` 4, `segments` 2). Was 426 / 228.
+    assert_eq!(borsh::to_vec(&liability(1, 0, 100, 0)).unwrap().len(), 583);
+    assert_eq!(lk + lv, 234);
 }
 
 /// The t12 audit extras this lane folds under (`audit` on) or the fold every other network runs.
@@ -306,8 +324,9 @@ fn per_block_cost_grows_linearly_with_dead_rows() {
     let root_us_per_claim = (rows[2].2 - rows[0].2) * 1_000.0 / (rows[2].0 - rows[0].0) as f64;
     println!("marginal carriage bytes per terminal claim (3 Valid seats) = {per_claim:.0} B");
     println!("marginal state_root cost per terminal claim (debug build)  = {root_us_per_claim:.3} us");
-    // One terminal claim adds one liability (3 signers) and three locks: 64 + 822 + 3*228 = 1,570 B.
-    assert!(per_claim > 1_400.0 && per_claim < 1_700.0, "per-claim growth {per_claim}");
+    // One terminal claim adds one liability (3 signers) and three locks: 64 + 979 + 3*234 = 1,745 B at
+    // v22 (1,570 B at v21: ADR-0152's skeleton appends 157 B to the row and 6 B to each lock).
+    assert!(per_claim > 1_600.0 && per_claim < 1_900.0, "per-claim growth {per_claim}");
     assert!(rows[2].1 > rows[0].1 * 10, "carriage grows with dead rows");
 }
 

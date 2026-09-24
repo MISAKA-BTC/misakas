@@ -228,7 +228,14 @@ fn review12_0_burn_leaves_live_slashable_locks_covered() {
         let mut carriage = PalwStateCarriageV2::from_state(&s0);
         carriage.slashable_locks.insert(
             (bond_key(ATTACKER), h(0x10C4)),
-            PalwSlashableLockV1 { claim: h(0x10C4), amount: lock_amount, expiry_daa: 1_000_000, settled_at_final: 0 },
+            PalwSlashableLockV1 {
+                claim: h(0x10C4),
+                amount: lock_amount,
+                expiry_daa: 1_000_000,
+                settled_at_final: 0,
+                attested: kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::NONE,
+                segments: 0,
+            },
         );
         carriage.into_state(&b.state, None).expect("consistent")
     };
