@@ -445,6 +445,7 @@ fn t11_the_v2_kind_is_dormant_at_the_gate_and_in_the_fold() {
             signature: sign(&seat_kp, message.as_byte_slice(), PALW_RECEIPT_V2_MLDSA87_CONTEXT),
         }),
         contradiction: PalwPanelContradictionV1::ForgedOutput { binding: f.binding.clone(), pin: f.pin.clone(), position: 0 },
+        prompt_ids_opening: None,
         reporter_reveal: Vec::new(),
     };
     let evidence = borsh::to_vec(&payload).unwrap();

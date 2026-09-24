@@ -28,18 +28,31 @@
 //! | claim | the receipt names it, and the target is resolved from it ([`palw_offence_target_v1`]) |
 //! | committed root | the contradiction's binding must rebuild `claim.execution_root` |
 //! | execution | `verify_binding` rebuilds that root from every field of the job context |
-//! | leaf | the fault's site ([`PalwFaultSiteV1`]), read from the verdict, never from the filer |
-//! | signer | the ML-DSA receipt under the chain's domain, and its segment mask |
+//! | leaf | the fault's site ([`PalwFaultSiteV1`]), read from the verdict, never from the filer — with every committed leaf the verdict read |
+//! | signer | the ML-DSA receipt under the chain's domain, and its segment mask, which must be the one the panel assigned |
 //! | fault | the arithmetic, structural or decode checker |
 //! | slash target | the seat's lock; the executor through `void_and_slash` or the `Final`'s reversal |
 //!
 //! The job-identity link — that the root answers THIS claim's job and not a borrowed one — is
 //! stage F1, which stores the identity the claim was mined under.
+//!
+//! **What a partial seat vouched for** (F2 review, F-1). A segmented seat replays its segment from
+//! the prompt or from the committed checkpoint at the segment's start, and compares the step leaves
+//! of its segment with the committed ones. It vouches that those leaves are the correct function of
+//! what it resumed from — not that they agree with committed leaves of OTHER segments, which it
+//! recomputes (or restores) and never compares. A step refutation recomputes its leaf from the
+//! COMMITTED inputs, so one lie in segment 1 makes every downstream reader in segments 2 and 3
+//! "convict" — their holders replayed honestly and matched. A partial seat is therefore liable
+//! only for a verdict every committed leaf of which lies in the segments its mask covers, and that
+//! read nothing a segment replay does not recompute (a KV checkpoint, a generated token).
 
 use crate::palw_offence_v1::{PalwOffenceVerifyError, PalwPanelContradictionV1, palw_panel_contradiction_convicts_execution_v1};
 use crate::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3};
+use crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1;
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimSourceV2, PalwVoidReasonV2};
-use crate::palw_verification_v2::{PalwSegmentMaskV2, palw_segment_count_v2, palw_segment_index_of_leaf_v2};
+use crate::palw_verification_v2::{
+    PalwSegmentMaskV2, palw_segment_assignment_v2, palw_segment_count_v2, palw_segment_index_of_leaf_v2,
+};
 use crate::tx::TransactionOutpoint;
 use kaspa_hashes::Hash64;
 
@@ -47,10 +60,29 @@ use kaspa_hashes::Hash64;
 /// never be read as this one.
 pub const PALW_PANEL_FALSE_VALID_VERSION_V2: u16 = 2;
 
-/// **The most bytes a `PanelFalseValidV2` evidence may carry**: the close-byte ceiling the ruleset
-/// prices (a contradiction is at most a court close's proof) plus one ML-DSA-87 receipt and its
-/// framing. Asked before a byte is decoded.
-pub const PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES: u64 = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES + 8192;
+/// **The most bytes a `PanelFalseValidV2` evidence may carry: what ONE carrier holds** (F2 review,
+/// F-3). Asked before a byte is decoded.
+///
+/// A kind-3 object rides exactly one 0x4b lifecycle transaction: the chunk group assembles only a
+/// `FamilyCertified` ([`crate::palw_state_v2::palw_chunked_object_kind_admitted_v1`]), and this
+/// stage adds no chunking of its own. One carrier's payload is
+/// [`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES`] — ADR-0080's measured figure: the largest
+/// round number that relays under the 120,000 bytes a standard transaction carries
+/// ([`crate::palw_mode_v2::PALW_STANDARD_TX_BYTES`] = the mempool's `MAXIMUM_STANDARD_TRANSACTION_MASS`
+/// over `TRANSIENT_BYTE_TO_MASS_FACTOR`) with the worst-case carrier beside it, and under the
+/// 125,000 bytes a block holds (`max_block_mass / TRANSIENT_BYTE_TO_MASS_FACTOR`). The object's own
+/// framing — the payload version, the enum tag, the kind, the accused outpoint, the evidence id and
+/// the length prefix — rides in that carrier allowance beside it. The cap this replaces (the court's
+/// 2,250,000-byte close ceiling plus a receipt) stated a size no carrier could deliver: above
+/// ~110 KB the object never relays at all.
+///
+/// **Residual, recorded rather than closed:** a contradiction larger than one carrier cannot reach
+/// kind 3. A model class's softmax or KV-reading step opens one committed K/V leaf per cached
+/// position, so at 512 and more positions its step refutation is past this cap; such a fault
+/// convicts a full seat only through a court's `CourtFraud` void (the one-move court, the checkpoint
+/// court or a held data-availability answer), which a kind-3 `CourtFraud` then names in a few
+/// hundred bytes. Kind 3 is not chunked in this stage.
+pub const PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES: u64 = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
 
 /// Keyed-BLAKE2b-512 domain of [`palw_false_valid_ledger_key_v2`].
 pub const PALW_FALSE_VALID_KEY_DOMAIN_V2: &[u8] = b"misaka-palw/false-valid-key/v2";
@@ -130,6 +162,18 @@ pub struct PalwPanelFalseValidEvidenceV2 {
     pub accused_seat: TransactionOutpoint,
     pub receipt: PalwFalseValidReceiptV1,
     pub contradiction: PalwPanelContradictionV1,
+    /// **The prompt's one tile a `StepArithmetic` reads, where the job commits its ids as a Merkle
+    /// root** (F2 review, F-3; ADR-0081 Decision 3, the one-move court's carriage,
+    /// `PalwShardCourtAccusationV1::prompt_ids_opening`). The refutation then carries no id list and
+    /// the evidence grows with a path, never with the prompt; the pair is what
+    /// [`crate::palw_step_refute::palw_refutation_prompt_carriage_v1`] builds from a prover's
+    /// refutation. `None` on a flat commitment (where the refutation carries the whole list, the V1
+    /// route's form) and for a step that reads no prompt id. The job's commitment decides which of
+    /// the two is right — an opening against a flat digest, or a whole list against a Merkle root,
+    /// is refused by the arithmetic — so no per-network or per-class form is read to judge it.
+    /// Carried beside any other contradiction it is evidence for a question nobody asked, and
+    /// refused.
+    pub prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
     /// **F7's commit–reveal slot.** Empty until its own fence arms it, at most
     /// [`PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES`] once it does, and never part of the ledger
     /// key, so filling it cannot make one false `Valid` two offences.
@@ -163,15 +207,28 @@ pub struct PalwOffenceTargetV1 {
     pub phase: Option<PalwClaimPhaseV2>,
 }
 
-/// **Where in the execution a proven fault sits.** A seat is liable for the fault only if its
-/// receipt attested that place.
+/// **Where in the execution a proven fault sits, and what the verdict read to find it.** A seat is
+/// liable for the fault only if its receipt attested all of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwFaultSiteV1 {
-    /// One step-tree leaf, authenticated against the committed step root by the verdict itself.
-    Leaf(u64),
-    /// The execution as a whole: a shape, a checkpoint chain, a decoded output, or a void the chain
-    /// wrote. Only a whole attestation covers it. (F1 adds a site every `Valid` covers.)
+    /// **A fault a segment replay decides on its own.** Step leaf `leaf` is wrong, and the verdict
+    /// read no committed step leaf outside `first_read..=last_read` — and nothing a segment replay
+    /// does not itself recompute. A structural fault of the leaf alone reads only the leaf
+    /// ([`Self::leaf_alone`]); a recomputed step reads its canonical inputs as well, which the
+    /// verdict authenticated against the committed step root.
+    Leaf { leaf: u64, first_read: u64, last_read: u64 },
+    /// The execution as a whole: a shape, a checkpoint chain, a decoded output, a void the chain
+    /// wrote — or a step whose verdict read what no segment replay recomputes (a committed KV
+    /// checkpoint, a generated token) or a leaf outside the main step space no segment replay
+    /// compares. Only a whole attestation covers it. (F1 adds a site every `Valid` covers.)
     Whole,
+}
+
+impl PalwFaultSiteV1 {
+    /// A fault in step leaf `leaf` that the verdict found in that leaf and read nothing else for.
+    pub fn leaf_alone(leaf: u64) -> Self {
+        Self::Leaf { leaf, first_read: leaf, last_read: leaf }
+    }
 }
 
 /// The adjudicator's verdict: whom and what a conviction lands on, where the fault is, and whether
@@ -200,7 +257,8 @@ pub struct PalwFalseValidSigCheckV1<'a> {
 /// How a contradiction reaches a conviction, when it is admitted at all.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwFalseValidAdmissionV1 {
-    /// A void the chain wrote on this claim (`ProducerWithholding`, `CourtFraud`), tied to state.
+    /// A void the chain wrote on this claim for a proven false execution (`CourtFraud`), tied to
+    /// state.
     NamedVoid { reason: PalwVoidReasonV2, voided_daa: u64 },
     /// A proof against the committed execution itself (`StepArithmetic`, `StepStructural`,
     /// `ForgedOutput`), pinned to the claim's root.
@@ -265,11 +323,36 @@ pub fn palw_offence_target_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Op
     })
 }
 
+/// **The mask the claim's panel assigned `seat`** (F2 review, F-4) — the coverage licence's own
+/// reading (`palw_panel_v2`'s `MaskNotAssigned`: `palw_segment_assignment_v2` of the panel's
+/// anchor, the claim and the seat count, at the seat's position in the panel). `None` when no
+/// panel is in state; [`PalwSegmentMaskV2::NONE`] for a bond the panel does not seat.
+pub fn palw_false_valid_assigned_mask_v1(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    seat: &PalwBondKeyV2,
+) -> Option<PalwSegmentMaskV2> {
+    let panel = state.panel(claim_id)?;
+    let assignment = palw_segment_assignment_v2(panel.anchor, *claim_id, u16::try_from(panel.seats.len()).unwrap_or(u16::MAX));
+    Some(
+        panel
+            .seats
+            .iter()
+            .position(|s| s.bond == *seat)
+            .and_then(|index| u16::try_from(index).ok())
+            .map_or(PalwSegmentMaskV2::NONE, |index| assignment.mask_of(index)),
+    )
+}
+
 /// **Which contradictions may convict a `Valid` signer past the fence, and how.**
 ///
 /// Refused by name, each for a stated reason — a route the chain cannot tie to THIS claim's
 /// execution is a route to convict an honest seat:
 ///
+/// * `ProducerWithholding` (F2 review, F-2): the void a producer's own silence writes. A bystander
+///   files `DefaultAccusedHeld`, the colluding producer stays silent, the claim voids — and the
+///   honest full seat, which owes no disclosure and has no move in that session, would lose its
+///   whole lock. Refused until F3 lands seat-side disclosure and the S-cap;
 /// * `ExecutorEquivocation`: it proves a key signed two roots, not that this claim's root is
 ///   false, and no production code builds the attestations it carries;
 /// * `CourtExecutorGuilty`: no code ever writes the consumed row it names;
@@ -280,13 +363,13 @@ pub fn palw_false_valid_admission_v1(
 ) -> Result<PalwFalseValidAdmissionV1, PalwOffenceVerifyError> {
     use PalwPanelContradictionV1 as C;
     match contradiction {
-        C::ProducerWithholding { voided_daa } => {
-            Ok(PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa: *voided_daa })
-        }
         C::CourtFraud { voided_daa } => {
             Ok(PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::CourtFraud, voided_daa: *voided_daa })
         }
         C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+        C::ProducerWithholding { .. } => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "ProducerWithholding is a void the producer's own silence writes, and a seat owes no disclosure it could answer it with (until F3)",
+        )),
         C::ExecutorEquivocation(_) => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
             "ExecutorEquivocation proves a key signed two roots, not that this claim's execution is false",
         )),
@@ -300,6 +383,71 @@ pub fn palw_false_valid_admission_v1(
     }
 }
 
+/// What the structural pass answered about one opened step leaf.
+enum PalwStructuralPassV1 {
+    /// A shape fault, answered from the binding alone before anything was opened.
+    Shape,
+    /// A fault in the opened leaf itself: its coordinates, index, length or encoding.
+    LeafFault,
+    /// The leaf is well-formed (for a `StepArithmetic`, the recomputation decides).
+    Clean,
+}
+
+fn structural_pass(
+    refutation: &crate::palw_step_leg::PalwStepRefutationV1,
+    step_ladder: u64,
+) -> Result<PalwStructuralPassV1, PalwOffenceVerifyError> {
+    let root = &refutation.binding.committed_execution_root;
+    match crate::palw_step_leg::check_step_refutation_capped_v1(refutation, step_ladder) {
+        // The shape pass mints its evidence id at kind 0, leaf 0; every opened verdict at its own
+        // kind and leaf. That id is the one mark of which pass answered.
+        Ok(verdict) if verdict.evidence_id == crate::palw_step_leg::step_refutation_evidence_id(root, 0, 0, verdict.fault) => {
+            Ok(PalwStructuralPassV1::Shape)
+        }
+        Ok(_) => Ok(PalwStructuralPassV1::LeafFault),
+        Err(crate::palw_step_leg::PalwStepLegError::NoFaultFound) => Ok(PalwStructuralPassV1::Clean),
+        Err(_) => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+    }
+}
+
+/// A fault in `leaf` alone — placeable only on a main step coordinate. A segment replay compares
+/// the step tiles of its segment and nothing else, so a KV aux leaf (or any index past the main
+/// step space) is no segment's to have attested: only a whole attestation covers it.
+fn leaf_alone_site(binding: &crate::palw_step_leg::PalwStepBindingV2, leaf: u64) -> PalwFaultSiteV1 {
+    match crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, leaf) {
+        Some(_) => PalwFaultSiteV1::leaf_alone(leaf),
+        None => PalwFaultSiteV1::Whole,
+    }
+}
+
+/// **The site of a recomputed step: the output leaf and every committed leaf it was recomputed
+/// from** (F2 review, F-1). The refutation's inputs are exactly the canonical input set, each
+/// preimage's coordinates checked equal to the canonical ones and every run opened against the
+/// committed step root, so their leaf indices are the chain's, not the filer's.
+///
+/// `Whole` when the verdict read anything a segment replay does not recompute from its own resume
+/// point: a KV checkpoint anchor (the history arrives as committed state), or a generated token —
+/// the decode pin, which the checker reads only at a decode call (`call_index > 0`; a prefill
+/// gather reads the prompt), and which a segment replay derives itself from its own logits. A
+/// filer whose step reads no generated token can omit the pin; the checker refuses a gather that
+/// needed it, so the omission is proof it was not read.
+fn arithmetic_site(refutation: &crate::palw_step_refute::PalwExecutionStepRefutationV1) -> PalwFaultSiteV1 {
+    if refutation.kv_checkpoint.is_some() || (refutation.decode_tokens.is_some() && refutation.output_preimage.coord.call_index > 0) {
+        return PalwFaultSiteV1::Whole;
+    }
+    let (profile, context) = (&refutation.binding.shape_profile, &refutation.binding.job_context);
+    let leaf = refutation.output_opening.leaf_index;
+    let (mut first_read, mut last_read) = (leaf, leaf);
+    for preimage in refutation.inputs.iter().flat_map(|row| row.preimages.iter()) {
+        let Some(index) = crate::palw_step::canonical_step_leaf_index(profile, context, &preimage.coord) else {
+            return PalwFaultSiteV1::Whole;
+        };
+        first_read = first_read.min(index);
+        last_read = last_read.max(index);
+    }
+    PalwFaultSiteV1::Leaf { leaf, first_read, last_read }
+}
+
 /// **The site of a proven fault, and the committed leaf count its segment is cut from** (`0` for
 /// [`PalwFaultSiteV1::Whole`], where no cut is read). Called only after the contradiction
 /// convicted against the claim's root.
@@ -308,9 +456,10 @@ pub fn palw_false_valid_admission_v1(
 /// structural pass answers a shape fault — a non-canonical leaf count, profile or checkpoint count
 /// — from the binding alone, before it opens anything, so on that answer the carried
 /// `leaf_index` is whatever the filer wrote; taking it as the site would let a filer aim a
-/// whole-execution fault at any partial seat it chose. A shape verdict is therefore `Whole`; any
-/// other step verdict (and the arithmetic recomputation, reached only once the structural pass
-/// opened the output leaf and found it well-formed) sits at the leaf that pass authenticated.
+/// whole-execution fault at any partial seat it chose. A shape verdict is therefore `Whole`. A
+/// fault the structural pass found in the opened leaf is that leaf's alone; a recomputed step
+/// (reached only once the structural pass found the output leaf well-formed) sits at its output
+/// leaf and reads its inputs ([`arithmetic_site`]).
 pub fn palw_false_valid_fault_site_v1(
     contradiction: &PalwPanelContradictionV1,
     step_ladder: u64,
@@ -326,11 +475,21 @@ pub fn palw_false_valid_fault_site_v1(
                     preimage: refutation.output_preimage.clone(),
                 },
             };
-            step_site(&structural, refutation.output_opening.leaf_index, step_ladder)
+            let count = refutation.binding.step_leaf_count;
+            Ok(match structural_pass(&structural, step_ladder)? {
+                PalwStructuralPassV1::Shape => (PalwFaultSiteV1::Whole, 0),
+                PalwStructuralPassV1::LeafFault => (leaf_alone_site(&refutation.binding, refutation.output_opening.leaf_index), count),
+                PalwStructuralPassV1::Clean => (arithmetic_site(refutation), count),
+            })
         }
         PalwPanelContradictionV1::StepStructural(refutation) => match &refutation.evidence {
             PalwStepEvidenceV1::StepTile { opening, .. } | PalwStepEvidenceV1::KvChunk { opening, .. } => {
-                step_site(refutation, opening.leaf_index, step_ladder)
+                Ok(match structural_pass(refutation, step_ladder)? {
+                    PalwStructuralPassV1::Shape => (PalwFaultSiteV1::Whole, 0),
+                    PalwStructuralPassV1::LeafFault | PalwStructuralPassV1::Clean => {
+                        (leaf_alone_site(&refutation.binding, opening.leaf_index), refutation.binding.step_leaf_count)
+                    }
+                })
             }
             PalwStepEvidenceV1::Shape | PalwStepEvidenceV1::Checkpoint { .. } | PalwStepEvidenceV1::CheckpointChain { .. } => {
                 Ok((PalwFaultSiteV1::Whole, 0))
@@ -346,44 +505,27 @@ pub fn palw_false_valid_fault_site_v1(
     }
 }
 
-fn step_site(
-    refutation: &crate::palw_step_leg::PalwStepRefutationV1,
-    leaf_index: u64,
-    step_ladder: u64,
-) -> Result<(PalwFaultSiteV1, u64), PalwOffenceVerifyError> {
-    let binding = &refutation.binding;
-    let leaf = (PalwFaultSiteV1::Leaf(leaf_index), binding.step_leaf_count);
-    match crate::palw_step_leg::check_step_refutation_capped_v1(refutation, step_ladder) {
-        // The shape pass mints its evidence id at kind 0, leaf 0; every opened verdict at its own
-        // kind and leaf. That id is the one mark of which pass answered.
-        Ok(verdict)
-            if verdict.evidence_id
-                == crate::palw_step_leg::step_refutation_evidence_id(&binding.committed_execution_root, 0, 0, verdict.fault) =>
-        {
-            Ok((PalwFaultSiteV1::Whole, 0))
-        }
-        Ok(_) | Err(crate::palw_step_leg::PalwStepLegError::NoFaultFound) => Ok(leaf),
-        Err(_) => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
-    }
-}
-
-/// **Whether a receipt attested the place a fault is in** — the seat is liable only for what it
-/// said it replayed.
+/// **Whether a receipt attested everything a fault's verdict rests on** — the seat is liable only
+/// for what it said it replayed.
 ///
 /// * A full receipt attested the whole job: always liable.
-/// * A segmented receipt with mask `m` over the claim's `k` segments is liable when `m` is not
-///   empty and either `m` is the full mask, or the site is a leaf whose segment `m` covers
-///   (the leaf's segment is cut from the binding's committed `step_leaf_count`, as the producer
-///   cut it). A `Whole` fault needs the full mask.
-/// * The mask is authentic: a coverage licence requires every `Valid` mask to be the one the
-///   anchor assigned, and the signature covers it.
+/// * A segmented receipt whose mask is the full mask over the claim's `k` segments is a full
+///   attestation, whatever the seat's assignment: a seat assigned a segment that replayed the whole
+///   job and signed for all of it is held to all of it.
+/// * A partial mask must be the one the panel assigned the seat (`assigned_mask`, the coverage
+///   licence's `MaskNotAssigned` rule) — otherwise `SegmentMaskNotAssigned`. It is then liable
+///   only at a [`PalwFaultSiteV1::Leaf`] whose leaf and every leaf the verdict read lie in segments
+///   the mask covers (segments are cut from the binding's committed `step_leaf_count`, as the
+///   producer cut them; every segment between the first and the last read is asked for, which is
+///   exact for the one-segment masks a panel assigns). Never at `Whole`.
 ///
-/// Refused with `SiteNotAttested` when the receipt does not reach the site, and `SegmentsUnknown`
-/// when `k` is not in state and the mask is neither empty nor placeable without it.
+/// Refused with `SiteNotAttested` when the receipt does not reach all of the site, and
+/// `SegmentsUnknown` when `k` is not in state and the mask is neither empty nor placeable without it.
 pub fn palw_false_valid_liable_v1(
     receipt: &PalwFalseValidReceiptV1,
     site: PalwFaultSiteV1,
     segment_count: Option<u16>,
+    assigned_mask: Option<PalwSegmentMaskV2>,
     step_leaf_count: u64,
 ) -> Result<(), PalwOffenceVerifyError> {
     let mask = match receipt {
@@ -399,58 +541,54 @@ pub fn palw_false_valid_liable_v1(
     if mask.is_full(k) {
         return Ok(());
     }
+    if assigned_mask != Some(mask) {
+        return Err(PalwOffenceVerifyError::SegmentMaskNotAssigned);
+    }
     match site {
         PalwFaultSiteV1::Whole => Err(PalwOffenceVerifyError::SiteNotAttested),
-        PalwFaultSiteV1::Leaf(leaf) => match palw_segment_index_of_leaf_v2(step_leaf_count, k, leaf) {
-            Some(index) if mask.covers(index) => Ok(()),
-            _ => Err(PalwOffenceVerifyError::SiteNotAttested),
-        },
+        PalwFaultSiteV1::Leaf { leaf, first_read, last_read } => {
+            let segment_of = |l: u64| palw_segment_index_of_leaf_v2(step_leaf_count, k, l);
+            match (segment_of(first_read.min(leaf)), segment_of(last_read.max(leaf))) {
+                (Some(first), Some(last)) if (first..=last).all(|segment| mask.covers(segment)) => Ok(()),
+                _ => Err(PalwOffenceVerifyError::SiteNotAttested),
+            }
+        }
     }
 }
 
-/// **Whether an execution-proving contradiction proves the claim's committed execution false —
-/// with a step refutation read the way this network carries its prompt.**
+/// **Whether an execution-proving contradiction proves the claim's committed execution false.**
 ///
-/// [`palw_panel_contradiction_convicts_execution_v1`] (the V1 route's, unchanged) recomputes a
-/// `StepArithmetic` step with the FLAT prompt comparison: the refutation's whole id list against
-/// `prompt_token_ids_hash`. On a network that commits its prompts in the Merkle form
-/// (`Params::palw_prompt_ids_merkle`; testnet-12 from genesis) that hash is a Merkle root, so the
-/// comparison refuses every refutation a prover builds (`InputSetNotCanonical`) before a step is
-/// recomputed — and no seat could ever be convicted of a step fault there. Measured on a real
-/// testnet-12 claim (T46): the drill's one-lane lie at a middle leaf read
-/// `PanelFalseValidNeedsContradiction`. The seats' sampler, the court's close and the one-move
-/// accusation all read a refutation through [`crate::palw_step_refute::palw_refutation_prompt_carriage_v1`]
-/// — the list taken out, and the one tile the disputed step reads opened against the root — and so
-/// does this: the evidence carries the whole list, as every prover builds it, and
-/// [`crate::palw_step_refute::check_execution_step_refutation_carried_capped_v1`] derives the
-/// opening from it under `prompt_ids_form`, which the Merkle root then authenticates. Under the flat
-/// form the carriage is the identity and the check is the V1 route's, byte for byte. Every other
-/// contradiction is the V1 route's check.
+/// With no prompt-id opening this IS the V1 route's check
+/// ([`palw_panel_contradiction_convicts_execution_v1`]), for every kind, byte for byte: a
+/// `StepArithmetic` on a flat commitment carries the whole id list and is matched against the flat
+/// digest. With an opening (F2 review, F-3) a `StepArithmetic` is judged by the one-move court's
+/// opened check, [`crate::palw_step_refute::check_execution_step_refutation_opened_capped_v1`]: the
+/// one tile the step reads, opened against the job's Merkle root before an id is read — so the
+/// evidence grows with a path and never with the prompt, and on a Merkle commitment (testnet-12
+/// from genesis) a whole list is refused by the flat comparison exactly as the checker refuses it.
+/// The job's commitment is the discriminator; neither the network's nor the class's form is read.
+/// An opening beside any other contradiction is refused.
 pub fn palw_false_valid_convicts_execution_v2(
     contradiction: &PalwPanelContradictionV1,
+    prompt_ids_opening: Option<&PalwPromptIdsOpeningV1>,
     claim_execution_root: Hash64,
     class_artifact_root: Hash64,
     step_ladder: u64,
-    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 ) -> Result<(), PalwOffenceVerifyError> {
-    match contradiction {
-        PalwPanelContradictionV1::StepArithmetic { refutation, operand_openings } => {
-            if refutation.binding.committed_execution_root != claim_execution_root {
-                return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
-            }
-            let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, class_artifact_root)
-                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
-            crate::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
-                refutation,
-                &operands,
-                prompt_ids_form,
-                step_ladder,
-            )
-            .map(|_| ())
-            .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
-        }
-        other => palw_panel_contradiction_convicts_execution_v1(other, claim_execution_root, class_artifact_root, step_ladder),
+    let Some(opening) = prompt_ids_opening else {
+        return palw_panel_contradiction_convicts_execution_v1(contradiction, claim_execution_root, class_artifact_root, step_ladder);
+    };
+    let PalwPanelContradictionV1::StepArithmetic { refutation, operand_openings } = contradiction else {
+        return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
+    };
+    if refutation.binding.committed_execution_root != claim_execution_root {
+        return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
     }
+    let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, class_artifact_root)
+        .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+    crate::palw_step_refute::check_execution_step_refutation_opened_capped_v1(refutation, &operands, Some(opening), step_ladder)
+        .map(|_| ())
+        .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
 }
 
 /// **The one adjudicator of a false `Valid`** (ADR-0152 v2 F2) — the processor calls it with
@@ -458,35 +596,37 @@ pub fn palw_false_valid_convicts_execution_v2(
 /// verdict every node folds are one function. The caller has already checked the evidence digest.
 /// In order:
 ///
-/// 1. the evidence is at most [`PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES`];
-/// 2. it decodes as version 2, and the reporter slot is empty unless `reporter_armed` — and never
-///    longer than [`PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES`];
+/// 1. the evidence is at most [`PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES`], what one carrier holds;
+/// 2. it decodes as version 2, the reporter slot is empty unless `reporter_armed` — and never
+///    longer than [`PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES`] — and a prompt-id opening rides
+///    only beside a `StepArithmetic`;
 /// 3. it accuses the seat the receipt names, the receipt names the claim, and the verdict is
 ///    `Valid`;
 /// 4. (`sig` only) the seat is `Active` or `Retiring` and signed the receipt under the chain's
 ///    domain, in the V2 or V3 message and context its form was licensed with;
 /// 5. the target resolves from state ([`palw_offence_target_v1`]);
-/// 6. the claim has no open court or held data-availability session — the filer waits, since
-///    voiding a claim in the middle of a session is not a rule this stage proves;
-/// 7. the contradiction is admitted ([`palw_false_valid_admission_v1`]), and a named void is the
-///    one the chain wrote on this claim (`palw_void_binds_claim_v1`, the V1 fold's own reading);
+/// 6. no session is open on the claim — a court, or a data-availability session held or not (the
+///    claim `DefaultDisputed`); the filer waits. F2 review, F-4: this is stricter than the "court
+///    only" the peer agreed, on purpose — a void in the middle of a DA session is unhandled until F3
+///    (the session's accuser reservation and deadline would be left to a claim that is no longer
+///    disputed);
+/// 7. the contradiction is admitted ([`palw_false_valid_admission_v1`]; `ProducerWithholding` is
+///    refused until F3), and a named void is the one the chain wrote on this claim
+///    (`palw_void_binds_claim_v1`, the V1 fold's own reading);
 /// 8. an execution-proving contradiction convicts against the TARGET's `execution_root` and
-///    artifact root at the class's ladder, a step refutation read in the network's prompt-id
-///    carriage ([`palw_false_valid_convicts_execution_v2`]) — the root pin is the link from claim
-///    to execution, and nothing compares a job id with the claim id; a `ForgedOutput` is refused
-///    under ADR-0082's decode rules unless the claim is known to be an attempt;
-/// 9. the receipt attested the fault's site ([`palw_false_valid_liable_v1`]).
-///
-/// `prompt_ids_form` is the network's (`Params::palw_prompt_ids_form_at`, which the fold carries as
-/// `PalwTransitionExtrasV1::prompt_ids_merkle`) — the form every seat and court reads a step
-/// refutation's prompt in.
+///    artifact root at the class's ladder ([`palw_false_valid_convicts_execution_v2`], the prompt
+///    read through the evidence's opening where the job commits a Merkle root) — the root pin is the
+///    link from claim to execution, and nothing compares a job id with the claim id; a
+///    `ForgedOutput` is refused under ADR-0082's decode rules unless the claim is known to be an
+///    attempt;
+/// 9. the receipt attested everything the fault's verdict rests on ([`palw_false_valid_liable_v1`]),
+///    a partial mask being the one the panel assigned.
 pub fn palw_check_panel_false_valid_v2(
     state: &PalwChainStateV2,
     accused: &PalwBondKeyV2,
     evidence: &[u8],
     fp_decode_rules_active: bool,
     reporter_armed: bool,
-    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     sig: Option<PalwFalseValidSigCheckV1<'_>>,
 ) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
@@ -502,6 +642,9 @@ pub fn palw_check_panel_false_valid_v2(
     }
     if payload.reporter_reveal.len() > PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES {
         return Err(PalwOffenceVerifyError::EvidenceTooLarge);
+    }
+    if payload.prompt_ids_opening.is_some() && !matches!(payload.contradiction, PalwPanelContradictionV1::StepArithmetic { .. }) {
+        return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
     }
     let inner = payload.receipt.inner();
     if payload.accused_seat != accused.0 || inner.seat_bond.0 != accused.0 {
@@ -523,7 +666,10 @@ pub fn palw_check_panel_false_valid_v2(
         }
     }
     let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
-    if state.open_courts_of(&target.claim_id) > 0 || state.held_da_missing_of(&target.claim_id).is_some() {
+    if state.open_courts_of(&target.claim_id) > 0
+        || state.held_da_missing_of(&target.claim_id).is_some()
+        || matches!(target.phase, Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
+    {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
@@ -545,16 +691,17 @@ pub fn palw_check_panel_false_valid_v2(
             }
             palw_false_valid_convicts_execution_v2(
                 &payload.contradiction,
+                payload.prompt_ids_opening.as_ref(),
                 target.execution_root,
                 target.artifact_root,
                 ladder,
-                prompt_ids_form,
             )?;
             true
         }
     };
     let (site, step_leaf_count) = palw_false_valid_fault_site_v1(&payload.contradiction, ladder)?;
-    palw_false_valid_liable_v1(&payload.receipt, site, target.segment_count, step_leaf_count)?;
+    let assigned = palw_false_valid_assigned_mask_v1(state, &target.claim_id, accused);
+    palw_false_valid_liable_v1(&payload.receipt, site, target.segment_count, assigned, step_leaf_count)?;
     Ok(PalwFalseValidFindingV1 { target, site, execution_proving })
 }
 
@@ -562,7 +709,6 @@ pub fn palw_check_panel_false_valid_v2(
 mod tests {
     use super::*;
     use crate::palw_offence_v1::PalwOffenceVerifyError as E;
-    use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
     use crate::palw_state_v2::{PalwClaimStateV2, PalwPanelSeatV2, PalwPanelStateV2};
     use crate::palw_verification_v2::palw_segment_leaf_range_v2;
     use crate::tx::TransactionId;
@@ -578,6 +724,7 @@ mod tests {
 
     const CLAIM: u64 = 0xC1A1;
     const CLASS: u64 = 0xC1A5;
+    const PANEL_ANCHOR: u64 = 0xA7;
 
     fn v2_receipt(seat_no: u64, claim: Hash64, verdict: PalwReceiptVerdictV2) -> PalwSeatReceiptV2 {
         PalwSeatReceiptV2 {
@@ -607,6 +754,7 @@ mod tests {
             accused_seat: receipt.inner().seat_bond.0,
             receipt,
             contradiction,
+            prompt_ids_opening: None,
             reporter_reveal: Vec::new(),
         }
     }
@@ -616,15 +764,7 @@ mod tests {
     }
 
     fn judge(state: &PalwChainStateV2, payload: &PalwPanelFalseValidEvidenceV2) -> Result<PalwFalseValidFindingV1, E> {
-        palw_check_panel_false_valid_v2(
-            state,
-            &PalwBondKeyV2(payload.accused_seat),
-            &bytes(payload),
-            false,
-            false,
-            PalwPromptIdsFormV1::Flat,
-            None,
-        )
+        palw_check_panel_false_valid_v2(state, &PalwBondKeyV2(payload.accused_seat), &bytes(payload), false, false, None)
     }
 
     fn claim_row(phase: PalwClaimPhaseV2, execution_root: Hash64) -> PalwClaimStateV2 {
@@ -654,10 +794,25 @@ mod tests {
 
     fn five_seat_panel() -> PalwPanelStateV2 {
         PalwPanelStateV2 {
-            anchor: h64(0xA7),
+            anchor: h64(PANEL_ANCHOR),
             seats: (1..=5).map(|n| PalwPanelSeatV2 { bond: seat(n), operator_id: h64(0x0900 + n) }).collect(),
             bound_daa: 20,
         }
+    }
+
+    /// The mask the five-seat panel's anchor assigned seat `n` (the seats sit in panel order 1–5).
+    fn assigned(n: u64) -> PalwSegmentMaskV2 {
+        palw_segment_assignment_v2(h64(PANEL_ANCHOR), h64(CLAIM), 5).mask_of((n - 1) as u16)
+    }
+
+    /// The seat the anchor drew for the full replay.
+    fn full_seat() -> u64 {
+        (1..=5).find(|n| assigned(*n) == PalwSegmentMaskV2::full(4)).expect("one seat replays whole")
+    }
+
+    /// The four partial seats, each with the one segment it was assigned.
+    fn partial_seats() -> Vec<u64> {
+        (1..=5).filter(|n| *n != full_seat()).collect()
     }
 
     fn liability_row(
@@ -706,62 +861,110 @@ mod tests {
 
     /// **The site/mask truth table**, at `k = 1` (a two-seat panel, where the one partial seat's
     /// mask IS the full mask), `k = 4` (the five-seat panel every shipped class draws) and
-    /// `k = 31` (one short of the mask's width).
+    /// `k = 31` (one short of the mask's width). F2 review: a partial seat is liable only for a fault
+    /// whose leaf AND every leaf its verdict read lie in its segment (F-1), and only under the mask
+    /// its panel assigned it (F-4); a full mask is a full attestation whatever the assignment.
     #[test]
     fn the_site_and_mask_truth_table() {
         let leaves = 1_000u64;
+        let at = PalwFaultSiteV1::leaf_alone;
+        let everything = PalwFaultSiteV1::Leaf { leaf: leaves - 1, first_read: 0, last_read: leaves - 1 };
         for k in [1u16, 4, 31] {
-            // A full receipt attested everything, whatever the cut and whether it is known.
-            for site in [PalwFaultSiteV1::Whole, PalwFaultSiteV1::Leaf(0), PalwFaultSiteV1::Leaf(leaves - 1)] {
+            // A full receipt attested everything, whatever the cut, the assignment and whether
+            // either is known.
+            for site in [PalwFaultSiteV1::Whole, at(0), at(leaves - 1), everything] {
                 for known in [Some(k), None] {
-                    assert_eq!(palw_false_valid_liable_v1(&full(1), site, known, leaves), Ok(()), "k={k} {site:?} {known:?}");
+                    for assigned in [None, Some(PalwSegmentMaskV2::NONE), Some(PalwSegmentMaskV2::single(0))] {
+                        assert_eq!(
+                            palw_false_valid_liable_v1(&full(1), site, known, assigned, leaves),
+                            Ok(()),
+                            "k={k} {site:?} {known:?} {assigned:?}"
+                        );
+                    }
                 }
             }
             // An empty mask attested nothing, known cut or not.
             for known in [Some(k), None] {
                 assert_eq!(
-                    palw_false_valid_liable_v1(&segmented(2, PalwSegmentMaskV2::NONE), PalwFaultSiteV1::Whole, known, leaves),
+                    palw_false_valid_liable_v1(
+                        &segmented(2, PalwSegmentMaskV2::NONE),
+                        PalwFaultSiteV1::Whole,
+                        known,
+                        Some(PalwSegmentMaskV2::NONE),
+                        leaves
+                    ),
                     Err(E::SiteNotAttested),
                     "k={k}: an empty mask"
                 );
             }
-            // The full mask is a full attestation — liable at the whole and at every leaf.
+            // The full mask is a full attestation — liable at the whole and at every leaf, whatever
+            // the seat was assigned: a partial seat that replayed the whole job and signed for all
+            // of it is held to all of it.
             let whole_mask = segmented(2, PalwSegmentMaskV2::full(k));
-            assert_eq!(palw_false_valid_liable_v1(&whole_mask, PalwFaultSiteV1::Whole, Some(k), leaves), Ok(()), "k={k}");
-            assert_eq!(palw_false_valid_liable_v1(&whole_mask, PalwFaultSiteV1::Leaf(leaves - 1), Some(k), leaves), Ok(()), "k={k}");
+            for assigned in [Some(PalwSegmentMaskV2::full(k)), Some(PalwSegmentMaskV2::single(0)), Some(PalwSegmentMaskV2::NONE), None]
+            {
+                for site in [PalwFaultSiteV1::Whole, at(leaves - 1), everything] {
+                    assert_eq!(palw_false_valid_liable_v1(&whole_mask, site, Some(k), assigned, leaves), Ok(()), "k={k} {assigned:?}");
+                }
+            }
             // ...but not placeable when the cut is not in state.
             assert_eq!(
-                palw_false_valid_liable_v1(&whole_mask, PalwFaultSiteV1::Whole, None, leaves),
+                palw_false_valid_liable_v1(&whole_mask, PalwFaultSiteV1::Whole, None, None, leaves),
                 Err(E::SegmentsUnknown),
                 "k={k}: an unknown cut"
             );
-            // One segment each: liable for exactly the leaves in it, never for the whole.
+            // One segment each, as assigned: liable for exactly the faults whose leaf and every read
+            // are in it, never for the whole.
             for index in 0..k {
                 let (start, end) = palw_segment_leaf_range_v2(leaves, k, index).expect("a segment of the cut");
-                let partial = segmented(3, PalwSegmentMaskV2::single(index));
-                let whole = palw_false_valid_liable_v1(&partial, PalwFaultSiteV1::Whole, Some(k), leaves);
+                let mask = PalwSegmentMaskV2::single(index);
+                let partial = segmented(3, mask);
+                let liable_at = |site: PalwFaultSiteV1| palw_false_valid_liable_v1(&partial, site, Some(k), Some(mask), leaves);
                 if k == 1 {
-                    assert_eq!(whole, Ok(()), "k=1: the one segment is the whole job");
+                    assert_eq!(liable_at(PalwFaultSiteV1::Whole), Ok(()), "k=1: the one segment is the whole job");
                 } else {
-                    assert_eq!(whole, Err(E::SiteNotAttested), "k={k} seg {index}: a partial mask never covers the whole");
+                    assert_eq!(liable_at(PalwFaultSiteV1::Whole), Err(E::SiteNotAttested), "k={k} seg {index}: never the whole");
                 }
                 for leaf in [start, end - 1] {
-                    assert_eq!(
-                        palw_false_valid_liable_v1(&partial, PalwFaultSiteV1::Leaf(leaf), Some(k), leaves),
-                        Ok(()),
-                        "k={k} seg {index} leaf {leaf}"
-                    );
-                }
-                if k > 1 {
-                    let outside = if end < leaves { end } else { start - 1 };
-                    assert_eq!(
-                        palw_false_valid_liable_v1(&partial, PalwFaultSiteV1::Leaf(outside), Some(k), leaves),
-                        Err(E::SiteNotAttested),
-                        "k={k} seg {index}: the neighbour's leaf {outside}"
-                    );
+                    assert_eq!(liable_at(at(leaf)), Ok(()), "k={k} seg {index} leaf {leaf}");
                 }
                 assert_eq!(
-                    palw_false_valid_liable_v1(&partial, PalwFaultSiteV1::Leaf(start), None, leaves),
+                    liable_at(PalwFaultSiteV1::Leaf { leaf: end - 1, first_read: start, last_read: end - 1 }),
+                    Ok(()),
+                    "k={k} seg {index}: a step that read only its own segment"
+                );
+                if k > 1 {
+                    let outside = if end < leaves { end } else { start - 1 };
+                    assert_eq!(liable_at(at(outside)), Err(E::SiteNotAttested), "k={k} seg {index}: the neighbour's leaf {outside}");
+                    // **F-1**: the leaf is this segment's, but the verdict read a neighbour's leaf —
+                    // which this seat never compared, so a lie there is not its lie.
+                    if start > 0 {
+                        assert_eq!(
+                            liable_at(PalwFaultSiteV1::Leaf { leaf: start, first_read: start - 1, last_read: start }),
+                            Err(E::SiteNotAttested),
+                            "k={k} seg {index}: a read in the previous segment"
+                        );
+                    }
+                    if end < leaves {
+                        assert_eq!(
+                            liable_at(PalwFaultSiteV1::Leaf { leaf: end - 1, first_read: end - 1, last_read: end }),
+                            Err(E::SiteNotAttested),
+                            "k={k} seg {index}: a read in the next segment"
+                        );
+                    }
+                    // **F-4**: a partial mask the panel did not assign this seat is refused, whatever
+                    // the site — and so is one with no assignment to compare against.
+                    let other = PalwSegmentMaskV2::single((index + 1) % k);
+                    for wrong in [Some(other), Some(PalwSegmentMaskV2::NONE), None] {
+                        assert_eq!(
+                            palw_false_valid_liable_v1(&partial, at(start), Some(k), wrong, leaves),
+                            Err(E::SegmentMaskNotAssigned),
+                            "k={k} seg {index}: assigned {wrong:?}"
+                        );
+                    }
+                }
+                assert_eq!(
+                    palw_false_valid_liable_v1(&partial, at(start), None, Some(mask), leaves),
                     Err(E::SegmentsUnknown),
                     "k={k} seg {index}: an unknown cut"
                 );
@@ -769,54 +972,71 @@ mod tests {
             // A leaf the cut does not have is in no segment.
             let partial = segmented(3, PalwSegmentMaskV2::single(0));
             let expected = if k == 1 { Ok(()) } else { Err(E::SiteNotAttested) };
-            assert_eq!(palw_false_valid_liable_v1(&partial, PalwFaultSiteV1::Leaf(leaves), Some(k), leaves), expected, "k={k}");
+            assert_eq!(
+                palw_false_valid_liable_v1(&partial, at(leaves), Some(k), Some(PalwSegmentMaskV2::single(0)), leaves),
+                expected,
+                "k={k}"
+            );
         }
     }
 
-    /// **The execution check reads a step refutation in the network's prompt carriage — and under
-    /// the flat form it IS the V1 route's check**, for every execution-proving kind and a named void,
-    /// on the claim's root and on another. Under the Merkle form only `StepArithmetic` is read
-    /// differently (the whole list carried, the tile opened from it); every other kind is the V1
-    /// route's there too. The Merkle half on a real refutation is `t46o` (kaspa-consensus).
+    /// **With no prompt-id opening the execution check IS the V1 route's**, for every
+    /// execution-proving kind and a named void, on the claim's root and on another. An opening rides
+    /// only beside a `StepArithmetic`, and there the job's commitment decides: the fixture commits a
+    /// flat digest, so a Merkle opening is refused by the arithmetic. The Merkle half on a real
+    /// refutation is `t46o` (kaspa-consensus).
     #[test]
-    fn the_execution_check_is_the_v1_routes_under_the_flat_form() {
+    fn the_execution_check_is_the_v1_routes_without_an_opening() {
         use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1};
         use PalwPanelContradictionV1 as C;
         let skeleton = crate::palw_step_refute::tests::skeleton_refutation();
         let root = skeleton.binding.committed_execution_root;
+        let arithmetic = C::StepArithmetic { refutation: skeleton.clone(), operand_openings: Vec::new() };
         let cases = [
             C::StepStructural(PalwStepRefutationV1 { binding: skeleton.binding.clone(), evidence: PalwStepEvidenceV1::Shape }),
             C::ForgedOutput { binding: skeleton.binding.clone(), pin: zeroed(), position: 0 },
-            C::StepArithmetic { refutation: skeleton.clone(), operand_openings: Vec::new() },
+            arithmetic.clone(),
             C::CourtFraud { voided_daa: 5 },
         ];
+        let opening = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&[3, 5, 8, 13], 0).expect("a short prompt opens");
         for contradiction in &cases {
             for claim_root in [root, h64(0xE0)] {
                 let v1 = palw_panel_contradiction_convicts_execution_v1(contradiction, claim_root, h64(0xAF), 1 << 20);
                 assert_eq!(
-                    palw_false_valid_convicts_execution_v2(contradiction, claim_root, h64(0xAF), 1 << 20, PalwPromptIdsFormV1::Flat),
+                    palw_false_valid_convicts_execution_v2(contradiction, None, claim_root, h64(0xAF), 1 << 20),
                     v1,
-                    "flat: {contradiction:?}"
+                    "no opening: {contradiction:?}"
                 );
-                if !matches!(contradiction, C::StepArithmetic { .. }) {
-                    assert_eq!(
-                        palw_false_valid_convicts_execution_v2(
-                            contradiction,
-                            claim_root,
-                            h64(0xAF),
-                            1 << 20,
-                            PalwPromptIdsFormV1::MerkleV1
-                        ),
-                        v1,
-                        "merkle: {contradiction:?}"
-                    );
-                }
+            }
+            if !matches!(contradiction, C::StepArithmetic { .. }) {
+                assert_eq!(
+                    palw_false_valid_convicts_execution_v2(contradiction, Some(&opening), root, h64(0xAF), 1 << 20),
+                    Err(E::PanelFalseValidNeedsContradiction),
+                    "an opening beside {contradiction:?} is evidence for a question nobody asked"
+                );
             }
         }
+        assert_eq!(
+            palw_false_valid_convicts_execution_v2(&arithmetic, Some(&opening), h64(0xE0), h64(0xAF), 1 << 20),
+            Err(E::PanelFalseValidWorkMismatch),
+            "the root is pinned first"
+        );
+        assert_eq!(
+            palw_false_valid_convicts_execution_v2(&arithmetic, Some(&opening), root, h64(0xAF), 1 << 20),
+            Err(E::PanelFalseValidNeedsContradiction),
+            "a flat commitment refuses a Merkle opening"
+        );
+        // And the adjudicator refuses an opening beside anything but a step before it reads more.
+        let state = live_state(voided(55, PalwVoidReasonV2::CourtFraud), h64(0xE0), h64(0xAF));
+        let mut payload = evidence(full(1), C::CourtFraud { voided_daa: 55 });
+        judge(&state, &payload).expect("without the opening the void binds");
+        payload.prompt_ids_opening = Some(opening);
+        assert_eq!(judge(&state, &payload), Err(E::PanelFalseValidNeedsContradiction));
     }
 
     /// **The admission table**: which contradiction may convict a `Valid` signer, refused by
-    /// name where it cannot be tied to this claim's execution.
+    /// name where it cannot be tied to this claim's execution — `ProducerWithholding` among them
+    /// (F2 review, F-2).
     #[test]
     fn the_admission_table() {
         use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1};
@@ -829,6 +1049,7 @@ mod tests {
         };
         let legs: crate::palw_legs::PalwLegsRefutationV1 = zeroed();
         let refused = [
+            C::ProducerWithholding { voided_daa: 55 },
             C::ExecutorEquivocation(carriage),
             C::CourtExecutorGuilty { offence_id: h64(0x0FF) },
             C::ConflictingPermit { span: 1, round: 2, permit_index: 0 },
@@ -845,6 +1066,16 @@ mod tests {
                 "and the adjudicator refuses it before anything else is read"
             );
         }
+        // **F-2: a ProducerWithholding void the chain really wrote is refused too** — a colluding
+        // producer's silence must not take an honest full seat's lock.
+        let withheld = live_state(voided(55, PalwVoidReasonV2::ProducerWithholding), h64(0xE0), h64(0xAF));
+        assert!(
+            matches!(
+                judge(&withheld, &evidence(full(1), C::ProducerWithholding { voided_daa: 55 })),
+                Err(E::ContradictionNotAdmitted(_))
+            ),
+            "the void binds the claim, and the route is shut"
+        );
         // The execution-proving kinds are admitted: they go on to be pinned to the root.
         let structural =
             C::StepStructural(PalwStepRefutationV1 { binding: skeleton.binding.clone(), evidence: PalwStepEvidenceV1::Shape });
@@ -864,48 +1095,47 @@ mod tests {
         fp_claim.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
         fp.set_false_valid_rows_for_tests(h64(CLAIM), Some(fp_claim), Some(five_seat_panel()), None, 0);
         let payload = evidence(full(1), forged.clone());
-        let armed = palw_check_panel_false_valid_v2(&fp, &seat(1), &bytes(&payload), true, false, PalwPromptIdsFormV1::Flat, None);
+        let armed = palw_check_panel_false_valid_v2(&fp, &seat(1), &bytes(&payload), true, false, None);
         assert!(matches!(armed, Err(E::ContradictionNotAdmitted(_))), "{armed:?}");
-        let attempt =
-            palw_check_panel_false_valid_v2(&state, &seat(1), &bytes(&payload), true, false, PalwPromptIdsFormV1::Flat, None);
+        let attempt = palw_check_panel_false_valid_v2(&state, &seat(1), &bytes(&payload), true, false, None);
         assert_eq!(attempt, Err(E::PanelFalseValidWorkMismatch), "an attempt claim is still judged");
-        // A named void binds only the void the chain wrote: this claim, this reason, this DAA.
-        for (reason, contradiction) in [
-            (PalwVoidReasonV2::CourtFraud, C::CourtFraud { voided_daa: 55 }),
-            (PalwVoidReasonV2::ProducerWithholding, C::ProducerWithholding { voided_daa: 55 }),
-        ] {
-            let state = live_state(voided(55, reason), h64(0xE0), h64(0xAF));
-            let finding = judge(&state, &evidence(full(1), contradiction.clone())).expect("the void the chain wrote binds");
-            assert_eq!(finding.site, PalwFaultSiteV1::Whole);
-            assert!(!finding.execution_proving, "a named void names a claim, not a root");
-            assert_eq!(finding.target.execution_root, h64(0xE0));
+        // A named void binds only the void the chain wrote: this claim, CourtFraud, this DAA.
+        let contradiction = C::CourtFraud { voided_daa: 55 };
+        let finding = judge(&state, &evidence(full(1), contradiction.clone())).expect("the void the chain wrote binds");
+        assert_eq!(finding.site, PalwFaultSiteV1::Whole);
+        assert!(!finding.execution_proving, "a named void names a claim, not a root");
+        assert_eq!(finding.target.execution_root, h64(0xE0));
+        let full_mask = full_seat();
+        assert!(judge(&state, &evidence(segmented(full_mask, PalwSegmentMaskV2::full(4)), contradiction.clone())).is_ok());
+        for partial in partial_seats() {
             assert_eq!(
-                judge(&state, &evidence(segmented(2, PalwSegmentMaskV2::single(0)), contradiction.clone())),
+                judge(&state, &evidence(segmented(partial, assigned(partial)), contradiction.clone())),
                 Err(E::SiteNotAttested),
-                "a partial seat did not attest the whole"
-            );
-            let other = if reason == PalwVoidReasonV2::CourtFraud {
-                PalwVoidReasonV2::ProducerWithholding
-            } else {
-                PalwVoidReasonV2::CourtFraud
-            };
-            let wrong_reason = live_state(voided(55, other), h64(0xE0), h64(0xAF));
-            assert_eq!(judge(&wrong_reason, &evidence(full(1), contradiction.clone())), Err(E::PanelFalseValidWorkMismatch));
-            let wrong_daa = live_state(voided(56, reason), h64(0xE0), h64(0xAF));
-            assert_eq!(judge(&wrong_daa, &evidence(full(1), contradiction.clone())), Err(E::PanelFalseValidWorkMismatch));
-            // Once the claim has retired, the liability row carries the void — and the cut is gone.
-            let mut retired = PalwChainStateV2::genesis();
-            retired.set_false_valid_rows_for_tests(h64(CLAIM), None, None, Some(liability_row(h64(0xE0), Some((55, reason)))), 0);
-            let finding = judge(&retired, &evidence(full(1), contradiction.clone())).expect("the row binds the void");
-            assert_eq!((finding.target.lane, finding.target.segment_count, finding.target.phase), (None, None, None));
-            assert_eq!(
-                judge(&retired, &evidence(segmented(2, PalwSegmentMaskV2::single(0)), contradiction.clone())),
-                Err(E::SegmentsUnknown),
-                "a retired claim's cut is not in state until F1"
+                "seat {partial}'s assigned segment did not attest the whole"
             );
         }
-        // No target, and a claim in session.
-        assert_eq!(judge(&PalwChainStateV2::genesis(), &evidence(full(1), C::CourtFraud { voided_daa: 55 })), Err(E::NoTarget));
+        let wrong_reason = live_state(voided(55, PalwVoidReasonV2::ProducerWithholding), h64(0xE0), h64(0xAF));
+        assert_eq!(judge(&wrong_reason, &evidence(full(1), contradiction.clone())), Err(E::PanelFalseValidWorkMismatch));
+        let wrong_daa = live_state(voided(56, PalwVoidReasonV2::CourtFraud), h64(0xE0), h64(0xAF));
+        assert_eq!(judge(&wrong_daa, &evidence(full(1), contradiction.clone())), Err(E::PanelFalseValidWorkMismatch));
+        // Once the claim has retired, the liability row carries the void — and the cut is gone.
+        let mut retired = PalwChainStateV2::genesis();
+        retired.set_false_valid_rows_for_tests(
+            h64(CLAIM),
+            None,
+            None,
+            Some(liability_row(h64(0xE0), Some((55, PalwVoidReasonV2::CourtFraud)))),
+            0,
+        );
+        let finding = judge(&retired, &evidence(full(1), contradiction.clone())).expect("the row binds the void");
+        assert_eq!((finding.target.lane, finding.target.segment_count, finding.target.phase), (None, None, None));
+        assert_eq!(
+            judge(&retired, &evidence(segmented(2, PalwSegmentMaskV2::single(0)), contradiction.clone())),
+            Err(E::SegmentsUnknown),
+            "a retired claim's cut is not in state until F1"
+        );
+        // No target, and a claim in session: a court, or a data-availability session held or not.
+        assert_eq!(judge(&PalwChainStateV2::genesis(), &evidence(full(1), contradiction.clone())), Err(E::NoTarget));
         let mut in_court = live_state(voided(55, PalwVoidReasonV2::CourtFraud), h64(0xE0), h64(0xAF));
         in_court.set_false_valid_rows_for_tests(
             h64(CLAIM),
@@ -914,34 +1144,79 @@ mod tests {
             None,
             1,
         );
-        assert_eq!(judge(&in_court, &evidence(full(1), C::CourtFraud { voided_daa: 55 })), Err(E::ClaimUnderSession));
+        assert_eq!(judge(&in_court, &evidence(full(1), contradiction.clone())), Err(E::ClaimUnderSession));
+        let disputed = PalwClaimPhaseV2::DefaultDisputed {
+            accused_daa: 50,
+            missing_event_index: 0,
+            accuser: seat(7),
+            accuser_exposure: 10,
+            resumed: Box::new(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 30 }),
+        };
+        let (refutation, openings, artifact_root) = crate::palw_step_refute::tests::base0_matmul_fraud();
+        let root = refutation.binding.committed_execution_root;
+        let under_da = live_state(disputed, root, artifact_root);
+        let step = C::StepArithmetic { refutation, operand_openings: openings };
+        assert_eq!(judge(&under_da, &evidence(full(1), step.clone())), Err(E::ClaimUnderSession), "a DA session (F-4)");
+        let licensed = live_state(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 30 }, root, artifact_root);
+        judge(&licensed, &evidence(full(1), step)).expect("and the same proof convicts once the session is gone");
     }
 
-    /// **A real step fault convicts the full seat and the partial holder of its leaf — and only
-    /// them.** The arithmetic fixture's committed matmul tile is off by one; the claim commits that
-    /// execution's root.
+    /// **A step fault whose verdict reads a neighbour segment convicts only whole attestations**
+    /// (F2 review, F-1, in the unit fixture's shape). The arithmetic fixture's committed matmul tile
+    /// at decode call 1 is off by one; the step reads the embedding tiles of the same call, which the
+    /// four-way cut puts in the previous segment. The full seat, and a partial-assigned seat that
+    /// signed the full mask, are liable; every partial seat under its assigned mask is not — the
+    /// leaf's own segment holder included — and a partial mask the panel did not assign is refused.
     #[test]
-    fn a_step_fault_convicts_the_seats_that_attested_its_leaf() {
+    fn a_step_fault_that_reads_a_neighbour_segment_convicts_only_whole_attestations() {
         let (refutation, openings, artifact_root) = crate::palw_step_refute::tests::base0_matmul_fraud();
         let root = refutation.binding.committed_execution_root;
         let leaves = refutation.binding.step_leaf_count;
         let leaf = refutation.output_opening.leaf_index;
+        let first_read = refutation
+            .inputs
+            .iter()
+            .flat_map(|row| row.preimages.iter())
+            .map(|p| {
+                crate::palw_step::canonical_step_leaf_index(
+                    &refutation.binding.shape_profile,
+                    &refutation.binding.job_context,
+                    &p.coord,
+                )
+                .expect("a canonical input")
+            })
+            .min()
+            .expect("a matmul reads its input row");
+        let home = palw_segment_index_of_leaf_v2(leaves, 4, leaf).expect("the leaf is in the cut");
+        assert_ne!(
+            palw_segment_index_of_leaf_v2(leaves, 4, first_read),
+            Some(home),
+            "the premise: the step reads the previous segment"
+        );
         let state = live_state(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 30 }, root, artifact_root);
         let contradiction =
             PalwPanelContradictionV1::StepArithmetic { refutation: refutation.clone(), operand_openings: openings.clone() };
-        let finding = judge(&state, &evidence(full(1), contradiction.clone())).expect("the full seat attested the leaf");
-        assert_eq!(finding.site, PalwFaultSiteV1::Leaf(leaf));
+        let finding = judge(&state, &evidence(full(1), contradiction.clone())).expect("the full receipt attested everything");
+        assert_eq!(finding.site, PalwFaultSiteV1::Leaf { leaf, first_read, last_read: leaf }, "the site carries what the step read");
         assert!(finding.execution_proving);
         assert_eq!(finding.target.segment_count, Some(4), "a five-seat panel is cut in four");
-        let home = palw_segment_index_of_leaf_v2(leaves, 4, leaf).expect("the leaf is in the cut");
-        for index in 0..4u16 {
-            let verdict =
-                judge(&state, &evidence(segmented(2 + index as u64, PalwSegmentMaskV2::single(index)), contradiction.clone()));
-            if index == home {
-                assert!(verdict.is_ok(), "the partial holder of the leaf's segment is liable: {verdict:?}");
-            } else {
-                assert_eq!(verdict, Err(E::SiteNotAttested), "segment {index} did not attest leaf {leaf}");
-            }
+        judge(&state, &evidence(segmented(full_seat(), PalwSegmentMaskV2::full(4)), contradiction.clone()))
+            .expect("the full seat's full mask");
+        for partial in partial_seats() {
+            let mask = assigned(partial);
+            assert_eq!(
+                judge(&state, &evidence(segmented(partial, mask), contradiction.clone())),
+                Err(E::SiteNotAttested),
+                "seat {partial} (mask {mask:?}; the leaf is in segment {home}) did not attest everything the verdict read"
+            );
+            judge(&state, &evidence(segmented(partial, PalwSegmentMaskV2::full(4)), contradiction.clone()))
+                .expect("a partial-assigned seat that signed the full mask is held to it");
+            let unassigned = PalwSegmentMaskV2::single((0..4).find(|s| !mask.covers(*s)).expect("another segment"));
+            assert_eq!(
+                judge(&state, &evidence(segmented(partial, unassigned), contradiction.clone())),
+                Err(E::SegmentMaskNotAssigned),
+                "seat {partial}: a partial mask the panel did not assign"
+            );
         }
         // The same fault against another claim's root is not this claim's.
         let elsewhere = live_state(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 30 }, h64(0xE0), artifact_root);
@@ -953,6 +1228,30 @@ mod tests {
         let payload =
             evidence(full(1), PalwPanelContradictionV1::StepArithmetic { refutation: honest, operand_openings: honest_openings });
         assert_eq!(judge(&state, &payload), Err(E::PanelFalseValidNeedsContradiction));
+    }
+
+    /// **A step whose verdict reads what no segment replay recomputes is a whole-execution site**
+    /// (F-1): a KV checkpoint anchor, or the generated-token pin at a decode call. The structural
+    /// pass alone decides the site, so the attached objects need not verify for this reading.
+    #[test]
+    fn a_step_reading_a_checkpoint_or_a_generated_token_is_whole() {
+        let (refutation, openings, _) = crate::palw_step_refute::tests::base0_matmul_fraud();
+        assert!(refutation.output_preimage.coord.call_index > 0, "the fixture's step is at a decode call");
+        let site = |r: crate::palw_step_refute::PalwExecutionStepRefutationV1| {
+            palw_false_valid_fault_site_v1(
+                &PalwPanelContradictionV1::StepArithmetic { refutation: r, operand_openings: openings.clone() },
+                1 << 20,
+            )
+            .expect("the structural pass opens the output leaf")
+            .0
+        };
+        assert!(matches!(site(refutation.clone()), PalwFaultSiteV1::Leaf { .. }), "no pin, no anchor: the leaves it read");
+        let mut pinned = refutation.clone();
+        pinned.decode_tokens = Some(zeroed());
+        assert_eq!(site(pinned), PalwFaultSiteV1::Whole, "a decode-call step carrying the generated tokens");
+        let mut anchored = refutation;
+        anchored.kv_checkpoint = Some(zeroed());
+        assert_eq!(site(anchored), PalwFaultSiteV1::Whole, "a step reading a committed checkpoint");
     }
 
     /// **A shape fault is a whole-execution fault, whatever leaf the filer attached.** The
@@ -976,11 +1275,11 @@ mod tests {
         });
         let finding = judge(&state, &evidence(full(1), aimed.clone())).expect("a non-canonical leaf count convicts");
         assert_eq!(finding.site, PalwFaultSiteV1::Whole, "the verdict came from the shape pass");
-        for index in 0..4u16 {
+        for partial in partial_seats() {
             assert_eq!(
-                judge(&state, &evidence(segmented(2 + index as u64, PalwSegmentMaskV2::single(index)), aimed.clone())),
+                judge(&state, &evidence(segmented(partial, assigned(partial)), aimed.clone())),
                 Err(E::SiteNotAttested),
-                "segment {index} attested no shape"
+                "seat {partial} attested no shape"
             );
         }
     }
@@ -1008,7 +1307,7 @@ mod tests {
         };
         let v1_bytes = borsh::to_vec(&v1).expect("a V1 payload serializes");
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &v1_bytes, false, false, PalwPromptIdsFormV1::Flat, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &v1_bytes, false, false, None),
             Err(E::PanelFalseValidNeedsContradiction),
             "a V1 payload is not read as V2"
         );
@@ -1016,11 +1315,10 @@ mod tests {
         revealing.reporter_reveal = vec![0xAB; 32];
         let revealing_bytes = bytes(&revealing);
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, false, PalwPromptIdsFormV1::Flat, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, false, None),
             Err(E::ReporterSlotNotArmed)
         );
-        let armed = palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, true, PalwPromptIdsFormV1::Flat, None)
-            .expect("F7 reads the slot");
+        let armed = palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, true, None).expect("F7 reads the slot");
         assert_eq!(armed, judge(&state, &good).unwrap(), "the slot changes nothing the adjudicator finds");
         // The ledger key is (seat, claim) and nothing else.
         let id = palw_false_valid_offence_id_v2(&seat(1).0, &h64(CLAIM));
@@ -1064,40 +1362,61 @@ mod tests {
         };
         let at_bound = with_reveal(PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES);
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &at_bound, false, true, PalwPromptIdsFormV1::Flat, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &at_bound, false, true, None),
             Ok(expected),
             "armed, a reveal of exactly the bound is read and changes nothing the adjudicator finds"
         );
         let past_bound = with_reveal(PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES + 1);
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &past_bound, false, true, PalwPromptIdsFormV1::Flat, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &past_bound, false, true, None),
             Err(E::EvidenceTooLarge),
             "armed, one byte past the bound is refused"
         );
         for payload in [with_reveal(1), at_bound, past_bound] {
             assert_eq!(
-                palw_check_panel_false_valid_v2(&state, &seat(1), &payload, false, false, PalwPromptIdsFormV1::Flat, None),
+                palw_check_panel_false_valid_v2(&state, &seat(1), &payload, false, false, None),
                 Err(E::ReporterSlotNotArmed),
                 "unarmed, any filled slot is refused before its length is read"
             );
         }
     }
 
-    /// **The byte cap** is asked before a byte is decoded.
+    /// **The byte cap is what one carrier holds** (F2 review, F-3), and it is asked before a byte is
+    /// decoded. A kind-3 object at the cap, in the 0x4b lifecycle payload that carries it, is the
+    /// chunk lane's payload plus its own framing, and leaves a standard transaction the carrier
+    /// allowance `the_close_ceiling_fits_a_carrier_transaction` asks of a chunk. The measured half —
+    /// every offence T46 files, in a signed carrier, weighed by the mass calculator — is
+    /// kaspa-consensus's `t46`.
     #[test]
-    fn the_byte_cap() {
-        let state = PalwChainStateV2::genesis();
+    fn the_byte_cap_is_one_carrier() {
+        use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
         let cap = PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES as usize;
+        assert_eq!(cap, crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES, "one carrier's payload");
+        let object = crate::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence {
+            kind: crate::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2,
+            accused: seat(1),
+            evidence_id: h64(1),
+            evidence: vec![0u8; cap],
+        };
+        let carried = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+            .expect("the carriage serializes")
+            .len() as u64;
+        assert_eq!(carried, cap as u64 + 140, "the object's framing: the version, the tags, the outpoint, the id and the length");
+        assert!(
+            carried + 18_000 <= crate::palw_mode_v2::PALW_STANDARD_TX_BYTES,
+            "a carrier at the cap leaves a standard transaction the chunk lane's allowance: {carried}"
+        );
+        let state = PalwChainStateV2::genesis();
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap + 1], false, false, PalwPromptIdsFormV1::Flat, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap + 1], false, false, None),
             Err(E::EvidenceTooLarge)
         );
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap], false, false, PalwPromptIdsFormV1::Flat, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap], false, false, None),
             Err(E::PanelFalseValidNeedsContradiction),
             "at the cap the bytes are read, and these do not decode"
         );
-        // A real evidence object sits far below it: the cap is for a court close's worth of proof.
+        // A real step refutation sits below it.
         let (refutation, openings, _) = crate::palw_step_refute::tests::base0_matmul_fraud();
         let heavy = evidence(full(1), PalwPanelContradictionV1::StepArithmetic { refutation, operand_openings: openings });
         assert!((bytes(&heavy).len() as u64) < PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES);
@@ -1125,7 +1444,6 @@ mod tests {
                     &bytes(&payload),
                     false,
                     false,
-                    PalwPromptIdsFormV1::Flat,
                     Some(PalwFalseValidSigCheckV1 { chain_domain: domain, seat_pubkey: &pubkey, seat_active: active, verify }),
                 )
             };

@@ -139,6 +139,7 @@ impl Gate {
             accused_seat: self.cards[card].0,
             receipt,
             contradiction,
+            prompt_ids_opening: None,
             reporter_reveal: Vec::new(),
         };
         offence(PalwOffenceKindV1::PanelFalseValidV2, self.cards[card], borsh::to_vec(&payload).unwrap())
