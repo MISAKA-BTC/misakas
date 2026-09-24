@@ -245,6 +245,31 @@ fn fold_block_v1(mut level: Vec<Hash64>) -> Option<Hash64> {
     Some(level[0])
 }
 
+/// The same promote-odd fold, over a run of nodes whose left edge is even at every level it folds
+/// through, in `O(log n)` memory: a stack of perfect subtrees (a binary counter), then the stack
+/// folded right to left. The level-by-level fold carries an odd tail up unchanged, which is exactly
+/// what leaves the perfect subtrees of the run's binary decomposition to be joined right to left —
+/// `the_stack_fold_is_the_level_fold` holds the two equal over every width.
+fn fold_nodes_promote_odd_v1(nodes: &[Hash64]) -> Hash64 {
+    let mut stack: Vec<(u32, Hash64)> = Vec::with_capacity(64);
+    for node in nodes {
+        let mut carry = (0u32, *node);
+        while let Some(&(height, left)) = stack.last() {
+            if height != carry.0 {
+                break;
+            }
+            stack.pop();
+            carry = (height + 1, step_merkle_node_v1(&left, &carry.1));
+        }
+        stack.push(carry);
+    }
+    let mut acc = stack.pop().map(|(_, h)| h).unwrap_or_default();
+    while let Some((_, left)) = stack.pop() {
+        acc = step_merkle_node_v1(&left, &acc);
+    }
+    acc
+}
+
 /// **The capture's fold: leaf hashes in, one retained node per `2^retain_level` of them.**
 ///
 /// Fed in canonical leaf order, exactly once per leaf, by the family's capture loop. It holds at
@@ -529,6 +554,45 @@ impl Base0SparseStepTreeV1 {
                 })
                 .ok_or(Base0SparseCaptureError::SpanDoesNotCoverTheRange { index: position << level, span_first, span_end })
         })
+    }
+
+    /// **The sibling set of a range ALIGNED to the retained level, from the kept vector alone**
+    /// (SEAT-S4) — what a fold serves for a segment it cannot open at the leaf level.
+    ///
+    /// A range whose first leaf is a multiple of `2^retain_level` and whose end is one too (or the
+    /// tree's own end) consumes no sibling below the retained level: its left edge is even at every
+    /// level below it, and its right edge is either even or the level's promoted tail. So every
+    /// sibling is a node at or above the retained level, and each is the promote-odd fold of a run
+    /// of retained nodes — computed here run by run with a stack of perfect subtrees, so nothing the
+    /// size of the retained vector is copied (`range_siblings_from_edges_v1` with no edges answers
+    /// the same set, at the price of every level above the retained one held at once: the retained
+    /// vector twice over, 0.8 GB at the 2M attempt).
+    ///
+    /// `SpanNotAligned` for a range that is not its own span at this level.
+    pub fn aligned_range_siblings_v1(&self, first: u64, count: u64) -> Result<Vec<Hash64>, Base0SparseCaptureError> {
+        let (span_first, span_end) = self.span_for_range(first, count)?;
+        if span_first != first || span_end != first + count {
+            return Err(Base0SparseCaptureError::SpanNotAligned { span_first: first, span_end: first + count });
+        }
+        self.walk_range_siblings_v1(first, count, &|level, position| {
+            if level < self.retain_level {
+                return Err(Base0SparseCaptureError::SpanNotAligned { span_first: first, span_end: first + count });
+            }
+            self.retained_subtree_root_v1(level - self.retain_level, position)
+        })
+    }
+
+    /// The tree's node at `retain_level + height`, position `position`: the promote-odd fold of the
+    /// retained nodes it covers. Their left edge is `position · 2^height`, even at every height below
+    /// `height`, so the local pairing is the global one and a promotion can only be the level's own
+    /// tail (`Base0SparseStepAccumulatorV1`'s argument, one tower up).
+    fn retained_subtree_root_v1(&self, height: u32, position: u64) -> Result<Hash64, Base0SparseCaptureError> {
+        let missing = Base0SparseCaptureError::SpanDoesNotCoverTheRange { index: position, span_first: 0, span_end: 0 };
+        let width = 1u64.checked_shl(height).ok_or(missing.clone())?;
+        let lo = position.checked_mul(width).ok_or(missing.clone())?;
+        let hi = lo.saturating_add(width).min(self.retained.len() as u64);
+        let nodes = self.retained.get(lo as usize..hi as usize).filter(|n| !n.is_empty()).ok_or(missing)?;
+        Ok(fold_nodes_promote_odd_v1(nodes))
     }
 
     /// The sibling walk itself — `step_merkle_range_siblings_v1`'s order and promote rule, the node at
@@ -822,6 +886,121 @@ pub fn base0_fold_range_root_v1(
         return Err("the opening's path is too long".to_string());
     }
     nodes.first().copied().ok_or_else(|| "the range folded to nothing".to_string())
+}
+
+/// **A range's leaves folded as they stream past, for [`base0_fold_range_root_v1`]** (SEAT-S4): the
+/// left edge's leaves, one digest per whole block at `level`, the right edge's leaves — and nothing
+/// else, whatever the range's width. A partial seat replaying a held segment (26 M leaves at the
+/// 8,192 row) holds `O(width / 2^level + 2·2^level)` hashes here, where a vector of the range's
+/// leaves would be gigabytes.
+///
+/// The split is `base0_fold_range_root_v1`'s own: blocks are aligned to the step space and the
+/// tree's tail block is whole when the range reaches the tree's end
+/// (`Base0FpFoldRangeOpeningV1::whole_blocks_v1`'s rule), and a range with no whole block is all
+/// edge. Leaves arrive in order, each exactly once, from the range's first; anything else is
+/// refused, because a replay that emits another order is not the range's.
+pub struct Base0RangeFoldV1 {
+    leaf_count: u64,
+    first: u64,
+    end: u64,
+    level: u32,
+    block: u64,
+    whole: (u64, u64),
+    next: u64,
+    left: Vec<Hash64>,
+    current: Vec<Hash64>,
+    digests: Vec<Hash64>,
+    right: Vec<Hash64>,
+}
+
+impl Base0RangeFoldV1 {
+    /// `[first, first + count)` of a tree of `leaf_count` leaves, folded at `level` (at most
+    /// [`PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1`], so a block in flight is bounded).
+    pub fn new(leaf_count: u64, first: u64, count: u64, level: u32) -> Result<Self, String> {
+        let end = first.checked_add(count).filter(|end| count > 0 && *end <= leaf_count).ok_or("the range is not inside the tree")?;
+        if level > PALW_BASE0_SPARSE_MAX_RETAIN_LEVEL_V1 {
+            return Err(format!("fold level {level} is past the sparse cap"));
+        }
+        let block = 1u64 << level;
+        let first_block = first.div_ceil(block);
+        let end_block = if end >= leaf_count { end.div_ceil(block) } else { end / block }.max(first_block);
+        Ok(Self {
+            leaf_count,
+            first,
+            end,
+            level,
+            block,
+            whole: (first_block, end_block),
+            next: first,
+            left: Vec::new(),
+            current: Vec::new(),
+            digests: Vec::with_capacity(((end_block - first_block) as usize).min(1 << 20)),
+            right: Vec::new(),
+        })
+    }
+
+    /// The next leaf of the range, by index and hash.
+    pub fn push(&mut self, index: u64, leaf_hash: Hash64) -> Result<(), String> {
+        if index != self.next || index >= self.end {
+            return Err(format!("leaf {index} arrived where leaf {} of [{}, {}) was due", self.next, self.first, self.end));
+        }
+        self.next += 1;
+        let (first_block, end_block) = self.whole;
+        let block_of = index / self.block;
+        if block_of < first_block || block_of >= end_block {
+            if index < first_block * self.block {
+                self.left.push(leaf_hash);
+            } else {
+                self.right.push(leaf_hash);
+            }
+            return Ok(());
+        }
+        self.current.push(leaf_hash);
+        let block_end = ((block_of + 1) * self.block).min(self.leaf_count);
+        if index + 1 == block_end {
+            let leaves = std::mem::take(&mut self.current);
+            self.digests.push(base0_fold_block_digest_v1(block_of * self.block, &leaves).ok_or("an empty block")?);
+        }
+        Ok(())
+    }
+
+    /// The range's root under the served `siblings` — every leaf must have arrived.
+    pub fn root_v1(&self, siblings: &[Hash64], max_step_leaf_count: u64) -> Result<Hash64, String> {
+        if self.next != self.end || !self.current.is_empty() {
+            return Err(format!("the range [{}, {}) streamed only to leaf {}", self.first, self.end, self.next));
+        }
+        base0_fold_range_root_v1(
+            self.leaf_count,
+            self.first,
+            self.end - self.first,
+            self.level,
+            &self.left,
+            &self.digests,
+            &self.right,
+            siblings,
+            max_step_leaf_count,
+        )
+    }
+}
+
+/// **How many siblings the consensus range walk consumes for `[first, first + count)`** — the
+/// count `step_range_opening_root_capped_v1` spends, derived without a leaf, so a served opening
+/// whose path is not its range's is refused before anything is replayed against it.
+pub fn base0_range_sibling_count_v1(leaf_count: u64, first: u64, count: u64) -> Option<usize> {
+    let end = first.checked_add(count).filter(|end| count > 0 && *end <= leaf_count)?;
+    let (mut a, mut b, mut width, mut siblings) = (first, end, leaf_count, 0usize);
+    while width > 1 {
+        if !a.is_multiple_of(2) {
+            siblings += 1;
+        }
+        if !b.is_multiple_of(2) && (b != width || width.is_multiple_of(2)) {
+            siblings += 1;
+        }
+        a /= 2;
+        b = b.div_ceil(2);
+        width = width.div_ceil(2);
+    }
+    Some(siblings)
 }
 
 // =============================================================================================
@@ -1881,6 +2060,86 @@ mod tests {
     /// edges' leaves and the whole blocks' digests is `step_range_opening_root_v1`'s from every leaf,
     /// with the same siblings; and a sibling too few or too many is refused, as the consensus walk
     /// refuses it.
+    /// **The stack fold is the level fold** — `fold_nodes_promote_odd_v1` over every width, against
+    /// the level-by-level promote-odd fold (`fold_block_v1`) and the step tree's own root.
+    #[test]
+    fn the_stack_fold_is_the_level_fold() {
+        for n in 1..=300usize {
+            let ls = leaves(n);
+            let nodes: Vec<Hash64> = ls.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(i as u64, h)).collect();
+            assert_eq!(Some(fold_nodes_promote_odd_v1(&nodes)), fold_block_v1(nodes.clone()), "n={n}");
+            assert_eq!(fold_nodes_promote_odd_v1(&nodes), step_merkle_root_v1(&ls).expect("a root"), "n={n}");
+        }
+    }
+
+    /// **SEAT-S4's two fold primitives are the consensus walk.** For every tree, retained level and
+    /// segment-shaped range: the aligned span's siblings read off the retained vector are the
+    /// consensus siblings (and those of the tree's own edge walk); the streamed fold of the span's
+    /// leaves roots to the step root under them; the sibling count is the one the walk spends; and a
+    /// range that is not its own span is refused, as is a leaf out of order.
+    #[test]
+    fn an_aligned_span_is_opened_from_the_retained_vector_alone() {
+        let mut checked = 0usize;
+        for n in [1u64, 2, 3, 7, 8, 9, 31, 64, 65, 100, 257, 1_000] {
+            let ls = leaves(n as usize);
+            let root = step_merkle_root_v1(&ls).expect("a root");
+            for retain_level in [0u32, 1, 2, 3, 5, 7] {
+                let tree = Base0SparseStepTreeV1::from_leaves_v1(&ls, retain_level).expect("folds");
+                for k in [1u64, 2, 3, 4, 7] {
+                    for i in 0..k {
+                        let (first, end) = (i * n / k, (i + 1) * n / k);
+                        if end == first {
+                            continue;
+                        }
+                        let (span_first, span_end) = tree.span_for_range(first, end - first).expect("a span");
+                        let count = span_end - span_first;
+                        let siblings = tree.aligned_range_siblings_v1(span_first, count).expect("an aligned span opens");
+                        let consensus = step_merkle_range_siblings_v1(&ls, span_first as usize, count as usize).expect("siblings");
+                        assert_eq!(siblings, consensus, "n={n} r={retain_level} [{span_first}, {span_end})");
+                        assert_eq!(
+                            siblings,
+                            tree.range_siblings_from_edges_v1(&[], span_first, count).expect("the edge walk"),
+                            "n={n} r={retain_level}: the lean walk and the tower walk"
+                        );
+                        assert_eq!(base0_range_sibling_count_v1(n, span_first, count), Some(siblings.len()));
+                        // The seat's streamed fold — at the tree's level and at the seat's own.
+                        for fold_level in [retain_level, PALW_BASE0_SPARSE_RETAIN_LEVEL_V1] {
+                            let mut fold = Base0RangeFoldV1::new(n, span_first, count, fold_level).expect("a range");
+                            for index in span_first..span_end {
+                                fold.push(index, ls[index as usize]).expect("in order");
+                            }
+                            assert_eq!(fold.root_v1(&siblings, PALW_STEP_LEG_MAX_LEAVES), Ok(root), "n={n} r={retain_level}");
+                        }
+                        // The exact range, with the consensus siblings, streamed the same way.
+                        let exact = step_merkle_range_siblings_v1(&ls, first as usize, (end - first) as usize).expect("siblings");
+                        assert_eq!(base0_range_sibling_count_v1(n, first, end - first), Some(exact.len()));
+                        let mut fold = Base0RangeFoldV1::new(n, first, end - first, retain_level).expect("a range");
+                        for index in first..end {
+                            fold.push(index, ls[index as usize]).expect("in order");
+                        }
+                        assert_eq!(fold.root_v1(&exact, PALW_STEP_LEG_MAX_LEAVES), Ok(root), "n={n} exact [{first}, {end})");
+                        // A lie in one leaf moves the root.
+                        let mut fold = Base0RangeFoldV1::new(n, first, end - first, retain_level).expect("a range");
+                        for index in first..end {
+                            let h = if index == first { Hash64::from_u64_word(0xBAD) } else { ls[index as usize] };
+                            fold.push(index, h).expect("in order");
+                        }
+                        assert_ne!(fold.root_v1(&exact, PALW_STEP_LEG_MAX_LEAVES), Ok(root));
+                        if (span_first, span_end) != (first, end) {
+                            assert!(tree.aligned_range_siblings_v1(first, end - first).is_err(), "an unaligned range is refused");
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 300, "the sweep ran: {checked}");
+        let mut fold = Base0RangeFoldV1::new(10, 2, 5, 1).expect("a range");
+        assert!(fold.push(3, Hash64::default()).is_err(), "a leaf out of order");
+        assert!(fold.root_v1(&[], PALW_STEP_LEG_MAX_LEAVES).is_err(), "an unfinished range");
+        assert!(Base0RangeFoldV1::new(10, 8, 5, 1).is_err(), "a range past the tree");
+    }
+
     #[test]
     fn the_fold_range_root_is_the_consensus_root() {
         use kaspa_consensus_core::palw_step_leg::{step_merkle_range_siblings_v1, step_range_opening_root_v1};

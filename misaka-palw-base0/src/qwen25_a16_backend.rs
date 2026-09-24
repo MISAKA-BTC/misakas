@@ -20,7 +20,6 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::classes::ArtifactSourceV1;
 use crate::engine_a16::{A16Cache, A16Engine, A16PlanErrorV1};
-use crate::fp_interval::Base0FpIntervalKernelsV1;
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3};
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2};
@@ -1723,96 +1722,16 @@ impl Qwen25A16Backend {
         Ok(())
     }
 
-    fn replay_segment_opening_v1(
-        &self,
-        job: &PalwJobContextV2,
-        prompt: &[usize],
-        opening: &[u8],
-    ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        let opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening).map_err(|e| e.to_string())?;
-        let first = kaspa_consensus_core::palw_step::canonical_step_coordinates(&self.profile, job, opened.leaf_start)
-            .ok_or_else(|| "the segment start is not a main step coordinate".to_string())?;
-        let last = kaspa_consensus_core::palw_step::canonical_step_coordinates(&self.profile, job, opened.leaf_end.saturating_sub(1))
-            .ok_or_else(|| "the segment end is not a main step coordinate".to_string())?;
-        let window = kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentResumeWindowV1 {
-            segment_index: opened.segment_index,
-            leaf_start: opened.leaf_start,
-            leaf_end: opened.leaf_end,
-            first_call: first.call_index,
-            last_call: last.call_index,
-        };
-        let resumes = !opened.chunks.is_empty() && opened.covered_decode_call > 0;
-        let start = if resumes {
-            crate::fp_interval::Base0FpIntervalStartV1::Checkpoint {
-                covered_decode_call: opened.covered_decode_call,
-                chunks: &opened.chunks,
-                seed_token: opened.seed_token,
-                prompt_tokens: prompt,
-            }
-        } else {
-            crate::fp_interval::Base0FpIntervalStartV1::Genesis { prompt_tokens: prompt }
-        };
-        // **The window in STEPS, under the class's cadence** (ADR-0133 S1's runtime half; ADR-0151
-        // follow-up, item 4). It was spelled in CALLS — `from_calls_v1(prefill, covered + 1,
-        // last_call)` — which has two consequences a partial seat pays for: a segment anywhere in
-        // the prefill is call 0, so every such segment replayed the WHOLE prefill whatever its own
-        // end (on the 2M attempt, three segments each replaying 262,143 positions); and a
-        // checkpoint counted in positions (the held map's) cannot be a call boundary, so a
-        // mid-prefill resume could not be expressed at all. The minimum state a dense segment
-        // `[a, b)` needs is rows `[0, a)` loaded and `[a, b)` re-executed — the resource profile's
-        // `(resume_rows, end_rows)` — and that is a window of steps: the one after the checkpoint's
-        // rows (`palw_checkpoint_positions_at_v1` converts the leaf's counter, calls or positions,
-        // to rows) through the segment's last leaf's own step. A genesis segment starts at step 1
-        // and still stops at its end. `a_partial_seat_replays_its_segments_prefix_and_resumes_at_
-        // its_start` pins both against the derivation.
-        let prefill = u64::from(job.declared_prefill_tokens);
-        let first_step = if resumes {
-            u64::from(kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1(
-                &self.profile,
-                job,
-                opened.covered_decode_call,
-            )) + 1
-        } else {
-            1
-        };
-        let last_step = if last.call_index == 0 { u64::from(last.position) + 1 } else { prefill + u64::from(last.call_index) };
-        if first_step > last_step {
-            return Err("the checkpoint already covers this segment's last step; nothing to replay".to_string());
-        }
-        let fp_window = crate::fp_interval::Base0FpWindowV1 { first_step, last_step };
-        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&self.profile, job, self.step_ladder_cap())
-            .map_err(|e| e.to_string())?;
-        let kernels = A16IntervalKernels {
+    /// The dense tier's interval kernels as this backend replays with them — its plan, its drill
+    /// fault (none off a drill) and its cache representation.
+    fn interval_kernels_v1(&self) -> A16IntervalKernels<'_> {
+        A16IntervalKernels {
             artifact: &self.artifact,
             plan: self.plan.as_ref(),
             fault: self.drill_fault_v1(),
             storage: self.runtime_profile,
-        };
-        let ctx_hash = job.context_hash();
-        let profile_hash = self.profile.shape_profile_id();
-        let mut hashes = Vec::new();
-        kernels.replay_interval_into(&self.profile, job, &start, fp_window, leaf_count, &mut |i, tile| {
-            hashes.push((i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &tile)));
-            Ok(())
-        })?;
-        let attested: Vec<(u64, Hash64)> =
-            hashes.iter().copied().filter(|(i, _)| *i >= opened.leaf_start && *i < opened.leaf_end).collect();
-        let matches = attested == opened.committed_leaf_hashes;
-        Ok(kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1 {
-            window,
-            leaf_hashes: hashes,
-            // The STEPS this seat re-executed — `end_rows − resume_rows` in the resource profile's
-            // terms — which for a per-call resume is the calls since the checkpoint, as before.
-            calls_replayed: u32::try_from(last_step - first_step + 1).unwrap_or(u32::MAX),
-            matches,
-        })
+        }
     }
-}
-
-fn opening_has_hash(opening: &[u8], leaf: u64, hash: Hash64) -> bool {
-    crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(opening)
-        .ok()
-        .is_some_and(|o| o.committed_leaf_hashes.iter().any(|(i, h)| *i == leaf && *h == hash))
 }
 
 impl PalwExecutionBackendV1 for Qwen25A16Backend {
@@ -1880,6 +1799,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 execution_root: outcome.execution_root,
                 trace_root: outcome.trace_root,
                 work_leaves: None,
+                output_root: Some(outcome.output_root),
             });
         }
         // The fold sink: one execution, the dense run's roots, none of its tiles (ADR-0084 D7).
@@ -1895,24 +1815,51 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             None,
             self.runtime_profile,
         )?;
+        // SEAT-S2: the output root the producer's `execute` puts in the claim — the same run
+        // struct's, computed by the same executor over the ids this replay generated.
         Ok(PalwReplayRootsV1 {
             execution_root: run.execution_root,
             trace_root: run.trace_root,
             work_leaves: Some(run.binding.step_leaf_count),
+            output_root: Some(run.output_root),
         })
     }
 
+    /// SEAT-S4: the authenticated `SC02` opening at this class's ladder — a dense capture proves the
+    /// segment exactly, a held attempt's fold proves its span at the retained level.
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
-        crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())
+        crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
+            capture,
+            seat_count,
+            segment_index,
+            Some(&self.profile),
+            self.step_ladder_cap(),
+        )
+        .map_err(|e| e.to_string())
     }
 
+    /// SEAT-S4: authenticated against `claim` and this seat's `job`, then the window replayed in STEPS
+    /// under the class's cadence — a genesis segment from step 1 to its own end, a resumed one from the
+    /// step after its checkpoint's rows (`palw_checkpoint_positions_at_v1`), which is the resource
+    /// profile's `(resume_rows, end_rows)` (`a_partial_seat_replays_its_segments_prefix_and_resumes_at_its_start`).
     fn replay_segment_from_checkpoint_v1(
         &self,
         job: &PalwJobContextV2,
         prompt: &[usize],
         opening: &[u8],
+        claim: kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1,
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        self.replay_segment_opening_v1(job, prompt, opening)
+        crate::segment_opening::base0_replay_segment_opening_v2(
+            &self.interval_kernels_v1(),
+            &self.profile,
+            job,
+            prompt,
+            opening,
+            claim,
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
+        )
+        .map_err(String::from)
     }
 
     fn replay_accused_segment_v1(
@@ -1923,8 +1870,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         job: &PalwJobContextV2,
         prompt: &[usize],
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())?;
-        self.replay_segment_opening_v1(job, prompt, &opening)
+        crate::segment_opening::base0_replay_capture_segment_v2(
+            &self.interval_kernels_v1(),
+            &self.profile,
+            capture,
+            seat_count,
+            segment_index,
+            Some(job),
+            &crate::segment_opening::base0_court_prompt_v1(self, job.job_id, prompt),
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
+        )
+        .map_err(String::from)
     }
 
     fn replay_layer_site_v3(
@@ -1959,13 +1916,21 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let k = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats);
         let index = kaspa_consensus_core::palw_verification_v2::palw_segment_index_of_leaf_v2(binding.step_leaf_count, k, leaf)
             .unwrap_or(0);
-        let opening = crate::produce::base0_open_segment_checkpoint_v1(capture, seats, index).map_err(|e| e.to_string())?;
-        let prompt: Vec<usize> = match &retention {
-            crate::produce::Base0RetentionV1::Folded(m) => m.prompt_token_ids.iter().map(|t| *t as usize).collect(),
-            crate::produce::Base0RetentionV1::Dense(_) => Vec::new(),
-        };
-        let replay = self.replay_segment_opening_v1(&binding.job_context, &prompt, &opening)?;
-        Ok(replay.leaf_hashes.iter().any(|(i, h)| *i == leaf && opening_has_hash(&opening, leaf, *h)))
+        // The segment holding the site, from the capture's own authenticated opening (SEAT-S4): the
+        // site's leaf is inside the proven range, so a match roots it to the capture's binding.
+        let replay = crate::segment_opening::base0_replay_capture_segment_v2(
+            &self.interval_kernels_v1(),
+            &self.profile,
+            capture,
+            seats,
+            index,
+            None,
+            &crate::segment_opening::base0_court_prompt_v1(self, binding.job_context.job_id, &[]),
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
+        )
+        .map_err(String::from)?;
+        Ok(replay.matches)
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
@@ -2082,8 +2047,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             if claim.attempt_draw.is_some() && !kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&self.profile) {
                 return PalwMaterialVerdictV1::Mismatch;
             }
-            if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
-                return PalwMaterialVerdictV1::Mismatch;
+            // **SEAT-S1: the whole job, here too.** This branch checked the id alone, and a held
+            // class's attempt IS a fold — so a fold of a smaller job under the right id (a
+            // shortened prefill, the decode call skipped) was licensed by every seat holding it.
+            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &folded.binding.job_context, &claim) {
+                return verdict;
             }
             if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
@@ -2100,22 +2068,10 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             };
         }
         if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
-            if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
-                return PalwMaterialVerdictV1::Mismatch;
-            }
-            // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
-            // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
-            // job at the block's own draw rule. The id alone let a smaller job through: decode calls
-            // skipped, or a prompt of another length, vouched for by every seat that held it.
-            if let Some(prefill_draw) = claim.attempt_draw
-                && claim.anchor != Hash64::default()
-            {
-                let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
-                    return PalwMaterialVerdictV1::Unverifiable;
-                };
-                if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
-                    return PalwMaterialVerdictV1::Mismatch;
-                }
+            // **The whole job, not only its id** (ADR-0117; SEAT-S1): the same rule as the fold
+            // branch above, `base0_material_job_is_the_claims_v1`.
+            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &decoded.0.job_context, &claim) {
+                return verdict;
             }
             // A capture for some OTHER class of this family is not this backend's to vouch for.
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
@@ -3011,7 +2967,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // **What each role's capture retains — the term the kills were made of**, chosen exactly as
         // the lanes choose their sinks: the attempt folds for a held class and keeps dense tiles
         // otherwise (`execute`); the verdict replay folds (`execute_for_verdict`); a segment replay
-        // keeps the hashes of the window it walks (`replay_segment_opening_v1`).
+        // folds the range it proves (`segment_opening::base0_replay_segment_opening_v2`: its edges
+        // and one digest a block), still priced as the window's hashes — an upper bound of it.
         let fold = PalwCaptureRetentionV1::Fold {
             retain_level: crate::fp_capture::palw_base0_sparse_retain_level_for_class_v1(&self.profile, self.step_ladder_cap()),
         };
@@ -3245,8 +3202,7 @@ mod free_prompt_tests {
     /// and the same quanta: 16 GiB or 7 GiB of cache, the same reward. And the court's half: a
     /// capture the `i32` producer retained is resumed by the `i16` seat and by the `i32` one
     /// (`replay_accused_segment_v1`), segment for segment, with the same leaf hashes and the same
-    /// `matches`. Where a segment cannot be resumed at all — a folded retention past the prefill,
-    /// the S1 gap the resource profile prices — both refuse by the same sentence.
+    /// `matches` — the held attempt's fold included, which serves its segments since SEAT-S4.
     #[test]
     fn the_backend_commits_the_same_roots_under_every_runtime_profile() {
         use kaspa_consensus_core::palw_execution_quanta_v1::palw_execution_canonical_work_id_v1;
@@ -3303,42 +3259,32 @@ mod free_prompt_tests {
             assert_eq!(ra.execution_root, a.execution_root, "{name}: and they are the claim's");
 
             // The court's half: the i32 producer's capture, resumed by both seats. A held class's attempt
-            // folds (`a_held_classs_attempt_folds_and_stays_adjudicable`), and a fold serves no S1 opening
-            // — both representations refuse it by the same sentence — so the openings a seat resumes come
-            // from a dense capture of the same job, as a server holding one would serve them.
+            // folds (`a_held_classs_attempt_folds_and_stays_adjudicable`) and serves its S1 opening from
+            // the fold — genesis, proven at its retained level (SEAT-S4); the dense capture of the same
+            // job, as a server holding one would serve it, proves each segment exactly. Every segment of
+            // either resumes under both representations to a match, with the same leaf hashes.
             let seats = 4u16;
-            let mut resumed = 0usize;
             let folds = kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&profile);
-            let segment_capture = if folds {
-                let x = compact.replay_accused_segment_v1(&a.material, seats, 0, &job, &prompt).expect_err("a fold serves no S1 opening");
-                let y = oracle.replay_accused_segment_v1(&a.material, seats, 0, &job, &prompt).expect_err("under either representation");
-                assert_eq!(x, y);
-                assert!(x.contains("folded capture"), "{name}: {x}");
+            let mut captures = vec![a.material.clone()];
+            if folds {
                 let dense = a16_execute_for_attempt_capped_v1(&artifact, &profile, oracle.plan.as_ref(), &job, &prompt, oracle.step_ladder_cap())
                     .expect("the dense capture of the same job");
                 assert_eq!(dense.execution_root, a.execution_root, "{name}: the dense capture is the same execution");
-                crate::produce::base0_material_encode_v1(&dense).expect("encodes")
-            } else {
-                a.material.clone()
-            };
-            for segment in 0..palw_segment_count_v2(seats) {
-                let by_compact = compact.replay_accused_segment_v1(&segment_capture, seats, segment, &job, &prompt);
-                let by_oracle = oracle.replay_accused_segment_v1(&segment_capture, seats, segment, &job, &prompt);
-                match (by_compact, by_oracle) {
-                    (Ok(x), Ok(y)) => {
-                        assert!(x.matches && y.matches, "{name} segment {segment}: the resumed segment matches the capture");
-                        assert_eq!(x.leaf_hashes, y.leaf_hashes, "{name} segment {segment}: the same leaf hashes");
-                        assert_eq!(x.window, y.window);
-                        resumed += 1;
-                    }
-                    (Err(x), Err(y)) => {
-                        assert_eq!(x, y, "{name} segment {segment}: the same refusal");
-                        assert!(x.contains("replay whole"), "{name} segment {segment}: only the folded retention's known gap refuses: {x}");
-                    }
-                    (x, y) => panic!("{name} segment {segment}: the two representations disagree about resumability: {x:?} vs {y:?}"),
+                captures.push(crate::produce::base0_material_encode_v1(&dense).expect("encodes"));
+            }
+            let mut resumed = 0usize;
+            for segment_capture in &captures {
+                for segment in 0..palw_segment_count_v2(seats) {
+                    let x = compact.replay_accused_segment_v1(segment_capture, seats, segment, &job, &prompt);
+                    let y = oracle.replay_accused_segment_v1(segment_capture, seats, segment, &job, &prompt);
+                    let (x, y) = (x.unwrap_or_else(|e| panic!("{name} segment {segment}: {e}")), y.expect("and under i32"));
+                    assert!(x.matches && y.matches, "{name} segment {segment}: the resumed segment matches the capture");
+                    assert_eq!(x.leaf_hashes, y.leaf_hashes, "{name} segment {segment}: the same leaf hashes");
+                    assert_eq!(x.window, y.window);
+                    resumed += 1;
                 }
             }
-            assert!(resumed >= 1, "{name}: at least the genesis segment resumes");
+            assert!(resumed >= palw_segment_count_v2(seats) as usize, "{name}: every segment resumes");
         }
     }
 
@@ -3396,6 +3342,7 @@ mod free_prompt_tests {
             trace_root: folded.trace_root,
             anchor: job.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");
@@ -3490,21 +3437,29 @@ mod free_prompt_tests {
         let capture = crate::produce::base0_material_encode_v1(&dense).expect("encodes");
         let leaf_count = crate::produce::base0_material_decode_v1(&capture).expect("decodes").0.step_leaf_count;
 
-        // (a) Every genesis segment stops at its own end.
+        // (a) Every genesis segment stops at its own end. The seat's claim is the producer's roots.
+        let claim_of = |segment_index: u16| kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1 {
+            execution_root: folded.execution_root,
+            trace_root: folded.trace_root,
+            seat_count: seats,
+            segment_index,
+        };
         let mut genesis_replays = Vec::new();
         for segment in 0..k {
             let (resume, end) = palw_role_rows_v1(&profile, &job, leaf_count, PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: segment })
                 .expect("the derivation names the segment");
-            let opening = producer.open_segment_checkpoint_v1(&capture, seats, segment).expect("a folded retention serves genesis");
-            let opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(&opening).expect("decodes");
-            assert!(opened.chunks.is_empty(), "segment {segment}: the folded retention carries no checkpoint");
+            let opening =
+                producer.open_segment_checkpoint_v1(&capture, seats, segment).expect("a dense retention serves its segments");
+            let opened = crate::segment_opening::Base0SegmentOpeningV2::decode_v2(&opening).expect("decodes");
+            assert!(opened.anchor.is_none(), "segment {segment}: a held class's retention carries no checkpoint state");
             for backend in &backends {
-                let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &opening).expect("replays");
+                let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &opening, claim_of(segment)).expect("replays");
                 assert!(replay.matches, "segment {segment}: the seat's hashes are the capture's");
                 assert_eq!(u64::from(replay.calls_replayed), end, "segment {segment}: a genesis replay runs steps 1..=end_rows ({end})");
                 assert_eq!(resume, if segment == 0 { 0 } else { resume }, "the derivation's resume point is the segment's first position");
             }
-            genesis_replays.push(backends[0].replay_segment_from_checkpoint_v1(&job, &prompt, &opening).expect("replays"));
+            genesis_replays
+                .push(backends[0].replay_segment_from_checkpoint_v1(&job, &prompt, &opening, claim_of(segment)).expect("replays"));
         }
         assert!(
             u64::from(genesis_replays[0].calls_replayed) < u64::from(prefill),
@@ -3527,14 +3482,35 @@ mod free_prompt_tests {
         }
         let chunks = crate::legs::base0_checkpoint_chunks_at_v1(&profile, &job, a as u32, |entry| reference.state_chunk_bytes_v1(entry))
             .expect("the checkpoint at a rows chunks");
-        let genesis_opening = producer.open_segment_checkpoint_v1(&capture, seats, segment).expect("genesis");
-        let mut opened = crate::produce::Base0SegmentCheckpointOpeningV1::decode_v1(&genesis_opening).expect("decodes");
-        opened.covered_decode_call = a as u32;
-        opened.chunks = chunks;
-        let resuming = opened.encode_v1().expect("encodes");
+        // The checkpoint the claim COMMITS at `a` rows — its leaf and its opening against the leg, read
+        // off the producer's fold (the leg's leaves are what a held retention keeps) — with the state.
+        let dense_retention = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes");
+        let crate::produce::Base0RetentionV1::Folded(fold) =
+            crate::produce::base0_material_decode_any_v1(&folded.material).expect("decodes")
+        else {
+            panic!("a held attempt retains the fold")
+        };
+        let anchor_at = |covered: u32, chunks: Vec<Vec<u8>>| {
+            let mut anchor =
+                crate::fp_interval::base0_checkpoint_operands_v1(dense_retention.binding(), &[], &fold.checkpoint_leaves, covered)
+                    .expect("the leg commits a checkpoint at every position");
+            anchor.chunks = chunks;
+            anchor
+        };
+        let resuming = crate::segment_opening::base0_segment_opening_v2(
+            &dense_retention,
+            seats,
+            segment,
+            crate::segment_opening::Base0SegmentAnchorV1::Given(anchor_at(a as u32, chunks)),
+            Some(&profile),
+            producer.step_ladder_cap(),
+        )
+        .expect("the producer opens the segment at the committed checkpoint")
+        .encode_v2()
+        .expect("encodes");
         let whole = &genesis_replays[segment as usize];
         for backend in &backends {
-            let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &resuming).expect("resumes");
+            let replay = backend.replay_segment_from_checkpoint_v1(&job, &prompt, &resuming, claim_of(segment)).expect("resumes");
             assert!(replay.matches, "{}: the resumed segment attests the capture's hashes", backend.runtime_profile_v1().unwrap().name());
             assert_eq!(u64::from(replay.calls_replayed), b - a, "the seat re-executed exactly [a, b)");
             assert_eq!(
@@ -3545,10 +3521,27 @@ mod free_prompt_tests {
             assert!(replay.leaf_hashes.len() < whole.leaf_hashes.len(), "and fewer leaves were recomputed to get them");
             assert!(replay.leaf_hashes[0].0 > whole.leaf_hashes[0].0, "nothing before the segment's start was re-executed");
         }
-        // A checkpoint past the segment's end is a named refusal, not a silent empty window.
-        opened.covered_decode_call = b as u32 + 1;
-        let past = opened.encode_v1().expect("encodes");
-        assert!(backends[1].replay_segment_from_checkpoint_v1(&job, &prompt, &past).is_err());
+        // The held map's state authenticates the anchor (SEAT-S4): one flipped byte of the served
+        // rows is not the committed checkpoint's state, and nothing is replayed from it.
+        let mut forged = crate::segment_opening::Base0SegmentOpeningV2::decode_v2(&resuming).expect("decodes");
+        forged.anchor.as_mut().expect("resumed").chunks[0][0] ^= 1;
+        assert_eq!(
+            backends[0].replay_segment_from_checkpoint_v1(&job, &prompt, &forged.encode_v2().unwrap(), claim_of(segment)).err(),
+            Some(crate::segment_opening::Base0SegmentRefusalV1::AnchorNotCommitted.to_string()),
+        );
+        // A committed checkpoint past the segment's start — its own state, its own opening — is a
+        // named refusal, not a silent empty window.
+        for (position, token) in prompt.iter().enumerate().take(b as usize + 1).skip(a as usize) {
+            engine.forward_token_planned(&plan, &mut reference, *token, position).expect("walks");
+        }
+        let past_chunks =
+            crate::legs::base0_checkpoint_chunks_at_v1(&profile, &job, b as u32 + 1, |entry| reference.state_chunk_bytes_v1(entry))
+                .expect("the checkpoint past the segment chunks");
+        let mut opened = crate::segment_opening::Base0SegmentOpeningV2::decode_v2(&resuming).expect("decodes");
+        opened.anchor = Some(anchor_at(b as u32 + 1, past_chunks));
+        let past = opened.encode_v2().expect("encodes");
+        let refused = backends[1].replay_segment_from_checkpoint_v1(&job, &prompt, &past, claim_of(segment)).expect_err("refused");
+        assert_eq!(refused, crate::segment_opening::Base0SegmentRefusalV1::AnchorPastTheRange.to_string());
     }
 
     #[test]
@@ -3719,6 +3712,7 @@ mod free_prompt_tests {
             trace_root: outcome.trace_root,
             anchor: Hash64::from_u64_word(0xA16C0117),
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(
             backend.verify_material(&outcome.material, claim),
@@ -3924,6 +3918,7 @@ mod free_prompt_tests {
                     trace_root: outcome.trace_root,
                     anchor: Hash64::from_u64_word(0xE95),
                     attempt_draw: None,
+                    output_root: None,
                 }
             ),
             kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
@@ -4040,6 +4035,7 @@ mod free_prompt_tests {
             trace_root: dense.trace_root,
             anchor: ctx.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
@@ -5153,6 +5149,7 @@ mod free_prompt_tests {
                 trace_root: outcome.trace_root,
                 anchor: job.job_id,
                 attempt_draw: None,
+                output_root: None,
             };
             let annexed = backend.open_fp_interval_with_close(&outcome.material, 0, &ids, &[leaf]).expect("the annex");
             let generated = backend.fp_committed_output_ids(&outcome.material).expect("the answer's ids");
@@ -5215,6 +5212,7 @@ mod free_prompt_tests {
             trace_root: o.trace_root,
             anchor: job.job_id,
             attempt_draw: None,
+            output_root: None,
         };
         let leaves = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().step_leaf_count;
         let opened = backend.open_fp_interval(&honest.material, 0, &ids).expect("interval 0 opens");
@@ -5733,6 +5731,7 @@ mod held_real_row_probe {
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         let count = honest.fp_interval_count(&capture).expect("a held capture has intervals");
         assert_eq!(Some(count), honest.fp_interval_count_for(positions, decode), "the executor's count is the chain's");
@@ -5811,6 +5810,7 @@ mod held_real_row_probe {
             trace_root: lying.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         assert_ne!(lying_claim.execution_root, claim.execution_root, "the lie is committed");
         let t = std::time::Instant::now();
@@ -5979,6 +5979,7 @@ mod held_real_row_probe {
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         let mid = honest.fp_interval_count(&capture).expect("intervals") / 2;
         let opening = honest.open_fp_interval(&capture, mid, &ids).expect("the interval opens");
@@ -6016,6 +6017,7 @@ mod held_real_row_probe {
             trace_root: lying.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         let lie = liar.open_fp_interval(&lying_capture, mid, &ids).expect("the liar serves its interval");
         let verdict = honest.verify_fp_interval_opening(&lie, lying_claim, mid, &ids, leaves);
