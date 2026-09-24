@@ -191,6 +191,18 @@ pub enum TxRuleError {
     #[error("transaction output #{0} is a model-market sink before the market's activation (daa {1})")]
     ModelSinkBeforeMarketActivation(usize, u64),
 
+    /// **ADR-0152-adjacent (Activation Pool; the review's A8): an activation sink nothing binds.** On
+    /// a ruleset that declares the pool, every `OP_RETURN "MSKACT01" <class>` output must be the one
+    /// its lifecycle carrier's `ActivationPoolFunded` names, with its value and its class — or the
+    /// transaction, and a block carrying it, is invalid: an activation sink can never burn silently.
+    #[error("transaction output #{0} is an unbound activation sink: {1}")]
+    ActivationSinkUnbound(usize, &'static str),
+
+    /// ADR-0152-adjacent (Activation Pool): the height-indexed half — an activation sink below the
+    /// pool's activation (the model sink's M-9 pair).
+    #[error("transaction output #{0} is an activation sink before the pool's activation (daa {1})")]
+    ActivationSinkBeforePoolActivation(usize, u64),
+
     /// kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): a transaction spends a known
     /// non-releasable bond's locked output-0 ({0}). Above the
     /// `bond_spend_gate_mergeset_activation_daa_score` fence the per-tx UTXO validation rejects such a

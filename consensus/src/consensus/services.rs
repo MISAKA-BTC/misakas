@@ -192,7 +192,10 @@ impl ConsensusServices {
             params.palw_held_context_fence(),
         )
         // ADR-0125: the lane's payee outputs widen the coinbase cap where the lane is configured.
-        .with_round_lane_declared(params.palw_execution_lane_fence().is_some());
+        .with_round_lane_declared(params.palw_execution_lane_fence().is_some())
+        // ADR-0152-adjacent (Activation Pool): the activation sink's two doors, where the ruleset
+        // declares the pool (testnet-12 alone).
+        .with_activation_pool_fence(params.palw_activation_pool_fence().map(|pool| pool.activation));
 
         let pruning_point_manager = PruningPointManager::new(
             params.pruning_depth(),

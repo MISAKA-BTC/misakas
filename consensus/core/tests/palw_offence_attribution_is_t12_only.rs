@@ -127,6 +127,9 @@ fn the_fence_moves_testnet12s_fingerprint_and_nothing_else_did() {
     let t12 = palw_t12_shipped_params();
     let mut without = t12.clone();
     without.palw_offence_attribution = None;
+    // ADR-0152-adjacent: the Activation Pool landed after this pin was taken; taken away as well,
+    // and `palw_activation_pool_is_t12_only` pins what it moves.
+    without.palw_activation_pool = None;
     let before = ids(&without);
     println!("testnet-12 without the fence: params {} identity {} schedule {}", before.0, before.1, before.2);
     println!("testnet-12 with the fence:    params {} identity {} schedule {}", ids(&t12).0, ids(&t12).1, ids(&t12).2);

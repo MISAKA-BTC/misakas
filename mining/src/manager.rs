@@ -113,6 +113,10 @@ impl MiningManager {
         // market? The daemon passes `params.palw_model_market.is_some()`; the test path leaves the
         // base-config `false`, so the mempool's sink carve-outs are inert wherever the market is.
         model_sink_relay_allowed: bool,
+        // ADR-0152-adjacent (Activation Pool): does this network declare the pool? The daemon passes
+        // `params.palw_activation_pool_fence().is_some()`; `false` keeps the activation sink out of
+        // relay, as consensus keeps it out of every other network's blocks.
+        activation_sink_relay_allowed: bool,
         // kaspa-pq EVM Lane v0.4 (§16): the miner's EVM coinbase (None = zero).
         evm_fee_recipient: Option<kaspa_consensus_core::evm::EvmAddress>,
         // kaspa-pq DNS-finality: local attestation mempool/mining policy (expiry, dedup, recent-epoch
@@ -124,6 +128,7 @@ impl MiningManager {
             Config::build_default(target_time_per_block, relay_non_std_transactions, max_block_mass).apply_ram_scale(ram_scale);
         config.pq_only = pq_only;
         config.model_sink_relay_allowed = model_sink_relay_allowed;
+        config.activation_sink_relay_allowed = activation_sink_relay_allowed;
         config.attestation_policy = attestation_policy;
         // kaspa-pq: the production node charges ≈100× a Kaspa transaction's fee (the ×10 relay rate
         // on top of the ~10× ML-DSA compute mass) to reconcile the ~72×-larger post-quantum

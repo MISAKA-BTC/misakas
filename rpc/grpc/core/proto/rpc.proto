@@ -2760,3 +2760,46 @@ message GetPalwVestingResponseMessage {
   optional uint64 lockLiveLastExpiryDaa = 41;
   RPCError error = 1000;
 }
+
+// ADR-0152-adjacent (user decision 2026-09-25): one class's Activation Pool (op 200).
+message GetPalwActivationPoolRequestMessage {
+  string classId = 1;
+}
+
+message GetPalwActivationPoolResponseMessage {
+  bool available = 1;
+  bool poolArmed = 2;
+  uint64 tipDaa = 3;
+  bool classFound = 4;
+  string classId = 5;
+  string classStatus = 6;
+  string lifecycle = 7;
+  bool hasPool = 8;
+  uint64 prepSompi = 9;
+  uint64 bonusSompi = 10;
+  uint64 fundedSompi = 11;
+  uint64 paidSompi = 12;
+  uint64 withheldSompi = 13;
+  uint64 openedDaa = 14;
+  repeated string prepPaid = 15;
+  repeated string bonusPaid = 16;
+  repeated string probeCredited = 17;
+  string registrantOperator = 18;
+  uint64 prepRewardNowSompi = 19;
+  uint64 prepCapNowSompi = 20;
+  uint64 nextAuditSpan = 21;
+  uint64 spanDaa = 22;
+  string sinkScript = 23;
+  uint64 minTopupSompi = 24;
+  uint64 prepBaseSompi = 25;
+  uint32 prepSharePermille = 26;
+  uint32 bonusSharePermille = 27;
+  uint64 rampDaa = 28;
+  uint32 prepPayeeCap = 29;
+  uint32 bonusPayeeCap = 30;
+  uint64 totalFundedSompi = 31;
+  uint64 totalPaidSompi = 32;
+  uint64 totalWithheldSompi = 33;
+  uint64 totalAvailableSompi = 34;
+  RPCError error = 1000;
+}

@@ -16091,10 +16091,8 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // and a per-class pool pays preparation and activation out of sink-bound top-ups. Genesis-only;
     // its three prerequisites are armed above or by pass 2's walk. The terms are the user's
     // illustrative scale, to be tuned.
-    params.palw_activation_pool = Some(PalwActivationPoolParamsV1 {
-        activation: at,
-        terms: crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1,
-    });
+    params.palw_activation_pool =
+        Some(PalwActivationPoolParamsV1 { activation: at, terms: crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1 });
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's

@@ -5667,6 +5667,28 @@ pub enum PalwConsensusObjectV2 {
         operand_openings: Vec<crate::palw_artifact::PalwArtifactOpeningV1>,
         signature: Vec<u8>,
     },
+    // ---- ADR-0152-adjacent: the Activation Pool (user decision 2026-09-25): tag 58, the next free
+    // after A-held's 57. ----
+    /// **A top-up of a class's Activation Pool** (tag 58): `amount` sompi its carrier paid into the
+    /// output at `sink_index`, whose script is `OP_RETURN OP_DATA8 "MSKACT01" OP_DATA64 <class_id>`
+    /// ([`crate::palw_activation_pool_v1::palw_activation_sink_spk_v1`]).
+    ///
+    /// **Unsigned: the sink is the proof.** The value is read off the carrier and never off the
+    /// object alone — the extraction walk skips an object whose named output is not that sink with
+    /// that value (`palw_activation_pool_binds_its_carrier_v1`), and a block carrying an activation
+    /// sink no such object binds is INVALID (the review's A8,
+    /// [`crate::palw_activation_pool_v1::palw_activation_sink_binding_refusal_v1`]), so no activation
+    /// sink ever burns silently. Anyone may send one — a sponsor, the class's own registrant — and it
+    /// confers no right: a top-up is a donation, never refunded once folded. Past
+    /// `Params::palw_activation_pool` only; the fold refuses it below the fence, for a class the
+    /// state does not hold, for a Frozen class, and under the terms' least top-up — and a refused
+    /// carrier's MSK is paid back through the P-B1 route (`PalwCarrierRefundV1`), counted against the
+    /// payout queue's ceiling.
+    ActivationPoolFunded {
+        class_id: Hash64,
+        amount: u64,
+        sink_index: u32,
+    },
 }
 
 /// **The name of a v22-skeleton object (ADR-0152 v3.1 §6 row 24, tags 53–56)**, or `None` for
@@ -7540,6 +7562,11 @@ pub enum PalwStateV2Error {
     HeldSubRootsDoNotRoot { session: Hash64, folded: Hash64, committed: Hash64 },
     #[error("claim {claim} is under a court session and this accusation may not open another: {why} (ADR-0152 §4-ter C3)")]
     HeldDissectionFurtherSessionRefused { claim: Hash64, why: &'static str },
+    // ---- ADR-0152-adjacent: the Activation Pool (user decision 2026-09-25) ----
+    #[error("the Activation Pool is not armed on this network (Params::palw_activation_pool)")]
+    ActivationPoolDormant,
+    #[error("a top-up of class {class}'s Activation Pool adds {amount} sompi, below the least top-up of {min}")]
+    ActivationPoolTopUpBelowMinimum { class: Hash64, amount: u64, min: u64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -7930,6 +7957,17 @@ pub struct PalwChainStateV2 {
     /// Row 15 (DA-2, M3): each accused claim's court record, from its first session until the claim
     /// record retires.
     da_claims: BTreeMap<Hash64, crate::palw_da_rcore_v1::PalwDaClaimV1>,
+    // ---- ADR-0152-adjacent: the Activation Pool (user decision 2026-09-25) ----
+    //
+    // Primary data in ONE Some-only root block after R-core+'s (`activation_pool/v1`) and ONE
+    // carriage tail (`0xB5`), written only when a row exists or a counter is non-zero — so a state
+    // without a pool (every state of every network but testnet-12, and testnet-12's genesis) roots
+    // and carries exactly as before.
+    /// One row per class with a pool, by class id; opened at a bought registration or the first
+    /// top-up, never removed.
+    activation_pools: BTreeMap<Hash64, crate::palw_activation_pool_v1::PalwActivationPoolV1>,
+    /// The sums of the rows' five sompi fields (I2), moved only by the row writer.
+    activation_pool_counters: crate::palw_activation_pool_v1::PalwActivationPoolCountersV1,
 
     // ---- indices: rebuildable, never serialized, never hashed ----
     /// `(deadline_daa, claim)` — the sweep queue. A claim has at most one live deadline.
@@ -8072,6 +8110,8 @@ impl PalwChainStateV2 {
             vesting_counters: crate::palw_vesting_v1::PalwVestingCountersV1::default(),
             da_sessions: BTreeMap::new(),
             da_claims: BTreeMap::new(),
+            activation_pools: BTreeMap::new(),
+            activation_pool_counters: Default::default(),
             deadlines: BTreeSet::new(),
             unresolved: BTreeSet::new(),
             work_ids: BTreeMap::new(),
@@ -9713,6 +9753,29 @@ impl PalwChainStateV2 {
         self.da_claims.get(claim_id)
     }
 
+    /// **ADR-0152-adjacent: a class's Activation Pool**, if it has one.
+    pub fn activation_pool(&self, class_id: &Hash64) -> Option<&crate::palw_activation_pool_v1::PalwActivationPoolV1> {
+        self.activation_pools.get(class_id)
+    }
+
+    /// Every Activation Pool, by class id.
+    pub fn activation_pools_iter(
+        &self,
+    ) -> impl Iterator<Item = (&Hash64, &crate::palw_activation_pool_v1::PalwActivationPoolV1)> + '_ {
+        self.activation_pools.iter()
+    }
+
+    /// The Activation Pool counters (the sums of every row, I2).
+    pub fn activation_pool_counters(&self) -> crate::palw_activation_pool_v1::PalwActivationPoolCountersV1 {
+        self.activation_pool_counters
+    }
+
+    /// **Does this state hold any Activation Pool data?** The one guard of the `activation_pool/v1`
+    /// root block and the `0xB5` carriage tail.
+    fn has_activation_pool_data(&self) -> bool {
+        !self.activation_pools.is_empty() || !self.activation_pool_counters.is_zero()
+    }
+
     /// The one deadline `claim_id` holds in the sweep queue, if any (DL-1: none while a seat session
     /// pauses it). A scan of the index — a read for tests and RPCs, never a consensus path.
     pub fn deadline_of(&self, claim_id: &Hash64) -> Option<u64> {
@@ -9960,6 +10023,14 @@ impl PalwChainStateV2 {
             // M3 (DA-2, §6 rows 14–15), appended in landing order.
             state.update(collection_root(b"da_sessions", &self.da_sessions).as_byte_slice());
             state.update(collection_root(b"da_claims", &self.da_claims).as_byte_slice());
+        }
+        // **ADR-0152-adjacent: the Activation Pool, ONE Some-only block after R-core+'s** — hashed only
+        // when a row exists or a counter is non-zero, so every state without a pool (every network
+        // but testnet-12, and testnet-12's genesis) roots exactly as before; once present, both items.
+        if self.has_activation_pool_data() {
+            state.update(b"activation_pool/v1");
+            state.update(collection_root(b"activation_pools", &self.activation_pools).as_byte_slice());
+            state.update(&borsh::to_vec(&self.activation_pool_counters).expect("PalwActivationPoolCountersV1 is borsh-serializable"));
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -10455,6 +10526,8 @@ impl PalwChainStateV2 {
             return Err(PalwStateV2Error::CarriageInconsistent("DA indexes differ from the DA sessions and records".into()));
         }
         self.assert_da_consistency_v1(params)?;
+        // ADR-0152-adjacent: the Activation Pool's I1–I4.
+        self.assert_activation_pool_consistency_v1()?;
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
@@ -10579,6 +10652,47 @@ impl PalwChainStateV2 {
                 )));
             }
             let _ = side;
+        }
+        Ok(())
+    }
+
+    /// **ADR-0152-adjacent: the Activation Pool's invariants** — what a carriage somebody else wrote
+    /// must satisfy before it is believed:
+    ///
+    /// * **I1** every row is balanced: `funded == prep + bonus + paid + withheld`;
+    /// * **I2** the counters are the sums of the rows (and so balanced too);
+    /// * **I3** the three operator lists are strictly increasing and within the structural caps;
+    /// * **I4** a row names a class the state holds.
+    ///
+    /// Empty on every network but testnet-12, where every check is a walk of the pools alone.
+    pub(crate) fn assert_activation_pool_consistency_v1(&self) -> Result<(), PalwStateV2Error> {
+        use crate::palw_activation_pool_v1::{
+            PALW_ACTIVATION_PAYEE_CAP_MAX_V1, PALW_ACTIVATION_PROBE_CREDITED_MAX_V1, PalwActivationPoolCountersV1,
+            palw_sorted_unique_v1,
+        };
+        let bad = |why: String| Err(PalwStateV2Error::CarriageInconsistent(why));
+        for (class_id, row) in &self.activation_pools {
+            if !self.classes.contains_key(class_id) {
+                return bad(format!("an activation pool names class {class_id}, which the state does not hold (I4)"));
+            }
+            if !row.is_balanced() {
+                return bad(format!("class {class_id}'s activation pool is not balanced: {row:?} (I1)"));
+            }
+            for (name, list, cap) in [
+                ("prep_paid", &row.prep_paid, PALW_ACTIVATION_PAYEE_CAP_MAX_V1),
+                ("bonus_paid", &row.bonus_paid, PALW_ACTIVATION_PAYEE_CAP_MAX_V1),
+                ("probe_credited", &row.probe_credited, PALW_ACTIVATION_PROBE_CREDITED_MAX_V1),
+            ] {
+                if !palw_sorted_unique_v1(list) || list.len() > cap {
+                    return bad(format!("class {class_id}'s activation pool {name} is not sorted, unique and within {cap} (I3)"));
+                }
+            }
+        }
+        if PalwActivationPoolCountersV1::of_rows(self.activation_pools.values()) != self.activation_pool_counters {
+            return bad("the activation pool counters differ from the sums of the rows (I2)".into());
+        }
+        if !self.activation_pool_counters.is_balanced() {
+            return bad("the activation pool counters are not balanced (I1)".into());
         }
         Ok(())
     }
@@ -11307,6 +11421,19 @@ pub enum PalwDeltaEntryV2 {
         old: Option<crate::palw_da_rcore_v1::PalwDaClaimV1>,
         new: Option<crate::palw_da_rcore_v1::PalwDaClaimV1>,
     },
+    // ---- ADR-0152-adjacent: the Activation Pool (user decision 2026-09-25), appended from 76 ----
+    /// A class's pool was opened, funded, paid from or withheld (76). Rows are never removed, so
+    /// `new` is always `Some` on the fold's own writes; revert removes a row the entry opened.
+    ActivationPool {
+        key: Hash64,
+        old: Option<crate::palw_activation_pool_v1::PalwActivationPoolV1>,
+        new: Option<crate::palw_activation_pool_v1::PalwActivationPoolV1>,
+    },
+    /// The pool counters moved with a row (77).
+    ActivationPoolCounters {
+        old: crate::palw_activation_pool_v1::PalwActivationPoolCountersV1,
+        new: crate::palw_activation_pool_v1::PalwActivationPoolCountersV1,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -11350,13 +11477,19 @@ pub fn palw_escrow_destroyed_by_delta_v2(delta: &PalwStateDeltaV2) -> u64 {
         .fold(0u64, |acc, v| acc.saturating_add(v))
 }
 
-
 #[cfg(test)]
 thread_local! {
     /// **R2's measure (tests only): how many times the fold asked the readiness predicate** — the
     /// unit the span step's cost is counted in (one ask per bond per class the step reads), so a
     /// test can say "does not scale with Candidate rows" without timing anything.
     pub(crate) static PALW_READY_PREDICATE_EVALS_FOR_TESTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// **An admission audit that sat** (ADR-0147): its verdict, and every drawn operator with its
+/// population bonds in key order, in draw order.
+struct PalwAdmissionJuryV1 {
+    seated: bool,
+    drawn: Vec<(Hash64, Vec<PalwBondKeyV2>)>,
 }
 
 /// **The fold's read-only inputs — the parent state, the params and the block's extras — for the
@@ -12607,6 +12740,9 @@ pub fn palw_model_carrier_payout_rows_v1(tx: &crate::tx::Transaction) -> Option<
         PalwConsensusObjectV2::ModelBuy { .. } => Some(TransitionBuilder::model_payout_rows_would_add(false, false).max(1)),
         PalwConsensusObjectV2::ModelSeed { .. } => Some(TransitionBuilder::model_payout_rows_would_add(false, true).max(1)),
         PalwConsensusObjectV2::ModelSell { .. } => Some(TransitionBuilder::model_payout_rows_would_add(true, false)),
+        // ADR-0152-adjacent (Activation Pool): an accepted top-up writes no payout row; a refused one
+        // is paid back through one (P-B1), so a top-up carrier takes one row of the budget.
+        PalwConsensusObjectV2::ActivationPoolFunded { .. } => Some(1),
         _ => None,
     }
 }
@@ -12680,6 +12816,13 @@ pub fn palw_model_market_carrier_refusal_v1(
         return None;
     }
     let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
+    // ADR-0152-adjacent (Activation Pool): the fold's own refusal of a top-up, asked before it is
+    // relayed or mined — a refused top-up is paid back (P-B1), but a node need not mine the round trip.
+    if let PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, .. } = &payload.object
+        && payload.version == PALW_LIFECYCLE_TX_VERSION_V2
+    {
+        return palw_activation_pool_admits_v1(state, &extras(), class_id, *amount).err();
+    }
     let line_id = match payload.object {
         PalwConsensusObjectV2::ModelSeed { line_id, .. } | PalwConsensusObjectV2::ModelBuy { line_id, .. }
             if payload.version == PALW_LIFECYCLE_TX_VERSION_V2 =>
@@ -14166,6 +14309,48 @@ impl<'a> TransitionBuilder<'a> {
         }
         self.reindex_da_accusers(&key.0, before);
         self.entries.push(PalwDeltaEntryV2::DaSession { key, old, new });
+    }
+
+    /// **ADR-0152-adjacent: write one class's Activation Pool row** — the ONE writer of
+    /// `activation_pools` and of its counters, so I2 holds by construction: the row (entry 76) and,
+    /// when a sompi field moved, the counters (entry 77) in the same step. Rows are never removed.
+    fn write_activation_pool(&mut self, key: Hash64, new: crate::palw_activation_pool_v1::PalwActivationPoolV1) {
+        let old = self.state.activation_pools.insert(key, new.clone());
+        if old.as_ref() == Some(&new) {
+            return;
+        }
+        let before = self.state.activation_pool_counters;
+        let after = before.moved(old.as_ref(), &new);
+        self.entries.push(PalwDeltaEntryV2::ActivationPool { key, old, new: Some(new) });
+        if after != before {
+            self.state.activation_pool_counters = after;
+            self.entries.push(PalwDeltaEntryV2::ActivationPoolCounters { old: before, new: after });
+        }
+    }
+
+    /// **ADR-0152-adjacent: one pool payout, accumulated in the payee's pool row** (key prefix
+    /// `[0xFE, 0xFF]`, [`crate::palw_activation_pool_v1::palw_activation_pool_payout_key_v1`]) —
+    /// `add_panel_payout`'s shape: one payee holds one row however many pools pay it.
+    fn add_activation_pool_payout(&mut self, payload: Hash64, amount: u64) -> Result<(), PalwStateV2Error> {
+        if amount == 0 {
+            return Ok(());
+        }
+        let key = crate::palw_activation_pool_v1::palw_activation_pool_payout_key_v1(&payload);
+        let held = self.state.pending_payouts.get(&key).map(|row| row.amount).unwrap_or(0);
+        let total = held.checked_add(amount).ok_or(PalwStateV2Error::Overflow("activation pool payout"))?;
+        self.write_payout(key, Some(PalwPayoutV2 { payload, amount: total }));
+        Ok(())
+    }
+
+    /// Whether the payout queue has room for rows to `payees` that it does not hold yet — the
+    /// existing ceiling ([`PALW_V2_MAX_PENDING_PAYOUTS`]), measured before anything is written.
+    fn activation_pool_payout_room(&self, payees: &[Hash64]) -> bool {
+        let fresh: BTreeSet<Hash64> = payees
+            .iter()
+            .map(crate::palw_activation_pool_v1::palw_activation_pool_payout_key_v1)
+            .filter(|key| !self.state.pending_payouts.contains_key(key))
+            .collect();
+        self.state.pending_payouts.len().saturating_add(fresh.len()) <= PALW_V2_MAX_PENDING_PAYOUTS
     }
 
     /// **M3 (DA-2): write, update or retire one claim's DA record** — the rooted write, its delta
@@ -16969,7 +17154,7 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     /// **ADR-0147: did this `Candidate` class's admission jury sit at this boundary, and does a
-    /// majority of it hold the class?**
+    /// majority of it hold the class?** (`admission_jury_seated` in the observation.)
     ///
     /// Four things make the jury independent of the registrant, and each is a structural fact
     /// rather than an identity comparison:
@@ -16989,13 +17174,20 @@ impl<'a> TransitionBuilder<'a> {
     /// No anchor for the span before — no attempt was admitted in it — is no audit: the class stays
     /// `Candidate` until an audit span that has one. A short jury (fewer operators in the population
     /// than seats) admits nothing. Both are the fail-closed direction.
-    fn admission_jury_seated(
+    ///
+    /// **It returns the jury itself, not only the verdict** (ADR-0152-adjacent: Activation Pool):
+    /// `None` where no jury sat (not an audit span, no anchor for the span before, a short
+    /// population), else the verdict and each drawn operator with its population bonds in key order,
+    /// so the pool's (a) reads the same draw the verdict was taken from and asks its stricter question
+    /// of the same bonds. The verdict is the one it always was, predicate for predicate in the same
+    /// order.
+    fn admission_jury_v1(
         &self,
         class_id: &Hash64,
         ctx: &PalwBlockContextV2,
         span_now: u64,
         fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
-    ) -> bool {
+    ) -> Option<PalwAdmissionJuryV1> {
         use crate::palw_model_registry_v1::{
             palw_admission_audit_due_v1, palw_admission_audit_period_spans_v2, palw_admission_jury_quorum_v1,
             palw_admission_jury_seed_v1,
@@ -17011,11 +17203,9 @@ impl<'a> TransitionBuilder<'a> {
             palw_admission_audit_due_v1(span_now, period)
         };
         if !due {
-            return false;
+            return None;
         }
-        let Some(anchor) = self.state.round_seed_anchor.as_ref().filter(|anchor| anchor.span.saturating_add(1) == span_now) else {
-            return false;
-        };
+        let anchor = self.state.round_seed_anchor.as_ref().filter(|anchor| anchor.span.saturating_add(1) == span_now)?;
         let seed = palw_admission_jury_seed_v1(class_id, span_now, &anchor.block, &anchor.execution_key);
         let cutoff = span_now.saturating_sub(1).saturating_mul(fold.span_daa.max(1));
         let base = self.params.base_class_id;
@@ -17038,17 +17228,223 @@ impl<'a> TransitionBuilder<'a> {
         let seats = fold.globals.seat_count.max(1);
         let jury = crate::palw_panel_v2::palw_admission_jury_v1(&seed, &population, seats);
         if jury.len() < seats as usize {
-            return false;
+            return None;
         }
-        let ready = jury
+        let drawn: Vec<(Hash64, Vec<PalwBondKeyV2>)> = jury
             .iter()
-            .filter(|operator| {
-                population.iter().any(|(key, bond)| {
-                    bond.operator_id == **operator && self.model_registry_seat_is_ready(key, bond, class_id, ctx.daa_score, fold)
+            .map(|operator| {
+                (*operator, population.iter().filter(|(_, bond)| bond.operator_id == *operator).map(|(key, _)| **key).collect())
+            })
+            .collect();
+        let ready = drawn
+            .iter()
+            .filter(|(_, bonds)| {
+                bonds.iter().any(|key| {
+                    self.state
+                        .bonds
+                        .get(key)
+                        .is_some_and(|bond| self.model_registry_seat_is_ready(key, bond, class_id, ctx.daa_score, fold))
                 })
             })
             .count();
-        ready >= palw_admission_jury_quorum_v1(seats) as usize
+        Some(PalwAdmissionJuryV1 { seated: ready >= palw_admission_jury_quorum_v1(seats) as usize, drawn })
+    }
+
+    /// **ADR-0152-adjacent (Activation Pool): one class's pool at its span step** (user decision
+    /// 2026-09-25; the review's §4), past `Params::palw_activation_pool` and only for a class with a
+    /// pool — read after the row's own step, with the state it was in (`before`) and the state it is
+    /// in now (`after`):
+    ///
+    /// * **(a)** at a `Candidate`'s audit, whatever the jury decided ([`Self::pay_activation_prep_v1`]);
+    /// * **`prep` becomes `bonus` once the class is past `Candidate`.** (a) is paid at a Candidate's
+    ///   audit and nowhere else, so a preparation budget outside `Candidate` has no payee left: left
+    ///   in place it would be sponsors' MSK that no rule could ever pay (conserved, and dead). Moved,
+    ///   it waits behind verified service — (b) — which is where the review puts "the bulk of the
+    ///   pay". This is the design's own seating rule (B2, "bonus += prep"), kept because the review's
+    ///   minimal spec keeps (a) Candidate-only; a later top-up of a class past `Candidate` is wholly
+    ///   bonus for the same reason ([`crate::palw_activation_pool_v1::palw_activation_inflow_split_v1`]);
+    /// * **(b)'s run opens when the row ENTERS `Probation`** (from `Prefetching` or `Held`):
+    ///   `probe_credited` restarts, so a re-formation credits the operators of ITS probation;
+    /// * **(b) is paid once the row is `ActiveLimited` or `Active` with credited operators waiting**
+    ///   — at `Probation → ActiveLimited` itself, and at each later span a full queue or an empty
+    ///   bonus deferred it to ([`Self::pay_activation_bonus_v1`]).
+    #[allow(clippy::too_many_arguments)]
+    fn step_activation_pool_v1(
+        &mut self,
+        class_id: &Hash64,
+        ctx: &PalwBlockContextV2,
+        span_now: u64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+        terms: &crate::palw_activation_pool_v1::PalwActivationPoolTermsV1,
+        before: crate::palw_model_registry_v1::PalwModelLifecycleV1,
+        after: crate::palw_model_registry_v1::PalwModelLifecycleV1,
+        jury: Option<&PalwAdmissionJuryV1>,
+    ) {
+        use crate::palw_model_registry_v1::PalwModelLifecycleV1 as L;
+        let Some(mut pool) = self.state.activation_pools.get(class_id).cloned() else { return };
+        let registrant_operator = self
+            .state
+            .classes
+            .get(class_id)
+            .and_then(|record| record.registrant_bond)
+            .and_then(|key| self.state.bonds.get(&key))
+            .map(|bond| bond.operator_id);
+        if matches!(before, L::Candidate)
+            && let Some(jury) = jury
+        {
+            self.pay_activation_prep_v1(class_id, &mut pool, ctx, span_now, fold, terms, jury, registrant_operator);
+        }
+        if !matches!(after, L::Candidate) && pool.prep_sompi > 0 {
+            pool.bonus_sompi = pool.bonus_sompi.saturating_add(pool.prep_sompi);
+            pool.prep_sompi = 0;
+        }
+        if matches!(after, L::Probation { .. }) && !matches!(before, L::Probation { .. }) {
+            pool.probe_credited.clear();
+        }
+        if matches!(after, L::ActiveLimited { .. } | L::Active) && !pool.probe_credited.is_empty() {
+            self.pay_activation_bonus_v1(&mut pool, terms, registrant_operator);
+        }
+        self.write_activation_pool(*class_id, pool);
+    }
+
+    /// **(a), the preparation reward** (the review's §4 with the user's panel-floor decision): at a
+    /// `Candidate`'s own audit, each drawn juror `o` — in draw order — is paid
+    /// `a = min(A_MAX(age), ⌊prep / 10⌋)` once per (class, `o`) iff one of its population bonds, the
+    /// lowest key that qualifies:
+    ///
+    /// * holds collateral of at least the PANEL floor (ten network floors — the bonds a panel can
+    ///   draw, the outsider seat included; the review's C3 and A2-i, the user's decision), by the
+    ///   draw's own predicate (`palw_bond_may_take_work_v2`);
+    /// * has its readiness row proved at span `S − 2` or earlier (review M6: before the seed of the
+    ///   audit existed, so the S−1 anchor's producer cannot feed its own jurors a fresh proof);
+    /// * is READY by the registry's one predicate (fresh, active, the readiness multiple free);
+    ///
+    /// and `o` is not the registrant's operator (the population already excludes it; asked again
+    /// so the rule does not rest on the draw's filter). **Whatever the verdict**: the paid fact is the
+    /// verified preparation, and a quorum that failed pays its prepared jurors exactly what a seated
+    /// one does. At most `seat_count × a` an audit, never past `prep`, never past the payee cap. With
+    /// no room in the payout queue nobody is paid and nobody is marked — the next audit pays.
+    #[allow(clippy::too_many_arguments)]
+    fn pay_activation_prep_v1(
+        &mut self,
+        class_id: &Hash64,
+        pool: &mut crate::palw_activation_pool_v1::PalwActivationPoolV1,
+        ctx: &PalwBlockContextV2,
+        span_now: u64,
+        fold: &crate::palw_model_registry_v1::PalwModelRegistryFoldV1,
+        terms: &crate::palw_activation_pool_v1::PalwActivationPoolTermsV1,
+        jury: &PalwAdmissionJuryV1,
+        registrant_operator: Option<Hash64>,
+    ) {
+        use crate::palw_activation_pool_v1::{palw_activation_prep_reward_v1, palw_sorted_insert_v1};
+        let a = palw_activation_prep_reward_v1(terms, pool.prep_sompi, ctx.daa_score.saturating_sub(pool.opened_daa));
+        let Some(proved_by) = span_now.checked_sub(2) else { return };
+        if a == 0 {
+            return;
+        }
+        let panel_floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_v1(self.params.min_collateral_sompi());
+        let slots = (terms.prep_payee_cap as usize).saturating_sub(pool.prep_paid.len()).min((pool.prep_sompi / a) as usize);
+        let mut payees: Vec<(Hash64, Hash64)> = Vec::new();
+        for (operator, bonds) in &jury.drawn {
+            if payees.len() >= slots {
+                break;
+            }
+            if Some(*operator) == registrant_operator || pool.prep_paid.binary_search(operator).is_ok() {
+                continue;
+            }
+            let qualifying = bonds.iter().find_map(|key| {
+                let bond = self.state.bonds.get(key)?;
+                let proved = self.state.seat_readiness.get(&(*key, *class_id))?.proved_span;
+                (palw_bond_may_take_work_v2(bond, panel_floor)
+                    && proved <= proved_by
+                    && self.model_registry_seat_is_ready(key, bond, class_id, ctx.daa_score, fold))
+                .then_some(bond.payout_payload)
+            });
+            if let Some(payload) = qualifying {
+                payees.push((*operator, payload));
+            }
+        }
+        let payloads: Vec<Hash64> = payees.iter().map(|(_, payload)| *payload).collect();
+        if payees.is_empty() || !self.activation_pool_payout_room(&payloads) {
+            return;
+        }
+        for (operator, payload) in &payees {
+            if self.add_activation_pool_payout(*payload, a).is_err() {
+                return;
+            }
+            palw_sorted_insert_v1(&mut pool.prep_paid, *operator);
+        }
+        let total = a.saturating_mul(payees.len() as u64);
+        pool.prep_sompi -= total;
+        pool.paid_sompi = pool.paid_sompi.saturating_add(total);
+    }
+
+    /// **(b), the activation bonus** (the review's A1 fix): each operator in `probe_credited` that
+    /// is not the registrant's and was never paid (b) for this class — in the order of its earliest
+    /// bond's registration, then its id (a key cannot be ground for a place: the design's order),
+    /// up to the payee cap — is paid `b = ⌊bonus × β / n⌋`. The list is spent when paid (and when it
+    /// can never pay: the cap reached, nobody eligible). Deferred, with the list kept, when `b` is
+    /// zero (a sponsor's later top-up pays these operators) or the payout queue has no room.
+    fn pay_activation_bonus_v1(
+        &mut self,
+        pool: &mut crate::palw_activation_pool_v1::PalwActivationPoolV1,
+        terms: &crate::palw_activation_pool_v1::PalwActivationPoolTermsV1,
+        registrant_operator: Option<Hash64>,
+    ) {
+        use crate::palw_activation_pool_v1::{palw_activation_bonus_reward_v1, palw_sorted_insert_v1};
+        // Deferred without a walk: a bonus that cannot pay even one payee a sompi, or a queue with no
+        // row left at all, pays nobody this span — and this is asked at every span a deferral lasts.
+        if palw_activation_bonus_reward_v1(terms, pool.bonus_sompi, 1) == 0
+            || self.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS
+        {
+            return;
+        }
+        let wanted: BTreeSet<Hash64> = pool
+            .probe_credited
+            .iter()
+            .copied()
+            .filter(|operator| Some(*operator) != registrant_operator && pool.bonus_paid.binary_search(operator).is_err())
+            .collect();
+        let mut first_bond: BTreeMap<Hash64, (u64, PalwBondKeyV2, Hash64)> = BTreeMap::new();
+        if !wanted.is_empty() {
+            for (key, bond) in &self.state.bonds {
+                if !wanted.contains(&bond.operator_id) {
+                    continue;
+                }
+                let candidate = (bond.registered_daa, *key, bond.payout_payload);
+                first_bond
+                    .entry(bond.operator_id)
+                    .and_modify(|held| {
+                        if (candidate.0, candidate.1) < (held.0, held.1) {
+                            *held = candidate;
+                        }
+                    })
+                    .or_insert(candidate);
+            }
+        }
+        let mut payees: Vec<(u64, Hash64, Hash64)> =
+            first_bond.into_iter().map(|(operator, (registered, _, payload))| (registered, operator, payload)).collect();
+        payees.sort();
+        payees.truncate((terms.bonus_payee_cap as usize).saturating_sub(pool.bonus_paid.len()));
+        if payees.is_empty() {
+            pool.probe_credited.clear();
+            return;
+        }
+        let b = palw_activation_bonus_reward_v1(terms, pool.bonus_sompi, payees.len());
+        let payloads: Vec<Hash64> = payees.iter().map(|(_, _, payload)| *payload).collect();
+        if b == 0 || !self.activation_pool_payout_room(&payloads) {
+            return;
+        }
+        for (_, operator, payload) in &payees {
+            if self.add_activation_pool_payout(*payload, b).is_err() {
+                return;
+            }
+            palw_sorted_insert_v1(&mut pool.bonus_paid, *operator);
+        }
+        let total = b.saturating_mul(payees.len() as u64);
+        pool.bonus_sompi -= total;
+        pool.paid_sompi = pool.paid_sompi.saturating_add(total);
+        pool.probe_credited.clear();
     }
 
     /// Claims of a class still in flight (accepted and not terminal): its attempts and — past the
@@ -17152,6 +17548,51 @@ impl<'a> TransitionBuilder<'a> {
             next.probes_failed = next.probes_failed.saturating_add(1);
         }
         self.write_model_lifecycle(claim.class_id, Some(next));
+    }
+
+    /// **ADR-0152-adjacent (Activation Pool), (b)'s tracking: the operators credited on a probe
+    /// `Final`** (the review's A1). While a class's row is in `Probation`, each attempt `Final` of it
+    /// adds the operators of its credited seats — the seats that filed `Valid` in time, the ADR-0147
+    /// outsider included — to its pool's `probe_credited`, sorted, at most `probation_claims ×
+    /// seat_count`. Those are the operators strangers verified serving the class: what (b) pays at
+    /// `Probation → ActiveLimited`, instead of a population the registrant fills itself. Past
+    /// `Params::palw_activation_pool` only, and only for a class with a pool.
+    fn note_activation_probe_credits_v1(&mut self, claim_id: &Hash64, claim: &PalwClaimStateV2) {
+        use crate::palw_activation_pool_v1::{
+            PALW_ACTIVATION_PROBE_CREDITED_MAX_V1, palw_activation_probe_credit_cap_v1, palw_sorted_insert_v1,
+        };
+        if self.extras.activation_pool.is_none() || !matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            return;
+        }
+        if !self
+            .state
+            .model_lifecycles
+            .get(&claim.class_id)
+            .is_some_and(|row| matches!(row.state, crate::palw_model_registry_v1::PalwModelLifecycleV1::Probation { .. }))
+        {
+            return;
+        }
+        let Some(mut pool) = self.state.activation_pools.get(&claim.class_id).cloned() else { return };
+        let Some(fold) = self.model_registry_fold() else { return };
+        let cap = palw_activation_probe_credit_cap_v1(fold.globals.probation_claims as usize, fold.globals.seat_count as usize)
+            .min(PALW_ACTIVATION_PROBE_CREDITED_MAX_V1);
+        let Some(duties) = self.state.panel_duties.get(claim_id) else { return };
+        let credited: Vec<Hash64> = duties
+            .seats
+            .iter()
+            .filter(|(_, at)| **at != 0)
+            .filter_map(|(seat, _)| self.state.bonds.get(seat).map(|bond| bond.operator_id))
+            .collect();
+        let mut changed = false;
+        for operator in credited {
+            if pool.probe_credited.len() >= cap {
+                break;
+            }
+            changed |= palw_sorted_insert_v1(&mut pool.probe_credited, operator);
+        }
+        if changed {
+            self.write_activation_pool(claim.class_id, pool);
+        }
     }
 
     /// **2026-09-24 DoS audit #8: withdraw the probe pass a convicted `Final` was credited.**
@@ -17331,6 +17772,9 @@ impl<'a> TransitionBuilder<'a> {
         );
         for class_id in &rowed {
             let row = self.state.model_lifecycles.get(class_id).cloned().expect("just listed");
+            // ADR-0147: the jury sits only for a row IN `Candidate`, drawn once here — its verdict is
+            // the observation's, and past `palw_activation_pool` the drawn operators are (a)'s.
+            let mut jury: Option<PalwAdmissionJuryV1> = None;
             if r2 && *class_id != base {
                 let parked = matches!(
                     self.state.classes.get(class_id).map(|record| &record.status),
@@ -17410,8 +17854,12 @@ impl<'a> TransitionBuilder<'a> {
                     // only transition it is read by. Drawn just for a row that IS in `Candidate`
                     // — a state nothing writes below the fence — so no other class pays for a
                     // walk of the bond registry at any boundary.
-                    admission_jury_seated: matches!(row.state, PalwModelLifecycleV1::Candidate)
-                        && self.admission_jury_seated(class_id, ctx, span_now, &fold),
+                    admission_jury_seated: {
+                        if matches!(row.state, PalwModelLifecycleV1::Candidate) {
+                            jury = self.admission_jury_v1(class_id, ctx, span_now, &fold);
+                        }
+                        jury.as_ref().is_some_and(|jury| jury.seated)
+                    },
                 };
                 (palw_lifecycle_step_v1(row.state, &obs, &profile, &fold.globals), utilization)
             };
@@ -17435,6 +17883,13 @@ impl<'a> TransitionBuilder<'a> {
             };
             if next != row {
                 self.write_model_lifecycle(*class_id, Some(next));
+            }
+            // ADR-0152-adjacent (Activation Pool): (a) at this Candidate's audit, prep's move once the
+            // class is past Candidate, (b)'s run opened at Probation and paid past it.
+            if let Some(terms) = self.extras.activation_pool
+                && *class_id != base
+            {
+                self.step_activation_pool_v1(class_id, ctx, span_now, &fold, &terms, row.state, state, jury.as_ref());
             }
             if *class_id != base {
                 admissions.push((*class_id, admission_milli));
@@ -19255,6 +19710,8 @@ impl<'a> TransitionBuilder<'a> {
 
     fn finalize_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2, final_daa: u64) -> Result<(), PalwStateV2Error> {
         self.note_model_probe(claim, true);
+        // ADR-0152-adjacent (Activation Pool): (b)'s tracking — before the duty row leaves below.
+        self.note_activation_probe_credits_v1(&id, claim);
         self.note_final_work(&id, claim, final_daa);
         self.release_for_claim(claim, final_daa)?;
         // The weight divergence between the lanes (ADR-0044): an attempt's Final IS its block's
@@ -24445,6 +24902,10 @@ fn apply_object(
         PalwConsensusObjectV2::ModelSeed { line_id, seeder, msk_seed, sink_index: _ } => {
             model_seed_v1(builder, ctx, line_id, seeder, *msk_seed)?;
         }
+        // ADR-0152-adjacent (Activation Pool): a sink-bound top-up.
+        PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, sink_index: _ } => {
+            apply_activation_pool_funded_v1(builder, ctx, class_id, *amount)?;
+        }
         // ---- ADR-0088: the model registry ---------------------------------------------------
         PalwConsensusObjectV2::ModelLineFounded { class_id, name, founder, root, signature: _ } => {
             apply_model_line_founded(builder, ctx, class_id, name, founder, root)?;
@@ -24986,6 +25447,17 @@ fn apply_object(
             {
                 builder.open_model_lifecycle(ctx, *class_id, &carriage.profile, &carriage.canonical, *initial_target);
             }
+            // **ADR-0152-adjacent (Activation Pool): a bought class's pool opens with its listing**, at
+            // a zero balance — the waiting bonus's ramp starts at the registration, so a listing that
+            // has waited offers its preparers more. A re-registration of a Dormant class keeps the pool
+            // it had (the design's B5: the id is the listing).
+            if builder.extras.activation_pool.is_some()
+                && palw_class_registration_buyer_v1(object).is_some()
+                && !builder.state.activation_pools.contains_key(class_id)
+            {
+                builder
+                    .write_activation_pool(*class_id, crate::palw_activation_pool_v1::PalwActivationPoolV1::opened_at(ctx.daa_score));
+            }
         }
         // **ADR-0078 Decision 4: a derivation is committed beside its claim; the thing never
         // rides.** The chain checks what it can check — the claim exists on this chain (any phase
@@ -25257,6 +25729,22 @@ fn apply_object(
             let mut frozen = record;
             frozen.status = PalwClassStatusV2::Frozen { since_daa: ctx.daa_score };
             builder.write_class(*class_id, Some(frozen));
+            // **ADR-0152-adjacent (Activation Pool): a proven-bad class stops attracting preparers.**
+            // Its budgets move to the row's own `withheld` — never into `panel_reserve_sompi`, whose
+            // number is ADR-0124's withheld escrow (the review's C10) — and nothing is refunded: a
+            // top-up is a donation, so there is no race for the exit (A11).
+            if let Some(mut pool) = builder.state.activation_pools.get(class_id).cloned()
+                && (pool.prep_sompi > 0 || pool.bonus_sompi > 0)
+            {
+                pool.withheld_sompi = pool
+                    .withheld_sompi
+                    .checked_add(pool.prep_sompi)
+                    .and_then(|w| w.checked_add(pool.bonus_sompi))
+                    .ok_or(PalwStateV2Error::Overflow("activation pool withheld"))?;
+                pool.prep_sompi = 0;
+                pool.bonus_sompi = 0;
+                builder.write_activation_pool(*class_id, pool);
+            }
         }
         PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats } => {
             if seats.is_empty() {
@@ -28086,6 +28574,55 @@ fn apply_carrier_market_refunds(builder: &mut TransitionBuilder<'_>) -> Result<(
     Ok(())
 }
 
+/// **ADR-0152-adjacent: may `amount` sompi top up `class_id`'s pool at this block?** The fold's
+/// refusal, spelled once for the fold and the mempool (`palw_model_market_carrier_refusal_v1`):
+/// the pool armed, the class held and not Frozen (a Dormant class is funded — its listing waits for
+/// a re-registration, the design's B5), the amount at least the terms' least top-up.
+pub fn palw_activation_pool_admits_v1(
+    state: &PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    class_id: &Hash64,
+    amount: u64,
+) -> Result<crate::palw_activation_pool_v1::PalwActivationPoolTermsV1, PalwStateV2Error> {
+    let terms = extras.activation_pool.ok_or(PalwStateV2Error::ActivationPoolDormant)?;
+    let class = state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
+    if matches!(class.status, PalwClassStatusV2::Frozen { .. }) {
+        return Err(PalwStateV2Error::FrozenClass(*class_id));
+    }
+    if amount < terms.min_topup_sompi {
+        return Err(PalwStateV2Error::ActivationPoolTopUpBelowMinimum { class: *class_id, amount, min: terms.min_topup_sompi });
+    }
+    Ok(terms)
+}
+
+/// **ADR-0152-adjacent: a top-up folds into its class's pool** — opened here if the class has none
+/// yet (a genesis class, which nobody bought), `amount` split by `α` while the class is a `Candidate`
+/// and wholly bonus once it is not ([`crate::palw_activation_pool_v1::palw_activation_inflow_split_v1`]:
+/// `prep` has no payee outside a Candidate's audit).
+fn apply_activation_pool_funded_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    class_id: &Hash64,
+    amount: u64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_activation_pool_v1::{PalwActivationPoolV1, palw_activation_inflow_split_v1};
+    let terms = palw_activation_pool_admits_v1(&builder.state, builder.extras, class_id, amount)?;
+    let candidate = builder
+        .state
+        .model_lifecycles
+        .get(class_id)
+        .is_some_and(|row| matches!(row.state, crate::palw_model_registry_v1::PalwModelLifecycleV1::Candidate));
+    let (prep, bonus) = palw_activation_inflow_split_v1(amount, terms.prep_share_permille, candidate);
+    let mut pool =
+        builder.state.activation_pools.get(class_id).cloned().unwrap_or_else(|| PalwActivationPoolV1::opened_at(ctx.daa_score));
+    let overflow = PalwStateV2Error::Overflow("activation pool top-up");
+    pool.prep_sompi = pool.prep_sompi.checked_add(prep).ok_or(overflow.clone())?;
+    pool.bonus_sompi = pool.bonus_sompi.checked_add(bonus).ok_or(overflow.clone())?;
+    pool.funded_sompi = pool.funded_sompi.checked_add(amount).ok_or(overflow)?;
+    builder.write_activation_pool(*class_id, pool);
+    Ok(())
+}
+
 fn apply_model_line_founded(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -28975,6 +29512,15 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         // M3 (DA-2): the two DA maps, verify-then-install; their indexes are rebuilt after the delta.
         PalwDeltaEntryV2::DaSession { key, old, new } => swap_write!(state.da_sessions, key, old, new),
         PalwDeltaEntryV2::DaClaim { key, old, new } => swap_write!(state.da_claims, key, old, new),
+        // ADR-0152-adjacent: the pool rows and their counters, verify-then-install.
+        PalwDeltaEntryV2::ActivationPool { key, old, new } => swap_write!(state.activation_pools, key, old, new),
+        PalwDeltaEntryV2::ActivationPoolCounters { old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.activation_pool_counters != *expected {
+                return Err(PalwStateV2Error::DeltaMismatch("activation pool counters do not match the delta's expectation"));
+            }
+            state.activation_pool_counters = *install;
+        }
         PalwDeltaEntryV2::Weights { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             if (state.safe_weight, state.bounded_immature) != *expected {
@@ -29368,6 +29914,10 @@ pub struct PalwStateCarriageV2 {
     /// M3 (DA-2, rows 14–15), the same tail, after the vesting items.
     pub da_sessions: BTreeMap<(Hash64, PalwBondKeyV2), crate::palw_da_rcore_v1::PalwDaSessionV1>,
     pub da_claims: BTreeMap<Hash64, crate::palw_da_rcore_v1::PalwDaClaimV1>,
+    /// **ADR-0152-adjacent: the Activation Pool.** A twenty-second tagged tail (`0xB5`), encoded
+    /// only when a row exists or a counter is non-zero (the root block's own guard); both rooted.
+    pub activation_pools: BTreeMap<Hash64, crate::palw_activation_pool_v1::PalwActivationPoolV1>,
+    pub activation_pool_counters: crate::palw_activation_pool_v1::PalwActivationPoolCountersV1,
 }
 
 /// The legacy layout (every field but ADR-0087's), kept as a private twin so the derive spells
@@ -29464,6 +30014,11 @@ const PALW_CARRIAGE_SETTLED_FINALS_TAIL_V1: u8 = 0xB3;
 /// counters, once any is non-empty or non-zero. Rooted. Absent on every chain until the writers
 /// land, so a carriage without R-core+ data is byte-identical to one before this tail existed.
 const PALW_CARRIAGE_RCORE_PLUS_TAIL_V1: u8 = 0xB4;
+/// ADR-0152-adjacent (user decision 2026-09-25): the Activation Pool's rows and counters, once a
+/// row exists or a counter is non-zero. Rooted. Absent on every chain without a pool, so its
+/// carriage is byte-identical to one before this tail existed. `0xB0`/`0xB1` are skipped: never
+/// declared, but never reserved either (the review's M10).
+const PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1: u8 = 0xB5;
 
 /// **ADR-0152 T80: the carriage version a stored snapshot was written at**, read from its first two
 /// bytes (the carriage's leading `version: u16`, little-endian) without decoding anything else — a
@@ -29640,6 +30195,11 @@ impl borsh::BorshSerialize for PalwStateCarriageV2 {
             self.da_sessions.serialize(writer)?;
             self.da_claims.serialize(writer)?;
         }
+        if !self.activation_pools.is_empty() || !self.activation_pool_counters.is_zero() {
+            PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1.serialize(writer)?;
+            self.activation_pools.serialize(writer)?;
+            self.activation_pool_counters.serialize(writer)?;
+        }
         Ok(())
     }
 }
@@ -29745,6 +30305,9 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
         let mut da_sessions = BTreeMap::new();
         let mut da_claims = BTreeMap::new();
         let mut seen_rcore_plus = false;
+        let mut activation_pools = BTreeMap::new();
+        let mut activation_pool_counters = crate::palw_activation_pool_v1::PalwActivationPoolCountersV1::default();
+        let mut seen_activation_pool = false;
         loop {
             let mut tail = [0u8; 1];
             if reader.read(&mut tail)? == 0 {
@@ -29852,6 +30415,12 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
                     da_sessions = BTreeMap::deserialize_reader(reader)?;
                     da_claims = BTreeMap::deserialize_reader(reader)?;
                 }
+                PALW_CARRIAGE_ACTIVATION_POOL_TAIL_V1 if !seen_activation_pool => {
+                    seen_activation_pool = true;
+                    activation_pools = BTreeMap::deserialize_reader(reader)?;
+                    activation_pool_counters =
+                        crate::palw_activation_pool_v1::PalwActivationPoolCountersV1::deserialize_reader(reader)?;
+                }
                 PALW_CARRIAGE_OBJECTIVE_OFFENCE_TAIL_V1 if !seen_objective_offence => {
                     seen_objective_offence = true;
                     consumed_offences = BTreeMap::deserialize_reader(reader)?;
@@ -29945,6 +30514,8 @@ impl borsh::BorshDeserialize for PalwStateCarriageV2 {
             vesting_counters,
             da_sessions,
             da_claims,
+            activation_pools,
+            activation_pool_counters,
         })
     }
 }
@@ -30016,6 +30587,8 @@ impl PalwStateCarriageV2 {
             vesting_counters: state.vesting_counters,
             da_sessions: state.da_sessions.clone(),
             da_claims: state.da_claims.clone(),
+            activation_pools: state.activation_pools.clone(),
+            activation_pool_counters: state.activation_pool_counters,
             model_versions: state.model_versions.clone(),
             model_proposals: state.model_proposals.clone(),
             model_evaluations: state.model_evaluations.clone(),
@@ -30155,6 +30728,8 @@ impl PalwStateCarriageV2 {
             vesting_counters: self.vesting_counters,
             da_sessions: self.da_sessions,
             da_claims: self.da_claims,
+            activation_pools: self.activation_pools,
+            activation_pool_counters: self.activation_pool_counters,
             model_versions: self.model_versions,
             model_proposals: self.model_proposals,
             model_evaluations: self.model_evaluations,
@@ -35121,6 +35696,10 @@ pub(crate) mod tests {
             fn armed_from(height: u64, fold: Option<PalwModelRegistryFoldV1>) -> PalwTransitionExtrasV1 {
                 PalwTransitionExtrasV1 { admission_independence_daa: Some(height), ..extras(fold) }
             }
+
+            // ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): the pool through this
+            // module's contested network.
+            mod activation_pool_v1;
 
             fn fold_step(
                 parent: &PalwChainStateV2,
@@ -46098,6 +46677,10 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::VestingCounters { .. } => "vesting_counters",
                     PalwDeltaEntryV2::DaSession { .. } => "da_session",
                     PalwDeltaEntryV2::DaClaim { .. } => "da_claim",
+                    // ADR-0152-adjacent: the Activation Pool's two (their own round trip is the pool
+                    // suite's).
+                    PalwDeltaEntryV2::ActivationPool { .. } => "activation_pool",
+                    PalwDeltaEntryV2::ActivationPoolCounters { .. } => "activation_pool_counters",
                 });
             }
         }
@@ -46193,6 +46776,15 @@ pub(crate) mod tests {
             ),
             (74, PalwDeltaEntryV2::DaSession { key: (key, bond_key(1)), old: None, new: None }),
             (75, PalwDeltaEntryV2::DaClaim { key, old: None, new: None }),
+            // ADR-0152-adjacent (Activation Pool, 2026-09-25), appended after M3's pair.
+            (76, PalwDeltaEntryV2::ActivationPool { key, old: None, new: None }),
+            (
+                77,
+                PalwDeltaEntryV2::ActivationPoolCounters {
+                    old: crate::palw_activation_pool_v1::PalwActivationPoolCountersV1::default(),
+                    new: crate::palw_activation_pool_v1::PalwActivationPoolCountersV1::default(),
+                },
+            ),
         ];
         for (discriminant, entry) in pinned {
             assert_eq!(borsh::to_vec(&entry).unwrap()[0], discriminant, "{entry:?}");
@@ -46793,6 +47385,9 @@ pub(crate) mod tests {
             vesting_counters: _,
             da_sessions: _,
             da_claims: _,
+            // ADR-0152-adjacent: its own Some-only block, after R-core+'s (the pool suite's root pins).
+            activation_pools: _,
+            activation_pool_counters: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 

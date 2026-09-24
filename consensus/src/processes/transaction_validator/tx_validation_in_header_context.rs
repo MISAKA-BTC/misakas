@@ -50,6 +50,7 @@ impl TransactionValidator {
     ) -> TxResult<()> {
         self.check_tx_is_finalized(tx, lock_time_arg)?;
         self.check_model_sink_outputs_in_context(tx, ctx_daa_score)?;
+        self.check_activation_sink_outputs_in_context(tx, ctx_daa_score)?;
         self.check_palw_fp_work_leaves_in_context(tx, ctx_daa_score)
     }
 
@@ -104,6 +105,26 @@ impl TransactionValidator {
         for (i, output) in tx.outputs.iter().enumerate() {
             if kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some() {
                 return Err(TxRuleError::ModelSinkBeforeMarketActivation(i, ctx_daa_score));
+            }
+        }
+        Ok(())
+    }
+
+    /// **ADR-0152-adjacent (Activation Pool): the height-indexed half of the activation sink** — the
+    /// model sink's M-9 pair, for the same reason: isolation admits the form wherever the ruleset
+    /// declares the pool, and this refuses it below the fence's height, so a build that schedules the
+    /// pool and one that does not agree on every transaction before it. Genesis-only by
+    /// `validate_palw_v2`, so on testnet-12 this never fires; it is the door for any other ruleset.
+    fn check_activation_sink_outputs_in_context(&self, tx: &Transaction, ctx_daa_score: u64) -> TxResult<()> {
+        let Some(fence) = self.palw_activation_pool_fence else {
+            return Ok(());
+        };
+        if fence.is_active(ctx_daa_score) {
+            return Ok(());
+        }
+        for (i, output) in tx.outputs.iter().enumerate() {
+            if kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&output.script_public_key).is_some() {
+                return Err(TxRuleError::ActivationSinkBeforePoolActivation(i, ctx_daa_score));
             }
         }
         Ok(())

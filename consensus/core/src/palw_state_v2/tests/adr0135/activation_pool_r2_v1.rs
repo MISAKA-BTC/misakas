@@ -52,9 +52,19 @@ fn evals_of_one_boundary(state: &PalwChainStateV2, daa: u64, armed: bool) -> (u6
     let p = params();
     PALW_READY_PREDICATE_EVALS_FOR_TESTS.with(|count| count.set(0));
     let blue = state.last_point().map(|point| point.blue_score + 1).unwrap_or(3);
-    let (next, _) =
-        apply_palw_transition_v2_with_extras(state, &p, &ctx(blue, daa, blue), &[], None, false, false, false, false, &pool_extras(armed))
-            .expect("the boundary folds");
+    let (next, _) = apply_palw_transition_v2_with_extras(
+        state,
+        &p,
+        &ctx(blue, daa, blue),
+        &[],
+        None,
+        false,
+        false,
+        false,
+        false,
+        &pool_extras(armed),
+    )
+    .expect("the boundary folds");
     (PALW_READY_PREDICATE_EVALS_FOR_TESTS.with(|count| count.get()), next)
 }
 
@@ -81,7 +91,9 @@ fn r2_the_span_step_does_not_scale_with_candidate_rows_between_their_audits() {
     let (empty_quiet, _) = evals_of_one_boundary(&base, quiet * SPAN, true);
     let (armed_quiet, next) = evals_of_one_boundary(&crowded, quiet * SPAN, true);
     let (unarmed_quiet, _) = evals_of_one_boundary(&crowded, quiet * SPAN, false);
-    println!("predicate evaluations at a quiet span: no Candidate {empty_quiet}; {n} Candidates armed {armed_quiet}, unarmed {unarmed_quiet}");
+    println!(
+        "predicate evaluations at a quiet span: no Candidate {empty_quiet}; {n} Candidates armed {armed_quiet}, unarmed {unarmed_quiet}"
+    );
     assert_eq!(armed_quiet, empty_quiet, "armed: 32 Candidates between their audits cost the step nothing");
     assert_eq!(unarmed_quiet - empty_quiet, n * bonds, "unarmed: each Candidate walks every bond every span");
     for i in 0..n {

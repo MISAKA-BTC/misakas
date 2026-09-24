@@ -13,7 +13,7 @@
 //! * **R2 (the review's M2):** the registry's span step skips the rows of `Dormant` and `Frozen`
 //!   classes, and a `Candidate` row reads its ready seats and its jury only at its OWN staggered
 //!   audit span, so the per-span cost of a listing does not grow with the listings nobody audits;
-//! * **the pool itself**, in the later sections of this module.
+//! * **the pool itself** (the later sections).
 //!
 //! Below the fence — every network but testnet-12 — nothing here is reached, and every fold is
 //! byte-identical to a build without this module.
@@ -79,6 +79,11 @@ impl PalwActivationPoolTermsV1 {
         if self.prep_payee_cap == 0 || self.bonus_payee_cap == 0 {
             return Some("palw_activation_pool's payee caps must both be positive");
         }
+        if self.prep_payee_cap as usize > PALW_ACTIVATION_PAYEE_CAP_MAX_V1
+            || self.bonus_payee_cap as usize > PALW_ACTIVATION_PAYEE_CAP_MAX_V1
+        {
+            return Some("palw_activation_pool's payee caps are past the structural 256");
+        }
         if self.min_topup_sompi == 0 {
             return Some("palw_activation_pool's min_topup_sompi is zero");
         }
@@ -117,7 +122,396 @@ pub fn palw_admission_audit_offset_v1(class_id: &Hash64, period_spans: u64) -> u
 /// the network's readiness proofs for different classes stop landing in the same few blocks.
 pub fn palw_admission_audit_due_staggered_v1(class_id: &Hash64, span_now: u64, period_spans: u64) -> bool {
     let period = period_spans.max(1);
-    span_now > 0 && (span_now % period + palw_admission_audit_offset_v1(class_id, period)) % period == 0
+    span_now > 0 && (span_now % period + palw_admission_audit_offset_v1(class_id, period)).is_multiple_of(period)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The pool (the review's §4 "Minimal spec", with the user's decisions of 2026-09-25)
+// ---------------------------------------------------------------------------------------------
+//
+// **One row per class, in its own Some-only side map** (`PalwChainStateV2::activation_pools`,
+// rooted in the `activation_pool/v1` block and carried in the `0xB5` tail, with delta entries 76
+// and 77), opened with a zero balance when a class is bought past the fence and funded only by
+// `ActivationPoolFunded` (object tag 58): MSK a carrier paid into an `OP_RETURN "MSKACT01" <class>`
+// sink, bound at block validity (the review's A8 — an unbound or mis-bound activation sink makes
+// the block invalid, so none can burn silently the way an unbound `MSKMDL01` can). The registrant
+// funds its own pool with the same object; nothing is taken from its bond (the user: `B` stays
+// 1 MSK, no deposit, no mandatory seed).
+//
+// **Two payouts, both once per (class, operator), both from the row's own budgets and never from
+// emission:**
+//
+// * **(a) the preparation reward** — at a `Candidate`'s own staggered audit, to each drawn juror
+//   that holds a READY population bond for the class with collateral ≥ the panel floor (ten
+//   network floors: the bonds a panel can actually draw, review C3/A2-i), whose readiness row was
+//   proved at least two spans before the audit (before the seed existed, review M6), and that is not
+//   the registrant's operator. `a = min(A_MAX(age), ⌊prep/10⌋)`, `A_MAX` ramping from `A0` to
+//   `3·A0` over `W` DAA of the pool's age (the waiting bonus; review A5), at most `seat_count × a`
+//   an audit. Paid whatever the jury's verdict — the objectively proven fact is the preparation,
+//   never the yes (the user's principle; review C5 is why the amount is small and fixed).
+// * **(b) the activation bonus** — at `Probation → ActiveLimited`, never at `Prefetching →
+//   Probation` (review A1: that population is the registrant's to fill), to each operator the
+//   chain credited on the class's probe `Final`s while it was in `Probation` — the ADR-0147
+//   outsider seat included — except the registrant's operator: `b = ⌊bonus × β / n⌋`. A later
+//   `Held → … → ActiveLimited` pays only operators not paid before.
+//
+// **Payout rows** are keyed per payee under the two-byte prefix `[0xFE, 0xFF]` — after the seat
+// rows' `0xFE` and before the market's `0xFF` (review C4) — accumulated like a seat's, measured
+// against `PALW_V2_MAX_PENDING_PAYOUTS`, and deferred whole (nobody marked paid) when the queue has
+// no room. Not vested, not slashable, not in the R-core+ committed ledger: a possession proof the
+// chain already verified is not a claim a later conviction can reach (the design's B2).
+//
+// **Frozen** moves the row's `prep + bonus` to its own `withheld` (review C10: never into
+// `panel_reserve_sompi`, whose number is ADR-0124's). Nothing is ever refunded: a top-up is a
+// donation. A Dormant class's pool stays and resumes with a re-registration of the class id.
+
+use crate::tx::ScriptPublicKey;
+
+/// **One class's pool.** `funded == prep + bonus + paid + withheld` always (I1); the three lists are
+/// sorted, unique operator ids and capped (I3). Never removed: the id is the listing.
+#[derive(Clone, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwActivationPoolV1 {
+    /// The budget of (a), the preparation reward.
+    pub prep_sompi: u64,
+    /// The budget of (b), the activation bonus.
+    pub bonus_sompi: u64,
+    /// Every sompi ever sunk into the pool.
+    pub funded_sompi: u64,
+    /// Every sompi written to `pending_payouts` from it.
+    pub paid_sompi: u64,
+    /// Every sompi a freeze took out of the budgets (never minted).
+    pub withheld_sompi: u64,
+    /// The ramp's origin: the registration, or — for a class nobody bought — the first top-up.
+    pub opened_daa: u64,
+    /// Operators paid (a), sorted; at most the terms' `prep_payee_cap`.
+    pub prep_paid: Vec<Hash64>,
+    /// Operators paid (b), sorted; at most the terms' `bonus_payee_cap`.
+    pub bonus_paid: Vec<Hash64>,
+    /// Operators credited on the class's probe `Final`s during its current probation run (and,
+    /// until (b) is paid out of it, after): sorted, at most `probation_claims × seat_count`.
+    pub probe_credited: Vec<Hash64>,
+}
+
+impl PalwActivationPoolV1 {
+    /// A row opened at `daa` with nothing in it.
+    pub fn opened_at(daa: u64) -> Self {
+        Self { opened_daa: daa, ..Default::default() }
+    }
+
+    /// **I1**: every sompi funded is in a budget, paid, or withheld.
+    pub fn is_balanced(&self) -> bool {
+        u128::from(self.funded_sompi)
+            == u128::from(self.prep_sompi)
+                + u128::from(self.bonus_sompi)
+                + u128::from(self.paid_sompi)
+                + u128::from(self.withheld_sompi)
+    }
+}
+
+/// **The pool's global counters** — each the sum of its field over every row (I2), and balanced as
+/// a row is (I1 at the level of the chain). Wide, so no sum of rows can overflow them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwActivationPoolCountersV1 {
+    pub funded_sompi: u128,
+    pub prep_sompi: u128,
+    pub bonus_sompi: u128,
+    pub paid_sompi: u128,
+    pub withheld_sompi: u128,
+}
+
+impl PalwActivationPoolCountersV1 {
+    pub fn is_zero(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// I1 over the counters.
+    pub fn is_balanced(&self) -> bool {
+        self.funded_sompi == self.prep_sompi + self.bonus_sompi + self.paid_sompi + self.withheld_sompi
+    }
+
+    /// The counters of `rows`, summed — what I2 compares the stored counters with.
+    pub fn of_rows<'a>(rows: impl IntoIterator<Item = &'a PalwActivationPoolV1>) -> Self {
+        let mut sum = Self::default();
+        for row in rows {
+            sum.add(row);
+        }
+        sum
+    }
+
+    fn add(&mut self, row: &PalwActivationPoolV1) {
+        self.funded_sompi += u128::from(row.funded_sompi);
+        self.prep_sompi += u128::from(row.prep_sompi);
+        self.bonus_sompi += u128::from(row.bonus_sompi);
+        self.paid_sompi += u128::from(row.paid_sompi);
+        self.withheld_sompi += u128::from(row.withheld_sompi);
+    }
+
+    /// The counters after one row moved from `old` to `new` — the ONE writer's update, so the
+    /// counters can never be moved by anything that did not move a row.
+    pub fn moved(&self, old: Option<&PalwActivationPoolV1>, new: &PalwActivationPoolV1) -> Self {
+        let mut next = *self;
+        if let Some(old) = old {
+            next.funded_sompi -= u128::from(old.funded_sompi);
+            next.prep_sompi -= u128::from(old.prep_sompi);
+            next.bonus_sompi -= u128::from(old.bonus_sompi);
+            next.paid_sompi -= u128::from(old.paid_sompi);
+            next.withheld_sompi -= u128::from(old.withheld_sompi);
+        }
+        next.add(new);
+        next
+    }
+}
+
+/// Insert `id` into a sorted list; `false` if it was already there.
+pub fn palw_sorted_insert_v1(list: &mut Vec<Hash64>, id: Hash64) -> bool {
+    match list.binary_search(&id) {
+        Ok(_) => false,
+        Err(at) => {
+            list.insert(at, id);
+            true
+        }
+    }
+}
+
+/// Whether a list is strictly increasing — sorted, and so unique.
+pub fn palw_sorted_unique_v1(list: &[Hash64]) -> bool {
+    list.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+/// **(b)'s tracking cap**: the operators one probation run can credit — `probation_claims` probe
+/// `Final`s of `seat_count` seats each.
+pub fn palw_activation_probe_credit_cap_v1(probation_claims: usize, seat_count: usize) -> usize {
+    probation_claims.saturating_mul(seat_count.max(1))
+}
+
+/// **The structural cap on either payee list** (I3): the terms may name any cap up to it, and the
+/// consistency check holds every row to it — a row's operator list is at most 256 × 64 bytes.
+pub const PALW_ACTIVATION_PAYEE_CAP_MAX_V1: usize = 256;
+
+/// **The structural cap on `probe_credited`** (I3): the fold stops at `probation_claims ×
+/// seat_count` (50 on testnet-12) and never past this.
+pub const PALW_ACTIVATION_PROBE_CREDITED_MAX_V1: usize = 256;
+
+// ---- the sink (the model market's `MSKMDL01` shape, its own tag) ----------------------------------
+
+/// The activation sink script's tag: `OP_RETURN OP_DATA8 "MSKACT01" OP_DATA64 <class id>`.
+pub const PALW_ACTIVATION_SINK_TAG_V1: &[u8; 8] = b"MSKACT01";
+const OP_RETURN: u8 = 0x6a;
+const OP_DATA8: u8 = 0x08;
+const OP_DATA64: u8 = 0x40;
+
+/// The sink a top-up pays into (75 bytes, script version 0). Unspendable by construction; its value
+/// leaves circulation when the carrier is accepted and is credited to the class's pool by the fold.
+pub fn palw_activation_sink_spk_v1(class_id: &Hash64) -> ScriptPublicKey {
+    let mut script = Vec::with_capacity(1 + 1 + 8 + 1 + 64);
+    script.push(OP_RETURN);
+    script.push(OP_DATA8);
+    script.extend_from_slice(PALW_ACTIVATION_SINK_TAG_V1);
+    script.push(OP_DATA64);
+    script.extend_from_slice(class_id.as_byte_slice());
+    ScriptPublicKey::new(0, crate::tx::ScriptVec::from_slice(&script))
+}
+
+/// The class an activation sink script names, if it is one — recognised by its EXACT script, never
+/// by its shape.
+pub fn palw_activation_sink_class_v1(spk: &ScriptPublicKey) -> Option<Hash64> {
+    if spk.version() != 0 {
+        return None;
+    }
+    let script = spk.script();
+    if script.len() != 75
+        || script[0] != OP_RETURN
+        || script[1] != OP_DATA8
+        || &script[2..10] != PALW_ACTIVATION_SINK_TAG_V1
+        || script[10] != OP_DATA64
+    {
+        return None;
+    }
+    let mut id = [0u8; 64];
+    id.copy_from_slice(&script[11..75]);
+    Some(Hash64::from_bytes(id))
+}
+
+/// **The review's A8, as a block rule: why an activation sink output of `tx` is not bound**, as
+/// `(output index, reason)`, or `None` when every one is. A sink is bound iff `tx` is a lifecycle
+/// carrier whose payload decodes, at the current wire version, to an `ActivationPoolFunded` naming
+/// that output's index, its value and the class its script names. One carrier carries one object,
+/// so a second sink in the same carrier is unbound by construction.
+///
+/// Context-free (it reads the transaction alone), so it is answered at isolation, where a block
+/// that carries an unbound sink is refused whole — never only at the mempool, and never left to the
+/// fold, which could only drop the object and keep the MSK.
+pub fn palw_activation_sink_binding_refusal_v1(tx: &crate::tx::Transaction) -> Option<(usize, &'static str)> {
+    use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+    let mut sinks = tx
+        .outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, output)| palw_activation_sink_class_v1(&output.script_public_key).map(|c| (i, c)));
+    let first = sinks.next()?;
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return Some((first.0, "an activation sink rides only a lifecycle carrier"));
+    }
+    let bound = match borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) {
+        Ok(payload) if payload.version == PALW_LIFECYCLE_TX_VERSION_V2 => match payload.object {
+            crate::palw_state_v2::PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, sink_index } => {
+                Some((sink_index as usize, class_id, amount))
+            }
+            _ => None,
+        },
+        _ => None,
+    };
+    for (index, class) in std::iter::once(first).chain(sinks) {
+        match bound {
+            None => return Some((index, "an activation sink's carrier carries no ActivationPoolFunded")),
+            Some((named, _, _)) if named != index => {
+                return Some((index, "an activation sink is not the output its carrier's ActivationPoolFunded names"));
+            }
+            Some((_, named_class, _)) if named_class != class => {
+                return Some((index, "an activation sink names another class than its carrier's ActivationPoolFunded"));
+            }
+            Some((_, _, amount)) if amount != tx.outputs[index].value => {
+                return Some((index, "an activation sink holds another amount than its carrier's ActivationPoolFunded declares"));
+            }
+            Some(_) => {}
+        }
+    }
+    None
+}
+
+// ---- the arithmetic -------------------------------------------------------------------------------
+
+/// **An inflow's split**: `⌊amount × α / 1000⌋` to the preparation budget and the rest to the bonus —
+/// while the class is a `Candidate` (`prep_open`). Once it is not, its preparation budget has no
+/// payee left ((a) is paid at a Candidate's audit and nowhere else), so the whole inflow is bonus;
+/// that is the same rule that moves a seated Candidate's `prep` into its `bonus`.
+pub fn palw_activation_inflow_split_v1(amount: u64, prep_share_permille: u16, prep_open: bool) -> (u64, u64) {
+    if !prep_open {
+        return (0, amount);
+    }
+    let prep = (u128::from(amount) * u128::from(prep_share_permille.min(1_000)) / 1_000) as u64;
+    (prep, amount - prep)
+}
+
+/// **`A_MAX(age)`**: `A0 + 2·A0·min(age, W)/W` — `A0` at the pool's opening, `3·A0` from `W` on.
+pub fn palw_activation_prep_cap_v1(terms: &PalwActivationPoolTermsV1, age_daa: u64) -> u64 {
+    let base = u128::from(terms.prep_base_sompi);
+    let ramp = u128::from(terms.ramp_daa.max(1));
+    let waited = u128::from(age_daa.min(terms.ramp_daa));
+    (base + 2 * base * waited / ramp).min(u128::from(u64::MAX)) as u64
+}
+
+/// **(a)'s per-payee amount**: `min(A_MAX(age), ⌊prep / 10⌋)`.
+pub fn palw_activation_prep_reward_v1(terms: &PalwActivationPoolTermsV1, prep_sompi: u64, age_daa: u64) -> u64 {
+    palw_activation_prep_cap_v1(terms, age_daa).min(prep_sompi / 10)
+}
+
+/// **(b)'s per-payee amount**: `⌊bonus × β / 1000 / n⌋` — zero for no payee.
+pub fn palw_activation_bonus_reward_v1(terms: &PalwActivationPoolTermsV1, bonus_sompi: u64, payees: usize) -> u64 {
+    if payees == 0 {
+        return 0;
+    }
+    (u128::from(bonus_sompi) * u128::from(terms.bonus_share_permille.min(1_000)) / 1_000 / payees as u128) as u64
+}
+
+// ---- the payout rows ------------------------------------------------------------------------------
+
+/// **The first two bytes of every pool payout key**: `0xFE` (the seats') then `0xFF`, so a pool row
+/// sorts after every seat row whose second byte is not `0xFF` and before every market row (`0xFF`):
+/// the drain order stays claims → seats → pool → market (the review's C4 — the design's `0xFD`
+/// sorted before the seats). One payee holds one row however many pools pay it.
+pub const PALW_ACTIVATION_POOL_PAYOUT_KEY_PREFIX_V1: [u8; 2] = [0xFE, 0xFF];
+
+/// The pool payout row's key domain (`H(domain ‖ payee payload)`). A ROW key, kept out of
+/// `PALW_STATE_V2_ALL_DOMAINS` as the other payout-row domains are.
+pub const PALW_STATE_V2_DOMAIN_ACTIVATION_POOL_PAYOUT: &[u8] = b"misaka-palw/state-v2/activation-pool-payout/v1";
+
+/// **A payee's pool payout row**: `H(DOMAIN ‖ payload)` with its first two bytes forced to
+/// [`PALW_ACTIVATION_POOL_PAYOUT_KEY_PREFIX_V1`].
+pub fn palw_activation_pool_payout_key_v1(payload: &Hash64) -> Hash64 {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_STATE_V2_DOMAIN_ACTIVATION_POOL_PAYOUT).to_state();
+    state.update(payload.as_byte_slice());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    out[..2].copy_from_slice(&PALW_ACTIVATION_POOL_PAYOUT_KEY_PREFIX_V1);
+    Hash64::from_bytes(out)
+}
+
+// ---- the read (op 200) ------------------------------------------------------------------------------
+
+/// **One class's pool as a reader sees it at a tip** (`getPalwActivationPool`, op 200).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PalwActivationPoolReadV1 {
+    /// The terms in force at `now_daa`; `None` where the pool is not armed.
+    pub terms: Option<PalwActivationPoolTermsV1>,
+    pub class_found: bool,
+    /// `active`, `dormant`, `frozen`, `registered`, or empty for an unknown class.
+    pub class_status: &'static str,
+    /// The registry row's state, `Debug`-printed; `None` without a row.
+    pub lifecycle: Option<String>,
+    pub pool: Option<PalwActivationPoolV1>,
+    pub counters: PalwActivationPoolCountersV1,
+    pub registrant_operator: Option<Hash64>,
+    /// (a)'s per-payee amount were this Candidate's audit now; 0 for any other class.
+    pub prep_reward_now_sompi: u64,
+    /// `A_MAX(age)` now (0 without a pool or terms).
+    pub prep_cap_now_sompi: u64,
+    /// The span this Candidate next meets its jury at (R2's stagger).
+    pub next_audit_span: Option<u64>,
+    pub span_daa: u64,
+    pub now_daa: u64,
+}
+
+/// **The read, from a state**: the row, the terms, what (a) would pay now and — for a Candidate — the
+/// first span after `now_daa`'s whose audit is due, given the registry's `(span_daa, period)`.
+pub fn palw_activation_pool_read_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    class_id: &Hash64,
+    terms: Option<PalwActivationPoolTermsV1>,
+    now_daa: u64,
+    schedule: Option<(u64, u64)>,
+) -> PalwActivationPoolReadV1 {
+    use crate::palw_model_registry_v1::PalwModelLifecycleV1;
+    use crate::palw_state_v2::PalwClassStatusV2;
+    let class = state.class(class_id);
+    let row = state.model_lifecycle(class_id);
+    let pool = state.activation_pool(class_id).cloned();
+    let candidate = row.is_some_and(|row| matches!(row.state, PalwModelLifecycleV1::Candidate));
+    let age = pool.as_ref().map(|pool| now_daa.saturating_sub(pool.opened_daa)).unwrap_or(0);
+    let (prep_cap_now_sompi, prep_reward_now_sompi) = match (&terms, &pool) {
+        (Some(terms), Some(pool)) => (
+            palw_activation_prep_cap_v1(terms, age),
+            if candidate { palw_activation_prep_reward_v1(terms, pool.prep_sompi, age) } else { 0 },
+        ),
+        _ => (0, 0),
+    };
+    let next_audit_span = match schedule {
+        Some((span_daa, period)) if candidate && terms.is_some() => {
+            let span_now = now_daa / span_daa.max(1);
+            (span_now + 1..=span_now + period.max(1)).find(|span| palw_admission_audit_due_staggered_v1(class_id, *span, period))
+        }
+        _ => None,
+    };
+    PalwActivationPoolReadV1 {
+        terms,
+        class_found: class.is_some(),
+        class_status: match class.map(|c| &c.status) {
+            Some(PalwClassStatusV2::Active) => "active",
+            Some(PalwClassStatusV2::Dormant { .. }) => "dormant",
+            Some(PalwClassStatusV2::Frozen { .. }) => "frozen",
+            Some(_) => "registered",
+            None => "",
+        },
+        lifecycle: row.map(|row| format!("{:?}", row.state)),
+        pool,
+        counters: state.activation_pool_counters(),
+        registrant_operator: class.and_then(|c| c.registrant_bond).and_then(|key| state.bond(&key)).map(|bond| bond.operator_id),
+        prep_reward_now_sompi,
+        prep_cap_now_sompi,
+        next_audit_span,
+        span_daa: schedule.map(|(span_daa, _)| span_daa).unwrap_or(0),
+        now_daa,
+    }
 }
 
 #[cfg(test)]
@@ -154,6 +548,145 @@ mod tests {
         }
         assert!(offsets.len() > 40, "64 classes spread over the period, not stacked on one span: {} offsets", offsets.len());
         assert!(!palw_admission_audit_due_staggered_v1(&Hash64::from_u64_word(1), 0, period), "span zero is never an audit");
-        assert!((1..10).all(|span| palw_admission_audit_due_staggered_v1(&Hash64::from_u64_word(9), span, 1)), "a one-span period audits every span");
+        assert!(
+            (1..10).all(|span| palw_admission_audit_due_staggered_v1(&Hash64::from_u64_word(9), span, 1)),
+            "a one-span period audits every span"
+        );
+    }
+
+    /// The split, the ramp and the two amounts, on the user's scale.
+    #[test]
+    fn the_pool_arithmetic_is_the_specs() {
+        let t = PALW_ACTIVATION_POOL_TERMS_V1;
+        assert_eq!(
+            palw_activation_inflow_split_v1(300 * 100_000_000, 400, true),
+            (120 * 100_000_000, 180 * 100_000_000),
+            "the design's 300 MSK: prep 120, bonus 180"
+        );
+        assert_eq!(palw_activation_inflow_split_v1(7, 400, true), (2, 5), "floor to prep, the rest to bonus");
+        assert_eq!(palw_activation_inflow_split_v1(300, 400, false), (0, 300), "past Candidate every sompi is bonus");
+        let a0 = t.prep_base_sompi;
+        assert_eq!(palw_activation_prep_cap_v1(&t, 0), a0, "A0 at the opening");
+        assert_eq!(palw_activation_prep_cap_v1(&t, t.ramp_daa / 2), 2 * a0, "2·A0 half way");
+        assert_eq!(palw_activation_prep_cap_v1(&t, t.ramp_daa), 3 * a0, "3·A0 at W");
+        assert_eq!(palw_activation_prep_cap_v1(&t, 10 * t.ramp_daa), 3 * a0, "and never past it");
+        assert_eq!(palw_activation_prep_reward_v1(&t, 1_000 * 100_000_000, 0), a0, "a large budget pays A_MAX");
+        assert_eq!(
+            palw_activation_prep_reward_v1(&t, 50 * 100_000_000, t.ramp_daa),
+            5 * 100_000_000,
+            "a small one pays a tenth of itself"
+        );
+        assert_eq!(palw_activation_prep_reward_v1(&t, 9, 0), 0, "under ten sompi pays nothing");
+        assert_eq!(
+            palw_activation_bonus_reward_v1(&t, 180 * 100_000_000, 6),
+            15 * 100_000_000,
+            "the design's example: 6 payees, 15 MSK each"
+        );
+        assert_eq!(palw_activation_bonus_reward_v1(&t, 1_000, 0), 0);
+        assert_eq!(palw_activation_probe_credit_cap_v1(10, 5), 50);
+    }
+
+    /// The sink is `MSKMDL01`'s shape with its own tag, read back only off its exact script.
+    #[test]
+    fn the_activation_sink_is_its_exact_script() {
+        let class = Hash64::from_u64_word(0xC1A5);
+        let spk = palw_activation_sink_spk_v1(&class);
+        assert_eq!(spk.script().len(), 75);
+        assert_eq!(&spk.script()[2..10], b"MSKACT01");
+        assert_eq!(palw_activation_sink_class_v1(&spk), Some(class));
+        assert_eq!(
+            palw_activation_sink_class_v1(&crate::palw_model_market_v1::palw_model_sink_spk_v1(&class)),
+            None,
+            "a market sink is not one"
+        );
+        assert_eq!(crate::palw_model_market_v1::palw_model_sink_class_v1(&spk), None, "nor the other way");
+        let mut forged = spk.script().to_vec();
+        forged[9] ^= 1;
+        assert_eq!(palw_activation_sink_class_v1(&ScriptPublicKey::new(0, crate::tx::ScriptVec::from_slice(&forged))), None);
+        assert_eq!(
+            palw_activation_sink_class_v1(&ScriptPublicKey::new(1, crate::tx::ScriptVec::from_slice(spk.script()))),
+            None,
+            "script version 0 only"
+        );
+        assert_eq!(crate::mldsa87_primitives::p2pkh_mldsa87_payload(&spk), None, "an OP_RETURN is never a payee");
+    }
+
+    /// The pool payout key sorts after the seats' `0xFE` rows and before the market's `0xFF`.
+    #[test]
+    fn a_pool_payout_row_drains_after_the_seats_and_before_the_market() {
+        let payee = Hash64::from_u64_word(0x9A01);
+        let key = palw_activation_pool_payout_key_v1(&payee);
+        assert_eq!(&key.as_byte_slice()[..2], &[0xFE, 0xFF]);
+        let seat = crate::palw_state_v2::palw_panel_payout_key_v1(&payee);
+        assert_eq!(seat.as_byte_slice()[0], crate::palw_state_v2::PALW_STATE_V2_PANEL_PAYOUT_KEY_PREFIX);
+        if seat.as_byte_slice()[1] != 0xFF {
+            assert!(seat < key, "a seat row drains first");
+        }
+        let mut market = [0xFFu8; 64];
+        market[1] = 0x00;
+        assert!(key < Hash64::from_bytes(market), "and every market row after it");
+        assert_ne!(palw_activation_pool_payout_key_v1(&Hash64::from_u64_word(0x9A02)), key, "one row per payee");
+    }
+
+    /// **The review's A8 as a block rule**: an activation sink is bound, or refused by name.
+    #[test]
+    fn an_activation_sink_is_bound_or_refused() {
+        use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+        use crate::subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_LIFECYCLE};
+        use crate::tx::{Transaction, TransactionOutput};
+        let class = Hash64::from_u64_word(0xC1A5);
+        let payee = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&[0x11; 64]);
+        let carrier = |object: Option<PalwConsensusObjectV2>, outputs: Vec<TransactionOutput>, subnet| {
+            let payload = object
+                .map(|object| borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object }).unwrap())
+                .unwrap_or_default();
+            Transaction::new(0, vec![], outputs, 0, subnet, 0, payload)
+        };
+        let funded = |amount, sink_index, class_id| Some(PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, sink_index });
+        let outs =
+            |value| vec![TransactionOutput::new(5, payee.clone()), TransactionOutput::new(value, palw_activation_sink_spk_v1(&class))];
+        assert_eq!(
+            palw_activation_sink_binding_refusal_v1(&carrier(funded(700, 1, class), outs(700), SUBNETWORK_ID_PALW_LIFECYCLE)),
+            None,
+            "bound"
+        );
+        assert_eq!(
+            palw_activation_sink_binding_refusal_v1(&carrier(
+                None,
+                vec![TransactionOutput::new(5, payee.clone())],
+                SUBNETWORK_ID_NATIVE
+            )),
+            None,
+            "no sink, no question"
+        );
+        for (tx, why) in [
+            (carrier(None, outs(700), SUBNETWORK_ID_NATIVE), "rides only a lifecycle carrier"),
+            (carrier(None, outs(700), SUBNETWORK_ID_PALW_LIFECYCLE), "carries no ActivationPoolFunded"),
+            (carrier(funded(700, 0, class), outs(700), SUBNETWORK_ID_PALW_LIFECYCLE), "is not the output"),
+            (carrier(funded(701, 1, class), outs(700), SUBNETWORK_ID_PALW_LIFECYCLE), "another amount"),
+            (carrier(funded(700, 1, Hash64::from_u64_word(9)), outs(700), SUBNETWORK_ID_PALW_LIFECYCLE), "another class"),
+        ] {
+            let refusal = palw_activation_sink_binding_refusal_v1(&tx);
+            assert!(refusal.is_some_and(|(index, reason)| index == 1 && reason.contains(why)), "{why}: {refusal:?}");
+        }
+        // Two sinks in one carrier: one object binds one of them, the other is unbound.
+        let mut two = outs(700);
+        two.push(TransactionOutput::new(700, palw_activation_sink_spk_v1(&class)));
+        let refusal = palw_activation_sink_binding_refusal_v1(&carrier(funded(700, 1, class), two, SUBNETWORK_ID_PALW_LIFECYCLE));
+        assert_eq!(refusal.map(|(index, _)| index), Some(2), "the second sink is the unbound one");
+    }
+
+    /// The counters' one update is the rows' sum, balanced.
+    #[test]
+    fn the_counters_move_with_their_row() {
+        let old = PalwActivationPoolV1 { prep_sompi: 40, bonus_sompi: 60, funded_sompi: 100, ..PalwActivationPoolV1::opened_at(5) };
+        let new = PalwActivationPoolV1 { prep_sompi: 30, paid_sompi: 10, ..old.clone() };
+        assert!(old.is_balanced() && new.is_balanced());
+        let base = PalwActivationPoolCountersV1::of_rows([&old]);
+        let moved = base.moved(Some(&old), &new);
+        assert_eq!(moved, PalwActivationPoolCountersV1::of_rows([&new]));
+        assert!(moved.is_balanced());
+        assert!(!PalwActivationPoolV1 { funded_sompi: 99, ..new }.is_balanced(), "I1 catches a sompi out of place");
     }
 }

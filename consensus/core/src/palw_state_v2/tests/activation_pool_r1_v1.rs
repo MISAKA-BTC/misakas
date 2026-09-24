@@ -80,9 +80,23 @@ fn fold_at(
     objects: &[PalwConsensusObjectV2],
     extras: &PalwTransitionExtrasV1,
 ) -> PalwChainStateV2 {
-    apply_palw_transition_v7(base, &b.state, None, &bctx(block, daa), objects, PalwBlockWorkV3::None, &[], Hash64::default(), false, false, false, false, extras)
-        .unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e:?}"))
-        .0
+    apply_palw_transition_v7(
+        base,
+        &b.state,
+        None,
+        &bctx(block, daa),
+        objects,
+        PalwBlockWorkV3::None,
+        &[],
+        Hash64::default(),
+        false,
+        false,
+        false,
+        false,
+        extras,
+    )
+    .unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e:?}"))
+    .0
 }
 
 fn registrant_bond(collateral: u64) -> PalwConsensusObjectV2 {
@@ -209,7 +223,11 @@ fn r1_an_idle_active_bought_class_is_still_reclaimed() {
     s1.set_model_lifecycle_for_tests(class_id, row);
     let (mut block, mut daa) = (2u64, 2u64);
     let s = idle(&b, s1, &mut block, &mut daa, u64::from(b.state.reclaim_epochs()) + 1, &extras);
-    assert!(is_dormant(&s, &class_id), "an Active class that produced nothing for twelve epochs is reclaimed: {:?}", s.class(&class_id));
+    assert!(
+        is_dormant(&s, &class_id),
+        "an Active class that produced nothing for twelve epochs is reclaimed: {:?}",
+        s.class(&class_id)
+    );
     assert_eq!(s.registration_exposure(&bond_key(REGISTRANT)), 0, "and its registrant's exposure comes back");
 }
 
@@ -239,7 +257,10 @@ fn r1_testnet_12s_genesis_held_rows_are_share_bearing_and_never_reclaimed_past_t
         println!("pool {}: held rows' budgets {budgets:?}", extras.activation_pool.is_some());
         dormant_by_rule.push(held.iter().map(|id| is_dormant(&s, id)).collect::<Vec<_>>());
     }
-    println!("held rows Dormant after thirteen idle epochs — pool armed: {:?}; old rule: {:?}", dormant_by_rule[0], dormant_by_rule[1]);
+    println!(
+        "held rows Dormant after thirteen idle epochs — pool armed: {:?}; old rule: {:?}",
+        dormant_by_rule[0], dormant_by_rule[1]
+    );
     assert_eq!(dormant_by_rule[0], vec![false, false], "past the fence a genesis row is never reclaimed, like the floor");
     assert_eq!(dormant_by_rule[1], vec![true, true], "the old rule, on the same card and blocks, reclaimed both idle held rows");
 }

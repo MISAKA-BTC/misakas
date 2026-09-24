@@ -1227,6 +1227,9 @@ Do you confirm? (y/n)";
         // are live only where the ruleset declares the market. `None` on every shipped preset, so
         // this is `false` on testnet-11, devnet and a carded mainnet today.
         config.palw_model_market.is_some(),
+        // ADR-0152-adjacent (Activation Pool): the activation sink relays only where the ruleset
+        // declares the pool (testnet-12 alone).
+        config.palw_activation_pool_fence().is_some(),
         evm_fee_recipient,
         attestation_policy,
     )));

@@ -86,6 +86,13 @@ pub struct Config {
     /// consensus at the accepting block's own DAA (`check_model_sink_outputs_in_context`).
     pub model_sink_relay_allowed: bool,
 
+    /// **ADR-0152-adjacent (Activation Pool): whether this network declares the pool**, so its
+    /// activation sink (`OP_RETURN "MSKACT01" <class>`) is carved out of the output-class and dust
+    /// rules exactly as the model sink is. `false` by default; the daemon sets it from
+    /// `params.palw_activation_pool_fence().is_some()` (testnet-12 alone). Consensus refuses an
+    /// unbound one at isolation, so relaying the form is never relaying a burn.
+    pub activation_sink_relay_allowed: bool,
+
     /// kaspa-pq DNS-finality: local mempool/mining policy for `StakeAttestationShard` txs (expiry,
     /// dedup, recent-epoch template preference). Sourced from the chain's `DnsParams`; defaults to
     /// disabled so behavior is byte-identical to upstream unless explicitly wired (see the daemon).
@@ -143,6 +150,8 @@ impl Config {
             // ADR-0087 Decision 6 (audit M-9): OFF unless the network declares the market, so a
             // build with the market dormant relays exactly what it relayed before ADR-0087.
             model_sink_relay_allowed: false,
+            // ADR-0152-adjacent (Activation Pool): OFF unless the network declares the pool.
+            activation_sink_relay_allowed: false,
             // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
             // with values derived from the chain's `DnsParams` when present.
             attestation_policy: AttestationMempoolPolicy::disabled(),
@@ -195,6 +204,8 @@ impl Config {
             // ADR-0087 Decision 6 (audit M-9): OFF unless the network declares the market, so a
             // build with the market dormant relays exactly what it relayed before ADR-0087.
             model_sink_relay_allowed: false,
+            // ADR-0152-adjacent (Activation Pool): OFF unless the network declares the pool.
+            activation_sink_relay_allowed: false,
             // kaspa-pq DNS-finality: disabled by default (overlay off); the daemon overrides this
             // with values derived from the chain's `DnsParams` when present.
             attestation_policy: AttestationMempoolPolicy::disabled(),

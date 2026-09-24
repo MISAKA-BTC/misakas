@@ -152,6 +152,9 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::ModelBuy { .. } => Ok(()),
         // ADR-0090: a seed is bound to its carrier's sink output exactly as a buy is.
         PalwConsensusObjectV2::ModelSeed { .. } => Ok(()),
+        // ADR-0152-adjacent (Activation Pool): a top-up is bound to its carrier's activation sink
+        // below, and an activation sink nothing binds is refused at block validity.
+        PalwConsensusObjectV2::ActivationPoolFunded { .. } => Ok(()),
         PalwConsensusObjectV2::ModelSell { signature, .. } if !signature.is_empty() => Ok(()),
         PalwConsensusObjectV2::ModelSell { .. } => Err("a model sell must carry the holder's signature — unsigned, anyone could drain a position"),
         // ADR-0088: every registry object is attributed to a bond and carries that bond's signature,
@@ -581,6 +584,27 @@ pub fn palw_model_buy_binds_its_carrier_v1(tx: &Transaction, object: &PalwConsen
     Ok(())
 }
 
+/// **ADR-0152-adjacent (Activation Pool): a top-up's carrier pays `amount` to the class's
+/// activation sink**, at the output the object names, or the object does not ride. The block rule
+/// ([`crate::palw_activation_pool_v1::palw_activation_sink_binding_refusal_v1`]) already refused
+/// every activation sink no object binds; this is the other direction — an object naming an output
+/// that is not that sink with that value credits nothing.
+pub fn palw_activation_pool_binds_its_carrier_v1(tx: &Transaction, object: &PalwConsensusObjectV2) -> Result<(), &'static str> {
+    let PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, sink_index } = object else {
+        return Ok(());
+    };
+    let Some(output) = tx.outputs.get(*sink_index as usize) else {
+        return Err("an activation top-up names a sink output its carrier does not have");
+    };
+    if output.value != *amount {
+        return Err("an activation top-up declares an amount its sink output does not hold");
+    }
+    if crate::palw_activation_pool_v1::palw_activation_sink_class_v1(&output.script_public_key) != Some(*class_id) {
+        return Err("an activation top-up's sink output must be the class's own activation sink");
+    }
+    Ok(())
+}
+
 /// **The 2026-09-23 Position route matrix, P-B1: who a refused carrier buy or seed is paid back
 /// to** — the P2PKH-ML-DSA-87 payload of the carrier's first output that pays one, and `None` for
 /// any other object, a zero amount, or a carrier with no such output.
@@ -602,6 +626,10 @@ pub fn palw_model_carrier_refund_v1(
     let (line_id, amount) = match object {
         PalwConsensusObjectV2::ModelBuy { line_id, msk_in, .. } => (*line_id, *msk_in),
         PalwConsensusObjectV2::ModelSeed { line_id, msk_seed, .. } => (*line_id, *msk_seed),
+        // ADR-0152-adjacent (Activation Pool): a refused top-up goes back the same way, named by the
+        // class it was for (the refund row's `line_id` field is a log label; the row is keyed by
+        // the carrier).
+        PalwConsensusObjectV2::ActivationPoolFunded { class_id, amount, .. } => (*class_id, *amount),
         _ => return None,
     };
     if amount == 0 {
@@ -669,6 +697,10 @@ pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwL
             continue;
         }
         if let Err(reason) = palw_model_buy_binds_its_carrier_v1(tx, &payload.object) {
+            out.skipped.push((id, reason));
+            continue;
+        }
+        if let Err(reason) = palw_activation_pool_binds_its_carrier_v1(tx, &payload.object) {
             out.skipped.push((id, reason));
             continue;
         }

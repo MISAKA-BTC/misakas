@@ -4216,6 +4216,36 @@ impl VirtualStateProcessor {
         ))
     }
 
+    /// **ADR-0152-adjacent (op 200): one class's Activation Pool at the tip** — the row, the terms
+    /// in force at the tip's DAA, what (a) would pay now and the span its next audit falls at (R2's
+    /// stagger over the registry fold's period). `None` off ConsensusV2 or before the first state.
+    pub fn palw_activation_pool_v1_impl(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<kaspa_consensus_core::palw_activation_pool_v1::PalwActivationPoolReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let tip_daa = self.headers_store.get_header(tip).map(|h| h.daa_score).unwrap_or(0);
+        let fold = self.palw_model_registry_fold_at(tip_daa);
+        let schedule = fold.as_ref().map(|fold| {
+            (
+                fold.span_daa,
+                kaspa_consensus_core::palw_model_registry_v1::palw_admission_audit_period_spans_v2(
+                    state_params.epoch_length(),
+                    fold.span_daa,
+                    fold.admission_audit_period_daa,
+                ),
+            )
+        });
+        Some(kaspa_consensus_core::palw_activation_pool_v1::palw_activation_pool_read_v1(
+            &state,
+            &class_id,
+            self.palw_activation_pool_at(tip_daa),
+            tip_daa,
+            schedule,
+        ))
+    }
+
     /// Class panel status, bonded seats, and per-claim assignments at the tip.
     pub fn palw_panel_network_view_v1_impl(&self) -> Option<kaspa_consensus_core::palw_panel_view_v1::PalwPanelNetworkViewV1> {
         let registry = self.palw_model_registry_v1_impl()?;
@@ -7659,6 +7689,19 @@ impl VirtualStateProcessor {
                 Obj::ModelSeed { line_id, .. } => {
                     if !self.palw_model_market_active_at(point.daa_score) {
                         return Err(format!("a model seed of line {line_id} on a chain where the model market is not in force"));
+                    }
+                }
+                // **ADR-0152-adjacent (Activation Pool): a top-up exists only past the pool's fence**,
+                // refused by name before it (the drop-not-invalidate shape; its MSK comes back through
+                // P-B1 where the carrier is refunded). Its sink binding was checked at extraction
+                // (`palw_activation_pool_binds_its_carrier_v1`), and an activation sink nothing binds
+                // made the block invalid at isolation; the class, its status and the least top-up are
+                // the fold's (`palw_activation_pool_admits_v1`).
+                Obj::ActivationPoolFunded { class_id, .. } => {
+                    if self.palw_activation_pool_at(point.daa_score).is_none() {
+                        return Err(format!(
+                            "a top-up of class {class_id}'s Activation Pool on a chain where the pool is not in force"
+                        ));
                     }
                 }
                 Obj::ModelSell { line_id, holder, units_in, min_msk_out, held_units, not_after_daa, pubkey, signature } => {
@@ -11838,6 +11881,9 @@ impl VirtualStateProcessor {
             let paid = match &carried.object {
                 MObj::ModelBuy { msk_in, .. } => *msk_in,
                 MObj::ModelSeed { msk_seed, .. } => *msk_seed,
+                // ADR-0152-adjacent (Activation Pool): a top-up the fold refuses (a missing or Frozen
+                // class, under the least top-up) is paid back by the same route, against the same cap.
+                MObj::ActivationPoolFunded { amount, .. } => *amount,
                 _ => 0,
             };
             if !refunds_armed || paid == 0 {
@@ -15862,6 +15908,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtAttnRootClaimedHeld { .. } => "CourtAttnRootClaimedHeld",
         O::CourtAttnDissected { .. } => "CourtAttnDissected",
         O::CourtAttnChildChosen { .. } => "CourtAttnChildChosen",
+        // ADR-0152-adjacent — a sink-bound top-up of a class's Activation Pool (tag 58).
+        O::ActivationPoolFunded { .. } => "ActivationPoolFunded",
     }
 }
 

@@ -985,6 +985,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwVestingResponse::default())
     }
 
+    /// **ADR-0152-adjacent: one class's Activation Pool** (op 200; testnet-12) — its budgets, its
+    /// payees, the terms and the sink a top-up pays into. A node built before op 200 drops the
+    /// WebSocket on it: ask it last on a connection, or reconnect.
+    async fn get_palw_activation_pool(&self, request: GetPalwActivationPoolRequest) -> RpcResult<GetPalwActivationPoolResponse> {
+        self.get_palw_activation_pool_call(None, request).await
+    }
+    async fn get_palw_activation_pool_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwActivationPoolRequest,
+    ) -> RpcResult<GetPalwActivationPoolResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwActivationPoolResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

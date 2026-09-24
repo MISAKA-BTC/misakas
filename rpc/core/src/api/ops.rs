@@ -268,6 +268,10 @@ pub enum RpcApiOps {
     /// their maturity and queue position, the next block's moves, the counters and the halt.
     /// Appended at the tail: a node built before it drops the WebSocket on it.
     GetPalwVesting = 199,
+    /// ADR-0152-adjacent (user decision 2026-09-25): one class's Activation Pool — its budgets,
+    /// who was paid, the operators credited toward the activation bonus, the terms and the sink a
+    /// top-up pays into. Appended at the tail: a node built before it drops the WebSocket on it.
+    GetPalwActivationPool = 200,
 }
 
 impl RpcApiOps {

@@ -42,6 +42,9 @@ fn the_ledger_is_the_only_thing_that_moved_testnet12() {
     let mut parent = inert_twin(&palw_t12_shipped_params());
     println!("testnet-12 at the parent (the ledger taken away): {:?}", ids(&parent));
     parent.palw_offence_attribution = None;
+    // ADR-0152-adjacent: the Activation Pool landed after this pin was taken; it is taken away
+    // here too, and `palw_activation_pool_is_t12_only` pins what it moves.
+    parent.palw_activation_pool = None;
     let now = ids(&parent);
     assert_eq!((now.0.as_str(), now.1.as_str(), now.2.as_str()), T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION);
 }

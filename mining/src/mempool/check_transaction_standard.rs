@@ -162,8 +162,13 @@ impl Mempool {
             // where `palw_model_market` is `None` and consensus refuses the form outright — relayed
             // a transaction it knew consensus would reject, which is the exact rule the PQ-only
             // carve-out above this one cites as its own reason to exist.
-            let is_model_sink = self.config.model_sink_relay_allowed
-                && kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some();
+            let is_model_sink = (self.config.model_sink_relay_allowed
+                && kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&output.script_public_key).is_some())
+                // ADR-0152-adjacent (Activation Pool): the activation sink, on the same terms where
+                // the network declares the pool (consensus refuses an unbound one at isolation).
+                || (self.config.activation_sink_relay_allowed
+                    && kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&output.script_public_key)
+                        .is_some());
             let output_rejected = if self.config.pq_only {
                 !output_class.is_pq_standard() && output_class != ScriptClass::EvmDepositLock && !is_model_sink
             } else {
@@ -201,6 +206,13 @@ impl Mempool {
         // be spelled once, in one condition, or the pair drifts.
         if self.config.model_sink_relay_allowed
             && kaspa_consensus_core::palw_model_market_v1::palw_model_sink_class_v1(&transaction_output.script_public_key).is_some()
+        {
+            return false;
+        }
+        // ADR-0152-adjacent (Activation Pool): the activation sink is not dust either, under the same gate.
+        if self.config.activation_sink_relay_allowed
+            && kaspa_consensus_core::palw_activation_pool_v1::palw_activation_sink_class_v1(&transaction_output.script_public_key)
+                .is_some()
         {
             return false;
         }
