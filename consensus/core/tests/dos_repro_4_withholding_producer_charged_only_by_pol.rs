@@ -417,9 +417,22 @@ struct Accused {
     disclose: u64,
 }
 
-/// The DA route, folded by `go`: `DefaultAccused` -> disclose window lapses -> `ProducerWithholding`.
+/// testnet-12 with `palw_rcore_plus` forced off (C7 cleared, mirrors re-synced): the fence-off twin
+/// on which ADR-0062's v1 court — the route this repro measured — stands. Past the fence the DA
+/// route is ADR-0152 M3's (`rcore_m3_da_court`: sessions in side maps, DA-6's price on the accuser's
+/// free half, DA-7's default).
+fn t12_rcore_off() -> Params {
+    let mut p = t12();
+    p.palw_rcore_plus = None;
+    p.palw_rcore_conservative_classes = &[];
+    p.sync_palw_rcore_plus();
+    p
+}
+
+/// The DA route, folded by `go`: `DefaultAccused` -> disclose window lapses -> `ProducerWithholding`
+/// — ADR-0062's v1 court, on the fence-off twin (ADR-0152 R6).
 fn da_accused(go: FoldFn) -> Accused {
-    let p = t12();
+    let p = t12_rcore_off();
     let (floor, pwu, per) = floor_terms(&p);
     let collateral = at_least_the_floor(&p, per.collateral);
     let (sp, mut s) = setup(&p, collateral);
@@ -438,7 +451,14 @@ fn da_accused(go: FoldFn) -> Accused {
     book.tick(&s, &keys, daa);
     let seats = seated(&p, &s, &id, h(0xA1));
     s = step(&s, daa, blue, &[PalwConsensusObjectV2::PanelBound { claim: id, anchor: h(0xA1), seats: seats.clone() }]).unwrap().0;
-    let duty = palw_panel_seat_exposure_v1(claim.reserved, claim.escrowed_reward, seats.len(), extras(&p, daa).panel_reward_multiple_permille);
+    // The duty the bind wrote: past ADR-0152's `palw_rcore_plus` (testnet-12's genesis) L-4's
+    // `duty_bind` — the cap `(w + E) / 5` while every lock is priced on the whole gain (the S review's
+    // H1) — and below it the panel economy's.
+    let duty = if sp.rcore_plus_active_at(daa) {
+        s.panel_duty_row_of(&id).expect("the bind writes a duty row").seat_exposure
+    } else {
+        palw_panel_seat_exposure_v1(claim.reserved, claim.escrowed_reward, seats.len(), extras(&p, daa).panel_reward_multiple_permille)
+    };
 
     let accuser = seats[0].bond;
     let accuser_before = s.reserved_exposure(&accuser);

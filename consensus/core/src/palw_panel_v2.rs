@@ -198,7 +198,8 @@ pub struct PalwPanelValidLockV1 {
     pub window_court: u64,
     /// **ADR-0152 L-4b / SR-7 (S-SPEC §3.3): the one-ledger seat filter** — `Some` where
     /// `Params::palw_rcore_plus` is active at the binding block. Then a bond is drawn iff
-    /// `committed + eligibility ≤ collateral × ceiling_permille / 1000` (the bind's own test) and
+    /// `eligibility` fits its work room — `committed + eligibility ≤ collateral × ceiling_permille /
+    /// 1000` and `committed + accuser + eligibility ≤ collateral` (the bind's own test) — and
     /// the panel economy's headroom test is not asked; `required` and the 100% `slashable_available`
     /// ledger are not read. The stake-weighted draw (M4) keeps this as its eligibility filter.
     pub rcore: Option<PalwRcoreSeatFilterV1>,
@@ -221,11 +222,19 @@ impl PalwPanelValidLockV1 {
     /// asks this of every eligible bond of every pending claim (the route-matrix re-audit's #3).
     pub fn admits(&self, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> bool {
         if let Some(filter) = self.rcore {
+            // The one invariant's work gate (the S review's M1): the room is the 500‰ ceiling less
+            // `committed`, never past `collateral − committed − accuser`, as the bind measures it.
             let Some(record) = state.bond(bond) else { return false };
-            let ceiling = (record.collateral as u128).saturating_mul(filter.ceiling_permille as u128) / 1000;
             let committed =
                 crate::palw_state_v2::palw_bond_committed_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court);
-            return committed.saturating_add(filter.eligibility) <= ceiling;
+            let room = crate::palw_state_v2::palw_rcore_gate_room_of_v1(
+                record.collateral,
+                filter.ceiling_permille,
+                committed,
+                crate::palw_state_v2::palw_accuser_exposure_v1(state, bond),
+                crate::palw_state_v2::PalwRcoreGateV1::Work,
+            );
+            return filter.eligibility <= room;
         }
         let posted = state.bond(bond).map(|b| b.collateral as u128).unwrap_or(0);
         if posted < self.required {

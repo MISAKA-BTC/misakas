@@ -31,14 +31,21 @@ struct Skeleton {
 fn skeleton(armed: bool) -> Skeleton {
     let (config, bundle, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
     assert!(config.params.palw_rcore_plus.is_some_and(|f| f.is_active(0)), "testnet-12 arms R-core+ from genesis");
-    let config: Config = if armed {
-        config
+    let (config, bundle): (Config, PalwConsensusParamsV2) = if armed {
+        (config, bundle)
     } else {
         let mut params = config.params.clone();
         params.palw_rcore_plus = None;
         params.palw_rcore_conservative_classes = &[];
         params.sync_palw_rcore_plus();
-        ConfigBuilder::new(params).skip_proof_of_work().build()
+        let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+        // The twin's own bundle (its mirrors re-synced), so the fold this harness drives reads the
+        // ruleset the processor reads — M3's tag 55 folds past the fence and is refused below it.
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(twin) = &config.params.palw_consensus_mode else {
+            unreachable!("testnet-12 is ConsensusV2")
+        };
+        let twin = twin.clone();
+        (config, twin)
     };
     config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
     let ctx = TestContext::new(TestConsensus::new(&config));
@@ -102,21 +109,25 @@ impl Skeleton {
             Obj::ReporterRevealed { offence_key: Hash64::from_u64_word(0x54), reporter: card, salt: [0x54; 32] },
             Obj::MaterialDisclosedV2 {
                 claim: Hash64::from_u64_word(0x55),
-                unit: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
-                answer: Box::new(kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
-                    version: 1,
-                    claim: Hash64::from_u64_word(0x55),
-                    missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
-                    binding,
-                    disclosure: kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
-                        opening: kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
-                            first_leaf_index: 0,
-                            leaf_hashes: vec![],
-                            siblings: vec![],
+                unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Held(
+                    kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
+                ),
+                answer: kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Held(Box::new(
+                    kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                        version: 1,
+                        claim: Hash64::from_u64_word(0x55),
+                        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
+                        binding,
+                        disclosure: kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                            opening: kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
+                                first_leaf_index: 0,
+                                leaf_hashes: vec![],
+                                siblings: vec![],
+                            },
                         },
+                        signature: Vec::new(),
                     },
-                    signature: vec![1; 8],
-                }),
+                )),
                 discloser: card,
                 signature: vec![1; 8],
             },
@@ -125,9 +136,12 @@ impl Skeleton {
     }
 }
 
-/// **Tags 53–56 are dropped by the gate and the walk and refused by the fold, fence on or off.**
-/// The stateless ride table admits each (their shape rules are their owners'), so what keeps them
-/// inert is the acceptance layer and the fold, by name.
+/// **Tags 53, 54 and 56 are dropped by the gate and the walk and refused by the fold, fence on or
+/// off; tag 55 is M3's past `palw_rcore_plus`.** The stateless ride table admits each (their shape
+/// rules are their owners'), so what keeps the declared ones inert is the acceptance layer and the
+/// fold, by name. Tag 55 past the fence is judged: this one's signature is junk, so the gate refuses
+/// it for that, the walk drops it, and the fold — which never reads a signature — refuses it for the
+/// claim it names, which this chain does not hold. Below the fence it is declared-not-landed.
 #[tokio::test]
 async fn rcore_v22_objects_are_dropped_by_the_gate_and_the_walk_and_refused_by_the_fold() {
     for armed in [true, false] {
@@ -136,6 +150,14 @@ async fn rcore_v22_objects_are_dropped_by_the_gate_and_the_walk_and_refused_by_t
             assert_eq!(borsh::to_vec(&object).unwrap()[0], tag, "{object:?}");
             kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
                 .expect("the ride table admits the shape; acceptance drops it");
+            if armed && tag == 55 {
+                let why = s.validate(&object).expect_err("the gate refuses an unsigned answer");
+                assert!(why.contains("is not signed by the bond it names"), "tag 55: {why}");
+                assert!(s.accepted(&object).is_empty(), "tag 55: the walk drops it with the block standing");
+                let err = s.fold(&object).expect_err("the fold refuses it too");
+                assert!(matches!(err, PalwStateV2Error::MissingClaim(_)), "tag 55: {err}");
+                continue;
+            }
             let why = s.validate(&object).expect_err("the gate drops a declared-not-landed object");
             assert!(why.contains("declared by the v22 layout"), "armed {armed}, tag {tag}: {why}");
             assert!(s.accepted(&object).is_empty(), "armed {armed}, tag {tag}: the walk drops it with the block standing");

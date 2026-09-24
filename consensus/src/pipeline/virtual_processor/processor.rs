@@ -7060,6 +7060,48 @@ impl VirtualStateProcessor {
                 // read — the fold refuses the same objects (`RcoreObjectNotLanded`), so the gate and
                 // the fold agree, and the block carrying one stands. Each owner replaces this arm
                 // with its acceptance rule (S-7: 53/54; M3: 55; S-5: 56).
+                //
+                // **M3 (ADR-0152 DA-4): tag 55 past `palw_rcore_plus`.** The DA court's fence, the
+                // ruleset's close ceiling on the answer, and the discloser's ML-DSA-87 over
+                // `palw_da_disclosure_message_v4` under the DA-disclosure-v4 context, verified against the
+                // DISCLOSER's registered key — any locked signer may answer (X7), so the signer is the
+                // bond the object names, and whether that bond is liable on the claim is the fold's
+                // (`DaDiscloserNotLiable`). Below the fence it stays refused by name, as before.
+                Obj::MaterialDisclosedV2 { claim, unit, answer, discloser, signature }
+                    if state_params.rcore_plus_active_at(point.daa_score) =>
+                {
+                    if !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a data-availability answer on a network with no V2 court parameters".to_string())?;
+                    let bytes = borsh::to_vec(answer).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim}'s answer is {bytes} bytes, above this ruleset's {}-byte close ceiling (DA-8)",
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let record =
+                        state.bond(discloser).ok_or_else(|| format!("an answer names bond {discloser:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_da_rcore_v1::palw_da_disclosure_message_v4(
+                        &self.palw_network_domain_v2(),
+                        claim,
+                        unit,
+                        &kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_digest_v1(answer),
+                        discloser,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_da_rcore_v1::PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim}'s answer is not signed by the bond it names"));
+                    }
+                }
                 Obj::ReporterCommitted { .. }
                 | Obj::ReporterRevealed { .. }
                 | Obj::MaterialDisclosedV2 { .. }
@@ -7107,6 +7149,7 @@ impl VirtualStateProcessor {
                                 state,
                                 state_params,
                                 &self.palw_transition_extras_for(point),
+                                claim,
                                 claim_record,
                                 point.daa_score,
                                 panel_params.seat_count() as usize,
@@ -8674,7 +8717,14 @@ impl VirtualStateProcessor {
                     // The demanding seat's own draw — keyed by the network domain, which is held here
                     // and not in the fold — must have put the leaf's interval in that seat's sample,
                     // so no seat can pick the leaf an executor must put on chain.
-                    if let kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf } = accusation.missing {
+                    //
+                    // **ADR-0152 DA-3 (M3): not past `palw_rcore_plus`**, where a named `StepLeaf` is
+                    // free — any leaf inside the binding's bound, from a seat or not — and the per-seat
+                    // session budget (DA-8) replaces the once-per-seat rule; drawn units, seeded by the
+                    // accepting block, are what the accuser cannot choose.
+                    if let kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf } = accusation.missing
+                        && !state_params.rcore_plus_active_at(point.daa_score)
+                    {
                         let panel =
                             state.panel(&claim_id).ok_or_else(|| format!("claim {claim_id} has no bound panel to demand from"))?;
                         let seat_index = panel
@@ -8695,6 +8745,11 @@ impl VirtualStateProcessor {
                 }
                 Obj::MaterialDisclosedHeld { disclosure } => {
                     let claim_id = disclosure.claim;
+                    if state_params.rcore_plus_active_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: MaterialDisclosedHeld is retired past palw_rcore_plus; MaterialDisclosedV2 answers (DA-1)"
+                        ));
+                    }
                     if !self.palw_held_context_at(point.daa_score) || !self.palw_da_court_at(point.daa_score) {
                         return Err(format!(
                             "claim {claim_id}: a held disclosure needs the held regime and the data-availability court (ADR-0103)"
@@ -8876,6 +8931,11 @@ impl VirtualStateProcessor {
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
                     }
+                    if state_params.rcore_plus_active_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: MaterialDisclosed is retired past palw_rcore_plus; MaterialDisclosedV2 answers (DA-1)"
+                        ));
+                    }
                     let court = self
                         .palw_court_params_v2
                         .as_ref()
@@ -8962,6 +9022,13 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
             prompt_ids_form: self.palw_prompt_ids_form_at(daa_score),
             base_class_id: self.palw_v2_bundle.as_ref().map(|bundle| bundle.base_class_id).unwrap_or_default(),
+            // ADR-0152 N9 (M3): the fold's one predicate, read from the same bundle mirror.
+            da_signer_liability: self.palw_v2_bundle.as_ref().is_some_and(|bundle| {
+                kaspa_consensus_core::palw_state_v2::palw_da_signer_liability_armed_v1(
+                    &bundle.state,
+                    kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+                )
+            }),
         }
     }
 
@@ -9408,6 +9475,8 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
+        // The claim's id: the buyback bound `s` of L-1's `G_res` reads the claim's root through it.
+        claim_id: &Hash64,
         claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
         now_daa: u64,
         // The panel's seat count: what `duty_bind` divides the claim's commitment by.
@@ -9438,6 +9507,7 @@ impl VirtualStateProcessor {
                     state,
                     state_params,
                     extras,
+                    claim_id,
                     claim,
                     seat_count,
                     now_daa,
@@ -9673,6 +9743,8 @@ impl VirtualStateProcessor {
             // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
             // after the gate refused it.
             offence_attribution_active: self.palw_offence_attribution_at(daa_score),
+            // ADR-0152 X7 / N9 (M3): the peer's P2-7 constant, and nothing else.
+            seat_da_answer_landed: kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
@@ -11181,6 +11253,7 @@ impl VirtualStateProcessor {
                 state,
                 state_params,
                 binding_extras,
+                claim_id,
                 claim,
                 block_daa,
                 panel_params.seat_count() as usize,

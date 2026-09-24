@@ -48,9 +48,13 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// ids. The value is testnet-12 at v22 with this fence alone taken away (R-core+ still armed), so the
 /// property is unchanged: this fence is exactly the difference. v21: `39d512cf…` / `f7db37bf…` /
 /// `b16bf05a…`.
+///
+/// **Re-pinned once more by M3** (ADR-0152 DA-4, IMPL-7): the DA-disclosure-v4 context closes
+/// `COMPLETE_V5`, so the bundle's context root, and with it testnet-12's params and identity ids,
+/// moved; the schedule did not (no fence moved). v22 skeleton: `cf57a2e9…` / `2b48d4ee…`.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "cf57a2e9ae416542c53e14dc5944f84bf76b23ffef6ea1bb01b1898aeb71ef00",
-    "2b48d4ee10c15af9cd6e4f267e92472232e3b7d71c13ce57ecb5af592866a85c",
+    "f5eee4746137d0e40a58fd5e99bfdc47738800550ad313811be7b1eed185821b",
+    "75666d42d34312c76691de9d1f876465e58502e48d38bde1aa3d7cce0906e7c9",
     "75282ad229d5f8617aa5b3f5b818ddab9defdc893f1276c6a079c080af7debff",
 );
 

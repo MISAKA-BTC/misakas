@@ -1601,6 +1601,7 @@ pub fn palw_model_registry_read_v2(
                 if rate_rule {
                     crate::palw_state_v2::palw_panel_room_read_v1(
                         state,
+                        params,
                         class_id,
                         per_span,
                         ccu_of(class_id).saturating_mul(seat_count),

@@ -41,14 +41,27 @@ pub fn model_classes(p: &Params) -> (Hash64, Hash64) {
     (classes[1].0, classes[2].0)
 }
 
+/// **The execution lane as the processor hands it to the fold at `daa`** (`palw_transition_extras_for`):
+/// the lane's span and, where `palw_execution_quanta` is armed, `PALW_EXECUTION_QUANTUM_V1` — the
+/// quantum the execution rights `R` of a claim's gain are counted in (a zero quantum counts none, the
+/// S review's L1). `span_open_round` reads a header's timestamp the fold never sees here; `0`.
+pub fn processor_round_lane(p: &Params, daa: u64) -> Option<kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1> {
+    p.palw_execution_lane_at(daa).map(|lane| kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 {
+        schedule_span_daa: lane.schedule_span_daa_at(daa),
+        execution_quantum: if p.palw_execution_quanta_at(daa) {
+            kaspa_consensus_core::palw_execution_quanta_v1::PALW_EXECUTION_QUANTUM_V1
+        } else {
+            0
+        },
+        ..Default::default()
+    })
+}
+
 /// The extras the processor hands the fold at `daa`, as far as the class gate reads them.
 pub fn room_extras(p: &Params, daa: u64) -> PalwTransitionExtrasV1 {
     let mut e = extras(p, daa);
     e.work_target_active = p.palw_work_target_at(daa);
-    e.round_lane = p.palw_execution_lane_at(daa).map(|lane| kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1 {
-        schedule_span_daa: lane.schedule_span_daa_at(daa),
-        ..Default::default()
-    });
+    e.round_lane = processor_round_lane(p, daa);
     e
 }
 

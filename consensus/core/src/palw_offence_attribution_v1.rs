@@ -219,11 +219,17 @@ pub struct PalwExecutorRefutedEvidenceV1 {
 
 /// **What the identity checks read besides the target and the binding**: the network's prompt-id
 /// form (a class's form is derived from it, `palw_prompt_ids_form_of_class_v1`) and which class is
-/// the base one (whose canonical job the chain derives, J5).
+/// the base one (whose canonical job the chain derives, J5) — and the one ruleset switch the
+/// adjudicators read beside them: whether a DA-confirmed withholding makes a `Valid` signer liable
+/// (`da_signer_liability`, [`crate::palw_state_v2::palw_da_signer_liability_armed_v1`]; N9).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwIdentityRulesV1 {
     pub prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     pub base_class_id: Hash64,
+    /// ADR-0152 N9 / X7 (M3): `ProducerWithholding` may restate a DA-7 default against a covering
+    /// `Valid` signer. `false` wherever `palw_rcore_plus` is dormant, and wherever the ruleset keeps
+    /// signer liability dormant.
+    pub da_signer_liability: bool,
 }
 
 /// **Which identity check a binding failed** — the first, in the addendum's order (§4-bis.2):
@@ -502,7 +508,10 @@ pub fn palw_false_valid_assigned_mask_v1(
 /// * `ProducerWithholding` (F2 review, F-2): the void a producer's own silence writes. A bystander
 ///   files `DefaultAccusedHeld`, the colluding producer stays silent, the claim voids — and the
 ///   honest full seat, which owes no disclosure and has no move in that session, would lose its
-///   whole lock. Refused until F3 lands seat-side disclosure and the S-cap;
+///   whole lock. Refused HERE, always; past `palw_rcore_plus` M3's court gives the seat the move it
+///   lacked (any locked signer answers, X7) and [`palw_check_panel_false_valid_v2`] admits the
+///   contradiction before this list is read, but only as the restatement of a DA-7 default (N9,
+///   [`palw_da_default_confirms_withholding_v1`]);
 /// * `ExecutorEquivocation`: it proves a key signed two roots, not that this claim's root is
 ///   false, and no production code builds the attestations it carries;
 /// * `CourtExecutorGuilty`: no code ever writes the consumed row it names;
@@ -519,7 +528,8 @@ pub fn palw_false_valid_admission_v1(
         C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
         C::IdentityMismatch { .. } | C::OutputMismatch { .. } => Ok(PalwFalseValidAdmissionV1::ClaimProving),
         C::ProducerWithholding { .. } => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
-            "ProducerWithholding is a void the producer's own silence writes, and a seat owes no disclosure it could answer it with (until F3)",
+            "ProducerWithholding convicts a Valid signer only as the restatement of a DA-confirmed default (ADR-0152 N9): no \
+             DA session defaulted on this claim at that DAA, and a seat owes no disclosure it could answer any other void with",
         )),
         C::ExecutorEquivocation(_) => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
             "ExecutorEquivocation proves a key signed two roots, not that this claim's execution is false",
@@ -974,8 +984,9 @@ fn adjudicate_against_claim_v1(
 ///    data-availability session, held or not, no longer blocks a conviction; voiding under one is
 ///    handled where the claim is written — the held rows dropped, the accuser's reservation given
 ///    back — and a filer can no longer open a session to delay one);
-/// 7. the contradiction is admitted ([`palw_false_valid_admission_v1`]; `ProducerWithholding` is
-///    refused until F3), and a named void is the one the chain wrote on this claim
+/// 7. the contradiction is admitted ([`palw_false_valid_admission_v1`]; `ProducerWithholding` only as
+///    the restatement of a DA-7 default, [`palw_da_default_confirms_withholding_v1`], N9), and a named
+///    void is the one the chain wrote on this claim
 ///    (`palw_void_binds_claim_v1`, the V1 fold's own reading) — a PROVEN `CourtFraud`, never a
 ///    court's `CourtDefault` (the executor's silence, which proves nothing a seat replayed; F2
 ///    residual);
@@ -1037,8 +1048,24 @@ pub fn palw_check_panel_false_valid_v2(
     if state.open_courts_of(&target.claim_id) > 0 {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
-    let admission = palw_false_valid_admission_v1(&payload.contradiction)?;
-    if let PalwFalseValidAdmissionV1::NamedVoid { reason, voided_daa } = admission {
+    // ADR-0152 N9 (M3): `ProducerWithholding` is admitted against a `Valid` signer exactly when a
+    // DA-7 default confirmed the claim's withholding at that DAA — the `DaDefault` record (kind 5),
+    // which only M3's sweep writes, past `palw_rcore_plus`. It restates the default: the signer's
+    // (seat, claim) key is the one DA-7's own S4 on covering signers is written under, so whichever
+    // lands second is a no-op; its site is `Whole` (only a full attestation is liable); and the
+    // adjudicator already requires the receipt to be `Valid` (never `Sampled`, `Incapable` or
+    // `Unavailable`). Every other `ProducerWithholding` is refused as F-2 refused it.
+    let da_confirmed = rules.da_signer_liability
+        && matches!(payload.contradiction, PalwPanelContradictionV1::ProducerWithholding { voided_daa }
+            if palw_da_default_confirms_withholding_v1(state, &target, voided_daa));
+    let admission = if let (true, PalwPanelContradictionV1::ProducerWithholding { voided_daa }) = (da_confirmed, &payload.contradiction) {
+        PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::ProducerWithholding, voided_daa: *voided_daa }
+    } else {
+        palw_false_valid_admission_v1(&payload.contradiction)?
+    };
+    if let PalwFalseValidAdmissionV1::NamedVoid { reason, voided_daa } = admission
+        && !da_confirmed
+    {
         // A court's DEFAULT is not its verdict (F2 residual): the void the executor's own
         // silence wrote proves nothing about the execution the seats replayed, so a
         // `CourtFraud` contradiction naming it is refused by name rather than as a mismatch.
@@ -1067,6 +1094,15 @@ pub fn palw_check_panel_false_valid_v2(
     palw_false_valid_liable_v1(&payload.receipt, site, target.segment_count, assigned, step_leaf_count)?;
     let acts_on_claim = !matches!(admission, PalwFalseValidAdmissionV1::NamedVoid { .. });
     Ok(PalwFalseValidFindingV1 { target, site, acts_on_claim, forfeit })
+}
+
+/// **ADR-0152 N9: did a DA-7 default confirm this claim's withholding at `voided_daa`?** — the
+/// claim's `DaDefault` record (kind 5, keyed `(executor, claim)`) exists and was written at that DAA.
+/// Only M3's sweep writes it, past `palw_rcore_plus`, so below the fence this is always `false`.
+pub fn palw_da_default_confirms_withholding_v1(state: &PalwChainStateV2, target: &PalwOffenceTargetV1, voided_daa: u64) -> bool {
+    state
+        .consumed_offence(&crate::palw_da_rcore_v1::palw_da_offence_id_v1(&target.executor_bond.0, &target.claim_id))
+        .is_some_and(|row| row.kind == crate::palw_offence_v1::PalwOffenceKindV1::DaDefault && row.accepted_daa == voided_daa)
 }
 
 /// `H(domain ‖ claim)` — the evidence half of a kind-4 offence id: one refuted execution per claim,
@@ -1179,7 +1215,11 @@ mod tests {
     /// The identity rules these fixtures run under: the flat network form, and the fixture class as
     /// the base one (so J5 reads the floor's canonical job wherever a test builds a floor binding).
     fn rules() -> PalwIdentityRulesV1 {
-        PalwIdentityRulesV1 { prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, base_class_id: h64(CLASS) }
+        PalwIdentityRulesV1 {
+            prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            base_class_id: h64(CLASS),
+            da_signer_liability: false,
+        }
     }
 
     fn seat(n: u64) -> PalwBondKeyV2 {
@@ -1998,7 +2038,7 @@ mod tests {
         for form in [Form::Flat, Form::MerkleV1] {
             let honest = floor_binding_for_tests_v1(&anchor, form);
             let class = honest.shape_profile.shape_profile_id();
-            let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: class };
+            let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: class, da_signer_liability: false };
             let judge = |binding: &PalwStepBindingV2, full: bool| {
                 palw_binding_identity_fault_v1(&attempt_target(binding, anchor), binding, rules, full)
             };
@@ -2077,7 +2117,7 @@ mod tests {
             assert_eq!(palw_binding_identity_fault_v1(&target, &unverified, rules, true), Err(E::BindingUnverified));
             // **The F1-M residual, pinned:** on a class whose canonical job the chain does not derive
             // (every class but the base one, until CoreV1) the relabel has no fault here.
-            let model_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(0xBA5E) };
+            let model_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(0xBA5E), da_signer_liability: false };
             assert_eq!(
                 palw_binding_identity_fault_v1(&attempt_target(relabel, anchor), relabel, model_rules, true),
                 Ok(None),
@@ -2168,7 +2208,7 @@ mod tests {
             edit(&mut moved_ctx);
             assert_ne!(palw_fp_job_pin_of_context_v1(&moved_ctx), pin, "the pin reads the {what}");
         }
-        let rules = PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id };
+        let rules = PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id, da_signer_liability: false };
         let fp_binding = moved(&floor, |b| b.job_context = ctx.clone());
         let mut target = attempt_target(&fp_binding, pin);
         target.lane = Some(PalwClaimSourceKindV1::FreePrompt);

@@ -671,10 +671,24 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
             crate::palw_state_v2::palw_claim_escrow_v1(state_params, ctx.subsidy, budget_fences.escrow_carve),
         ))
         .ok_or(PalwAdmissionV2Error::Overflow("claim reservation"))?;
-    let ceiling = (bond.collateral as u128)
-        .checked_mul(admission.max_exposure_ratio_permille as u128)
-        .ok_or(PalwAdmissionV2Error::Overflow("exposure ceiling"))?
-        / 1000;
+    let ceiling = if rcore {
+        // **The one invariant's work gate (the S review's M1)**: past `palw_rcore_plus` the room is
+        // `palw_rcore_gate_room_of_v1` — the 500‰ ceiling less `committed`, never past
+        // `collateral − committed − accuser` — so `committed + accuser + claim ≤ C` holds here as in
+        // the fold's `apply_attempt`. Reported as the ceiling this claim was measured against.
+        reserved.saturating_add(crate::palw_state_v2::palw_rcore_gate_room_of_v1(
+            bond.collateral,
+            admission.max_exposure_ratio_permille,
+            reserved,
+            crate::palw_state_v2::palw_accuser_exposure_v1(state, &bond_key),
+            crate::palw_state_v2::PalwRcoreGateV1::Work,
+        ))
+    } else {
+        (bond.collateral as u128)
+            .checked_mul(admission.max_exposure_ratio_permille as u128)
+            .ok_or(PalwAdmissionV2Error::Overflow("exposure ceiling"))?
+            / 1000
+    };
     let would_reserve = reserved.checked_add(claim_reservation).ok_or(PalwAdmissionV2Error::Overflow("reserved exposure"))?;
     if would_reserve > ceiling {
         return Err(PalwAdmissionV2Error::ExposureCeilingExceeded {

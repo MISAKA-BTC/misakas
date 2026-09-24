@@ -258,10 +258,10 @@ pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4: &[&[u8]] = &[
 /// `Params::palw_rcore_plus` arms only over a bundle that commits to this set: V4 in V4's order,
 /// then the additions — a prefix is visibly a superset. A V5 network runs everything V4 names.
 ///
-/// **One addition today, two when M3 lands.** The DA-disclosure-v4 context is M3's and is not
-/// defined in this tree; the v22 skeleton commits the reporter-commit context and leaves M3's slot
-/// named below. Testnet-12's genesis bundle states this root, so M3's append re-mints testnet-12's
-/// ruleset id once more before M5 freezes the set — no other network commits to V5.
+/// **Two additions**: the v22 skeleton's reporter-commit context, then M3's DA-disclosure-v4 context
+/// (`MaterialDisclosedV2`, DA-4). Testnet-12's genesis bundle states this root, so M3's append
+/// re-minted testnet-12's ruleset id once more before M5 freezes the set — no other network commits
+/// to V5.
 pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5: &[&[u8]] = &[
     // — V2, in order —
     crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
@@ -292,10 +292,10 @@ pub const PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5: &[&[u8]] = &[
     crate::palw_checkpoint_court_v1::PALW_CHECKPOINT_COURT_MLDSA87_ACCUSE_CONTEXT,
     crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
     crate::palw_held_da_v1::PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT,
-    // — R-core+ (ADR-0152 IMPL-7): the reporter's commitment (R-3) —
+    // — R-core+ (ADR-0152 IMPL-7): the reporter's commitment (R-3), then any locked signer's
+    //   answer to a data-availability session (DA-4, M3) —
     crate::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
-    // TODO(M3, ADR-0152 DA-4): `PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT` is appended here, after
-    // the reporter-commit context, when M3 defines it.
+    crate::palw_da_rcore_v1::PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
 ];
 
 /// The families whose ML-DSA-87 contexts the ConsensusV2 acceptance layer verifies signatures
@@ -2269,16 +2269,19 @@ pub(crate) mod tests {
             ],
             "V4 is V3 then the held regime's three contexts (ADR-0103)"
         );
-        // And V4 opens V5 (ADR-0152 IMPL-7): R-core+'s reporter-commit context. M3's DA-disclosure-v4
-        // context is the second addition and lands with M3; this list learns it then.
+        // And V4 opens V5 (ADR-0152 IMPL-7): R-core+'s reporter-commit context, then M3's
+        // DA-disclosure-v4 context — exactly two additions.
         assert_eq!(
             &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5[..PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4.len()],
             PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4
         );
         assert_eq!(
             &PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V5[PALW_V2_SIGNATURE_CONTEXTS_COMPLETE_V4.len()..],
-            &[crate::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT],
-            "V5 is V4 then R-core+'s reporter-commit context (ADR-0152 IMPL-7; M3 appends DA-disclosure-v4)"
+            &[
+                crate::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
+                crate::palw_da_rcore_v1::PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
+            ],
+            "V5 is V4 then R-core+'s reporter-commit and DA-disclosure-v4 contexts (ADR-0152 IMPL-7)"
         );
         let roots = [
             palw_v2_signature_contexts_root(),

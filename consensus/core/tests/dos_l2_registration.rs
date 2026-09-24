@@ -990,8 +990,9 @@ fn dos_l2_fix12_a_bought_registration_burns_one_msk() {
 /// used to pay the burn, fall to 9 MSK, and leave a later `PanelFalseValid` on that lock only what
 /// was left to take (`slash_bond` clamps). Past the fence it is refused
 /// (`ClassRegistrationBurnUnaffordable`, `already` = the live locked sum); a lock that leaves room
-/// for exactly the burn folds; a lock dead on both clocks does not count; below the fence nothing is
-/// burned and nothing is asked.
+/// for exactly the reservation and the burn folds (past ADR-0152's `palw_rcore_plus` the lock is on
+/// the one ledger the reservation reads, so it no longer overlaps it); a lock dead on both clocks
+/// does not count; below the fence nothing is burned and nothing is asked.
 ///
 /// Fails without the fix: the first registration folds and the bond ends below its live lock.
 #[test]
@@ -1034,10 +1035,23 @@ fn dos_l2_fix12_review_the_burn_leaves_live_locks_covered() {
         }
         other => panic!("the burn must not eat a live lock: {other:?}"),
     }
-    // Exactly the burn's room beside the lock: folds, and the lock is still fully backed.
-    let s0 = with_lock(&extras, collateral as u128 - burn, 1_000_000);
-    let s1 = fold_one(&b, &s0, 2, &bought(&b, &s0, 90_100, 1), &extras).expect("the burn fits beside the lock");
+    // Exactly the room beside the lock: folds, and the lock is still fully backed. Past ADR-0152's
+    // `palw_rcore_plus` (testnet-12's genesis) the live lock is on the one committed ledger the
+    // registration's reservation is measured against as well (the S review's L4), so the room
+    // beside it is the reservation plus the burn — the pre-R-core+ overlap, a lock of `collateral −
+    // burn` beside the reservation, is refused by the burn's first check, whose `already` now
+    // carries the lock.
+    assert!(b.state.rcore_plus_active_at(2), "the premise: the one ledger is armed");
+    let s0 = with_lock(&extras, collateral as u128 - price - burn, 1_000_000);
+    let s1 = fold_one(&b, &s0, 2, &bought(&b, &s0, 90_100, 1), &extras).expect("the reservation and the burn fit beside the lock");
     assert_eq!(s1.bond(&bond_key(ATTACKER)).unwrap().collateral as u128, collateral as u128 - burn);
+    let overlap = with_lock(&extras, collateral as u128 - burn, 1_000_000);
+    match fold_one(&b, &overlap, 2, &bought(&b, &overlap, 90_150, 1), &extras) {
+        Err(PalwStateV2Error::ClassRegistrationBurnUnaffordable { already, .. }) => {
+            assert_eq!(already, collateral as u128 - burn, "`already` is the one ledger, the live lock included")
+        }
+        other => panic!("the reservation may not overlap a live lock past R-core+: {other:?}"),
+    }
     // A lock dead on both clocks and past its horizon stands behind nothing.
     let dead = with_lock(&extras, collateral as u128 - price, 1);
     let far = 1 + 2 * b.state.window_court() + 10;

@@ -268,11 +268,38 @@ fn assert_the_attempt_keeps_its_room(p: &Params, o: &Outcome, object: Step3) {
     assert!(gate(p, &sp, after, o.class, o.next_daa + 1).is_err(), "the charge the object made takes effect for the next block");
 }
 
+/// testnet-12 with `palw_rcore_plus` forced off: ADR-0062's v1 court, where an accusation takes the
+/// claim out of `ReceiptLicensed` (the re-charge this scenario measured; ADR-0152 R6's twin).
+fn t12_rcore_off() -> Params {
+    let mut p = t12();
+    p.palw_rcore_plus = None;
+    p.palw_rcore_conservative_classes = &[];
+    p.sync_palw_rcore_plus();
+    p
+}
+
 #[test]
 fn a_default_accusation_on_a_licensed_claim_and_the_own_attempt_fold_in_one_block() {
-    let p = t12();
+    let p = t12_rcore_off();
     let o = scenario(&p, Step3::Accusation);
     assert_the_attempt_keeps_its_room(&p, &o, Step3::Accusation);
+}
+
+/// **ADR-0152 T21 (M3's row) / DA-1: past `palw_rcore_plus` a DA accusation re-charges nothing.** The
+/// same scenario on testnet-12 as shipped: the accuser's session lives in the side maps and the
+/// licensed claim stays `ReceiptLicensed`, so its replay stays freed — the object alone leaves the
+/// room at one — and the object and the own attempt fold in one block, the session open.
+#[test]
+fn an_rcore_da_session_on_a_licensed_claim_recharges_nothing() {
+    let p = t12();
+    let o = scenario(&p, Step3::Accusation);
+    assert_eq!(o.room_parent, 1, "the class has room for exactly one more claim");
+    assert!(o.precheck.is_ok() && o.rehearsed.is_ok(), "the pre-check and the rehearsal admit: {:?} {:?}", o.precheck, o.rehearsed);
+    assert_eq!(o.room_after_object, 1, "a non-seat DA session neither pauses nor charges (T21)");
+    let (after, _, _) = o.both.as_ref().unwrap_or_else(|e| panic!("the object and the attempt fold in one block: {e}"));
+    assert!(after.claim(&o.own).is_some(), "the block's own attempt is admitted");
+    assert!(matches!(after.claim(&o.first).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "DA-1: the phase is untouched");
+    assert!(after.da_session(&o.first, &bond_key(ACCUSER)).is_some(), "the session is open");
 }
 
 #[test]
