@@ -313,6 +313,7 @@ pub fn drill_family_evidence_v1(
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         if backend.verify_material(bytes, claim) == kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches {
             return Err(PalwDrillError::Backend {
@@ -447,6 +448,7 @@ pub fn drill_free_prompt_evidence_v1(
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         if backend.verify_material(bytes, claim) == kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches {
             return Err(PalwDrillError::Backend {

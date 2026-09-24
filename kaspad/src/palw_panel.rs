@@ -2312,6 +2312,7 @@ impl PalwPanelService {
             anchor,
             attempt_draw: self.attempt_draw_for_claim(session, accepted_block),
             output_root: None,
+            job_pin: None,
         };
         let work = ReplayWork::Attempt(job, prompt);
         let (backend, outcome) = offload(backend, move |b| work.run(b)).await?;
@@ -3785,6 +3786,7 @@ impl PalwPanelService {
                     anchor,
                     attempt_draw,
                     output_root: None,
+                    job_pin: None,
                 };
                 let pool_has_it = materials
                     .get(&duty.claim_id)
@@ -5107,6 +5109,8 @@ impl PalwPanelService {
                                     anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
                                     attempt_draw: None,
                                     output_root: Some(duty.output_root),
+                                    // ADR-0152 v3.1 J-1 (the 3a review's L-b): the pin the claim recorded.
+                                    job_pin: duty.fp_job_pin_v1(),
                                 };
                                 if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
                                     continue;
@@ -5447,6 +5451,7 @@ impl PalwPanelService {
                                     anchor,
                                     attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
                                     output_root: Some(duty.output_root),
+                                    job_pin: duty.fp_job_pin_v1(),
                                 },
                             ) == PalwMaterialVerdictV1::Matches
                             {
@@ -5483,6 +5488,7 @@ impl PalwPanelService {
                                     anchor,
                                     attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
                                     output_root: Some(duty.output_root),
+                                    job_pin: duty.fp_job_pin_v1(),
                                 },
                             ) == PalwMaterialVerdictV1::Matches
                         {
@@ -7696,6 +7702,8 @@ impl PalwPanelService {
             anchor,
             attempt_draw: None,
             output_root: Some(duty.output_root),
+            // ADR-0152 v3.1 J-1 (the 3a review's L-b): the pin the claim recorded.
+            job_pin: duty.fp_job_pin_v1(),
         };
         // **The bound is the CLASS's, in the class's own cadence unit** (audit B, C-2). A
         // checkpoint leaf's `covered_decode_call` counts decode calls on a per-call class and
@@ -8117,6 +8125,7 @@ impl PalwPanelService {
             anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
             backend.as_ref(),
@@ -9286,6 +9295,7 @@ mod seat_duty_panel_key_tests {
             quanta: 0,
             free_prompt: false,
             work_leaves: 0,
+            job_identity: Hash64::default(),
         }
     }
 

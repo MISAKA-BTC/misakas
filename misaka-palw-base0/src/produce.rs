@@ -1078,6 +1078,17 @@ pub fn base0_material_job_is_the_claims_v1<B: kaspa_consensus_core::palw_backend
         return Err(PalwMaterialVerdictV1::Mismatch);
     }
     let Some(prefill_draw) = claim.attempt_draw else {
+        // **A free-prompt claim: the pin the chain recorded, not the id alone** (ADR-0152 v3.1 J-1;
+        // the 3a review's L-b). The job id is `fp_job_id_v3` of whatever job the capture was run
+        // under, so a capture of ANOTHER job under this id — its prompt, tokenizer, width or decode
+        // count moved — passed here, and a full seat that licensed it was liable for the claim's
+        // `IdentityMismatch` (J1, the FP pin). Where the caller has the claim's recorded pin, the
+        // capture's context must reproduce it.
+        if let Some(pin) = claim.job_pin
+            && kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(material_job) != pin
+        {
+            return Err(PalwMaterialVerdictV1::Mismatch);
+        }
         return Ok(());
     };
     let Ok((canonical, _)) = backend.job_for_anchor(claim.anchor) else {

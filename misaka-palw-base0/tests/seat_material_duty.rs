@@ -5,7 +5,8 @@
 //! whole job, SEAT-0's tail, and under `CoreV1` the claim's output root,
 //! `base0_material_answers_the_claim_v1`) and the REPLAY route (`execute_for_verdict`'s roots,
 //! which SEAT-S2 extended with the output root; the comparison is kaspad's `replay_licenses_v1`,
-//! restated here as "every root the claim commits reproduces") — for the floor, the held A16 v7 (a
+//! restated here as "every root the claim commits reproduces", which is this file's statement and
+//! not a guard on kaspad's comparison) — for the floor, the held A16 v7 (a
 //! fold), the per-call A16 v2 (dense) and the held Qwen3.6 v7, each under `CoreV1`:
 //!
 //! * an honest attempt and an honest free prompt: `Matches`, and the replay reproduces every root;
@@ -46,12 +47,21 @@ fn attempt_claim(anchor: Hash64, out: &PalwExecutionOutcomeV1) -> PalwClaimRoots
         anchor,
         attempt_draw: Some(true),
         output_root: Some(out.output_root),
+        job_pin: None,
     }
 }
 
-/// **The replay route**: the seat re-runs the job the CHAIN asked for and every root the claim
-/// commits must reproduce. Destructured field by field — the guard on `output_root`.
-fn replay_licenses(backend: &dyn PalwExecutionBackendV1, job: &PalwJobContextV2, prompt: &[usize], claim: &PalwClaimRootsV1) -> bool {
+/// **The replay route, as THIS FILE restates it**: the seat re-runs the job the CHAIN asked for and
+/// every root the claim commits must reproduce. Destructured field by field — the guard on
+/// `PalwReplayRootsV1::output_root` existing. **Not a guard on kaspad's `replay_licenses_v1`**: the
+/// seat's real comparison (whether it reads the output root) is kaspad's, the peer's SEAT-R; this is
+/// the base0 half's statement of what a replay reproduces, and a green run here says nothing about it.
+fn replay_reproduces_every_root(
+    backend: &dyn PalwExecutionBackendV1,
+    job: &PalwJobContextV2,
+    prompt: &[usize],
+    claim: &PalwClaimRootsV1,
+) -> bool {
     let PalwReplayRootsV1 { execution_root, trace_root, work_leaves: _, output_root } =
         backend.execute_for_verdict(job, prompt).expect("the seat's replay runs");
     assert!(output_root.is_some(), "every shipped family's replay names its output root (SEAT-S2)");
@@ -75,12 +85,15 @@ fn duty(
         let honest = backend.execute(&job, &prompt).expect("the honest run");
         let claim = attempt_claim(anchor, &honest);
         assert_eq!(backend.verify_material(&honest.material, claim), MATCHES, "{label} #{n}: the honest material");
-        assert!(replay_licenses(backend, &job, &prompt, &claim), "{label} #{n}: the honest replay");
+        assert!(replay_reproduces_every_root(backend, &job, &prompt, &claim), "{label} #{n}: the honest replay");
 
         // OutputRoot: the honest run, a ground answer.
         let ground = PalwClaimRootsV1 { output_root: Some(Hash64::from_u64_word(0x6A0D ^ n)), ..claim };
         assert_eq!(backend.verify_material(&honest.material, ground), MISMATCH, "{label} #{n}: a ground output root");
-        assert!(!replay_licenses(backend, &job, &prompt, &ground), "{label} #{n}: the replay's answer is not the ground one");
+        assert!(
+            !replay_reproduces_every_root(backend, &job, &prompt, &ground),
+            "{label} #{n}: the replay's answer is not the ground one"
+        );
 
         // The wrong whole job under the anchor's id: a relabel, a short prefill, the Legacy context.
         let mut lies: Vec<(&str, PalwExecutionOutcomeV1)> = Vec::new();
@@ -110,7 +123,7 @@ fn duty(
         for (what, lie) in &lies {
             let lie_claim = attempt_claim(anchor, lie);
             assert_eq!(backend.verify_material(&lie.material, lie_claim), MISMATCH, "{label} #{n}: {what} — the material route");
-            assert!(!replay_licenses(backend, &job, &prompt, &lie_claim), "{label} #{n}: {what} — the replay route");
+            assert!(!replay_reproduces_every_root(backend, &job, &prompt, &lie_claim), "{label} #{n}: {what} — the replay route");
         }
 
         // The drill's step fault, in the middle of the step space: the replay refuses it.
@@ -118,7 +131,10 @@ fn duty(
         let leaf = capture.binding().step_leaf_count / 2;
         if let Ok(lying) = backend.execute_with_injected_fault(&job, &prompt, leaf) {
             assert_ne!(lying.execution_root, honest.execution_root, "{label} #{n}: another execution");
-            assert!(!replay_licenses(backend, &job, &prompt, &attempt_claim(anchor, &lying)), "{label} #{n}: the step lie");
+            assert!(
+                !replay_reproduces_every_root(backend, &job, &prompt, &attempt_claim(anchor, &lying)),
+                "{label} #{n}: the step lie"
+            );
         }
     }
 
@@ -126,16 +142,45 @@ fn duty(
     let fp = fp_job(profile, form, fp_prompt, 2);
     let run = backend.execute_free_prompt(&fp, fp_prompt).expect("the free-prompt run").outcome;
     let ctx = misaka_palw_base0::produce::base0_material_decode_any_v1(&run.material).expect("decodes").binding().job_context.clone();
+    // The pin the chain records for the claim (`palw_fp_job_pin_v1(commitment)`), which an honest
+    // run's context reproduces (`palw_fp_job_pin_of_context_v1`).
+    let pin = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&ctx);
     let fp_claim = PalwClaimRootsV1 {
         execution_root: run.execution_root,
         trace_root: run.trace_root,
         anchor: ctx.job_id,
         attempt_draw: None,
         output_root: Some(run.output_root),
+        job_pin: Some(pin),
     };
     assert_eq!(backend.verify_material(&run.material, fp_claim), MATCHES, "{label}: the honest free prompt");
     let fp_ground = PalwClaimRootsV1 { output_root: Some(Hash64::from_u64_word(0xF6A0)), ..fp_claim };
     assert_eq!(backend.verify_material(&run.material, fp_ground), MISMATCH, "{label}: a free prompt under a ground answer");
+
+    // **The 3a review's L-b: a capture of ANOTHER job under the served id.** The executor commits the
+    // roots of a run of another prompt and serves that run's job, so the job id the seat derives
+    // from what it was served matches the capture — and the claim's recorded pin (the commitment's
+    // own job) does not. Without the pin the seat licensed it; with it, refused.
+    let mut other_prompt: Vec<usize> = fp_prompt.to_vec();
+    other_prompt[0] = (other_prompt[0] + 1) % profile.vocab_size as usize;
+    let other = fp_job(profile, form, &other_prompt, 2);
+    let relabelled = backend.execute_free_prompt(&other, &other_prompt).expect("the other job runs").outcome;
+    let other_ctx =
+        misaka_palw_base0::produce::base0_material_decode_any_v1(&relabelled.material).expect("decodes").binding().job_context.clone();
+    let served = PalwClaimRootsV1 {
+        execution_root: relabelled.execution_root,
+        trace_root: relabelled.trace_root,
+        anchor: other_ctx.job_id,
+        attempt_draw: None,
+        output_root: Some(relabelled.output_root),
+        job_pin: None,
+    };
+    assert_eq!(backend.verify_material(&relabelled.material, served), MATCHES, "{label}: without the pin the id alone passes");
+    assert_eq!(
+        backend.verify_material(&relabelled.material, PalwClaimRootsV1 { job_pin: Some(pin), ..served }),
+        MISMATCH,
+        "{label}: the claim's recorded pin refuses a capture of another job"
+    );
 }
 
 #[test]
@@ -189,5 +234,5 @@ fn a_legacy_seat_does_not_bind_the_answer_on_the_material_route() {
     let honest = backend.execute(&job, &prompt).unwrap();
     let ground = PalwClaimRootsV1 { output_root: Some(Hash64::from_u64_word(0x6A0D)), ..attempt_claim(anchor, &honest) };
     assert_eq!(backend.verify_material(&honest.material, ground), MATCHES, "Legacy: the material route as it was");
-    assert!(!replay_licenses(&backend, &job, &prompt, &ground), "and the replay still compares the answer");
+    assert!(!replay_reproduces_every_root(&backend, &job, &prompt, &ground), "and the replay still compares the answer");
 }

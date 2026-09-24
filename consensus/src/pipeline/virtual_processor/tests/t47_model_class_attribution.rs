@@ -236,6 +236,7 @@ impl ModelClaim {
             anchor: self.anchor,
             attempt_draw: Some(true),
             output_root: Some(a.output_root),
+            job_pin: None,
         }
     }
 }

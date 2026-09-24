@@ -3413,6 +3413,7 @@ mod free_prompt_tests {
             anchor: job.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");
@@ -3783,6 +3784,7 @@ mod free_prompt_tests {
             anchor: Hash64::from_u64_word(0xA16C0117),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(
             backend.verify_material(&outcome.material, claim),
@@ -3989,6 +3991,7 @@ mod free_prompt_tests {
                     anchor: Hash64::from_u64_word(0xE95),
                     attempt_draw: None,
                     output_root: None,
+                    job_pin: None,
                 }
             ),
             kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
@@ -4106,6 +4109,7 @@ mod free_prompt_tests {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let geometry = crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&dense.binding, interval).expect("a geometry");
         for index in 0..count {
@@ -5221,6 +5225,7 @@ mod free_prompt_tests {
                 anchor: job.job_id,
                 attempt_draw: None,
                 output_root: None,
+                job_pin: None,
             };
             let annexed = backend.open_fp_interval_with_close(&outcome.material, 0, &ids, &[leaf]).expect("the annex");
             let generated = backend.fp_committed_output_ids(&outcome.material).expect("the answer's ids");
@@ -5284,6 +5289,7 @@ mod free_prompt_tests {
             anchor: job.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let leaves = crate::produce::base0_material_decode_any_v1(&honest.material).expect("decodes").binding().step_leaf_count;
         let opened = backend.open_fp_interval(&honest.material, 0, &ids).expect("interval 0 opens");
@@ -5803,6 +5809,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let count = honest.fp_interval_count(&capture).expect("a held capture has intervals");
         assert_eq!(Some(count), honest.fp_interval_count_for(positions, decode), "the executor's count is the chain's");
@@ -5882,6 +5889,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_ne!(lying_claim.execution_root, claim.execution_root, "the lie is committed");
         let t = std::time::Instant::now();
@@ -6051,6 +6059,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let mid = honest.fp_interval_count(&capture).expect("intervals") / 2;
         let opening = honest.open_fp_interval(&capture, mid, &ids).expect("the interval opens");
@@ -6089,6 +6098,7 @@ mod held_real_row_probe {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let lie = liar.open_fp_interval(&lying_capture, mid, &ids).expect("the liar serves its interval");
         let verdict = honest.verify_fp_interval_opening(&lie, lying_claim, mid, &ids, leaves);

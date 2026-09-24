@@ -129,6 +129,15 @@ pub struct PalwClaimRootsV1 {
     /// check that judges a claim can bind its answer; the replay's own is
     /// [`PalwReplayRootsV1::output_root`], and the comparison is the caller's.
     pub output_root: Option<Hash64>,
+    /// **The job pin a FREE-PROMPT claim recorded** (ADR-0152 v3.1 J-1:
+    /// `palw_fp_job_pin_v1(commitment)`, the claim record's `job_identity`), when the caller has it —
+    /// read from chain state like the roots, never off the material. A seat holding an FP capture
+    /// checks the capture's context reproduces it (`palw_fp_job_pin_of_context_v1`) before it signs
+    /// (the 3a review's L-b): the job id alone let a capture of ANOTHER job under this id through,
+    /// and a full seat that licensed it is then liable for the claim's `IdentityMismatch` (J1, FP
+    /// pin). `None` for an attempt claim (its whole job is `attempt_draw`'s) and for a caller with no
+    /// claim record.
+    pub job_pin: Option<Hash64>,
 }
 
 /// What a seat concluded about served material.

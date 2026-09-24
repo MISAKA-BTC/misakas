@@ -881,6 +881,7 @@ pub fn palw_verify_context_vector_v1(
         anchor: job_id,
         attempt_draw: None,
         output_root: None,
+        job_pin: None,
     };
     let work_leaves = binding.step_leaf_count;
     let ctx = binding.job_context.clone();
@@ -1131,6 +1132,7 @@ fn tamper_stage_v1(
         anchor: ctx.job_id,
         attempt_draw: None,
         output_root: None,
+        job_pin: None,
     };
     let work_leaves = binding.step_leaf_count;
     let opening = backend.open_fp_interval(capture, 0, ids)?;

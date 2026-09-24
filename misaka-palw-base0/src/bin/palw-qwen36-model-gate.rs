@@ -382,7 +382,11 @@ fn main() {
 
     // The shipped worker's own assembly (`palw-qwen36-fp-worker::load`), at the width under test.
     let engine_arc = arc.clone();
-    let backend = Qwen36Backend::with_class_profile(arc, model_id.clone(), row.canonical_job, profile.clone(), net.clone());
+    let backend = Qwen36Backend::with_class_profile(arc, model_id.clone(), row.canonical_job, profile.clone(), net.clone())
+        // The shipped worker's rule (the 3a review's H-B): `FpWorkerRuntime::new` refuses a backend without it.
+        .with_attempt_rules(
+            misaka_palw_base0::fp_worker::fp_worker_attempt_rules_v1(&String::from_utf8_lossy(&net)).unwrap_or_else(|why| die(why)),
+        );
     let shape_id = backend.shape_id();
     {
         use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;

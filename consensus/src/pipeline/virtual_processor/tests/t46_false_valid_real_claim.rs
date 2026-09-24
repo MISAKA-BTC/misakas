@@ -3539,6 +3539,7 @@ async fn t18e_the_floor_relabel_is_refuted_by_j5() {
             anchor: claim.anchor,
             attempt_draw: Some(true),
             output_root: Some(claim.envelope.attempt.output_root),
+            job_pin: None,
         },
     );
     assert_eq!(verdict, kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Mismatch, "a seat refuses the relabel");
@@ -3775,9 +3776,10 @@ async fn t18m_a_shared_roots_tickets_are_the_earliest_accepted_finals() {
 }
 
 /// **T18n (review M-1, the insurance): a convicted representative's UNSPENT tickets pass to the
-/// root's remaining Final.** The one case the acceptance order cannot decide is a tie — a borrower
-/// accepted by the SAME chain block as its lender (its own block merging the lender's), where the
-/// claim id breaks it and the borrower grinds it. A schedule minted over that tie holds every ticket
+/// root's remaining Final.** The acceptance order is not authorship (the 3a review's M): a borrower
+/// accepted by the same chain block as its lender ties and wins by its ground id, and a borrower
+/// whose block is a DAG sibling of the lender's can be accepted FIRST. Either way the schedule holds
+/// every ticket under the borrower — modelled here as the tie. A schedule minted over that tie holds every ticket
 /// under the borrower, and one of them is spent (its round's permit accepted on this chain). The
 /// borrower is refuted by kind 4 after `Final` (`IdentityMismatch`: its binding answers the lender's
 /// anchor) and forfeits by claim: its Final leaves the schedule, the spent ticket leaves with it,

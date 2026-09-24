@@ -2906,6 +2906,7 @@ mod tests {
                     anchor: Hash64::from_u64_word(7),
                     attempt_draw: None,
                     output_root: None,
+                    job_pin: None,
                 }
             ),
             PalwMaterialVerdictV1::Unverifiable
@@ -2938,6 +2939,7 @@ mod tests {
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
 
         // `rows = 0, generated = 1` — the row a token was selected from is simply absent.
@@ -3031,6 +3033,7 @@ mod tests {
                     anchor,
                     attempt_draw: None,
                     output_root: None,
+                    job_pin: None,
                 }
             ),
             PalwMaterialVerdictV1::Matches
@@ -3085,6 +3088,7 @@ mod tests {
             anchor,
             attempt_draw: Some(draw),
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&short.material, roots(&short, true)), PalwMaterialVerdictV1::Matches);
         assert_eq!(backend.verify_material(&short.material, roots(&short, false)), PalwMaterialVerdictV1::Mismatch);
@@ -3153,6 +3157,7 @@ mod tests {
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
 
@@ -3329,6 +3334,7 @@ mod tests {
             anchor: ctx.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&bytes, claim), PalwMaterialVerdictV1::Matches);
         let dense_bytes = crate::produce::base0_material_encode_v1(&dense).expect("the dense sink retains").len();
@@ -3901,6 +3907,7 @@ mod tests {
             anchor: job.job_id,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&folded.material, claim), PalwMaterialVerdictV1::Matches);
         let dense_material = crate::produce::base0_material_encode_v1(&dense).expect("the dense material encodes");

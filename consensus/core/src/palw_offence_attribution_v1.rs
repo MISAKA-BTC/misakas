@@ -769,7 +769,7 @@ pub fn palw_false_valid_convicts_execution_v2(
 /// | J2 | the binding's profile is not the claim's class |
 /// | J1 | attempt: `job_id` is not the recorded anchor; free prompt: the context's pin is not the commitment's |
 /// | J3 | attempt: `execution_seed` is not the anchor's first 32 bytes |
-/// | J5a | attempt: the whole context is not the `CoreV1` one the anchor implies at the class's canonical job (the floor's, or the model formula `(n_ctx/8 − 1, 2)`); a class too narrow for the formula is refused `IdentityNotDerivable` |
+/// | J5a | attempt: the whole context is not the `CoreV1` one the anchor implies at the class's canonical job (the floor's, or the model formula `(n_ctx/8 − 1, 2)`); a class too narrow for the formula skips J5 and, if J4/J6/J7 find nothing, is refused `IdentityNotDerivable` |
 /// | J5b | the same, a canonical prompt of at most 4,096 ids: the prompt root is not the anchor's (a longer one is `PromptNotAnchored`'s) |
 /// | J4 | the logits trace root is not the claim's |
 /// | J6 | the activation leg is not `palw_int_activation_leg_root_v1(ctx)` (both lanes) |
@@ -800,6 +800,10 @@ pub fn palw_binding_identity_fault_v1(
     }
     let lane = target.lane.ok_or(PalwOffenceVerifyError::LaneUnknown)?;
     let (ctx, profile) = (&binding.job_context, &binding.shape_profile);
+    // A class too narrow for the formula derives no attempt context (J5), and that is a refusal
+    // only once every OTHER check has found nothing (the 3a review's L-a): J4, J6 and J7 read no
+    // canonical job, so a narrow class must not escape them too.
+    let mut not_derivable = false;
     // J2 — the class. Every check below reads the profile, so it must be the claim's first.
     if profile.shape_profile_id() != target.class_id {
         return Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims));
@@ -820,17 +824,20 @@ pub fn palw_binding_identity_fault_v1(
                 return Ok(Some(PalwIdentityFaultV1::SeedNotTheJobs));
             }
             // J5: the whole context `CoreV1` derives from the anchor at the class's canonical job.
-            let canonical = palw_attempt_canonical_v1(profile, target.class_id == rules.base_class_id)
-                .ok_or(PalwOffenceVerifyError::IdentityNotDerivable)?;
-            let expected = palw_attempt_context_v1(profile, &identity, canonical, ctx.prompt_token_ids_hash);
-            if ctx.context_hash() != expected.context_hash() {
-                return Ok(Some(PalwIdentityFaultV1::ContextNotCanonical));
-            }
-            if with_prompt_root && canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
-                let root = palw_attempt_prompt_root_v1(profile, &identity, canonical.0, rules.prompt_ids_form)
-                    .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
-                if ctx.prompt_token_ids_hash != root {
-                    return Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors));
+            match palw_attempt_canonical_v1(profile, target.class_id == rules.base_class_id) {
+                None => not_derivable = true,
+                Some(canonical) => {
+                    let expected = palw_attempt_context_v1(profile, &identity, canonical, ctx.prompt_token_ids_hash);
+                    if ctx.context_hash() != expected.context_hash() {
+                        return Ok(Some(PalwIdentityFaultV1::ContextNotCanonical));
+                    }
+                    if with_prompt_root && canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
+                        let root = palw_attempt_prompt_root_v1(profile, &identity, canonical.0, rules.prompt_ids_form)
+                            .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                        if ctx.prompt_token_ids_hash != root {
+                            return Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors));
+                        }
+                    }
                 }
             }
         }
@@ -846,6 +853,9 @@ pub fn palw_binding_identity_fault_v1(
     }
     if binding.checkpoint_profile != crate::palw_attempt_rules_v1::palw_canonical_checkpoint_profile_v1(profile) {
         return Ok(Some(PalwIdentityFaultV1::CheckpointProfileNotCanonical));
+    }
+    if not_derivable {
+        return Err(PalwOffenceVerifyError::IdentityNotDerivable);
     }
     Ok(None)
 }
@@ -2127,10 +2137,32 @@ mod tests {
             let mut narrow = model.clone();
             narrow.shape_profile.n_ctx = 8;
             narrow.job_context.shape_profile_id = narrow.shape_profile.shape_profile_id();
+            // An honest narrow binding: its activation leg is the statement over ITS context.
+            narrow.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&narrow.job_context);
             let narrow = moved(&narrow, |_| {});
             assert_eq!(
                 palw_binding_identity_fault_v1(&attempt_target(&narrow, anchor), &narrow, model_rules, true),
                 Err(E::IdentityNotDerivable)
+            );
+            // The 3a review's L-a: a narrow class escapes J5 only — J4, J6 and J7 still name it.
+            let narrow_leg = moved(&narrow, |b| b.activation_leg_root = other);
+            assert_eq!(
+                palw_binding_identity_fault_v1(&attempt_target(&narrow_leg, anchor), &narrow_leg, model_rules, true),
+                Ok(Some(PalwIdentityFaultV1::ActivationLegNotCanonical)),
+                "{form:?}: J6 on a narrow class"
+            );
+            let narrow_ckpt = moved(&narrow, |b| b.checkpoint_profile.checkpoint_interval += 1);
+            assert_eq!(
+                palw_binding_identity_fault_v1(&attempt_target(&narrow_ckpt, anchor), &narrow_ckpt, model_rules, true),
+                Ok(Some(PalwIdentityFaultV1::CheckpointProfileNotCanonical)),
+                "{form:?}: J7 on a narrow class"
+            );
+            let mut narrow_trace = attempt_target(&narrow, anchor);
+            narrow_trace.trace_root = other;
+            assert_eq!(
+                palw_binding_identity_fault_v1(&narrow_trace, &narrow, model_rules, true),
+                Ok(Some(PalwIdentityFaultV1::TraceNotTheClaims)),
+                "{form:?}: J4 on a narrow class"
             );
         }
     }

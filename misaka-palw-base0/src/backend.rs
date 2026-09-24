@@ -1392,6 +1392,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
     }
@@ -1507,6 +1508,7 @@ mod tests {
             anchor,
             attempt_draw: draw,
             output_root: None,
+            job_pin: None,
         };
         let full = backend.execute(&canonical, &prompt).expect("the canonical job runs");
         let short = backend.execute(&one_forward, &prompt).expect("the one-forward job runs");
@@ -1556,6 +1558,7 @@ mod tests {
             anchor,
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, mine), PalwMaterialVerdictV1::Matches);
 
@@ -1700,6 +1703,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(
             backend.verify_material(&lying.material, its_own),
@@ -1736,6 +1740,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
 
         assert_eq!(backend.verify_material(b"not material at all", claim), PalwMaterialVerdictV1::Unverifiable);
@@ -1792,6 +1797,7 @@ mod tests {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&capture, roots), PalwMaterialVerdictV1::Matches);
         let attempt_anchor = PalwClaimRootsV1 { anchor: Hash64::from_u64_word(0xA71E), ..roots };
@@ -1903,6 +1909,7 @@ mod tests {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         assert_eq!(backend.verify_material(&lying.outcome.material, roots), PalwMaterialVerdictV1::Matches);
 
@@ -2053,6 +2060,7 @@ mod tests {
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let build = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1, leaf: u64| {
             let work = backend.capture_shape(&run.outcome.material).expect("a shape").step_leaf_count;
@@ -2120,6 +2128,7 @@ mod tests {
                 anchor: fp_job_id_v3(&job),
                 attempt_draw: None,
                 output_root: None,
+                job_pin: None,
             };
             let opening = backend.open_fp_interval(capture, 0, &ids).expect("interval 0 opens");
             let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, &ids, work);
@@ -2251,6 +2260,7 @@ mod tests {
             anchor: Hash64::default(),
             attempt_draw: None,
             output_root: None,
+            job_pin: None,
         };
         let draw = palw_fp_interval_draw_v1(
             &job.network_domain,
