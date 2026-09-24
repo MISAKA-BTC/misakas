@@ -102,21 +102,25 @@ impl Skeleton {
             Obj::ReporterRevealed { offence_key: Hash64::from_u64_word(0x54), reporter: card, salt: [0x54; 32] },
             Obj::MaterialDisclosedV2 {
                 claim: Hash64::from_u64_word(0x55),
-                unit: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
-                answer: Box::new(kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
-                    version: 1,
-                    claim: Hash64::from_u64_word(0x55),
-                    missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
-                    binding,
-                    disclosure: kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
-                        opening: kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
-                            first_leaf_index: 0,
-                            leaf_hashes: vec![],
-                            siblings: vec![],
+                unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::Held(
+                    kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
+                ),
+                answer: kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Held(Box::new(
+                    kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                        version: 1,
+                        claim: Hash64::from_u64_word(0x55),
+                        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 1 },
+                        binding,
+                        disclosure: kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                            opening: kaspa_consensus_core::palw_step_leg::PalwStepRangeOpeningV1 {
+                                first_leaf_index: 0,
+                                leaf_hashes: vec![],
+                                siblings: vec![],
+                            },
                         },
+                        signature: Vec::new(),
                     },
-                    signature: vec![1; 8],
-                }),
+                )),
                 discloser: card,
                 signature: vec![1; 8],
             },

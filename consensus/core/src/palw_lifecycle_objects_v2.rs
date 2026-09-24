@@ -456,9 +456,19 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // bounded receipt list for 56, the close ceiling for 55) are their owners' to add with the
         // rule (S-7, M3, S-5), before M5 freezes the layout; a shape refused here is a BLOCK rule,
         // and adding one to a live chain would be a fork, so none is guessed at now.
+        //
+        // M3 (DA-4) adds tag 55's one stateless rule, the one `MaterialDisclosed` has: the answer
+        // carries its discloser's signature (the acceptance layer verifies it; the close ceiling,
+        // the unit and the discloser's standing are state, and stay there).
+        PalwConsensusObjectV2::MaterialDisclosedV2 { signature, .. } => {
+            if signature.is_empty() {
+                Err("a data-availability answer must carry its discloser's signature — unsigned, anyone could bind a locked signer to an answer it never gave")
+            } else {
+                Ok(())
+            }
+        }
         PalwConsensusObjectV2::ReporterCommitted { .. }
         | PalwConsensusObjectV2::ReporterRevealed { .. }
-        | PalwConsensusObjectV2::MaterialDisclosedV2 { .. }
         | PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => Ok(()),
     }
 }
@@ -1627,21 +1637,26 @@ mod tests {
                 55,
                 PalwConsensusObjectV2::MaterialDisclosedV2 {
                     claim: h64(21),
-                    unit: crate::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf: 3 },
-                    answer: Box::new(crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
-                        version: 1,
-                        claim: h64(21),
-                        missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepRange { first: 0, count: 1 },
-                        binding: shard_accusation().refutation.binding,
-                        disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
-                            opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
-                                first_leaf_index: 0,
-                                leaf_hashes: vec![h64(14)],
-                                siblings: vec![],
-                            },
-                        },
-                        signature: sig(),
+                    unit: crate::palw_da_rcore_v1::PalwDaUnitV1::Held(crate::palw_held_da_v1::PalwHeldMissingV1::StepRange {
+                        first: 0,
+                        count: 1,
                     }),
+                    answer: crate::palw_da_rcore_v1::PalwDaAnswerV1::Held(Box::new(
+                        crate::palw_held_da_v1::PalwHeldDisclosureCarriageV1 {
+                            version: 1,
+                            claim: h64(21),
+                            missing: crate::palw_held_da_v1::PalwHeldMissingV1::StepRange { first: 0, count: 1 },
+                            binding: shard_accusation().refutation.binding,
+                            disclosure: crate::palw_held_da_v1::PalwHeldDisclosureV1::StepRange {
+                                opening: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                                    first_leaf_index: 0,
+                                    leaf_hashes: vec![h64(14)],
+                                    siblings: vec![],
+                                },
+                            },
+                            signature: Vec::new(),
+                        },
+                    )),
                     discloser: bond(7),
                     signature: sig(),
                 },

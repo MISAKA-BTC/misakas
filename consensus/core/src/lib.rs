@@ -253,6 +253,9 @@ pub mod palw_held_context_v1;
 /// ADR-0103 Decision 4 — a data-availability accusation names a prompt tile, a state chunk or a
 /// step range, and is answered by that unit and its path. Behind `Params::palw_held_context`.
 pub mod palw_held_da_v1;
+/// ADR-0152 v3.1 §3.11 (DA-1…DA-9, M3) — the data-availability court past `Params::palw_rcore_plus`:
+/// sessions in side maps, drawn units, any locked signer answers, seat-only pause credit.
+pub mod palw_da_rcore_v1;
 pub mod palw_job_identity;
 pub mod palw_job_ledger;
 pub mod palw_job_panel;
