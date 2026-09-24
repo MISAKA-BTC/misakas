@@ -312,7 +312,12 @@ fn run(p: &Params, force_audit_off: bool) -> String {
 /// unchanged, but eight bytes more per rooted Final record. Measured: with the field
 /// `#[borsh(skip)]` the dump is `8254eab6…` to the byte; serialized, exactly 11 `  root` lines
 /// differ (the blocks holding a Final) and nothing else — length and line count unchanged.
-const PARENT_DUMP_BLAKE2B_256: &str = "7bf3238f4394776c077b19cc4b555909f672060dbb4d177ac5660c441c50b0d2";
+///
+/// **And for the S-4 review's tail append to `PalwClaimRcoreV1`** (`g_res_sompi`, 16 zero bytes per
+/// claim here): again only the printed roots move — the length and the line count are unchanged. On
+/// the S-4 line alone (without `accepted_blue_score`) the digest was `62b729ae…`; with both appends,
+/// as integrated, it is the value below.
+const PARENT_DUMP_BLAKE2B_256: &str = "d86c2852606fe96e0f14487286090e3eca1b682d099e36ca7f28bc847d33e99f";
 const PARENT_DUMP_BYTES: usize = 686_879;
 const PARENT_DUMP_LINES: usize = 1_953;
 

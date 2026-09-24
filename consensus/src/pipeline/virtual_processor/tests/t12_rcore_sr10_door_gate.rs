@@ -222,7 +222,7 @@ impl Gate {
             operator_id: facts.bond.as_ref().expect("a genesis card is a registered bond").operator_id,
             artifact_root: facts.artifact_root,
             trace_root,
-            output_root: Hash64::from_u64_word(0x5210_32),
+            output_root: Hash64::from_u64_word(0x0052_1032),
             execution_root: Hash64::from_u64_word(0x5210_41),
             pwu: facts.pwu,
             trace_manifest_root: attempt_trace_manifest_root_v1(trace_root, PALW_ATTEMPT_V2_TRACE_CHUNKS),

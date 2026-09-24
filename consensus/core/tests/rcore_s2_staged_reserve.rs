@@ -39,6 +39,7 @@ fn t01_a_full_service_quorum_licence_releases_the_escrow_and_final_releases_the_
         let bound = c.bind(id, &seats);
         let settled = c.s.settled_attempt_finals();
         let receipts: Vec<_> = seats.iter().map(|(k, _)| valid(id, *k, bound)).collect();
+        let g_res = licence_g_res(&c, &id);
         c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }]);
         let licensed = c.claim(&id);
         assert_eq!(c.s.settled_attempt_finals(), settled + 1, "armed={armed}: an attempt's V1 licence settles the anchor (V-8)");
@@ -50,9 +51,10 @@ fn t01_a_full_service_quorum_licence_releases_the_escrow_and_final_releases_the_
                     basis_k: 3,
                     escrow_released: true,
                     served_mask: 0b1_1111,
-                    unserved_seen: false
+                    unserved_seen: false,
+                    g_res_sompi: g_res,
                 },
-                "the licence records its door, its recount, its service and the release"
+                "the licence records its door, its recount, its service, the release and the G_res it priced with"
             );
             assert_eq!(c.reserved(&producer), before + w, "E leaves at the licence (SR-1)");
             assert_eq!(palw_claim_commitment_v1(&c.sp, &licensed, c.daa), Some(w));
@@ -88,6 +90,7 @@ fn t27_t68_missing_and_unavailable_seats_hold_the_escrow_to_final() {
             receipts.extend(seats[3..].iter().map(|(k, _)| unavailable(id, *k, bound)));
         }
         let settled = c.s.settled_attempt_finals();
+        let g_res = licence_g_res(&c, &id);
         c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts }]);
         let licensed = c.claim(&id);
         assert_eq!(
@@ -97,7 +100,8 @@ fn t27_t68_missing_and_unavailable_seats_hold_the_escrow_to_final() {
                 basis_k: 3,
                 escrow_released: false,
                 served_mask: 0b0_0111,
-                unserved_seen: with_unavailable
+                unserved_seen: with_unavailable,
+                g_res_sompi: g_res,
             },
             "unavailable={with_unavailable}"
         );
@@ -247,6 +251,7 @@ fn t37_t74_coverage_ticks_s2_does_not_and_its_v2_door_upgrade_ticks_and_releases
             0,
         );
         let up = c.claim(&id);
+        assert!(s2.rcore.g_res_sompi > 0, "the S2 licence recorded its G_res");
         assert_eq!(
             up.rcore,
             PalwClaimRcoreV1 {
@@ -254,9 +259,10 @@ fn t37_t74_coverage_ticks_s2_does_not_and_its_v2_door_upgrade_ticks_and_releases
                 basis_k: 3,
                 escrow_released: true,
                 served_mask: 0b1_1111,
-                unserved_seen: false
+                unserved_seen: false,
+                g_res_sompi: s2.rcore.g_res_sompi,
             },
-            "the upgrade"
+            "the upgrade (the V2 door keeps the first licence's G_res: Q-4)"
         );
         assert_eq!(c.s.settled_attempt_finals(), settled + 1, "the upgrade settles the anchor once (V-8)");
         assert!(palw_rcore_counts_licensed_v1(&up), "T-2(c): the upgrade frees the replay");

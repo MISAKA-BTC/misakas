@@ -244,9 +244,11 @@ fn the_door_on_a_real_s2_licence() {
             escrow_released: false,
             served_mask: bit(&full) | bit(&partial[0]),
             unserved_seen: false,
+            g_res_sompi: licensed.g_res_sompi,
         },
         "S-2's licence staging"
     );
+    assert!(licensed.g_res_sompi > 0, "the S-4 review: the first licence records its G_res");
     assert_eq!(s3.settled_attempt_finals(), s2.settled_attempt_finals(), "V-8: an S2 licence below 2 does not tick");
     let lock = *s3.slashable_lock(full, claim_id).expect("the full seat locked at licence");
     assert_eq!((lock.attested, lock.segments), (PalwSegmentMaskV2::full(CUT), CUT), "S-3: the full seat's mask on its lock");

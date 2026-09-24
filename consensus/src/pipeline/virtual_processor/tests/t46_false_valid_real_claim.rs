@@ -3131,9 +3131,15 @@ async fn t46s_a_court_default_convicts_no_seat() {
         0
     };
     assert!(h.sp().rcore_plus_active_at(run.voided_daa) && action > 0, "the premise: testnet-12 arms R-core+");
-    assert!(
-        u128::from(charged) >= (claim.reserved + escrow + claim.rights_reserved + action).min(u128::from(c0)),
-        "the forfeit and S2's action at least"
+    // Exactly the losing charge (the user's decision on deviation 2): the forfeit, S2's action and the
+    // court time the session ran — `reserved × min(close − opened, window_court) / window_court`.
+    let opened = run.in_court.last_point().expect("the court's block").daa_score;
+    let window = h.sp().window_court();
+    let court_time = claim.reserved * u128::from((run.voided_daa - opened).min(window)) / u128::from(window.max(1));
+    assert_eq!(
+        u128::from(charged),
+        (claim.reserved + escrow + claim.rights_reserved + action + court_time).min(u128::from(c0)),
+        "the forfeit, S2's action and the court time: the losing charge, to the sompi"
     );
     assert!(u128::from(charged) >= claim.reserved + escrow + claim.rights_reserved, "reservation, escrow and rights at least");
     assert_eq!(debit(&run.in_court, &run.walk.state, h.cards[BYSTANDER]), 0, "the bystander pays nothing");
