@@ -741,70 +741,80 @@ fn the_a16_fold_licenses_honest_free_prompts_and_refuses_every_forgery() {
     }
 }
 
-/// **An attempt served as a fold** — no producer here writes one, so the seat's fold branch now
-/// refuses one under an attempt claim outright: SEAT-0's head rule reads dense leaves only, and a
-/// fold's selecting row would otherwise be a free field (`seat0_review_regressions`). Even the
-/// honest fold — the backend's own capture loop over the attempt job, under the registered plan —
-/// is a `Mismatch` through kaspad's verb, though every SEAT-0 rule holds on it; and T1–T5 are still
-/// refused by the rule named for each.
+/// **An attempt served as a fold.** On this line a HELD class's attempt folds
+/// (`palw_attempt_capture_folds_v1`), so there the fold is the honest producer's own material:
+/// licensed, and T1–T5 refused on it by the rule named for each. On a class whose attempts keep
+/// their tiles no producer writes one, and SEAT-0's head rule reads dense leaves only, so a fold's
+/// selecting row would be a free field (`seat0_review_regressions`): the seat refuses it outright —
+/// even the honest one, though every SEAT-0 rule holds on it — and T1–T5 are still refused.
 #[test]
 fn an_attempt_served_as_a_fold_is_held_to_the_same_rules() {
-    use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_held_canonical_v1, qwen25_a16_profile_v7};
+    use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_held_canonical_v1, qwen25_a16_profile_v2, qwen25_a16_profile_v7};
+    use kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1;
     let vocab = 8_292u32;
     let artifact = a16_artifact(vocab);
-    let profile = qwen25_a16_profile_v7(a16_geometry(vocab)).expect("the held graph-v7 row projects");
-    let backend = a16_backend(&artifact, &profile, qwen25_a16_held_canonical_v1(profile.n_ctx));
-    let plan = misaka_palw_base0::engine_a16::A16Engine::new(&artifact)
-        .expect("an A16 artifact")
-        .plan_from_profile(&profile)
-        .expect("the registered graph compiles");
-    for (anchor, draw) in [(0xF01D_0001u64, true), (0xF01D_0002, false)] {
-        let anchor = Hash64::from_u64_word(anchor);
-        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
-        let job = palw_attempt_job_v1(job, draw);
-        let run = a16_execute_free_prompt_streaming_v1(
-            &artifact,
-            &profile,
-            Some(&plan),
-            &job,
-            &prompt,
-            backend.step_ladder_cap(),
-            &mut |_| {},
-        )
-        .expect("the fold runs the attempt job");
-        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-        let claim = Claim {
-            label: format!("A16 held v7 attempt-as-fold draw={draw}"),
-            backend: &backend,
-            family: Base0SeatFamilyV1::IntegerKv,
-            material: base0_fp_material_encode_v2(&run, &ids).expect("the fold retains"),
-            roots: PalwClaimRootsV1 {
-                execution_root: run.execution_root,
-                trace_root: run.trace_root,
-                anchor,
-                attempt_draw: Some(draw),
-            },
-            fp: None,
-        };
-        assert!(licensed_before_seat0(&claim.material, claim.roots), "{}: the pre-SEAT-0 seat licensed it", claim.label);
-        assert_eq!(
-            claim.seat(&claim.material, claim.roots),
-            PalwMaterialVerdictV1::Mismatch,
-            "{}: an attempt served as a fold is not licensed, honest or not",
-            claim.label
-        );
-        let m = claim.honest();
-        assert_eq!(base0_seat_rules_v1(m.binding(), m.rows(), m.ids(), None, claim.family), Ok(()), "{}", claim.label);
-        claim.assert_every_attack_refused();
+    let held = qwen25_a16_profile_v7(a16_geometry(vocab)).expect("the held graph-v7 row projects");
+    let per_call = qwen25_a16_profile_v2(a16_geometry(vocab)).expect("the v2 row projects");
+    for (label, profile) in [("held v7", held), ("v2", per_call)] {
+        let folds = palw_attempt_capture_folds_v1(&profile);
+        assert_eq!(folds, label == "held v7", "{label}: only the held row's attempt folds");
+        let backend = a16_backend(&artifact, &profile, qwen25_a16_held_canonical_v1(profile.n_ctx));
+        let plan = misaka_palw_base0::engine_a16::A16Engine::new(&artifact)
+            .expect("an A16 artifact")
+            .plan_from_profile(&profile)
+            .expect("the registered graph compiles");
+        for (anchor, draw) in [(0xF01D_0001u64, true), (0xF01D_0002, false)] {
+            let anchor = Hash64::from_u64_word(anchor);
+            let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+            let job = palw_attempt_job_v1(job, draw);
+            let run = a16_execute_free_prompt_streaming_v1(
+                &artifact,
+                &profile,
+                Some(&plan),
+                &job,
+                &prompt,
+                backend.step_ladder_cap(),
+                &mut |_| {},
+            )
+            .expect("the fold runs the attempt job");
+            let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+            let claim = Claim {
+                label: format!("A16 {label} attempt-as-fold draw={draw}"),
+                backend: &backend,
+                family: Base0SeatFamilyV1::IntegerKv,
+                material: base0_fp_material_encode_v2(&run, &ids).expect("the fold retains"),
+                roots: PalwClaimRootsV1 {
+                    execution_root: run.execution_root,
+                    trace_root: run.trace_root,
+                    anchor,
+                    attempt_draw: Some(draw),
+                },
+                fp: None,
+            };
+            if folds {
+                claim.assert_honest_matches();
+            } else {
+                assert!(licensed_before_seat0(&claim.material, claim.roots), "{}: the pre-SEAT-0 seat licensed it", claim.label);
+                assert_eq!(
+                    claim.seat(&claim.material, claim.roots),
+                    PalwMaterialVerdictV1::Mismatch,
+                    "{}: an attempt of a class whose attempts keep their tiles is not licensed as a fold, honest or not",
+                    claim.label
+                );
+                let m = claim.honest();
+                assert_eq!(base0_seat_rules_v1(m.binding(), m.rows(), m.ids(), None, claim.family), Ok(()), "{}", claim.label);
+            }
+            claim.assert_every_attack_refused();
+        }
     }
 }
 
-/// **The held map's DENSE retention keeps its verdict.** A per-position class retains no
-/// checkpoint chunks and the dense tuple carries no leaves, so its dense material never rebuilt the
-/// committed checkpoint leg and was never licensed by the material route — before SEAT-0 or after.
-/// (At the live held widths a dense capture does not exist at all: 8,192's canonical job is
-/// 105,396,200 leaves, past every network ladder.) Pinned so the claim "SEAT-0 moves no honest
-/// verdict" covers this row too, rather than being true of it by omission.
+/// **The held map's attempt keeps its verdict.** On this line a held class's attempt FOLDS
+/// (`palw_attempt_capture_folds_v1`; the dense sink of a 2M attempt is terabytes), so its material
+/// is the fold and is licensed by the material route — before SEAT-0 and after. (On the live
+/// 2bd134ec line the same row kept dense tiles, retained no checkpoint chunks and was never
+/// licensed by material.) Pinned so the claim "SEAT-0 moves no honest verdict" covers this row too,
+/// rather than being true of it by omission.
 #[test]
 fn the_held_maps_dense_retention_keeps_the_verdict_it_had() {
     use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_held_canonical_v1, qwen25_a16_profile_v7};

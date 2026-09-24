@@ -5,7 +5,10 @@
 //!   roots from SERVED rows with no execution behind them, so on a court-capable backend every new
 //!   set of rows was a new root the seat licensed. It is the ledger-compiled class's alone now.
 //! * `fold_attempt_*` — an attempt served as a fold: SEAT-0's head rule reads dense leaves only, so
-//!   the fold's selecting row was free and every bend a fresh root. No producer serves one; refused.
+//!   the fold's selecting row was free and every bend a fresh root. On a class whose attempts keep
+//!   their tiles no producer serves one; refused. On this line a HELD class's attempt folds, so its
+//!   fold stays licensable and its selecting row is a residual (`held_fold_attempt_*`, ignored)
+//!   that SEAT-R and F1c's rule 12 close.
 //! * `crafted_profile_*` — a stranger's profile whose node count overflows `u32` panicked inside the
 //!   head rule (`overflow-checks = true`, and the node's panic hook exits). The floor now checks
 //!   the class profile id as the other tiers do, and the rules count the profile checked first.
@@ -212,12 +215,17 @@ fn legacy_rows_only_material_is_not_licensed_on_a_registered_qwen36_class() {
 // F-B: an attempt served as a fold — rule 5 is dense-only, so the selecting row is free
 // ------------------------------------------------------------------------------------------------
 
-#[test]
-fn fold_attempt_bent_row_is_not_licensed() {
-    use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7;
+/// One honest execution of an attempt job through the fold sink, served as a fold under the
+/// attempt claim, then its selecting row bent four ways (token moved, trace root and binding
+/// re-derived). Returns the honest fold's verdict and every bent execution root the seat licensed.
+fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> (PalwMaterialVerdictV1, Vec<Hash64>) {
+    use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1;
     let artifact = a16_artifact(8_292);
-    let (backend, _) = a16_held_backend(&artifact);
-    let profile = qwen25_a16_profile_v7(a16_geometry(8_292)).expect("v7");
+    let backend =
+        Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), qwen25_a16_held_canonical_v1(profile.n_ctx))
+            .expect("servable")
+            .with_step_ladder_cap(PALW_STEP_LEG_MAX_LEAVES)
+            .with_prompt_ids_form(PalwPromptIdsFormV1::MerkleV1);
     let plan = misaka_palw_base0::engine_a16::A16Engine::new(&artifact).expect("a16").plan_from_profile(&profile).expect("plan");
     let anchor = Hash64::from_u64_word(0xF01D_BE17);
     let draw = true; // the live rule past the prefill-draw fence: D = 1, the only row is the selecting row
@@ -228,13 +236,9 @@ fn fold_attempt_bent_row_is_not_licensed() {
             .expect("one honest execution");
     let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
     let honest = base0_fp_material_decode_v2(&base0_fp_material_encode_v2(&run, &ids).expect("fold")).expect("decodes");
-    // Even the honest fold: no producer serves an attempt as one, so the seat does not license it.
-    assert_eq!(
-        backend.verify_material(
-            &base0_fp_material_encode_v2(&run, &ids).unwrap(),
-            PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor, attempt_draw: Some(draw) }
-        ),
-        PalwMaterialVerdictV1::Mismatch
+    let honest_verdict = backend.verify_material(
+        &base0_fp_material_encode_v2(&run, &ids).unwrap(),
+        PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor, attempt_draw: Some(draw) },
     );
     let mut licensed = Vec::new();
     for bend in 1..=4usize {
@@ -265,11 +269,41 @@ fn fold_attempt_bent_row_is_not_licensed() {
             licensed.push(roots.execution_root);
         }
     }
+    (honest_verdict, licensed)
+}
+
+/// A class whose attempts keep their tiles (`palw_attempt_capture_folds_v1` false): no producer
+/// serves its attempt as a fold, so the seat refuses one — the honest fold included — and no bend
+/// of its selecting row is licensed.
+#[test]
+fn fold_attempt_bent_row_is_not_licensed() {
+    use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2;
+    let profile = qwen25_a16_profile_v2(a16_geometry(8_292)).expect("v2");
+    assert!(!kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&profile));
+    let (honest, licensed) = bend_a_fold_attempt(profile);
+    assert_eq!(honest, PalwMaterialVerdictV1::Mismatch, "no producer serves this class's attempt as a fold");
     assert!(
         licensed.is_empty(),
         "{} distinct execution roots from ONE execution were licensed by re-bending the selecting row of a fold attempt",
         licensed.len()
     );
+}
+
+/// **The launch line's residual.** A HELD class's attempt folds here, so its fold is the honest
+/// producer's material and the seat licenses it — and SEAT-0's head rule reads dense leaves only,
+/// so the selecting row of that fold is not tied to its step tree: one execution still licenses a
+/// fresh execution root per bend. What closes it is SEAT-R (a full-mask `Valid` only from a replay,
+/// in the same binary as F2's `palw_offence_attribution`) and F1c's rule 12 (`LogitsNotStepOutput`).
+/// Ignored until they land; un-ignore it then, and it must pass.
+#[test]
+#[ignore = "residual on the launch line: a held fold attempt's selecting row — closed by SEAT-R and F1c rule 12"]
+fn held_fold_attempt_bent_row_is_not_licensed() {
+    use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7;
+    let profile = qwen25_a16_profile_v7(a16_geometry(8_292)).expect("v7");
+    assert!(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&profile));
+    let (honest, licensed) = bend_a_fold_attempt(profile);
+    assert_eq!(honest, PalwMaterialVerdictV1::Matches, "the honest held fold attempt is licensed");
+    assert!(licensed.is_empty(), "{} bent execution roots licensed from ONE held execution", licensed.len());
 }
 
 // ------------------------------------------------------------------------------------------------

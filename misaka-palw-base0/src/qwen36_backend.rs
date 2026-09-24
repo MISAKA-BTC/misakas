@@ -1770,12 +1770,16 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // and its step root is read off the retained tree rather than rebuilt from tiles there are
         // none of.
         if let Ok(folded) = crate::produce::base0_fp_material_decode_v2(material) {
-            // **An attempt is never served as a fold** — this build's `execute` writes the dense
-            // capture for every attempt — and a fold's rows are tied to its step tree by no rule a
-            // seat can run (SEAT-0's head rule reads dense leaves), so under an attempt claim its
-            // selecting row is a free field: bend it, move the token, re-derive the roots, and
-            // every seat licensed each bend. Refused, as material no honest producer serves.
-            if claim.attempt_draw.is_some() {
+            // **An attempt folds only on a held class** (`palw_attempt_capture_folds_v1`: this
+            // build's `execute` writes the dense capture for every other), and a fold's rows are
+            // tied to its step tree by no rule a seat can run (SEAT-0's head rule reads dense
+            // leaves) — so under an attempt claim of a class whose attempts do not fold, the
+            // selecting row would be a free field: bend it, move the token, re-derive the roots,
+            // and every seat licensed each bend. Refused, as material no honest producer serves.
+            // A held class's fold attempt is the honest producer's own material and stays
+            // licensable here; its selecting row is the residual SEAT-R (a full-mask `Valid` only
+            // from a replay) and F1c's rule 12 close at `palw_offence_attribution`.
+            if claim.attempt_draw.is_some() && !self.profile.as_ref().is_some_and(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1) {
                 return PalwMaterialVerdictV1::Mismatch;
             }
             if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
