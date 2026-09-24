@@ -153,33 +153,45 @@ struct HeldRow {
     leaves: u64,
 }
 
-fn eight_k(p: &Params) -> HeldRow {
+fn held_row(p: &Params, n_ctx: fn(u32) -> bool) -> Option<HeldRow> {
     let rows = genesis_classes(p);
-    bundle(p)
-        .genesis_objects
-        .iter()
-        .find_map(|o| match o {
-            PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(c), .. }
-                if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&c.profile) && c.profile.n_ctx == 8_192 =>
-            {
-                let (_, leaves, target, _) = *rows.iter().find(|r| r.0 == *class_id).expect("a genesis row");
-                Some(HeldRow { id: *class_id, profile: c.profile.clone(), job: c.canonical.clone(), target, leaves })
-            }
-            _ => None,
-        })
-        .expect("testnet-12 registers the 8k held row")
+    bundle(p).genesis_objects.iter().find_map(|o| match o {
+        PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(c), .. }
+            if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&c.profile) && n_ctx(c.profile.n_ctx) =>
+        {
+            let (_, leaves, target, _) = *rows.iter().find(|r| r.0 == *class_id).expect("a genesis row");
+            Some(HeldRow { id: *class_id, profile: c.profile.clone(), job: c.canonical.clone(), target, leaves })
+        }
+        _ => None,
+    })
+}
+
+fn eight_k(p: &Params) -> HeldRow {
+    held_row(p, |n| n == 8_192).expect("testnet-12 registers the 8k held row")
+}
+
+/// testnet-12's genesis 2M held row — the one class its bundle mirrors as unanswerable.
+fn two_m(p: &Params) -> HeldRow {
+    held_row(p, |n| n > kaspa_consensus_core::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1)
+        .expect("testnet-12 registers the 2M held row")
 }
 
 /// testnet-12 at DAA 1,000: the 8k row made `Active` through the carriage (its registry row opens
 /// `Prefetching` until seven seats prove the artifact — the one step here that is not the fold), the
 /// executor and the bystander bonded — the bystander at exactly `bystander_collateral`.
 fn chain(rule: Rule, bystander_collateral: u64) -> (Chain, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
+    let (c, row, seats) = chain_on(rule, bystander_collateral, eight_k);
+    assert!(!c.sp.held_class_is_unanswerable_v1(&row.id), "the 8k row is answerable");
+    (c, row, seats)
+}
+
+/// [`chain`] on the held row `which` picks.
+fn chain_on(rule: Rule, bystander_collateral: u64, which: fn(&Params) -> HeldRow) -> (Chain, HeldRow, Vec<(PalwBondKeyV2, Hash64)>) {
     let p = t12();
     let b = bundle(&p);
     let sp = b.state.clone();
     assert!(!sp.held_unanswerable_classes().is_empty(), "the bundle carries the answerability mirror");
-    let row = eight_k(&p);
-    assert!(!sp.held_class_is_unanswerable_v1(&row.id), "the 8k row is answerable");
+    let row = which(&p);
     let seats: Vec<(PalwBondKeyV2, Hash64)> =
         genesis_bonds(&p)[..b.panel.seat_count() as usize].iter().map(|(k, o, _)| (*k, *o)).collect();
     let mut s = genesis_state(&p);
@@ -390,4 +402,35 @@ fn a_floor_bystander_holds_one_held_dissection_charge_not_two() {
     open(&mut c, &row, a).expect("opens");
     open(&mut c, &row, b).expect("below the fence the second held dissection opens on reserved alone");
     assert_eq!((c.s.court_sessions_for_claim(&a), c.s.court_sessions_for_claim(&b)), (1, 1));
+}
+
+/// **The 2M row opens no held dissection on testnet-12** (the shard-court addendum on the network's
+/// own ruleset): the one-move accusation the unbound verdict defers to a dissection is refused
+/// `ShardCourtHeldSiteUnanswerable` past `palw_offence_attribution` — no session, no reservation, the
+/// accuser's collateral untouched. Below the fence the same accusation opens the dissection it
+/// always did.
+#[test]
+fn the_2m_row_opens_no_held_dissection_on_testnet_12() {
+    // A bystander that can back the 2M claim's reservation (≈ 59,743 MSK), so the twin below the
+    // fence opens on it and the refusal above is the addendum's, not the ceiling's.
+    let collateral = 100_000_000_000_000; // 1,000,000 MSK
+    let (mut c, row, seats) = chain_on(Rule::T12, collateral, two_m);
+    assert!(c.sp.held_class_is_unanswerable_v1(&row.id), "the bundle mirrors the 2M row as unanswerable");
+    let claim_id = licensed(&mut c, &row, &seats, 1);
+    let bystander_before = c.s.bond(&bond_key(BYSTANDER)).unwrap().clone();
+    let refused = open(&mut c, &row, claim_id).expect_err("past the fence the 2M row's dissection never opens");
+    assert!(
+        matches!(&refused, PalwStateV2Error::ShardCourtHeldSiteUnanswerable { class, .. } if *class == row.id),
+        "refused by name: {refused:?}"
+    );
+    assert_eq!(c.s.court_sessions_for_claim(&claim_id), 0, "no session");
+    assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(BYSTANDER)), 0, "no reservation");
+    assert_eq!(c.s.bond(&bond_key(BYSTANDER)).unwrap(), &bystander_before, "the accuser untouched");
+    assert!(matches!(c.s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the claim stands");
+
+    // Below the fence: the dissection opens, as it did before the addendum.
+    let (mut c, row, seats) = chain_on(Rule::Below, collateral, two_m);
+    let claim_id = licensed(&mut c, &row, &seats, 1);
+    open(&mut c, &row, claim_id).expect("below the fence the 2M row's dissection opens");
+    assert_eq!(c.s.court_sessions_for_claim(&claim_id), 1);
 }
