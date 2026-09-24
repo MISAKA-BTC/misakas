@@ -4425,21 +4425,72 @@ impl VirtualStateProcessor {
         self.palw_class_carriage_store.write().insert(class_id, record).map_err(|e| format!("cannot store the declaration: {e}"))
     }
 
-    /// A bond's claims at the tip (ADR-0122 §6.5). See the trait doc.
+    /// A bond's claims at the tip (ADR-0122 §6.5). See the trait docs. `with_vesting` adds claim
+    /// row v3's vesting half (ADR-0152, phase2-plan §1.6) — the RPC's read only; node policy reads
+    /// the rows alone (review of P2-10, finding 4) — read at the NEXT block: the virtual's DAA and
+    /// the raw second-clock depth there, the two facts the next fold's step 3d reads, as
+    /// `palw_vesting_v1_impl` reads it.
     pub fn palw_claim_rows_v1_impl(
         &self,
         bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
         role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
         include_terminal: bool,
         limit: usize,
+        with_vesting: bool,
     ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
-        let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
-        let (rows, truncated) =
-            kaspa_consensus_core::palw_producer_v2::palw_claim_rows_v1(&state, state_params, &bond, role, include_terminal, limit);
-        let bond = kaspa_consensus_core::palw_producer_v2::palw_bond_summary_v1(&state, &bond);
-        Some(kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1 { tip_daa, rows, truncated, bond })
+        let vesting_at = with_vesting.then(|| {
+            let next_daa = self.palw_next_block_daa_for_reads(&state);
+            (next_daa, self.palw_settled_anchor_depth_at(next_daa))
+        });
+        Some(kaspa_consensus_core::palw_producer_v2::palw_bond_claims_v1(
+            &state,
+            state_params,
+            &bond,
+            role,
+            include_terminal,
+            limit,
+            vesting_at,
+        ))
+    }
+
+    /// **The DAA the next block folds at, for a read of the committed tip** (ADR-0152 P2-10): the
+    /// virtual's, never below `tip + 1`. The virtual can trail the PALW tip for a moment (the tip
+    /// store and the virtual state are written apart), and a read must not answer for a block at or
+    /// below the one its state already folded; a virtual state that cannot be read is the same
+    /// floor, not a missing answer — the registration terms' read clamps the same way (review of
+    /// P2-10, finding 4).
+    fn palw_next_block_daa_for_reads(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> u64 {
+        let tip_daa = state.last_point().map(|point| point.daa_score).unwrap_or(0);
+        let floor = tip_daa.saturating_add(1);
+        self.virtual_stores.read().state.get().map(|virtual_state| virtual_state.daa_score).unwrap_or(floor).max(floor)
+    }
+
+    /// **ADR-0152 V-1…V-8, read side: `getPalwVesting` (op 199)** — the vesting table as the next
+    /// block's step 3d will find it (phase2-plan §1.6, P2-10). The committed tip through
+    /// `load_tip_cached` (the read-side rule above), the virtual's DAA as the next block's, and the
+    /// RAW second-clock depth at that DAA (I-8: the pure functions compute the escape themselves).
+    /// Everything else is `palw_vesting_read_v1`, which answers "what moves next" only through
+    /// `palw_vesting_next_block_plan_v1` — never the planner on a committed state.
+    pub fn palw_vesting_v1_impl(
+        &self,
+        query: kaspa_consensus_core::palw_vesting_read_v1::PalwVestingQueryV1,
+        limit: usize,
+        after: Option<(u64, kaspa_hashes::Hash64)>,
+    ) -> Option<kaspa_consensus_core::palw_vesting_read_v1::PalwVestingReadV1> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let next_daa = self.palw_next_block_daa_for_reads(&state);
+        Some(kaspa_consensus_core::palw_vesting_read_v1::palw_vesting_read_v1(
+            &state,
+            state_params,
+            next_daa,
+            self.palw_settled_anchor_depth_at(next_daa),
+            &query,
+            limit,
+            after,
+        ))
     }
 
     pub fn palw_seat_duties_v2_impl(

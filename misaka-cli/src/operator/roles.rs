@@ -5,6 +5,12 @@
 //! `final`, and a void destroys it. A prompt-lane claim is paid only through receipt blocks this
 //! bond's own producer mines.
 //!
+//! **ADR-0152 (testnet-12): `final` is not paid.** Past `palw_rcore_plus` a Final names its reward
+//! in a vesting row, and the reward is minted only once the row matures and moves — a conviction
+//! first burns it. So a Final whose row lives is `vesting` (this bond's legs of it), one whose row
+//! moved is `moved` (counted, with its escrow as an upper bound — the row that named this bond's leg
+//! is gone), and only a Final that never vested (below the fence) is `paid` (phase2-plan F10).
+//!
 //! `verifier status` shows what this bond judges as a seat. It says plainly that seats are not
 //! paid: verifying is what turns the network's claims final, this operator's own included, and a
 //! seat that dissents from the quorum is charged.
@@ -14,7 +20,7 @@ use crate::operator::profile::Profile;
 use crate::operator::snapshot::Snapshot;
 use crate::operator::status::group;
 
-use crate::operator::work::{Lane, Outcome, WorkState};
+use crate::operator::work::{Lane, Outcome, VestingStage, WorkState};
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use serde_json::json;
@@ -35,8 +41,20 @@ pub(crate) struct Rewards {
     pub(crate) queued_sompi: u64,
     pub(crate) queued_claims: usize,
     /// Escrow of final claims that has left the queue — paid (spendable or maturing in the wallet).
+    /// Only a Final that did not vest: below ADR-0152's fence, final and paid are one event.
     pub(crate) paid_sompi: u64,
     pub(crate) paid_claims: usize,
+    /// ADR-0152: this bond's legs of Finals whose reward still VESTS — named in a row, minted only
+    /// once it matures and moves, burned if a conviction lands first. Not money yet.
+    pub(crate) vesting_sompi: u64,
+    pub(crate) vesting_claims: usize,
+    /// ADR-0152: vested Finals whose row MOVED (minted by the block after the move), and their
+    /// escrow — an UPPER BOUND on what this bond was minted, not its leg: the row that named the
+    /// split left the table when it moved, and the escrow also holds the buyback slice executed at
+    /// Final, the seats' legs, the reserve and the remainder work pricing never named
+    /// (`finalize_claim`). Its unit is not [`Self::vesting_sompi`]'s (review of P2-10, finding 3).
+    pub(crate) moved_escrow_sompi: u64,
+    pub(crate) moved_claims: usize,
     /// Escrow of voided claims: destroyed, never paid.
     pub(crate) forfeited_sompi: u64,
     pub(crate) forfeited_claims: usize,
@@ -44,6 +62,30 @@ pub(crate) struct Rewards {
     pub(crate) quanta_spent: u64,
     pub(crate) prompt_final_claims: usize,
     pub(crate) prompt_pending_claims: usize,
+}
+
+/// **The vesting track's lines of `misaka rewards`** (ADR-0152), none where nothing vested:
+/// `vesting` in this bond's own legs of the rows that live, and `moved` counted with its escrow
+/// marked `≤` — the one figure left once a row moved, and an upper bound, never a mint (review of
+/// P2-10, finding 3). `(label, amount, claims, what)`.
+pub(crate) fn vesting_lines(r: &Rewards) -> Vec<(&'static str, String, usize, &'static str)> {
+    if r.vesting_claims == 0 && r.moved_claims == 0 {
+        return Vec::new();
+    }
+    vec![
+        (
+            "vesting",
+            msk(r.vesting_sompi),
+            r.vesting_claims,
+            "this bond's legs of Finals still vesting: minted only once each row matures (misaka palw vesting)",
+        ),
+        (
+            "moved",
+            format!("≤ {}", msk(r.moved_escrow_sompi)),
+            r.moved_claims,
+            "vested Finals whose row moved (minted by the block after): at most their escrow — this bond's leg left with the row",
+        ),
+    ]
 }
 
 /// Sum the works' reward track. Only rows the node served carry an escrow; a row read off the log
@@ -59,12 +101,20 @@ pub(crate) fn sum(works: &[crate::operator::snapshot::WorkRow]) -> (Rewards, usi
                 r.escrowed_sompi += extra.escrow_sompi;
                 r.escrowed_claims += 1;
             }
-            (Lane::Block, Outcome::Mined, _) => match extra.payout_pending_sompi {
-                Some(q) => {
+            (Lane::Block, Outcome::Mined, _) => match (extra.payout_pending_sompi, extra.vesting) {
+                (Some(q), _) => {
                     r.queued_sompi += q;
                     r.queued_claims += 1;
                 }
-                None => {
+                (None, Some(v)) if v.stage != VestingStage::Moved => {
+                    r.vesting_sompi += v.payee_sompi;
+                    r.vesting_claims += 1;
+                }
+                (None, Some(_)) => {
+                    r.moved_escrow_sompi += extra.escrow_sompi;
+                    r.moved_claims += 1;
+                }
+                (None, None) => {
                     r.paid_sompi += extra.escrow_sompi;
                     r.paid_claims += 1;
                 }
@@ -146,8 +196,41 @@ pub(crate) async fn rewards(ctx: &crate::node::Ctx, profile: Profile) -> CliResu
             r.escrowed_claims.to_string(),
             "claims still being verified — paid only if they turn final",
         );
-        line("forfeited", msk(r.forfeited_sompi), r.forfeited_claims.to_string(), "escrow of voided claims: destroyed, not paid");
+        line(
+            "forfeited",
+            msk(r.forfeited_sompi),
+            r.forfeited_claims.to_string(),
+            "escrow of voided claims — a Final convicted while it vested included: destroyed, not paid",
+        );
+        for (label, amount, claims, what) in vesting_lines(&r) {
+            line(label, amount, claims.to_string(), what);
+        }
         line("paid", msk(r.paid_sompi), r.paid_claims.to_string(), "escrow of final claims that left the queue (in the wallet above)");
+        if let Some(v) = snap.wallet.as_ref().and_then(|w| w.as_ref().ok()).and_then(|w| w.vesting.as_ref()) {
+            if v.reporter_pending_sompi + v.reporter_awarded_sompi > 0 {
+                line(
+                    "reporter",
+                    msk(v.reporter_pending_sompi + v.reporter_awarded_sompi),
+                    "—".into(),
+                    &format!(
+                        "reporter rewards to the pay address: {} in their reveal window, {} awarded and moving first",
+                        msk(v.reporter_pending_sompi),
+                        msk(v.reporter_awarded_sompi)
+                    ),
+                );
+            }
+            if v.bond_held == Some(true) {
+                println!(
+                    "  {}",
+                    paint::yellow(
+                        "B-3: the bond's collateral stays locked while it is payee of a row the conviction window still holds"
+                    )
+                );
+            }
+            if v.halted {
+                println!("  {}", paint::yellow("the chain is in a licence halt: no vesting row matures until an anchor settles"));
+            }
+        }
         let prompt = format!(
             "{} quanta spent as receipt blocks{}",
             r.quanta_spent,
@@ -307,7 +390,9 @@ mod tests {
     /// paid, voided is forfeited — and a row whose escrow nobody served counts in none of them.
     #[test]
     fn the_reward_track_splits_the_way_the_chain_pays() {
-        let e = |escrow, pending| Some(ClaimExtra { deadline_daa: None, escrow_sompi: escrow, payout_pending_sompi: pending });
+        let e = |escrow, pending| {
+            Some(ClaimExtra { deadline_daa: None, escrow_sompi: escrow, payout_pending_sompi: pending, vesting: None })
+        };
         let works = vec![
             row(Lane::Block, WorkState::WaitingReceipts, e(100, None)),
             row(Lane::Block, WorkState::RewardPending, e(200, Some(200))),
@@ -319,5 +404,49 @@ mod tests {
         assert_eq!(known, 4, "the log-read row is not counted");
         assert_eq!((r.escrowed_sompi, r.queued_sompi, r.paid_sompi, r.forfeited_sompi), (100, 200, 300, 400));
         assert_eq!((r.escrowed_claims, r.queued_claims, r.paid_claims, r.forfeited_claims), (1, 1, 1, 1));
+    }
+
+    /// **T52: a Final whose row lives is `vesting`, not `paid`** (ADR-0152, phase2-plan F10) — its
+    /// amount is the bond's own legs, not the escrow; a moved row is `moved`, its escrow printed as
+    /// the upper bound it is (never as a mint: review of P2-10, finding 3); a queued move is
+    /// `queued`; and only a Final that never vested is `paid`.
+    #[test]
+    fn t52_a_final_with_a_live_row_is_vesting_not_paid() {
+        use crate::operator::work::VestingExtra;
+        let v = |stage, payee| VestingExtra {
+            stage,
+            payee_sompi: payee,
+            expiry_daa: Some(12_000),
+            licences_since_final: 0,
+            licences_needed: Some(30),
+            matured_at: None,
+            eta_daa: Some(12_000),
+            eta_estimated: true,
+        };
+        let e =
+            |pending, vesting| Some(ClaimExtra { deadline_daa: None, escrow_sompi: 1_000, payout_pending_sompi: pending, vesting });
+        let works = vec![
+            row(Lane::Block, WorkState::RewardPending, e(None, Some(v(VestingStage::Maturing, 400)))),
+            row(Lane::Block, WorkState::RewardPending, e(None, Some(v(VestingStage::Latched, 300)))),
+            row(Lane::Block, WorkState::Rewarded, e(None, Some(v(VestingStage::Moved, 0)))),
+            row(Lane::Block, WorkState::RewardPending, e(Some(250), Some(v(VestingStage::Moved, 0)))),
+            row(Lane::Block, WorkState::Rewarded, e(None, None)),
+        ];
+        let (r, _) = sum(&works);
+        assert_eq!((r.vesting_sompi, r.vesting_claims), (700, 2), "the bond's legs, not the escrow");
+        assert_eq!((r.moved_escrow_sompi, r.moved_claims), (1_000, 1));
+        assert_eq!((r.queued_sompi, r.queued_claims), (250, 1));
+        assert_eq!((r.paid_sompi, r.paid_claims), (1_000, 1), "only the Final that never vested is paid");
+        // The two vesting lines keep their units apart: the live rows in this bond's legs, the moved
+        // ones as an escrow bound — the 1,000-sompi claim whose legs read 400 while it vested must
+        // not read as 1,000 minted once it moves.
+        let lines = vesting_lines(&r);
+        let (label, amount, claims, what) = &lines[0];
+        assert_eq!((*label, amount.as_str(), *claims), ("vesting", msk(700).as_str(), 2));
+        assert!(what.contains("legs"), "{what}");
+        let (label, amount, claims, what) = &lines[1];
+        assert_eq!((*label, amount.as_str(), *claims), ("moved", format!("≤ {}", msk(1_000)).as_str(), 1));
+        assert!(what.contains("at most their escrow") && !what.contains("coinbase minted"), "{what}");
+        assert!(vesting_lines(&Rewards::default()).is_empty(), "nothing vested, no vesting lines");
     }
 }

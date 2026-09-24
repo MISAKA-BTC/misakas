@@ -759,6 +759,15 @@ from!(item: &kaspa_rpc_core::RpcPalwClaimRow, protowire::RpcPalwClaimRow, {
         exec_tickets_spent: item.exec_tickets_spent,
         exec_first_round: item.exec_first_round,
         exec_last_round: item.exec_last_round,
+        vesting_stage: item.vesting_stage.clone(),
+        vesting_sompi: item.vesting_sompi,
+        vesting_payee_sompi: item.vesting_payee_sompi,
+        vesting_expiry_daa: item.vesting_expiry_daa,
+        vesting_licences_since_final: item.vesting_licences_since_final,
+        vesting_licences_needed: item.vesting_licences_needed,
+        vesting_matured_at: item.vesting_matured_at,
+        vesting_eta_daa: item.vesting_eta_daa,
+        vesting_eta_estimated: item.vesting_eta_estimated,
     }
 });
 from!(item: &kaspa_rpc_core::GetPalwClaimsRequest, protowire::GetPalwClaimsRequestMessage, {
@@ -779,6 +788,8 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwClaimsResponse>, protowire::GetPal
         bond_slashed: item.bond_slashed,
         bond_registered_daa: item.bond_registered_daa,
         bond_capable_classes: item.bond_capable_classes.clone(),
+        vesting_only_rows: item.vesting_only_rows.iter().map(protowire::RpcPalwClaimRow::from).collect(),
+        vesting_only_truncated: item.vesting_only_truncated,
         error: None,
     }
 });
@@ -956,8 +967,8 @@ from!(item: &kaspa_rpc_core::RpcPalwClassLedgerTotals, protowire::RpcPalwClassLe
         redrawn: item.redrawn,
         paid_at_acceptance: item.paid_at_acceptance,
         escrow_final_sompi: item.escrow_final_sompi.clone(),
-        producer_paid_sompi: item.producer_paid_sompi.clone(),
-        panel_paid_sompi: item.panel_paid_sompi.clone(),
+        producer_named_sompi: item.producer_named_sompi.clone(),
+        panel_named_sompi: item.panel_named_sompi.clone(),
         reserve_sompi: item.reserve_sompi.clone(),
         burned_sompi: item.burned_sompi.clone(),
         attempted_compute: item.attempted_compute.clone(),
@@ -1373,6 +1384,119 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwModelCertificationResponse>, proto
         class_id: item.class_id.clone(),
         end_to_end_certified: item.end_to_end_certified,
         families: item.families.iter().map(protowire::RpcPalwModelCertifiedFamily::from).collect(),
+        error: None,
+    }
+});
+from!(item: &kaspa_rpc_core::GetPalwVestingRequest, protowire::GetPalwVestingRequestMessage, {
+    Self {
+        bond: item.bond.clone(),
+        payout_address: item.payout_address.clone(),
+        claim_id: item.claim_id.clone(),
+        limit: item.limit,
+        after: item.after.clone(),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwVestingLeg, protowire::RpcPalwVestingLeg, {
+    Self {
+        kind: item.kind.clone(),
+        payee_bond: item.payee_bond.clone(),
+        payload: item.payload.clone(),
+        sompi: item.sompi,
+        queue_key: item.queue_key.clone(),
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwVestingRow, protowire::RpcPalwVestingRow, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        producer_bond: item.producer_bond.clone(),
+        licence_door: item.licence_door.clone(),
+        basis_k: item.basis_k,
+        escrow_sompi: item.escrow_sompi,
+        buyback_bound_sompi: item.buyback_bound_sompi,
+        total_sompi: item.total_sompi,
+        reserve_sompi: item.reserve_sompi,
+        final_daa: item.final_daa,
+        expiry_daa: item.expiry_daa,
+        settled_at_final: item.settled_at_final,
+        matured_at: item.matured_at,
+        stage: item.stage.clone(),
+        daa_clock_met: item.daa_clock_met,
+        licences_since_final: item.licences_since_final,
+        licences_needed: item.licences_needed,
+        second_clock_bound_daa: item.second_clock_bound_daa,
+        da_session_open: item.da_session_open,
+        mature_now: item.mature_now,
+        lock_live: item.lock_live,
+        moves_ahead: item.moves_ahead,
+        keys_ahead: item.keys_ahead,
+        in_next_block: item.in_next_block,
+        eta_daa: item.eta_daa,
+        eta_estimated: item.eta_estimated,
+        legs: item.legs.iter().map(protowire::RpcPalwVestingLeg::from).collect(),
+        legs_sompi: item.legs_sompi,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwReporterReward, protowire::RpcPalwReporterReward, {
+    Self {
+        offence_key: item.offence_key.clone(),
+        stage: item.stage.clone(),
+        reporter_bond: item.reporter_bond.clone(),
+        payload: item.payload.clone(),
+        sompi: item.sompi,
+        reveal_until: item.reveal_until,
+        in_next_block: item.in_next_block,
+    }
+});
+from!(item: &kaspa_rpc_core::RpcPalwVestingMove, protowire::RpcPalwVestingMove, {
+    Self { source: item.source.clone(), id: item.id.clone(), legs: item.legs.iter().map(protowire::RpcPalwVestingLeg::from).collect() }
+});
+from!(item: &kaspa_rpc_core::RpcPalwVestingDoorCount, protowire::RpcPalwVestingDoorCount, {
+    Self { door: item.door.clone(), rows: item.rows, latched_rows: item.latched_rows, sompi: item.sompi.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwVestingResponse>, protowire::GetPalwVestingResponseMessage, {
+    Self {
+        available: item.available,
+        rcore_plus_active: item.rcore_plus_active,
+        tip_daa: item.tip_daa,
+        next_daa: item.next_daa,
+        halted: item.halted,
+        second_clock_depth: item.second_clock_depth,
+        second_clock_escaped_depth: item.second_clock_escaped_depth,
+        settled_anchors: item.settled_anchors,
+        measured_ms_per_daa: item.measured_ms_per_daa,
+        created_sompi: item.created_sompi.clone(),
+        moved_sompi: item.moved_sompi.clone(),
+        burned_sompi: item.burned_sompi.clone(),
+        live_rows: item.live_rows,
+        latched_rows: item.latched_rows,
+        live_sompi: item.live_sompi.clone(),
+        latched_sompi: item.latched_sompi.clone(),
+        latched_behind_head: item.latched_behind_head,
+        reporter_pending_rows: item.reporter_pending_rows,
+        reporter_awarded_rows: item.reporter_awarded_rows,
+        next_block_moves: item.next_block_moves.iter().map(protowire::RpcPalwVestingMove::from).collect(),
+        next_block_legs: item.next_block_legs,
+        next_block_new_keys: item.next_block_new_keys,
+        next_block_stopped: item.next_block_stopped.clone(),
+        next_block_stopped_at: item.next_block_stopped_at.clone(),
+        backlog_keys: item.backlog_keys,
+        backlog_blocks_est: item.backlog_blocks_est,
+        licence_histogram: item.licence_histogram.iter().map(protowire::RpcPalwVestingDoorCount::from).collect(),
+        bond: item.bond.clone(),
+        payout_address: item.payout_address.clone(),
+        claim_id: item.claim_id.clone(),
+        claim_stage: item.claim_stage.clone(),
+        bond_known: item.bond_known,
+        payee_holds_collateral: item.payee_holds_collateral,
+        lock_live_rows: item.lock_live_rows,
+        lock_live_last_expiry_daa: item.lock_live_last_expiry_daa,
+        rows: item.rows.iter().map(protowire::RpcPalwVestingRow::from).collect(),
+        rows_total: item.rows_total,
+        next_after: item.next_after.clone(),
+        maturing_sompi: item.maturing_sompi.clone(),
+        query_latched_sompi: item.query_latched_sompi.clone(),
+        reporter_rewards: item.reporter_rewards.iter().map(protowire::RpcPalwReporterReward::from).collect(),
         error: None,
     }
 });
@@ -2556,6 +2680,15 @@ try_from!(item: &protowire::RpcPalwClaimRow, kaspa_rpc_core::RpcPalwClaimRow, {
         exec_tickets_spent: item.exec_tickets_spent,
         exec_first_round: item.exec_first_round,
         exec_last_round: item.exec_last_round,
+        vesting_stage: item.vesting_stage.clone(),
+        vesting_sompi: item.vesting_sompi,
+        vesting_payee_sompi: item.vesting_payee_sompi,
+        vesting_expiry_daa: item.vesting_expiry_daa,
+        vesting_licences_since_final: item.vesting_licences_since_final,
+        vesting_licences_needed: item.vesting_licences_needed,
+        vesting_matured_at: item.vesting_matured_at,
+        vesting_eta_daa: item.vesting_eta_daa,
+        vesting_eta_estimated: item.vesting_eta_estimated,
     }
 });
 try_from!(item: &protowire::GetPalwClaimsRequestMessage, kaspa_rpc_core::GetPalwClaimsRequest, {
@@ -2576,6 +2709,12 @@ try_from!(item: &protowire::GetPalwClaimsResponseMessage, RpcResult<kaspa_rpc_co
         bond_slashed: item.bond_slashed,
         bond_registered_daa: item.bond_registered_daa,
         bond_capable_classes: item.bond_capable_classes.clone(),
+        vesting_only_rows: item
+            .vesting_only_rows
+            .iter()
+            .map(kaspa_rpc_core::RpcPalwClaimRow::try_from)
+            .collect::<RpcResult<Vec<_>>>()?,
+        vesting_only_truncated: item.vesting_only_truncated,
     }
 });
 try_from!(item: &protowire::RpcPalwClassRow, kaspa_rpc_core::RpcPalwClassRow, {
@@ -2756,8 +2895,8 @@ try_from!(item: &protowire::RpcPalwClassLedgerTotals, kaspa_rpc_core::RpcPalwCla
         redrawn: item.redrawn,
         paid_at_acceptance: item.paid_at_acceptance,
         escrow_final_sompi: item.escrow_final_sompi.clone(),
-        producer_paid_sompi: item.producer_paid_sompi.clone(),
-        panel_paid_sompi: item.panel_paid_sompi.clone(),
+        producer_named_sompi: item.producer_named_sompi.clone(),
+        panel_named_sompi: item.panel_named_sompi.clone(),
         reserve_sompi: item.reserve_sompi.clone(),
         burned_sompi: item.burned_sompi.clone(),
         attempted_compute: item.attempted_compute.clone(),
@@ -3167,6 +3306,134 @@ try_from!(item: &protowire::GetPalwModelCertificationResponseMessage, RpcResult<
         class_id: item.class_id.clone(),
         end_to_end_certified: item.end_to_end_certified,
         families: item.families.iter().map(kaspa_rpc_core::RpcPalwModelCertifiedFamily::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::GetPalwVestingRequestMessage, kaspa_rpc_core::GetPalwVestingRequest, {
+    Self {
+        bond: item.bond.clone(),
+        payout_address: item.payout_address.clone(),
+        claim_id: item.claim_id.clone(),
+        limit: item.limit,
+        after: item.after.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwVestingLeg, kaspa_rpc_core::RpcPalwVestingLeg, {
+    Self {
+        kind: item.kind.clone(),
+        payee_bond: item.payee_bond.clone(),
+        payload: item.payload.clone(),
+        sompi: item.sompi,
+        queue_key: item.queue_key.clone(),
+    }
+});
+try_from!(item: &protowire::RpcPalwVestingRow, kaspa_rpc_core::RpcPalwVestingRow, {
+    Self {
+        claim_id: item.claim_id.clone(),
+        class_id: item.class_id.clone(),
+        producer_bond: item.producer_bond.clone(),
+        licence_door: item.licence_door.clone(),
+        basis_k: item.basis_k,
+        escrow_sompi: item.escrow_sompi,
+        buyback_bound_sompi: item.buyback_bound_sompi,
+        total_sompi: item.total_sompi,
+        reserve_sompi: item.reserve_sompi,
+        final_daa: item.final_daa,
+        expiry_daa: item.expiry_daa,
+        settled_at_final: item.settled_at_final,
+        matured_at: item.matured_at,
+        stage: item.stage.clone(),
+        daa_clock_met: item.daa_clock_met,
+        licences_since_final: item.licences_since_final,
+        licences_needed: item.licences_needed,
+        second_clock_bound_daa: item.second_clock_bound_daa,
+        da_session_open: item.da_session_open,
+        mature_now: item.mature_now,
+        lock_live: item.lock_live,
+        moves_ahead: item.moves_ahead,
+        keys_ahead: item.keys_ahead,
+        in_next_block: item.in_next_block,
+        eta_daa: item.eta_daa,
+        eta_estimated: item.eta_estimated,
+        legs: item.legs.iter().map(kaspa_rpc_core::RpcPalwVestingLeg::try_from).collect::<RpcResult<Vec<_>>>()?,
+        legs_sompi: item.legs_sompi,
+    }
+});
+try_from!(item: &protowire::RpcPalwReporterReward, kaspa_rpc_core::RpcPalwReporterReward, {
+    Self {
+        offence_key: item.offence_key.clone(),
+        stage: item.stage.clone(),
+        reporter_bond: item.reporter_bond.clone(),
+        payload: item.payload.clone(),
+        sompi: item.sompi,
+        reveal_until: item.reveal_until,
+        in_next_block: item.in_next_block,
+    }
+});
+try_from!(item: &protowire::RpcPalwVestingMove, kaspa_rpc_core::RpcPalwVestingMove, {
+    Self {
+        source: item.source.clone(),
+        id: item.id.clone(),
+        legs: item.legs.iter().map(kaspa_rpc_core::RpcPalwVestingLeg::try_from).collect::<RpcResult<Vec<_>>>()?,
+    }
+});
+try_from!(item: &protowire::RpcPalwVestingDoorCount, kaspa_rpc_core::RpcPalwVestingDoorCount, {
+    Self { door: item.door.clone(), rows: item.rows, latched_rows: item.latched_rows, sompi: item.sompi.clone() }
+});
+try_from!(item: &protowire::GetPalwVestingResponseMessage, RpcResult<kaspa_rpc_core::GetPalwVestingResponse>, {
+    Self {
+        available: item.available,
+        rcore_plus_active: item.rcore_plus_active,
+        tip_daa: item.tip_daa,
+        next_daa: item.next_daa,
+        halted: item.halted,
+        second_clock_depth: item.second_clock_depth,
+        second_clock_escaped_depth: item.second_clock_escaped_depth,
+        settled_anchors: item.settled_anchors,
+        measured_ms_per_daa: item.measured_ms_per_daa,
+        created_sompi: item.created_sompi.clone(),
+        moved_sompi: item.moved_sompi.clone(),
+        burned_sompi: item.burned_sompi.clone(),
+        live_rows: item.live_rows,
+        latched_rows: item.latched_rows,
+        live_sompi: item.live_sompi.clone(),
+        latched_sompi: item.latched_sompi.clone(),
+        latched_behind_head: item.latched_behind_head,
+        reporter_pending_rows: item.reporter_pending_rows,
+        reporter_awarded_rows: item.reporter_awarded_rows,
+        next_block_moves: item
+            .next_block_moves
+            .iter()
+            .map(kaspa_rpc_core::RpcPalwVestingMove::try_from)
+            .collect::<RpcResult<Vec<_>>>()?,
+        next_block_legs: item.next_block_legs,
+        next_block_new_keys: item.next_block_new_keys,
+        next_block_stopped: item.next_block_stopped.clone(),
+        next_block_stopped_at: item.next_block_stopped_at.clone(),
+        backlog_keys: item.backlog_keys,
+        backlog_blocks_est: item.backlog_blocks_est,
+        licence_histogram: item
+            .licence_histogram
+            .iter()
+            .map(kaspa_rpc_core::RpcPalwVestingDoorCount::try_from)
+            .collect::<RpcResult<Vec<_>>>()?,
+        bond: item.bond.clone(),
+        payout_address: item.payout_address.clone(),
+        claim_id: item.claim_id.clone(),
+        claim_stage: item.claim_stage.clone(),
+        bond_known: item.bond_known,
+        payee_holds_collateral: item.payee_holds_collateral,
+        lock_live_rows: item.lock_live_rows,
+        lock_live_last_expiry_daa: item.lock_live_last_expiry_daa,
+        rows: item.rows.iter().map(kaspa_rpc_core::RpcPalwVestingRow::try_from).collect::<RpcResult<Vec<_>>>()?,
+        rows_total: item.rows_total,
+        next_after: item.next_after.clone(),
+        maturing_sompi: item.maturing_sompi.clone(),
+        query_latched_sompi: item.query_latched_sompi.clone(),
+        reporter_rewards: item
+            .reporter_rewards
+            .iter()
+            .map(kaspa_rpc_core::RpcPalwReporterReward::try_from)
+            .collect::<RpcResult<Vec<_>>>()?,
     }
 });
 try_from!(item: &protowire::RpcPalwModelLifecycle, kaspa_rpc_core::RpcPalwModelLifecycle, {

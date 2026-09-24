@@ -970,6 +970,21 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwModelCertificationResponse::default())
     }
 
+    /// **ADR-0152 P2-10: the vesting table** (op 199; testnet-12's R-core+) — name one of a bond,
+    /// a payout address or a claim, or none for the chain-wide totals. A node built before op 199
+    /// drops the WebSocket on it: ask it last on a connection, or reconnect.
+    async fn get_palw_vesting(&self, request: GetPalwVestingRequest) -> RpcResult<GetPalwVestingResponse> {
+        self.get_palw_vesting_call(None, request).await
+    }
+    async fn get_palw_vesting_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwVestingRequest,
+    ) -> RpcResult<GetPalwVestingResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwVestingResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await
