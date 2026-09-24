@@ -240,6 +240,16 @@ impl ConsensusSessionOwned {
         self.consensus.palw_claim_readers_v2(claim)
     }
 
+    /// What a node's receipt pool reads off the tip: the bound panels of `claims`, the registered
+    /// keys of `bonds`. One store-tip read for the whole batch, on the panel's cadence.
+    pub fn palw_receipt_pool_facts_v1(
+        &self,
+        claims: Vec<kaspa_consensus_core::Hash64>,
+        bonds: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,
+    ) -> Option<kaspa_consensus_core::palw_panel_v2::PalwReceiptPoolFactsV1> {
+        self.consensus.palw_receipt_pool_facts_v1(claims, bonds)
+    }
+
     /// A claim's committed roots and price at the tip (ADR-0111 Decision 2).
     pub fn palw_claim_roots_v2(
         &self,

@@ -2070,13 +2070,30 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // and its step root is read off the retained tree rather than rebuilt from tiles there are
         // none of. Same three questions, same three answers.
         if let Ok(folded) = crate::produce::base0_fp_material_decode_v2(material) {
+            // **An attempt folds only on a held class** (`palw_attempt_capture_folds_v1`: this
+            // build's `execute` writes the dense capture for every other), and a fold's rows are
+            // tied to its step tree by no rule a seat can run (SEAT-0's head rule reads dense
+            // leaves) — so under an attempt claim of a class whose attempts do not fold, the
+            // selecting row would be a free field: bend it, move the token, re-derive the roots,
+            // and every seat licensed each bend. Refused, as material no honest producer serves.
+            // A held class's fold attempt is the honest producer's own material and stays
+            // licensable here; its selecting row is the residual SEAT-R (a full-mask `Valid` only
+            // from a replay) and F1c's rule 12 close at `palw_offence_attribution`.
+            if claim.attempt_draw.is_some() && !kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&self.profile) {
+                return PalwMaterialVerdictV1::Mismatch;
+            }
             if claim.anchor != Hash64::default() && folded.binding.job_context.job_id != claim.anchor {
                 return PalwMaterialVerdictV1::Mismatch;
             }
             if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
                 return PalwMaterialVerdictV1::Unverifiable;
             }
-            return match crate::produce::base0_fp_material_matches_claim_v2(&folded, claim.execution_root, claim.trace_root) {
+            return match crate::produce::base0_fp_material_matches_claim_v2(
+                &folded,
+                claim.execution_root,
+                claim.trace_root,
+                crate::produce::Base0SeatFamilyV1::IntegerKv,
+            ) {
                 Ok(true) => PalwMaterialVerdictV1::Matches,
                 Ok(false) => PalwMaterialVerdictV1::Mismatch,
                 Err(_) => PalwMaterialVerdictV1::Unverifiable,
@@ -2109,6 +2126,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 claim.execution_root,
                 claim.trace_root,
                 self.network_ladder,
+                crate::produce::Base0SeatFamilyV1::IntegerKv,
             ) {
                 Ok(true) => PalwMaterialVerdictV1::Matches,
                 Ok(false) => PalwMaterialVerdictV1::Mismatch,
@@ -2118,6 +2136,13 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let Some(run) = qwen25_a16_material_decode_v1(material) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
+        // **The legacy composite is the ledger-compiled class's alone.** A court-capable backend's
+        // `execute` writes the family codec for every attempt, and this decode re-derives the roots
+        // from the rows it was sent with no execution behind them — so on this backend every new
+        // set of rows was a new root the seat licensed, and SEAT-0's rules never saw them.
+        if self.court_capable {
+            return PalwMaterialVerdictV1::Mismatch;
+        }
         // Recomputed under the job the claim's ANCHOR implies — the job the chain asked for, and
         // the only one a producer was entitled to run. A claim with no anchor has no block to bind
         // to, and a capture verified without one is re-usable by anyone who mines a fresh block, so

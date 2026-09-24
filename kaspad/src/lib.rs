@@ -16,6 +16,7 @@ pub mod palw_lane_watch;
 pub mod palw_memory_ledger;
 pub mod palw_panel;
 pub mod palw_producer;
+pub mod palw_receipt_pool;
 pub mod palw_retention;
 pub mod palw_round_producer;
 pub mod validator_service;
