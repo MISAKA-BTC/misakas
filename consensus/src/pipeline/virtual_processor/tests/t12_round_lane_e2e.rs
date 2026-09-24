@@ -321,7 +321,23 @@ impl T12Chain {
         txs: Vec<Transaction>,
         keep: &dyn Fn(Hash64) -> bool,
     ) -> (Block, Hash64) {
-        let (block, claim_id) = self.build_attempt(card, step_ms, txs, keep);
+        self.attempt_executing(card, step_ms, txs, keep, None).await
+    }
+
+    /// [`Self::attempt`], committing `execution_root` in place of the harness's fixture root when
+    /// one is given — a producer's lie a filer can refute: a root that answers another job (T18b's
+    /// borrowed root, ADR-0152 v3.1 J-5). Consensus never re-executes an attempt and no admission
+    /// rebuilds a root, so the chain admits it as it admits any; `ExecutorRefuted { IdentityMismatch }`
+    /// is what convicts it later (ADR-0152 Phase 2's T48 files one on a `Final` row).
+    pub(super) async fn attempt_executing(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        txs: Vec<Transaction>,
+        keep: &dyn Fn(Hash64) -> bool,
+        execution_root: Option<Hash64>,
+    ) -> (Block, Hash64) {
+        let (block, claim_id) = self.build_attempt_executing(card, step_ms, txs, keep, execution_root);
         let block = self.insert_chain_block(block, &format!("card {card}'s attempt block")).await;
         (block, claim_id)
     }
@@ -333,6 +349,18 @@ impl T12Chain {
         step_ms: u64,
         txs: Vec<Transaction>,
         keep: &dyn Fn(Hash64) -> bool,
+    ) -> (MutableBlock, Hash64) {
+        self.build_attempt_executing(card, step_ms, txs, keep, None)
+    }
+
+    /// [`Self::build_attempt`] with [`Self::attempt_executing`]'s optional execution root.
+    fn build_attempt_executing(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        txs: Vec<Transaction>,
+        keep: &dyn Fn(Hash64) -> bool,
+        execution_root: Option<Hash64>,
     ) -> (MutableBlock, Hash64) {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
@@ -367,7 +395,7 @@ impl T12Chain {
         facts.ready_to_produce(&card_pubkey(card)).unwrap_or_else(|why| panic!("card {card} is not ready to produce: {why}"));
         let header = &t.block.header;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let execution = Hash64::from_u64_word(0xE7EC_0000_0000_0000 | self.nonce);
+        let execution = execution_root.unwrap_or_else(|| Hash64::from_u64_word(0xE7EC_0000_0000_0000 | self.nonce));
         let mut attempt = PalwAttemptUnsignedV2 {
             version: PALW_ATTEMPT_V2_VERSION,
             network_domain: self.network_domain,
