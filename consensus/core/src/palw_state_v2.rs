@@ -47703,6 +47703,206 @@ pub(crate) mod tests {
         assert_eq!(s5.reserved_exposure(&bond_key(2)), s3.reserved_exposure(&bond_key(2)), "its reservation is back");
     }
 
+    /// **T-A11 (ADR-0152 §4-ter.3 step 6; the review's F6): the `StateChunk` fallback, both branches,
+    /// on R-core+'s data-availability court, under an open held dissection.** The producer's checkpoints
+    /// hold a forged row in slice (V, 0) — the case where an honest challenger's own sub-root of that
+    /// slice disagrees with the one the producer files, so the dissection's bottom cannot be built
+    /// from the filing (`PalwAttnHeldEvidenceV1::fallback_v1`). A seat of the licensing panel opens its
+    /// held dissection at a fused leaf and then demands the forged chunk through the DA court
+    /// (`DefaultAccusedHeld`, unit `StateChunk { checkpoint, chunk }`):
+    /// * **disclosure** — the producer answers every unit of the session (`MaterialDisclosedV2`), and
+    ///   the seat files `CheckpointAccused` on the very bytes disclosed: the claim is voided `CourtFraud`
+    ///   through S-4's funnel (its `CourtConviction` record written), the dissection closes with the
+    ///   void, and the seat is not charged;
+    /// * **silence** — the disclose window runs out: DA-7 voids the claim `ProducerWithholding` (S1) and
+    ///   charges the producer, the licensing `Valid` signers are not charged (N9 dormant: seats'
+    ///   answering has not landed, `seat_da_answer_landed` false), nor is the seat, and the void closes
+    ///   the dissection neutrally.
+    #[test]
+    fn t_a11_the_state_chunk_fallback_convicts_on_disclosure_and_withholds_on_silence() {
+        use crate::palw_attn_court_v1::{PalwAttnCheckpointAnchorV1, PalwAttnChunkOpeningV1};
+        use crate::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1};
+        use crate::palw_held_da_v1::{PalwHeldDisclosureCarriageV1, PalwHeldDisclosureV1, PalwHeldMissingV1};
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_leaf_index};
+        use crate::palw_step_leg::{PalwStepOpeningV1, step_merkle_path_v1};
+        // The forged execution: (V, layer 0, position 4) moved in every checkpoint that holds it, the
+        // committed cache-write rows honest; a real tile committed at layer 1's fused site, position 12.
+        let forged = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, Some((1, 0, 4)));
+        let profile = forged.binding.shape_profile.clone();
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, 1, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fixed row") };
+        let width = elements.min(node.tile_len);
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 12, tile_index: 0 };
+        let fx = forged.with_committed_tile(coord, width, vec![0; 4 * width as usize]);
+        let leaf = canonical_step_leaf_index(&profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let class_id = fx.class_id();
+
+        // R-core+ at genesis through the mirror; the held regime and its courts; F2's fence; a turn
+        // longer than the disclose window, so the DA court decides before the dissection's clock.
+        // testnet-12's 500‰ exposure ceiling: an accuser stakes against the free half of its bond.
+        let p = held_params(class_id)
+            .with_turn_deadline_daa(200)
+            .expect("a turn")
+            .with_fp_exposure_ceiling(500)
+            .expect("a ceiling")
+            .with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+        let x = PalwTransitionExtrasV1 {
+            panel_economy_active: true,
+            shard_court_ladder: Some(1 << 26),
+            held_context_ladder: Some(1 << 26),
+            offence_attribution_active: true,
+            ..door_extras(true)
+        };
+        let step = |parent: &PalwChainStateV2, daa: u64, objects: &[PalwConsensusObjectV2], att: Option<&PalwAttemptEnvelopeV2>| {
+            aheld_held_dissection::step(parent, &p, daa, objects, att, &x)
+        };
+        let mut objects = register_class_and_bond();
+        if let PalwConsensusObjectV2::ClassRegistered { class_id: registered, .. } = &mut objects[0] {
+            *registered = class_id;
+        }
+        // The producer and the seats post what the R-core+ door fixtures' seats post: under the 500‰
+        // ceiling the producer's claim and every accuser's stake fit.
+        if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = &mut objects[1] {
+            *collateral = 1_000_000_000;
+        }
+        objects.extend((2..=6).map(|n| seat_bond_reg(n, 1_000_000_000)));
+        let s0 = step(&PalwChainStateV2::genesis(), 100, &objects, None).expect("the registry");
+        let mut env = attempt_for_class(160, 1, class_id, bond_key(1), vec![7; 4], op_id(21), h64(11));
+        env.attempt.trace_root = h64(HELD_TRACE_ROOT);
+        env.attempt.execution_root = fx.binding.committed_execution_root;
+        env.attempt.trace_chunk_count = 1;
+        env.attempt.trace_retention_daa = 999_999;
+        let claim_id = attempt_id_v2(&env.attempt);
+        let s1 = step(&s0, 101, &[], Some(&env)).expect("the claim");
+        let s2 = step(&s1, 102, &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats: sybil_seats() }], None)
+            .expect("the panel binds");
+        let (full, auditor) = full_seat_and_auditor(claim_id);
+        let s3 = step(&s2, 103, &[optimistic_object(claim_id, &[full, auditor])], None).expect("S2 licenses");
+        assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        let seat = sybil_seats().iter().map(|seat| seat.bond).find(|bond| *bond != full && *bond != auditor).expect("a third seat");
+
+        // The seat's held dissection at the fused leaf, then its DA demand of the forged chunk.
+        let s4 = step(&s3, 104, &[honest_fused_accusation(&fx, claim_id, leaf, seat)], None).expect("the held dissection opens");
+        assert_eq!(s4.court_sessions_for_claim(&claim_id), 1);
+        let mut checkpoint_accusation = fx.accusation(11, 1, 0, 4);
+        let named = PalwHeldMissingV1::StateChunk { checkpoint: 11, chunk: checkpoint_accusation.chunk.chunk_index };
+        let demand = PalwConsensusObjectV2::DefaultAccusedHeld {
+            accusation: Box::new(crate::palw_held_da_v1::PalwHeldAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                missing: named,
+                accuser: seat,
+                binding: fx.binding.clone(),
+                signature: vec![9; 8],
+            }),
+        };
+        let s5 = step(&s4, 105, &[demand], None).expect("the DA court demands the chunk");
+        let session = s5.da_session(&claim_id, &seat).expect("the DA session").clone();
+        assert_eq!(session.units.first(), Some(&PalwDaUnitV1::Held(named)), "the named unit leads the session's units");
+        assert_eq!(s5.court_sessions_for_claim(&claim_id), 1, "the held dissection is still open");
+
+        // **Disclosure**: the producer answers every unit; the seat convicts on the disclosed bytes.
+        let answer = |unit: &PalwDaUnitV1| -> PalwConsensusObjectV2 {
+            let PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint, chunk }) = *unit else {
+                panic!("a StateChunk session draws StateChunk units: {unit:?}")
+            };
+            let positions = checkpoint + 1;
+            let chunks = &fx.chunks[checkpoint as usize];
+            let siblings = crate::palw_state_chunk_map::palw_state_chunk_path_for_map_v1(&profile, positions, chunks, chunk)
+                .expect("the chunk's held path");
+            PalwConsensusObjectV2::MaterialDisclosedV2 {
+                claim: claim_id,
+                unit: *unit,
+                answer: PalwDaAnswerV1::Held(Box::new(PalwHeldDisclosureCarriageV1 {
+                    version: 1,
+                    claim: claim_id,
+                    missing: PalwHeldMissingV1::StateChunk { checkpoint, chunk },
+                    binding: fx.binding.clone(),
+                    disclosure: PalwHeldDisclosureV1::StateChunk {
+                        anchor: PalwAttnCheckpointAnchorV1 {
+                            leaf: fx.checkpoint_leaves[checkpoint as usize].clone(),
+                            opening: PalwStepOpeningV1 {
+                                leaf_index: u64::from(checkpoint),
+                                leaf_hash: fx.checkpoint_hashes[checkpoint as usize],
+                                siblings: step_merkle_path_v1(&fx.checkpoint_hashes, checkpoint as usize).expect("a leg path"),
+                            },
+                        },
+                        chunk: PalwAttnChunkOpeningV1 { chunk_index: chunk, chunk_bytes: chunks[chunk as usize].clone(), siblings },
+                    },
+                    // DA-4: the carriage's own slot stays empty; the discloser signs the whole answer.
+                    signature: Vec::new(),
+                })),
+                discloser: bond_key(1),
+                signature: vec![9; 8],
+            }
+        };
+        let answers: Vec<PalwConsensusObjectV2> = session.units.iter().map(answer).collect();
+        let disclosed = match &answers[0] {
+            PalwConsensusObjectV2::MaterialDisclosedV2 { answer: PalwDaAnswerV1::Held(carriage), .. } => match &carriage.disclosure {
+                PalwHeldDisclosureV1::StateChunk { chunk, .. } => chunk.chunk_bytes.clone(),
+                other => panic!("{other:?}"),
+            },
+            other => panic!("{other:?}"),
+        };
+        let s6 = step(&s5, 106, &answers, None).expect("the producer discloses every unit");
+        assert!(s6.da_session(&claim_id, &seat).is_none(), "every unit answered: the session closes refuted");
+        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "an answer is no verdict");
+        // The seat's accusation is built from the disclosed chunk: the forged row, against the honest
+        // committed cache-write row.
+        assert_eq!(checkpoint_accusation.chunk.chunk_bytes, disclosed, "the accusation reads the bytes the producer disclosed");
+        checkpoint_accusation.claim = claim_id;
+        checkpoint_accusation.trace_root = h64(HELD_TRACE_ROOT);
+        checkpoint_accusation.executor_bond = bond_key(1);
+        checkpoint_accusation.accuser_bond = seat;
+        let s7 = step(&s6, 107, &[PalwConsensusObjectV2::CheckpointAccused { accusation: Box::new(checkpoint_accusation) }], None)
+            .expect("the checkpoint court convicts on the disclosed chunk");
+        assert!(
+            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "{:?}",
+            s7.claim(&claim_id).unwrap().phase
+        );
+        assert!(
+            s7.consumed_offence(&palw_court_conviction_offence_id_v1(&bond_key(1).0, &claim_id)).is_some(),
+            "S-4's CourtConviction record"
+        );
+        assert_eq!(s7.court_sessions_for_claim(&claim_id), 0, "the void closed the dissection");
+        assert_eq!(
+            s7.bond(&seat).expect("the seat").collateral,
+            s3.bond(&seat).expect("the seat").collateral,
+            "the seat pays nothing: its dissection closed neutrally and its DA exposure came back at the conviction"
+        );
+        assert!(s7.bond(&bond_key(1)).unwrap().collateral < s3.bond(&bond_key(1)).unwrap().collateral, "the producer is charged");
+
+        // **Silence**: the disclose window runs out.
+        let mut s = s5.clone();
+        let mut at = 106;
+        while !s.claim(&claim_id).unwrap().phase.is_terminal() {
+            s = step(&s, at, &[], None).unwrap_or_else(|e| panic!("DAA {at}: {e}"));
+            at += 1;
+            assert!(at < 400, "the DA court decides inside its window");
+        }
+        assert!(
+            matches!(
+                s.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+            ),
+            "{:?}",
+            s.claim(&claim_id).unwrap().phase
+        );
+        assert!(s.bond(&bond_key(1)).unwrap().collateral < s3.bond(&bond_key(1)).unwrap().collateral, "S1: the producer is charged");
+        for signer in [full, auditor] {
+            assert_eq!(
+                s.bond(&signer).expect("a signer").collateral,
+                s3.bond(&signer).expect("a signer").collateral,
+                "N9 dormant: the Valid signer {signer:?} is not charged for the producer's withholding"
+            );
+        }
+        assert_eq!(s.bond(&seat).expect("the seat").collateral, s3.bond(&seat).expect("the seat").collateral, "nor is the seat");
+        assert_eq!(s.court_sessions_for_claim(&claim_id), 0, "the withholding void closed the dissection neutrally");
+    }
+
     fn held_da_accusation(
         fx: &crate::palw_checkpoint_court_v1::tests::HeldFixture,
         claim_id: Hash64,
