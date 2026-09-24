@@ -16173,3 +16173,6 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 mod t12_clock_floor;
 mod t12_offence_attribution_gate;
 mod t12_round_lane_e2e;
+// ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
+// through the gate, the acceptance walk and the fold.
+mod t46_false_valid_real_claim;

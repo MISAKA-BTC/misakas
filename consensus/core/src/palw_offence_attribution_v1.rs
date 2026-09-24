@@ -55,6 +55,11 @@ pub const PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES: u64 = crate::palw_mode_v2::DEFAULT
 /// Keyed-BLAKE2b-512 domain of [`palw_false_valid_ledger_key_v2`].
 pub const PALW_FALSE_VALID_KEY_DOMAIN_V2: &[u8] = b"misaka-palw/false-valid-key/v2";
 
+/// **The most bytes F7's reporter slot may carry, once its fence arms it** (agreed with the peer).
+/// Until then the slot must be empty; after, a commit–reveal opening is a few hashes, and a slot
+/// the filer could fill up to the evidence cap would be free bytes riding every conviction.
+pub const PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES: usize = 256;
+
 /// **The ladder a bundle-less judge opens a non-held class's step tree at**: the widest any
 /// ruleset may freeze ([`crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`]), the
 /// bound `PALW_FP_STRUCTURAL_WORK_LEAVES_CAP` gives the free-prompt door for the same reason. The
@@ -125,8 +130,9 @@ pub struct PalwPanelFalseValidEvidenceV2 {
     pub accused_seat: TransactionOutpoint,
     pub receipt: PalwFalseValidReceiptV1,
     pub contradiction: PalwPanelContradictionV1,
-    /// **F7's commit–reveal slot.** Empty until its own fence arms it, and never part of the
-    /// ledger key, so filling it cannot make one false `Valid` two offences.
+    /// **F7's commit–reveal slot.** Empty until its own fence arms it, at most
+    /// [`PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES`] once it does, and never part of the ledger
+    /// key, so filling it cannot make one false `Valid` two offences.
     pub reporter_reveal: Vec<u8>,
 }
 
@@ -402,13 +408,59 @@ pub fn palw_false_valid_liable_v1(
     }
 }
 
+/// **Whether an execution-proving contradiction proves the claim's committed execution false —
+/// with a step refutation read the way this network carries its prompt.**
+///
+/// [`palw_panel_contradiction_convicts_execution_v1`] (the V1 route's, unchanged) recomputes a
+/// `StepArithmetic` step with the FLAT prompt comparison: the refutation's whole id list against
+/// `prompt_token_ids_hash`. On a network that commits its prompts in the Merkle form
+/// (`Params::palw_prompt_ids_merkle`; testnet-12 from genesis) that hash is a Merkle root, so the
+/// comparison refuses every refutation a prover builds (`InputSetNotCanonical`) before a step is
+/// recomputed — and no seat could ever be convicted of a step fault there. Measured on a real
+/// testnet-12 claim (T46): the drill's one-lane lie at a middle leaf read
+/// `PanelFalseValidNeedsContradiction`. The seats' sampler, the court's close and the one-move
+/// accusation all read a refutation through [`crate::palw_step_refute::palw_refutation_prompt_carriage_v1`]
+/// — the list taken out, and the one tile the disputed step reads opened against the root — and so
+/// does this: the evidence carries the whole list, as every prover builds it, and
+/// [`crate::palw_step_refute::check_execution_step_refutation_carried_capped_v1`] derives the
+/// opening from it under `prompt_ids_form`, which the Merkle root then authenticates. Under the flat
+/// form the carriage is the identity and the check is the V1 route's, byte for byte. Every other
+/// contradiction is the V1 route's check.
+pub fn palw_false_valid_convicts_execution_v2(
+    contradiction: &PalwPanelContradictionV1,
+    claim_execution_root: Hash64,
+    class_artifact_root: Hash64,
+    step_ladder: u64,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<(), PalwOffenceVerifyError> {
+    match contradiction {
+        PalwPanelContradictionV1::StepArithmetic { refutation, operand_openings } => {
+            if refutation.binding.committed_execution_root != claim_execution_root {
+                return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+            }
+            let operands = crate::palw_artifact::PalwProvenOperandsV1::from_openings_v1(operand_openings, class_artifact_root)
+                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            crate::palw_step_refute::check_execution_step_refutation_carried_capped_v1(
+                refutation,
+                &operands,
+                prompt_ids_form,
+                step_ladder,
+            )
+            .map(|_| ())
+            .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
+        }
+        other => palw_panel_contradiction_convicts_execution_v1(other, claim_execution_root, class_artifact_root, step_ladder),
+    }
+}
+
 /// **The one adjudicator of a false `Valid`** (ADR-0152 v2 F2) — the processor calls it with
 /// `sig = Some(..)`, the fold with `None`, on the same state, so the verdict a node accepts and the
 /// verdict every node folds are one function. The caller has already checked the evidence digest.
 /// In order:
 ///
 /// 1. the evidence is at most [`PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES`];
-/// 2. it decodes as version 2, and the reporter slot is empty unless `reporter_armed`;
+/// 2. it decodes as version 2, and the reporter slot is empty unless `reporter_armed` — and never
+///    longer than [`PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES`];
 /// 3. it accuses the seat the receipt names, the receipt names the claim, and the verdict is
 ///    `Valid`;
 /// 4. (`sig` only) the seat is `Active` or `Retiring` and signed the receipt under the chain's
@@ -419,16 +471,22 @@ pub fn palw_false_valid_liable_v1(
 /// 7. the contradiction is admitted ([`palw_false_valid_admission_v1`]), and a named void is the
 ///    one the chain wrote on this claim (`palw_void_binds_claim_v1`, the V1 fold's own reading);
 /// 8. an execution-proving contradiction convicts against the TARGET's `execution_root` and
-///    artifact root at the class's ladder — the root pin is the link from claim to execution, and
-///    nothing compares a job id with the claim id; a `ForgedOutput` is refused under ADR-0082's
-///    decode rules unless the claim is known to be an attempt;
+///    artifact root at the class's ladder, a step refutation read in the network's prompt-id
+///    carriage ([`palw_false_valid_convicts_execution_v2`]) — the root pin is the link from claim
+///    to execution, and nothing compares a job id with the claim id; a `ForgedOutput` is refused
+///    under ADR-0082's decode rules unless the claim is known to be an attempt;
 /// 9. the receipt attested the fault's site ([`palw_false_valid_liable_v1`]).
+///
+/// `prompt_ids_form` is the network's (`Params::palw_prompt_ids_form_at`, which the fold carries as
+/// `PalwTransitionExtrasV1::prompt_ids_merkle`) — the form every seat and court reads a step
+/// refutation's prompt in.
 pub fn palw_check_panel_false_valid_v2(
     state: &PalwChainStateV2,
     accused: &PalwBondKeyV2,
     evidence: &[u8],
     fp_decode_rules_active: bool,
     reporter_armed: bool,
+    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     sig: Option<PalwFalseValidSigCheckV1<'_>>,
 ) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
@@ -441,6 +499,9 @@ pub fn palw_check_panel_false_valid_v2(
     }
     if !payload.reporter_reveal.is_empty() && !reporter_armed {
         return Err(PalwOffenceVerifyError::ReporterSlotNotArmed);
+    }
+    if payload.reporter_reveal.len() > PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES {
+        return Err(PalwOffenceVerifyError::EvidenceTooLarge);
     }
     let inner = payload.receipt.inner();
     if payload.accused_seat != accused.0 || inner.seat_bond.0 != accused.0 {
@@ -482,11 +543,12 @@ pub fn palw_check_panel_false_valid_v2(
                     "ForgedOutput under ADR-0082's decode rules convicts only a claim known to be an attempt",
                 ));
             }
-            palw_panel_contradiction_convicts_execution_v1(
+            palw_false_valid_convicts_execution_v2(
                 &payload.contradiction,
                 target.execution_root,
                 target.artifact_root,
                 ladder,
+                prompt_ids_form,
             )?;
             true
         }
@@ -500,6 +562,7 @@ pub fn palw_check_panel_false_valid_v2(
 mod tests {
     use super::*;
     use crate::palw_offence_v1::PalwOffenceVerifyError as E;
+    use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
     use crate::palw_state_v2::{PalwClaimStateV2, PalwPanelSeatV2, PalwPanelStateV2};
     use crate::palw_verification_v2::palw_segment_leaf_range_v2;
     use crate::tx::TransactionId;
@@ -553,7 +616,15 @@ mod tests {
     }
 
     fn judge(state: &PalwChainStateV2, payload: &PalwPanelFalseValidEvidenceV2) -> Result<PalwFalseValidFindingV1, E> {
-        palw_check_panel_false_valid_v2(state, &PalwBondKeyV2(payload.accused_seat), &bytes(payload), false, false, None)
+        palw_check_panel_false_valid_v2(
+            state,
+            &PalwBondKeyV2(payload.accused_seat),
+            &bytes(payload),
+            false,
+            false,
+            PalwPromptIdsFormV1::Flat,
+            None,
+        )
     }
 
     fn claim_row(phase: PalwClaimPhaseV2, execution_root: Hash64) -> PalwClaimStateV2 {
@@ -702,6 +773,48 @@ mod tests {
         }
     }
 
+    /// **The execution check reads a step refutation in the network's prompt carriage — and under
+    /// the flat form it IS the V1 route's check**, for every execution-proving kind and a named void,
+    /// on the claim's root and on another. Under the Merkle form only `StepArithmetic` is read
+    /// differently (the whole list carried, the tile opened from it); every other kind is the V1
+    /// route's there too. The Merkle half on a real refutation is `t46o` (kaspa-consensus).
+    #[test]
+    fn the_execution_check_is_the_v1_routes_under_the_flat_form() {
+        use crate::palw_step_leg::{PalwStepEvidenceV1, PalwStepRefutationV1};
+        use PalwPanelContradictionV1 as C;
+        let skeleton = crate::palw_step_refute::tests::skeleton_refutation();
+        let root = skeleton.binding.committed_execution_root;
+        let cases = [
+            C::StepStructural(PalwStepRefutationV1 { binding: skeleton.binding.clone(), evidence: PalwStepEvidenceV1::Shape }),
+            C::ForgedOutput { binding: skeleton.binding.clone(), pin: zeroed(), position: 0 },
+            C::StepArithmetic { refutation: skeleton.clone(), operand_openings: Vec::new() },
+            C::CourtFraud { voided_daa: 5 },
+        ];
+        for contradiction in &cases {
+            for claim_root in [root, h64(0xE0)] {
+                let v1 = palw_panel_contradiction_convicts_execution_v1(contradiction, claim_root, h64(0xAF), 1 << 20);
+                assert_eq!(
+                    palw_false_valid_convicts_execution_v2(contradiction, claim_root, h64(0xAF), 1 << 20, PalwPromptIdsFormV1::Flat),
+                    v1,
+                    "flat: {contradiction:?}"
+                );
+                if !matches!(contradiction, C::StepArithmetic { .. }) {
+                    assert_eq!(
+                        palw_false_valid_convicts_execution_v2(
+                            contradiction,
+                            claim_root,
+                            h64(0xAF),
+                            1 << 20,
+                            PalwPromptIdsFormV1::MerkleV1
+                        ),
+                        v1,
+                        "merkle: {contradiction:?}"
+                    );
+                }
+            }
+        }
+    }
+
     /// **The admission table**: which contradiction may convict a `Valid` signer, refused by
     /// name where it cannot be tied to this claim's execution.
     #[test]
@@ -751,9 +864,10 @@ mod tests {
         fp_claim.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
         fp.set_false_valid_rows_for_tests(h64(CLAIM), Some(fp_claim), Some(five_seat_panel()), None, 0);
         let payload = evidence(full(1), forged.clone());
-        let armed = palw_check_panel_false_valid_v2(&fp, &seat(1), &bytes(&payload), true, false, None);
+        let armed = palw_check_panel_false_valid_v2(&fp, &seat(1), &bytes(&payload), true, false, PalwPromptIdsFormV1::Flat, None);
         assert!(matches!(armed, Err(E::ContradictionNotAdmitted(_))), "{armed:?}");
-        let attempt = palw_check_panel_false_valid_v2(&state, &seat(1), &bytes(&payload), true, false, None);
+        let attempt =
+            palw_check_panel_false_valid_v2(&state, &seat(1), &bytes(&payload), true, false, PalwPromptIdsFormV1::Flat, None);
         assert_eq!(attempt, Err(E::PanelFalseValidWorkMismatch), "an attempt claim is still judged");
         // A named void binds only the void the chain wrote: this claim, this reason, this DAA.
         for (reason, contradiction) in [
@@ -894,7 +1008,7 @@ mod tests {
         };
         let v1_bytes = borsh::to_vec(&v1).expect("a V1 payload serializes");
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &v1_bytes, false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &v1_bytes, false, false, PalwPromptIdsFormV1::Flat, None),
             Err(E::PanelFalseValidNeedsContradiction),
             "a V1 payload is not read as V2"
         );
@@ -902,10 +1016,11 @@ mod tests {
         revealing.reporter_reveal = vec![0xAB; 32];
         let revealing_bytes = bytes(&revealing);
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, false, PalwPromptIdsFormV1::Flat, None),
             Err(E::ReporterSlotNotArmed)
         );
-        let armed = palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, true, None).expect("F7 reads the slot");
+        let armed = palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, true, PalwPromptIdsFormV1::Flat, None)
+            .expect("F7 reads the slot");
         assert_eq!(armed, judge(&state, &good).unwrap(), "the slot changes nothing the adjudicator finds");
         // The ledger key is (seat, claim) and nothing else.
         let id = palw_false_valid_offence_id_v2(&seat(1).0, &h64(CLAIM));
@@ -934,17 +1049,51 @@ mod tests {
         }
     }
 
+    /// **The reporter slot's own bound, once F7 arms it**: at most
+    /// [`PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES`], asked of an armed slot as well as an unarmed
+    /// one — and an unarmed slot is refused for being filled at all, whatever its length.
+    #[test]
+    fn the_reporter_slot_is_bounded_once_armed() {
+        let state = live_state(voided(55, PalwVoidReasonV2::CourtFraud), h64(0xE0), h64(0xAF));
+        let good = evidence(full(1), PalwPanelContradictionV1::CourtFraud { voided_daa: 55 });
+        let expected = judge(&state, &good).expect("the empty slot is the unarmed rule");
+        let with_reveal = |len: usize| {
+            let mut filled = good.clone();
+            filled.reporter_reveal = vec![0xAB; len];
+            bytes(&filled)
+        };
+        let at_bound = with_reveal(PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES);
+        assert_eq!(
+            palw_check_panel_false_valid_v2(&state, &seat(1), &at_bound, false, true, PalwPromptIdsFormV1::Flat, None),
+            Ok(expected),
+            "armed, a reveal of exactly the bound is read and changes nothing the adjudicator finds"
+        );
+        let past_bound = with_reveal(PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES + 1);
+        assert_eq!(
+            palw_check_panel_false_valid_v2(&state, &seat(1), &past_bound, false, true, PalwPromptIdsFormV1::Flat, None),
+            Err(E::EvidenceTooLarge),
+            "armed, one byte past the bound is refused"
+        );
+        for payload in [with_reveal(1), at_bound, past_bound] {
+            assert_eq!(
+                palw_check_panel_false_valid_v2(&state, &seat(1), &payload, false, false, PalwPromptIdsFormV1::Flat, None),
+                Err(E::ReporterSlotNotArmed),
+                "unarmed, any filled slot is refused before its length is read"
+            );
+        }
+    }
+
     /// **The byte cap** is asked before a byte is decoded.
     #[test]
     fn the_byte_cap() {
         let state = PalwChainStateV2::genesis();
         let cap = PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES as usize;
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap + 1], false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap + 1], false, false, PalwPromptIdsFormV1::Flat, None),
             Err(E::EvidenceTooLarge)
         );
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap], false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap], false, false, PalwPromptIdsFormV1::Flat, None),
             Err(E::PanelFalseValidNeedsContradiction),
             "at the cap the bytes are read, and these do not decode"
         );
@@ -976,6 +1125,7 @@ mod tests {
                     &bytes(&payload),
                     false,
                     false,
+                    PalwPromptIdsFormV1::Flat,
                     Some(PalwFalseValidSigCheckV1 { chain_domain: domain, seat_pubkey: &pubkey, seat_active: active, verify }),
                 )
             };

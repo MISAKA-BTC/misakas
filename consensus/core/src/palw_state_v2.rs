@@ -11507,6 +11507,8 @@ impl<'a> TransitionBuilder<'a> {
             evidence,
             self.params.fp_decode_rules_at(ctx.daa_score),
             false,
+            // The network's prompt-id form, as the processor's gate reads it.
+            self.extras.prompt_ids_form_v1(),
             None,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
