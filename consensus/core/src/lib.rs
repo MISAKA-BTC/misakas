@@ -406,6 +406,7 @@ pub mod palw_transcendental;
 pub mod palw_v2;
 pub mod palw_verification_profile_v1;
 pub mod palw_verification_v2;
+pub mod palw_vesting_v1;
 pub mod palw_weight;
 pub mod palw_work_target_v1;
 /// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
