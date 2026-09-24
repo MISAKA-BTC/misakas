@@ -558,6 +558,11 @@ pub struct VirtualStateProcessor {
     /// The 2026-09-23 economic audit's fence, resolved once in [`Self::palw_audit_2026_09_23_at`];
     /// the fold's extras and the registration gate read it there.
     pub(super) palw_audit_2026_09_23: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
+    /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
+    /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
+    /// the other way.
+    pub(super) palw_offence_attribution: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -1047,6 +1052,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11: params.palw_audit_2026_09_11_fence(),
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
+            palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -7985,6 +7991,69 @@ impl VirtualStateProcessor {
                         self.network_id_bytes.as_slice(),
                         Some(self.genesis.hash),
                     );
+                    // **ADR-0152 v2 F2 (`Params::palw_offence_attribution`): a false `Valid` has ONE
+                    // route past the fence, judged here and in the fold by one adjudicator.** The V1
+                    // `PanelFalseValid` is refused by name: its evidence convicts on
+                    // `job_id == claim_id`, a fixed point no real block-lane or free-prompt claim
+                    // reaches, while a receipt signed by hand in the V2 format still clears it for the
+                    // state-bound contradictions (`ConflictingPermit` names no claim at all).
+                    // `PanelFalseValidV2` is judged by `palw_check_panel_false_valid_v2` with the
+                    // signature half the fold does not run — the receipt verified under THIS chain's
+                    // domain and the key the accused bond registered, in the V2 or V3 form it was
+                    // licensed in — and a (seat, claim) already convicted is refused, since the fold
+                    // would carry it as a no-op. Whether the seat still holds the lock it is charged
+                    // is the fold's question, asked by the per-object rehearsal that follows, so a
+                    // refusal there drops the object too. Below the fence the V2 kind does not exist
+                    // and everything after this block is the gate as it was.
+                    if self.palw_offence_attribution_at(point.daa_score) {
+                        use kaspa_consensus_core::palw_offence_v1::{PalwOffenceKindV1, PalwOffenceVerifyError};
+                        match kind {
+                            PalwOffenceKindV1::PanelFalseValid => {
+                                return Err(PalwOffenceVerifyError::SupersededOnThisNetwork.to_string());
+                            }
+                            PalwOffenceKindV1::PanelFalseValidV2 => {
+                                if evidence.is_empty() {
+                                    return Err(PalwOffenceVerifyError::EvidenceEmpty.to_string());
+                                }
+                                if kaspa_consensus_core::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != *evidence_id {
+                                    return Err(PalwOffenceVerifyError::EvidenceIdMismatch.to_string());
+                                }
+                                let finding = kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_v2(
+                                    state,
+                                    accused,
+                                    evidence,
+                                    state_params.fp_decode_rules_at(point.daa_score),
+                                    // F7's reporter slot: empty until its own fence arms it.
+                                    false,
+                                    Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwFalseValidSigCheckV1 {
+                                        chain_domain: domain,
+                                        seat_pubkey: &record.pubkey,
+                                        seat_active: matches!(
+                                            record.status,
+                                            kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active
+                                                | kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }
+                                        ),
+                                        verify: &Self::verify_mldsa87_with_context_bool,
+                                    }),
+                                )
+                                .map_err(|e| e.to_string())?;
+                                let offence_id = kaspa_consensus_core::palw_offence_attribution_v1::palw_false_valid_offence_id_v2(
+                                    &accused.0,
+                                    &finding.target.claim_id,
+                                );
+                                if state.consumed_offence(&offence_id).is_some() {
+                                    return Err(format!(
+                                        "bond {accused:?}'s false Valid on claim {} is already convicted: one offence per seat and claim",
+                                        finding.target.claim_id
+                                    ));
+                                }
+                                continue;
+                            }
+                            PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
+                        }
+                    } else if let kaspa_consensus_core::palw_offence_v1::PalwOffenceKindV1::PanelFalseValidV2 = kind {
+                        return Err(kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string());
+                    }
                     kaspa_consensus_core::palw_offence_v1::palw_verify_objective_offence_v1(
                         *kind,
                         &accused.0,
@@ -9139,13 +9208,12 @@ impl VirtualStateProcessor {
             audit_2026_09_11_deep_active: self.palw_audit_2026_09_11_deep_at(daa_score),
             audit_2026_09_23_active: self.palw_audit_2026_09_23_at(daa_score),
             settled_anchor_depth: self.palw_settled_anchor_depth_at(daa_score),
-            // TODO(adr0152-f2-processor): resolve `Params::palw_offence_attribution` here —
-            // `self.palw_offence_attribution_at(daa_score)`, with the processor field beside
-            // `palw_objective_offence`, its initialisation from `params`, and the helper beside
-            // `palw_audit_2026_09_23_at` — in the same change as the kind 1/3 routing of the
-            // `Obj::ObjectiveOffence` gate (spec §3.4). Until then every block folds the fence
-            // dormant: `PanelFalseValidV2` is refused and the V1 kind is consumed as below it.
-            offence_attribution_active: false,
+            // ADR-0152 v2 F2: which route a false `Valid` takes at this block — the V1 kind refused
+            // and `PanelFalseValidV2` consumed through the adjudicator the object gate ran. Written
+            // explicitly for the reason every line above gives: an unwritten default here would fold
+            // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
+            // after the gate refused it.
+            offence_attribution_active: self.palw_offence_attribution_at(daa_score),
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
@@ -9398,6 +9466,14 @@ impl VirtualStateProcessor {
 
     fn palw_audit_2026_09_23_at(&self, daa_score: u64) -> bool {
         self.palw_audit_2026_09_23.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0152 v2 F2, resolved in exactly one place, at the BLOCK's own DAA.** Which route a
+    /// false `Valid` takes — the V1 `PanelFalseValid` or `PanelFalseValidV2` — is decided by the
+    /// object gate and again by the fold, and the two must read one answer: a gate that admitted
+    /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
+    fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
+        self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.

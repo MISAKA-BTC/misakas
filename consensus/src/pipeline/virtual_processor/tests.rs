@@ -16171,4 +16171,5 @@ async fn fix12_review_a_gate_refused_registrant_spends_one_slot_a_block() {
 // Test-only: the scenario lives in `tests/t12_round_lane_e2e.rs` beside this file, as a child of
 // this module so it reuses `TestContext` and the harness identities.
 mod t12_clock_floor;
+mod t12_offence_attribution_gate;
 mod t12_round_lane_e2e;
