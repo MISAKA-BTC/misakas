@@ -325,13 +325,26 @@ struct H {
 
 /// testnet-12 with harness cards at genesis; `armed = false` unsets `palw_offence_attribution`.
 fn harness(armed: bool) -> H {
+    harness_with(armed, armed)
+}
+
+/// **testnet-12 with `palw_offence_attribution` armed and `palw_rcore_plus` forced off** — the
+/// fence-off twin ADR-0152 v3.1 R6 names for the tests that exercise the v1 data-availability court
+/// (ADR-0062, ADR-0103 Decision 4: `DefaultDisputed`, `MaterialDisclosed(Held)`), which stands below
+/// `palw_rcore_plus` and which M3's court replaces above it. Its bundle is the twin's own (mirrors
+/// re-synced), so the fold the harness drives and the processor read one ruleset.
+fn harness_rcore_off() -> H {
+    harness_with(true, false)
+}
+
+fn harness_with(offence_attribution: bool, rcore_plus: bool) -> H {
     use misaka_palw_base0::classes::resolve_class_v1;
     kaspa_core::log::try_init_logger("warn");
     let (config, bundle, _premine, floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
     assert!(config.params.palw_offence_attribution.is_some_and(|f| f.is_active(0)), "testnet-12 arms the fence from genesis");
-    let config: Config = if armed {
-        config
-    } else {
+    let (config, bundle): (Config, PalwConsensusParamsV2) = if offence_attribution && rcore_plus {
+        (config, bundle)
+    } else if !offence_attribution {
         let mut params = config.params.clone();
         params.palw_offence_attribution = None;
         // ADR-0152: R-core+ is armed above this fence on testnet-12 and refuses to stand without
@@ -340,7 +353,19 @@ fn harness(armed: bool) -> H {
         params.palw_rcore_plus = None;
         params.palw_rcore_conservative_classes = &[];
         params.sync_palw_rcore_plus();
-        ConfigBuilder::new(params).skip_proof_of_work().build()
+        (ConfigBuilder::new(params).skip_proof_of_work().build(), bundle)
+    } else {
+        let mut params = config.params.clone();
+        params.palw_rcore_plus = None;
+        params.palw_rcore_conservative_classes = &[];
+        params.sync_palw_rcore_plus();
+        let config = ConfigBuilder::new(params).skip_proof_of_work().build();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(twin) = &config.params.palw_consensus_mode else {
+            unreachable!("testnet-12 is ConsensusV2")
+        };
+        let twin = twin.clone();
+        assert!(twin.state.rcore_plus_from_daa().is_none(), "the twin's bundle mirrors the fence off");
+        (config, twin)
     };
     config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
     let ctx = TestContext::new(TestConsensus::new(&config));
@@ -2166,7 +2191,9 @@ async fn t46n_session_open() {
         PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldAccusationV1, PalwHeldMissingV1,
         palw_held_da_accusation_message_v1,
     };
-    let h = harness(true);
+    // ADR-0152 R6: the v1 DA court's sessions (`DefaultDisputed`) stand below `palw_rcore_plus`; this
+    // is their fence-off twin. The R-core twin is `t46n_r_an_rcore_da_session_does_not_defer_a_conviction`.
+    let h = harness_rcore_off();
     let (walk, claim, licence) = h.licensed(Fault::Step);
     let id = claim.claim_id;
     let c = claim.contradiction();
@@ -2644,7 +2671,10 @@ async fn t46r_a_producer_withholding_void_convicts_no_seat() {
         PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldAccusationV1, PalwHeldMissingV1,
         palw_held_da_accusation_message_v1,
     };
-    let h = harness(true);
+    // ADR-0152 R6: F-2's refusal is the rule below `palw_rcore_plus` (the v1 court's void); this is its
+    // fence-off twin. Past the fence N9 admits `ProducerWithholding` only as a DA-7 default's
+    // restatement — the R-core twin is `n9_producer_withholding_restates_a_da_default_only`.
+    let h = harness_rcore_off();
     let (mut walk, claim, licence) = h.licensed(Fault::Honest);
     let id = claim.claim_id;
     let mut accusation = PalwHeldAccusationV1 {
@@ -3109,7 +3139,10 @@ async fn t18_job_identity_survives_reorg_across_admission() {
 ///   the void); a partial seat is not liable at `Whole`.
 #[tokio::test]
 async fn t18b_a_borrowed_root_answers_another_job() {
-    let h = harness(true);
+    // ADR-0152 R6: the v1 DA court's half of T18b (`DefaultAccusedHeld` / `MaterialDisclosed` against a
+    // borrowed binding, the `DefaultDisputed` default) stands below `palw_rcore_plus`; this is its
+    // fence-off twin. The R-core twin is `t18b_r_a_borrowed_root_answers_no_rcore_session`.
+    let h = harness_rcore_off();
     let mut walk = h.genesis_walk();
     let c0 = h.open_claim_at_nonce(&mut walk, Fault::Honest, 0);
     h.bind(&mut walk, c0.claim_id);
@@ -3278,7 +3311,38 @@ async fn t18c_before_licence_the_executor_is_refuted() {
         assert!(walk.state.palw_execution_root_is_forfeited_v1(&root), "{fault:?}: a proven-false root is forfeit");
     }
 
-    // (ii) A root with no preimage: nobody can answer for it.
+    // (ii) A root with no preimage: `t18c_ii_a_root_with_no_preimage_defaults` (the v1 court's twin
+    // below `palw_rcore_plus`, and M3's session past it).
+
+    // (iv) Garbage logits over an honest step tree — the R1 residual.
+    // (iv) Garbage logits over an honest step tree — the R1 residual.
+    let mut walk = h.genesis_walk();
+    let bent = h.open_claim(&mut walk, Fault::GarbageLogits);
+    let pin = bent.pin.clone().unwrap();
+    let routes = [
+        ("ForgedOutput", C::ForgedOutput { binding: bent.binding.clone(), pin: pin.clone(), position: 0 }),
+        ("IdentityMismatch", C::IdentityMismatch { binding: bent.binding.clone() }),
+        (
+            "OutputMismatch",
+            C::OutputMismatch {
+                binding: bent.binding.clone(),
+                pin: kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(pin.clone()),
+            },
+        ),
+        ("Shape", C::StepStructural(PalwStepRefutationV1 { binding: bent.binding.clone(), evidence: PalwStepEvidenceV1::Shape })),
+    ];
+    for (route, contradiction) in routes {
+        let why = h.judge_refuted(&walk.state, bent.claim_id, contradiction.clone()).expect_err("R1 has no F1 route");
+        eprintln!("[t18c(iv)] {route}: {why}");
+        h.refused(&walk, &h.refuted(bent.claim_id, contradiction), &why.to_string());
+    }
+}
+
+/// **T18c (ii): a root with no preimage is answered by nobody** — a bystander's event accusation runs
+/// out and the claim voids for withholding, the producer charged. ADR-0152 R6: below
+/// `palw_rcore_plus` through the v1 court (`DefaultDisputed`); the R-core twin runs the same claim
+/// through M3's session and DA-7's default.
+fn t18c_ii_body(h: &H) {
     let mut walk = h.genesis_walk();
     let lender = h.open_claim_at_nonce(&mut walk, Fault::Honest, 0);
     let mut fake = lender;
@@ -3318,28 +3382,11 @@ async fn t18c_before_licence_the_executor_is_refuted() {
     }
     assert_eq!(voided, Some(PalwVoidReasonV2::ProducerWithholding));
     assert!(walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral < executor_before, "the withholding producer is charged");
+}
 
-    // (iv) Garbage logits over an honest step tree — the R1 residual.
-    let mut walk = h.genesis_walk();
-    let bent = h.open_claim(&mut walk, Fault::GarbageLogits);
-    let pin = bent.pin.clone().unwrap();
-    let routes = [
-        ("ForgedOutput", C::ForgedOutput { binding: bent.binding.clone(), pin: pin.clone(), position: 0 }),
-        ("IdentityMismatch", C::IdentityMismatch { binding: bent.binding.clone() }),
-        (
-            "OutputMismatch",
-            C::OutputMismatch {
-                binding: bent.binding.clone(),
-                pin: kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(pin.clone()),
-            },
-        ),
-        ("Shape", C::StepStructural(PalwStepRefutationV1 { binding: bent.binding.clone(), evidence: PalwStepEvidenceV1::Shape })),
-    ];
-    for (route, contradiction) in routes {
-        let why = h.judge_refuted(&walk.state, bent.claim_id, contradiction.clone()).expect_err("R1 has no F1 route");
-        eprintln!("[t18c(iv)] {route}: {why}");
-        h.refused(&walk, &h.refuted(bent.claim_id, contradiction), &why.to_string());
-    }
+#[tokio::test]
+async fn t18c_ii_a_root_with_no_preimage_defaults() {
+    t18c_ii_body(&harness_rcore_off());
 }
 
 /// **T18d: an output root that is not the run's output is refuted** (`OutputMismatch`, the one

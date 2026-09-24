@@ -2501,6 +2501,61 @@ pub fn palw_accuser_room_v1(
     palw_bond_free_slashable_v1(state, params, bond, now_daa, raw_depth).saturating_sub(palw_accuser_exposure_v1(state, bond))
 }
 
+/// **A-6 (the S-1…S-3 review's M1): an accuser risks only its free half** — past `palw_rcore_plus` a
+/// new accusation's exposure fits iff `max(committed, ceiling‰ · C) + accuser_exposure + new ≤ C`,
+/// where `committed` is the one ledger ([`palw_bond_committed_v1`]), `accuser_exposure` every court,
+/// open DA session and refuted exposure the bond holds ([`palw_accuser_exposure_v1`], DA-6's held
+/// refuted cost included) and `ceiling‰` the 500‰ work ceiling. A bond whose work is under its
+/// ceiling may accuse with the half above it and no more; one whose locks outgrew the ceiling
+/// accuses with what is left. `Err((backed, C))` on refusal, `backed = max(committed, half) + accuser`.
+///
+/// TODO(S, review M1): S lands ONE shared helper enforcing exactly this at every accusing gate (the
+/// court opening, the DA arm); M3's DA admission calls this local copy until that commit is merged
+/// into this line, and is then routed through S's helper.
+fn palw_da_accuser_fits_v1(
+    committed: u128,
+    accuser_exposure: u128,
+    new: u128,
+    collateral: u64,
+    ceiling_permille: u32,
+) -> Result<(), (u128, u128)> {
+    let half = u128::from(collateral).saturating_mul(u128::from(ceiling_permille)) / 1000;
+    let backed = committed.max(half).saturating_add(accuser_exposure);
+    if backed.saturating_add(new) > u128::from(collateral) { Err((backed, u128::from(collateral))) } else { Ok(()) }
+}
+
+/// **ADR-0152 DA-8 / DA-6: what the fold would answer an accusation** — the stage the session would
+/// open at, whether its accuser is a seat of the claim's current panel, its exposure and its deadline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwDaAdmissionV1 {
+    pub stage: crate::palw_da_rcore_v1::PalwDaStageV1,
+    pub accuser_is_seat: bool,
+    pub exposure: u128,
+    pub deadline_daa: u64,
+}
+
+/// **ADR-0152 DA-3 (C-8): may `accuser` open a data-availability session on `claim_id` at `now_daa`?**
+/// Exported for Phase 2's fee-safe de-duplication: the SAME gate the fold's opening reads
+/// (`PalwFoldReadV1::da_admission_v1`) — accusability, retention, the accuser's standing, DA-8's
+/// caps, DA-6's price and the A-6 headroom — minus only what the object itself carries (the named
+/// unit, which the fold bounds against the claim and the binding). The ADR's signature takes no
+/// `extras`; this one does, because the `FinalRow` price reads the claim's gain (the economic-safety
+/// fold) and the headroom reads the second clock, both of which the fold reads from its extras.
+/// `DaCourtDormant` below `palw_rcore_plus`.
+pub fn palw_da_accusation_admissible_v2(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim_id: &Hash64,
+    accuser: &PalwBondKeyV2,
+    now_daa: u64,
+) -> Result<PalwDaAdmissionV1, PalwStateV2Error> {
+    if !params.rcore_plus_active_at(now_daa) {
+        return Err(PalwStateV2Error::DaCourtDormant);
+    }
+    PalwFoldReadV1::outside(state, params, extras).da_admission_v1(claim_id, accuser, now_daa)
+}
+
 /// **B-3: the withdrawal gate past `palw_rcore_plus`** (the Phase 2 plan §2.3 signature).
 ///
 /// `v5(escaped depth) || (rcore && accuser_exposure > 0) || (rcore && payee of an unmatured row)`,
@@ -2646,7 +2701,13 @@ pub fn palw_rcore_release_due_v1(
 /// court is open on a licence, `max(licensed + window_challenge_at(licensed), last)` for a licence,
 /// the disclose deadline, and a terminal record's abandon hold or retirement — so the arm sites,
 /// `rebuild_deadline_index_v2`, `expected_deadline` and `assert_deadline_consistency` can read one
-/// function. M3 adds the DA rows and M4 the `basis_k < 2` row.
+/// function. M4 adds the `basis_k < 2` row.
+///
+/// **M3's DA rows** (DL-1's table, DA-5): a live claim with an open SEAT session owes no deadline (the
+/// pause; the anchors it shifts are written back when the last seat session closes, so every other
+/// row reads the shifted anchor); a terminal claim with ANY session open owes none (its retirement
+/// waits); and a terminal claim's retirement is `max(terminal + claim_retirement_daa,
+/// last_closed_daa + 1)`. A non-seat session changes nothing (V3S-08).
 pub fn palw_rcore_deadline_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -2655,6 +2716,10 @@ pub fn palw_rcore_deadline_v1(
     last_daa: Option<u64>,
 ) -> Result<Option<u64>, PalwStateV2Error> {
     let open_courts = state.open_courts_by_claim.get(claim_id).copied().unwrap_or(0);
+    let da = state.da_claims.get(claim_id);
+    if !claim.phase.is_terminal() && da.is_some_and(|record| record.open_seat_sessions > 0) {
+        return Ok(None);
+    }
     Ok(match claim.phase {
         PalwClaimPhaseV2::Provisional => {
             Some(claim.bind_base_daa().checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?)
@@ -2676,8 +2741,25 @@ pub fn palw_rcore_deadline_v1(
                 .checked_add(palw_da_disclose_window_daa_v1(params))
                 .ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?,
         ),
-        PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => terminal_deadline_at_v1(claim, params, last_daa)?,
+        PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } => {
+            palw_da_terminal_deadline_v1(terminal_deadline_at_v1(claim, params, last_daa)?, da)
+        }
     })
+}
+
+/// **DL-1's terminal DA rows (M3, DA-5):** none while any session is open on the claim, and the
+/// retirement re-armed no earlier than one DAA after the last close. The one terminal deadline a
+/// record's claim can own is its retirement: the abandon hold is a free-prompt `BindTimeout`'s, and
+/// such a claim never bound the panel an accusation needs.
+fn palw_da_terminal_deadline_v1(at: Option<u64>, da: Option<&crate::palw_da_rcore_v1::PalwDaClaimV1>) -> Option<u64> {
+    let Some(record) = da else { return at };
+    if record.open_sessions() > 0 {
+        return None;
+    }
+    match record.last_closed_daa {
+        Some(closed) => at.map(|at| at.max(closed.saturating_add(1))),
+        None => at,
+    }
 }
 
 /// **§3.6: the key a `CourtConviction` (kind 6) is recorded under** — `H(domain ‖ claim_id)`, one per
@@ -6683,6 +6765,31 @@ pub enum PalwStateV2Error {
     /// attempt, as `AttemptExposureCeiling` is: the attempt is skipped and the block stands.
     #[error("bond {bond:?} posts {collateral} sompi, below the producer floor of {floor}: top up before producing")]
     ProducerBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
+    // ---- ADR-0152 v3.1 §3.11 (M3): the data-availability court past `palw_rcore_plus` ----
+    #[error("bond {accuser:?} already holds an open data-availability session on claim {claim}: one per accuser per claim (DA-2)")]
+    DaSessionAlreadyOpen { claim: Hash64, accuser: PalwBondKeyV2 },
+    #[error("bond {accuser:?} cannot open another data-availability session on claim {claim}: {why} (DA-8)")]
+    DaSessionBudgetExhausted { claim: Hash64, accuser: PalwBondKeyV2, why: &'static str },
+    #[error(
+        "leaf {leaf} of claim {claim} is a fused-attention site: its terminal is a held dissection, never a \
+         data-availability unit (DA-3)"
+    )]
+    DaUnitNeedsDissection { claim: Hash64, leaf: u64 },
+    #[error(
+        "the accusation on claim {claim} carries a binding that answers another job or class ({why}); its filer \
+         sends ExecutorRefuted instead (DA-3, J-5)"
+    )]
+    DaBindingIsIdentityFault { claim: Hash64, why: String },
+    #[error("no open data-availability session on claim {0} demands the unit answered (DA-4)")]
+    DaUnitNotDemanded(Hash64),
+    #[error("the unit answered on claim {0} is already answered on chain (DA-4)")]
+    DaUnitAlreadyAnswered(Hash64),
+    #[error("bond {discloser:?} neither produced claim {claim} nor holds a live lock on it, so it cannot answer for it (DA-4, X7)")]
+    DaDiscloserNotLiable { claim: Hash64, discloser: PalwBondKeyV2 },
+    #[error("the answer on claim {claim} is not in the form its unit names: {why} (DA-4)")]
+    DaAnswerMalformed { claim: Hash64, why: &'static str },
+    #[error("{0} is retired past palw_rcore_plus: MaterialDisclosedV2 (tag 55) answers every data-availability session there (DA-1)")]
+    DaV1AnswerRetired(&'static str),
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -8687,6 +8794,12 @@ impl PalwChainStateV2 {
         self.da_claims.get(claim_id)
     }
 
+    /// The one deadline `claim_id` holds in the sweep queue, if any (DL-1: none while a seat session
+    /// pauses it). A scan of the index — a read for tests and RPCs, never a consensus path.
+    pub fn deadline_of(&self, claim_id: &Hash64) -> Option<u64> {
+        self.deadlines.iter().find(|(_, id)| id == claim_id).map(|(at, _)| *at)
+    }
+
     /// The DA sessions by deadline, `(deadline_daa, claim, accuser)` — the sweep's order (DA-7).
     pub fn da_deadlines_iter(&self) -> impl Iterator<Item = &(u64, Hash64, PalwBondKeyV2)> + '_ {
         self.da_deadlines.iter()
@@ -9416,6 +9529,10 @@ impl PalwChainStateV2 {
         // and every non-terminal claim without an open court has exactly one deadline.
         let mut expected_deadlines: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
+            // ADR-0152 DA-5 (M3): a live claim a seat session pauses owes none (DL-1's DA row).
+            if self.da_claims.get(id).is_some_and(|record| record.open_seat_sessions > 0) {
+                continue;
+            }
             if let Some(deadline) = expected_deadline(claim, self.open_courts_by_claim.get(id).copied().unwrap_or(0)) {
                 expected_deadlines.insert((deadline_with_params(&claim.phase, deadline), *id));
             }
@@ -9540,6 +9657,8 @@ impl PalwChainStateV2 {
     /// with the claims** — what a carriage somebody else wrote must satisfy before it is believed.
     ///
     /// * Below `palw_rcore_plus` both DA maps are empty (no writer runs there).
+    /// * Past it, no claim is `DefaultDisputed` and the held court's side maps are empty (DA-1: the
+    ///   v1 sessions are never written there — the accused unit lives in the session, IMPL-12).
     /// * Every session and every record names a claim the state holds (retirement waits for the last
     ///   session and takes the record with it), and every session's claim has a record.
     /// * A record's open counts are exactly its sessions', split by `accuser_is_seat`, within DA-8's
@@ -9556,6 +9675,14 @@ impl PalwChainStateV2 {
                 return bad("DA sessions or records on a network where palw_rcore_plus is dormant".into());
             }
             return Ok(());
+        }
+        // DA-1: the v1 sessions are never written past the fence — no claim is `DefaultDisputed` and
+        // the held court's side maps stay empty (the accused unit lives in the session, IMPL-12).
+        if let Some((id, _)) = self.claims.iter().find(|(_, claim)| matches!(claim.phase, PalwClaimPhaseV2::DefaultDisputed { .. })) {
+            return bad(format!("claim {id} is DefaultDisputed past palw_rcore_plus (DA-1)"));
+        }
+        if !self.held_da_missing.is_empty() || !self.held_leaf_demands.is_empty() {
+            return bad("the held court's side maps are written past palw_rcore_plus (DA-1)".into());
         }
         let window = palw_da_disclose_window_daa_v1(params);
         let mut counted: BTreeMap<Hash64, (u8, u8)> = BTreeMap::new();
@@ -10336,6 +10463,113 @@ impl<'a> PalwFoldReadV1<'a> {
 }
 
 impl PalwFoldReadV1<'_> {
+    /// **ADR-0152 DA-1 / DA-6 / DA-8 (M3): may `accuser` open a session on `claim_id` at `now_daa`,
+    /// and at what stage and price?** The one gate [`palw_da_accusation_admissible_v2`] exports and the
+    /// fold's opening reads, so the filer's fee-safe de-duplication and the fold cannot disagree.
+    ///
+    /// * **Accusable (DA-8):** a panel is bound — `PanelBound`, `ReceiptLicensed`, or a redrawn
+    ///   `Provisional` — or the claim is `Final` with its vesting row unmatured and unmoved; never a
+    ///   voided claim. `now + W_disclose ≤ trace_retention_daa`.
+    /// * **The accuser (DA-8):** not the producer; Active and at or above the floor; with no session
+    ///   of its own open on the claim; a seat of the claim's CURRENT panel within its four sessions
+    ///   (and exempt from the lifetime cap), anyone else within three open and sixteen ever.
+    /// * **The price (DA-6):** `min(⌈r · S_P(stage)⌉, min_collateral)`, checked on the accuser's free
+    ///   half: `max(committed, 500‰ · C) + accuser exposure + new ≤ C` (A-6, review M1;
+    ///   [`palw_da_accuser_fits_v1`]).
+    fn da_admission_v1(
+        &self,
+        claim_id: &Hash64,
+        accuser: &PalwBondKeyV2,
+        now_daa: u64,
+    ) -> Result<PalwDaAdmissionV1, PalwStateV2Error> {
+        use crate::palw_da_rcore_v1::{
+            PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1, PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1, PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1,
+            PalwDaStageV1, palw_da_session_exposure_v1, palw_da_stage_reward_base_v1,
+        };
+        let state = self.state;
+        let claim = state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+        let panel = state.panels.get(claim_id);
+        let stage = match claim.phase {
+            PalwClaimPhaseV2::Provisional if claim.rebound_daa.is_some() && panel.is_some() => PalwDaStageV1::Live,
+            PalwClaimPhaseV2::PanelBound { .. } => PalwDaStageV1::Live,
+            PalwClaimPhaseV2::ReceiptLicensed { .. } => PalwDaStageV1::Licensed,
+            PalwClaimPhaseV2::Final { .. } if state.vesting.get(claim_id).is_some_and(|row| row.matured_at.is_none()) => {
+                PalwDaStageV1::FinalRow
+            }
+            PalwClaimPhaseV2::Voided { .. } | PalwClaimPhaseV2::DefaultDisputed { .. } => {
+                return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "DefaultAccused" });
+            }
+            PalwClaimPhaseV2::Provisional | PalwClaimPhaseV2::Final { .. } => {
+                return Err(PalwStateV2Error::DaClaimNotAccusable(*claim_id));
+            }
+        };
+        let disclose = palw_da_disclose_window_daa_v1(self.params);
+        let deadline_daa = now_daa.checked_add(disclose).ok_or(PalwStateV2Error::Overflow("da disclose deadline"))?;
+        if now_daa < claim.accepted_daa || deadline_daa > claim.trace_retention_daa {
+            return Err(PalwStateV2Error::DaOutsideRetention {
+                claim: *claim_id,
+                at: now_daa,
+                window: disclose,
+                retention_daa: claim.trace_retention_daa,
+            });
+        }
+        let panel = panel.ok_or(PalwStateV2Error::DaClaimNotAccusable(*claim_id))?;
+        if panel.seats.is_empty() {
+            return Err(PalwStateV2Error::EmptyPanel);
+        }
+        if *accuser == claim.bond {
+            return Err(PalwStateV2Error::DaAccuserIsTheProducer(*accuser));
+        }
+        let record = state.bonds.get(accuser).ok_or(PalwStateV2Error::MissingBond(*accuser))?;
+        if !matches!(record.status, PalwBondStatusV2::Active) {
+            return Err(PalwStateV2Error::BondNotActive(*accuser));
+        }
+        let floor = self.params.min_collateral_sompi();
+        if record.collateral < floor {
+            return Err(PalwStateV2Error::BondBelowFloor { bond: *accuser, collateral: record.collateral, floor });
+        }
+        if state.da_sessions.contains_key(&(*claim_id, *accuser)) {
+            return Err(PalwStateV2Error::DaSessionAlreadyOpen { claim: *claim_id, accuser: *accuser });
+        }
+        let accuser_is_seat = panel.seats.iter().any(|seat| seat.bond == *accuser);
+        let da = state.da_claims.get(claim_id);
+        let exhausted = |why| Err(PalwStateV2Error::DaSessionBudgetExhausted { claim: *claim_id, accuser: *accuser, why });
+        if accuser_is_seat {
+            if da.and_then(|record| record.opened_by_seat.get(accuser)).copied().unwrap_or(0) >= PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1 {
+                return exhausted("a seat opens at most four sessions on a claim over its life");
+            }
+        } else {
+            if da.map(|record| record.open_other_sessions).unwrap_or(0) >= PALW_DA_OPEN_NON_SEAT_PER_CLAIM_V1 {
+                return exhausted("at most three non-seat sessions are open on a claim at once");
+            }
+            if da.map(|record| record.opened_non_seat_total).unwrap_or(0) >= PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1 {
+                return exhausted("at most sixteen non-seat sessions open on a claim over its life");
+            }
+        }
+        let full = palw_claim_bond_reservation_v1(self.params, claim).ok_or(PalwStateV2Error::Overflow("da reward base"))?;
+        let producer_collateral = state.bonds.get(&claim.bond).map(|bond| bond.collateral).unwrap_or(0);
+        let g = self.rcore_g_res(claim).saturating_add(u128::from(claim.escrowed_reward));
+        let exposure = palw_da_session_exposure_v1(palw_da_stage_reward_base_v1(stage, full, producer_collateral, g), floor);
+        // A-6: the accuser's free half — a seat whose 500‰ is full of locks can still accuse, and no
+        // bond accuses past its collateral (review M1: courts and the one ledger counted).
+        let committed = palw_bond_committed_v1(state, accuser, now_daa, self.second_clock_depth(now_daa), self.params.window_court);
+        palw_da_accuser_fits_v1(
+            committed,
+            palw_accuser_exposure_v1(state, accuser),
+            exposure,
+            record.collateral,
+            self.params.fp_max_exposure_ratio_permille,
+        )
+        .map_err(|(backed, ceiling)| PalwStateV2Error::AccusationExposureCeiling {
+            bond: *accuser,
+            edge: "data-availability session",
+            backed,
+            accusation: exposure,
+            ceiling,
+        })?;
+        Ok(PalwDaAdmissionV1 { stage, accuser_is_seat, exposure, deadline_daa })
+    }
+
     fn canonical_per_draw(&self, class_id: &Hash64, accepted_daa: u64) -> Option<u64> {
         self.state
             .palw_attempt_per_draw_v1(
@@ -12473,7 +12707,6 @@ impl<'a> TransitionBuilder<'a> {
 
     /// **M3 (DA-2): open or close one data-availability session** — the rooted write, its delta
     /// entry (74), and both DA indexes kept equal to a rebuild ([`palw_da_indexes_of_v1`]).
-    #[allow(dead_code)] // M3 Phase 1: declared; the DA fold (Phase 2) writes through it.
     fn write_da_session(&mut self, key: (Hash64, PalwBondKeyV2), new: Option<crate::palw_da_rcore_v1::PalwDaSessionV1>) {
         let before = self.da_accusers_of_claim(&key.0);
         let old = match &new {
@@ -12495,7 +12728,6 @@ impl<'a> TransitionBuilder<'a> {
 
     /// **M3 (DA-2): write, update or retire one claim's DA record** — the rooted write, its delta
     /// entry (75), and the accuser index (a refuted entry held keeps its accuser indexed).
-    #[allow(dead_code)] // M3 Phase 1: declared; the DA fold (Phase 2) writes through it.
     fn write_da_claim(&mut self, key: Hash64, new: Option<crate::palw_da_rcore_v1::PalwDaClaimV1>) {
         let before = self.da_accusers_of_claim(&key);
         let old = match &new {
@@ -12511,7 +12743,6 @@ impl<'a> TransitionBuilder<'a> {
 
     /// The accusers `claim_id` contributes to the A-6 index: its open sessions' and its refuted
     /// entries' — the per-claim half of [`palw_da_indexes_of_v1`].
-    #[allow(dead_code)] // M3 Phase 1: declared; the DA fold (Phase 2) writes through it.
     fn da_accusers_of_claim(&self, claim_id: &Hash64) -> BTreeSet<PalwBondKeyV2> {
         let mut accusers: BTreeSet<PalwBondKeyV2> = self.state.da_sessions_of(claim_id).map(|(accuser, _)| *accuser).collect();
         if let Some(record) = self.state.da_claims.get(claim_id) {
@@ -12520,7 +12751,6 @@ impl<'a> TransitionBuilder<'a> {
         accusers
     }
 
-    #[allow(dead_code)] // M3 Phase 1: declared; the DA fold (Phase 2) writes through it.
     fn reindex_da_accusers(&mut self, claim_id: &Hash64, before: BTreeSet<PalwBondKeyV2>) {
         let after = self.da_accusers_of_claim(claim_id);
         for gone in before.difference(&after) {
@@ -12529,6 +12759,143 @@ impl<'a> TransitionBuilder<'a> {
         for added in after.difference(&before) {
             self.state.da_by_accuser.insert((*added, *claim_id));
         }
+    }
+
+    /// **ADR-0152 DA-2/DA-5/DA-6 (M3): close one session** — `Refuted` moves its exposure into the
+    /// claim's `refuted_held` (DA-6: held until the claim resolves), `Released` returns it (a confirmed
+    /// default, a conviction, a void). The record's counts and `last_closed_daa` follow; when the last
+    /// SEAT session closes, the pause ends: a live claim's anchors are credited through
+    /// [`crate::palw_da_rcore_v1::palw_da_resume_claim_v1`] (unless `credit_pause` is off — the claim is
+    /// about to be written terminal by the caller) and its deadline re-armed from DL-1. A terminal
+    /// claim's retirement is re-armed once its last session is gone.
+    fn da_close_session_v1(
+        &mut self,
+        claim_id: Hash64,
+        accuser: PalwBondKeyV2,
+        refuted: bool,
+        credit_pause: bool,
+        now_daa: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let session = self
+            .state
+            .da_sessions
+            .get(&(claim_id, accuser))
+            .cloned()
+            .ok_or_else(|| PalwStateV2Error::CarriageInconsistent(format!("no DA session of {accuser:?} on claim {claim_id}")))?;
+        self.write_da_session((claim_id, accuser), None);
+        let mut record = self.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
+        if session.accuser_is_seat {
+            record.open_seat_sessions = record.open_seat_sessions.saturating_sub(1);
+        } else {
+            record.open_other_sessions = record.open_other_sessions.saturating_sub(1);
+        }
+        record.last_closed_daa = Some(now_daa);
+        if refuted {
+            record.refuted_held.push((accuser, session.exposure));
+        }
+        let unpaused = session.accuser_is_seat && record.open_seat_sessions == 0;
+        let paused_since = if unpaused { record.paused_since.take() } else { None };
+        let open_left = record.open_sessions();
+        self.write_da_claim(claim_id, Some(record));
+        let Some(claim) = self.state.claims.get(&claim_id).cloned() else { return Ok(()) };
+        if claim.phase.is_terminal() {
+            if open_left == 0 {
+                self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
+            }
+            return Ok(());
+        }
+        if let Some(since) = paused_since {
+            if credit_pause {
+                let resumed = crate::palw_da_rcore_v1::palw_da_resume_claim_v1(&claim, since, now_daa);
+                if resumed != claim {
+                    self.write_claim(claim_id, Some(resumed));
+                }
+            }
+            self.rearm_claim_deadline_dl1_v1(claim_id, now_daa)?;
+        }
+        Ok(())
+    }
+
+    /// **DL-1 re-armed from the record**: the claim's one deadline, disarmed and re-derived by
+    /// [`palw_rcore_deadline_v1`] at `now_daa` (the block being folded).
+    fn rearm_claim_deadline_dl1_v1(&mut self, claim_id: Hash64, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        self.disarm_deadline(claim_id);
+        let Some(claim) = self.state.claims.get(&claim_id).cloned() else { return Ok(()) };
+        if let Some(at) = palw_rcore_deadline_v1(&self.state, self.params, &claim_id, &claim, Some(now_daa))? {
+            self.arm_deadline(at, claim_id);
+        }
+        Ok(())
+    }
+
+    /// **DA-5 / L-3 (V3S-02, V3S-04): the row and the locks follow a session.** The claim's vesting row
+    /// (if it has one) is re-keyed to `max(expiry, until)` and every live lock of its `Valid` signers
+    /// re-dated to at least `until` (`until` = the session's deadline + `window_challenge_at`), so a
+    /// conviction landing while the session is open, or within the challenge window of its end,
+    /// finds the row unmatured and every lock live. Only ever raises. (M3 applies the lock half
+    /// before `Final` too: a seat-paused licensed claim can outlast the licence's lock window, and a
+    /// default at the `Licensed` stage charges S4 on live locks.)
+    fn da_rekey_v1(&mut self, claim_id: Hash64, until: u64, now_daa: u64) {
+        if let Some(row) = self.state.vesting.get(&claim_id).cloned()
+            && row.expiry_daa < until
+        {
+            let old = Some(row.clone());
+            let new = Some(crate::palw_vesting_v1::PalwVestingRowV1 { expiry_daa: until, ..row });
+            self.state.vesting.insert(claim_id, new.clone().expect("some"));
+            self.entries.push(PalwDeltaEntryV2::Vesting { key: claim_id, old, new });
+        }
+        let settled_now = self.state.settled_attempt_finals;
+        let depth = self.second_clock_depth(now_daa);
+        let window_court = self.params.window_court;
+        let stale: Vec<((PalwBondKeyV2, Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1)> = self
+            .state
+            .slashable_locks
+            .iter()
+            .filter(|((_, claim), lock)| {
+                *claim == claim_id && lock.expiry_daa < until && lock.is_live_v3(now_daa, settled_now, depth, window_court)
+            })
+            .map(|(key, lock)| (*key, *lock))
+            .collect();
+        for (key, lock) in stale {
+            self.write_slashable_lock(key, Some(crate::palw_panel_var_v1::PalwSlashableLockV1 { expiry_daa: until, ..lock }));
+        }
+    }
+
+    /// **Every open session on `claim_id` closes and returns its exposure** (a void, a conviction, a
+    /// confirmed default: DA-6's "a confirmed or released session returns its exposure"); with
+    /// `convicted`, every `refuted_held` entry returns to its accuser as well (DA-6, N13).
+    fn da_release_all_v1(&mut self, claim_id: Hash64, convicted: bool, now_daa: u64) -> Result<(), PalwStateV2Error> {
+        if !self.state.da_claims.contains_key(&claim_id) {
+            return Ok(());
+        }
+        let accusers: Vec<PalwBondKeyV2> = self.state.da_sessions_of(&claim_id).map(|(accuser, _)| *accuser).collect();
+        for accuser in accusers {
+            self.da_close_session_v1(claim_id, accuser, false, false, now_daa)?;
+        }
+        if convicted
+            && let Some(record) = self.state.da_claims.get(&claim_id)
+            && !record.refuted_held.is_empty()
+        {
+            let refunded = crate::palw_da_rcore_v1::PalwDaClaimV1 { refuted_held: Vec::new(), ..record.clone() };
+            self.write_da_claim(claim_id, Some(refunded));
+        }
+        Ok(())
+    }
+
+    /// **DA-6: a retiring claim's DA record goes with it, and the refuted exposure no conviction
+    /// refunded is burned** through `slash_seat` (capped at `min_collateral_sompi`, as every seat-side
+    /// charge), earning no reward. Retirement never runs with a session open (DL-1 defers it).
+    fn da_retire_v1(&mut self, claim_id: Hash64) -> Result<(), PalwStateV2Error> {
+        let Some(record) = self.state.da_claims.get(&claim_id).cloned() else { return Ok(()) };
+        if record.open_sessions() > 0 {
+            return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                "claim {claim_id} retired with a data-availability session open (DL-1 defers retirement)"
+            )));
+        }
+        for (accuser, amount) in &record.refuted_held {
+            self.slash_seat(*accuser, *amount, self.params.min_collateral_sompi())?;
+        }
+        self.write_da_claim(claim_id, None);
+        Ok(())
     }
 
     /// **The vesting work's burn hook** (S-SPEC §2, P5): burn `claim_id`'s vesting row for a
@@ -15718,6 +16085,22 @@ impl<'a> TransitionBuilder<'a> {
     // ---- deadline index (never in the delta: rebuilt facts, not primary data) ----
 
     fn arm_deadline(&mut self, deadline: u64, claim: Hash64) {
+        // **ADR-0152 DL-1's DA rows (M3), at the one primitive every arm site calls**: a live claim a
+        // seat session pauses owes no deadline, a terminal claim with a session open owes none (its
+        // retirement waits), and a retirement arms no earlier than one DAA after the last close —
+        // exactly [`palw_rcore_deadline_v1`]'s rows, so no site (a bind, a redraw, a court clearing, a
+        // void or a Final) can arm what DL-1 would not rebuild. `da_claims` is empty below
+        // `palw_rcore_plus`, where this is the plain insert it always was.
+        let mut deadline = deadline;
+        if let Some(record) = self.state.da_claims.get(&claim) {
+            let terminal = self.state.claims.get(&claim).is_some_and(|c| c.phase.is_terminal());
+            if (!terminal && record.open_seat_sessions > 0) || (terminal && record.open_sessions() > 0) {
+                return;
+            }
+            if terminal && let Some(closed) = record.last_closed_daa {
+                deadline = deadline.max(closed.saturating_add(1));
+            }
+        }
         self.state.deadlines.insert((deadline, claim));
     }
 
@@ -16331,6 +16714,13 @@ impl<'a> TransitionBuilder<'a> {
         let mut finalized = claim.clone();
         finalized.phase = PalwClaimPhaseV2::Final { final_daa };
         self.write_claim(id, Some(finalized.clone()));
+        // ADR-0152 DA-5 (M3): a session still open at `Final` (a non-seat one — a seat session holds
+        // the claim's deadline) keeps the row and the locks behind its own end.
+        let open: Vec<u64> = self.state.da_sessions_of(&id).map(|(_, session)| session.deadline_daa).collect();
+        for deadline in open {
+            let until = deadline.saturating_add(self.params.window_challenge_at(final_daa));
+            self.da_rekey_v1(id, until, final_daa);
+        }
         // Below `palw_audit_2026_09_23` the second clock ticks here, as it always did — counted on
         // every network (a fact about the chain) and read by no rule there. Past the fence it
         // ticks at the licence instead (`license_claim`): a `Final` is reached by the DAA sweep
@@ -16350,6 +16740,15 @@ impl<'a> TransitionBuilder<'a> {
         voided_daa: u64,
         reason: PalwVoidReasonV2,
     ) -> Result<(), PalwStateV2Error> {
+        // **ADR-0152 DA-6 (M3): a void ends every open DA session on the claim, exposure returned**;
+        // a void that IS a conviction (`CourtFraud`, a proven fraud; `ProducerWithholding`, which past
+        // `palw_rcore_plus` only a DA default writes) refunds the refuted exposure held too. A
+        // `CourtDefault` is no conviction (the court's default is not its verdict), so it refunds
+        // nothing, and the held exposure burns at retirement unless a later conviction lands.
+        if self.params.rcore_plus_active_at(voided_daa) {
+            let convicted = matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding);
+            self.da_release_all_v1(id, convicted, voided_daa)?;
+        }
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa, reason };
         if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::ProducerWithholding) {
@@ -16527,6 +16926,8 @@ impl<'a> TransitionBuilder<'a> {
         for session_id in orphans {
             self.write_court(session_id, None)?;
         }
+        // ADR-0152 DA-6 (M3): the claim's DA record retires with it, burning unrefunded exposure.
+        self.da_retire_v1(id)?;
         self.write_claim(id, None);
         if self.state.panels.contains_key(&id) {
             self.write_panel(id, None);
@@ -17685,6 +18086,275 @@ fn close_da_session_refuted_v2(
     builder.write_claim(claim_id, Some(restored.clone()));
     builder.disarm_deadline(claim_id);
     rearm_claim_after_da_session(builder, ctx, claim_id, &restored)
+}
+
+/// **ADR-0152 DA-1…DA-3, DA-5, DA-6, DA-8 (M3): open a data-availability session past
+/// `palw_rcore_plus`** — the event accusation (`DefaultAccused`, no binding) and the held one
+/// (`DefaultAccusedHeld`, with the claim's binding) alike.
+///
+/// 1. **The gate** is [`palw_da_accusation_admissible_v2`]'s (`PalwFoldReadV1::da_admission_v1`):
+///    accusable stage, retention, the accuser's standing, DA-8's caps, DA-6's price on the free half.
+/// 2. **The named unit** is bounded by chain facts: an event row inside
+///    `palw_da_max_accusable_rows_v1(trace_chunk_count)` (a row past the run is answered by
+///    `OutOfRange`); a held unit inside what the authenticated binding commits, a fused-attention
+///    `StepLeaf` refused as `DaUnitNeedsDissection` (its terminal is the held dissection), a binding
+///    that fails the identity rule refused as `DaBindingIsIdentityFault` (J-5). A named `StepLeaf` is
+///    free — any leaf in the bound, from a seat or not; ADR-0111 D3's seat-and-once rule is replaced by
+///    DA-8's budgets.
+/// 3. **The drawn units** (DA-3) come from `palw_da_draw_units_v1`, seeded by the accepting block:
+///    event rows inside the committed run (`palw_da_in_run_rows_v1`), held units of the named kind
+///    inside the binding's bound; none for an event accusation of a held-context class's attempt,
+///    whose held bound this object does not carry.
+/// 4. **The record**: the session under `(claim, accuser)`; the claim's counts and budgets; a seat's
+///    first open session pauses a live claim (its deadline goes, DA-5) — a non-seat one never does.
+/// 5. **The row and the locks follow the session** (DA-5): re-keyed to at least its deadline plus
+///    `window_challenge_at`.
+fn open_da_session_rcore_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    accuser: PalwBondKeyV2,
+    named: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    binding: Option<&crate::palw_step_leg::PalwStepBindingV2>,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_da_rcore_v1::{PalwDaDrawSpaceV1, PalwDaSessionV1, PalwDaUnitV1, palw_da_draw_seed_v1, palw_da_draw_units_v1};
+    use crate::palw_held_da_v1::PalwHeldMissingV1;
+    if !builder.da_court {
+        return Err(PalwStateV2Error::DaCourtDormant);
+    }
+    let admission = builder.read().da_admission_v1(&claim_id, &accuser, ctx.daa_score)?;
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    let seed = palw_da_draw_seed_v1(&ctx.block, &claim_id, &accuser);
+    let drawn = match (named, binding) {
+        (PalwDaUnitV1::Event { row, tile }, None) => {
+            let accusable = palw_da_max_accusable_rows_v1(claim.trace_chunk_count);
+            if row >= accusable {
+                return Err(PalwStateV2Error::DaIndexOutOfRange {
+                    claim: claim_id,
+                    index: palw_da_event_index_v1(row, tile),
+                    count: accusable,
+                });
+            }
+            let space = if matches!(claim.source, PalwClaimSourceV2::Attempt) && builder.state.class_is_held_v1(&claim.class_id) {
+                PalwDaDrawSpaceV1::Nothing
+            } else {
+                PalwDaDrawSpaceV1::Events {
+                    rows: crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active),
+                    tiles: crate::palw_da_rcore_v1::palw_da_row_tiles_v1(
+                        builder.state.fp_work_profiles.get(&claim.class_id).map(|profile| profile.as_ref()),
+                    ),
+                }
+            };
+            palw_da_draw_units_v1(&seed, &named, &space)
+        }
+        (PalwDaUnitV1::Held(missing), Some(binding)) => {
+            let form = builder.extras.prompt_ids_form_v1();
+            if let PalwHeldMissingV1::StepLeaf { leaf } = missing
+                && binding.committed_execution_root == claim.execution_root
+                && crate::palw_da_rcore_v1::palw_da_step_leaf_is_fused_v1(binding, leaf)
+            {
+                return Err(PalwStateV2Error::DaUnitNeedsDissection { claim: claim_id, leaf });
+            }
+            crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, &missing, binding, form)
+                .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, binding) {
+                return Err(PalwStateV2Error::DaBindingIsIdentityFault { claim: claim_id, why });
+            }
+            let chunks_of = |checkpoint: u32| -> Option<u64> {
+                let covered = crate::palw_context_ladder::palw_checkpoint_covered_at_index_v1(
+                    &binding.shape_profile,
+                    checkpoint,
+                    binding.checkpoint_profile.checkpoint_interval,
+                )?;
+                let positions =
+                    crate::palw_context_ladder::palw_checkpoint_positions_at_v1(&binding.shape_profile, &binding.job_context, covered);
+                crate::palw_state_chunk_map::palw_state_chunk_count_at_v1(&binding.shape_profile, positions)
+            };
+            let space = match missing {
+                PalwHeldMissingV1::PromptIdsTile { .. } => PalwDaDrawSpaceV1::PromptTiles {
+                    tiles: crate::palw_prompt_ids_v1::prompt_ids_tile_count_v1(u64::from(binding.job_context.declared_prefill_tokens))
+                        .unwrap_or(0),
+                },
+                PalwHeldMissingV1::StateChunk { .. } => {
+                    PalwDaDrawSpaceV1::StateChunks { checkpoints: binding.checkpoint_count, chunks_of: &chunks_of }
+                }
+                PalwHeldMissingV1::StepRange { .. } | PalwHeldMissingV1::StepLeaf { .. } => {
+                    PalwDaDrawSpaceV1::StepRanges { leaves: binding.step_leaf_count }
+                }
+            };
+            // Every drawn unit is bounded exactly as the named one was; one that would not be (none
+            // by construction) is dropped rather than demanded.
+            palw_da_draw_units_v1(&seed, &named, &space)
+                .into_iter()
+                .filter(|unit| match unit {
+                    PalwDaUnitV1::Held(drawn) => {
+                        crate::palw_held_da_v1::palw_held_da_check_accusation_v1(&claim.execution_root, drawn, binding, form).is_ok()
+                    }
+                    PalwDaUnitV1::Event { .. } => false,
+                })
+                .collect()
+        }
+        _ => return Err(PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why: "an accusation's unit and binding disagree in kind" }),
+    };
+    let mut units = Vec::with_capacity(1 + drawn.len());
+    units.push(named);
+    units.extend(drawn);
+    let session = PalwDaSessionV1 {
+        opened_daa: ctx.daa_score,
+        deadline_daa: admission.deadline_daa,
+        accuser_is_seat: admission.accuser_is_seat,
+        exposure: admission.exposure,
+        units,
+        stage: admission.stage,
+    };
+    builder.write_da_session((claim_id, accuser), Some(session));
+    let mut record = builder.state.da_claims.get(&claim_id).cloned().unwrap_or_default();
+    let pauses = if admission.accuser_is_seat {
+        record.open_seat_sessions = record.open_seat_sessions.saturating_add(1);
+        let opened = record.opened_by_seat.entry(accuser).or_insert(0);
+        *opened = opened.saturating_add(1);
+        record.open_seat_sessions == 1
+    } else {
+        record.open_other_sessions = record.open_other_sessions.saturating_add(1);
+        record.opened_non_seat_total = record.opened_non_seat_total.saturating_add(1);
+        false
+    };
+    if pauses {
+        record.paused_since = Some(ctx.daa_score);
+    }
+    builder.write_da_claim(claim_id, Some(record));
+    // DA-5: a seat's first open session pauses a live claim — DL-1 gives it no deadline.
+    if pauses && !claim.phase.is_terminal() {
+        builder.disarm_deadline(claim_id);
+    }
+    let until = admission.deadline_daa.saturating_add(builder.params.window_challenge_at(ctx.daa_score));
+    builder.da_rekey_v1(claim_id, until, ctx.daa_score);
+    Ok(())
+}
+
+/// **ADR-0152 DA-4 (M3): `MaterialDisclosedV2` — an answer to every open session that demands the
+/// unit.**
+///
+/// The discloser is the claim's producer or a bond with a live lock on the claim (X7; the acceptance
+/// layer verified its signature); the unit is demanded by an open session and not yet answered
+/// (which bounds the bytes: each distinct unit is answered once); the answer is the unit's own form
+/// and is checked by hash arithmetic against the claim's roots — `check_trace_event_disclosure_v1`
+/// for an event, the held checkers for a held unit — plus the identity rule (J-5; `IdentityNotRecorded`
+/// falls back to the arithmetic alone). A held `StepLeaf`'s evidence is adjudicated: guilty convicts
+/// the claim (`act_on_convicted_claim_v1`: voided `CourtFraud` live, the `Final` reversed after), a
+/// fused leaf is `DaUnitNeedsDissection`. An accepted answer joins `answered` (a `Flat` answer sets
+/// `flat_answered`, covering every in-run row); every session whose units are then all answered is
+/// refuted — its exposure held in `refuted_held` (DA-6) — and closes.
+fn apply_da_answer_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    answer: &crate::palw_da_rcore_v1::PalwDaAnswerV1,
+    discloser: PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
+    if !builder.da_court {
+        return Err(PalwStateV2Error::DaCourtDormant);
+    }
+    let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
+    let record = builder.state.da_claims.get(&claim_id).cloned().ok_or(PalwStateV2Error::DaUnitNotDemanded(claim_id))?;
+    // X7: the producer, or a bond still liable on the claim.
+    let now = ctx.daa_score;
+    let liable = discloser == claim.bond
+        || builder.state.slashable_locks.get(&(discloser, claim_id)).is_some_and(|lock| {
+            lock.is_live_v3(now, builder.state.settled_attempt_finals, builder.second_clock_depth(now), builder.params.window_court)
+        });
+    if !liable {
+        return Err(PalwStateV2Error::DaDiscloserNotLiable { claim: claim_id, discloser });
+    }
+    if !builder.state.da_sessions_of(&claim_id).any(|(_, session)| session.units.contains(&unit)) {
+        return Err(PalwStateV2Error::DaUnitNotDemanded(claim_id));
+    }
+    let in_run = palw_da_in_run_rows_v1(&claim, builder.extras.fp_da_pins_active);
+    if palw_da_unit_answered_v1(&record, &unit, in_run) {
+        return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
+    }
+    let malformed = |why| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why };
+    let flat = match (&unit, answer) {
+        (PalwDaUnitV1::Event { row, tile }, PalwDaAnswerV1::Event(disclosure)) => {
+            crate::palw_step_refute::check_trace_event_disclosure_v1(
+                claim.trace_root,
+                claim.execution_root,
+                *row,
+                *tile,
+                disclosure,
+                crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            )
+            .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, disclosure.binding()) {
+                return Err(PalwStateV2Error::DaOpeningRefused { claim: claim_id, why });
+            }
+            matches!(disclosure, crate::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. })
+        }
+        (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
+            if carriage.version != crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1 {
+                return Err(malformed("the carriage is not version 1"));
+            }
+            if carriage.claim != claim_id || carriage.missing != *missing {
+                return Err(malformed("the carriage names another claim or unit"));
+            }
+            if !carriage.signature.is_empty() {
+                return Err(malformed("the carriage's own signature slot is empty: the discloser signs the whole answer"));
+            }
+            let Some(network_ladder) = builder.extras.held_context_ladder else {
+                return Err(PalwStateV2Error::HeldContextDormant);
+            };
+            let ladder = builder.state.class_step_ladder_v1(&claim.class_id, network_ladder);
+            crate::palw_held_da_v1::palw_held_da_check_disclosure_v1(
+                &claim.execution_root,
+                missing,
+                &carriage.binding,
+                &carriage.disclosure,
+                ladder,
+                builder.extras.prompt_ids_form_v1(),
+            )
+            .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
+            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, &carriage.binding) {
+                return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
+            }
+            // ADR-0111 Decision 4: a leaf's evidence is adjudicated by the one-move verdict.
+            if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &carriage.disclosure {
+                let artifact_root =
+                    builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
+                match evidence.verdict_v1(claim.class_id, artifact_root, ladder).map_err(|e| PalwStateV2Error::HeldDaRefused {
+                    claim: claim_id,
+                    why: format!("the evidence does not adjudicate: {e}"),
+                })? {
+                    crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
+                        // The executor convicted itself by answering: its sessions end with it.
+                        return builder.act_on_convicted_claim_v1(ctx, claim_id);
+                    }
+                    crate::palw_shard_court_v1::PalwShardCourtVerdictV1::FalseAccusation => {}
+                    crate::palw_shard_court_v1::PalwShardCourtVerdictV1::NeedsDissection => {
+                        return Err(PalwStateV2Error::DaUnitNeedsDissection { claim: claim_id, leaf: evidence.leaf_index() });
+                    }
+                }
+            }
+            false
+        }
+        _ => return Err(malformed("an event unit is answered by an event disclosure, a held unit by a held carriage")),
+    };
+    let mut answered = record;
+    answered.answered.insert(unit);
+    answered.flat_answered |= flat;
+    builder.write_da_claim(claim_id, Some(answered.clone()));
+    // Every session whose units are now all answered is refuted.
+    let refuted: Vec<PalwBondKeyV2> = builder
+        .state
+        .da_sessions_of(&claim_id)
+        .filter(|(_, session)| session.units.iter().all(|u| palw_da_unit_answered_v1(&answered, u, in_run)))
+        .map(|(accuser, _)| *accuser)
+        .collect();
+    for accuser in refuted {
+        builder.da_close_session_v1(claim_id, accuser, true, true, now)?;
+    }
+    Ok(())
 }
 
 /// **ADR-0103 Decision 5: a dissection opened at the leaf an accusation named.** The `CourtOpened`
@@ -19818,6 +20488,18 @@ fn apply_object(
             if builder.extras.held_context_ladder.is_none() {
                 return Err(PalwStateV2Error::HeldContextDormant);
             }
+            // ADR-0152 DA-1 (M3): past `palw_rcore_plus` a held accusation opens a session in the side
+            // maps, with drawn units, a free named leaf and no once-per-seat rule.
+            if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                return open_da_session_rcore_v1(
+                    builder,
+                    ctx,
+                    accusation.claim,
+                    accusation.accuser,
+                    crate::palw_da_rcore_v1::PalwDaUnitV1::Held(accusation.missing),
+                    Some(&accusation.binding),
+                );
+            }
             let claim_id = accusation.claim;
             let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
             crate::palw_held_da_v1::palw_held_da_check_accusation_v1(
@@ -19877,6 +20559,9 @@ fn apply_object(
             let Some(ladder) = builder.extras.held_context_ladder else {
                 return Err(PalwStateV2Error::HeldContextDormant);
             };
+            if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                return Err(PalwStateV2Error::DaV1AnswerRetired("MaterialDisclosedHeld"));
+            }
             if !builder.da_court {
                 return Err(PalwStateV2Error::DaCourtDormant);
             }
@@ -21418,6 +22103,12 @@ fn apply_object(
         // name on every network — `Params::palw_rcore_plus` arms none of them — until each owner
         // replaces its arm with the rule (S-7: 53/54; M3: 55; S-5: 56). The processor's gate drops
         // them first, so a block carrying one stands and folds nothing for it.
+        // M3 (DA-4): tag 55 past `palw_rcore_plus` — any locked signer's answer to a DA session.
+        PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, answer, discloser, signature: _ }
+            if builder.params.rcore_plus_active_at(ctx.daa_score) =>
+        {
+            return apply_da_answer_v1(builder, ctx, *claim, *unit, answer, *discloser);
+        }
         PalwConsensusObjectV2::ReporterCommitted { .. }
         | PalwConsensusObjectV2::ReporterRevealed { .. }
         | PalwConsensusObjectV2::MaterialDisclosedV2 { .. }
@@ -21760,12 +22451,27 @@ fn apply_object(
         }
         // **ADR-0062 SA-1: the accusation that CAN take a bond, because somebody has to prove it.**
         PalwConsensusObjectV2::DefaultAccused { claim: claim_id, missing_event_index, accuser, signature: _ } => {
+            // ADR-0152 DA-1 (M3): past `palw_rcore_plus` the event accusation opens a session in the
+            // side maps; below it, ADR-0062 SA-1 verbatim.
+            if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                return open_da_session_rcore_v1(
+                    builder,
+                    ctx,
+                    *claim_id,
+                    *accuser,
+                    crate::palw_da_rcore_v1::PalwDaUnitV1::event_of_index(*missing_event_index),
+                    None,
+                );
+            }
             open_da_session_v2(builder, ctx, *claim_id, *missing_event_index, accuser, true)?;
         }
         // **ADR-0062 SA-2: the refutation, and it is arithmetic.**
         PalwConsensusObjectV2::MaterialDisclosed { claim: claim_id, event_index, disclosure, signature: _ } => {
             if !builder.da_court {
                 return Err(PalwStateV2Error::DaCourtDormant);
+            }
+            if builder.params.rcore_plus_active_at(ctx.daa_score) {
+                return Err(PalwStateV2Error::DaV1AnswerRetired("MaterialDisclosed"));
             }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
             let PalwClaimPhaseV2::DefaultDisputed { accused_daa, missing_event_index, accuser, accuser_exposure, resumed } =

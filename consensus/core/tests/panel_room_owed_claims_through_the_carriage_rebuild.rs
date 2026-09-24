@@ -149,14 +149,25 @@ fn owed_by(s: &PalwChainStateV2, sp: &kaspa_consensus_core::palw_state_v2::PalwS
     palw_panel_demand_read_v1(s, sp, seat_count).0.get(&class).copied().unwrap_or(0)
 }
 
+/// testnet-12 with `palw_rcore_plus` forced off (C7's list cleared, mirrors re-synced): the fence-off
+/// twin, where an accusation is ADR-0062's `DefaultDisputed` (ADR-0152 R6).
+fn t12_rcore_off() -> Params {
+    let mut p = t12();
+    p.palw_rcore_plus = None;
+    p.palw_rcore_conservative_classes = &[];
+    p.sync_palw_rcore_plus();
+    p
+}
+
 /// The walk on a model class with ADR-0119's held ladder recorded or not (`ladder`), and its window
-/// at C7's 1,000 spans or as its work derives it (`c7_window`).
-fn walk(ladder: bool, c7_window: bool) -> Owed {
+/// at C7's 1,000 spans or as its work derives it (`c7_window`), on testnet-12 (`rcore`) or its
+/// fence-off twin.
+fn walk(ladder: bool, c7_window: bool, rcore: bool) -> Owed {
     use kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1;
     use kaspa_consensus_core::palw_model_registry_v1::{
         PALW_REGISTRY_GLOBALS_V1, PalwModelLifecycleV1, PalwModelRegistryFoldV1, PalwModelWorkV1,
     };
-    let p = t12();
+    let p = if rcore { t12() } else { t12_rcore_off() };
     let b = bundle(&p);
     let sp = &b.state;
     let floor = floor_row(&b);
@@ -335,16 +346,34 @@ fn walk(ladder: bool, c7_window: bool) -> Owed {
     assert_eq!(back, s3, "the un-licensed state is the pre-licence state");
     let reverted = owed_by(&back, sp, seat_count, model_id);
 
-    // A DA accusation on the licensed claim: not a court, but the phase is no longer ReceiptLicensed.
+    // A DA accusation on the licensed claim. Below `palw_rcore_plus` (ADR-0062): not a court, but the
+    // phase is no longer ReceiptLicensed. Past it (ADR-0152 DA-1, M3): a session in the side maps, the
+    // phase untouched — a non-seat session neither pauses nor charges (T21).
     let mut dc = PalwStateCarriageV2::from_state(&licensed);
-    *dc.reserved_exposure.entry(bond_key(1)).or_insert(0) += 1;
-    dc.claims.get_mut(&claim_id).unwrap().phase = PalwClaimPhaseV2::DefaultDisputed {
-        accused_daa: 4,
-        missing_event_index: 0,
-        accuser: bond_key(1),
-        accuser_exposure: 1,
-        resumed: Box::new(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 3 }),
-    };
+    if sp.rcore_plus_from_daa().is_some() {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaClaimV1, PalwDaSessionV1, PalwDaStageV1, PalwDaUnitV1};
+        dc.da_sessions.insert(
+            (claim_id, bond_key(1)),
+            PalwDaSessionV1 {
+                opened_daa: 4,
+                deadline_daa: 4 + sp.window_challenge(),
+                accuser_is_seat: false,
+                exposure: 1,
+                units: vec![PalwDaUnitV1::Event { row: 0, tile: 0 }],
+                stage: PalwDaStageV1::Licensed,
+            },
+        );
+        dc.da_claims.insert(claim_id, PalwDaClaimV1 { open_other_sessions: 1, opened_non_seat_total: 1, ..Default::default() });
+    } else {
+        *dc.reserved_exposure.entry(bond_key(1)).or_insert(0) += 1;
+        dc.claims.get_mut(&claim_id).unwrap().phase = PalwClaimPhaseV2::DefaultDisputed {
+            accused_daa: 4,
+            missing_event_index: 0,
+            accuser: bond_key(1),
+            accuser_exposure: 1,
+            resumed: Box::new(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 3 }),
+        };
+    }
     let disputed = dc.into_state_v3(sp, None, false, None).expect("the accused licensed claim rebuilds");
     Owed {
         provisional,
@@ -359,13 +388,13 @@ fn walk(ladder: bool, c7_window: bool) -> Owed {
 /// Held to Final by the window, with or without the ladder (without it: the review's HELD-2 case).
 #[test]
 fn a_class_held_to_final_owes_its_licensed_claim_until_final_through_the_carriage() {
-    for ladder in [false, true] {
-        let owed = walk(ladder, true);
-        println!("window {PALW_RCORE_C7_WINDOW_SPANS_V1} spans, held ladder {ladder}: {owed:?}");
+    for (ladder, rcore) in [(false, true), (true, true), (false, false), (true, false)] {
+        let owed = walk(ladder, true, rcore);
+        println!("window {PALW_RCORE_C7_WINDOW_SPANS_V1} spans, held ladder {ladder}, rcore {rcore}: {owed:?}");
         assert_eq!(
             owed,
             Owed { provisional: 1, licensed: 1, courted: 1, court_closed: 1, reverted: 1, disputed: 1 },
-            "no licence releases a held class's claim, and a court or an accusation adds nothing to it (held ladder {ladder})"
+            "no licence releases a held class's claim, and a court or an accusation adds nothing to it (held ladder {ladder}, rcore {rcore})"
         );
     }
 }
@@ -374,12 +403,21 @@ fn a_class_held_to_final_owes_its_licensed_claim_until_final_through_the_carriag
 #[test]
 fn an_ordinary_class_is_released_at_licence_and_recharged_by_a_court_a_revert_or_an_accusation() {
     for ladder in [false, true] {
-        let owed = walk(ladder, false);
-        println!("the derived window, held ladder {ladder}: {owed:?}");
+        // Fence off (ADR-0062): the accusation takes the claim out of ReceiptLicensed and re-charges it.
+        let owed = walk(ladder, false, false);
+        println!("the derived window, held ladder {ladder}, rcore off: {owed:?}");
         assert_eq!(
             owed,
             Owed { provisional: 1, licensed: 0, courted: 1, court_closed: 0, reverted: 1, disputed: 1 },
-            "held ladder {ladder}"
+            "held ladder {ladder}, rcore off"
+        );
+        // Past `palw_rcore_plus` (ADR-0152 DA-1, T21): a DA session leaves the phase and re-charges nothing.
+        let owed = walk(ladder, false, true);
+        println!("the derived window, held ladder {ladder}, rcore on: {owed:?}");
+        assert_eq!(
+            owed,
+            Owed { provisional: 1, licensed: 0, courted: 1, court_closed: 0, reverted: 1, disputed: 0 },
+            "held ladder {ladder}, rcore on: a DA session neither pauses nor charges"
         );
     }
 }

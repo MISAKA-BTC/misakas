@@ -7044,6 +7044,48 @@ impl VirtualStateProcessor {
                 // read — the fold refuses the same objects (`RcoreObjectNotLanded`), so the gate and
                 // the fold agree, and the block carrying one stands. Each owner replaces this arm
                 // with its acceptance rule (S-7: 53/54; M3: 55; S-5: 56).
+                //
+                // **M3 (ADR-0152 DA-4): tag 55 past `palw_rcore_plus`.** The DA court's fence, the
+                // ruleset's close ceiling on the answer, and the discloser's ML-DSA-87 over
+                // `palw_da_disclosure_message_v4` under the DA-disclosure-v4 context, verified against the
+                // DISCLOSER's registered key — any locked signer may answer (X7), so the signer is the
+                // bond the object names, and whether that bond is liable on the claim is the fold's
+                // (`DaDiscloserNotLiable`). Below the fence it stays refused by name, as before.
+                Obj::MaterialDisclosedV2 { claim, unit, answer, discloser, signature }
+                    if state_params.rcore_plus_active_at(point.daa_score) =>
+                {
+                    if !self.palw_da_court_at(point.daa_score) {
+                        return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    let court = self
+                        .palw_court_params_v2
+                        .as_ref()
+                        .ok_or_else(|| "a data-availability answer on a network with no V2 court parameters".to_string())?;
+                    let bytes = borsh::to_vec(answer).map(|b| b.len() as u64).unwrap_or(u64::MAX);
+                    if bytes > court.max_close_bytes() {
+                        return Err(format!(
+                            "claim {claim}'s answer is {bytes} bytes, above this ruleset's {}-byte close ceiling (DA-8)",
+                            court.max_close_bytes()
+                        ));
+                    }
+                    let record =
+                        state.bond(discloser).ok_or_else(|| format!("an answer names bond {discloser:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_da_rcore_v1::palw_da_disclosure_message_v4(
+                        &self.palw_network_domain_v2(),
+                        claim,
+                        unit,
+                        &kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_digest_v1(answer),
+                        discloser,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_da_rcore_v1::PALW_DA_DISCLOSURE_V4_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("claim {claim}'s answer is not signed by the bond it names"));
+                    }
+                }
                 Obj::ReporterCommitted { .. }
                 | Obj::ReporterRevealed { .. }
                 | Obj::MaterialDisclosedV2 { .. }
@@ -8658,7 +8700,14 @@ impl VirtualStateProcessor {
                     // The demanding seat's own draw — keyed by the network domain, which is held here
                     // and not in the fold — must have put the leaf's interval in that seat's sample,
                     // so no seat can pick the leaf an executor must put on chain.
-                    if let kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf } = accusation.missing {
+                    //
+                    // **ADR-0152 DA-3 (M3): not past `palw_rcore_plus`**, where a named `StepLeaf` is
+                    // free — any leaf inside the binding's bound, from a seat or not — and the per-seat
+                    // session budget (DA-8) replaces the once-per-seat rule; drawn units, seeded by the
+                    // accepting block, are what the accuser cannot choose.
+                    if let kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { leaf } = accusation.missing
+                        && !state_params.rcore_plus_active_at(point.daa_score)
+                    {
                         let panel =
                             state.panel(&claim_id).ok_or_else(|| format!("claim {claim_id} has no bound panel to demand from"))?;
                         let seat_index = panel
@@ -8679,6 +8728,11 @@ impl VirtualStateProcessor {
                 }
                 Obj::MaterialDisclosedHeld { disclosure } => {
                     let claim_id = disclosure.claim;
+                    if state_params.rcore_plus_active_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim_id}: MaterialDisclosedHeld is retired past palw_rcore_plus; MaterialDisclosedV2 answers (DA-1)"
+                        ));
+                    }
                     if !self.palw_held_context_at(point.daa_score) || !self.palw_da_court_at(point.daa_score) {
                         return Err(format!(
                             "claim {claim_id}: a held disclosure needs the held regime and the data-availability court (ADR-0103)"
@@ -8859,6 +8913,11 @@ impl VirtualStateProcessor {
                 Obj::MaterialDisclosed { claim, event_index, disclosure, signature } => {
                     if !self.palw_da_court_at(point.daa_score) {
                         return Err(format!("claim {claim}: the data-availability court is not armed on this network (ADR-0062)"));
+                    }
+                    if state_params.rcore_plus_active_at(point.daa_score) {
+                        return Err(format!(
+                            "claim {claim}: MaterialDisclosed is retired past palw_rcore_plus; MaterialDisclosedV2 answers (DA-1)"
+                        ));
                     }
                     let court = self
                         .palw_court_params_v2
