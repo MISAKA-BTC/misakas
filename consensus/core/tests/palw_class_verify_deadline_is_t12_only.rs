@@ -161,3 +161,67 @@ fn testnet11s_rules_are_unmoved_for_a_class_past_24_spans() {
         assert!(!sp.class_verify_deadline_active_at(daa), "no horizon at {daa}");
     }
 }
+
+/// **T-D8b / P-1: testnet-12's pruning depth is the D_cap claim lattice, and nobody else's moved.**
+/// testnet-12 (the fence at genesis) derives `2(600 + 16,000) + 1,200 + 3,000 + 37,520 = 74,920` —
+/// the receipt window at D_cap and the DA term at `R_eff`'s span (U-D3) — which the finality-offset
+/// rounding leaves as it is (`74,920 mod 600 = 520`, clear of `k` on both sides), and validates on it;
+/// one DAA short, `validate_palw_v2` refuses it (K18). Its fence-off twin re-derives the depth it had
+/// before, 12,002. testnet-11 is still 12,002 and its own derivation (the fence is `None` there), and
+/// devnet's and mainnet's depths are the fingerprints `BEFORE_THE_DEADLINE` pins.
+#[test]
+fn testnet12_derives_its_pruning_depth_from_the_d_cap_lattice_and_nobody_else_moves() {
+    use kaspa_consensus_core::config::params::{palw_v2_claim_lattice_daa_v1, palw_v2_pruning_depth_v1};
+    let t12 = palw_t12_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { panic!("testnet-12 is ConsensusV2") };
+    let lattice = palw_v2_claim_lattice_daa_v1(bundle, t12.palw_da_court, t12.palw_class_verify_deadline);
+    assert_eq!(lattice, 74_920, "the D_cap lattice");
+    assert_eq!(t12.pruning_depth(), 74_920, "testnet-12's pruning depth");
+    assert_eq!(
+        t12.pruning_depth(),
+        palw_v2_pruning_depth_v1(&t12.blockrate, bundle, t12.palw_da_court, t12.palw_class_verify_deadline)
+    );
+    let (f, k) = (t12.finality_depth(), t12.ghostdag_k() as u64);
+    let m = t12.pruning_depth() % f;
+    assert!(k < m && m < f - k, "the pruning-sample walk's offset: {m} mod {f}, k {k}");
+    t12.validate_palw_v2().expect("testnet-12 validates on its own horizon");
+    let mut short = t12.clone();
+    short.blockrate.pruning_depth = lattice - 1;
+    assert!(
+        matches!(short.validate_palw_v2(), Err(kaspa_consensus_core::palw_mode_v2::PalwModeV2Error::Invalid(why)) if why.contains("the claim lattice outlives the pruning horizon")),
+        "one DAA short of the D_cap lattice is refused"
+    );
+    assert_eq!(palw_v2_pruning_depth_v1(&t12.blockrate, bundle, t12.palw_da_court, None), 12_002, "the fence-off derivation");
+    let t11 = palw_rc_shipped_params();
+    let PalwConsensusMode::ConsensusV2(b11) = &t11.palw_consensus_mode else { panic!("testnet-11 is ConsensusV2") };
+    assert_eq!(t11.pruning_depth(), 12_002, "testnet-11's horizon, unchanged");
+    assert_eq!(palw_v2_claim_lattice_daa_v1(b11, t11.palw_da_court, t11.palw_class_verify_deadline), 12_000);
+}
+
+/// **A measured row at D_cap validates on testnet-12's own params** (E-11 with P-1): a row for the 2M
+/// class whose canonical job measures exactly 16,000 DAA — the most a row may state — needs no other
+/// change to testnet-12; one DAA past D_cap it is refused on its own.
+#[test]
+fn a_measured_row_at_d_cap_validates_on_testnet12_s_own_horizon() {
+    use kaspa_consensus_core::palw_class_verify_deadline_v1::{PALW_CLASS_VERIFY_CAP_DAA_V1, PalwClassVerifyRowV1};
+    const AT_CAP: [PalwClassVerifyRowV1; 1] = [PalwClassVerifyRowV1 {
+        class_id: kaspa_consensus_core::config::params::PALW_T12_RCORE_CONSERVATIVE_CLASSES[0],
+        activation_daa: 0,
+        // 2 × 3.662… s × 262,145 positions = 1,919,999.99 s = 16,000 DAA of 120 s.
+        a_r_ps: 3_662_095_405_214,
+        b_r_ps: 0,
+        t_fixed_ms: 0,
+        canonical_positions: 262_145,
+        leaves_per_position: 1,
+    }];
+    const PAST_CAP: [PalwClassVerifyRowV1; 1] = [PalwClassVerifyRowV1 { a_r_ps: 3_662_095_786_000, ..AT_CAP[0] }];
+    assert_eq!(AT_CAP[0].raw_daa(262_145), u128::from(PALW_CLASS_VERIFY_CAP_DAA_V1));
+    assert_eq!(PAST_CAP[0].raw_daa(262_145), u128::from(PALW_CLASS_VERIFY_CAP_DAA_V1) + 1);
+    let mut p = palw_t12_shipped_params();
+    p.palw_class_verify_rows = &AT_CAP;
+    p.sync_palw_class_verify_deadline();
+    p.validate_palw_v2().expect("a D_cap row on testnet-12's own horizon");
+    p.palw_class_verify_rows = &PAST_CAP;
+    p.sync_palw_class_verify_deadline();
+    assert!(p.validate_palw_v2().is_err(), "past D_cap the row is refused");
+}

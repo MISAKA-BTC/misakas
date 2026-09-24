@@ -35,9 +35,19 @@
 //!   re-sign. A seat must not have to REPLAY again for that: node N-2 must keep its replay result per
 //!   (claim, job), not per duty key (which the new `bound_daa` changes).
 //! * **V2c at registration** (paging classes, keyed on `artifact_bytes`, see
-//!   `PalwFoldReadV1::check_class_verify_admits_v1`'s TODO), **P-1** (the regenesis pruning depth, at
-//!   or above `palw_class_verify_lattice_daa_v1`, which a measured row already requires — E-11), and
-//!   **SR-1b's `daa ≥ H`** on its supplementary path.
+//!   `PalwFoldReadV1::check_class_verify_admits_v1`'s TODO), and **SR-1b's `daa ≥ H`** on its
+//!   supplementary path.
+//!
+//! # The pruning depth (P-1), in force from genesis
+//!
+//! Past this fence the pruning depth is derived from the D_cap claim lattice
+//! (`config::params::palw_v2_claim_lattice_daa_v1`: the receipt window at D_cap and the DA term at
+//! `R_eff`'s span) — 74,920 on testnet-12, against 12,002 before — because a pruning point can never
+//! move backward (K37), so the horizon a 2M flag day will need can only be chosen at genesis. For the
+//! regenesis owner: the storage and IBD cost of a ~6× horizon is unmeasured (M12 runs after launch),
+//! the pruning point starts ~74,920 DAA (≈ 104 days at 120 s) after genesis instead of ~12,002
+//! (≈ 17 days), the header/block caches are sized by it (under their byte budgets), and a node fewer
+//! than 74,920 DAA behind now syncs by headers rather than by a pruning proof.
 
 use crate::Hash64;
 use crate::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, PalwModelWorkV1, palw_verification_window_spans_v1};
@@ -53,7 +63,7 @@ pub const PALW_CLASS_VERIFY_REF_SPAN_DAA_V1: u64 = PALW_SPAN_MS_V1.div_ceil(PALW
 /// **D_cap** (U-D3): no claim's compute deadline exceeds 16,000 DAA. A measured row's `D` is clamped
 /// to `[1, D_cap]`; a free-prompt claim whose measured `D` exceeds it is refused
 /// (`FreePromptDeadlineOverCap`). The pruning depth that makes a 16,000-DAA claim lattice fit is
-/// fixed at regenesis (P-1, set beside this fence by the regenesis params).
+/// derived from it wherever this fence is armed (P-1, `config::params::palw_v2_claim_lattice_daa_v1`).
 pub const PALW_CLASS_VERIFY_CAP_DAA_V1: u64 = 16_000;
 
 /// m: the margin a measured row's replay time is multiplied by (U-D4).

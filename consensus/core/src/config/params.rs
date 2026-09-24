@@ -1375,8 +1375,12 @@ pub struct Params {
     /// pause moves `H` (V6); and a long-D class owes the panel room until Final (K-1).
     ///
     /// Genesis-only, and refused unless `palw_class_receipt_window` is armed at or below it (the rule
-    /// replaces §11.3's product) and `palw_fp_derived_work` is too (a free-prompt claim's `D` reads
-    /// its class's published work profile, which that fence makes exist before the first such claim).
+    /// replaces §11.3's product), `palw_fp_derived_work` is too (a free-prompt claim's `D` reads
+    /// its class's published work profile, which that fence makes exist before the first such claim),
+    /// and `palw_short_challenge_window` is too (long-D is measured against its 120). **Its Some-ness
+    /// sets the pruning depth (P-1)**: the claim lattice past it is the D_cap one
+    /// (`palw_v2_claim_lattice_daa_v1`, 74,920 on testnet-12), chosen at genesis because a pruning
+    /// point can never move backward.
     /// Independent of `palw_offence_attribution`. `Some(0)` on testnet-12 only; `None` elsewhere;
     /// hashed Some-only, so every other preset's ids are byte-identical to a build without it. The
     /// bundle's mirror is made by `sync_palw_class_verify_deadline`.
@@ -2700,31 +2704,67 @@ pub struct Params {
 /// preset's depth is decided by these two bounds, which
 /// `the_v2_pruning_depth_is_the_derivation_and_the_inherited_floor_never_binds` proves, and a floor
 /// that bound would leave the identity's normalisation unable to reproduce the pre-fence value.
+///
+/// **ADR-0152 §4-quater P-1:** past `palw_class_verify_deadline` the lattice is the class-verify
+/// one ([`palw_v2_claim_lattice_daa_v1`]) — keyed, like the DA term, on the fence's Some-ness, so no
+/// network's horizon depends on a height.
 pub fn palw_v2_pruning_depth_v1(
     blockrate: &BlockrateParams,
     bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
     da_court: Option<ForkActivation>,
+    class_verify_deadline: Option<ForkActivation>,
 ) -> u64 {
-    let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
-        + bundle.state.window_challenge()
-        + bundle.state.window_court()
-        + palw_v2_da_court_lattice_daa(da_court, &bundle.state);
-    palw_v2_pruning_depth_for_lattice_v1(blockrate, bundle, lattice)
+    palw_v2_pruning_depth_for_lattice_v1(blockrate, bundle, palw_v2_claim_lattice_daa_v1(bundle, da_court, class_verify_deadline))
 }
 
-/// **ADR-0152 §4-quater E-11: the claim lattice a measured class's claims can reach** —
-/// [`palw_v2_pruning_depth_v1`]'s lattice with the receipt window at `max(window_receipt, D_cap)`
-/// (`PALW_CLASS_VERIFY_CAP_DAA_V1`): a free-prompt claim of a measured class may be priced up to
-/// D_cap, and its receipt window is then D_cap. The DA term is the existing one (the design's P = 5,400
-/// reading; 42,800 on testnet-12's windows). `validate_palw_class_verify_deadline_v1` refuses a
-/// measured row on a ruleset whose pruning depth is shorter; the regenesis depth (P-1) is chosen at
-/// or above it.
-pub fn palw_class_verify_lattice_daa_v1(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2, da_court: Option<ForkActivation>) -> u64 {
-    let receipt = bundle.state.window_receipt().max(crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_CAP_DAA_V1);
-    2 * (bundle.state.window_bind() + receipt)
-        + bundle.state.window_challenge()
-        + bundle.state.window_court()
-        + palw_v2_da_court_lattice_daa(da_court, &bundle.state)
+/// **The claim lattice: the longest stretch past a claim's acceptance that a judgement of it can be
+/// anchored on** — the ONE lattice the pruning depth is derived from ([`palw_v2_pruning_depth_v1`])
+/// and `validate_palw_v2` (K18) holds the depth to, so the two cannot disagree.
+///
+/// * Below `palw_class_verify_deadline` (every network but testnet-12): two bind+receipt pairs (a
+///   claim is revived once), the challenge and court windows, and the DA court's `accuse + disclose`
+///   where its fence is set ([`palw_v2_da_court_lattice_daa`]) — the rule as it stood, byte for byte.
+/// * **Past it (ADR-0152 §4-quater P-1, U-D3)**: the receipt window is `max(window_receipt, D_cap)`
+///   (a measured class's claims are priced up to D_cap, and their receipt window is then D_cap), and
+///   the DA term is the long-D pause bound — the span of `R_eff` at D_cap
+///   ([`palw_class_verify_reff_span_daa_v1`]; DA-8 unchanged: a session fits `R_eff`), where the DA
+///   court is set. On testnet-12's windows: `2(600 + 16,000) + 1,200 + 3,000 + 37,520 = 74,920`.
+///
+/// Keyed on the fence's Some-ness (a `never()` is absence), exactly as the DA term is keyed on the DA
+/// court's, so a ruleset's horizon is a genesis fact: a pruning point can never move backward (K37),
+/// so a depth for D_cap can only be chosen at genesis — which is why the fence is genesis-only.
+pub fn palw_v2_claim_lattice_daa_v1(
+    bundle: &crate::palw_mode_v2::PalwConsensusParamsV2,
+    da_court: Option<ForkActivation>,
+    class_verify_deadline: Option<ForkActivation>,
+) -> u64 {
+    let state = &bundle.state;
+    if class_verify_deadline.filter(|f| *f != ForkActivation::never()).is_none() {
+        return 2 * (state.window_bind() + state.window_receipt())
+            + state.window_challenge()
+            + state.window_court()
+            + palw_v2_da_court_lattice_daa(da_court, state);
+    }
+    let receipt = state.window_receipt().max(crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_CAP_DAA_V1);
+    let pause = if da_court.is_some() { palw_class_verify_reff_span_daa_v1(state) } else { 0 };
+    2 * (state.window_bind() + receipt) + state.window_challenge() + state.window_court() + pause
+}
+
+/// **The span of `R_eff` at D_cap** (ADR-0152 §4-quater.8): `2(W_bind + W_r) + max(wc, 1) + W_court +
+/// W_disclose` with `W_r = max(window_receipt, D_cap)` and `wc` the challenge window a licence gets —
+/// the longest a long-D claim's retention (and so its DA sessions, DA-8) can run past acceptance.
+/// Past `palw_class_verify_deadline` every licence gets the short window
+/// (`PALW_SHORT_CHALLENGE_WINDOW_DAA_V1`, 120): `validate_palw_v2` refuses the fence without
+/// `palw_short_challenge_window` at or below it, since long-D is measured against that same 120. Read
+/// as the constant rather than off the bundle's mirror, so the depth `with_palw_v2_depths` derives
+/// before the mirrors are synced is the depth every later reader re-derives. 37,520 on testnet-12's
+/// windows.
+pub fn palw_class_verify_reff_span_daa_v1(state: &crate::palw_state_v2::PalwStateParamsV2) -> u64 {
+    let receipt = state.window_receipt().max(crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_CAP_DAA_V1);
+    2 * (state.window_bind() + receipt)
+        + crate::palw_state_v2::PALW_SHORT_CHALLENGE_WINDOW_DAA_V1
+        + state.window_court()
+        + crate::palw_state_v2::palw_da_disclose_window_daa_v1(state)
 }
 
 /// [`palw_v2_pruning_depth_v1`]'s depth for a given claim `lattice`: the anticone-finalization lower
@@ -2815,8 +2855,12 @@ impl Params {
         // The horizon, from the ONE derivation the identity's normalisation re-applies. Raised,
         // never lowered: an inherited depth wider than the derivation stays (no preset's is —
         // `the_v2_pruning_depth_is_the_derivation_and_the_inherited_floor_never_binds`).
-        self.blockrate.pruning_depth =
-            self.blockrate.pruning_depth.max(palw_v2_pruning_depth_v1(&self.blockrate, bundle, self.palw_da_court));
+        self.blockrate.pruning_depth = self.blockrate.pruning_depth.max(palw_v2_pruning_depth_v1(
+            &self.blockrate,
+            bundle,
+            self.palw_da_court,
+            self.palw_class_verify_deadline,
+        ));
         self
     }
 
@@ -4321,11 +4365,12 @@ impl Params {
         // TWO bind+receipt pairs: a claim whose first panel concludes nothing is revived once and
         // binds a second (`sweep_deadlines`' `PanelBound` arm), so the longest path a judgement
         // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
-        let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
-            + bundle.state.window_challenge()
-            + bundle.state.window_court()
-            // ADR-0062 SA-6: `+ accuse + disclose`, zero while the fence is `None`.
-            + palw_v2_da_court_lattice_daa(self.palw_da_court, &bundle.state);
+        // ADR-0062 SA-6: `+ accuse + disclose`, zero while the fence is `None`. ADR-0152 §4-quater
+        // P-1 / E-11: past `palw_class_verify_deadline` the receipt window is `max(window_receipt,
+        // D_cap)` and the DA term the `R_eff` span at D_cap — the ONE lattice the depth is derived
+        // from (`palw_v2_claim_lattice_daa_v1`), so a measured class (whose claims reach D_cap) can
+        // never sit on a horizon that prunes what its judgements read.
+        let lattice = palw_v2_claim_lattice_daa_v1(bundle, self.palw_da_court, self.palw_class_verify_deadline);
         if lattice > self.blockrate.pruning_depth {
             return Err(PalwModeV2Error::Invalid(
                 "the claim lattice outlives the pruning horizon — the headers its judgements are anchored on would be deleted first",
@@ -4669,7 +4714,8 @@ impl Params {
         if self.palw_da_court.is_some_and(|f| !f.is_active(0)) {
             self.palw_da_court = None;
             if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-                self.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&self.blockrate, bundle, None);
+                self.blockrate.pruning_depth =
+                    palw_v2_pruning_depth_v1(&self.blockrate, bundle, None, self.palw_class_verify_deadline);
             }
         } else if self.palw_da_court == Some(ForkActivation::never()) {
             self.palw_da_court = None;
@@ -5495,6 +5541,15 @@ impl Params {
                  deadline replaces §11.3's receipt window and cannot precede it",
             ));
         }
+        // Long-D, the room's hold, V6 and the `R_eff` span in the pruning horizon are all measured
+        // against the SHORT challenge window (120): a licence that could still get the long one
+        // (1,200) would make every one of them the wrong bound.
+        if !armed_below(self.palw_short_challenge_window) {
+            return Err(Invalid(
+                "palw_class_verify_deadline is armed without palw_short_challenge_window at or below it: long-D, the room's \
+                 hold and the pruning horizon's R_eff span are all measured against the short challenge window",
+            ));
+        }
         // A free-prompt claim's deadline reads its class's published work profile; past the derived-work
         // fence no free-prompt claim exists without one, so the deadline a claim is bound under never
         // changes when a profile is published later.
@@ -5528,28 +5583,10 @@ impl Params {
                  with Params::sync_palw_class_verify_deadline after the bundle is assembled",
             ));
         }
-        // **E-11 / T-D8b: a measured row opens a deadline only a pruning horizon sized for D_cap can
-        // hold.** A row's canonical `D` is inside D_cap, but its free-prompt claims reach D_cap (V2(c)
-        // refuses only past it), and a claim bound near the cap anchors judgements up to
-        // [`palw_class_verify_lattice_daa_v1`] past its acceptance — the claim lattice with the receipt
-        // window at `max(window_receipt, D_cap)`. A horizon shorter than that prunes the headers those
-        // judgements read. The depth is a genesis fact (K37: a pruning point never moves back), so a
-        // ruleset whose depth cannot hold D_cap takes no measured row at all; with no row every
-        // admissible claim's receipt window is the global one and the existing lattice check holds.
-        if !self.palw_class_verify_rows.is_empty()
-            && let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
-        {
-            let lattice = palw_class_verify_lattice_daa_v1(bundle, self.palw_da_court);
-            if lattice > self.blockrate.pruning_depth {
-                return Err(crate::palw_mode_v2::PalwModeV2Error::InvalidOwned(format!(
-                    "palw_class_verify_rows is non-empty and the claim lattice at D_cap ({lattice} DAA: the receipt window at \
-                     max(window_receipt, {}) ) outlives the pruning horizon of {} — the headers a measured class's judgements are \
-                     anchored on would be deleted first (ADR-0152 §4-quater E-11)",
-                    crate::palw_class_verify_deadline_v1::PALW_CLASS_VERIFY_CAP_DAA_V1,
-                    self.blockrate.pruning_depth
-                )));
-            }
-        }
+        // **E-11 / T-D8b**: a measured row opens deadlines up to D_cap, which only a pruning horizon
+        // sized for D_cap holds. Past this fence `validate_palw_v2`'s claim-lattice check (K18) reads
+        // `palw_v2_claim_lattice_daa_v1` — the D_cap lattice, the same number `with_palw_v2_depths`
+        // derives the depth from — so no row, and no fence, can stand on a shorter horizon.
         Ok(())
     }
 
@@ -16791,6 +16828,10 @@ mod consensus_params_id_tests {
         assert_ne!(t12.consensus_schedule_id(), without.consensus_schedule_id(), "and so does its schedule");
     }
 
+    /// testnet-12's pruning depth (ADR-0152 §4-quater P-1, U-D3): the D_cap claim lattice, 74,920,
+    /// which the finality-offset rounding leaves as it is. testnet-11's stays 12,002.
+    const T12_PRUNING_DEPTH: u64 = 74_920;
+
     /// **T-D7 (the fence part): ADR-0152 §4-quater's class-verify-deadline fence is armed at genesis,
     /// over §11.3's receipt window and the derived free-prompt work, or refused** — testnet-12 alone
     /// arms it, at DAA 0, with empty rows, mirrored into its bundle, and validates; every other preset
@@ -16864,6 +16905,10 @@ mod consensus_params_id_tests {
         );
         refused_with(&|p| p.palw_fp_derived_work = None, "palw_class_verify_deadline is armed without palw_fp_derived_work");
         refused_with(
+            &|p| p.set_palw_short_challenge_window(None),
+            "palw_class_verify_deadline is armed without palw_short_challenge_window",
+        );
+        refused_with(
             &|p| {
                 p.palw_class_verify_deadline = None;
                 p.palw_class_verify_rows = &ROW;
@@ -16895,37 +16940,46 @@ mod consensus_params_id_tests {
                 needle,
             );
         }
-        // E-11 / T-D8b: a measured row needs a pruning horizon that holds the claim lattice at D_cap.
-        // testnet-12's launch depth (12,002, the lattice at the 600-DAA receipt window) does not: the
-        // row is refused by name. Raised to the D_cap lattice (42,800 on testnet-12's windows, laid out
-        // as every V2 depth is) the row validates; one DAA short of the lattice it is refused again.
+        // P-1 / E-11 / T-D8b: testnet-12 carries the horizon its claims can reach. Its pruning depth is
+        // the claim lattice past the fence — `2(600 + D_cap) + 1,200 + 3,000 + R_eff span` — laid out as
+        // every V2 depth is (`palw_v2_pruning_depth_for_lattice_v1`); a measured row validates on
+        // testnet-12's own params; and one DAA short of the lattice `validate_palw_v2` refuses the
+        // ruleset (K18), row or no row, since the lattice past the fence is the D_cap one.
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(t12_bundle) = &t12.palw_consensus_mode else { unreachable!() };
-        let lattice = palw_class_verify_lattice_daa_v1(t12_bundle, t12.palw_da_court);
-        assert_eq!(lattice, 2 * (600 + 16_000) + 1_200 + 3_000 + 5_400, "the lattice at D_cap: 42,800");
-        assert!(t12.blockrate.pruning_depth < lattice, "the premise: launch testnet-12's depth holds no D_cap claim");
+        let reff = palw_class_verify_reff_span_daa_v1(&t12_bundle.state);
+        assert_eq!(reff, 2 * (600 + 16_000) + 120 + 3_000 + 1_200, "R_eff's span at D_cap: 37,520");
+        let lattice = palw_v2_claim_lattice_daa_v1(t12_bundle, t12.palw_da_court, t12.palw_class_verify_deadline);
+        assert_eq!(lattice, 2 * (600 + 16_000) + 1_200 + 3_000 + reff, "the D_cap lattice (U-D3)");
+        assert_eq!(lattice, 74_920);
+        assert_eq!(
+            palw_v2_claim_lattice_daa_v1(t12_bundle, t12.palw_da_court, None),
+            2 * (600 + 600) + 1_200 + 3_000 + 5_400,
+            "below the fence the lattice is the one it always was"
+        );
+        assert_eq!(
+            t12.blockrate.pruning_depth,
+            palw_v2_pruning_depth_for_lattice_v1(&t12.blockrate, t12_bundle, lattice),
+            "testnet-12's depth IS the derivation"
+        );
+        assert_eq!(t12.blockrate.pruning_depth, T12_PRUNING_DEPTH, "testnet-12's pruning depth, pinned");
         let mut rowed = t12.clone();
         rowed.palw_class_verify_rows = &ROW;
         rowed.sync_palw_class_verify_deadline();
-        refused_with(
-            &|p| {
-                p.palw_class_verify_rows = &ROW;
-                p.sync_palw_class_verify_deadline();
-            },
-            "outlives the pruning horizon",
-        );
-        assert!(rowed.validate_palw_v2().is_err(), "validate_palw_v2 refuses it too");
-        rowed.blockrate.pruning_depth = lattice - 1;
-        assert!(rowed.validate_palw_class_verify_deadline_v1().is_err(), "one DAA short of the lattice");
-        rowed.blockrate.pruning_depth = palw_v2_pruning_depth_for_lattice_v1(&rowed.blockrate, t12_bundle, lattice);
-        assert!(rowed.blockrate.pruning_depth >= lattice);
-        rowed.validate_palw_v2().expect("a well-formed row on a horizon that holds D_cap validates");
-        // With no row the launch depth is enough: the lattice check at the global window holds.
-        t12.validate_palw_class_verify_deadline_v1().expect("no row, no D_cap lattice");
+        rowed.validate_palw_v2().expect("a measured row validates on testnet-12's own horizon");
+        for with_row in [false, true] {
+            let mut short = if with_row { rowed.clone() } else { t12.clone() };
+            short.blockrate.pruning_depth = lattice - 1;
+            let refused = short.validate_palw_v2();
+            assert!(
+                matches!(&refused, Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(why)) if why.contains("the claim lattice outlives the pruning horizon")),
+                "one DAA short of the D_cap lattice (row {with_row}): {refused:?}"
+            );
+            short.blockrate.pruning_depth = lattice;
+            short.validate_palw_v2().expect("at the lattice exactly");
+        }
         // A measured row moves the params id (not the schedule); before `palw_offence_attribution` it
         // is refused (U-D8).
-        let mut depth_only = t12.clone();
-        depth_only.blockrate.pruning_depth = rowed.blockrate.pruning_depth;
-        assert_ne!(rowed.consensus_params_id(), depth_only.consensus_params_id(), "a row is a rule: the params id names it");
+        assert_ne!(rowed.consensus_params_id(), t12.consensus_params_id(), "a row is a rule: the params id names it");
         assert_eq!(rowed.consensus_schedule_id(), t12.consensus_schedule_id(), "a row is not a fence height");
         refused_with(
             &|p| {
@@ -19374,12 +19428,12 @@ mod consensus_params_id_tests {
             checked += 1;
             assert_eq!(
                 preset.blockrate.pruning_depth,
-                palw_v2_pruning_depth_v1(&preset.blockrate, bundle, Some(fence)),
+                palw_v2_pruning_depth_v1(&preset.blockrate, bundle, Some(fence), preset.palw_class_verify_deadline),
                 "{name}: the shipped horizon is not the derivation — the identity's normalisation cannot reproduce it"
             );
             // …and the value the normalisation lands on is the derivation WITHOUT the DA term,
             // which is what the previous release shipped.
-            let without = palw_v2_pruning_depth_v1(&preset.blockrate, bundle, None);
+            let without = palw_v2_pruning_depth_v1(&preset.blockrate, bundle, None, preset.palw_class_verify_deadline);
             assert!(without < preset.blockrate.pruning_depth, "{name}: scheduling the court must widen the horizon");
         }
         assert!(checked > 0, "no shipped preset schedules the DA court — this test would pass by finding nothing");
@@ -19444,7 +19498,8 @@ mod consensus_params_id_tests {
             bundle.court_e2e_root = crate::Hash64::from_bytes(PALW_RC_FOUR_FAMILY_COURT_E2E_ROOT_BYTES);
         }
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &previous.palw_consensus_mode else { panic!("V2") };
-        previous.blockrate.pruning_depth = palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None);
+        previous.blockrate.pruning_depth =
+            palw_v2_pruning_depth_v1(&previous.blockrate, bundle, None, previous.palw_class_verify_deadline);
 
         // **The "previous" here WAS the build the testnet-11 fleet runs** (`71b35c25…`, the ADR-0083
         // flag day's), and this line pinned it until 2026-09-23. It cannot any more: the economic
