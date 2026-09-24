@@ -6504,7 +6504,12 @@ mod tests {
         assert_eq!(material.checkpoint_leaves.len(), run.checkpoints.leaves.len());
 
         assert_eq!(
-            crate::produce::base0_fp_material_matches_claim_v2(&material, run.execution_root, run.trace_root),
+            crate::produce::base0_fp_material_matches_claim_v2(
+                &material,
+                run.execution_root,
+                run.trace_root,
+                crate::produce::Base0SeatFamilyV1::IntegerKv
+            ),
             Ok(true),
             "an honest graph-v5 material must pass the seat's check"
         );
@@ -6524,7 +6529,12 @@ mod tests {
         let mut lying = material.clone();
         lying.checkpoint_chunks = vec![vec![vec![0u8; 4]]];
         assert_eq!(
-            crate::produce::base0_fp_material_matches_claim_v2(&lying, run.execution_root, run.trace_root),
+            crate::produce::base0_fp_material_matches_claim_v2(
+                &lying,
+                run.execution_root,
+                run.trace_root,
+                crate::produce::Base0SeatFamilyV1::IntegerKv
+            ),
             Ok(false),
             "a per-position class serving chunks is serving the history Decision 9 keeps off the wire"
         );
@@ -6533,7 +6543,12 @@ mod tests {
         let mut tampered = material.clone();
         tampered.checkpoint_leaves[1].state_chunks_root = Hash64::from_u64_word(0xDEAD);
         assert_eq!(
-            crate::produce::base0_fp_material_matches_claim_v2(&tampered, run.execution_root, run.trace_root),
+            crate::produce::base0_fp_material_matches_claim_v2(
+                &tampered,
+                run.execution_root,
+                run.trace_root,
+                crate::produce::Base0SeatFamilyV1::IntegerKv
+            ),
             Ok(false),
             "a leaf that is not the committed one must not rebuild the committed root"
         );

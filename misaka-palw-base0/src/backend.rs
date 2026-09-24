@@ -579,7 +579,21 @@ impl PalwExecutionBackendV1 for Base0Backend {
                 return PalwMaterialVerdictV1::Mismatch;
             }
         }
-        match base0_material_matches_claim_capped_v1(&decoded, claim.execution_root, claim.trace_root, self.network_ladder) {
+        // **A capture for some other profile is not this backend's to vouch for** — the check the
+        // A16 and Qwen3.6 tiers already make. A free-prompt claim's roots are tied to no profile
+        // on chain, so without it the profile below is a stranger's: SEAT-0's head rule sums its
+        // node count, and 65,535 layers of a wide table overflow that sum — a panic, which the
+        // node's panic hook turns into an exit of every seat the material is served to.
+        if decoded.0.shape_profile.shape_profile_id() != self.profile.shape_profile_id() {
+            return PalwMaterialVerdictV1::Unverifiable;
+        }
+        match base0_material_matches_claim_capped_v1(
+            &decoded,
+            claim.execution_root,
+            claim.trace_root,
+            self.network_ladder,
+            crate::produce::Base0SeatFamilyV1::IntegerKv,
+        ) {
             Ok(true) => PalwMaterialVerdictV1::Matches,
             Ok(false) => PalwMaterialVerdictV1::Mismatch,
             Err(_) => PalwMaterialVerdictV1::Unverifiable,
