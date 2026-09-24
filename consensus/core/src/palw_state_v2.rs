@@ -2714,8 +2714,8 @@ pub fn palw_bond_has_open_court_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV
 /// (DA-4: any bond with a live lock on the claim may disclose), which Phase 2's automatic answering
 /// (P2-7) makes a duty kept by default. `palw_rcore_plus` armed AND seats' answering landed
 /// (`seat_da_answer_landed`: the processor passes
-/// [`crate::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`], `false` in this build — so both
-/// are dormant; the producer's DA-7 charge, the record and the reward are not).
+/// [`crate::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`], `true` since P2-7 landed kaspad's
+/// signer answers — so both are armed past the fence; below it neither exists).
 ///
 /// Read at the conviction's own DAA (`now_daa`): `palw_rcore_plus` ACTIVE there, not merely scheduled
 /// (M3 review, LOW) — on testnet-12 the fence is at genesis, so the two agree at every DAA.
@@ -11320,6 +11320,36 @@ impl PalwFoldReadV1<'_> {
         Ok(PalwDaAdmissionV1 { stage, accuser_is_seat, exposure, deadline_daa })
     }
 
+    /// **ADR-0152 X7 / DA-4 / DA-7 (M3): is `lock` live for the data-availability court at
+    /// `now_daa`?** Both clocks, the second bounded per obligation (`is_live_v3`) at the ESCAPED
+    /// depth ([`Self::second_clock_depth`]) — the one reading behind who may answer (X7) and who a
+    /// default charges (C7), so the fold and Phase 2's responder (P2-7) cannot disagree about a
+    /// signer's standing.
+    fn da_lock_live_v1(&self, lock: &crate::palw_panel_var_v1::PalwSlashableLockV1, now_daa: u64) -> bool {
+        lock.is_live_v3(now_daa, self.state.settled_attempt_finals, self.second_clock_depth(now_daa), self.params.window_court)
+    }
+
+    /// **X7 (DA-4): may `discloser` answer a session on `claim_id`?** The claim's producer, or a bond
+    /// still liable on it — a live lock ([`Self::da_lock_live_v1`]).
+    fn da_discloser_liable_v1(&self, claim_id: &Hash64, claim: &PalwClaimStateV2, discloser: &PalwBondKeyV2, now_daa: u64) -> bool {
+        *discloser == claim.bond
+            || self.state.slashable_locks.get(&(*discloser, *claim_id)).is_some_and(|lock| self.da_lock_live_v1(lock, now_daa))
+    }
+
+    /// **C7 (DA-7): is `lock` a covering signer's for any of `units`?** Live
+    /// ([`Self::da_lock_live_v1`]) and its recorded mask covers at least one of them
+    /// ([`crate::palw_da_rcore_v1::palw_da_unit_covered_by_v1`]) — what a default charges S4 on, and
+    /// so exactly what a signer owes an answer to (P2-7).
+    fn da_lock_covers_v1(
+        &self,
+        lock: &crate::palw_panel_var_v1::PalwSlashableLockV1,
+        units: &[crate::palw_da_rcore_v1::PalwDaUnitV1],
+        now_daa: u64,
+    ) -> bool {
+        self.da_lock_live_v1(lock, now_daa)
+            && units.iter().any(|unit| crate::palw_da_rcore_v1::palw_da_unit_covered_by_v1(unit, lock.attested, lock.segments))
+    }
+
     fn canonical_per_draw(&self, class_id: &Hash64, accepted_daa: u64) -> Option<u64> {
         self.state
             .palw_attempt_per_draw_v1(
@@ -12429,6 +12459,89 @@ pub fn palw_second_clock_depth_of_v1(
     now_daa: u64,
 ) -> Option<u64> {
     PalwFoldReadV1::outside(state, params, extras).second_clock_depth(now_daa)
+}
+
+/// **ADR-0152 X7 / DA-4, for callers outside the fold (Phase 2, P2-7): may `discloser` answer a
+/// data-availability session on `claim_id` at `now_daa`?** The fold's own predicate
+/// (`apply_da_answer_v1`'s `DaDiscloserNotLiable`): the claim's producer, or a bond with a live lock
+/// on the claim. `false` for a claim the state does not hold.
+pub fn palw_da_discloser_liable_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim_id: &Hash64,
+    discloser: &PalwBondKeyV2,
+    now_daa: u64,
+) -> bool {
+    state.claims.get(claim_id).is_some_and(|claim| {
+        PalwFoldReadV1::outside(state, params, extras).da_discloser_liable_v1(claim_id, claim, discloser, now_daa)
+    })
+}
+
+/// **ADR-0152 C7 / DA-7, for callers outside the fold (Phase 2, P2-7): is `seat`'s lock on
+/// `claim_id` a covering signer's for `unit` at `now_daa`?** The fold's own covering-signer
+/// predicate (`da_default_v1`): the lock is live and its recorded mask covers the unit. It is what
+/// a default would charge S4 for, so it is exactly what a locked signer owes an answer to.
+pub fn palw_da_lock_covers_unit_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    seat: &PalwBondKeyV2,
+    claim_id: &Hash64,
+    unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
+    now_daa: u64,
+) -> bool {
+    state.slashable_locks.get(&(*seat, *claim_id)).is_some_and(|lock| {
+        PalwFoldReadV1::outside(state, params, extras).da_lock_covers_v1(lock, std::slice::from_ref(unit), now_daa)
+    })
+}
+
+/// **ADR-0152 C7 / DA-7, for callers outside the fold (Phase 2, P2-7): every covering signer of
+/// each of `units` on `claim_id` at `now_daa`, in bond order** — one list a unit, in `units`' order:
+/// the bonds whose lock [`palw_da_lock_covers_unit_v1`] reads as covering, found as `da_default_v1`
+/// finds them (the lock map filtered by claim). The claim's locks are found in ONE walk of the map
+/// and each unit is asked of them by the fold's own per-unit predicate — the duty read asks this for
+/// every unit of every claim it holds a lock on, and a walk a unit was O(units × locks) on the panel's
+/// tick (the P2-7 review's LOW). Node policy staggers the signers' answers by their place here, so
+/// one answer lands and the others see the unit answered; it is never a consensus input.
+pub fn palw_da_covering_signers_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim_id: &Hash64,
+    units: &[crate::palw_da_rcore_v1::PalwDaUnitV1],
+    now_daa: u64,
+) -> Vec<Vec<PalwBondKeyV2>> {
+    let read = PalwFoldReadV1::outside(state, params, extras);
+    let locks: Vec<(&PalwBondKeyV2, &crate::palw_panel_var_v1::PalwSlashableLockV1)> =
+        state.slashable_locks.iter().filter(|((_, claim), _)| claim == claim_id).map(|((seat, _), lock)| (seat, lock)).collect();
+    units
+        .iter()
+        .map(|unit| {
+            locks
+                .iter()
+                .filter(|(_, lock)| read.da_lock_covers_v1(lock, std::slice::from_ref(unit), now_daa))
+                .map(|(seat, _)| **seat)
+                .collect()
+        })
+        .collect()
+}
+
+/// **ADR-0152 X7, for callers outside the fold (P2-7's retention duty): does `seat` hold a live lock
+/// on `claim_id` as the DA court reads one?** ([`PalwFoldReadV1::da_lock_live_v1`].) A signer
+/// keeps what it would answer from for as long as this holds and a session can still open.
+pub fn palw_da_lock_live_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    seat: &PalwBondKeyV2,
+    claim_id: &Hash64,
+    now_daa: u64,
+) -> bool {
+    state
+        .slashable_locks
+        .get(&(*seat, *claim_id))
+        .is_some_and(|lock| PalwFoldReadV1::outside(state, params, extras).da_lock_live_v1(lock, now_daa))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -13986,7 +14099,7 @@ impl<'a> TransitionBuilder<'a> {
     /// session on the claim (exposure returned) and refunds its refuted exposure (a DA default is a
     /// conviction, DA-6).
     fn da_default_v1(&mut self, ctx: &PalwBlockContextV2, claim_id: Hash64, accuser: PalwBondKeyV2) -> Result<(), PalwStateV2Error> {
-        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1, palw_da_unit_covered_by_v1};
+        use crate::palw_da_rcore_v1::{PalwDaStageV1, palw_da_in_run_rows_v1, palw_da_unit_answered_v1};
         let now = ctx.daa_score;
         let session = self
             .state
@@ -14024,20 +14137,19 @@ impl<'a> TransitionBuilder<'a> {
             .min()
             .map(|(_, bond)| bond)
             .unwrap_or(accuser);
-        let settled_now = self.state.settled_attempt_finals;
-        let depth = self.second_clock_depth(now);
-        let window_court = self.params.window_court;
+        // C7: the covering signers, by the ONE predicate Phase 2's responder reads to decide what a
+        // signer owes an answer to (`PalwFoldReadV1::da_lock_covers_v1`; P2-7).
         let covering: Vec<PalwBondKeyV2> = if matches!(stage, PalwDaStageV1::Live)
             || !palw_da_signer_liability_armed_v1(self.params, self.extras.seat_da_answer_landed, now)
         {
             Vec::new()
         } else {
+            // The bounded candidate set (the panel's seats and the liability row's signers; the S
+            // re-review), each read through the ONE covering predicate the node's responder reads.
+            let read = self.read();
             self.claim_locks_v1(&claim_id)
                 .into_iter()
-                .filter(|(_, lock)| {
-                    lock.is_live_v3(now, settled_now, depth, window_court)
-                        && unanswered.iter().any(|unit| palw_da_unit_covered_by_v1(unit, lock.attested, lock.segments))
-                })
+                .filter(|(_, lock)| read.da_lock_covers_v1(lock, &unanswered, now))
                 .map(|((seat, _), _)| seat)
                 .collect()
         };
@@ -20955,12 +21067,10 @@ fn apply_da_answer_v1(
     }
     let claim = builder.state.claims.get(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?.clone();
     let record = builder.state.da_claims.get(&claim_id).cloned().ok_or(PalwStateV2Error::DaUnitNotDemanded(claim_id))?;
-    // X7: the producer, or a bond still liable on the claim.
+    // X7: the producer, or a bond still liable on the claim — the predicate Phase 2's responder reads
+    // (`palw_da_discloser_liable_v1`; P2-7).
     let now = ctx.daa_score;
-    let liable = discloser == claim.bond
-        || builder.state.slashable_locks.get(&(discloser, claim_id)).is_some_and(|lock| {
-            lock.is_live_v3(now, builder.state.settled_attempt_finals, builder.second_clock_depth(now), builder.params.window_court)
-        });
+    let liable = builder.read().da_discloser_liable_v1(&claim_id, &claim, &discloser, now);
     if !liable {
         return Err(PalwStateV2Error::DaDiscloserNotLiable { claim: claim_id, discloser });
     }
@@ -20972,6 +21082,9 @@ fn apply_da_answer_v1(
         return Err(PalwStateV2Error::DaUnitAlreadyAnswered(claim_id));
     }
     let malformed = |why| PalwStateV2Error::DaAnswerMalformed { claim: claim_id, why };
+    // The answer's form, by the rule node policy builds with (`palw_da_answer_form_v1`; P2-7): the
+    // unit's own kind, and a held carriage of version 1 naming this claim and unit, unsigned.
+    crate::palw_da_rcore_v1::palw_da_answer_form_v1(&claim_id, &unit, answer).map_err(malformed)?;
     let flat = match (&unit, answer) {
         (PalwDaUnitV1::Event { row, tile }, PalwDaAnswerV1::Event(disclosure)) => {
             crate::palw_step_refute::check_trace_event_disclosure_v1(
@@ -20989,15 +21102,6 @@ fn apply_da_answer_v1(
             matches!(disclosure, crate::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. })
         }
         (PalwDaUnitV1::Held(missing), PalwDaAnswerV1::Held(carriage)) => {
-            if carriage.version != crate::palw_held_da_v1::PALW_HELD_DA_VERSION_V1 {
-                return Err(malformed("the carriage is not version 1"));
-            }
-            if carriage.claim != claim_id || carriage.missing != *missing {
-                return Err(malformed("the carriage names another claim or unit"));
-            }
-            if !carriage.signature.is_empty() {
-                return Err(malformed("the carriage's own signature slot is empty: the discloser signs the whole answer"));
-            }
             let Some(network_ladder) = builder.extras.held_context_ladder else {
                 return Err(PalwStateV2Error::HeldContextDormant);
             };
@@ -21045,6 +21149,7 @@ fn apply_da_answer_v1(
             }
             false
         }
+        // Refused by the form check above; spelled again so the match stands on its own.
         _ => return Err(malformed("an event unit is answered by an event disclosure, a held unit by a held carriage")),
     };
     let mut answered = record;
@@ -26607,8 +26712,9 @@ pub struct PalwTransitionExtrasV1 {
     /// refuses the V2 kind as dormant and leaves the fold byte for byte what it was.
     pub offence_attribution_active: bool,
     /// **ADR-0152 X7 / N9 (M3): have seats landed automatic DA answering?** The processor sets it to
-    /// [`crate::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`] and nothing else; `false` by
-    /// `Default` (the shipped value). Read only through [`palw_da_signer_liability_armed_v1`].
+    /// [`crate::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`] and nothing else (`true` since
+    /// P2-7); `false` by `Default`, the fence-dormant presets', where it is read by nothing (the
+    /// predicate also needs `palw_rcore_plus`). Read only through [`palw_da_signer_liability_armed_v1`].
     pub seat_da_answer_landed: bool,
     /// `Params::palw_share_growth_final` resolved at the block's DAA (ADR-0107). Below it a class
     /// grows its cadence share on the blocks it had ACCEPTED in the closed epoch; past it growth

@@ -1502,6 +1502,380 @@ pub(crate) fn palw_seat_retention_pins_v1(
     live.iter().copied().chain(liabilities.iter().filter(|(_, horizon)| **horizon >= current_daa).map(|(claim, _)| *claim)).collect()
 }
 
+/// **ADR-0152 X7 (Phase 2, P2-7), node policy: is a disclosure duty this node's to answer now?**
+/// Never past the deadline (the first block past it defaults the session, DA-7). The claim's
+/// PRODUCER answers at once. A COVERING SIGNER lets the producer have the first half of `W_disclose`
+/// and then answers in its place, staggered by its rank among the unit's covering signers — a
+/// sixteenth of the window per rank, and never later than a quarter-window before the deadline — so
+/// an honest producer's answer is the one that lands, a silent producer's signers answer with room
+/// to spare, and one signer's answer usually lands before the next signer's turn comes (the unit
+/// then leaves every duty list). Every answer is refused by the fold once the unit is answered
+/// (`DaUnitAlreadyAnswered`), so the stagger only saves carrier fees; it never decides who is charged.
+pub(crate) fn palw_disclosure_due_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1, current_daa: u64) -> bool {
+    use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
+    if current_daa > duty.deadline_daa {
+        return false;
+    }
+    match duty.role {
+        PalwDisclosureRoleV1::Producer => true,
+        PalwDisclosureRoleV1::CoveringSigner => {
+            let window = duty.disclose_window_daa.max(1);
+            let stagger = (window / 16).max(1).saturating_mul(u64::from(duty.signer_rank));
+            let lead = (window / 2).saturating_sub(stagger).max(window / 4);
+            current_daa.saturating_add(lead) >= duty.deadline_daa
+        }
+    }
+}
+
+/// **The court queue's key of an R-core answer** (P2-7): the claim, and the unit folded to 32 bits
+/// under a node-local domain. Node bookkeeping only (`court_moved`, `court_pending`): a collision
+/// between two units of one claim delays one answer by a replan, and decides nothing on chain.
+fn palw_disclosure_queue_key_v1(duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1) -> (Hash64, u32, bool) {
+    let unit = borsh::to_vec(&duty.unit).unwrap_or_default();
+    let digest = blake2b_simd::Params::new().hash_length(32).key(b"misaka-node/da-answer-queue-key/v1").hash(&unit);
+    let folded = u32::from_le_bytes(digest.as_bytes()[..4].try_into().expect("four bytes"));
+    (duty.claim_id, folded, true)
+}
+
+/// **Which lane's job a claim ran, as an R-core answer reads it** (ADR-0152 DA-4, X7; P2-7).
+#[derive(Clone, Debug)]
+pub(crate) enum PalwDaLaneV1 {
+    /// A free-prompt claim. Its job is NOT chain data: only a payload this node kept carries it.
+    /// `panel_da_admissible` is the network's (`Params::palw_panel_da_admissible`): which privacy
+    /// modes this node's seats may judge (`palw_fp_seat_may_judge_mode_v1`), and so re-make.
+    FreePrompt { panel_da_admissible: bool },
+    /// An attempt claim: the anchor and the draw its capture is checked under, and the job its
+    /// block asked for — chain data, so any node re-makes the capture — `None` when the block is not
+    /// in this node's store.
+    Attempt { anchor: Hash64, attempt_draw: Option<bool>, job: Option<(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>)> },
+}
+
+/// **The facts of one claim an R-core answer is built under** (ADR-0152 DA-4, X7; P2-7) — read off
+/// the chain on the panel's tick and moved into the blocking task that loads the claim's material
+/// ([`palw_da_material_v1`]) and answers its units ([`palw_da_unit_answer_v1`]), which read no session.
+#[derive(Clone, Debug)]
+pub(crate) struct PalwDaClaimFactsV1 {
+    pub claim_id: Hash64,
+    pub class_id: Hash64,
+    pub executor_bond: PalwBondKeyV2,
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    /// The claim's priced step leaves (`palw_claim_roots_v2`): what a leaf's evidence is checked against.
+    pub work_leaves: u64,
+    pub form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    pub lane: PalwDaLaneV1,
+    /// The free-prompt pin the capture must reproduce (`PalwDisclosureDutyV1::fp_job_pin_v1`; H-2's
+    /// check, on the answering path); `None` on the attempt lane.
+    pub job_pin: Option<Hash64>,
+}
+
+impl PalwDaClaimFactsV1 {
+    /// The roots `verify_material` checks a capture of this claim under: a free-prompt capture under
+    /// its OWN payload's job id — the claim's execution root commits the id, so a stranger's job does
+    /// not reproduce it — and an attempt capture under the block's anchor and draw. `output_root:
+    /// None`, as every DA and court re-make reads it (the SEAT-S2 audit of every `None`): the question
+    /// is whether these bytes are the claim's step leg, and no family's `verify_material` reads the answer.
+    fn roots_v1(&self, fp_job: Option<&kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3>) -> PalwClaimRootsV1 {
+        let (anchor, attempt_draw) = match &self.lane {
+            PalwDaLaneV1::Attempt { anchor, attempt_draw, .. } => (*anchor, *attempt_draw),
+            PalwDaLaneV1::FreePrompt { .. } => {
+                (fp_job.map(kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3).unwrap_or_default(), None)
+            }
+        };
+        let job_pin = match self.lane {
+            PalwDaLaneV1::FreePrompt { .. } => self.job_pin,
+            PalwDaLaneV1::Attempt { .. } => None,
+        };
+        PalwClaimRootsV1 { execution_root: self.execution_root, trace_root: self.trace_root, anchor, attempt_draw, output_root: None, job_pin }
+    }
+}
+
+/// **The material an R-core answer is built from, checked against the claim's roots** (P2-7).
+#[derive(Debug)]
+pub(crate) enum PalwDaCaptureV1 {
+    /// A free-prompt claim's payload: its job, the user's prompt and the family capture.
+    FreePrompt(kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1),
+    /// An attempt claim's bare family capture.
+    Attempt(Vec<u8>),
+}
+
+/// **ADR-0152 DA-4 / X7 (P2-7): the material an R-core answer is built from — kept and verified, or
+/// re-made and verified, never trusted.** Returns it, and whether it was re-made.
+///
+/// `kept` is every copy this node holds for the claim, own retention first, read one at a time. A
+/// copy is answered from only if it reproduces the claim's committed roots (`verify_material`, the
+/// check every seat arm and every re-make applies). A free-prompt payload that merely DECODES as
+/// `FPC1` proves nothing about its capture — the decoder binds the job and the prompt, and the
+/// capture is opaque to it — and a planted one (a peer racing the producer's job-only `FPM1` gossip
+/// with an `FPC1` of the right job and a garbage capture) would have an honest covering signer answer
+/// garbage, default, and be charged S4 for material it could have re-made (the P2-7 review's HIGH).
+///
+/// Otherwise the claim's job is replayed: an attempt claim's from its block (chain data), a
+/// free-prompt claim's from a kept payload that carries a job of the claim's class and producer — any
+/// spelling (`FPC1`, `FPA1`, `FPM1`: a full seat that licensed by replaying `FPM1` keeps exactly
+/// that), each distinct job tried in the order kept, so a stranger's job before the claim's costs a
+/// replay and never the answer. The re-made capture is used only if it reproduces the roots, and
+/// handed to `keep` — in its lane's form: the `FPC1` of the job, or the attempt's bare capture — to
+/// replace what did not verify, so the next session on the claim is answered without a replay.
+///
+/// Runs inside the blocking task [`PalwPanelService::rcore_da_answers_v1`] reserved memory for: the
+/// verification and the replay are whole-capture work. A free-prompt claim whose job this node never
+/// kept cannot be answered from here: its job is not chain data.
+pub(crate) fn palw_da_material_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    kept: impl IntoIterator<Item = Vec<u8>>,
+    keep: impl FnOnce(&[u8]),
+) -> Result<(PalwDaCaptureV1, bool), String> {
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PalwFpCaptureV1, PalwFpMaterialV1, palw_fp_capture_decode_v1, palw_fp_capture_encode_v1, palw_fp_job_material_decode_v1,
+    };
+    let reproduces =
+        |capture: &[u8], roots: PalwClaimRootsV1| backend.verify_material(capture, roots) == PalwMaterialVerdictV1::Matches;
+    match &facts.lane {
+        PalwDaLaneV1::FreePrompt { panel_da_admissible } => {
+            let mut jobs: Vec<PalwFpMaterialV1> = Vec::new();
+            for bytes in kept {
+                let material = match palw_fp_capture_decode_v1(&bytes, facts.form) {
+                    Some(payload) if reproduces(&payload.capture, facts.roots_v1(Some(&payload.material.job))) => {
+                        return Ok((PalwDaCaptureV1::FreePrompt(payload), false));
+                    }
+                    // Decodes, and its capture is not the claim's: its job may still be.
+                    Some(payload) => payload.material,
+                    None => match palw_fp_job_material_decode_v1(&bytes, facts.form) {
+                        Some(material) => material,
+                        None => continue,
+                    },
+                };
+                // The seat's own gate on a job it would replay (`fp_job_material_for_claim`): the
+                // claim's class and producer, a privacy mode it may judge.
+                if material.job.class_id == facts.class_id
+                    && material.job.executor_bond == facts.executor_bond.0
+                    && crate::palw_fp_seat::palw_fp_seat_may_judge_mode_v1(material.job.privacy_mode, *panel_da_admissible)
+                    && !jobs.iter().any(|held| held.job == material.job)
+                {
+                    jobs.push(material);
+                }
+            }
+            if jobs.is_empty() {
+                return Err("no kept capture reproduces the claim's roots, and no job of this free-prompt claim is kept here: its \
+                            job is not chain data"
+                    .to_string());
+            }
+            let mut refused = String::new();
+            for material in jobs {
+                let Some(ids) = PalwPanelService::fp_prompt_for_job(backend, &material, facts.form) else {
+                    refused = "the kept job's prompt is not the job's".to_string();
+                    continue;
+                };
+                let prompt: Vec<usize> = ids.iter().map(|id| *id as usize).collect();
+                let capture = match backend.execute_free_prompt(&material.job, &prompt) {
+                    Ok(run) => run.outcome.material,
+                    Err(e) => {
+                        refused = format!("the kept job's replay was refused: {e}");
+                        continue;
+                    }
+                };
+                if !reproduces(&capture, facts.roots_v1(Some(&material.job))) {
+                    refused = "the kept job's replay does not reproduce the claim's committed roots".to_string();
+                    continue;
+                }
+                keep(&palw_fp_capture_encode_v1(&material.job, &ids, &capture));
+                let material = PalwFpMaterialV1 { job: material.job, prompt_token_ids: ids };
+                return Ok((PalwDaCaptureV1::FreePrompt(PalwFpCaptureV1 { material, capture }), true));
+            }
+            Err(refused)
+        }
+        PalwDaLaneV1::Attempt { job, .. } => {
+            let roots = facts.roots_v1(None);
+            for bytes in kept {
+                // The attempt lane retains the family capture bare (ADR-0084 Decision 4); read through
+                // an `FPC1` envelope all the same, as `fp_capture_view` does.
+                let capture = match palw_fp_capture_decode_v1(&bytes, facts.form) {
+                    Some(payload) => payload.capture,
+                    None => bytes,
+                };
+                if reproduces(&capture, roots) {
+                    return Ok((PalwDaCaptureV1::Attempt(capture), false));
+                }
+            }
+            let (job, prompt) = job
+                .as_ref()
+                .ok_or("no kept capture reproduces the claim's roots, and the claim's block is not in this node's store")?;
+            let capture = backend.execute(job, prompt).map_err(|e| format!("the block's job's replay was refused: {e}"))?.material;
+            if !reproduces(&capture, roots) {
+                return Err("the replay of the block's job does not reproduce the claim's committed roots".to_string());
+            }
+            keep(&capture);
+            Ok((PalwDaCaptureV1::Attempt(capture), true))
+        }
+    }
+}
+
+/// **A held unit's disclosure from a free-prompt capture** (ADR-0103 Decision 4, ADR-0111 Decisions
+/// 4 and 6): the ONE held builder (`palw_da_held_disclosure_from_capture_v1`) over the capture and its
+/// job's prompt, the binding read off interval 0 where the answer does not carry its own. The v1
+/// court's answer ([`PalwPanelService::fp_held_da_disclosure_of_v1`]) and R-core's
+/// ([`palw_da_unit_answer_v1`]) both build through it.
+fn palw_fp_held_disclosure_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    payload: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
+    roots: PalwClaimRootsV1,
+    work_leaves: u64,
+    missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Result<
+    (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1),
+    String,
+> {
+    kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
+        backend,
+        &payload.capture,
+        &payload.material.prompt_token_ids,
+        roots,
+        work_leaves,
+        missing,
+        form,
+        || PalwPanelService::served_binding_v1(backend, payload),
+    )
+}
+
+/// **ADR-0152 DA-4 (P2-7): the answer to one unit, from the claim's verified material.** An event
+/// unit is opened out of the capture (`disclose_trace_event`: `Flat`, `Tiled`, or `OutOfRange` from
+/// the binding alone) by the claim's own class backend. A held unit by the ONE held builder: from a
+/// free-prompt capture with its job's prompt ([`palw_fp_held_disclosure_v1`]); from an attempt
+/// capture with the canonical prompt its block's anchor implies — the fold draws held units on
+/// attempt claims too (a `DefaultAccusedHeld` on any class draws width-1 step ranges beside a named
+/// leaf) — and the capture's own binding, read off an out-of-range event disclosure (every family's DA
+/// responder carries it there, and the fold's checkers read that binding).
+pub(crate) fn palw_da_unit_answer_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    material: &PalwDaCaptureV1,
+    unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+) -> Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String> {
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1, palw_da_held_answer_v1};
+    let capture: &[u8] = match material {
+        PalwDaCaptureV1::FreePrompt(payload) => &payload.capture,
+        PalwDaCaptureV1::Attempt(capture) => capture,
+    };
+    let missing = match unit {
+        PalwDaUnitV1::Event { row, tile } => return backend.disclose_trace_event(capture, row, tile).map(PalwDaAnswerV1::Event),
+        PalwDaUnitV1::Held(missing) => missing,
+    };
+    let (binding, disclosure) = match (material, &facts.lane) {
+        (PalwDaCaptureV1::FreePrompt(payload), _) => palw_fp_held_disclosure_v1(
+            backend,
+            payload,
+            facts.roots_v1(Some(&payload.material.job)),
+            facts.work_leaves,
+            missing,
+            facts.form,
+        )?,
+        (PalwDaCaptureV1::Attempt(capture), PalwDaLaneV1::Attempt { job, .. }) => {
+            let (_, prompt) = job.as_ref().ok_or("the claim's block is not in this node's store")?;
+            let prompt: Vec<u32> = prompt
+                .iter()
+                .map(|id| u32::try_from(*id).map_err(|_| format!("prompt id {id} does not fit a u32")))
+                .collect::<Result<_, _>>()?;
+            kaspa_consensus_core::palw_da_rcore_v1::palw_da_held_disclosure_from_capture_v1(
+                backend,
+                capture,
+                &prompt,
+                facts.roots_v1(None),
+                facts.work_leaves,
+                missing,
+                facts.form,
+                || backend.disclose_trace_event(capture, u32::MAX, u8::MAX).map(|disclosure| disclosure.binding().clone()),
+            )?
+        }
+        (PalwDaCaptureV1::Attempt(_), PalwDaLaneV1::FreePrompt { .. }) => {
+            return Err("a bare capture is not a free-prompt claim's material".to_string());
+        }
+    };
+    Ok(palw_da_held_answer_v1(facts.claim_id, missing, binding, disclosure))
+}
+
+/// **One claim's R-core answers, built off the loop** (P2-7): what [`palw_da_claim_answers_v1`] returns.
+#[derive(Debug)]
+pub(crate) struct PalwDaClaimAnswersV1 {
+    /// Whether the material was re-made by a replay of the claim's job (and handed to `keep`).
+    pub remade: bool,
+    /// One entry a unit asked, in order: `None` for an event unit a `Flat` of this claim already
+    /// answers (IMPL-16) — one queued or sent before, or one built here — so no carrier is paid for
+    /// an answer the fold refuses `DaUnitAlreadyAnswered`.
+    pub answers: Vec<Option<Result<kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1, String>>>,
+}
+
+/// **P2-7: every due unit of one claim answered from ONE load of its material** — loaded and checked
+/// ([`palw_da_material_v1`]), each unit answered from it ([`palw_da_unit_answer_v1`]), and the material
+/// dropped when this returns: the panel's tick never holds a claim's capture past its own answers, nor
+/// one beside the next claim's (the P2-7 review's MEDIUM: a per-tick cache of every claim's whole
+/// capture, cloned once a unit). `flat` says a `Flat` of this claim is already queued or sent.
+pub(crate) fn palw_da_claim_answers_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    kept: impl IntoIterator<Item = Vec<u8>>,
+    keep: impl FnOnce(&[u8]),
+    units: &[kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1],
+    in_run_rows: u32,
+    mut flat: bool,
+) -> Result<PalwDaClaimAnswersV1, String> {
+    use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_flat_answers_unit_v1};
+    use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
+    let (material, remade) = palw_da_material_v1(backend, facts, kept, keep)?;
+    let mut answers = Vec::with_capacity(units.len());
+    for unit in units {
+        if flat && palw_da_flat_answers_unit_v1(unit, in_run_rows) {
+            answers.push(None);
+            continue;
+        }
+        let answer = palw_da_unit_answer_v1(backend, facts, &material, *unit);
+        flat |= matches!(answer, Ok(PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })));
+        answers.push(Some(answer));
+    }
+    Ok(PalwDaClaimAnswersV1 { remade, answers })
+}
+
+/// **Keep a re-made capture as the claim's copy under `foreign/`** (P2-7), in place of whatever did not
+/// verify: written aside and renamed over, so a reader never sees half of it. Pinned while a live lock
+/// of this node's or an open session names the claim (`foreign_pinned`), and the retention janitor's
+/// space rule takes a copy an R-core session can still demand last. Best-effort: on a failed write the
+/// answers built from it still go, and the next session re-makes it.
+fn palw_da_keep_remade_v1(dir: &std::path::Path, claim: &Hash64, bytes: &[u8]) {
+    let path = dir.join(format!("{claim}.material"));
+    let partial = dir.join(format!("{claim}.material.partial"));
+    if let Err(e) =
+        std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&partial, bytes)).and_then(|()| std::fs::rename(&partial, &path))
+    {
+        warn!("[{PALW_PANEL}] claim {claim}: cannot keep the re-made capture ({e}); the next data-availability session re-makes it");
+    }
+}
+
+/// **Why one claim's R-core answers were not built this tick** (P2-7).
+#[derive(Debug)]
+pub(crate) enum PalwDaClaimHoldV1 {
+    /// The memory ledger cannot cover the claim's material and builders now: asked again next tick.
+    Ledger(String),
+    /// Nothing to answer from — no kept copy reproduces the roots and no replay does, the claim or its
+    /// class does not resolve, or the task died: asked again a re-plan later, since a replay that
+    /// did not reproduce the roots will not on the next tick either.
+    Material(String),
+}
+
+/// [`offload`] for a shared backend — the executor's kept instance ([`PalwPanelService::executor_backend_v1`])
+/// is an `Arc`, and the task borrows it rather than taking it: `Err` is a task that did not finish.
+async fn offload_shared<T, F>(
+    backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+    work: F,
+) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(&dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1) -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || work(backend.as_ref())).await.map_err(|e| format!("the backend task did not finish: {e}"))
+}
+
 /// The family capture inside a pool payload: an `FPC1` payload's inner tuple (ADR-0073 Decision
 /// 1a), or the bytes themselves for an attempt's raw capture. What `verify_material` and the
 /// provers take — the pool and the retention keep the payload as it travelled.
@@ -1646,6 +2020,351 @@ pub(crate) fn palw_seat_tail_v1(
         return PalwSeatTailV1::Silent;
     }
     PalwSeatTailV1::Waits { unserved: true }
+}
+
+/// **The landing margin of an automatic accusation** (ADR-0152 §3.8, DA-6: a seat accuses "until
+/// `bound + window_receipt − 60`"), in DAA before the receipt deadline the loop reads for the duty.
+/// The accusation must fold while the claim is still `PanelBound`: a seat's session pauses the claim
+/// (DA-5), so one folded in time holds the receipt deadline off, and one that lands after the sweep
+/// finds a claim redrawn onto seats it is not. Also the window in which an accusation filed when a
+/// licence lands is asked for again, should its carrier be lost.
+pub(crate) const PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1: u64 = 60;
+
+/// **P2-6: whether this seat's `Unavailable` files a `DefaultAccused` too, and until when** (ADR-0152
+/// §3.8, DA-1: data-availability accusations on every class past `palw_rcore_plus`). A seat that
+/// reached `Unavailable` holds nothing it verified — past SEAT-R only a producer that served it no
+/// job gets that far (`palw_seat_tail_v1`, and the resume and replay arms' `served: false`) — so its
+/// accusation names what it was not served, and a session makes the producer put the named unit and
+/// the fold's drawn ones on chain within `W_disclose` or take S1 (DA-7). `Some(deadline − 60)` while
+/// that landing margin holds; `None` below the fence, past the margin (the licence then gets its own
+/// accusation, N-5's seam), and for a claim this seat's own replay refuted: that seat was served, and
+/// the producer's answer would refute the session at the accuser's cost (DA-6) — its path is the
+/// challenger's half.
+pub(crate) fn palw_seat_da_accuse_by_v1(rcore: bool, refuted: bool, current_daa: u64, deadline: u64) -> Option<u64> {
+    let by = deadline.checked_sub(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1)?;
+    (rcore && !refuted && current_daa <= by).then_some(by)
+}
+
+/// **The court queue's key of this seat's accusation of `claim`** (P2-6): the claim, a round no
+/// court move or data-availability answer is keyed by, and the accusing side. Node bookkeeping only
+/// (`court_pending`, and `court_moved` as the debounce of a carrier in flight).
+fn palw_da_accusation_queue_key_v1(claim: Hash64) -> (Hash64, u32, bool) {
+    (claim, u32::MAX, false)
+}
+
+/// Whether a court-queue entry — its round, its side and its object — is one of this seat's
+/// accusations ([`palw_da_accusation_queue_key_v1`]).
+fn palw_da_accusation_queued_v1(round: u32, responder: bool, object: &PalwConsensusObjectV2) -> bool {
+    matches!(object, PalwConsensusObjectV2::DefaultAccused { .. }) && (round, responder) == (u32::MAX, false)
+}
+
+/// **What the seat does with the chain's answer to one of its accusations** (P2-6).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwSeatAccuseStepV1 {
+    /// Build it and queue it for the priority lane.
+    File,
+    /// Done with the claim: the accusation is on chain (or was, and closed), its unit is answered, or
+    /// the fold refuses it for a reason no wait can change.
+    Settle,
+    /// Ask again a re-plan later, inside the trigger's window: the accuser's free half is full
+    /// (A-6), and frees as its sessions close.
+    Retry,
+}
+
+/// **P2-6: the chain's answer (`PalwDaAccusationCheckV1`) as a step.** Only A-6's room is waited
+/// out; every other refusal of the fold's gate (the claim no longer accusable, outside retention,
+/// the seat's four sessions spent, the accuser leaving) stands for the rest of the trigger's window,
+/// so asking again would only pay chain reads for the same answer.
+///
+/// **A seat's accusation, or none** (the P2-6 review, LOW): the fold admits a bond that is not on
+/// the claim's current panel as a NON-seat accuser (`accuser_is_seat: false` — the claim was redrawn
+/// onto other seats, or the carrier would land after it is), which pays DA-6's exposure with no
+/// pause credit (DA-5) and spends the claim's non-seat budget of three open and sixteen ever. That is
+/// P2-8d's filing, not this one: such a `File` settles, here and in the queued re-check alike.
+pub(crate) fn palw_seat_accuse_step_v1(
+    check: &kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1,
+) -> PalwSeatAccuseStepV1 {
+    use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as C;
+    match check {
+        C::File { admission, .. } if !admission.accuser_is_seat => PalwSeatAccuseStepV1::Settle,
+        C::File { .. } => PalwSeatAccuseStepV1::File,
+        C::AccusedBefore | C::Answered => PalwSeatAccuseStepV1::Settle,
+        C::Refused(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::AccusationExposureCeiling { .. }) => {
+            PalwSeatAccuseStepV1::Retry
+        }
+        C::Refused(_) => PalwSeatAccuseStepV1::Settle,
+    }
+}
+
+/// **N-5 / P2-6: whether this seat was served each claim it holds a duty on** — what an accusation of
+/// withholding stands on (ADR-0152 §3.8, DA-6: "a licence lands on a claim that did not serve it").
+///
+/// A claim is UNSERVED from the first tick this seat reached the material wait holding nothing of it
+/// (the tail's `Waits { unserved: true }`, a resume or replay arm's `served: false`) — and only
+/// until it is SERVED: this seat holds a job of the claim's class and executor (pool or retention),
+/// an authenticated opening, a replay that runs, ran or refuted, a fault it found, a `Valid`; or it
+/// holds the job without being served it at all (the attempt lane, whose job is the anchor's) and
+/// accuses nobody of withholding. Served is sticky for the duty's life: a seat that asked on its
+/// first tick, was answered and was still replaying when the licence landed was served, and
+/// accusing its producer then (the P2-6 review, HIGH) cost the seat DA-6's exposure — refuted by the
+/// producer's one `Flat` — and paused an honest claim's licence-to-Final clock (DA-5).
+///
+/// So "unserved" names a first absence that no later tick contradicted, which is what N-5's seam
+/// ([`palw_seat_unserved_licence_v1`]) and the `Unavailable`'s accusation read
+/// ([`Self::is_unserved`]); a seat that holds the job but not an opening — a C7 partial seat's
+/// resume — abstains (the review, LOW: an accusation of row 0 is answered by one `Flat` whatever
+/// opening was withheld; naming the opening's own unit is P2-8d's).
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PalwSeatServiceV1 {
+    /// claim → the DAA this seat first reached the material wait holding nothing of it.
+    unserved: HashMap<Hash64, u64>,
+    /// The claims this seat was served (or holds the job of): never unserved again while the duty lives.
+    served: HashSet<Hash64>,
+}
+
+impl PalwSeatServiceV1 {
+    /// This seat reached the material wait on `claim` holding nothing of it at `daa` — unless it was
+    /// served before, in which case nothing changes (served is sticky).
+    pub(crate) fn note_unserved(&mut self, claim: Hash64, daa: u64) {
+        if !self.served.contains(&claim) {
+            self.unserved.entry(claim).or_insert(daa);
+        }
+    }
+
+    /// This seat holds a job, an opening or a verdict of `claim`: it accuses nobody of withholding it.
+    pub(crate) fn note_served(&mut self, claim: Hash64) {
+        self.unserved.remove(&claim);
+        self.served.insert(claim);
+    }
+
+    /// **What a SEAT-S4 resume step says of service** ([`palw_seat_resume_served_v1`]), noted — and the
+    /// step handed back to the arm that reads it.
+    pub(crate) fn resumed(&mut self, claim: Hash64, daa: u64, holds_job: bool, step: PalwSeatResumeStepV1) -> PalwSeatResumeStepV1 {
+        if palw_seat_resume_served_v1(&step, holds_job) {
+            self.note_served(claim);
+        } else {
+            self.note_unserved(claim, daa);
+        }
+        step
+    }
+
+    /// Whether `claim` is noted unserved now (and so was never served).
+    pub(crate) fn is_unserved(&self, claim: &Hash64) -> bool {
+        self.unserved.contains_key(claim)
+    }
+
+    /// **The unserved claims whose duty ended** (`live` refuses them), with the DAA each was first
+    /// unserved at; the claims `live` refuses leave both sets.
+    pub(crate) fn ended(&mut self, live: impl Fn(&Hash64) -> bool) -> Vec<(Hash64, u64)> {
+        let ended: Vec<(Hash64, u64)> = self.unserved.iter().filter(|(claim, _)| !live(claim)).map(|(c, at)| (*c, *at)).collect();
+        self.unserved.retain(|claim, _| live(claim));
+        self.served.retain(|claim| live(claim));
+        ended
+    }
+}
+
+/// **N-5 / P2-6: whether a SEAT-S4 resume step says this seat was served** — anything but a starved
+/// seat that authenticated no opening (`Starved { served: false }`) and holds no job the claim's
+/// answer authenticates (`holds_job`). A seat that holds the job and lacks an opening files its
+/// `Unavailable` at the wait but is served: an accusation of row 0 does not name the opening it
+/// lacks, and one `Flat` answers it (the P2-6 review, LOW).
+pub(crate) fn palw_seat_resume_served_v1(step: &PalwSeatResumeStepV1, holds_job: bool) -> bool {
+    holds_job || !matches!(step, PalwSeatResumeStepV1::Starved { served: false, .. })
+}
+
+/// **N-5 / P2-6: whether a SEAT-R replay pass says this seat was served** — a job of the claim's
+/// replays (`Waiting`), licensed it, or refuted it. `NoVerdict` says nothing either way: the arm that
+/// reads it asks whether a job is held.
+pub(crate) fn palw_seat_replay_served_v1(step: &PalwSeatReplayStepV1) -> bool {
+    *step != PalwSeatReplayStepV1::NoVerdict
+}
+
+/// **P2-6: the claims this seat accuses of withholding** (ADR-0152 §3.8, DA-6, DA-9) — noted when a
+/// seat files `Unavailable` ([`palw_seat_da_accuse_by_v1`]) and when a licence lands on a claim that
+/// never served it (N-5, `palw_seat_unserved_licence_v1`), each with the last DAA its trigger's window
+/// allows; asked of the chain ([`palw_seat_accuse_step_v1`]) until the chain holds the accusation.
+///
+/// **One accusation a claim, and no storm** (C-8). Every seat of a withheld claim opens its own
+/// session (DA-6: no serialization), but each opens it once: the chain's answer is `AccusedBefore`
+/// from the moment its session exists — and stays so after it closes (`opened_by_seat`) — so neither
+/// the second trigger, nor a restart, nor another tick files a second one. Between the queue and the
+/// chain the court queue's own debounce holds (`court_moved`: a carrier sent less than a re-plan
+/// ago is in flight), and a carrier that was lost is asked for again — the chain decides, never the
+/// memory of having sent it.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PalwSeatAccusationsV1 {
+    /// claim → (the last DAA its accusation is filed by, the DAA the chain last refused it for room).
+    wanted: BTreeMap<Hash64, (u64, Option<u64>)>,
+}
+
+impl PalwSeatAccusationsV1 {
+    /// Note `claim`, to be filed by `by_daa` (a second trigger may only widen the window).
+    pub(crate) fn want(&mut self, claim: Hash64, by_daa: u64) {
+        let entry = self.wanted.entry(claim).or_insert((by_daa, None));
+        entry.0 = entry.0.max(by_daa);
+    }
+
+    pub(crate) fn wants(&self, claim: &Hash64) -> bool {
+        self.wanted.contains_key(claim)
+    }
+
+    /// **The claims whose accusation the chain is asked about now** — each claim whose window still
+    /// runs (the rest are forgotten here), not queued for a carrier (`queued`), not sent less than a
+    /// re-plan ago (`sent_at`: `court_moved`'s DAA), and not refused for room less than a re-plan ago.
+    pub(crate) fn due(
+        &mut self,
+        current_daa: u64,
+        queued: impl Fn(&Hash64) -> bool,
+        sent_at: impl Fn(&Hash64) -> Option<u64>,
+    ) -> Vec<Hash64> {
+        self.wanted.retain(|_, (by, _)| current_daa <= *by);
+        let fresh = |at: Option<u64>| at.is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA));
+        self.wanted
+            .iter()
+            .filter(|(claim, (_, refused))| !queued(claim) && !fresh(sent_at(claim)) && !fresh(*refused))
+            .map(|(claim, _)| *claim)
+            .collect()
+    }
+
+    /// The chain refused `claim` for room at `current_daa`: asked again a re-plan later.
+    pub(crate) fn refused(&mut self, claim: &Hash64, current_daa: u64) {
+        if let Some(entry) = self.wanted.get_mut(claim) {
+            entry.1 = Some(current_daa);
+        }
+    }
+
+    /// Done with `claim` (`PalwSeatAccuseStepV1::Settle`).
+    pub(crate) fn settle(&mut self, claim: &Hash64) {
+        self.wanted.remove(claim);
+    }
+}
+
+/// **Which lane a carrier rode** (ADR-0152 Phase 2, P2-6: the carrier priority).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwCarrierLaneV1 {
+    /// The court queue — court moves, data-availability accusations and answers, the held court's
+    /// demands — and a permit signed twice (`carry_priority_v1`): each has a deadline, or a
+    /// withholding that runs on until it is filed.
+    Priority,
+    /// A licence: a receipt quorum the collector assembled.
+    Licence,
+    /// This node's own carriers: its canonical claim, its class registration, its possession
+    /// proofs, a supplementary receipt.
+    Ordinary,
+}
+
+/// **P2-6: is this carrier slot the licences' turn?** — the slot right after a priority carrier. One
+/// carrier is in flight per panel (`MAX_INFLIGHT_CARRIERS`), so a court queue that always holds an
+/// object — a data-availability storm: every unserved seat of every withheld claim, and every answer
+/// — would take every slot, and the claims waiting on their licence would void at their receipt
+/// deadline with their escrow burned (plan §5.7). On the licences' turn the collector offers its
+/// quorums before the priority lane, which takes the slot in the same tick if no quorum stands. So
+/// the priority lane is never two carriers in a row ahead of a waiting licence, a licence never
+/// delays the priority lane by more than one carrier, and a slot nobody else wants is never idle.
+pub(crate) fn palw_carrier_licence_turn_v1(last: Option<PalwCarrierLaneV1>) -> bool {
+    last == Some(PalwCarrierLaneV1::Priority)
+}
+
+/// **Where the tick offers its carrier slot, in the order it reaches them** (P2-6, the P2-6 review's
+/// LOWs: every site is gated by one scheduler, [`PalwCarrierSlotsV1`], and the tick visits the sites
+/// in [`Self::TICK_ORDER`] — a debug build asserts it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwCarrierSiteV1 {
+    /// The priority lane ahead of every other carrier (`carry_priority_v1`) — except on the
+    /// licences' turn.
+    PriorityFirst,
+    /// This node's own carriers: its canonical claim, its class registration, its possession proofs.
+    Own,
+    /// The collector's licences.
+    Licences,
+    /// The priority lane on the licences' turn, after the collector: a slot the collector could not
+    /// fill is never idle.
+    PriorityAfterLicences,
+    /// This seat's own receipt after the licence (ADR-0124 Decision 2).
+    OwnReceipts,
+}
+
+impl PalwCarrierSiteV1 {
+    /// The sites in the order the tick reaches them.
+    pub(crate) const TICK_ORDER: [Self; 5] =
+        [Self::PriorityFirst, Self::Own, Self::Licences, Self::PriorityAfterLicences, Self::OwnReceipts];
+
+    /// The lane a carrier sent from this site rode — what the next tick's turn reads.
+    pub(crate) fn lane(self) -> PalwCarrierLaneV1 {
+        match self {
+            Self::PriorityFirst | Self::PriorityAfterLicences => PalwCarrierLaneV1::Priority,
+            Self::Licences => PalwCarrierLaneV1::Licence,
+            Self::Own | Self::OwnReceipts => PalwCarrierLaneV1::Ordinary,
+        }
+    }
+}
+
+/// **One tick's carrier slots** (P2-6): the one gate every site of the tick asks before it sends
+/// ([`Self::offers`]) and the lane the last carrier rode, which is what the next tick's turn reads.
+///
+/// * **One carrier in flight per panel** (`MAX_INFLIGHT_CARRIERS`), at every site. The canonical
+///   claim and the class registration were the tick's first sites, entered with nothing in flight,
+///   and asked only for funding; behind the priority lane they chained a second and a third carrier
+///   onto its change, and the `Ordinary` mark that left cancelled the licences' turn (the P2-6
+///   review, LOW). A site that finds the slot taken sends nothing; a readiness proof marks itself
+///   waiting, as it always did.
+/// * **The priority lane first, except on the licences' turn** ([`palw_carrier_licence_turn_v1`]):
+///   on that turn it is offered after the collector instead, so a DA storm shares the slots with the
+///   licences one for one and a slot the collector cannot fill still goes to the storm.
+///
+/// The tick marks each site as it reaches it ([`Self::at`]) and reads the lane back at the end
+/// ([`Self::finish`]); a site whose carrier went out (`inflight` moved past what it was when the
+/// site began) is the lane of record.
+#[derive(Clone, Debug)]
+pub(crate) struct PalwCarrierSlotsV1 {
+    licence_turn: bool,
+    last: Option<PalwCarrierLaneV1>,
+    /// The site the tick is at, and `inflight` when it got there.
+    at: Option<(PalwCarrierSiteV1, usize)>,
+}
+
+impl PalwCarrierSlotsV1 {
+    /// The tick's slots, after a carrier that rode `last`.
+    pub(crate) fn new(last: Option<PalwCarrierLaneV1>) -> Self {
+        Self { licence_turn: palw_carrier_licence_turn_v1(last), last, at: None }
+    }
+
+    /// The tick reaches `site` with `inflight` carriers unconfirmed: the site before it is closed.
+    pub(crate) fn at(&mut self, site: PalwCarrierSiteV1, inflight: usize) {
+        self.close(inflight);
+        debug_assert!(
+            self.at.is_none_or(|(before, _)| {
+                let index = |s| PalwCarrierSiteV1::TICK_ORDER.iter().position(|x| *x == s);
+                index(before) < index(site)
+            }),
+            "the tick reaches its carrier sites in TICK_ORDER"
+        );
+        self.at = Some((site, inflight));
+    }
+
+    fn close(&mut self, inflight: usize) {
+        if let Some((site, from)) = self.at
+            && inflight > from
+        {
+            self.last = Some(site.lane());
+        }
+    }
+
+    /// **May `site` send a carrier now?** A slot is free, and it is the site's turn.
+    pub(crate) fn offers(&self, site: PalwCarrierSiteV1, inflight: usize) -> bool {
+        inflight < MAX_INFLIGHT_CARRIERS
+            && match site {
+                PalwCarrierSiteV1::PriorityFirst => !self.licence_turn,
+                PalwCarrierSiteV1::PriorityAfterLicences => self.licence_turn,
+                PalwCarrierSiteV1::Own | PalwCarrierSiteV1::Licences | PalwCarrierSiteV1::OwnReceipts => true,
+            }
+    }
+
+    /// The tick's last site is done: the lane the next tick's turn reads.
+    pub(crate) fn finish(mut self, inflight: usize) -> Option<PalwCarrierLaneV1> {
+        self.close(inflight);
+        self.last
+    }
 }
 
 /// What [`seat_duty_panel_key_v1`] names a duty by: `(claim, bound_daa, anchor, seat_index,
@@ -2847,6 +3566,17 @@ impl PalwPanelService {
         // `persist_fee_outpoint` overwrites the file as soon as it finds real money, so the wedge
         // clears itself without this path removing state it did not write.
         let script = self.fee_script(session);
+        // **P2-6 (F13): what the mempool would take** — a coinbase output past its spend maturity at
+        // the DAA the carrier is validated at, and never an output B-3 holds
+        // (`palw_fee_funding_usable_v1`). Asked of the remembered outpoints as well as the scan's: a
+        // configured float can be a coinbase too, and the locked set moves under a bond whose
+        // duties, accusations or unmatured rows stand.
+        let pov_daa = session.get_virtual_daa_score();
+        let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();
+        let locked: HashSet<TransactionOutpoint> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+        let usable = |outpoint: &TransactionOutpoint, entry: &UtxoEntry| {
+            palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)
+        };
         // Only ours are off-limits to a wallet (audit3 H12): the reservation exists because this
         // panel might spend the outpoint, and one it cannot sign for it will never spend.
         let mut foreign: Vec<TransactionOutpoint> = Vec::new();
@@ -2860,6 +3590,11 @@ impl PalwPanelService {
                 // rejects one.
                 if funding_is_foreign(script.as_ref(), &entry.script_public_key) {
                     foreign.push(*outpoint);
+                    continue;
+                }
+                // A remembered residue that cannot pay a carrier is exhausted: the scan below finds
+                // the money instead (`palw_fee_funding_pays_v1`, F13's drain path).
+                if !usable(outpoint, &entry) || !palw_fee_funding_pays_v1(entry.amount) {
                     continue;
                 }
                 return Some((*outpoint, entry));
@@ -2894,10 +3629,17 @@ impl PalwPanelService {
         //
         // A scan, so it runs only here: the two remembered outpoints are the hot path and this is
         // the path back from having none.
+        //
+        // **The largest output that pays, not the first** (P2-6, F13's drain path): rewards arrive as
+        // many coinbase outputs beside the drained residue of the last float, and the first one the
+        // UTXO set lists may be the residue itself or a small one that drains again within a few
+        // carriers, each drain costing a scan. So the whole set is read and the largest usable output
+        // at or above the floor is kept (`PalwFeeFundingScanV1::offer`).
         let script = script?;
         let mut cursor: Option<TransactionOutpoint> = None;
-        // What the scan SAW, so a failure can say which of its three reasons it was.
-        let (mut scanned, mut under_script, mut busy) = (0usize, 0usize, 0usize);
+        // What the scan SAW, so a failure can say which of its reasons it was.
+        let mut scanned = 0usize;
+        let mut scan = PalwFeeFundingScanV1::default();
         loop {
             let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
             if chunk.is_empty() {
@@ -2905,9 +3647,8 @@ impl PalwPanelService {
             }
             cursor = chunk.last().map(|(o, _)| *o);
             scanned += chunk.len();
-            let mut found = None;
             for (outpoint, entry) in chunk {
-                if entry.script_public_key != script || entry.is_coinbase {
+                if entry.script_public_key != script {
                     continue;
                 }
                 // **Never the bond's own output-0** (audit M2-13). The recovery scan looks for any
@@ -2915,26 +3656,22 @@ impl PalwPanelService {
                 // output IS its collateral it selected exactly that: the carrier is then refused by
                 // the spend gate as a chain block, or — where the mergeset fence is not armed —
                 // accepted through a merged block and the collateral simply leaves. Every other
-                // funding path in this tree carries this exclusion by name.
-                if self.bond.is_some_and(|bond| bond == outpoint) {
-                    continue;
-                }
-                under_script += 1;
-                if !is_free(&outpoint) {
-                    busy += 1;
-                    continue;
-                }
-                found = Some((outpoint, entry));
-                break;
+                // funding path in this tree carries this exclusion by name. And past it (P2-6): no
+                // other output B-3 holds, and a coinbase only once the mempool takes its spend —
+                // the rewards this bond earns fund its filing (`palw_fee_funding_usable_v1`); and of
+                // what pays a carrier, the largest (`PalwFeeFundingScanV1::offer`).
+                scan.offer(outpoint, entry, &usable, &is_free);
             }
-            if let Some((outpoint, entry)) = found {
-                info!(
-                    "[{PALW_PANEL}] recovered funding at {}:{} — the remembered outpoints were spent or never mined",
-                    outpoint.transaction_id, outpoint.index
-                );
-                self.persist_fee_outpoint(outpoint);
-                return Some((outpoint, entry));
-            }
+        }
+        let PalwFeeFundingScanV1 { found, under_script, busy, unripe, dust } = scan;
+        if let Some((outpoint, entry)) = found {
+            info!(
+                "[{PALW_PANEL}] recovered funding at {}:{} ({} sompi, the largest output that pays a carrier) — the remembered \
+                 outpoints were spent, never mined or drained",
+                outpoint.transaction_id, outpoint.index, entry.amount
+            );
+            self.persist_fee_outpoint(outpoint);
+            return Some((outpoint, entry));
         }
         // **Say why, not just that.** "no fee UTXO resolves" is true of a carrier still in flight,
         // of a configured outpoint that was never funded, and of a panel that owns nothing under
@@ -2942,7 +3679,7 @@ impl PalwPanelService {
         // was a `trace!` behind a disabled level while a seat sat stalled for hours with money it
         // could not see, so it warns: it fires once per tick only on the path that already warns.
         warn!(
-            "[{PALW_PANEL}] no fee UTXO resolves; tried {}; scanned {scanned} outputs, {under_script} under this bond's payout script of which {busy} are spent by our own mempool",
+            "[{PALW_PANEL}] no fee UTXO resolves; tried {}; scanned {scanned} outputs, {under_script} spendable under this bond's payout script of which {busy} are spent by our own mempool and {dust} hold under {} sompi (too little to pay a carrier), and {unripe} more that are coinbase outputs younger than the spend maturity or collateral B-3 holds",
             if candidates.is_empty() {
                 // A node with no remembered outpoint is the normal newcomer case, not an omission
                 // in this line: it says the scan is the whole story so nobody looks for a missing
@@ -2950,7 +3687,8 @@ impl PalwPanelService {
                 "no remembered outpoint (nothing persisted, none configured)".to_string()
             } else {
                 candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
-            }
+            },
+            palw_fee_funding_floor_v1()
         );
         None
     }
@@ -3335,6 +4073,123 @@ impl PalwPanelService {
         let _ = std::fs::create_dir_all(&self.config.state_dir);
         if let Err(e) = std::fs::write(self.fee_state_path(), format!("{}:{}", outpoint.transaction_id, outpoint.index)) {
             warn!("[{PALW_PANEL}] cannot persist the rolling fee outpoint: {e} — a restart will fall back to --palw-fee-outpoint");
+        }
+    }
+
+    /// **The priority lane** ([`PalwCarrierLaneV1::Priority`], P2-6): the court queue — court moves,
+    /// data-availability accusations and answers, the held court's demands — then a permit signed
+    /// twice, carried while the slot is free. The court queue goes first because a rung, an
+    /// accusation's landing margin and an answer's `W_disclose` each have a deadline; what the slot
+    /// cannot take stays queued for the next one, because a dispute dropped here is a dispute that
+    /// never happens. Chains `funding` through each carrier's change exactly as every other lane
+    /// does; the tick's slots (`PalwCarrierSlotsV1`) read whether a carrier went out off `inflight`.
+    #[allow(clippy::too_many_arguments)]
+    async fn carry_priority_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        current_daa: u64,
+        court_pending: &mut Vec<(Hash64, u32, bool, PalwConsensusObjectV2)>,
+        funding: &mut Option<(TransactionOutpoint, UtxoEntry)>,
+        inflight: &mut usize,
+        court_moved: &mut HashMap<(Hash64, u32, bool), u64>,
+        challenged: &mut HashSet<Hash64>,
+    ) {
+        // The court's moves first: a rung has a deadline and a receipt quorum does not.
+        let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        for (session_id, round, mine_is_responder, object) in std::mem::take(court_pending) {
+            let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| *inflight < MAX_INFLIGHT_CARRIERS) else {
+                // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
+                // dropped here is a dispute that never happens.
+                unsent.push((session_id, round, mine_is_responder, object));
+                continue;
+            };
+            match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                Ok(tx) => {
+                    let txid = tx.id();
+                    let change = tx.outputs[0].clone();
+                    match self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await {
+                        Ok(()) => {
+                            if palw_da_accusation_queued_v1(round, mine_is_responder, &object) {
+                                info!("[{PALW_PANEL}] submitted this seat's DefaultAccused of claim {session_id} in tx {txid} (P2-6)");
+                            } else {
+                                info!(
+                                    "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
+                                    object_name(&object)
+                                );
+                            }
+                            let next = TransactionOutpoint::new(txid, 0);
+                            self.persist_fee_outpoint(next);
+                            *funding = Some((
+                                next,
+                                UtxoEntry {
+                                    amount: change.value,
+                                    script_public_key: change.script_public_key,
+                                    block_daa_score: current_daa,
+                                    is_coinbase: false,
+                                },
+                            ));
+                            *inflight += 1;
+                            court_moved.insert((session_id, round, mine_is_responder), current_daa);
+                            if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
+                                challenged.insert(*claim);
+                            }
+                        }
+                        Err(e) => {
+                            warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
+                            *funding = None;
+                        }
+                    }
+                }
+                Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
+            }
+        }
+        *court_pending = unsent;
+        // **ADR-0125 §7.3: a permit signed twice, filed.** The relay queues each pair once;
+        // the evidence proves itself, so any funded panel may carry it. Behind the court's
+        // moves (they have deadlines) and in the priority lane; one carrier a tick at most,
+        // and evidence the carrier cannot take goes back to the queue.
+        if *inflight < MAX_INFLIGHT_CARRIERS
+            && let Some(evidence) = self.flow_context.palw_round_relay().take_evidence()
+        {
+            match funding.clone() {
+                None => self.flow_context.palw_round_relay().return_evidence(evidence),
+                Some((funding_outpoint, funding_entry)) => {
+                    let (round, index) = (evidence.round, evidence.permit_index);
+                    let object = PalwConsensusObjectV2::RoundPermitEquivocated { evidence: Box::new(evidence) };
+                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                        Ok(tx) => {
+                            let txid = tx.id();
+                            let change = tx.outputs[0].clone();
+                            match self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await {
+                                Ok(()) => {
+                                    info!("[{PALW_PANEL}] filed a permit signed twice (round {round}, permit {index}) in tx {txid}");
+                                    let next = TransactionOutpoint::new(txid, 0);
+                                    self.persist_fee_outpoint(next);
+                                    *funding = Some((
+                                        next,
+                                        UtxoEntry {
+                                            amount: change.value,
+                                            script_public_key: change.script_public_key,
+                                            block_daa_score: current_daa,
+                                            is_coinbase: false,
+                                        },
+                                    ));
+                                    *inflight += 1;
+                                }
+                                // Refused evidence is not retried: the mempool judged it against the
+                                // same rules the chain would, and a burned permit burns once.
+                                Err(e) => {
+                                    warn!(
+                                        "[{PALW_PANEL}] the mempool refused the equivocation evidence (round {round}, permit {index}): {e}"
+                                    );
+                                    *funding = None;
+                                }
+                            }
+                        }
+                        Err(e) => warn!("[{PALW_PANEL}] cannot build the equivocation evidence carrier: {e}"),
+                    }
+                }
+            }
         }
     }
 
@@ -3723,25 +4578,51 @@ impl PalwPanelService {
     /// Write-once per claim file; pruned by age on every write so the directory stays bounded
     /// (~2.3 MB a floor material, a few hundred claims a day, 72 h of them ≈ single-digit GiB
     /// worst case, far less in practice). Errors are swallowed: durability here is an assist to
-    /// the pull transport, not an obligation — the OBLIGATED copy is the producer's.
-    fn persist_foreign_material(&self, claim: &Hash64, bytes: &[u8]) {
+    /// the pull transport, not an obligation — the OBLIGATED copy is the producer's. Past
+    /// `palw_rcore_plus` a full seat's `Valid` on a free-prompt claim IS an obligation (X7: its lock
+    /// covers every unit a DA session can demand, and the job is not chain data), so this returns
+    /// whether a copy for the claim is on disk — written now or before — and that seat abstains
+    /// rather than sign what it holds nothing to answer from.
+    fn persist_foreign_material(&self, claim: &Hash64, bytes: &[u8]) -> bool {
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}.material"));
         if path.exists() {
-            return;
+            return true;
         }
         if let Err(e) = std::fs::create_dir_all(&dir) {
             warn!("[{PALW_PANEL}] cannot create the foreign retention directory {}: {e}", dir.display());
-            return;
+            return false;
         }
         // **A write failure is reported.** Swallowing it (`let _ =`) left the panel believing it
         // was retaining while a full volume dropped every byte — the node then answers no pull and
         // is charged for the silence (audit M2-2).
         if let Err(e) = std::fs::write(&path, bytes) {
             warn!("[{PALW_PANEL}] cannot retain material for claim {claim}: {e}");
-            return;
+            // A half-written file would read as kept on the next call.
+            let _ = std::fs::remove_file(&path);
+            return false;
         }
         self.prune_foreign_retention(&dir);
+        true
+    }
+
+    /// **May a replay's licence be signed? Only if the job it licensed is kept** (P2-7; the review's
+    /// LOW). Below `palw_rcore_plus` a free-prompt `Valid` owes nothing afterwards and is signed as
+    /// before, kept or not. Past it a full mask's `Valid` owes every unit a data-availability session
+    /// can demand (X7), answered from this job — not chain data — or charged S4 if the producer
+    /// withholds (DA-7); so a seat that could not keep it files nothing this tick (silence costs a seat
+    /// nothing, X10) and is asked again on the next.
+    fn licensed_job_kept_v1(&self, claim: &Hash64, bytes: Option<Vec<u8>>, current_daa: u64) -> bool {
+        let kept = bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes));
+        if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+            warn!(
+                "[{PALW_PANEL}] claim {claim}: licensed by replay, but its job could not be kept on disk — no Valid: a full \
+                 mask's Valid owes every unit a data-availability session can demand, from material this seat does not hold \
+                 (ADR-0152 X7, DA-7 S4)"
+            );
+            return false;
+        }
+        true
     }
 
     /// Bound `retention/foreign/` by BOTH age and count, oldest first.
@@ -4608,10 +5489,11 @@ impl PalwPanelService {
         let mut seat_replays = PalwSeatReplaysV1::default();
         // SEAT-S4's resume of a C7 partial seat's mask (`PalwSeatResumesV1`), in the same slots.
         let mut seat_resumes = PalwSeatResumesV1::default();
-        // N-5: the duties this seat reached the material wait on holding nothing it verified, with
-        // the DAA it first did — so a licence that lands on one is seen when its duty ends (the DA
-        // accusation that answers it is Phase 2's P2-6: `palw_seat_unserved_licence_v1`).
-        let mut unserved: HashMap<Hash64, u64> = HashMap::new();
+        // N-5: the duties this seat reached the material wait on holding nothing, with the DAA it
+        // first did, until anything serves it (`PalwSeatServiceV1`: served is sticky) — so a licence
+        // that lands on one is seen when its duty ends, and P2-6 accuses its producer
+        // (`palw_seat_unserved_licence_v1`); and only such a claim's `Unavailable` accuses.
+        let mut service = PalwSeatServiceV1::default();
         // R2 past SEAT-R: every claim this seat held a duty on, with its retention horizon
         // (`palw_seat_retention_horizon_v1`) — what the foreign retention keeps past the duty.
         let mut retention_liabilities: HashMap<Hash64, u64> = HashMap::new();
@@ -4661,6 +5543,10 @@ impl PalwPanelService {
         // CHAIN decide by re-planning. A duty only survives re-planning if chain state still says
         // that move is due, so a landed move disappears on its own when the round advances.
         let mut court_moved: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
+        // ADR-0152 IMPL-16 (P2-7): the claims whose R-core `Flat` answer this node sent, and when —
+        // one `Flat` answers every in-run event unit, so while it is plausibly in flight no other
+        // in-run unit of the claim is answered again (the fold would refuse it as answered).
+        let mut da_flat_sent: HashMap<Hash64, u64> = HashMap::new();
         // Claims this node has already judged: either reproduced (nothing to say) or disputed.
         let mut challenged: HashSet<Hash64> = HashSet::new();
         // **Pending court moves survive the tick.** They used to be built into a per-tick vector
@@ -4695,6 +5581,11 @@ impl PalwPanelService {
         // counts as no seat at all (measured on the devnet: receipts filled the eight-carrier chain
         // for fifteen minutes at a time and four of seven seats never proved).
         let mut readiness_waiting = false;
+        // P2-6: the lane the last carrier this panel sent rode (`PalwCarrierLaneV1`) — after a
+        // priority carrier the next slot is the licences' turn (`palw_carrier_licence_turn_v1`).
+        let mut last_lane: Option<PalwCarrierLaneV1> = None;
+        // P2-6: the claims this seat accuses of withholding, until the chain has the accusation.
+        let mut accusations = PalwSeatAccusationsV1::default();
         let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
@@ -6173,20 +7064,7 @@ impl PalwPanelService {
                     continue;
                 }
                 let (row, tile) = kaspa_consensus_core::palw_state_v2::palw_da_event_index_parts_v1(duty.missing_event_index);
-                // A free-prompt retention wraps the family capture with the job and its ids; the
-                // attempt lane retains the family capture bare (ADR-0084 Decision 4).
-                let disclosed = match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(
-                    &bytes,
-                    self.class_prompt_ids_form(duty.class_id),
-                ) {
-                    Some(payload) => self
-                        .resolve_backend(&session, duty.class_id, duty.artifact_root)
-                        .and_then(|backend| backend.disclose_trace_event(&payload.capture, row, tile)),
-                    None => match self.backend_for_raw_capture_v1(&session, &bytes) {
-                        Some((backend, _)) => backend.disclose_trace_event(&bytes, row, tile),
-                        None => Err("no held class reads the retained capture".to_string()),
-                    },
-                };
+                let disclosed = self.disclose_retained_event_v1(&session, duty.class_id, duty.artifact_root, &bytes, row, tile);
                 let disclosure = match disclosed {
                     Ok(disclosure) => disclosure,
                     Err(why) => {
@@ -6227,6 +7105,157 @@ impl PalwPanelService {
                         signature,
                     },
                 ));
+            }
+
+            // --- ADR-0152 X7 / DA-4 (P2-7): R-core+'s data-availability court — every demanded unit ---
+            //
+            // Past `palw_rcore_plus` an accusation opens a session in `da_sessions` and never touches
+            // the claim's phase (DA-1), so the loop above finds nothing there, and the v1 answers it
+            // built are refused (`DaV1AnswerRetired`). Here each unit an open session demands of this
+            // node is answered with one `MaterialDisclosedV2` (`palw_da_answer_object_v1`): as the
+            // claim's PRODUCER at once, or as a COVERING SIGNER — a live lock whose mask covers the
+            // unit, the fold's own predicate, so exactly the units a default would charge it S4 for —
+            // once the producer has had its turn (`palw_disclosure_due_v1`). The material is what
+            // this node kept for the claim, checked against its roots, or a capture re-made by
+            // replaying the claim's job and checked the same way (`palw_da_material_v1`), one claim at
+            // a time, off the loop, under the memory ledger (`rcore_da_answers_v1`). One `Flat` a claim
+            // answers every in-run event unit (IMPL-16). Below the fence the duty list is empty.
+            let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);
+            // What this node must keep: every claim a live lock of its bond still answers for, and
+            // every claim an open session demands a unit of now (its own too: a re-made capture is
+            // kept under `foreign/`). Pinned HERE, before any seat duty below can write `foreign/`
+            // and prune it — on the first tick after a restart the pins set at the end of the last
+            // tick are gone (the P2-7 review's LOW), and the age sweep would take a job payload a
+            // live lock still answers for; the end of the tick sets them again, with these.
+            let disclosure_retain: Vec<Hash64> =
+                disclosure.retain.iter().map(|(claim, _)| *claim).chain(disclosure.duties.iter().map(|duty| duty.claim_id)).collect();
+            if !disclosure_retain.is_empty() {
+                self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());
+            }
+            da_flat_sent.retain(|_, sent| current_daa < sent.saturating_add(COURT_MOVE_REPLAN_DAA));
+            // An answer still queued (the fee UTXO was busy) whose unit no open session demands of
+            // this node any more — another discloser answered it, or its session closed — is one the
+            // fold refuses (`DaUnitAlreadyAnswered`, `DaUnitNotDemanded`): it leaves the queue unsent,
+            // rather than paying a carrier the mempool then refuses.
+            let owed: std::collections::BTreeSet<(Hash64, kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1)> =
+                disclosure.duties.iter().map(|duty| (duty.claim_id, duty.unit)).collect();
+            court_pending.retain(|(_, _, _, object)| match object {
+                PalwConsensusObjectV2::MaterialDisclosedV2 { claim, unit, .. } => owed.contains(&(*claim, *unit)),
+                _ => true,
+            });
+            if da_armed && !disclosure.duties.is_empty() {
+                // A `Flat` queued (possibly waiting for the fee UTXO) or just sent answers the claim's run.
+                let mut flat_queued: HashSet<Hash64> = court_pending
+                    .iter()
+                    .filter_map(|(_, _, _, object)| match object {
+                        PalwConsensusObjectV2::MaterialDisclosedV2 {
+                            claim,
+                            answer:
+                                kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                                    kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. },
+                                ),
+                            ..
+                        } => Some(*claim),
+                        _ => None,
+                    })
+                    .collect();
+                flat_queued.extend(da_flat_sent.keys().copied());
+                // The due units not queued or recently tried, by claim, in the duty list's order —
+                // soonest deadline first — so the claim whose session ends first is built first and
+                // asks the memory ledger first.
+                let mut by_claim: Vec<(Hash64, Vec<&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1>)> = Vec::new();
+                for duty in &disclosure.duties {
+                    if !palw_disclosure_due_v1(duty, current_daa) {
+                        continue;
+                    }
+                    if flat_queued.contains(&duty.claim_id)
+                        && kaspa_consensus_core::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(&duty.unit, duty.in_run_rows)
+                    {
+                        continue;
+                    }
+                    let key = palw_disclosure_queue_key_v1(duty);
+                    if let Some(sent_daa) = court_moved.get(&key)
+                        && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
+                    {
+                        continue;
+                    }
+                    if court_pending.iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
+                        continue;
+                    }
+                    match by_claim.iter_mut().find(|(claim, _)| *claim == duty.claim_id) {
+                        Some((_, duties)) => duties.push(duty),
+                        None => by_claim.push((duty.claim_id, vec![duty])),
+                    }
+                }
+                for (claim, duties) in by_claim {
+                    let role = duties[0].role;
+                    match self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await {
+                        Ok(built) => {
+                            for (duty, built) in duties.iter().zip(built) {
+                                let key = palw_disclosure_queue_key_v1(duty);
+                                match built {
+                                    // A `Flat` built for an earlier unit answers this one.
+                                    Ok(None) => {}
+                                    Ok(Some(object)) => {
+                                        info!(
+                                            "[{PALW_PANEL}] claim {claim}: answering {:?} of an open data-availability session as {role:?} \
+                                             — deadline DAA {} (ADR-0152 DA-4, X7)",
+                                            duty.unit, duty.deadline_daa
+                                        );
+                                        if let PalwConsensusObjectV2::MaterialDisclosedV2 {
+                                            answer:
+                                                kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
+                                                    kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat {
+                                                        ..
+                                                    },
+                                                ),
+                                            ..
+                                        } = &object
+                                        {
+                                            flat_queued.insert(claim);
+                                            da_flat_sent.insert(claim, current_daa);
+                                        }
+                                        court_pending.push((key.0, key.1, key.2, object));
+                                    }
+                                    Err(why) => {
+                                        warn!(
+                                            "[{PALW_PANEL}] claim {claim}: cannot answer {:?} of an open data-availability session as \
+                                             {role:?}: {why}",
+                                            duty.unit
+                                        );
+                                        court_moved.insert(key, current_daa);
+                                        *court_stalls
+                                            .entry("a data-availability unit cannot be answered from what this node holds")
+                                            .or_default() += 1;
+                                    }
+                                }
+                            }
+                        }
+                        // Asked again next tick, soonest deadline first again.
+                        Err(PalwDaClaimHoldV1::Ledger(why)) => {
+                            *court_stalls.entry("the memory ledger cannot cover a data-availability answer").or_default() += 1;
+                            crate::palw_backends::note_throttled_v1("panel-da-answer-ledger", || {
+                                format!("[{PALW_PANEL}] claim {claim}: the data-availability answer waits — {why}")
+                            });
+                        }
+                        // Tried again a re-plan later, not every tick: building the material may have
+                        // replayed the claim's whole job, and one that does not reproduce the roots
+                        // will not on the next tick either.
+                        Err(PalwDaClaimHoldV1::Material(why)) => {
+                            warn!(
+                                "[{PALW_PANEL}] claim {claim}: cannot answer {} unit(s) of an open data-availability session as \
+                                 {role:?}: {why}",
+                                duties.len()
+                            );
+                            for duty in &duties {
+                                court_moved.insert(palw_disclosure_queue_key_v1(duty), current_daa);
+                            }
+                            *court_stalls
+                                .entry("a data-availability unit cannot be answered from what this node holds")
+                                .or_default() += duties.len();
+                        }
+                    }
+                }
             }
 
             // --- the seat's half: answer every duty exactly once ---
@@ -6361,6 +7390,17 @@ impl PalwPanelService {
                     continue;
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
+                // **N-5 / P2-6: service is recorded, not only its first absence** (the P2-6 review,
+                // HIGH). A free-prompt claim noted unserved is served the moment this seat holds a job
+                // of its class and executor — the pool's or this node's retention, the tail's own
+                // `holds_fp_job` — whatever arm runs this tick, or none (a replay deferred for memory
+                // below): the arms note what they see besides (`PalwSeatServiceV1`).
+                if seat_r && duty.free_prompt && service.is_unserved(&duty.claim_id) {
+                    let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                    if self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled).is_some() {
+                        service.note_served(duty.claim_id);
+                    }
+                }
                 let mut segments_attested: Option<kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2> = None;
                 // **Host memory, node-local and never consensus**: a replay that would push this host
                 // past its usable memory waits for a later tick instead of starting — swap is not
@@ -6406,6 +7446,8 @@ impl PalwPanelService {
                     // rest of the panel licenses). Silence is never charged; the fault goes to the
                     // court through the challenger's half, and nothing here replays the claim again.
                     if self.seat_found_fault_v1(&duty.claim_id) {
+                        // A fault is found in material this seat held: it was served (N-5).
+                        service.note_served(duty.claim_id);
                         // **A fault still addressed at a BLOCK is not finished with** (ADR-0086
                         // Decision 6, found by ADR-0111's drill): only the interval arm below names
                         // the leaf from the block's served leaves, and this gate used to stop it for
@@ -6483,6 +7525,11 @@ impl PalwPanelService {
                                 let prompt = Self::fp_prompt_for_job(resolved.as_ref(), &material, form)?;
                                 Some((ctx, prompt.iter().map(|t| *t as usize).collect::<Vec<usize>>()))
                             });
+                            // N-5 / P2-6: the step's word on service is noted as it is read
+                            // (`PalwSeatServiceV1::resumed`) — the `Unavailable` below still files at the
+                            // wait, and accuses only for a seat that holds nothing (the P2-6 review, HIGH
+                            // and LOW).
+                            let holds_job = job.is_some();
                             let step = match job {
                                 Some((ctx, prompt)) => {
                                     self.seat_s4_resume_v1(
@@ -6517,7 +7564,7 @@ impl PalwPanelService {
                                     PalwSeatResumeStepV1::Starved { missing: Vec::new(), served }
                                 }
                             };
-                            match step {
+                            match service.resumed(duty.claim_id, current_daa, holds_job, step) {
                                 PalwSeatResumeStepV1::Licensed(mask) => {
                                     debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::VerifiedSegmentResume));
                                     segments_attested = Some(mask);
@@ -6528,7 +7575,6 @@ impl PalwPanelService {
                                 // Served, and nothing left to try: silent, never an accusation (N-5).
                                 PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,
                                 PalwSeatResumeStepV1::Starved { served: false, .. } => {
-                                    unserved.entry(duty.claim_id).or_insert(current_daa);
                                     if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                                         Self::palw_licence_stands_v1(
                                             &session,
@@ -6558,13 +7604,18 @@ impl PalwPanelService {
                             && !refuted
                         {
                             let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
-                            match self
-                                .fp_seat_replay_pass_v1(&session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays)
-                                .await
-                            {
+                            // A job of the claim's replays, ran, or refuted it: served (N-5, the P2-6
+                            // review's HIGH); `NoVerdict` is read below.
+                            let pass =
+                                self.fp_seat_replay_pass_v1(&session, duty, seat_r_duty, current_daa, pooled, &mut seat_replays).await;
+                            if palw_seat_replay_served_v1(&pass.0) {
+                                service.note_served(duty.claim_id);
+                            }
+                            match pass {
                                 (PalwSeatReplayStepV1::Licensed, bytes) => {
-                                    if let Some(bytes) = bytes {
-                                        self.persist_foreign_material(&duty.claim_id, &bytes);
+                                    // X7: past the fence, a job this seat could not keep is a Valid it cannot answer for.
+                                    if !self.licensed_job_kept_v1(&duty.claim_id, bytes, current_daa) {
+                                        break 'verdict None;
                                     }
                                     debug_assert!(palw_seat_arm_licenses_v1(seat_r, PalwSeatArmV1::FreePromptReplay));
                                     licensed_by_replay = true;
@@ -6595,9 +7646,11 @@ impl PalwPanelService {
                                     let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
                                     if self
                                         .fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)
-                                        .is_none()
+                                        .is_some()
                                     {
-                                        unserved.entry(duty.claim_id).or_insert(current_daa);
+                                        service.note_served(duty.claim_id);
+                                    } else {
+                                        service.note_unserved(duty.claim_id, current_daa);
                                         if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                                             Self::palw_licence_stands_v1(
                                                 &session,
@@ -7272,6 +8325,12 @@ impl PalwPanelService {
                             // SEAT-S4: a C7 partial seat resumes its own mask from the anchor's job
                             // (`seat_s4_resume_v1`), and files that mask's V3 alone.
                             if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {
+                                // The attempt lane holds its job by the anchor, which no producer serves:
+                                // whatever the resume comes to, this seat accuses nobody of withholding.
+                                // An opening it lacks files the `Unavailable` at the wait and no
+                                // accusation — DA-4's `Flat` answer to an accusation of row 0 does not
+                                // reach an opening; P2-8d names the opening's own unit (the P2-6 review, LOW).
+                                service.note_served(duty.claim_id);
                                 match self
                                     .seat_s4_resume_v1(
                                         &session,
@@ -7298,7 +8357,6 @@ impl PalwPanelService {
                                     // Served, and nothing left to try: silent, never an accusation (N-5).
                                     PalwSeatResumeStepV1::Starved { served: true, .. } => break 'verdict None,
                                     PalwSeatResumeStepV1::Starved { served: false, .. } => {
-                                        unserved.entry(duty.claim_id).or_insert(current_daa);
                                         if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                                             Self::palw_licence_stands_v1(
                                                 &session,
@@ -7558,11 +8616,19 @@ impl PalwPanelService {
                         let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
                         self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled).is_some()
                     }) {
-                        PalwSeatTailV1::Silent => break 'verdict None,
-                        PalwSeatTailV1::Waits { unserved: true } => {
-                            unserved.entry(duty.claim_id).or_insert(current_daa);
+                        // Holding the claim's job, or on the attempt lane (whose job no producer
+                        // serves): served, for the rest of the duty (N-5, the P2-6 review's HIGH).
+                        PalwSeatTailV1::Silent => {
+                            service.note_served(duty.claim_id);
+                            break 'verdict None;
                         }
-                        PalwSeatTailV1::Waits { unserved: false } => {}
+                        PalwSeatTailV1::Waits { unserved: true } => service.note_unserved(duty.claim_id, current_daa),
+                        // A claim this seat's replay or fault finder refuted was served (false material).
+                        PalwSeatTailV1::Waits { unserved: false } => {
+                            if refuted_here {
+                                service.note_served(duty.claim_id);
+                            }
+                        }
                     }
                     if palw_seat_material_wait_ends_v1(seat_r, duty.bound_daa, deadline, current_daa, || {
                         Self::palw_licence_stands_v1(&session, duty.claim_id, &receipt_pool_v2, &receipt_pool_v3, &receipt_facts)
@@ -7721,7 +8787,23 @@ impl PalwPanelService {
                     self.flow_context.broadcast_palw_seat_receipt(bytes).await;
                 }
                 if valid {
-                    unserved.remove(&duty.claim_id);
+                    service.note_served(duty.claim_id);
+                }
+                // **P2-6: an `Unavailable` files a `DefaultAccused` too** (ADR-0152 §3.8, DA-1: every
+                // class) — only a seat that was never served the claim (`PalwSeatServiceV1`: a seat
+                // holding the job and waiting on an opening files the receipt and abstains, the P2-6
+                // review's LOW), inside its landing margin and never for a claim this seat's own replay
+                // refuted (`palw_seat_da_accuse_by_v1`); built, asked of the chain and queued below.
+                if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })
+                    && service.is_unserved(&duty.claim_id)
+                    && let Some(by) = palw_seat_da_accuse_by_v1(
+                        self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                        replay_refuted.contains(&duty.claim_id),
+                        current_daa,
+                        deadline,
+                    )
+                {
+                    accusations.want(duty.claim_id, by);
                 }
                 answered.insert(key);
             }
@@ -7770,6 +8852,99 @@ impl PalwPanelService {
                 }
             }
 
+            // --- P2-6: this seat's accusations of withholding ---
+            //
+            // ADR-0152 §3.8 / DA-1 / DA-6 / DA-9: a seat that filed `Unavailable` (above), or whose
+            // unserved duty ended in a licence (N-5, at the end of the tick), accuses the producer with
+            // an event `DefaultAccused` naming the unit its receipt names (C-9), built by the ONE
+            // builder (`palw_da_accusation_object_v1`). Every accusation is asked of the chain first
+            // (`palw_da_accusation_check_v1`: the fold's own gate, C-8, with A-6's room on the
+            // accuser's free half), so this node never pays a carrier for an accusation the fold
+            // refuses, nor for a second one of a claim it accused; and a queued one is asked again
+            // while it waits for the slot, so a claim that moved past accusability leaves the queue
+            // unsent. Below `palw_rcore_plus` nothing is noted, and nothing here runs; nor on a node
+            // that carries nothing (no `--palw-fee-outpoint`: receipts only), whose book is emptied
+            // rather than left to grow.
+            if self.config.fee_outpoint.is_none() {
+                accusations = PalwSeatAccusationsV1::default();
+            } else if self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+                use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1;
+                let due = accusations.due(
+                    current_daa,
+                    |claim| {
+                        court_pending.iter().any(|(sid, round, responder, object)| {
+                            *sid == *claim && palw_da_accusation_queued_v1(*round, *responder, object)
+                        })
+                    },
+                    |claim| court_moved.get(&palw_da_accusation_queue_key_v1(*claim)).copied(),
+                );
+                court_pending.retain(|(claim, round, responder, object)| {
+                    if !palw_da_accusation_queued_v1(*round, *responder, object) {
+                        return true;
+                    }
+                    let claim = *claim;
+                    if !accusations.wants(&claim) {
+                        return false;
+                    }
+                    match session.palw_da_accusation_check_v1(claim, bond_key).map(|check| palw_seat_accuse_step_v1(&check)) {
+                        None | Some(PalwSeatAccuseStepV1::File) => true,
+                        Some(PalwSeatAccuseStepV1::Retry) => {
+                            accusations.refused(&claim, current_daa);
+                            false
+                        }
+                        Some(PalwSeatAccuseStepV1::Settle) => {
+                            accusations.settle(&claim);
+                            false
+                        }
+                    }
+                });
+                for claim in due {
+                    let Some(check) = session.palw_da_accusation_check_v1(claim, bond_key) else { break };
+                    match (palw_seat_accuse_step_v1(&check), &check) {
+                        (PalwSeatAccuseStepV1::File, PalwDaAccusationCheckV1::File { unit, admission }) => {
+                            match kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
+                                &network_domain,
+                                claim,
+                                *unit,
+                                bond_key,
+                                |message, context| self.sign(message, context),
+                            ) {
+                                Ok(object) => {
+                                    info!(
+                                        "[{PALW_PANEL}] claim {claim}: accusing its producer of withholding — {unit:?} at stage {:?}, \
+                                         {} sompi on this bond's free half, the session's deadline DAA {} (ADR-0152 §3.8, DA-6)",
+                                        admission.stage, admission.exposure, admission.deadline_daa
+                                    );
+                                    let key = palw_da_accusation_queue_key_v1(claim);
+                                    court_pending.push((key.0, key.1, key.2, object));
+                                }
+                                Err(why) => {
+                                    warn!("[{PALW_PANEL}] claim {claim}: cannot build the accusation: {why}");
+                                    accusations.settle(&claim);
+                                }
+                            }
+                        }
+                        (PalwSeatAccuseStepV1::Retry, _) => {
+                            accusations.refused(&claim, current_daa);
+                            crate::palw_backends::note_throttled_v1("panel-da-accuse-room", || {
+                                format!(
+                                    "[{PALW_PANEL}] claim {claim}: the accusation waits for room on this bond's free half — {check:?}"
+                                )
+                            });
+                        }
+                        (_, PalwDaAccusationCheckV1::AccusedBefore) => accusations.settle(&claim),
+                        (_, check) => {
+                            info!("[{PALW_PANEL}] claim {claim}: not accused of withholding — {check:?}");
+                            accusations.settle(&claim);
+                        }
+                    }
+                }
+                // An accusation's debounce (`court_moved` under its queue key) leaves with its book
+                // entry: nothing else prunes `court_moved`, and every accusation added one (the P2-6
+                // review's note).
+                court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
+            }
+
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
                 // Resolve the fee UTXO ONCE per tick and then CHAIN it: the change of a carrier
@@ -7800,6 +8975,21 @@ impl PalwPanelService {
                         // The tip of our own chain is in the UTXO set, so every carrier behind it
                         // was mined. Nothing is in flight and the budget is whole again.
                         inflight = 0;
+                        // **P2-6 (F13) on the drain path** (the P2-6 review, MEDIUM): a tip too small
+                        // to fund a carrier is exhausted, and was offered every tick while every
+                        // carrier failed on it and the matured rewards were never looked at. With
+                        // nothing in flight, the funding is resolved afresh — the largest usable
+                        // output that pays, never the residue (`palw_fee_funding_floor_v1`).
+                        if palw_fee_chain_drained_v1(chained_funding.as_ref()) {
+                            info!(
+                                "[{PALW_PANEL}] the carrier chain's change {}:{} holds under {} sompi — too little for a \
+                                 carrier; resolving funding afresh",
+                                tip.transaction_id,
+                                tip.index,
+                                palw_fee_funding_floor_v1()
+                            );
+                            chained_funding = self.resolve_fee_funding(&session).await;
+                        }
                     } else if !self
                         .flow_context
                         .mining_manager()
@@ -7860,7 +9050,29 @@ impl PalwPanelService {
                         self.config.fee_outpoint.as_deref().unwrap_or("unset")
                     );
                 }
-                // **The class registration, ahead of everything else and only once.**
+                // **P2-6: the priority lane first — the court's moves, data-availability accusations
+                // and answers, convictions — except on the licences' turn** (the slot right after a
+                // priority carrier, `palw_carrier_licence_turn_v1`), when it goes behind the
+                // collector: one carrier is in flight per panel, and a queue that always holds a
+                // priority object would otherwise take every slot while claims waiting on their
+                // licence void at their receipt deadline. Every site below asks the one gate
+                // (`PalwCarrierSlotsV1::offers`: the slot free, and its turn), in `TICK_ORDER`.
+                let mut slots = PalwCarrierSlotsV1::new(last_lane);
+                slots.at(PalwCarrierSiteV1::PriorityFirst, inflight);
+                if slots.offers(PalwCarrierSiteV1::PriorityFirst, inflight) {
+                    self.carry_priority_v1(
+                        &session,
+                        current_daa,
+                        &mut court_pending,
+                        &mut funding,
+                        &mut inflight,
+                        &mut court_moved,
+                        &mut challenged,
+                    )
+                    .await;
+                }
+                slots.at(PalwCarrierSiteV1::Own, inflight);
+                // **The class registration, ahead of every other ordinary carrier and only once.**
                 //
                 // A class that is not registered mines nothing, so this is the one object whose
                 // absence costs the whole lane rather than one claim. It is offered first for the
@@ -7870,7 +9082,8 @@ impl PalwPanelService {
                 // own job and commit it as a canonical free-prompt claim, one per interval per
                 // bond, funded like any other carrier. A failed build is retried next interval,
                 // not next tick — an inference is not something to spin on.
-                if self.config.canonical_claims
+                if slots.offers(PalwCarrierSiteV1::Own, inflight)
+                    && self.config.canonical_claims
                     && current_daa >= canonical_last_daa.saturating_add(self.config.canonical_interval_daa)
                     && let Some((funding_outpoint, funding_entry)) = funding.clone()
                 {
@@ -7940,7 +9153,8 @@ impl PalwPanelService {
                         )
                     });
                 }
-                if !registration_waits
+                if slots.offers(PalwCarrierSiteV1::Own, inflight)
+                    && !registration_waits
                     && self.config.register_class.is_some()
                     && !class_registration_done
                     && class_registration_inflight.is_none()
@@ -8038,7 +9252,9 @@ impl PalwPanelService {
                         _ => continue,
                     };
                     let (class_id, span) = (*class_id, *span);
-                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
+                    let Some((funding_outpoint, funding_entry)) =
+                        funding.clone().filter(|_| slots.offers(PalwCarrierSiteV1::Own, inflight))
+                    else {
                         readiness_waiting = true;
                         crate::palw_backends::note_throttled_v1("panel-proof-waits", || {
                             format!(
@@ -8081,110 +9297,13 @@ impl PalwPanelService {
                         Err(e) => warn!("[{PALW_PANEL}] cannot build the readiness proof carrier for class {class_id}: {e}"),
                     }
                 }
-                // The court's moves first: a rung has a deadline and a receipt quorum does not.
-                let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
-                for (session_id, round, mine_is_responder, object) in std::mem::take(&mut court_pending) {
-                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
-                        // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
-                        // dropped here is a dispute that never happens.
-                        unsent.push((session_id, round, mine_is_responder, object));
-                        continue;
-                    };
-                    match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                        Ok(tx) => {
-                            let txid = tx.id();
-                            let change = tx.outputs[0].clone();
-                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                Ok(()) => {
-                                    info!(
-                                        "[{PALW_PANEL}] submitted {} for court session {session_id} round {round} in tx {txid}",
-                                        object_name(&object)
-                                    );
-                                    let next = TransactionOutpoint::new(txid, 0);
-                                    self.persist_fee_outpoint(next);
-                                    funding = Some((
-                                        next,
-                                        UtxoEntry {
-                                            amount: change.value,
-                                            script_public_key: change.script_public_key,
-                                            block_daa_score: current_daa,
-                                            is_coinbase: false,
-                                        },
-                                    ));
-                                    inflight += 1;
-                                    court_moved.insert((session_id, round, mine_is_responder), current_daa);
-                                    if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
-                                        challenged.insert(*claim);
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}",
-                                        object_name(&object)
-                                    );
-                                    funding = None;
-                                }
-                            }
-                        }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for session {session_id}: {e}"),
-                    }
-                }
-                court_pending = unsent;
-                // **ADR-0125 §7.3: a permit signed twice, filed.** The relay queues each pair once;
-                // the evidence proves itself, so any funded panel may carry it. Behind the court's
-                // moves (they have deadlines) and ahead of receipts; one carrier a tick at most,
-                // and evidence the carrier cannot take goes back to the queue.
-                if inflight < MAX_INFLIGHT_CARRIERS
-                    && let Some(evidence) = self.flow_context.palw_round_relay().take_evidence()
-                {
-                    match funding.clone() {
-                        None => self.flow_context.palw_round_relay().return_evidence(evidence),
-                        Some((funding_outpoint, funding_entry)) => {
-                            let (round, index) = (evidence.round, evidence.permit_index);
-                            let object = PalwConsensusObjectV2::RoundPermitEquivocated { evidence: Box::new(evidence) };
-                            match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
-                                Ok(tx) => {
-                                    let txid = tx.id();
-                                    let change = tx.outputs[0].clone();
-                                    match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
-                                        Ok(()) => {
-                                            info!(
-                                                "[{PALW_PANEL}] filed a permit signed twice (round {round}, permit {index}) in tx {txid}"
-                                            );
-                                            let next = TransactionOutpoint::new(txid, 0);
-                                            self.persist_fee_outpoint(next);
-                                            funding = Some((
-                                                next,
-                                                UtxoEntry {
-                                                    amount: change.value,
-                                                    script_public_key: change.script_public_key,
-                                                    block_daa_score: current_daa,
-                                                    is_coinbase: false,
-                                                },
-                                            ));
-                                            inflight += 1;
-                                        }
-                                        // Refused evidence is not retried: the mempool judged it against the
-                                        // same rules the chain would, and a burned permit burns once.
-                                        Err(e) => {
-                                            warn!(
-                                                "[{PALW_PANEL}] the mempool refused the equivocation evidence (round {round}, permit {index}): {e}"
-                                            );
-                                            funding = None;
-                                        }
-                                    }
-                                }
-                                Err(e) => warn!("[{PALW_PANEL}] cannot build the equivocation evidence carrier: {e}"),
-                            }
-                        }
-                    }
-                }
+                slots.at(PalwCarrierSiteV1::Licences, inflight);
                 // The claims the V2 pool holds anything for — heard V2 receipts, and every claim this
                 // node filed on (its V3 filings keep their inner half there) — as `receipts.keys()`
                 // named them before the pools were rebuilt.
                 let claims: Vec<Hash64> = receipt_pool_v2.claim_ids();
                 for claim in claims {
-                    if inflight >= MAX_INFLIGHT_CARRIERS || readiness_waiting {
+                    if !slots.offers(PalwCarrierSiteV1::Licences, inflight) || readiness_waiting {
                         break;
                     }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
@@ -8270,6 +9389,22 @@ impl PalwPanelService {
                         }
                     }
                 }
+                // **P2-6: the licences' turn passes the slot to the priority lane** when the collector
+                // had nothing to carry, in the same tick.
+                slots.at(PalwCarrierSiteV1::PriorityAfterLicences, inflight);
+                if slots.offers(PalwCarrierSiteV1::PriorityAfterLicences, inflight) {
+                    self.carry_priority_v1(
+                        &session,
+                        current_daa,
+                        &mut court_pending,
+                        &mut funding,
+                        &mut inflight,
+                        &mut court_moved,
+                        &mut challenged,
+                    )
+                    .await;
+                }
+                slots.at(PalwCarrierSiteV1::OwnReceipts, inflight);
                 // **ADR-0124 Decision 2: a seat carries its own receipt after the licence.** For
                 // every claim this seat answered `Valid` on, once the chain has licensed it without
                 // crediting this seat, the receipt rides a supplementary `ReceiptLicensed` while
@@ -8281,7 +9416,7 @@ impl PalwPanelService {
                     own_receipts.iter().map(|(claim, (receipt, _))| (*claim, receipt.clone())).collect();
                 own.sort_by_key(|(claim, _)| *claim);
                 for (claim, receipt) in own {
-                    if inflight >= MAX_INFLIGHT_CARRIERS || readiness_waiting {
+                    if !slots.offers(PalwCarrierSiteV1::OwnReceipts, inflight) || readiness_waiting {
                         break;
                     }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
@@ -8323,6 +9458,7 @@ impl PalwPanelService {
                         Err(e) => warn!("[{PALW_PANEL}] cannot build the supplementary carrier for claim {claim}: {e}"),
                     }
                 }
+                last_lane = slots.finish(inflight);
                 // What the next tick continues from. `None` here means a refusal cleared it, and
                 // the next tick resolves afresh.
                 //
@@ -8438,10 +9574,13 @@ impl PalwPanelService {
             replay_refuted.retain(|claim| live.contains(claim));
             seat_resumes.retain_live(|claim| duty_claims.contains(claim));
             // N-5's second half, past SEAT-R: a duty this seat was never served that ended because a
-            // licence landed on it. The accusation that answers it (`DefaultAccused`) is Phase 2's
-            // P2-6; this names the claim where that filing goes (`palw_seat_unserved_licence_v1`).
-            let ended: Vec<(Hash64, u64)> =
-                unserved.iter().filter(|(claim, _)| !duty_claims.contains(*claim)).map(|(claim, at)| (*claim, *at)).collect();
+            // licence landed on it (`palw_seat_unserved_licence_v1`). P2-6 accuses its producer at once
+            // (ADR-0152 §3.8, DA-6, DA-9: "and at once when a licence lands on a claim that did not
+            // serve it"): noted here, asked of the chain and queued on the next tick — and filed only
+            // if this seat has not accused the claim already, beside its `Unavailable`. "Never served"
+            // is `PalwSeatServiceV1`'s: a claim served on any later tick of its duty — a job held, a
+            // replay that ran, an authenticated opening — is not in `ended` (the P2-6 review, HIGH).
+            let ended = service.ended(|claim| duty_claims.contains(claim));
             if !ended.is_empty() {
                 let rows = self
                     .consensus_manager
@@ -8456,12 +9595,16 @@ impl PalwPanelService {
                 for (claim, since) in ended {
                     let phase = rows.iter().find(|row| row.claim_id == claim).map(|row| &row.phase);
                     if palw_seat_unserved_licence_v1(phase) {
+                        let rcore = self.consensus_config.params.palw_rcore_plus_active_at(current_daa);
                         info!(
                             "[{PALW_PANEL}] claim {claim}: licensed while this seat was never served its material (waiting since DAA \
-                             {since}) — the DefaultAccused filing that answers it is Phase 2's (P2-6); nothing filed (N-5)"
+                             {since}) — {} (N-5)",
+                            if rcore { "accusing its producer of withholding (P2-6)" } else { "nothing filed below palw_rcore_plus" }
                         );
+                        if rcore {
+                            accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));
+                        }
                     }
-                    unserved.remove(&claim);
                 }
             }
             // The foreign retention keeps what a live claim may still ask for: a C7 claim's window
@@ -8473,6 +9616,13 @@ impl PalwPanelService {
                 *self.foreign_pinned.lock().unwrap() = palw_seat_retention_pins_v1(&live, &retention_liabilities, current_daa);
             } else {
                 *self.foreign_pinned.lock().unwrap() = live.clone();
+            }
+            // P2-7: and every claim a live lock of this bond still answers for, or an open session
+            // demands a unit of now (`disclosure_retain`, read off the chain's locks and sessions, so a
+            // restart that forgot the duty book keeps them too — pinned already at the duty read, before
+            // any seat duty could prune). Empty below `palw_rcore_plus`.
+            if !disclosure_retain.is_empty() {
+                self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());
             }
             // H1's other half, past SEAT-R: the served openings of a claim no duty, court or dispute
             // names any more leave the pool. It admits no new `(claim, interval)` pair past its ceiling
@@ -8593,6 +9743,114 @@ fn funding_is_foreign(
     entry: &kaspa_consensus_core::tx::ScriptPublicKey,
 ) -> bool {
     ours.is_some_and(|ours| entry != ours)
+}
+
+/// **May the panel fund a carrier from this output?** (ADR-0152 Phase 2, P2-6: the plan's F13.)
+///
+/// The funder skipped every coinbase output, and every reward a bond earns — seat pay, a reporter's
+/// reward, a matured vesting leg — arrives as a coinbase output under its payout script: with
+/// filing automatic (DA accusations and answers, convictions), the fee float drained, `no fee UTXO
+/// resolves`, and filing stopped for good. So a coinbase output funds a carrier once the mempool
+/// takes its spend: `coinbase_spend_settled` — the very function the mempool's maturity check calls
+/// — at `pov_daa` (the virtual DAA the carrier is validated at) against `spend_maturity`
+/// (`Params::coinbase_spend_maturity`: the floor or the settlement's long maturity, whichever is
+/// longer — 600 DAA on testnet-12) with no DNS anchor, so the funder is conservative by
+/// construction: an anchor can release a younger coinbase, and not asking only delays one.
+///
+/// **Never an output B-3 holds** (`locked`: `getPalwProducerFacts`' locked set,
+/// `palw_v2_locked_bond_outpoints` — a bond's collateral while its duties, its accusations or an
+/// unmatured row of which it is a payee stand), and never this node's own bond output (audit
+/// M2-13), whatever the set says: spending either is refused as a chain block
+/// (`SpendsNonReleasableBond`), or moves collateral out under a merged block.
+pub(crate) fn palw_fee_funding_usable_v1(
+    outpoint: &TransactionOutpoint,
+    entry: &UtxoEntry,
+    pov_daa: u64,
+    spend_maturity: u64,
+    own_bond: Option<TransactionOutpoint>,
+    locked: &HashSet<TransactionOutpoint>,
+) -> bool {
+    if own_bond.is_some_and(|bond| bond == *outpoint) || locked.contains(outpoint) {
+        return false;
+    }
+    !entry.is_coinbase
+        || kaspa_consensus_core::dns_finality::coinbase_spend_settled(entry.block_daa_score, pov_daa, spend_maturity, None)
+}
+
+/// **The least a funding output must hold to fund this panel's carriers** (P2-6, F13 on the drain
+/// path; the P2-6 review, MEDIUM): twice the relay fee of the heaviest carrier the mempool admits
+/// (`MAXIMUM_STANDARD_TRANSACTION_MASS`, the builder's own `relay_fee_for_compute_mass`) — 0.12 MSK.
+///
+/// The float drains: every carrier pays its fee out of the change the next one spends, and a change
+/// at or below one carrier's fee builds nothing (`funding UTXO holds N sompi`). Nothing cleared such
+/// a residue, so it stayed the chain's tip and was offered every tick, every carrier failed, and the
+/// matured rewards the funder may take were never looked at — filing stopped, and a producer's
+/// R-core answers with it (an S1 default while it held spendable rewards). An output under this floor
+/// is exhausted: the funder never picks one (`resolve_fee_funding`) and the tick re-resolves the
+/// moment its chain's tip, with nothing in flight, falls under it — one carrier is in flight at a
+/// time, so no carrier is ever built from a tip under the floor, and one at or above it pays any
+/// standard carrier: no carrier fails for want of funds.
+pub(crate) fn palw_fee_funding_floor_v1() -> u64 {
+    relay_fee_for_compute_mass(MAXIMUM_STANDARD_TRANSACTION_MASS).saturating_mul(2)
+}
+
+/// Whether an output of `amount` sompi can fund this panel's carriers ([`palw_fee_funding_floor_v1`]).
+pub(crate) fn palw_fee_funding_pays_v1(amount: u64) -> bool {
+    amount >= palw_fee_funding_floor_v1()
+}
+
+/// **Whether the panel's carrier chain is drained** — its tip, with nothing in flight, holds too
+/// little to fund a carrier ([`palw_fee_funding_pays_v1`]), so the tick drops it and resolves its
+/// funding afresh (F13's drain path).
+pub(crate) fn palw_fee_chain_drained_v1(chained: Option<&(TransactionOutpoint, UtxoEntry)>) -> bool {
+    chained.is_some_and(|(_, entry)| !palw_fee_funding_pays_v1(entry.amount))
+}
+
+/// **The recovery scan's verdict on this bond's outputs** (`resolve_fee_funding`), and what it saw.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PalwFeeFundingScanV1 {
+    /// The largest output that funds a carrier so far.
+    pub(crate) found: Option<(TransactionOutpoint, UtxoEntry)>,
+    /// Usable outputs under the payout script.
+    pub(crate) under_script: usize,
+    /// Of those, spent by this node's own mempool.
+    pub(crate) busy: usize,
+    /// Outputs the funder may not take: a coinbase younger than its spend maturity, or held by B-3.
+    pub(crate) unripe: usize,
+    /// Free and usable, but too little to pay a carrier.
+    pub(crate) dust: usize,
+}
+
+impl PalwFeeFundingScanV1 {
+    /// **One output under this bond's payout script**: usable ([`palw_fee_funding_usable_v1`]),
+    /// free of this node's own mempool, able to pay a carrier ([`palw_fee_funding_pays_v1`]) — and
+    /// then kept if it is the largest so far (the first on a tie): a float that lasts longest before
+    /// the tick has to scan again, rather than the first output the UTXO set happens to list, which
+    /// may be the drained residue itself.
+    pub(crate) fn offer(
+        &mut self,
+        outpoint: TransactionOutpoint,
+        entry: UtxoEntry,
+        usable: impl Fn(&TransactionOutpoint, &UtxoEntry) -> bool,
+        is_free: impl Fn(&TransactionOutpoint) -> bool,
+    ) {
+        if !usable(&outpoint, &entry) {
+            self.unripe += 1;
+            return;
+        }
+        self.under_script += 1;
+        if !is_free(&outpoint) {
+            self.busy += 1;
+            return;
+        }
+        if !palw_fee_funding_pays_v1(entry.amount) {
+            self.dust += 1;
+            return;
+        }
+        if self.found.as_ref().is_none_or(|(_, kept)| entry.amount > kept.amount) {
+            self.found = Some((outpoint, entry));
+        }
+    }
 }
 
 /// **The `signature` field of this node's own `BondRegistered`.**
@@ -10147,19 +11405,6 @@ impl PalwPanelService {
         )
     }
 
-    /// **The binding and the prompt behind a retained free-prompt capture** — what a held
-    /// disclosure of a prompt tile is bound by (ADR-0103 Decision 4). The binding is read off the
-    /// capture's interval 0, which every family serves and which carries it.
-    fn retained_binding_and_prompt_v1(
-        &self,
-        session: &kaspa_consensusmanager::ConsensusProxy,
-        claim: Hash64,
-    ) -> Result<(kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, Vec<u32>), String> {
-        let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
-        let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
-        Ok((binding, payload.material.prompt_token_ids))
-    }
-
     /// **This node's retained free-prompt capture of `claim`, with the backend of its class** —
     /// the one loader behind every answer an executor gives from its retention (ADR-0111 Decision
     /// 6): its own capture first, then one it holds for another executor.
@@ -10199,10 +11444,62 @@ impl PalwPanelService {
         Ok(v4.binding)
     }
 
+    /// **A held unit's disclosure, from this node's free-prompt retention** (ADR-0103 Decision 4;
+    /// ADR-0111 Decisions 4 and 6): a leaf's evidence, a prompt tile, a state chunk or a run of step
+    /// leaves, built by the ONE held builder (`palw_da_held_disclosure_from_capture_v1`, whose match
+    /// names every unit the court can and has no catch-all) from the capture, its job's prompt and
+    /// the claim's roots — the binding read off interval 0 where the answer does not carry its own.
+    /// The v1 court's answer ([`Self::held_da_answer_v1`]) reads it; R-core's (P2-7) builds through
+    /// the same builder ([`palw_fp_held_disclosure_v1`]) on the capture it verified, re-made if need be.
+    fn fp_held_da_disclosure_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        claim: Hash64,
+        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
+    ) -> Result<
+        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1),
+        String,
+    > {
+        let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
+        self.fp_held_da_disclosure_of_v1(session, claim, backend.as_ref(), &payload, missing)
+    }
+
+    /// [`Self::fp_held_da_disclosure_v1`] on a given free-prompt capture and its class's backend.
+    fn fp_held_da_disclosure_of_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        claim: Hash64,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        payload: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCaptureV1,
+        missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
+    ) -> Result<
+        (kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, kaspa_consensus_core::palw_held_da_v1::PalwHeldDisclosureV1),
+        String,
+    > {
+        let job = &payload.material.job;
+        // `output_root: None`: the chain's roots read (`palw_claim_roots_v2`) carries no output root,
+        // and a leaf's evidence proves a step leaf against the execution root — not the answer.
+        // The roots are read by the leaf's arm only, and asked of the chain only for it.
+        let (roots, work_leaves) = if matches!(missing, kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1::StepLeaf { .. }) {
+            let (execution_root, trace_root, work_leaves) =
+                session.palw_claim_roots_v2(claim).ok_or("the chain holds no such claim")?;
+            let anchor = kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job);
+            // `job_pin: None`: this builder proves a leaf against the execution root; the capture's job is
+            // pinned where it is verified (R-core's answer, `PalwDaClaimFactsV1::roots_v1`), and the v1
+            // court below the fence records no identity to pin.
+            (PalwClaimRootsV1 { execution_root, trace_root, anchor, attempt_draw: None, output_root: None, job_pin: None }, work_leaves)
+        } else {
+            let none = Hash64::default();
+            (PalwClaimRootsV1 { execution_root: none, trace_root: none, anchor: none, attempt_draw: None, output_root: None, job_pin: None }, 0)
+        };
+        palw_fp_held_disclosure_v1(backend, payload, roots, work_leaves, missing, self.class_prompt_ids_form(job.class_id))
+    }
+
     /// **The held DA court's answer, in the unit accused** (ADR-0103 Decision 4; ADR-0111 Decisions
     /// 4 and 6), signed by the claim's bond: a leaf's evidence, a prompt tile, a state chunk or a run
-    /// of step leaves, each built from this executor's retention — an executor that cannot answer
-    /// is one the court slashes, so every unit the court can name has its answer here.
+    /// of step leaves, each built from this executor's retention ([`Self::fp_held_da_disclosure_v1`])
+    /// — an executor that cannot answer is one the court slashes, so every unit the court can name
+    /// has its answer there. The v1 court's (below `palw_rcore_plus`).
     fn held_da_answer_v1(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -10211,35 +11508,10 @@ impl PalwPanelService {
         missing: kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1,
     ) -> Result<PalwConsensusObjectV2, String> {
         use kaspa_consensus_core::palw_held_da_v1::{
-            PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldDisclosureCarriageV1, PalwHeldDisclosureV1,
-            PalwHeldMissingV1, palw_held_da_disclosure_message_v1,
+            PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldDisclosureCarriageV1,
+            palw_held_da_disclosure_message_v1,
         };
-        let (binding, disclosure) = match missing {
-            PalwHeldMissingV1::StepLeaf { leaf } => {
-                let evidence = self.retained_leaf_evidence_v1(session, claim, leaf)?;
-                (evidence.refutation.binding.clone(), PalwHeldDisclosureV1::StepLeaf { evidence: Box::new(evidence) })
-            }
-            PalwHeldMissingV1::PromptIdsTile { tile } => {
-                let (binding, prompt) = self.retained_binding_and_prompt_v1(session, claim)?;
-                let position = tile.saturating_mul(kaspa_consensus_core::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN);
-                let opening = kaspa_consensus_core::palw_prompt_ids_v1::prompt_ids_opening_v1(&prompt, position)
-                    .map_err(|e| format!("the prompt tile does not open: {e}"))?;
-                (binding, PalwHeldDisclosureV1::PromptIdsTile { opening })
-            }
-            PalwHeldMissingV1::StateChunk { checkpoint, chunk } => {
-                let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
-                let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
-                let (anchor, chunk) =
-                    backend.held_state_chunk_answer_v1(&payload.capture, &payload.material.prompt_token_ids, checkpoint, chunk)?;
-                (binding, PalwHeldDisclosureV1::StateChunk { anchor, chunk })
-            }
-            PalwHeldMissingV1::StepRange { first, count } => {
-                let (backend, payload) = self.retained_fp_capture_v1(session, claim)?;
-                let binding = Self::served_binding_v1(backend.as_ref(), &payload)?;
-                let opening = backend.held_step_range_answer_v1(&payload.capture, &payload.material.prompt_token_ids, first, count)?;
-                (binding, PalwHeldDisclosureV1::StepRange { opening })
-            }
-        };
+        let (binding, disclosure) = self.fp_held_da_disclosure_v1(session, claim, missing)?;
         let mut carriage = PalwHeldDisclosureCarriageV1 {
             version: PALW_HELD_DA_VERSION_V1,
             claim,
@@ -10258,6 +11530,155 @@ impl PalwPanelService {
         let message = palw_held_da_disclosure_message_v1(domain.as_byte_slice(), &carriage);
         carriage.signature = self.sign(message.as_byte_slice(), PALW_HELD_DA_MLDSA87_DISCLOSE_CONTEXT).ok_or("no signing key")?;
         Ok(PalwConsensusObjectV2::MaterialDisclosedHeld { disclosure: Box::new(carriage) })
+    }
+
+    /// **Open event `(row, tile)` of a retained or re-made capture** (ADR-0062 D3; ADR-0152 DA-4) —
+    /// nothing re-executed: the rows and ids kept at execution are what the claim committed. A
+    /// free-prompt retention wraps the family capture with the job and its ids; the attempt lane
+    /// retains the family capture bare (ADR-0084 Decision 4). The v1 court's responder; R-core's
+    /// (P2-7) opens the capture it verified by the claim's own class ([`palw_da_unit_answer_v1`]).
+    fn disclose_retained_event_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        bytes: &[u8],
+        row: u32,
+        tile: u8,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1, String> {
+        match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes, self.class_prompt_ids_form(class_id)) {
+            Some(payload) => self
+                .resolve_backend(session, class_id, artifact_root)
+                .and_then(|backend| backend.disclose_trace_event(&payload.capture, row, tile)),
+            None => match self.backend_for_raw_capture_v1(session, bytes) {
+                Some((backend, _)) => backend.disclose_trace_event(bytes, row, tile),
+                None => Err("no held class reads the retained capture".to_string()),
+            },
+        }
+    }
+
+    /// **ADR-0152 DA-4 / X7 (P2-7): the `MaterialDisclosedV2`s that answer one claim's due units**,
+    /// `duties` (one claim's, soonest deadline first), each signed by its duty's discloser — this
+    /// node's bond: the producer, or a covering signer.
+    ///
+    /// The claim's facts are read off the chain here; everything heavy runs in ONE blocking task under
+    /// ONE reservation of the memory ledger (`"da-answer"`, a full seat's figure for the class — the
+    /// court's bound for its close, and an upper bound over a whole-job re-make and the held builders,
+    /// which on a fold capture replay the anchor state): the copies this node kept are read and
+    /// checked, the capture re-made if none verifies ([`palw_da_material_v1`]) and kept under
+    /// `foreign/`, every unit answered from it ([`palw_da_claim_answers_v1`]), and the material dropped
+    /// when the task ends. A refusal of the reservation is [`PalwDaClaimHoldV1::Ledger`], tried again
+    /// the next tick; the duties arrive soonest deadline first, so the claim whose session ends first
+    /// asks the ledger first. (The P2-7 review's MEDIUM: whole-job replays and held builders ran with
+    /// no reservation, the held builders on the tick itself, beside a per-tick cache of every claim's
+    /// whole capture.)
+    ///
+    /// The producer answers on the executor's kept instance (its walk, as the v1 held answer does); a
+    /// covering signer on a fresh one through the one resolve door, which neither releases nor keeps
+    /// the executor's (the review's LOW). Each object is built by the ONE builder the real-claim tests
+    /// carry through the gate and the fold (`palw_da_answer_object_v1`), inside the ruleset's close
+    /// ceiling (DA-8). One entry a duty, in order: `Ok(None)` for a unit a `Flat` answers.
+    async fn rcore_da_answers_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        duties: &[&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1],
+        flat_queued: bool,
+    ) -> Result<Vec<Result<Option<PalwConsensusObjectV2>, String>>, PalwDaClaimHoldV1> {
+        use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
+        let Some(first) = duties.first() else { return Ok(Vec::new()) };
+        let (claim, class_id, artifact_root) = (first.claim_id, first.class_id, first.artifact_root);
+        let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> = match first.role {
+            PalwDisclosureRoleV1::Producer => self.executor_backend_v1(session, class_id, artifact_root),
+            PalwDisclosureRoleV1::CoveringSigner => self.resolve_backend(session, class_id, artifact_root).map(Arc::from),
+        }
+        .map_err(PalwDaClaimHoldV1::Material)?;
+        let (_, _, work_leaves) =
+            session.palw_claim_roots_v2(claim).ok_or(PalwDaClaimHoldV1::Material("the chain holds no such claim".to_string()))?;
+        let lane = if first.free_prompt {
+            PalwDaLaneV1::FreePrompt { panel_da_admissible: self.consensus_config.params.palw_panel_da_admissible() }
+        } else {
+            let bond = &first.executor_bond;
+            PalwDaLaneV1::Attempt {
+                anchor: self
+                    .job_anchor_for_claim(session, backend.as_ref(), network_domain, first.accepted_block, class_id, bond)
+                    .unwrap_or_default(),
+                attempt_draw: self.attempt_draw_for_claim(session, first.accepted_block),
+                job: self.attempt_job_for_claim(session, backend.as_ref(), network_domain, first.accepted_block, class_id, bond),
+            }
+        };
+        let facts = PalwDaClaimFactsV1 {
+            claim_id: claim,
+            class_id,
+            executor_bond: first.executor_bond,
+            execution_root: first.execution_root,
+            trace_root: first.trace_root,
+            work_leaves,
+            form: self.class_prompt_ids_form(class_id),
+            lane,
+            job_pin: first.fp_job_pin_v1(),
+        };
+        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
+            backend.as_ref(),
+            class_id,
+            artifact_root,
+            None,
+            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::FullSeat,
+            |id| self.chain_carriage_v1(session, id),
+        );
+        let reserved = self.reserve_replay_v1("da-answer", &need, class_id, claim).map_err(PalwDaClaimHoldV1::Ledger)?;
+        // Every copy this node may hold, own retention first; a free-prompt claim's `.answer`
+        // envelopes too, which carry its job.
+        let dir = &self.config.retention_dir;
+        let paths: Vec<PathBuf> = if first.free_prompt {
+            self.fp_retained_payload_paths(&claim).to_vec()
+        } else {
+            vec![crate::palw_producer::palw_retained_material_path(dir, &claim), dir.join("foreign").join(format!("{claim}.material"))]
+        };
+        let foreign = dir.join("foreign");
+        let units: Vec<kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1> = duties.iter().map(|duty| duty.unit).collect();
+        let in_run_rows = first.in_run_rows;
+        let built = offload_shared(backend, move |b| {
+            let _held_for_the_answers = reserved;
+            palw_da_claim_answers_v1(
+                b,
+                &facts,
+                paths.iter().filter_map(|path| std::fs::read(path).ok()),
+                |bytes| palw_da_keep_remade_v1(&foreign, &claim, bytes),
+                &units,
+                in_run_rows,
+                flat_queued,
+            )
+        })
+        .await
+        .map_err(PalwDaClaimHoldV1::Material)?
+        .map_err(PalwDaClaimHoldV1::Material)?;
+        if built.remade {
+            info!(
+                "[{PALW_PANEL}] claim {claim}: no kept copy reproduces its roots — its capture was re-made by replaying the claim's job \
+                 and kept, to answer a data-availability session ({:?})",
+                first.role
+            );
+        }
+        Ok(duties
+            .iter()
+            .zip(built.answers)
+            .map(|(duty, answer)| match answer {
+                None => Ok(None),
+                Some(Err(why)) => Err(why),
+                Some(Ok(answer)) => kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+                    &network_domain,
+                    duty.claim_id,
+                    duty.unit,
+                    answer,
+                    duty.discloser,
+                    self.config.court.max_close_bytes(),
+                    |message, context| self.sign(message, context),
+                )
+                .map(Some)
+                .map_err(|e| e.to_string()),
+            })
+            .collect())
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
@@ -10605,7 +12026,8 @@ impl PalwPanelService {
         replays: &mut PalwSeatReplaysV1,
     ) -> (PalwSeatReplayStepV1, Option<Vec<u8>>) {
         use kaspa_consensus_core::palw_freeprompt_v3::{
-            PalwFpMaterialV1, fp_job_id_v3, palw_fp_capture_decode_v1, palw_fp_job_material_decode_v1, palw_fp_seat_prompt_admit_v1,
+            PalwFpMaterialV1, fp_job_id_v3, palw_fp_capture_decode_v1, palw_fp_job_material_decode_v1, palw_fp_material_encode_v1,
+            palw_fp_seat_prompt_admit_v1,
         };
         let form = self.class_prompt_ids_form(duty.class_id);
         let Ok(probe) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else {
@@ -10672,7 +12094,7 @@ impl PalwPanelService {
         order.sort_by_key(|i| !own[*i]);
         let mut waiting = false;
         for index in order {
-            let (job_id, material, payloads) = &jobs[index];
+            let (job_id, material, _) = &jobs[index];
             let is_own = own[index];
             // Whether this job's replay can decide the claim: the claim's own, or any while none is.
             let decides = is_own || !holds_own;
@@ -10708,7 +12130,17 @@ impl PalwPanelService {
                                 duty.claim_id, replayed.work_leaves, seat_r_duty.role
                             );
                         }
-                        return (PalwSeatReplayStepV1::Licensed, payloads.first().cloned());
+                        // What is kept of a licence is the job it licensed, in its job-only spelling
+                        // (`FPM1`): never a served payload's `FPC1` whose capture nothing checked — a
+                        // peer racing the producer's gossip can plant one of the right job with a
+                        // garbage capture, and a covering signer then answered its DA session from it
+                        // (the P2-7 review's HIGH). A verified `FPC1` of this job is kept already
+                        // (`proof`, above; the directory is write-once), and R-core's answer re-makes
+                        // the capture from this one (`palw_da_material_v1`).
+                        return (
+                            PalwSeatReplayStepV1::Licensed,
+                            Some(palw_fp_material_encode_v1(&material.job, &material.prompt_token_ids)),
+                        );
                     }
                     if fresh {
                         warn!(
@@ -12257,18 +13689,53 @@ mod court_responder_coverage_pin {
         let event = source[loop_start..].find("palw_da_event_index_parts_v1(duty.missing_event_index)").expect("the event path");
         assert!(held < event, "a held unit is answered before an event index is read");
         // Every unit the court can name is answered, and with no catch-all arm — so a unit added to
-        // `PalwHeldMissingV1` is a compile error here rather than an executor slashed for silence.
+        // `PalwHeldMissingV1` is a compile error there rather than an executor slashed for silence.
+        // The arms are the ONE held builder's (`palw_da_held_disclosure_from_capture_v1`, P2-7),
+        // which the v1 answer and R-core's both reach.
         let answer = &source[source.find("fn held_da_answer_v1(").expect("the held answer")..];
         let answer = &answer[..answer.find("\n    }\n").expect("its end")];
+        assert!(answer.contains("self.fp_held_da_disclosure_v1(session, claim, missing)?"), "the v1 answer uses the shared builder");
+        let body = |head: &str| {
+            let at = &source[source.find(head).unwrap_or_else(|| panic!("{head}"))..];
+            &at[..at.find("\n    }\n").expect("its end")]
+        };
+        assert!(
+            body("fn fp_held_da_disclosure_v1(").contains("self.fp_held_da_disclosure_of_v1("),
+            "the free-prompt loader builds through the one free-prompt held source"
+        );
+        // Module-level functions end at a column-0 brace.
+        let top = |head: &str| {
+            let at = &source[source.find(head).unwrap_or_else(|| panic!("{head}"))..];
+            &at[..at.find("\n}\n").expect("its end")]
+        };
+        assert!(
+            body("fn fp_held_da_disclosure_of_v1(").contains("palw_fp_held_disclosure_v1("),
+            "which builds through the one free-prompt held builder"
+        );
+        assert!(
+            top("fn palw_fp_held_disclosure_v1(").contains("palw_da_held_disclosure_from_capture_v1("),
+            "which builds through the core's held builder"
+        );
+        let rcore = body("async fn rcore_da_answers_v1(");
+        for reached in ["palw_da_claim_answers_v1(", "palw_da_answer_object_v1("] {
+            assert!(rcore.contains(reached), "R-core's answer reaches {reached}");
+        }
+        let unit = top("pub(crate) fn palw_da_unit_answer_v1(");
+        assert!(unit.contains("palw_fp_held_disclosure_v1("), "a free-prompt claim's held unit, through the one FP held builder");
+        assert!(unit.contains("palw_da_held_disclosure_from_capture_v1("), "and an attempt claim's through the core's held builder");
+        assert!(top("pub(crate) fn palw_da_claim_answers_v1(").contains("palw_da_unit_answer_v1("), "every unit of a claim");
+        let core = include_str!("../../consensus/core/src/palw_da_rcore_v1.rs");
+        let builder = &core[core.find("pub fn palw_da_held_disclosure_from_capture_v1(").expect("the held builder")..];
+        let builder = &builder[..builder.find("\n}\n").expect("its end")];
         for unit in [
             "PalwHeldMissingV1::StepLeaf { leaf } =>",
             "PalwHeldMissingV1::PromptIdsTile { tile } =>",
             "PalwHeldMissingV1::StateChunk { checkpoint, chunk } =>",
             "PalwHeldMissingV1::StepRange { first, count } =>",
         ] {
-            assert!(answer.contains(unit), "the held answer has no arm {unit}");
+            assert!(builder.contains(unit), "the held builder has no arm {unit}");
         }
-        assert!(!answer.contains("other =>") && !answer.contains("_ =>"), "no held unit falls to a catch-all refusal");
+        assert!(!builder.contains("other =>") && !builder.contains("_ =>"), "no held unit falls to a catch-all refusal");
     }
 
     /// **ADR-0121 §7, pinned where the seat's fault is handled**: a `FaultInRange` whose address is
@@ -13966,7 +15433,7 @@ mod seat_s_tests {
         Hash64::from_u64_word(n)
     }
 
-    fn floor_backend() -> misaka_palw_base0::backend::Base0Backend {
+    pub(super) fn floor_backend() -> misaka_palw_base0::backend::Base0Backend {
         use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
         let court =
             kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
@@ -13991,7 +15458,7 @@ mod seat_s_tests {
     }
 
     /// A free-prompt job of the floor's, greedy, five prompt ids and a seven-token ceiling, and the ids.
-    fn floor_fp_job(
+    pub(super) fn floor_fp_job(
         backend: &misaka_palw_base0::backend::Base0Backend,
     ) -> (kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<u32>) {
         use kaspa_consensus_core::palw_freeprompt_v3::{
@@ -14719,8 +16186,9 @@ mod seat_s_tests {
         let gate = block.find("match palw_seat_tail_v1(seat_r, duty.free_prompt, refuted_here, || {").expect("the tail's gate");
         let wait = block.rfind("palw_seat_material_wait_ends_v1(").expect("the tail's wait");
         assert!(block[..gate].rfind("self.request_material_signed(").is_some(), "the pull still runs");
-        assert!(gate < wait && block[gate..wait].contains("PalwSeatTailV1::Silent => break 'verdict None,"));
-        let note = "PalwSeatTailV1::Waits { unserved: true } => {\n                            unserved.entry(duty.claim_id)";
+        let silent = "PalwSeatTailV1::Silent => {\n                            service.note_served(duty.claim_id);\n                            break 'verdict None;";
+        assert!(gate < wait && block[gate..wait].contains(silent), "Silent: served, and nothing filed");
+        let note = "PalwSeatTailV1::Waits { unserved: true } => service.note_unserved(duty.claim_id, current_daa),";
         assert!(block[gate..wait].contains(note), "noted only when served no job");
         assert!(!block.contains("if seat_r && !refuted {\n                        unserved.entry("), "the old unconditional note is gone");
     }
@@ -14967,5 +16435,855 @@ mod seat_s_tests {
         let key = palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 1, b"x");
         assert_ne!(key, palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 2, b"x"), "a segment's own task");
         assert_ne!(key.1, h(2), "never a whole-job replay's key");
+    }
+}
+
+#[cfg(test)]
+mod p2_7_disclosure_policy {
+    //! **ADR-0152 X7 (Phase 2, P2-7): when the node answers a disclosure duty, what it answers from,
+    //! and how its queue keys an answer.** The duty list and the answer object are consensus-core's
+    //! (`palw_disclosure_duties_v1`, `palw_da_answer_object_v1`) and are carried through the gate and
+    //! the fold on real claims in `t46_false_valid_real_claim::m3_da_court`; this is the node's own
+    //! policy around them — the material loader and the unit builders run here on the floor's fixture
+    //! backend (kept → verified → re-made → nothing), and the tick's loop is pinned where it runs.
+    use super::*;
+    use kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1;
+    use kaspa_consensus_core::palw_producer_v2::{PalwDisclosureDutyV1, PalwDisclosureRoleV1};
+
+    fn duty(role: PalwDisclosureRoleV1, signer_rank: u16, unit: PalwDaUnitV1, deadline_daa: u64, window: u64) -> PalwDisclosureDutyV1 {
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0));
+        PalwDisclosureDutyV1 {
+            claim_id: Hash64::from_u64_word(1),
+            accepted_block: Hash64::from_u64_word(2),
+            class_id: Hash64::from_u64_word(3),
+            artifact_root: Hash64::from_u64_word(4),
+            executor_bond: bond,
+            discloser: bond,
+            role,
+            signer_rank,
+            unit,
+            deadline_daa,
+            disclose_window_daa: window,
+            in_run_rows: 1,
+            trace_root: Hash64::default(),
+            execution_root: Hash64::default(),
+            free_prompt: false,
+            job_identity: Hash64::default(),
+        }
+    }
+
+    /// **The producer answers at once; a covering signer waits out the producer's half of the
+    /// window, staggered by its rank, and never later than a quarter-window before the deadline;
+    /// nobody answers past the deadline.** testnet-12's `W_disclose` of 1,200 DAA on a session opened
+    /// at 1,000: the producer from 1,000 to 2,200; the rank-0 signer from 1,600 (600 left), rank 1
+    /// from 1,675, rank 4 and every later rank from 1,900 (300 left); and a devnet-short window keeps
+    /// the same shape.
+    #[test]
+    fn the_producer_answers_at_once_and_a_covering_signer_after_its_turn() {
+        let unit = PalwDaUnitV1::Event { row: 0, tile: 0 };
+        let producer = duty(PalwDisclosureRoleV1::Producer, 0, unit, 2_200, 1_200);
+        for at in [1_000, 1_599, 2_200] {
+            assert!(palw_disclosure_due_v1(&producer, at), "the producer at {at}");
+        }
+        assert!(!palw_disclosure_due_v1(&producer, 2_201), "past the deadline the session has defaulted");
+        for (rank, first) in [(0u16, 1_600u64), (1, 1_675), (2, 1_750), (3, 1_825), (4, 1_900), (5, 1_900), (40, 1_900)] {
+            let signer = duty(PalwDisclosureRoleV1::CoveringSigner, rank, unit, 2_200, 1_200);
+            assert!(!palw_disclosure_due_v1(&signer, first - 1), "rank {rank} waits until {first}");
+            assert!(palw_disclosure_due_v1(&signer, first), "rank {rank} answers from {first}");
+            assert!(palw_disclosure_due_v1(&signer, 2_200) && !palw_disclosure_due_v1(&signer, 2_201), "rank {rank}: to the deadline");
+        }
+        let short = duty(PalwDisclosureRoleV1::CoveringSigner, 0, unit, 40, 20);
+        assert!(!palw_disclosure_due_v1(&short, 29) && palw_disclosure_due_v1(&short, 30), "half of a short window");
+        let degenerate = duty(PalwDisclosureRoleV1::CoveringSigner, 3, unit, 5, 0);
+        assert!(
+            palw_disclosure_due_v1(&degenerate, 5) && !palw_disclosure_due_v1(&degenerate, 6),
+            "a zero window still ends at its deadline"
+        );
+    }
+
+    /// A floor free-prompt claim the fixture backend ran: the backend, the claim's facts, its job and
+    /// prompt, and the honest capture.
+    fn fp_claim() -> (
+        misaka_palw_base0::backend::Base0Backend,
+        PalwDaClaimFactsV1,
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        Vec<u32>,
+        Vec<u8>,
+    ) {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let backend = super::seat_s_tests::floor_backend();
+        let (job, ids) = super::seat_s_tests::floor_fp_job(&backend);
+        let prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the producer's run");
+        let facts = PalwDaClaimFactsV1 {
+            claim_id: Hash64::from_u64_word(0xC1),
+            class_id: job.class_id,
+            executor_bond: PalwBondKeyV2(job.executor_bond),
+            execution_root: run.outcome.execution_root,
+            trace_root: run.facts.full_logits_trace_root,
+            work_leaves: run.facts.step_leaf_count,
+            form: backend.prompt_ids_form(),
+            lane: PalwDaLaneV1::FreePrompt { panel_da_admissible: false },
+            // No recorded identity (a fixture claim): H-2's check is skipped, as for any caller
+            // without the claim's record.
+            job_pin: None,
+        };
+        (backend, facts, job, ids, run.outcome.material)
+    }
+
+    /// Answer `units` of `facts`'s claim from `kept` on the fixture backend: what was built, and what
+    /// was handed to `keep`.
+    fn answer(
+        backend: &misaka_palw_base0::backend::Base0Backend,
+        facts: &PalwDaClaimFactsV1,
+        kept: Vec<Vec<u8>>,
+        units: &[PalwDaUnitV1],
+        flat: bool,
+    ) -> (Result<PalwDaClaimAnswersV1, String>, Option<Vec<u8>>) {
+        let mut kept_back = None;
+        let built = palw_da_claim_answers_v1(backend, facts, kept, |bytes| kept_back = Some(bytes.to_vec()), units, 2, flat);
+        (built, kept_back)
+    }
+
+    /// **The P2-7 review's HIGH: an R-core answer is built from a capture that reproduces the claim's
+    /// roots, or from one re-made by replaying the claim's job — never from a payload that merely
+    /// decodes as `FPC1`.** On the floor's fixture backend, one free-prompt claim:
+    ///
+    /// 1. an honest `FPC1` kept: answered from as it is, nothing replayed or rewritten;
+    /// 2. a PLANTED `FPC1` — the claim's job, a garbage capture — that the decoder accepts: never
+    ///    answered from; the job it carries is replayed, and the verified capture (byte for byte the
+    ///    honest payload) is handed to `keep` to replace it; with an honest copy kept beside it, that
+    ///    copy answers and nothing is replayed;
+    /// 3. the job alone (`FPM1`, what a full seat that licensed by replay keeps): re-made and kept as
+    ///    the claim's `FPC1`;
+    /// 4. nothing, a stranger's job (the claim's class and producer, another nonce), another
+    ///    producer's job: no answer and nothing kept — and a stranger's job before the claim's costs a
+    ///    replay, never the answer.
+    ///
+    /// Before the fix case 2 answered from the garbage (the loader's guard was the decoder alone), so
+    /// it is red without it.
+    /// **H-2 on the answering path (the PANEL ⋈ M2 Phase 3 merge):** a free-prompt answer is built
+    /// only from a capture whose context reproduces the claim's recorded job pin
+    /// (`PalwDisclosureDutyV1::fp_job_pin_v1` → `PalwDaClaimFactsV1::job_pin` → the roots'
+    /// `job_pin`). The honest capture of a claim whose record names ANOTHER job's pin is neither
+    /// answered from nor re-made from its job (the re-make reproduces the same context), and nothing
+    /// is kept — the fold's identity checks (J1) would refuse that answer. Red if `roots_v1` drops
+    /// the pin.
+    #[test]
+    fn a_free_prompt_answer_needs_the_claims_recorded_job_pin() {
+        use kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1;
+        let (backend, mut facts, job, ids, capture) = fp_claim();
+        let honest = palw_fp_capture_encode_v1(&job, &ids, &capture);
+        let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+        let (built, _) = answer(&backend, &facts, vec![honest.clone()], &event, false);
+        assert!(!built.expect("no pin recorded: answered").remade);
+        facts.job_pin = Some(Hash64::from_u64_word(0x0B0B));
+        let (built, kept) = answer(&backend, &facts, vec![honest], &event, false);
+        assert!(built.is_err() && kept.is_none(), "another job's pin: no answer, nothing kept");
+        facts.lane = PalwDaLaneV1::Attempt { anchor: Hash64::default(), attempt_draw: None, job: None };
+        assert_eq!(facts.roots_v1(None).job_pin, None, "the attempt lane never carries a free-prompt pin");
+    }
+
+    #[test]
+    fn a_da_answer_is_built_from_a_verified_or_re_made_capture_never_a_decodable_one() {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            palw_fp_capture_decode_v1, palw_fp_capture_encode_v1, palw_fp_material_encode_v1,
+        };
+        let (backend, facts, job, ids, capture) = fp_claim();
+        let honest = palw_fp_capture_encode_v1(&job, &ids, &capture);
+        let garbage = palw_fp_capture_encode_v1(&job, &ids, b"a capture nobody checked");
+        assert!(palw_fp_capture_decode_v1(&garbage, facts.form).is_some(), "the planted payload decodes as the claim's FPC1");
+        let job_only = palw_fp_material_encode_v1(&job, &ids);
+        let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+        // (1) Honest.
+        let (built, kept) = answer(&backend, &facts, vec![honest.clone()], &event, false);
+        let built = built.expect("answered from the honest copy");
+        assert!(!built.remade && kept.is_none(), "nothing replayed, nothing rewritten");
+        let honest_answer = built.answers[0].clone().expect("asked").expect("the event opens");
+        // (2) Planted.
+        let (built, kept) = answer(&backend, &facts, vec![garbage.clone()], &event, false);
+        let built = built.expect("re-made from the job the planted payload carries");
+        assert!(built.remade, "the garbage capture is never answered from");
+        assert_eq!(kept.as_deref(), Some(honest.as_slice()), "the verified re-make replaces it: the honest payload, byte for byte");
+        assert_eq!(built.answers[0], Some(Ok(honest_answer.clone())), "and answers as the honest copy does");
+        let (built, kept) = answer(&backend, &facts, vec![garbage.clone(), honest.clone()], &event, false);
+        assert!(!built.expect("the honest copy answers").remade && kept.is_none(), "own retention planted, the seat's copy honest");
+        // (3) The job alone.
+        let (built, kept) = answer(&backend, &facts, vec![job_only.clone()], &event, false);
+        assert!(built.expect("re-made from the kept job").remade);
+        assert_eq!(kept.as_deref(), Some(honest.as_slice()), "and kept as the claim's FPC1");
+        // (4) Nothing to answer from.
+        let (built, kept) = answer(&backend, &facts, Vec::new(), &event, false);
+        assert!(built.is_err() && kept.is_none(), "a free-prompt job is not chain data");
+        let mut stranger = job.clone();
+        stranger.job_nonce = [0xA5; 32];
+        let stranger_only = palw_fp_material_encode_v1(&stranger, &ids);
+        let (built, kept) = answer(&backend, &facts, vec![stranger_only.clone()], &event, false);
+        assert!(built.is_err() && kept.is_none(), "a stranger's job does not reproduce the claim's roots");
+        let (built, kept) = answer(&backend, &facts, vec![stranger_only, job_only.clone()], &event, false);
+        assert!(built.expect("the claim's own job, tried next").remade && kept.as_deref() == Some(honest.as_slice()));
+        let mut other = job.clone();
+        other.executor_bond =
+            kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB1), 0);
+        let (built, kept) = answer(&backend, &facts, vec![palw_fp_material_encode_v1(&other, &ids)], &event, false);
+        assert!(built.is_err() && kept.is_none(), "another producer's job is not replayed");
+    }
+
+    /// **Every due unit of a claim from one load, and one `Flat` answers the claim's run** (IMPL-16): a
+    /// `Flat` already queued answers an in-run event unit (`None`, no carrier), and one built here
+    /// answers the next in-run unit the same way; a held unit of a free-prompt claim is answered from
+    /// the same capture by the one held builder; an answer is the form the ONE object builder takes.
+    #[test]
+    fn a_claims_units_are_answered_from_one_load_and_one_flat_answers_its_run() {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerV1, palw_da_answer_object_v1};
+        use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+        use kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1;
+        let (backend, facts, job, ids, capture) = fp_claim();
+        let honest = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(&job, &ids, &capture);
+        let (built, _) = answer(&backend, &facts, vec![honest.clone()], &[PalwDaUnitV1::Event { row: 0, tile: 0 }], true);
+        assert_eq!(built.expect("loaded").answers, vec![None], "a queued Flat answers the in-run unit");
+        let units = [
+            PalwDaUnitV1::Event { row: 0, tile: 0 },
+            PalwDaUnitV1::Event { row: 1, tile: 0 },
+            PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: 0 }),
+        ];
+        let built = answer(&backend, &facts, vec![honest], &units, false).0.expect("loaded once");
+        assert_eq!(built.answers.len(), 3);
+        let first = built.answers[0].clone().expect("asked").expect("opens");
+        if matches!(first, PalwDaAnswerV1::Event(PalwTraceEventDisclosureV1::Flat { .. })) {
+            assert_eq!(built.answers[1], None, "the Flat built for row 0 answers row 1 of a two-row run");
+        } else {
+            assert!(built.answers[1].is_some(), "no Flat, so row 1 is answered on its own");
+        }
+        let held = built.answers[2].clone().expect("asked").expect("the prompt tile opens from the capture's job");
+        let bond = facts.executor_bond;
+        for (unit, answer) in [(units[0], first), (units[2], held)] {
+            palw_da_answer_object_v1(&Hash64::from_u64_word(0xD0), facts.claim_id, unit, answer, bond, u64::MAX, |_, _| Some(vec![1]))
+                .expect("the form the fold takes");
+        }
+    }
+
+    /// **An attempt claim's material: kept and verified, or re-made from its block's job** — which is
+    /// chain data, so a garbage copy (or none) costs a replay and is replaced, and only a node whose
+    /// store lacks the block has nothing to answer from.
+    #[test]
+    fn an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block() {
+        use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+        let backend = super::seat_s_tests::floor_backend();
+        let anchor = Hash64::from_u64_word(0x00C0_FFEE);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("job");
+        let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, true);
+        let run = backend.execute(&job, &prompt).expect("the producer's run");
+        let mut facts = PalwDaClaimFactsV1 {
+            claim_id: Hash64::from_u64_word(0xC2),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0)),
+            execution_root: run.execution_root,
+            trace_root: run.trace_root,
+            work_leaves: 0,
+            form: backend.prompt_ids_form(),
+            lane: PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: Some((job, prompt)) },
+            job_pin: None,
+        };
+        let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+        let (built, kept) = answer(&backend, &facts, vec![run.material.clone()], &event, false);
+        assert!(!built.expect("answered").remade && kept.is_none(), "the kept capture verifies");
+        let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec()], &event, false);
+        assert!(built.expect("re-made from the block's job").remade);
+        assert_eq!(kept.as_deref(), Some(run.material.as_slice()), "kept in the garbage's place");
+        facts.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: None };
+        let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec()], &event, false);
+        assert!(built.is_err() && kept.is_none(), "no block in this store: nothing to re-make from");
+    }
+
+    /// **The tick runs R-core's loop, and it runs before the seat's duties** (the P2-7 review's
+    /// MEDIUM and LOW): the duty read, then the pins of what it must keep (before any seat duty below
+    /// can write `foreign/` and prune it), then each claim's answers built and queued on the carrier
+    /// path every court move rides. And a licence by replay keeps the job it licensed in its
+    /// job-only spelling, never a served `FPC1` nothing checked, and past the fence a seat that could
+    /// not keep it signs no `Valid`.
+    #[test]
+    fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find("mod p2_7_disclosure_policy").expect("this module is in this file")];
+        let read = source.find("let disclosure = session.palw_disclosure_duties_v1(vec![bond_key]);").expect("the duty read");
+        let pinned = read
+            + source[read..].find("self.foreign_pinned.lock().unwrap().extend(disclosure_retain.iter().copied());").expect("pinned");
+        let built = pinned
+            + source[pinned..]
+                .find("self.rcore_da_answers_v1(&session, network_domain, &duties, flat_queued.contains(&claim)).await")
+                .expect("each claim's answers built");
+        let queued = built + source[built..].find("court_pending.push((key.0, key.1, key.2, object));").expect("and queued");
+        let seats = source.find("let duties = session.palw_seat_duties_v2(vec![bond_key]);").expect("the seat's duties");
+        assert!(read < pinned && pinned < built && built < queued && queued < seats, "read, pin, build, queue — before the seats");
+        let fp = &source[source.find("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
+        let fp = &fp[..fp.find("\n    }\n").expect("its end")];
+        assert!(
+            fp.contains("PalwSeatReplayStepV1::Licensed,\n                            Some(palw_fp_material_encode_v1(&material.job, &material.prompt_token_ids)),"),
+            "a licence keeps the job it licensed"
+        );
+        assert!(!fp.contains("payloads.first()"), "never the first-arrived spelling");
+        let licensed = &source[source.find("(PalwSeatReplayStepV1::Licensed, bytes) => {").expect("the licence arm")..];
+        let valid = licensed.find("break 'verdict Some(PalwReceiptVerdictV2::Valid);").expect("its Valid");
+        let abstain = licensed
+            .find("if !self.licensed_job_kept_v1(&duty.claim_id, bytes, current_daa) {\n                                        break 'verdict None;")
+            .expect("the kept-or-abstain gate");
+        assert!(abstain < valid, "past the fence nothing is signed that this seat cannot answer for");
+        let gate = &source[source.find("    fn licensed_job_kept_v1(").expect("the gate")..];
+        let gate = &gate[..gate.find("\n    }\n").expect("its end")];
+        assert!(
+            gate.contains("bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes))")
+                && gate.contains("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {"),
+            "the job is kept, or past the fence the licence is not signed"
+        );
+    }
+
+    /// **The queue key names the claim and the unit**: the same unit keys the same entry (so a
+    /// queued or recently sent answer is not rebuilt), distinct units of one claim key distinct
+    /// entries (so one answer never hides another), and the key's claim half is the claim.
+    #[test]
+    fn the_queue_key_is_the_claim_and_the_unit() {
+        use kaspa_consensus_core::palw_held_da_v1::PalwHeldMissingV1;
+        let units = [
+            PalwDaUnitV1::Event { row: 0, tile: 0 },
+            PalwDaUnitV1::Event { row: 7, tile: 0 },
+            PalwDaUnitV1::Event { row: 0, tile: 1 },
+            PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 5 }),
+            PalwDaUnitV1::Held(PalwHeldMissingV1::StepRange { first: 5, count: 1 }),
+            PalwDaUnitV1::Held(PalwHeldMissingV1::StateChunk { checkpoint: 1, chunk: 2 }),
+            PalwDaUnitV1::Held(PalwHeldMissingV1::PromptIdsTile { tile: 0 }),
+        ];
+        let keys: Vec<(Hash64, u32, bool)> =
+            units.iter().map(|unit| palw_disclosure_queue_key_v1(&duty(PalwDisclosureRoleV1::Producer, 0, *unit, 10, 10))).collect();
+        let distinct: HashSet<u32> = keys.iter().map(|key| key.1).collect();
+        assert_eq!(distinct.len(), units.len(), "one entry a unit");
+        assert!(keys.iter().all(|key| key.0 == Hash64::from_u64_word(1) && key.2), "the claim, as the responder");
+        let again = palw_disclosure_queue_key_v1(&duty(PalwDisclosureRoleV1::CoveringSigner, 2, units[3], 99, 10));
+        assert_eq!(again, keys[3], "the unit, whoever answers it");
+    }
+}
+
+#[cfg(test)]
+mod p2_6_da_accusation_policy {
+    //! **ADR-0152 §3.8 (Phase 2, P2-6): the automatic data-availability accusation, its funding and
+    //! its place in the carrier order.** The accusation's gate and its object are consensus-core's
+    //! (`palw_da_accusation_check_v1`, `palw_da_accusation_object_v1`) and ride the gate, the walk and
+    //! the fold on real claims in `t46_false_valid_real_claim::m3_da_court` (T34/T54a at processor
+    //! level); this is the node's own policy around them — when a seat accuses and until when, the
+    //! book that files each claim once, the fee funder's age and B-3 rules, and the lane order — and
+    //! the tick's wiring, pinned where it runs.
+    use super::*;
+    use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as C;
+    use kaspa_consensus_core::palw_state_v2::{PalwDaAdmissionV1, PalwStateV2Error};
+
+    fn claim(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+
+    fn the_source() -> &'static str {
+        let whole = include_str!("palw_panel.rs");
+        &whole[..whole.find("mod p2_6_da_accusation_policy").expect("this module is in this file")]
+    }
+
+    /// The body of `fn name` in the production source.
+    fn body_of(source: &'static str, signature: &str) -> &'static str {
+        let body = &source[source.find(signature).unwrap_or_else(|| panic!("{signature}"))..];
+        &body[..body.find("\n    }\n").expect("its end")]
+    }
+
+    /// **T34 (node half): a seat's `Unavailable` accuses the producer, inside the landing margin, on
+    /// every class.** Past `palw_rcore_plus` the window is `deadline − 60` (DA-6's "until `bound +
+    /// window_receipt − 60`"): testnet-12's floor, bound at 1,000 with its 600-DAA window, accuses
+    /// from its `X_ASK` (1,060) to 1,540 and not after; a 2M claim's 2,799-DAA window reaches 3,739.
+    /// Nothing below the fence, nothing for a claim this seat's own replay refuted (it was served —
+    /// the challenger's half), and nothing on a window shorter than the margin (the licence's own
+    /// accusation covers it).
+    #[test]
+    fn t34_an_unavailable_accuses_inside_its_landing_margin_on_every_class() {
+        let floor_deadline = 1_000 + 600;
+        assert_eq!(palw_seat_da_accuse_by_v1(true, false, 1_000 + PALW_SEAT_MATERIAL_WAIT_CAP_DAA_V1, floor_deadline), Some(1_540));
+        assert_eq!(palw_seat_da_accuse_by_v1(true, false, 1_540, floor_deadline), Some(1_540), "to the margin");
+        assert_eq!(palw_seat_da_accuse_by_v1(true, false, 1_541, floor_deadline), None, "not past it");
+        assert_eq!(palw_seat_da_accuse_by_v1(true, false, 1_060, 1_000 + 2_799), Some(3_739), "the 2M row's window");
+        assert_eq!(palw_seat_da_accuse_by_v1(false, false, 1_060, floor_deadline), None, "below palw_rcore_plus");
+        assert_eq!(palw_seat_da_accuse_by_v1(true, true, 1_060, floor_deadline), None, "a claim its replay refuted");
+        assert_eq!(palw_seat_da_accuse_by_v1(true, false, 10, 40), None, "a window shorter than the margin");
+    }
+
+    fn file() -> C {
+        file_as(true)
+    }
+
+    fn file_as(accuser_is_seat: bool) -> C {
+        C::File {
+            unit: kaspa_consensus_core::palw_da_rcore_v1::PALW_DA_AUTO_NAMED_UNIT_V1,
+            admission: PalwDaAdmissionV1 {
+                stage: kaspa_consensus_core::palw_da_rcore_v1::PalwDaStageV1::Live,
+                accuser_is_seat,
+                exposure: 320,
+                deadline_daa: 2_300,
+            },
+        }
+    }
+
+    /// **The chain's answer, as a step**: `File` files; an accusation on chain (open, or opened by
+    /// this seat before) and an answered unit settle the claim for good; A-6's room is waited out a
+    /// re-plan at a time; every other refusal of the fold's gate settles it.
+    #[test]
+    fn the_chains_answer_files_settles_or_waits_for_room() {
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0));
+        assert_eq!(palw_seat_accuse_step_v1(&file()), PalwSeatAccuseStepV1::File);
+        // The P2-6 review, LOW: a bond no longer on the claim's current panel would open a NON-seat
+        // session (no pause credit, the non-seat budget) — P2-8d's filing, never this one.
+        assert_eq!(palw_seat_accuse_step_v1(&file_as(false)), PalwSeatAccuseStepV1::Settle, "not a seat's accusation");
+        assert_eq!(palw_seat_accuse_step_v1(&C::AccusedBefore), PalwSeatAccuseStepV1::Settle);
+        assert_eq!(palw_seat_accuse_step_v1(&C::Answered), PalwSeatAccuseStepV1::Settle);
+        let room = PalwStateV2Error::AccusationExposureCeiling {
+            bond,
+            edge: "data-availability session",
+            backed: 900,
+            accusation: 320,
+            ceiling: 1_000,
+        };
+        assert_eq!(palw_seat_accuse_step_v1(&C::Refused(room)), PalwSeatAccuseStepV1::Retry, "A-6's room frees as sessions close");
+        for standing in [
+            PalwStateV2Error::DaCourtDormant,
+            PalwStateV2Error::MissingClaim(claim(1)),
+            PalwStateV2Error::WrongPhase { claim: claim(1), edge: "DefaultAccused" },
+            PalwStateV2Error::DaClaimNotAccusable(claim(1)),
+            PalwStateV2Error::DaOutsideRetention { claim: claim(1), at: 5, window: 1_200, retention_daa: 6 },
+            PalwStateV2Error::DaSessionBudgetExhausted { claim: claim(1), accuser: bond, why: "four" },
+            PalwStateV2Error::DaAccuserIsTheProducer(bond),
+        ] {
+            assert_eq!(palw_seat_accuse_step_v1(&C::Refused(standing.clone())), PalwSeatAccuseStepV1::Settle, "{standing:?}");
+        }
+    }
+
+    /// **The de-duplication: each accuser accuses a claim once, and no storm of duplicates rides.**
+    /// The `Unavailable` and the licence note the same claim once (the licence may only widen its
+    /// window). While its accusation is queued, or its carrier sent less than a re-plan ago, the
+    /// claim is not asked again; a carrier lost past the re-plan is asked again — the chain decides,
+    /// and from the moment the session exists its answer is `AccusedBefore`, which settles the claim;
+    /// a later trigger then costs one read and files nothing. A room refusal is asked again a re-plan
+    /// later; a window that runs out is forgotten. Driven through a scripted chain over thirty ticks
+    /// of triggers: exactly one accusation is built.
+    #[test]
+    fn the_book_files_each_claim_once_and_the_chain_ends_it() {
+        let (c1, c2) = (claim(1), claim(2));
+        let mut book = PalwSeatAccusationsV1::default();
+        book.want(c1, 1_540);
+        book.want(c1, 1_100);
+        book.want(c1, 1_600);
+        assert!(book.wants(&c1));
+        let nothing = |_: &Hash64| false;
+        let never = |_: &Hash64| None;
+        assert_eq!(book.due(1_060, nothing, never), vec![c1], "one entry, however many triggers");
+        assert!(book.due(1_060, |c| *c == c1, never).is_empty(), "not while queued");
+        assert!(book.due(1_069, nothing, |_| Some(1_060)).is_empty(), "not while its carrier is plausibly in flight");
+        assert_eq!(book.due(1_070, nothing, |_| Some(1_060)), vec![c1], "a lost carrier is asked for again after a re-plan");
+        book.refused(&c1, 1_070);
+        assert!(book.due(1_079, nothing, never).is_empty(), "room: asked a re-plan later");
+        assert_eq!(book.due(1_080, nothing, never), vec![c1]);
+        assert!(book.due(1_601, nothing, never).is_empty() && !book.wants(&c1), "the widened window runs out");
+        book.want(c2, 2_000);
+        book.settle(&c2);
+        assert!(book.due(1_100, nothing, never).is_empty(), "settled");
+
+        // Thirty ticks of the tick's own sequence on a scripted chain: triggers every tick (the
+        // `Unavailable`, then the licence), one queue, a carrier that lands two ticks after it is sent.
+        let mut book = PalwSeatAccusationsV1::default();
+        let key = palw_da_accusation_queue_key_v1(c1);
+        let (mut queued, mut sent_at, mut on_chain_at, mut built) = (false, None::<u64>, None::<u64>, 0);
+        for tick in 0..30u64 {
+            let daa = 1_060 + tick;
+            book.want(c1, daa + PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1);
+            if on_chain_at.is_none_or(|at| daa < at) && sent_at.is_some_and(|at| daa >= at + 2) {
+                on_chain_at = Some(daa);
+            }
+            let chain = |daa: u64| if on_chain_at.is_some_and(|at| daa >= at) { C::AccusedBefore } else { file() };
+            for c in book.due(daa, |c| *c == c1 && queued, |c| (*c == c1).then_some(sent_at).flatten()) {
+                match palw_seat_accuse_step_v1(&chain(daa)) {
+                    PalwSeatAccuseStepV1::File => {
+                        built += 1;
+                        queued = true;
+                    }
+                    PalwSeatAccuseStepV1::Settle => book.settle(&c),
+                    PalwSeatAccuseStepV1::Retry => book.refused(&c, daa),
+                }
+            }
+            // The priority lane sends what is queued, keyed as the court queue keys it.
+            if queued {
+                assert_eq!(key, (c1, u32::MAX, false));
+                queued = false;
+                sent_at = Some(daa);
+            }
+        }
+        assert_eq!(built, 1, "one accusation for thirty ticks of triggers");
+        assert!(on_chain_at.is_some(), "and the chain holds it");
+    }
+
+    /// **The queue key is the claim on the accusing side, and never an answer's or a court move's**:
+    /// a court move is keyed by its session id and an R-core answer is the responder's (`true`), so
+    /// the entry the priority lane carries is recognised as this seat's accusation and nothing else is.
+    #[test]
+    fn the_accusation_queue_key_is_the_claim_on_the_accusing_side() {
+        let key = palw_da_accusation_queue_key_v1(claim(5));
+        assert_eq!(key, (claim(5), u32::MAX, false));
+        let accused = PalwConsensusObjectV2::DefaultAccused {
+            claim: claim(5),
+            missing_event_index: 0,
+            accuser: PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0)),
+            signature: vec![1],
+        };
+        assert!(palw_da_accusation_queued_v1(key.1, key.2, &accused));
+        assert!(!palw_da_accusation_queued_v1(0, false, &accused), "another round is not this seat's accusation");
+        assert!(!palw_da_accusation_queued_v1(key.1, true, &accused), "nor the responder's side");
+    }
+
+    /// **The tick wires it where it runs**: the `Unavailable` notes the claim after its receipt is
+    /// broadcast; the accusation step asks the chain before it builds, builds with the ONE builder,
+    /// queues under the accusation's key, and runs before the collector and submitter; queued
+    /// accusations are asked again while they wait; and the licence seam notes the claim instead of
+    /// saying the filing is Phase 2's.
+    #[test]
+    fn the_tick_accuses_after_the_unavailable_and_before_the_carriers() {
+        let source = the_source();
+        let receipt = source
+            .find("self.flow_context.broadcast_palw_seat_receipt(bytes).await;\n                }\n                if valid {")
+            .expect("the receipt");
+        let noted = source.find("accusations.want(duty.claim_id, by);").expect("the Unavailable notes the claim");
+        let step = source.find("// --- P2-6: this seat's accusations of withholding ---").expect("the accusation step");
+        let asked = step
+            + source[step..]
+                .find("let Some(check) = session.palw_da_accusation_check_v1(claim, bond_key) else")
+                .expect("asked of the chain");
+        let rechecked = step
+            + source[step..].find("court_pending.retain(|(claim, round, responder, object)| {").expect("the queued ones asked again");
+        let built = step + source[step..].find("palw_da_rcore_v1::palw_da_accusation_object_v1(").expect("the ONE builder");
+        let queued = built + source[built..].find("let key = palw_da_accusation_queue_key_v1(claim);").expect("keyed");
+        let carriers = source.find("// --- the collector + submitter's half ---").expect("the carriers");
+        assert!(receipt < noted && noted < step, "noted once the receipt is out, before the step");
+        assert!(step < rechecked && rechecked < asked && asked < built && built < queued && queued < carriers);
+        let pruned = queued
+            + source[queued..]
+                .find("court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));")
+                .expect("the debounce leaves with the book entry");
+        assert!(pruned < carriers);
+        let licence = source.find("if palw_seat_unserved_licence_v1(phase) {").expect("the licence seam");
+        assert!(
+            source[licence..]
+                .find("accusations.want(claim, current_daa.saturating_add(PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1));")
+                .is_some()
+        );
+        assert!(!source.contains("the DefaultAccused filing that answers it is Phase 2's"), "the seam files now");
+    }
+
+    /// **The fee funder takes a coinbase output the mempool takes, and nothing B-3 holds** (T52's
+    /// funder half, F13): on testnet-12 (`coinbase_spend_maturity` 600) a coinbase 600 DAA old funds a
+    /// carrier and one 599 DAA old does not, nor one from a block ahead of the point; an ordinary
+    /// output funds at any age; this node's own bond output and any output in B-3's locked set never do.
+    #[test]
+    fn t52_the_fee_funder_takes_a_600_daa_old_coinbase_and_never_a_held_output() {
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let maturity = params.coinbase_spend_maturity();
+        assert_eq!(maturity, 600, "testnet-12's coinbase spend maturity");
+        let outpoint = |n: u64| TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(n), 0);
+        let entry = |block_daa_score: u64, is_coinbase: bool| UtxoEntry {
+            amount: 1_000,
+            script_public_key: kaspa_consensus_core::tx::ScriptPublicKey::default(),
+            block_daa_score,
+            is_coinbase,
+        };
+        let none = HashSet::new();
+        let usable = |n: u64, e: &UtxoEntry, pov: u64, own: Option<TransactionOutpoint>, locked: &HashSet<TransactionOutpoint>| {
+            palw_fee_funding_usable_v1(&outpoint(n), e, pov, maturity, own, locked)
+        };
+        assert!(usable(1, &entry(1_000, true), 1_600, None, &none), "600 DAA old");
+        assert!(!usable(1, &entry(1_001, true), 1_600, None, &none), "599 DAA old");
+        assert!(!usable(1, &entry(1_700, true), 1_600, None, &none), "ahead of the point");
+        assert!(usable(1, &entry(1_599, false), 1_600, None, &none), "an ordinary output at any age");
+        assert!(!usable(1, &entry(0, false), 1_600, Some(outpoint(1)), &none), "never this node's bond");
+        let locked: HashSet<TransactionOutpoint> = [outpoint(2)].into_iter().collect();
+        assert!(!usable(2, &entry(0, false), 1_600, None, &locked), "never an output B-3 holds");
+        assert!(!usable(2, &entry(0, true), 1_600, None, &locked), "a mature coinbase B-3 holds neither");
+        assert!(usable(3, &entry(0, true), 1_600, Some(outpoint(1)), &locked), "a mature coinbase nobody holds");
+    }
+
+    /// **The funder asks it of every candidate**: the remembered outpoints and the recovery scan both
+    /// go through `palw_fee_funding_usable_v1` at the virtual DAA with the chain's locked set, and the
+    /// scan no longer skips every coinbase; a remembered output that cannot pay a carrier is skipped,
+    /// and the scan keeps the largest that pays (`PalwFeeFundingScanV1::offer`).
+    #[test]
+    fn the_funder_asks_the_one_rule_of_every_candidate() {
+        let funder = body_of(the_source(), "    async fn resolve_fee_funding(");
+        assert!(funder.contains("let pov_daa = session.get_virtual_daa_score();"));
+        assert!(funder.contains("let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();"));
+        assert!(funder.contains("session.palw_locked_bond_outpoints_v2()"));
+        let rule =
+            funder.find("palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)").expect("one rule");
+        let remembered = funder
+            .find("if !usable(outpoint, &entry) || !palw_fee_funding_pays_v1(entry.amount) {")
+            .expect("the remembered outpoints");
+        let scan = funder.find("scan.offer(outpoint, entry, &usable, &is_free);").expect("the scan");
+        assert!(rule < remembered && remembered < scan);
+        assert!(!funder.contains("entry.is_coinbase"), "no blanket coinbase skip");
+        assert!(!funder.contains("found = Some((outpoint, entry));\n                break;"), "not the first output the set lists");
+    }
+
+    fn coin(amount: u64, block_daa_score: u64, is_coinbase: bool) -> UtxoEntry {
+        UtxoEntry { amount, script_public_key: kaspa_consensus_core::tx::ScriptPublicKey::default(), block_daa_score, is_coinbase }
+    }
+
+    fn outpoint(n: u64) -> TransactionOutpoint {
+        TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(n), 0)
+    }
+
+    /// **F13 on the drain path** (the P2-6 review, MEDIUM): a residue at or below one carrier's fee is
+    /// exhausted — the tick drops a chain whose mined tip holds it, and the funder skips it — and the
+    /// scan moves to a coinbase the mempool takes (600 DAA old on testnet-12), the largest one, never
+    /// a 599-DAA-old one however large, never the residue. The floor is twice the heaviest standard
+    /// carrier's relay fee, so a chain at or above it never fails a carrier for want of funds.
+    #[test]
+    fn f13_a_drained_residue_is_left_for_a_mature_coinbase() {
+        let maturity = kaspa_consensus_core::config::params::palw_t12_shipped_params().coinbase_spend_maturity();
+        let floor = palw_fee_funding_floor_v1();
+        assert_eq!(floor, 12_000_000, "2 × the relay fee of a 480,000-mass carrier: 0.12 MSK");
+        assert_eq!(floor, 2 * relay_fee_for_compute_mass(MAXIMUM_STANDARD_TRANSACTION_MASS), "pays the heaviest carrier twice");
+        // The residue: below one carrier's fee (the builder's `funding UTXO holds N sompi`).
+        let residue = (outpoint(1), coin(200_000, 1_500, false));
+        assert!(residue.1.amount <= relay_fee_for_compute_mass(0), "it pays no carrier at all");
+        assert!(palw_fee_chain_drained_v1(Some(&residue)), "the tick drops the drained chain");
+        assert!(!palw_fee_chain_drained_v1(Some(&(outpoint(2), coin(floor, 1_500, false)))), "a chain at the floor carries on");
+        assert!(!palw_fee_chain_drained_v1(None));
+        // The scan, as `resolve_fee_funding` runs it at DAA 1,600 with nothing held or pending.
+        let pov = 1_600;
+        let none = HashSet::new();
+        let usable = |o: &TransactionOutpoint, e: &UtxoEntry| palw_fee_funding_usable_v1(o, e, pov, maturity, None, &none);
+        let free = |_: &TransactionOutpoint| true;
+        let mut scan = PalwFeeFundingScanV1::default();
+        scan.offer(residue.0, residue.1.clone(), usable, free);
+        scan.offer(outpoint(3), coin(50_000_000_000, 1_001, true), usable, free); // 599 DAA old
+        scan.offer(outpoint(4), coin(300_000_000, 1_000, true), usable, free); // 600 DAA old
+        scan.offer(outpoint(5), coin(400_000_000, 900, true), usable, free); // 700 DAA old, larger
+        scan.offer(outpoint(6), coin(100_000_000, 800, true), usable, free);
+        let (found, _) = scan.found.clone().expect("the rewards fund the filing");
+        assert_eq!(found, outpoint(5), "the largest mature coinbase, never the residue nor a 599-DAA-old one");
+        assert_eq!((scan.dust, scan.unripe, scan.under_script, scan.busy), (1, 1, 4, 0));
+        // With only the residue and the young coinbase, nothing resolves: the residue is not funding.
+        let mut scan = PalwFeeFundingScanV1::default();
+        scan.offer(residue.0, residue.1.clone(), usable, free);
+        scan.offer(outpoint(3), coin(50_000_000_000, 1_001, true), usable, free);
+        assert!(scan.found.is_none(), "a residue is exhausted, and the young coinbase waits its maturity");
+        // An output our own mempool spends is not funding either.
+        let mut scan = PalwFeeFundingScanV1::default();
+        scan.offer(outpoint(4), coin(300_000_000, 1_000, true), usable, |_| false);
+        assert!(scan.found.is_none() && scan.busy == 1);
+        // And the tick asks it where the chain's tip is mined, then resolves afresh.
+        let source = the_source();
+        let mined = source.find("if session.get_virtual_utxo_entry(tip).is_some() {").expect("the mined tip");
+        let drained =
+            mined + source[mined..].find("if palw_fee_chain_drained_v1(chained_funding.as_ref()) {").expect("the drain rule");
+        let resolved =
+            drained + source[drained..].find("chained_funding = self.resolve_fee_funding(&session).await;").expect("resolved afresh");
+        assert!(!source[mined..resolved].contains("} else if"), "inside the mined-tip branch");
+        assert!(resolved - mined < 1_500);
+    }
+
+    /// Runs one tick's carrier sites through the tick's own scheduler, in the tick's own order: each
+    /// site that holds something sends while its gate (`PalwCarrierSlotsV1::offers`) lets it.
+    fn carrier_tick(
+        last: Option<PalwCarrierLaneV1>,
+        holds: impl Fn(PalwCarrierSiteV1) -> bool,
+    ) -> (Vec<PalwCarrierSiteV1>, Option<PalwCarrierLaneV1>) {
+        let mut slots = PalwCarrierSlotsV1::new(last);
+        let (mut inflight, mut sent) = (0usize, Vec::new());
+        for site in PalwCarrierSiteV1::TICK_ORDER {
+            slots.at(site, inflight);
+            if slots.offers(site, inflight) && holds(site) {
+                inflight += 1;
+                sent.push(site);
+            }
+        }
+        (sent, slots.finish(inflight))
+    }
+
+    /// **The carrier priority: convictions and DA above ordinary carriers, licences still carried, and
+    /// one carrier in flight at every site.** A tick whose first site sends sends nothing else — the
+    /// canonical claim and the class registration included (the P2-6 review, LOW: they chained a second
+    /// and third carrier onto the priority lane's change); on the licences' turn this node's own
+    /// carriers go first as they did before P2-6, then the collector, then the priority lane; a court
+    /// queue that never empties shares the slots with a licence always waiting one for one, and a slot
+    /// nobody else wants goes to it.
+    #[test]
+    fn the_priority_lane_goes_first_and_licences_are_still_carried() {
+        use super::PalwCarrierLaneV1::{Licence, Ordinary, Priority};
+        use super::PalwCarrierSiteV1::{Licences, Own, OwnReceipts, PriorityAfterLicences, PriorityFirst};
+        let all = |_: PalwCarrierSiteV1| true;
+        assert_eq!(carrier_tick(None, all), (vec![PriorityFirst], Some(Priority)), "priority first, and nothing after it");
+        assert_eq!(carrier_tick(Some(Licence), all), (vec![PriorityFirst], Some(Priority)));
+        assert_eq!(carrier_tick(Some(Ordinary), all), (vec![PriorityFirst], Some(Priority)));
+        assert_eq!(carrier_tick(Some(Priority), all), (vec![Own], Some(Ordinary)), "the licences' turn: own carriers first");
+        let storm = |site: PalwCarrierSiteV1| matches!(site, PriorityFirst | PriorityAfterLicences | Licences);
+        assert_eq!(carrier_tick(Some(Priority), storm), (vec![Licences], Some(Licence)), "then the licences");
+        let only_priority = |site: PalwCarrierSiteV1| matches!(site, PriorityFirst | PriorityAfterLicences);
+        assert_eq!(carrier_tick(Some(Priority), only_priority), (vec![PriorityAfterLicences], Some(Priority)), "an empty turn");
+        let only_receipts = |site: PalwCarrierSiteV1| site == OwnReceipts;
+        assert_eq!(carrier_tick(Some(Priority), only_receipts), (vec![OwnReceipts], Some(Ordinary)));
+        assert_eq!(carrier_tick(Some(Priority), |_| false), (vec![], Some(Priority)), "nothing sent: the turn stands");
+        // One in flight: with a carrier unconfirmed, no site sends.
+        for last in [None, Some(Priority), Some(Licence)] {
+            let slots = PalwCarrierSlotsV1::new(last);
+            assert!(PalwCarrierSiteV1::TICK_ORDER.iter().all(|site| !slots.offers(*site, MAX_INFLIGHT_CARRIERS)));
+        }
+        // A DA storm against a licence always waiting: one for one, never two priority slots in a row.
+        let run = |ticks: usize, licence_waits: &dyn Fn(usize) -> bool| {
+            let (mut last, mut sent) = (None, Vec::new());
+            for tick in 0..ticks {
+                let (out, lane) = carrier_tick(last, |site| match site {
+                    PriorityFirst | PriorityAfterLicences => true,
+                    Licences => licence_waits(tick),
+                    Own | OwnReceipts => false,
+                });
+                assert_eq!(out.len(), 1, "the storm always fills the slot, and only the slot");
+                sent.push(lane.expect("a lane"));
+                last = lane;
+            }
+            sent
+        };
+        let storm = run(100, &|_| true);
+        assert_eq!(storm.iter().filter(|lane| **lane == Licence).count(), 50, "a DA storm shares the slots one for one");
+        assert!(storm.windows(2).all(|pair| pair != [Priority, Priority]), "never two priority slots while a licence waits");
+        let sparse = run(100, &|tick| tick % 10 == 3);
+        assert_eq!(sparse.iter().filter(|lane| **lane == Licence).count(), 10, "every waiting licence is carried in its slot");
+    }
+
+    /// **The tick is that scheduler**: the submitter builds one `PalwCarrierSlotsV1` from the last
+    /// lane, marks each site in `TICK_ORDER`, asks the one gate at every site — the priority lane at
+    /// both of its sites, the canonical claim, the class registration and the possession proofs, the
+    /// collector and the supplementary receipts — and reads the lane of record back at the end; no
+    /// site asks the in-flight cap by itself any more, so none can skip the scheduler.
+    #[test]
+    fn the_tick_runs_every_carrier_site_through_the_one_scheduler_in_tick_order() {
+        let source = the_source();
+        let submitter = &source[source.find("// --- the collector + submitter's half ---").expect("the submitter")..];
+        let submitter = &submitter[..submitter.find("// Forget what the chain has moved past").expect("its end")];
+        let built = submitter.find("let mut slots = PalwCarrierSlotsV1::new(last_lane);").expect("one scheduler");
+        let sites = &submitter[built..];
+        let mut at = 0;
+        for site in PalwCarrierSiteV1::TICK_ORDER {
+            let mark = format!("slots.at(PalwCarrierSiteV1::{site:?}, inflight);");
+            let found = sites.find(&mark).unwrap_or_else(|| panic!("{mark}"));
+            assert!(found >= at, "{site:?} in TICK_ORDER");
+            assert_eq!(sites.matches(&mark).count(), 1, "{site:?} marked once");
+            at = found;
+        }
+        let gate = |site: &str| sites.matches(&format!("slots.offers(PalwCarrierSiteV1::{site}, inflight)")).count();
+        assert_eq!(gate("PriorityFirst"), 1);
+        assert_eq!(gate("Own"), 3, "the canonical claim, the class registration, the possession proofs");
+        assert_eq!(gate("Licences"), 1);
+        assert_eq!(gate("PriorityAfterLicences"), 1);
+        assert_eq!(gate("OwnReceipts"), 1);
+        assert!(
+            sites.contains("if slots.offers(PalwCarrierSiteV1::Own, inflight)\n                    && self.config.canonical_claims")
+        );
+        assert!(sites.contains("if slots.offers(PalwCarrierSiteV1::Own, inflight)\n                    && !registration_waits"));
+        assert_eq!(sites.matches(".carry_priority_v1(").count(), 2, "two call sites, each behind its gate");
+        for call in sites.match_indices(".carry_priority_v1(").map(|(i, _)| i) {
+            let gated = sites[..call].rfind("if slots.offers(PalwCarrierSiteV1::Priority").expect("gated");
+            assert!(call - gated < 120, "the call is the gate's body");
+        }
+        for own_gate in ["inflight < MAX_INFLIGHT_CARRIERS", "inflight >= MAX_INFLIGHT_CARRIERS"] {
+            assert!(!sites.contains(own_gate), "no site asks the cap by itself: {own_gate}");
+        }
+        assert!(sites.contains("last_lane = slots.finish(inflight);"));
+        assert!(!submitter.contains("std::mem::take(&mut court_pending)"), "the court queue is the priority lane's alone");
+    }
+
+    /// **N-5 / P2-6: an accusation stands on a seat that was never served** (the P2-6 review, HIGH and
+    /// LOW). A seat that asked on its first tick (unserved), was then served — its replay of the job
+    /// running (`Waiting`) — and was still replaying when the licence landed is not in the seam's
+    /// `ended`, so nothing is accused; a seat that held nothing to the end is. Served is sticky: a
+    /// later tick that finds nothing does not make it unserved again. A resuming seat that holds the
+    /// job and lacks an opening files its `Unavailable` but is served (it abstains from accusing); one
+    /// that holds nothing is not.
+    #[test]
+    fn a_seat_served_after_its_first_tick_accuses_nobody_when_the_licence_lands() {
+        let (served_late, never, resumed) = (claim(1), claim(2), claim(3));
+        let mut service = PalwSeatServiceV1::default();
+        let mut book = PalwSeatAccusationsV1::default();
+        // Tick 1: both seats reached the material wait holding nothing (the tail, a free-prompt claim).
+        for c in [served_late, never] {
+            assert_eq!(palw_seat_tail_v1(true, true, false, || false), PalwSeatTailV1::Waits { unserved: true });
+            service.note_unserved(c, 1_001);
+        }
+        // Tick 2: the job arrives for one, and its replay starts: served.
+        assert!(palw_seat_replay_served_v1(&PalwSeatReplayStepV1::Waiting));
+        assert!(palw_seat_replay_served_v1(&PalwSeatReplayStepV1::Refuted));
+        assert!(palw_seat_replay_served_v1(&PalwSeatReplayStepV1::Licensed));
+        assert!(!palw_seat_replay_served_v1(&PalwSeatReplayStepV1::NoVerdict), "NoVerdict says nothing");
+        service.note_served(served_late);
+        // Tick 3: the pool was swept and the tail finds nothing again — served stays served.
+        service.note_unserved(served_late, 1_003);
+        assert!(!service.is_unserved(&served_late) && service.is_unserved(&never));
+        // The resume: holding the job but no opening is served; holding nothing is not.
+        let starved = |served| PalwSeatResumeStepV1::Starved { missing: vec![], served };
+        assert!(palw_seat_resume_served_v1(&starved(false), true), "holds the job: abstains");
+        assert!(!palw_seat_resume_served_v1(&starved(false), false), "holds nothing: unserved");
+        assert!(palw_seat_resume_served_v1(&starved(true), false), "an authenticated opening");
+        assert!(palw_seat_resume_served_v1(&PalwSeatResumeStepV1::Waiting, false));
+        assert!(matches!(service.resumed(resumed, 1_001, false, starved(false)), PalwSeatResumeStepV1::Starved { .. }));
+        assert!(service.is_unserved(&resumed), "a resume that holds nothing");
+        service.resumed(resumed, 1_002, true, starved(false));
+        assert!(!service.is_unserved(&resumed), "then the job the answer authenticates: served");
+        // The licence lands on all three while the replay still runs: the duties end.
+        let ended = service.ended(|_| false);
+        assert_eq!(ended, vec![(never, 1_001)], "only the seat that was never served");
+        for (c, _) in &ended {
+            let licensed = kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 1_010 };
+            if palw_seat_unserved_licence_v1(Some(&licensed)) {
+                book.want(*c, 1_010 + PALW_SEAT_DA_ACCUSE_MARGIN_DAA_V1);
+            }
+        }
+        assert!(book.wants(&never) && !book.wants(&served_late) && !book.wants(&resumed));
+        assert!(service.ended(|_| false).is_empty(), "each ends once");
+        // A redraw that brings a claim back starts it afresh.
+        service.note_unserved(served_late, 2_000);
+        assert!(service.is_unserved(&served_late), "the duty ended; served left with it");
+    }
+
+    /// **Where the tick records service** (the P2-6 review, HIGH): every tick an unanswered
+    /// free-prompt duty noted unserved is asked whether this seat now holds a job of it (pool or
+    /// retention) before any arm or memory deferral; the replay pass's step, the resume's step, the
+    /// tail's `Silent`, a fault found and a `Valid` note service; the attempt lane's resume is served
+    /// by the anchor's job; an `Unavailable` accuses only an unserved claim; the seam reads
+    /// `ended`; and no site writes the old map.
+    #[test]
+    fn the_tick_records_service_where_it_sees_it() {
+        let source = the_source();
+        let worker = body_of(source, "    pub async fn worker(");
+        assert!(!worker.contains("unserved.entry(") && !worker.contains("unserved.remove("), "the first-absence map is gone");
+        let block = &source[source.find("let verdict = 'verdict: {").unwrap()..];
+        let block = &block[..block.find("let Some(verdict) = verdict else { continue };").unwrap()];
+        let pre = source.find("if seat_r && duty.free_prompt && service.is_unserved(&duty.claim_id) {").expect("the pre-check");
+        let budget =
+            source.find("self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))").expect("deferral");
+        let verdict = source.find("let verdict = 'verdict: {").unwrap();
+        assert!(pre < budget && budget < verdict, "asked before a replay deferred for memory skips the verdict");
+        assert!(
+            source[pre..budget].contains(".fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled)")
+        );
+        assert_eq!(block.matches("match service.resumed(duty.claim_id, current_daa, holds_job, step) {").count(), 1, "the FP resume");
+        assert_eq!(block.matches("if palw_seat_replay_served_v1(&pass.0) {").count(), 1, "the FP replay");
+        let fault = block.find("if self.seat_found_fault_v1(&duty.claim_id) {").unwrap();
+        assert!(block[fault..fault + 300].contains("service.note_served(duty.claim_id);"), "a fault found");
+        let attempt =
+            block.find("if seat_r_duty.role == PalwSeatRRoleV1::PartialResumes {\n                                //").expect("C7");
+        let route = attempt + block[attempt..].find(".seat_s4_resume_v1(").unwrap();
+        assert!(block[attempt..route].contains("service.note_served(duty.claim_id);"), "the attempt lane's job is the anchor's");
+        assert_eq!(block.matches("service.note_unserved(duty.claim_id, current_daa)").count(), 2, "the FP replay, the tail");
+        let valid = source.find("if valid {\n                    service.note_served(duty.claim_id);").expect("a Valid");
+        let hook = source.find("if matches!(verdict, PalwReceiptVerdictV2::Unavailable { .. })\n                    && service.is_unserved(&duty.claim_id)");
+        assert!(hook.is_some_and(|hook| valid < hook), "an Unavailable accuses only an unserved claim");
+        assert!(source.contains("let ended = service.ended(|claim| duty_claims.contains(claim));"), "the seam");
     }
 }

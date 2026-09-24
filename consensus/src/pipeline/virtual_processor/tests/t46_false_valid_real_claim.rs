@@ -4222,50 +4222,74 @@ mod m3_da_court {
         t18c_ii_body(&harness(true), PANEL[0]);
     }
 
-    /// **N9 and P2-7's constant: `ProducerWithholding` convicts a `Valid` signer only as a DA-7
-    /// default's restatement, and only once seats answer DA units.** A partial seat's session on a
-    /// licensed claim runs out with nobody answering: the producer takes S1 and a `DaDefault` is
-    /// recorded. As shipped (`PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1 = false`) signer liability is
-    /// dormant: no signer is charged, and a kind 3 `ProducerWithholding { voided_daa }` against the
-    /// full seat is refused at the gate and in the fold, as F-2 refused it. The adjudicator with
-    /// signer liability armed (the override the constant's flip gives) admits it against the full seat
-    /// — it binds the `DaDefault` record — and refuses it against a partial seat (`SiteNotAttested`:
-    /// its site is `Whole`) and at any other DAA.
+    /// **N9 with P2-7 landed: a DA-7 default charges the covering signer once, and a
+    /// `ProducerWithholding` restatement adds nothing.** A partial seat's session on a licensed claim
+    /// runs out with nobody answering: the producer takes S1 and a `DaDefault` is recorded, and —
+    /// signer liability armed as shipped (`PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`, the processor's
+    /// extras) — the full seat, the only full mask, loses its lock and takes S4 under the audit's
+    /// (seat, claim) key while every partial seat keeps its lock and collateral (C7). A kind 3
+    /// `ProducerWithholding { voided_daa }` against the full seat then writes nothing: the block that
+    /// carries it folds to the empty block's root, so the key is charged once. The adjudicator on the
+    /// rules the gate reads refuses the partial seat's restatement (`SiteNotAttested`: its site is
+    /// `Whole`) and a restatement at any other DAA (`ContradictionNotAdmitted`). The dormant side of
+    /// the constant is M3's `landed` twins' (`rcore_m3_da_court`).
     #[tokio::test]
     async fn n9_producer_withholding_restates_a_da_default_only() {
         use kaspa_consensus_core::palw_offence_attribution_v1::palw_check_panel_false_valid_v2;
         let h = harness(true);
-        assert!(!h.rules().da_signer_liability, "as shipped, signer liability is dormant (P2-7)");
+        assert!(h.rules().da_signer_liability, "P2-7 landed: signer liability is armed as shipped");
         let (mut walk, claim, licence) = h.licensed(Fault::Honest);
         let id = claim.claim_id;
         let full = licence.full_card();
-        let seat = licence.partials()[0];
+        let partials = licence.partials();
+        let seat = partials[0];
         let lock = *walk.state.slashable_lock(h.cards[full], id).expect("the full seat's lock");
         h.carry(&mut walk, vec![accuse(&h, id, seat, 0)]);
         let full_before = walk.state.bond(&h.cards[full]).unwrap().collateral;
+        let partials_before: Vec<(u64, Option<u128>)> = partials
+            .iter()
+            .map(|card| {
+                (walk.state.bond(&h.cards[*card]).unwrap().collateral, walk.state.slashable_lock(h.cards[*card], id).map(|l| l.amount))
+            })
+            .collect();
         run_out(&h, &mut walk, id, seat);
-        let PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::ProducerWithholding } = walk.state.claim(&id).unwrap().phase
+        let PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::ProducerWithholding } =
+            walk.state.claim(&id).unwrap().phase
         else {
             panic!("the default voids the claim")
         };
         assert!(walk.state.consumed_offence(&palw_da_offence_id_v1(&h.cards[EXECUTOR].0, &id)).is_some(), "the DaDefault record");
         let key = palw_false_valid_offence_id_v2(&h.cards[full].0, &id);
-        assert!(walk.state.consumed_offence(&key).is_none(), "dormant: no S4 on the covering signer");
-        assert_eq!(walk.state.bond(&h.cards[full]).unwrap().collateral, full_before, "and no debit");
-        let _ = lock;
-        // Kind 3 restating the default: refused while signer liability is dormant.
+        assert!(walk.state.consumed_offence(&key).is_some(), "S4 on the covering signer, under the (seat, claim) key");
+        assert!(walk.state.slashable_lock(h.cards[full], id).is_none(), "its lock taken first");
+        let charged = full_before - walk.state.bond(&h.cards[full]).unwrap().collateral;
+        assert!(u128::from(charged) > lock.amount, "the lock and min(25% C, 3 G) on top: {charged}");
+        let partials_after: Vec<(u64, Option<u128>)> = partials
+            .iter()
+            .map(|card| {
+                (walk.state.bond(&h.cards[*card]).unwrap().collateral, walk.state.slashable_lock(h.cards[*card], id).map(|l| l.amount))
+            })
+            .collect();
+        assert_eq!(partials_after, partials_before, "C7: no partial seat is charged");
+        // The restatement writes nothing: the key was charged once.
         let restated = h.v2(full, id, licence.segmented(full), C::ProducerWithholding { voided_daa });
-        let why = h.validate(&walk.state, &walk.next(), &restated).expect_err("dormant: refused");
-        assert!(why.contains("ProducerWithholding"), "{why}");
-        assert!(h.fold_refusal(&walk, &restated).contains("ProducerWithholding"));
-        // The adjudicator with signer liability armed: the restatement binds the default.
-        let armed = kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 { da_signer_liability: true, ..h.rules() };
+        let point = walk.next();
+        let carried = h.accepted(&walk.state, &point, std::slice::from_ref(&restated));
+        let block = h.fold(&walk.state, &point, &carried).expect("folds");
+        assert_eq!(block.state_root(), h.fold(&walk.state, &point, &[]).unwrap().state_root(), "nothing is written twice");
+        // The adjudicator on the gate's rules.
         let judge = |card: usize, daa: u64| {
             let payload = h.v2_payload(card, id, licence.segmented(card), C::ProducerWithholding { voided_daa: daa });
-            palw_check_panel_false_valid_v2(&walk.state, &h.cards[card], &borsh::to_vec(&payload).unwrap(), false, false, armed, None)
+            palw_check_panel_false_valid_v2(
+                &walk.state,
+                &h.cards[card],
+                &borsh::to_vec(&payload).unwrap(),
+                false,
+                false,
+                h.rules(),
+                None,
+            )
         };
-        let finding = judge(full, voided_daa).expect("armed: the full seat's Valid restates the DA default");
-        assert!(!finding.acts_on_claim, "a restatement acts on nothing: the default already did");
         assert_eq!(judge(seat, voided_daa).expect_err("a partial seat"), E::SiteNotAttested, "its site is Whole");
         assert!(matches!(judge(full, voided_daa + 1), Err(E::ContradictionNotAdmitted(_))), "another DAA binds nothing");
     }
@@ -4349,6 +4373,497 @@ mod m3_da_court {
         assert!(matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
         assert!(walk.state.da_session(&id, &h.cards[seat]).is_none(), "the conviction closes the session");
         assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[seat]), 0, "the seat's exposure is returned");
+        h.reloads(&walk.state);
+    }
+
+    // ---- Phase 2, P2-7: the node answers R-core sessions ---------------------------------------
+    //
+    // The node's half of X7 on real claims: the duty list kaspad reads each tick
+    // (`palw_disclosure_duties_v1`, through the processor's own extras at the next block), the
+    // family's opening of the claim's capture (`disclose_trace_event`, the held builder), and the ONE
+    // builder of tag 55 (`palw_da_answer_object_v1`) — each object then taken the whole way: the gate,
+    // the acceptance walk and the fold.
+
+    /// The duty list the node reads for `cards` at the next block.
+    fn duties_of(h: &H, walk: &Walk, cards: &[usize]) -> kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutiesV1 {
+        let point = walk.next();
+        let mine: Vec<PalwBondKeyV2> = cards.iter().map(|card| h.cards[*card]).collect();
+        h.vp().palw_disclosure_duties_v1_at(&walk.state, point.block, point.daa_score, &mine)
+    }
+
+    /// The node's answer to an event duty: the family opens the unit out of the claim's capture, and
+    /// the ONE builder signs it as `card`.
+    fn node_event_answer(
+        h: &H,
+        claim: &RealClaim,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
+        card: usize,
+    ) -> Obj {
+        let PalwDaUnitV1::Event { row, tile } = duty.unit else { panic!("an event duty: {:?}", duty.unit) };
+        let disclosure = h.backend.disclose_trace_event(&claim.material, row, tile).expect("the family opens the unit");
+        kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+            &h.domain,
+            duty.claim_id,
+            duty.unit,
+            PalwDaAnswerV1::Event(disclosure),
+            duty.discloser,
+            h.bundle.court.max_close_bytes(),
+            |message, context| Some(sign(card, message, context)),
+        )
+        .expect("the node's builder builds it")
+    }
+
+    /// **P2-7 (T32/T64's producer half, DA-6; the launch drill's D-5 at processor level): an honest
+    /// producer answers two accusers with the node's own builder and is not charged.** A partial
+    /// seat names row 7 and a bystander row 0 on one licensed claim; the producer's duty list holds
+    /// each demanded unit ONCE across both sessions — `(0, 0)` at the earlier of their deadlines, row 7
+    /// at the seat's — as the producer, and nothing for a bond with no stake in the claim. The node
+    /// opens `(0, 0)` as the floor's `Flat` (which answers the whole run, IMPL-16) and row 7 as
+    /// `OutOfRange` from the binding alone; both ride one block through the gate, the walk and the
+    /// fold. Both sessions are refuted and close; the producer keeps its collateral and its licence;
+    /// each accuser's exposure is held on its ledger (DA-6) and nothing is left to answer. The claim
+    /// then finalizes at its credited anchor and its retirement burns both held exposures — the
+    /// accusers pay, the producer does not.
+    #[tokio::test]
+    async fn p2_7_an_honest_producer_answers_two_accusers_with_the_nodes_builder_and_is_not_charged() {
+        use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
+        let h = harness(true);
+        let (mut walk, claim, licence) = h.licensed(Fault::Honest);
+        let id = claim.claim_id;
+        let seat = licence.partials()[0];
+        h.carry(&mut walk, vec![accuse(&h, id, seat, 7), accuse(&h, id, BYSTANDER, 0)]);
+        let sessions: Vec<(usize, kaspa_consensus_core::palw_da_rcore_v1::PalwDaSessionV1)> = [seat, BYSTANDER]
+            .into_iter()
+            .map(|card| (card, walk.state.da_session(&id, &h.cards[card]).expect("open").clone()))
+            .collect();
+        assert_eq!(sessions[0].1.units, vec![PalwDaUnitV1::Event { row: 7, tile: 0 }, PalwDaUnitV1::Event { row: 0, tile: 0 }]);
+        assert_eq!(sessions[1].1.units, vec![PalwDaUnitV1::Event { row: 0, tile: 0 }], "a one-row run draws nothing beside row 0");
+        let producer_before = walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral;
+        // The node's read: each unit once, as the producer.
+        let read = duties_of(&h, &walk, &[EXECUTOR]);
+        let expected = vec![
+            (PalwDaUnitV1::Event { row: 0, tile: 0 }, sessions[0].1.deadline_daa.min(sessions[1].1.deadline_daa)),
+            (PalwDaUnitV1::Event { row: 7, tile: 0 }, sessions[0].1.deadline_daa),
+        ];
+        let mut got: Vec<(PalwDaUnitV1, u64)> = read.duties.iter().map(|d| (d.unit, d.deadline_daa)).collect();
+        got.sort();
+        assert_eq!(got, expected, "each demanded unit once, at the earliest deadline demanding it");
+        assert!(
+            read.duties.iter().all(|d| (d.role, d.discloser, d.signer_rank) == (PalwDisclosureRoleV1::Producer, h.cards[EXECUTOR], 0))
+        );
+        assert!(duties_of(&h, &walk, &[BYSTANDER]).duties.is_empty(), "a bond with no lock owes nothing");
+        // The builder refuses what the chain would refuse: above the ruleset's close ceiling, with no
+        // signature, in the other unit's form — and the gate refuses an answer another key signed.
+        {
+            use kaspa_consensus_core::palw_da_rcore_v1::{PalwDaAnswerBuildErrorV1 as B, palw_da_answer_object_v1};
+            let duty = &read.duties[0];
+            let disclosure = h.backend.disclose_trace_event(&claim.material, 0, 0).expect("the family opens (0, 0)");
+            let ceiling = h.bundle.court.max_close_bytes();
+            let build = |unit: PalwDaUnitV1, ceiling: u64, card: Option<usize>| {
+                palw_da_answer_object_v1(
+                    &h.domain,
+                    id,
+                    unit,
+                    PalwDaAnswerV1::Event(disclosure.clone()),
+                    duty.discloser,
+                    ceiling,
+                    |m, c| card.map(|card| sign(card, m, c)),
+                )
+            };
+            assert!(matches!(build(duty.unit, 16, Some(EXECUTOR)), Err(B::AboveCloseCeiling { ceiling: 16, .. })), "DA-8's ceiling");
+            assert_eq!(build(duty.unit, ceiling, None), Err(B::Unsigned));
+            let held = PalwDaUnitV1::Held(PalwHeldMissingV1::StepLeaf { leaf: 0 });
+            assert!(matches!(build(held, ceiling, Some(EXECUTOR)), Err(B::Form(_))), "an event answer never answers a held unit");
+            let forged = build(duty.unit, ceiling, Some(BYSTANDER)).expect("built: the builder signs with the key it is handed");
+            h.refused(&walk, &forged, &format!("claim {id}'s answer is not signed by the bond it names"));
+        }
+        // The node's answers: one Flat for the run, then what it does not cover.
+        let mut objects = Vec::new();
+        let mut flat_sent = false;
+        for duty in &read.duties {
+            if flat_sent && kaspa_consensus_core::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(&duty.unit, duty.in_run_rows) {
+                continue;
+            }
+            let object = node_event_answer(&h, &claim, duty, EXECUTOR);
+            let Obj::MaterialDisclosedV2 { answer: PalwDaAnswerV1::Event(disclosure), .. } = &object else { unreachable!() };
+            flat_sent |= matches!(disclosure, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. });
+            objects.push(object);
+        }
+        assert!(flat_sent && objects.len() == 2, "a Flat for the run and an OutOfRange for row 7");
+        h.carry(&mut walk, objects);
+        assert!(walk.state.da_sessions_of(&id).next().is_none(), "both sessions refuted and closed");
+        assert_eq!(walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral, producer_before, "the producer is not charged");
+        assert!(matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "and keeps its licence");
+        let mut held = walk.state.da_claim(&id).unwrap().refuted_held.clone();
+        held.sort();
+        let mut want: Vec<(PalwBondKeyV2, u128)> = sessions.iter().map(|(card, s)| (h.cards[*card], s.exposure)).collect();
+        want.sort();
+        assert_eq!(held, want, "each accuser's exposure is held (DA-6)");
+        for (card, s) in &sessions {
+            assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[*card]), s.exposure, "on card {card}'s ledger");
+        }
+        assert!(duties_of(&h, &walk, &[EXECUTOR]).duties.is_empty(), "nothing is left to answer");
+        h.reloads(&walk.state);
+        // The accusers pay: the claim finalizes, and its retirement burns what was held.
+        h.sweep_to_final(&mut walk, id);
+        let before: Vec<u64> = sessions.iter().map(|(card, _)| walk.state.bond(&h.cards[*card]).unwrap().collateral).collect();
+        let retire = walk.state.deadline_of(&id).expect("the retirement");
+        let point = walk.at(retire + 1);
+        let next = h.fold(&walk.state, &point, &[]).expect("folds");
+        walk.advance(&point, next);
+        for ((card, s), before) in sessions.iter().zip(before) {
+            assert_eq!(
+                u128::from(before - walk.state.bond(&h.cards[*card]).unwrap().collateral),
+                s.exposure,
+                "card {card} pays (DA-6)"
+            );
+        }
+        assert_eq!(walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral, producer_before, "the producer never did");
+    }
+
+    /// **T32 (node half) + T54b at processor level (and the launch drill's D-5: two accusers, the
+    /// drawn unit answered by a `Valid` signer): a silent producer's covering signer answers
+    /// automatically, and the accusers pay.** A coverage licence (the full seat, four partials); a
+    /// partial seat names row 7 (the fold draws the run's one row `(0, 0)` beside it) and a bystander
+    /// names row 0. The seat-role read: the FULL seat — whose recorded mask covers every unit — owes
+    /// both units as a covering signer (rank 0, the only full mask) and pins the claim's material while
+    /// its lock lives; no partial seat, and neither accuser, owes anything. As shipped (P2-7 landed:
+    /// signer liability armed) silence is S1 on the producer and S4 on the full seat under the
+    /// (seat, claim) key, the partials untouched — T32's first half, run as the counterfactual.
+    /// Instead the full seat's node opens both units out of the capture it kept (a `Flat` for the run,
+    /// `OutOfRange` for row 7) and answers with the ONE builder, signed by its own card: both
+    /// sessions are refuted, nobody is charged — the producer, the answering signer and the partial
+    /// seats keep their collateral — each accuser's exposure is held, and the claim's retirement burns
+    /// it.
+    ///
+    /// What this does NOT run is kaspad: the answer here is built from the harness's capture by the
+    /// core builder. The node's own loader and builders (kept → verified → re-made → nothing) run on the
+    /// floor's fixture backend in `kaspad::palw_panel::p2_7_disclosure_policy`, and the tick's loop is
+    /// pinned there. Plan §4's T54b proper — a node e2e on a devnet preset — is a POST-LAUNCH item
+    /// (§8.4 / Q12): the operator deferred every drill and node launch until after the t12 launch
+    /// (2026-09-24).
+    #[tokio::test]
+    async fn t32_t54b_a_silent_producers_covering_signer_answers_and_the_accusers_pay() {
+        use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
+        let h = harness(true);
+        assert!(h.rules().da_signer_liability, "P2-7 landed: signer liability is armed as shipped");
+        let (mut walk, claim, licence) = h.licensed(Fault::Honest);
+        let id = claim.claim_id;
+        let full = licence.full_card();
+        let partials = licence.partials();
+        let accuser = partials[0];
+        h.carry(&mut walk, vec![accuse(&h, id, accuser, 7), accuse(&h, id, BYSTANDER, 0)]);
+        let sessions: Vec<(usize, kaspa_consensus_core::palw_da_rcore_v1::PalwDaSessionV1)> = [accuser, BYSTANDER]
+            .into_iter()
+            .map(|card| (card, walk.state.da_session(&id, &h.cards[card]).expect("open").clone()))
+            .collect();
+        assert_eq!(
+            sessions[0].1.units,
+            vec![PalwDaUnitV1::Event { row: 7, tile: 0 }, PalwDaUnitV1::Event { row: 0, tile: 0 }],
+            "named + drawn"
+        );
+        // The seat-role read.
+        let signer = duties_of(&h, &walk, &[full]);
+        let mut owed: Vec<PalwDaUnitV1> = signer.duties.iter().map(|d| d.unit).collect();
+        owed.sort();
+        assert_eq!(
+            owed,
+            vec![PalwDaUnitV1::Event { row: 0, tile: 0 }, PalwDaUnitV1::Event { row: 7, tile: 0 }],
+            "the full seat owes both"
+        );
+        assert!(
+            signer
+                .duties
+                .iter()
+                .all(|d| (d.role, d.discloser, d.signer_rank) == (PalwDisclosureRoleV1::CoveringSigner, h.cards[full], 0))
+        );
+        let retention = walk.state.claim(&id).unwrap().trace_retention_daa;
+        assert!(signer.retain.contains(&(id, retention)), "its live lock pins the claim's material (P2-7 retention)");
+        for card in partials.iter().copied().chain([BYSTANDER]) {
+            assert!(duties_of(&h, &walk, &[card]).duties.is_empty(), "card {card} covers nothing (C7)");
+        }
+        let cards: Vec<usize> = [EXECUTOR, full].into_iter().chain(partials.iter().copied()).collect();
+        let collateral =
+            |state: &PalwChainStateV2| -> Vec<u64> { cards.iter().map(|c| state.bond(&h.cards[*c]).unwrap().collateral).collect() };
+        let before = collateral(&walk.state);
+        // The counterfactual, as shipped: nobody answers.
+        {
+            let mut silent = walk.clone();
+            run_out(&h, &mut silent, id, accuser);
+            assert!(matches!(
+                silent.state.claim(&id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+            ));
+            let after = collateral(&silent.state);
+            assert!(after[0] < before[0], "S1 on the producer");
+            assert!(after[1] < before[1], "S4 on the covering signer");
+            assert!(
+                silent.state.consumed_offence(&palw_false_valid_offence_id_v2(&h.cards[full].0, &id)).is_some(),
+                "under the (seat, claim) key"
+            );
+            assert_eq!(after[2..], before[2..], "the partial seats are untouched (C7)");
+        }
+        // The full seat's node answers from the capture it kept: one Flat for the run, then row 7.
+        let mut objects = Vec::new();
+        let mut flat_sent = false;
+        for duty in &signer.duties {
+            if flat_sent && kaspa_consensus_core::palw_da_rcore_v1::palw_da_flat_answers_unit_v1(&duty.unit, duty.in_run_rows) {
+                continue;
+            }
+            let object = node_event_answer(&h, &claim, duty, full);
+            let Obj::MaterialDisclosedV2 { answer: PalwDaAnswerV1::Event(disclosure), .. } = &object else { unreachable!() };
+            flat_sent |= matches!(disclosure, kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. });
+            objects.push(object);
+        }
+        h.carry(&mut walk, objects);
+        assert!(walk.state.da_sessions_of(&id).next().is_none(), "both sessions refuted");
+        assert_eq!(collateral(&walk.state), before, "nobody is charged");
+        assert!(walk.state.slashable_lock(h.cards[full], id).is_some(), "the answering signer keeps its lock");
+        let mut held = walk.state.da_claim(&id).unwrap().refuted_held.clone();
+        held.sort();
+        let mut want: Vec<(PalwBondKeyV2, u128)> = sessions.iter().map(|(card, s)| (h.cards[*card], s.exposure)).collect();
+        want.sort();
+        assert_eq!(held, want, "each accuser's exposure is held (DA-6)");
+        assert!(duties_of(&h, &walk, &[full]).duties.is_empty() && duties_of(&h, &walk, &[EXECUTOR]).duties.is_empty());
+        h.reloads(&walk.state);
+        h.sweep_to_final(&mut walk, id);
+        let accusers_before: Vec<u64> =
+            sessions.iter().map(|(card, _)| walk.state.bond(&h.cards[*card]).unwrap().collateral).collect();
+        let retire = walk.state.deadline_of(&id).expect("the retirement");
+        let point = walk.at(retire + 1);
+        let next = h.fold(&walk.state, &point, &[]).expect("folds");
+        walk.advance(&point, next);
+        for ((card, s), before) in sessions.iter().zip(accusers_before) {
+            assert_eq!(
+                u128::from(before - walk.state.bond(&h.cards[*card]).unwrap().collateral),
+                s.exposure,
+                "card {card} pays (DA-6)"
+            );
+        }
+    }
+
+    /// **P2-7 (DA-3/DA-4 on an attempt claim): a held session on an attempt claim is answered from the
+    /// attempt capture.** The fold draws held units on any class — a `DefaultAccusedHeld` naming a
+    /// step leaf draws width-1 step ranges beside it — and v1's responder answered held units only
+    /// from a free-prompt capture, so an honest attempt producer could not answer one. The node's
+    /// attempt path: the canonical prompt the anchor implies, the roots of the claim's job, the
+    /// binding read off an out-of-range event disclosure of the capture, and the ONE held builder
+    /// (`palw_da_held_disclosure_from_capture_v1`) — a leaf's evidence the fold adjudicates as a
+    /// false accusation, and each range's opening. Every unit is answered, the session is refuted,
+    /// and the producer keeps its collateral.
+    #[tokio::test]
+    async fn p2_7_a_held_session_on_an_attempt_claim_is_answered_from_its_capture() {
+        use kaspa_consensus_core::palw_da_rcore_v1::{
+            palw_da_answer_object_v1, palw_da_held_answer_v1, palw_da_held_disclosure_from_capture_v1,
+        };
+        let h = harness(true);
+        let (mut walk, claim, _licence) = h.licensed(Fault::Honest);
+        let id = claim.claim_id;
+        let leaf = claim.binding.step_leaf_count / 3;
+        h.carry(&mut walk, vec![accuse_held(&h, id, BYSTANDER, PalwHeldMissingV1::StepLeaf { leaf }, &claim.binding)]);
+        let session = walk.state.da_session(&id, &h.cards[BYSTANDER]).expect("the held session").clone();
+        assert!(session.units.len() > 1, "the named leaf and drawn ranges: {:?}", session.units);
+        let producer_before = walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral;
+        let read = duties_of(&h, &walk, &[EXECUTOR]);
+        let mut units: Vec<PalwDaUnitV1> = read.duties.iter().map(|d| d.unit).collect();
+        units.sort();
+        let mut demanded = session.units.clone();
+        demanded.sort();
+        assert_eq!(units, demanded, "every unit the session demands");
+        // The node's attempt path.
+        let record = walk.state.claim(&id).unwrap().clone();
+        let prompt: Vec<u32> = claim.prompt.iter().map(|id| u32::try_from(*id).expect("a u32 id")).collect();
+        let roots = kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
+            execution_root: record.execution_root,
+            trace_root: record.trace_root,
+            anchor: claim.anchor,
+            attempt_draw: Some(h.config.params.palw_prefill_draw_active_at(claim.header.daa_score)),
+            output_root: None,
+            // An attempt claim: its whole job is `attempt_draw`'s (M2 Phase 3).
+            job_pin: None,
+        };
+        let objects: Vec<Obj> = read
+            .duties
+            .iter()
+            .map(|duty| {
+                let PalwDaUnitV1::Held(missing) = duty.unit else { panic!("a held unit: {:?}", duty.unit) };
+                let (binding, disclosure) = palw_da_held_disclosure_from_capture_v1(
+                    &h.backend,
+                    &claim.material,
+                    &prompt,
+                    roots,
+                    record.work_leaves,
+                    missing,
+                    h.form(),
+                    || h.backend.disclose_trace_event(&claim.material, u32::MAX, u8::MAX).map(|d| d.binding().clone()),
+                )
+                .unwrap_or_else(|e| panic!("the attempt capture answers {missing:?}: {e}"));
+                assert_eq!(binding, claim.binding, "the capture's own binding");
+                palw_da_answer_object_v1(
+                    &h.domain,
+                    id,
+                    duty.unit,
+                    palw_da_held_answer_v1(id, missing, binding, disclosure),
+                    duty.discloser,
+                    h.bundle.court.max_close_bytes(),
+                    |message, context| Some(sign(EXECUTOR, message, context)),
+                )
+                .unwrap_or_else(|e| panic!("the node's builder builds the answer to {missing:?}: {e}"))
+            })
+            .collect();
+        h.carry(&mut walk, objects);
+        assert!(walk.state.da_session(&id, &h.cards[BYSTANDER]).is_none(), "every unit answered: refuted");
+        assert_eq!(walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral, producer_before, "the producer is not charged");
+        assert!(matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        assert_eq!(walk.state.da_claim(&id).unwrap().refuted_held, vec![(h.cards[BYSTANDER], session.exposure)]);
+        h.reloads(&walk.state);
+    }
+
+    // ---- Phase 2, P2-6: the node accuses automatically -------------------------------------------
+    //
+    // The node's half of §3.8 on real claims: the read kaspad asks before it files
+    // (`palw_da_accusation_check_v1`, through the processor's own extras at the next block — C-8 and
+    // A-6's room), and the ONE builder of an event `DefaultAccused` (`palw_da_accusation_object_v1`),
+    // signed by the seat's card — each object then taken the whole way: the gate (the signature), the
+    // acceptance walk and the fold.
+
+    /// The node's read of an automatic accusation by `card` at the next block.
+    fn auto_check(h: &H, walk: &Walk, claim: Hash64, card: usize) -> kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 {
+        let point = walk.next();
+        h.vp().palw_da_accusation_check_v1_at(&walk.state, point.block, point.daa_score, &claim, &h.cards[card])
+    }
+
+    /// The node's accusation as `card` files it: the unit the read named, the ONE builder, the card's key.
+    fn auto_accusation(h: &H, claim: Hash64, card: usize, unit: PalwDaUnitV1) -> Obj {
+        kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(
+            &h.domain,
+            claim,
+            unit,
+            h.cards[card],
+            |message, context| Some(sign(card, message, context)),
+        )
+        .expect("the node's builder builds it")
+    }
+
+    /// **T34 (node half) + T54a at processor level (and the ADR's §3.8 "a seat whose fetch has failed
+    /// files `Unavailable` and a `DefaultAccused`"): an unserved seat's automatic accusation defaults
+    /// a silent producer — S1, and the reporter reward paid to the seat through step 3d.**
+    /// A real floor claim, bound (`PanelBound`: the `Unavailable`'s moment). The seat's node reads
+    /// `File` — row 0, tile 0, `Live`, a seat of the current panel, DA-6's exposure — builds the object
+    /// with the ONE builder and its card's key, and it clears the gate (the accusation's signature), the
+    /// walk and the fold, opening exactly the session the read described; the same object signed by
+    /// another card is refused by the gate. From then on the read says `AccusedBefore` (no duplicate
+    /// rides), while another seat of the panel still accuses on its own. The producer answers nothing:
+    /// the first block past the deadline voids the claim `ProducerWithholding`, takes the producer's
+    /// whole commitment (S1), records the `DaDefault`, and opens the
+    /// reward named for the accuser; when its reveal window closes, step 3d moves the award into the
+    /// payout queue under the reporter key, to the seat's payout, and the next block drains it into its
+    /// coinbase.
+    ///
+    /// T54a's "+ strike" is not asserted: `withholding_strikes` is declared by the v22 skeleton and no
+    /// fold rule writes it yet (the ejection ledger is Phase 1's; reported with P2-6).
+    ///
+    /// What this does NOT run is kaspad: the node's trigger (`palw_seat_da_accuse_by_v1`), its book
+    /// (`PalwSeatAccusationsV1`) and the carrier lanes run in `kaspad::palw_panel::p2_6_da_accusation_policy`;
+    /// plan §4's T54a proper, a node e2e on a devnet preset, is a POST-LAUNCH item (the operator
+    /// deferred every drill and node launch until after the t12 launch, 2026-09-24).
+    #[tokio::test]
+    async fn t34_t54a_an_unserved_seats_automatic_accusation_defaults_a_silent_producer_and_pays_it_through_3d() {
+        use kaspa_consensus_core::palw_da_rcore_v1::{PALW_DA_AUTO_NAMED_UNIT_V1, PalwDaStageV1};
+        use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as Check;
+        let h = harness(true);
+        let mut walk = h.genesis_walk();
+        let claim = h.open_claim(&mut walk, Fault::Honest);
+        let id = claim.claim_id;
+        h.bind(&mut walk, id);
+        let seat = PANEL[0];
+        let Check::File { unit, admission } = auto_check(&h, &walk, id, seat) else {
+            panic!("the unserved seat files: {:?}", auto_check(&h, &walk, id, seat))
+        };
+        assert_eq!(unit, PALW_DA_AUTO_NAMED_UNIT_V1);
+        assert!(admission.accuser_is_seat && admission.stage == PalwDaStageV1::Live, "a seat, before the licence");
+        assert!(matches!(auto_check(&h, &walk, id, EXECUTOR), Check::Refused(PalwStateV2Error::DaAccuserIsTheProducer(_))));
+        let forged =
+            kaspa_consensus_core::palw_da_rcore_v1::palw_da_accusation_object_v1(&h.domain, id, unit, h.cards[seat], |m, c| {
+                Some(sign(BYSTANDER, m, c))
+            })
+            .expect("built: the builder signs with the key it is handed");
+        h.refused(&walk, &forged, &format!("claim {id}'s accusation is not signed by the bond it names"));
+        let producer = h.cards[EXECUTOR];
+        let producer_before = walk.state.bond(&producer).unwrap().collateral;
+        let commitment =
+            kaspa_consensus_core::palw_state_v2::palw_claim_bond_reservation_v1(h.sp(), walk.state.claim(&id).unwrap()).unwrap();
+        h.carry(&mut walk, vec![auto_accusation(&h, id, seat, unit)]);
+        let session = walk.state.da_session(&id, &h.cards[seat]).expect("the session the read described").clone();
+        assert_eq!(
+            (session.units[0], session.accuser_is_seat, session.exposure, session.deadline_daa, session.stage),
+            (unit, true, admission.exposure, admission.deadline_daa, PalwDaStageV1::Live)
+        );
+        assert_eq!(walk.state.deadline_of(&id), None, "the seat's session pauses the claim (DA-5)");
+        assert_eq!(auto_check(&h, &walk, id, seat), Check::AccusedBefore, "filed once");
+        assert!(matches!(auto_check(&h, &walk, id, PANEL[1]), Check::File { .. }), "every other seat accuses its own");
+        h.reloads(&walk.state);
+        // The producer is silent.
+        run_out(&h, &mut walk, id, seat);
+        let voided_at = walk.daa;
+        assert!(matches!(
+            walk.state.claim(&id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }
+        ));
+        let debit = producer_before - walk.state.bond(&producer).unwrap().collateral;
+        assert_eq!(u128::from(debit), commitment, "S1: the whole commitment");
+        let key = palw_da_offence_id_v1(&producer.0, &id);
+        let record = walk.state.consumed_offence(&key).expect("the DaDefault");
+        assert_eq!(
+            (record.kind, record.accepted_daa, u128::from(record.collected)),
+            (PalwOffenceKindV1::DaDefault, voided_at, commitment)
+        );
+        assert_eq!(palw_accuser_exposure_v1(&walk.state, &h.cards[seat]), 0, "the confirmed session's exposure comes back");
+        assert_eq!(auto_check(&h, &walk, id, seat), Check::AccusedBefore, "and never again");
+        let pending = *walk.state.reward_pending(&key).expect("the DA default's reward");
+        assert_eq!(pending.best.map(|winner| winner.reporter), Some(h.cards[seat]), "named for the accuser (R-4)");
+        let payload = walk.state.bond(&h.cards[seat]).unwrap().payout_payload;
+        let amount = pending.amount;
+        assert!(amount > 0);
+        // The reveal window closes; step 3d moves the award in the same block.
+        let point = walk.at(pending.reveal_until + 1);
+        let next = h.fold(&walk.state, &point, &[]).expect("the award's block folds");
+        walk.advance(&point, next);
+        assert!(walk.state.reward_pending(&key).is_none() && walk.state.reporter_rewards_iter().all(|(k, _)| *k != key));
+        let row = kaspa_consensus_core::palw_vesting_v1::palw_reporter_payout_key_v1(&key);
+        let queued = walk.state.pending_payout(&row).copied().expect("moved into the payout queue by step 3d");
+        assert_eq!((queued.payload, queued.amount), (payload, amount), "to the seat's payout");
+        h.reloads(&walk.state);
+        let point = walk.next();
+        let next = h.fold(&walk.state, &point, &[]).expect("the mint's block folds");
+        walk.advance(&point, next);
+        assert!(walk.state.pending_payout(&row).is_none(), "drained into the next coinbase");
+    }
+
+    /// **P2-6: the node does not accuse a unit already on chain.** A partial seat of a licensed claim
+    /// accuses automatically (the read's `Licensed` stage — the licence that landed on it) and the
+    /// honest producer answers with the run's `Flat` (the node's own answer builder): the session is
+    /// refuted. The accuser's read is `AccusedBefore` (its session closed, `opened_by_seat` remains);
+    /// another seat's read is `Answered` — the material is on chain, and a session naming it could
+    /// only be refuted at that seat's cost.
+    #[tokio::test]
+    async fn p2_6_an_answered_unit_is_not_accused_again() {
+        use kaspa_consensus_core::palw_da_rcore_v1::PalwDaStageV1;
+        use kaspa_consensus_core::palw_producer_v2::PalwDaAccusationCheckV1 as Check;
+        let h = harness(true);
+        let (mut walk, claim, licence) = h.licensed(Fault::Honest);
+        let id = claim.claim_id;
+        let partials = licence.partials();
+        let Check::File { unit, admission } = auto_check(&h, &walk, id, partials[0]) else { panic!("files") };
+        assert_eq!(admission.stage, PalwDaStageV1::Licensed);
+        h.carry(&mut walk, vec![auto_accusation(&h, id, partials[0], unit)]);
+        let read = duties_of(&h, &walk, &[EXECUTOR]);
+        assert_eq!(read.duties.len(), 1, "the run's one row");
+        let answer = node_event_answer(&h, &claim, &read.duties[0], EXECUTOR);
+        h.carry(&mut walk, vec![answer]);
+        assert!(walk.state.da_session(&id, &h.cards[partials[0]]).is_none(), "refuted");
+        assert_eq!(auto_check(&h, &walk, id, partials[0]), Check::AccusedBefore, "once, after the session closed too");
+        assert_eq!(auto_check(&h, &walk, id, partials[1]), Check::Answered, "row 0 is on chain");
         h.reloads(&walk.state);
     }
 }

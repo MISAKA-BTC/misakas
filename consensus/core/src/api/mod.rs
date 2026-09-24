@@ -887,6 +887,29 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// **ADR-0152 X7 / DA-4 (Phase 2, P2-7): the R-core court's half** — every unanswered unit of an
+    /// open data-availability session this node must answer, as the claim's producer or as a
+    /// covering signer, and the claims a live lock obliges it to keep the material of. Empty below
+    /// `palw_rcore_plus`, where [`Self::palw_da_duties_v2`] is the court's duty list.
+    fn palw_disclosure_duties_v1(
+        &self,
+        _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>,
+    ) -> crate::palw_producer_v2::PalwDisclosureDutiesV1 {
+        Default::default()
+    }
+
+    /// **ADR-0152 §3.8 (Phase 2, P2-6): what an automatic accusation of `claim` by `accuser` comes
+    /// to** at the tip, for the DAA the virtual's next block folds at — the fold's own gate (C-8, A-6
+    /// included), the named unit's bound, and whether the accuser accused before or the unit is
+    /// answered. `None` when there is no tip state to read (off `ConsensusV2`).
+    fn palw_da_accusation_check_v1(
+        &self,
+        _claim: crate::Hash64,
+        _accuser: crate::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<crate::palw_producer_v2::PalwDaAccusationCheckV1> {
+        None
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {
