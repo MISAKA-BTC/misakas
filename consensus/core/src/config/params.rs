@@ -5287,6 +5287,21 @@ impl Params {
         }
     }
 
+    /// **ADR-0152 §4-ter N4: the court turn this node's backends answer a held dissection in** —
+    /// `Some(bundle.court.turn_deadline_daa())` where `palw_offence_attribution` is armed, the turn
+    /// [`Self::palw_held_unanswerable_classes_v1`] judges a class against, so a node's
+    /// `supports_dissection` and the chain's mercy list read one predicate
+    /// (`palw_held_class_unanswerable_v1`); `None` on every other network, whose backends are then
+    /// byte for byte what they were. Handed to every backend a node resolves
+    /// (`PalwExecutionBackendV1::set_held_answerability_v1`). Node-side only: nothing hashes it.
+    pub fn palw_held_answer_turn_v1(&self) -> Option<u64> {
+        let armed = self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never());
+        match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if armed => Some(bundle.court.turn_deadline_daa()),
+            _ => None,
+        }
+    }
+
     /// **ADR-0152 §4-ter (A-held): mirror [`Self::palw_held_unanswerable_classes_v1`] into the V2
     /// bundle** — the `#[borsh(skip)]` copy on `PalwStateParamsV2` the fold's mercy and one-move
     /// refusal read (the fold holds no `Params`). Called by `sync_palw_rcore_plus`, so every site

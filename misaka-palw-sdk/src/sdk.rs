@@ -93,6 +93,12 @@ pub struct PalwClassSdk {
     /// `palw_offence_attribution`, `Legacy` elsewhere. Set with [`Self::with_attempt_rules_v1`] from
     /// the node's params; `Legacy` by default, so every existing caller keeps its roots.
     attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
+    /// **ADR-0152 §4-ter N4: the court turn every backend this SDK resolves answers a held
+    /// dissection in** — `Params::palw_held_answer_turn_v1()`: `Some` on a network that arms
+    /// `palw_offence_attribution`, `None` elsewhere (the default, so every existing caller's backends
+    /// are what they were). Set with [`Self::with_held_answerability_v1`] from the node's params;
+    /// past the fence it is what makes a resolved backend's `supports_dissection` held-aware.
+    held_answer_turn: Option<u64>,
 }
 
 /// The model a row is a revision OF: `"Qwen/Qwen2.5-1.5B/graph-v2"` → `"Qwen/Qwen2.5-1.5B"`.
@@ -145,7 +151,15 @@ impl PalwClassSdk {
         assert_eq!(ids.len(), lineages.len(), "two lineages share a lineage id");
         let fallbacks = lineages.iter().filter(|l| l.is_container_fallback()).count();
         assert!(fallbacks <= 1, "{fallbacks} lineages claim the container-fallback slot, and files can only fall back to one");
-        Self { lineages, court, prompt_ids_form, network_id, chain_classes: false, attempt_rules: Default::default() }
+        Self {
+            lineages,
+            court,
+            prompt_ids_form,
+            network_id,
+            chain_classes: false,
+            attempt_rules: Default::default(),
+            held_answer_turn: None,
+        }
     }
 
     /// **Run the chain's attempt rule** (ADR-0152 v3.1 J-5): every backend this SDK resolves gets it
@@ -159,6 +173,19 @@ impl PalwClassSdk {
 
     pub fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
         self.attempt_rules
+    }
+
+    /// **Answer held dissections inside the chain's turn** (ADR-0152 §4-ter N4): every backend this
+    /// SDK resolves — through a lineage or the chain-registered arm — gets `court_turn_daa`
+    /// (`set_held_answerability_v1` / `with_held_answerability_v1`). A node passes
+    /// `Params::palw_held_answer_turn_v1()`.
+    pub fn with_held_answerability_v1(mut self, court_turn_daa: Option<u64>) -> Self {
+        self.held_answer_turn = court_turn_daa;
+        self
+    }
+
+    pub fn held_answerability_v1(&self) -> Option<u64> {
+        self.held_answer_turn
     }
 
     /// **The canonical job a registration of `entry` carries**: the table's under `Legacy`; under
@@ -183,9 +210,10 @@ impl PalwClassSdk {
     pub fn with_lineage(mut self, lineage: Arc<dyn PalwModelLineageV1>) -> Self {
         let mut lineages = std::mem::take(&mut self.lineages);
         lineages.push(lineage);
-        let attempt_rules = self.attempt_rules;
+        let (attempt_rules, held_answer_turn) = (self.attempt_rules, self.held_answer_turn);
         Self::with_lineages(lineages, self.court, self.prompt_ids_form, std::mem::take(&mut self.network_id))
             .with_attempt_rules_v1(attempt_rules)
+            .with_held_answerability_v1(held_answer_turn)
     }
 
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
@@ -389,9 +417,11 @@ impl PalwClassSdk {
         Ok(candidates.pop().expect("length checked above"))
     }
 
-    /// A resolved backend, running this SDK's attempt rule.
+    /// A resolved backend, running this SDK's attempt rule and answering held dissections inside its
+    /// turn (ADR-0152 §4-ter N4).
     fn ruled_v1(&self, mut backend: Box<dyn PalwExecutionBackendV1>) -> Box<dyn PalwExecutionBackendV1> {
         backend.set_attempt_rules_v1(self.attempt_rules);
+        backend.set_held_answerability_v1(self.held_answer_turn);
         backend
     }
 
@@ -569,7 +599,8 @@ impl PalwClassSdk {
                 backend
                     .with_step_ladder_cap(self.court.max_step_leaf_count())
                     .with_prompt_ids_form(self.prompt_ids_form)
-                    .with_attempt_rules(self.attempt_rules),
+                    .with_attempt_rules(self.attempt_rules)
+                    .with_held_answerability_v1(self.held_answer_turn),
             ));
         }
         if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_registered_root(holdings, artifact_root, profile) {
@@ -583,7 +614,8 @@ impl PalwClassSdk {
                 backend
                     .with_step_ladder_cap(self.court.max_step_leaf_count())
                     .with_prompt_ids_form(self.prompt_ids_form)
-                    .with_attempt_rules(self.attempt_rules),
+                    .with_attempt_rules(self.attempt_rules)
+                    .with_held_answerability_v1(self.held_answer_turn),
             ));
         }
         Err(format!(

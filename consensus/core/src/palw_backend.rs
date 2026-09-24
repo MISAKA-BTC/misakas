@@ -263,6 +263,15 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         crate::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy
     }
 
+    /// **ADR-0152 §4-ter N4: the court turn a held class's dissection is answered in** — the node's
+    /// `Params::palw_held_answer_turn_v1()`: `Some(turn)` where `palw_offence_attribution` is armed,
+    /// `None` everywhere else. Set once, from the node's params, on every backend its registry
+    /// resolves (as [`Self::set_attempt_rules_v1`] is), so past the fence
+    /// [`Self::supports_dissection`] is held-aware on a real node and the producer's guard refuses
+    /// a held class this build cannot defend. A family with no fused site (the floor) keeps the
+    /// default no-op; `None` leaves every family byte for byte what it was.
+    fn set_held_answerability_v1(&mut self, _court_turn_daa: Option<u64>) {}
+
     /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;

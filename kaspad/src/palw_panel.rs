@@ -65,6 +65,12 @@ use kaspa_utils::triggers::SingleTrigger;
 
 const PALW_PANEL: &str = "palw-panel";
 
+/// ADR-0152 §4-ter N3: a held dissection's moves, answered off the tick by the windowed builders.
+mod held_court;
+/// ADR-0152 §4-ter T-A9 and T-A10: the held route against the fold, and N4 live on a node.
+#[cfg(test)]
+mod held_court_e2e;
+
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
 /// phase differs from the one `seen` last recorded, in the operator's stage names. A claim seen for
 /// the first time prints its current stage; a claim that retired from the state leaves `seen`
@@ -2726,25 +2732,17 @@ impl PalwPanelService {
     /// operator's configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         let net = self.consensus_config.params.net.to_string().into_bytes();
-        // ADR-0152 v3.1 J-5: the attempt rule this network runs (`CoreV1` where
-        // `palw_offence_attribution` is armed), on every backend the registry resolves.
-        let rules = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(&self.consensus_config.params);
-        let registry = if self.config.chain_classes {
-            crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(
-                self.config.court,
-                self.config.prompt_ids_form,
-                self.class_holdings.clone(),
-                net,
-            )
-        } else {
-            crate::palw_backends::PalwBackendRegistry::new(
-                self.config.court,
-                self.config.prompt_ids_form,
-                self.class_holdings.clone(),
-                net,
-            )
-        };
-        registry.with_attempt_rules_v1(rules)
+        // ADR-0152 v3.1 J-5 and §4-ter N4: the attempt rule this network runs (`CoreV1` where
+        // `palw_offence_attribution` is armed) and the held-answerability turn, on every backend the
+        // registry resolves — the producer's constructor, so a seat and a producer read one rule.
+        crate::palw_backends::PalwBackendRegistry::for_node_v1(
+            &self.consensus_config.params,
+            self.config.court,
+            self.config.prompt_ids_form,
+            self.class_holdings.clone(),
+            net,
+            self.config.chain_classes,
+        )
     }
 
     /// The class id `--palw-register-class` names, as this build derives it. `None` when the
@@ -4911,6 +4909,17 @@ impl PalwPanelService {
             crate::palw_producer::palw_rcore_plus_reads_v1(&self.consensus_config.params, session, class_id, &bond, facts.daa_score);
         crate::palw_producer::palw_canonical_claim_room_v1(bond_facts, rcore_plus)?;
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
+        // The producer's guard, for the claim this node underwrites here too: no claim of a fused
+        // class this build cannot defend at its dissection's turn — past `palw_offence_attribution`, no
+        // held class it cannot answer inside the court's turn (ADR-0152 §4-ter N4).
+        if let Some(refusal) = crate::palw_producer::palw_dissection_refusal_v1(
+            backend.as_ref(),
+            &self.consensus_config.params,
+            facts.daa_score,
+            class_id,
+        ) {
+            return Err(refusal);
+        }
         // The class's canonical job in leaves: the attempt lane's derived pwu is expected draws ×
         // one job, and the draws are a pure function of the class target.
         let per_inference = facts.pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(facts.class_target).max(1);
@@ -5457,6 +5466,9 @@ impl PalwPanelService {
             Hash64,
             (u64, Option<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnAccusedFilingV1>),
         > = HashMap::new();
+        // ADR-0152 §4-ter N3: the held route's evidence per (session, role), its builds off the tick,
+        // and the accused's held filings read off the chain.
+        let mut held_court = held_court::PalwHeldCourtV1::default();
         // **The receipt pools, V2 and V3** (the launch review's receipt-pool flush; see
         // `palw_receipt_pool` for the four rules they keep). This node's own receipts live inside
         // them but outside everything an arrival can evict; what gossip delivers is keyed per
@@ -6047,6 +6059,7 @@ impl PalwPanelService {
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             attn_evidence.retain(|(session_id, _), _| court_duties.iter().any(|d| d.session_id == *session_id));
             attn_root_filings.retain(|session_id, _| court_duties.iter().any(|d| d.session_id == *session_id));
+            held_court.begin_tick_v1(&court_duties, current_daa).await;
             for duty in &court_duties {
                 let move_round = court_move_round_v1(duty);
                 if let Some(sent_daa) = court_moved.get(&(duty.session_id, move_round, duty.i_am_responder))
@@ -6064,6 +6077,17 @@ impl PalwPanelService {
                 if court_pending.iter().any(|(sid, round, responder, _)| {
                     *sid == duty.session_id && *round == move_round && *responder == duty.i_am_responder
                 }) {
+                    continue;
+                }
+                // **ADR-0152 §4-ter N3: a held dissection takes the held route** — the windowed
+                // builders (N1 for the responder, N2 for a challenger), built off the tick, and the
+                // held root claim (tag 57) as move 1 — never the dense builder below, which a held
+                // job is past. Below `palw_offence_attribution` no duty takes it.
+                if self.held_route_of_v1(&session, duty, current_daa, &mut held_court) {
+                    match self.held_move_v1(&session, duty, current_daa, &mut held_court) {
+                        Ok(object) => court_pending.push((duty.session_id, move_round, duty.i_am_responder, object)),
+                        Err(why) => *court_stalls.entry(why).or_default() += 1,
+                    }
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
@@ -6961,6 +6985,8 @@ impl PalwPanelService {
                 let Some(object) = object else { continue };
                 court_pending.push((duty.session_id, move_round, duty.i_am_responder, object));
             }
+            // ADR-0152 §4-ter N3: the tick's one held build, the soonest deadline first, off the tick.
+            self.held_start_build_v1(&session, network_domain, current_daa, &mut held_court, &materials).await;
             // Ask for every accused capture a close needed and this node did not hold. Outside the
             // logging guard below deliberately: a request that only goes out when a summary line
             // happens to be printed is a request nobody can reason about.
@@ -10137,6 +10163,31 @@ fn attn_root_filings_from_chain_v1(
             found.push(PalwAttnAccusedFilingV1 { binding: *binding, out_tile, anchor: Some(*anchor) });
         }
         _ => {}
+    });
+    found.reverse();
+    found
+}
+
+/// **The accused's HELD filing, read back off the chain** (ADR-0152 §4-ter N3, C2): what its
+/// `CourtAttnRootClaimedHeld` (tag 57) carried — the binding, the committed output tile, the anchor
+/// and every slice sub-root of the anchor's state, which the fold refused unless they root to the
+/// anchor (H3). The session record keeps none of it, so a held challenger reads it here, beside
+/// [`attn_root_filings_from_chain_v1`] and through the same walk: every held root claim filed for
+/// `session_id` in the span, OLDEST first, for the caller to keep the one whose tile proves against
+/// the claim's own root at the narrowed leaf.
+fn attn_held_filings_from_chain_v1(
+    consensus: &dyn kaspa_consensus_core::api::ConsensusApi,
+    session_id: Hash64,
+    not_before_daa: u64,
+    max_chain_blocks: usize,
+) -> Vec<kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1> {
+    let mut found = Vec::new();
+    walk_accepted_lifecycle_objects_v1(consensus, not_before_daa, max_chain_blocks, &mut |object| {
+        if let Some((filed, filing)) = kaspa_consensus_core::palw_attn_responder_v1::PalwAttnHeldFilingV1::from_object_v1(&object)
+            && filed == session_id
+        {
+            found.push(filing);
+        }
     });
     found.reverse();
     found
@@ -13938,7 +13989,10 @@ mod held_class_form_pin {
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find("#[cfg(test)]\nmod tests {").expect("the unit tests follow the code")];
         let uses: Vec<&str> = source.lines().filter(|l| l.contains("self.config.prompt_ids_form")).map(str::trim).collect();
-        assert_eq!(uses.len(), 6, "a new reader of the network's form — read the class's instead (ADR-0118 D3): {uses:#?}");
+        // Five: the node registry's one constructor (`PalwBackendRegistry::for_node_v1`, which read it
+        // twice before the producer and the panel shared it), the two class-form doors, the
+        // canonical claim's carrier and a bisection's close.
+        assert_eq!(uses.len(), 5, "a new reader of the network's form — read the class's instead (ADR-0118 D3): {uses:#?}");
         assert!(source.contains("fn class_prompt_ids_form(&self, class_id: Hash64)"), "the one door");
         for callee in [
             "palw_fp_capture_decode_v1(",

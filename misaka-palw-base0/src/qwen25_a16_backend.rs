@@ -2150,6 +2150,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         self.attempt_rules
     }
 
+    /// ADR-0152 §4-ter N4: the setter form of [`Self::with_held_answerability_v1`] — what a node's
+    /// registry applies to every backend it resolves (`Params::palw_held_answer_turn_v1()`).
+    fn set_held_answerability_v1(&mut self, court_turn_daa: Option<u64>) {
+        self.held_answer_turn = court_turn_daa;
+    }
+
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
         let (prefill, decode) = self.canonical_job;
         let shape = &self.artifact.shape;
