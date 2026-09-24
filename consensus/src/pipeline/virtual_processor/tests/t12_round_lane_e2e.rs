@@ -314,6 +314,19 @@ impl T12Chain {
     /// draw it keeps is carried. A producer varies its execution the same way: a draw is an
     /// inference, and which winning inference it carries is its own choice.
     async fn attempt(&mut self, card: usize, step_ms: u64, txs: Vec<Transaction>, keep: &dyn Fn(Hash64) -> bool) -> (Block, Hash64) {
+        let (block, claim_id) = self.build_attempt(card, step_ms, txs, keep);
+        let block = self.insert_chain_block(block, &format!("card {card}'s attempt block")).await;
+        (block, claim_id)
+    }
+
+    /// [`Self::attempt`]'s block, built and not inserted — so two can be built on the same parents.
+    fn build_attempt(
+        &mut self,
+        card: usize,
+        step_ms: u64,
+        txs: Vec<Transaction>,
+        keep: &dyn Fn(Hash64) -> bool,
+    ) -> (MutableBlock, Hash64) {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_TRACE_CHUNKS, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2,
             PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1, challenge_v2, class_ticket_v3, execution_anchor_v3,
@@ -389,8 +402,7 @@ impl T12Chain {
         t.block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
         t.block.header.finalize();
         self.attempts += 1;
-        let block = self.insert_chain_block(t.block, &format!("card {card}'s attempt block")).await;
-        (block, claim_id)
+        (t.block, claim_id)
     }
 
     /// Heartbeats until `done` holds of the tip, at most `cap`; the answer is `done`'s last value.
@@ -1221,4 +1233,56 @@ async fn t12_a_late_full_seat_licenses_through_the_node_s_own_assemblers() {
     let (_, state) = chain.tip_state();
     let phase = state.claim(&claim_id).unwrap().phase.clone();
     assert!(matches!(phase, PalwClaimPhaseV2::ReceiptLicensed { .. }), "the carried optimistic licence licenses the claim: {phase:?}");
+}
+
+/// **T-THREAD (ADR-0152 v3.1 J-1), through the pipeline on testnet-12: a claim records the
+/// execution anchor of the header that carried it** — `execution_anchor_v3(network domain, the
+/// header's pre-PoW hash, class, bond, nonce)`, the job its attempt had to answer:
+///
+/// * **own work**: card 0's attempt block, built by this node and inserted as the sink;
+/// * **merged work**: card 1's attempt block built on the SAME parents as card 2's, both inserted,
+///   and a heartbeat that merges whichever lost the tip — its claim, folded from the anticone,
+///   records the anchor of its OWN header (never the merging block's, never the attempt id).
+#[tokio::test]
+async fn t12_a_claim_records_the_anchor_of_the_header_that_carried_it() {
+    use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, execution_anchor_v3};
+    kaspa_core::log::try_init_logger("warn");
+    let (config, bundle, premine, floats) = t12_with_harness_cards();
+    assert!(config.params.palw_offence_attribution_active_at(0), "testnet-12 records job identities from genesis");
+    let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
+    let ttpb = config.params.target_time_per_block();
+    chain.heartbeat(ttpb, Vec::new()).await;
+    let anchor_of = |chain: &T12Chain, block: &Block| {
+        let envelope = PalwAttemptEnvelopeV2::decode_wire(&block.header.palw_commitment).expect("an attempt carriage");
+        execution_anchor_v3(
+            chain.network_domain,
+            kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header),
+            envelope.attempt.class_id,
+            &envelope.attempt.executor_bond,
+            block.header.nonce,
+        )
+    };
+
+    // Own work.
+    let (own_block, own_claim) = chain.attempt(0, ttpb, Vec::new(), &|_| true).await;
+    let (_, state) = chain.tip_state();
+    let recorded = state.claim(&own_claim).expect("the attempt opened its claim").job_identity;
+    assert_eq!(recorded, anchor_of(&chain, &own_block), "own work records its own header's anchor");
+    assert_ne!(recorded, own_claim, "the anchor, never the claim id");
+
+    // Two attempt blocks on the same parents; the heartbeat merges the one that lost the tip.
+    let (a, claim_a) = chain.build_attempt(1, ttpb, Vec::new(), &|_| true);
+    let (b, claim_b) = chain.build_attempt(2, 0, Vec::new(), &|_| true);
+    assert_eq!(a.header.direct_parents(), b.header.direct_parents(), "siblings");
+    let (a, b) = (a.to_immutable(), b.to_immutable());
+    for block in [&a, &b] {
+        chain.ctx.consensus.validate_and_insert_block(block.clone()).virtual_state_task.await.expect("an attempt block is valid");
+    }
+    chain.heartbeat(ttpb, Vec::new()).await;
+    let (_, state) = chain.tip_state();
+    for (block, claim) in [(&a, claim_a), (&b, claim_b)] {
+        let record = state.claim(&claim).unwrap_or_else(|| panic!("claim {claim} was admitted (chain or merged)"));
+        assert_eq!(record.accepted_block, block.header.hash, "the claim's carrying block is its own");
+        assert_eq!(record.job_identity, anchor_of(&chain, block), "each claim records the anchor of its OWN header");
+    }
 }

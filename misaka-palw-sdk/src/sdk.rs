@@ -1282,6 +1282,7 @@ mod chain_only_lattice_tests {
 
         // ---- the lattice: committed → bound → licensed → Final ---------------------------
         let committed = Obj::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
             claim: claim_id,
             class_id,
             bond: PalwBondKeyV2(bond_outpoint),

@@ -94,6 +94,7 @@ fn ctx(daa: u64) -> PalwBlockContextV2 {
 
 fn fp_commitment(class_id: Hash64, leaves: u64, n: u64, seed: u64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::FreePromptCommitted {
+        job_pin: kaspa_hashes::Hash64::default(),
         claim: h(0xF0_0000 + seed),
         class_id,
         bond: bond_key(n),

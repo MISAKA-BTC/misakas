@@ -2936,6 +2936,17 @@ impl Params {
                      ledger, the locks, the segmented receipts and the forfeiture those fences define",
                 ));
             }
+            // **ADR-0152 v3.1 J-3 (F1, SPEC §4.3): the prefill draw at genesis too.** The identity
+            // rule's J5 derives an attempt's whole context as the drawn one — the canonical job at
+            // one decode step (`palw_attempt_job_v1(·, true)`) — so a network whose attempts ran the
+            // whole canonical job at any height would have every honest claim of that height fail
+            // J5 and be convicted of answering another job.
+            if !self.palw_prefill_draw.is_some_and(|f| f != ForkActivation::never() && f.daa_score() == 0) {
+                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                    "palw_offence_attribution is armed without palw_prefill_draw at genesis: its identity rule (J5) derives \
+                     every attempt's context at the prefill draw's one decode step",
+                ));
+            }
         }
         // ADR-0089 Decision 9's two preconditions: an EVM face of a market that does not exist,
         // or on a lane that is inert, is a design that has not been armed.
@@ -16508,6 +16519,12 @@ mod consensus_params_id_tests {
         refused_with(&|p| p.palw_objective_offence = None, "palw_offence_attribution is armed without");
         refused_with(&|p| p.palw_verification_v2 = Some(ForkActivation::new(5)), "palw_offence_attribution is armed without");
         refused_with(&|p| p.palw_economic_safety = None, "palw_offence_attribution is armed without");
+        // ADR-0152 v3.1 F1: the prefill draw at genesis, which J5 derives every attempt context at.
+        refused_with(&|p| p.palw_prefill_draw = None, "palw_offence_attribution is armed without palw_prefill_draw at genesis");
+        refused_with(
+            &|p| p.palw_prefill_draw = Some(ForkActivation::new(7)),
+            "palw_offence_attribution is armed without palw_prefill_draw at genesis",
+        );
         let mut without = t12.clone();
         without.palw_offence_attribution = None;
         let mut never_armed = t12.clone();

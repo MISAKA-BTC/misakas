@@ -152,6 +152,7 @@ mod tests {
 
     fn fp_commit(claim: u64, pwu: u64, quanta: u32) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
             claim: h64(claim),
             class_id: h64(1),
             bond: bond(),

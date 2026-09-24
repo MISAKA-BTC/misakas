@@ -493,3 +493,59 @@ fn t11_the_v2_kind_is_dormant_at_the_gate_and_in_the_fold() {
         "and the claim voided before Final"
     );
 }
+
+// ---- F1 (ADR-0152 v3.1): the attribution-only tags and kinds leave testnet-11 where it was -------
+
+/// **T18x: a V1 payload carrying tag 9 or 10 is refused on testnet-11 exactly as an undecodable tag
+/// was** — at the processor's V1 gate (`PanelFalseValidNeedsContradiction`, before the seat, the
+/// receipt or the signature is read) and in the V1 fold ("does not decode"), and the carrying block
+/// folds to the empty block's pinned root. The same payload bytes with the tag byte replaced by one
+/// no build decodes are refused with the same two answers — so no testnet-11 verdict moved when the
+/// tags were appended. Kind 4 (`ExecutorRefuted`) is dormant there as kind 3 is, and kinds 5 and 6
+/// are refused by name as records only the fold writes.
+#[test]
+fn t11_attribution_tags_and_kinds_are_refused_as_they_were() {
+    use kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1;
+    let f = licensed();
+    let seat = f.seats[0];
+    let seat_kp = generate_key_pair([0x74; 32]);
+    let dormant = processor_extras(&f.p, f.daa);
+    let refusal_of = |object: &PalwConsensusObjectV2| format!("{:?}", fold_with(&f, std::slice::from_ref(object), &dormant).err());
+    for contradiction in [
+        PalwPanelContradictionV1::IdentityMismatch { binding: f.binding.clone() },
+        PalwPanelContradictionV1::OutputMismatch { binding: f.binding.clone(), pin: PalwDecodeTokenPinV1::Base0V1(f.pin.clone()) },
+    ] {
+        let payload = v1_payload(f.claim_id, seat, &seat_kp, domain(&f.p), contradiction.clone(), false);
+        let bytes = borsh::to_vec(&payload).unwrap();
+        // The same bytes with the contradiction's tag replaced by one nothing decodes.
+        let tag_at = bytes.len() - borsh::to_vec(&contradiction).unwrap().len();
+        let mut undecodable = bytes.clone();
+        undecodable[tag_at] = 0xEE;
+        assert!(borsh::from_slice::<PalwPanelFalseValidEvidenceV1>(&undecodable).is_err());
+        for evidence in [&bytes, &undecodable] {
+            assert_eq!(
+                gate(&f.p, PalwOffenceKindV1::PanelFalseValid, seat, &seat_kp, evidence),
+                "Err(PanelFalseValidNeedsContradiction)",
+                "the V1 gate"
+            );
+        }
+        let appended = refusal_of(&offence(PalwOffenceKindV1::PanelFalseValid, seat, bytes));
+        let unknown = refusal_of(&offence(PalwOffenceKindV1::PanelFalseValid, seat, undecodable));
+        assert!(appended.contains("PanelFalseValid evidence does not decode"), "{appended}");
+        assert!(unknown.contains("PanelFalseValid evidence does not decode"), "{unknown}");
+    }
+    let without = fold_with(&f, &[], &dormant).expect("the block without them");
+    assert_eq!(without.state_root().to_string(), ROOT_EMPTY_NEXT, "the carrying block's root is the empty block's");
+
+    // Kind 4 is dormant on testnet-11; 5 and 6 are never filed.
+    let evidence = vec![4u8; 16];
+    assert_eq!(gate(&f.p, PalwOffenceKindV1::ExecutorRefuted, f.seats[0], &seat_kp, &evidence), "Err(AttributionDormant)");
+    let refused = fold_with(&f, &[offence(PalwOffenceKindV1::ExecutorRefuted, seat, evidence)], &dormant);
+    assert!(matches!(refused, Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::ObjectiveOffenceDormant)), "{refused:?}");
+    for kind in [PalwOffenceKindV1::DaDefault, PalwOffenceKindV1::CourtConviction] {
+        let evidence = vec![kind as u8; 16];
+        assert!(gate(&f.p, kind, seat, &seat_kp, &evidence).starts_with("Err(KindNotFileable("), "{kind:?}");
+        let refused = refusal_of(&offence(kind, seat, evidence));
+        assert!(refused.contains("is a record the fold writes"), "{kind:?}: {refused}");
+    }
+}

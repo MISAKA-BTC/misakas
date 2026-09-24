@@ -14137,6 +14137,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &inj_params, &cx(1, 1, 1), &reg, None).unwrap();
         let commit = Obj::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
             claim: claim_id,
             class_id: base_class,
             bond: harness_bond_key,
@@ -14265,6 +14266,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
             subsidy: 0,
             escrow_carve: None,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         },
         PalwMergedWorkV1 {
             carrying_block: r2,
@@ -14273,6 +14275,7 @@ async fn palw_v2_a_quantum_spent_twice_in_one_mergeset_is_paid_once() {
             subsidy: 0,
             escrow_carve: None,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         },
     ];
     let fold_point = PalwBlockContextV2 { block: h64(0xF01D), daa_score: 7, blue_score: 6, subsidy: 0 };

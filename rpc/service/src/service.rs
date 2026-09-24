@@ -443,6 +443,8 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 // ADR-0152 v22 skeleton: declared (SR-9, Q-5), written by no rule yet.
                 R::UnavailableQuorum => "unavailable_quorum",
                 R::NotReplayBacked => "not_replay_backed",
+                // ADR-0152 F2 residual: a court default, past `palw_offence_attribution`.
+                R::CourtDefault => "court_default",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }

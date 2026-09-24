@@ -33,8 +33,14 @@
 //! | fault | the arithmetic, structural or decode checker |
 //! | slash target | the seat's lock; the executor through `void_and_slash` or the `Final`'s reversal |
 //!
-//! The job-identity link — that the root answers THIS claim's job and not a borrowed one — is
-//! stage F1, which stores the identity the claim was mined under.
+//! **F1 (ADR-0152 v3.1 J-1…J-5) adds the job-identity link** — that the root answers THIS claim's
+//! job and not a borrowed one. The claim records the identity it was mined under
+//! (`PalwClaimStateV2::job_identity`: the carrying header's execution anchor, or a free-prompt
+//! commitment's [`crate::palw_fp_execution_v3::palw_fp_job_pin_v1`]), and
+//! [`palw_binding_identity_fault_v1`] holds a binding's context to it; `IdentityMismatch` (9) and
+//! `OutputMismatch` (10) convict on it, against a `Valid` signer (kind 3) or against the executor
+//! itself ([`palw_check_executor_refuted_v1`], kind 4, no receipt). A fault that proves the claim
+//! answers the wrong job forfeits by CLAIM, never by root: a borrowed root is an honest lender's too.
 //!
 //! **What a partial seat vouched for** (F2 review, F-1). A segmented seat replays its segment from
 //! the prompt or from the committed checkpoint at the segment's start, and compares the step leaves
@@ -180,11 +186,93 @@ pub struct PalwPanelFalseValidEvidenceV2 {
     pub reporter_reveal: Vec<u8>,
 }
 
-/// Which lane a live claim came from. Not stored: read off the claim row when a target is resolved.
+/// Which lane a claim came from. Not stored as such: read off the claim row when a target is
+/// resolved, or off the liability row's `free_prompt` where the row recorded the claim's identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwClaimSourceKindV1 {
     Attempt,
     FreePrompt,
+}
+
+/// Wire version of [`PalwExecutorRefutedEvidenceV1`].
+pub const PALW_EXECUTOR_REFUTED_VERSION_V1: u16 = 1;
+
+/// Keyed-BLAKE2b-512 domain of [`palw_executor_refuted_ledger_key_v1`].
+pub const PALW_EXECUTOR_REFUTED_KEY_DOMAIN_V1: &[u8] = b"misaka-palw/executor-refuted-key/v1";
+
+/// **The claim's executor refuted by an objective contradiction of its own committed execution**
+/// (ADR-0152 v3.1 J-4, kind 4). No receipt and no signature: the evidence is objective, and the
+/// accused is whoever the claim names as its executor. One offence per claim.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwExecutorRefutedEvidenceV1 {
+    /// = [`PALW_EXECUTOR_REFUTED_VERSION_V1`].
+    pub version: u16,
+    pub claim_id: Hash64,
+    /// One of the execution- or claim-proving contradictions (5, 6, 8, 9, 10).
+    pub contradiction: PalwPanelContradictionV1,
+    /// A `StepArithmetic`'s one prompt tile under a Merkle prompt commitment — the same carriage
+    /// kind 3 takes (F2 review, F-3); `None` otherwise.
+    pub prompt_ids_opening: Option<PalwPromptIdsOpeningV1>,
+    /// F7's commit–reveal slot, as kind 3's: empty until its own fence, never in the ledger key.
+    pub reporter_reveal: Vec<u8>,
+}
+
+/// **What the identity checks read besides the target and the binding**: the network's prompt-id
+/// form (a class's form is derived from it, `palw_prompt_ids_form_of_class_v1`) and which class is
+/// the base one (whose canonical job the chain derives, J5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwIdentityRulesV1 {
+    pub prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    pub base_class_id: Hash64,
+}
+
+/// **Which identity check a binding failed** — the first, in the addendum's order (§4-bis.2):
+/// J2, J1, J3, J5a, J5b, J4.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwIdentityFaultV1 {
+    /// J2: the binding's shape profile is not the claim's class (a class id IS its profile id).
+    ClassNotTheClaims,
+    /// J1: the context's job is not the one the claim recorded (attempt: the job id against the
+    /// carrying header's anchor; free prompt: the context's pin against the commitment's).
+    JobNotTheClaims,
+    /// J3 (attempt): the execution seed is not the anchor's first 32 bytes.
+    SeedNotTheJobs,
+    /// J5a (attempt, a class whose canonical job the chain derives): the whole context is not the
+    /// one the anchor implies — prefill, decode, ceiling, network, nullifier, model, runtime,
+    /// tokenizer, assignment, cu, version or scheme moved.
+    ContextNotCanonical,
+    /// J5b (attempt, a canonical prompt of at most 4,096 ids): the prompt root is not the anchor's
+    /// prompt — a relabelled run of another anchor's prompt.
+    PromptNotTheAnchors,
+    /// J4: the binding's logits trace root is not the claim's committed trace root.
+    TraceNotTheClaims,
+}
+
+impl PalwIdentityFaultV1 {
+    /// The check's name, as the ADR spells it.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::ClassNotTheClaims => "J2",
+            Self::JobNotTheClaims => "J1",
+            Self::SeedNotTheJobs => "J3",
+            Self::ContextNotCanonical => "J5a",
+            Self::PromptNotTheAnchors => "J5b",
+            Self::TraceNotTheClaims => "J4",
+        }
+    }
+}
+
+/// **What a conviction forfeits of the rights the convicted work already holds** (ADR-0152 v3.1
+/// V-2b, addendum §4-bis.7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwForfeitScopeV1 {
+    /// A named void: it names a claim the chain already voided, and proves nothing about a root.
+    None,
+    /// The claim answers the wrong job or output (9, 10): its own rights go, by claim id — never
+    /// the root's, which an honest lender's claim may carry too.
+    ByClaim,
+    /// The execution itself is false (5, 6, 8): every right on that root goes (ADR-0151).
+    ByRoot,
 }
 
 /// **What a false-Valid conviction lands on**, resolved from state — the live claim first, its
@@ -205,6 +293,15 @@ pub struct PalwOffenceTargetV1 {
     pub segment_count: Option<u16>,
     /// `None` when only the liability row is left.
     pub phase: Option<PalwClaimPhaseV2>,
+    /// **F1 (ADR-0152 v3.1 J-2, R9): the job identity the claim recorded** — the claim record's,
+    /// else the liability row's copy, else the vesting row's; 0 when none recorded it, which
+    /// convicts nobody (`IdentityNotRecorded`).
+    pub job_identity: Hash64,
+    /// The claim's committed logits trace root (J4), from the same source.
+    pub trace_root: Hash64,
+    /// The claim's committed output root (`OutputMismatch`); 0 where only a vesting row is left,
+    /// which records none.
+    pub output_root: Hash64,
 }
 
 /// **Where in the execution a proven fault sits, and what the verdict read to find it.** A seat is
@@ -231,14 +328,28 @@ impl PalwFaultSiteV1 {
     }
 }
 
-/// The adjudicator's verdict: whom and what a conviction lands on, where the fault is, and whether
-/// the contradiction proves the EXECUTION false (and so voids or reverses the claim) or only names
-/// a void the chain already wrote.
+/// The adjudicator's verdict: whom and what a conviction lands on, where the fault is, whether the
+/// contradiction proves the claim false — its execution, or (F1) the job or output it answers — and
+/// so voids or reverses it, or only names a void the chain already wrote, and what of the convicted
+/// work's rights it forfeits (addendum §4-bis.7: `execution_proving` became these two).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwFalseValidFindingV1 {
     pub target: PalwOffenceTargetV1,
     pub site: PalwFaultSiteV1,
-    pub execution_proving: bool,
+    /// The claim is proven false (execution- or claim-proving): void it before `Final`, reverse
+    /// its `Final` after.
+    pub acts_on_claim: bool,
+    pub forfeit: PalwForfeitScopeV1,
+}
+
+/// **Kind 4's verdict**: the claim whose executor is refuted, and what of its rights the
+/// conviction forfeits. The executor always acts on the claim.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwExecutorRefutedFindingV1 {
+    pub target: PalwOffenceTargetV1,
+    pub forfeit: PalwForfeitScopeV1,
+    /// The identity check that failed, for a 9 (`None` for every other contradiction).
+    pub identity_fault: Option<PalwIdentityFaultV1>,
 }
 
 /// **The signature half of the adjudicator, which only the processor runs.** The fold passes
@@ -263,6 +374,11 @@ pub enum PalwFalseValidAdmissionV1 {
     /// A proof against the committed execution itself (`StepArithmetic`, `StepStructural`,
     /// `ForgedOutput`), pinned to the claim's root.
     ExecutionProving,
+    /// **F1: a proof that the claim's committed execution answers another job or class
+    /// (`IdentityMismatch`), or that its output root is not that execution's output
+    /// (`OutputMismatch`)** — pinned to the claim's root and its recorded identity. It proves the
+    /// CLAIM false, not the root: a borrowed root may be an honest lender's.
+    ClaimProving,
 }
 
 /// `H(domain ‖ claim)` — the evidence half of a V2 offence id, which names the claim and nothing
@@ -308,18 +424,52 @@ pub fn palw_offence_target_v1(state: &PalwChainStateV2, claim_id: &Hash64) -> Op
             lane: Some(lane),
             segment_count,
             phase: Some(claim.phase.clone()),
+            job_identity: claim.job_identity,
+            trace_root: claim.trace_root,
+            output_root: claim.output_root,
         });
     }
-    let row = state.panel_liability(claim_id)?;
+    // A retired claim's row records its lane and its segment cut only where it recorded its
+    // identity (F1, `persist_panel_liability` past `palw_offence_attribution`); a row written below
+    // the fence reads as F2 read it — lane and cut unknown.
+    let recorded_lane = |job_identity: &Hash64, free_prompt: bool| {
+        (*job_identity != Hash64::default()).then_some(if free_prompt {
+            PalwClaimSourceKindV1::FreePrompt
+        } else {
+            PalwClaimSourceKindV1::Attempt
+        })
+    };
+    if let Some(row) = state.panel_liability(claim_id) {
+        return Some(PalwOffenceTargetV1 {
+            claim_id: *claim_id,
+            class_id: row.class_id,
+            artifact_root: artifact_of(&row.class_id),
+            executor_bond: row.executor_bond,
+            execution_root: row.execution_root,
+            lane: recorded_lane(&row.job_identity, row.free_prompt),
+            segment_count: (row.segment_count != 0).then_some(row.segment_count),
+            phase: None,
+            job_identity: row.job_identity,
+            trace_root: row.trace_root,
+            output_root: row.output_root,
+        });
+    }
+    // ADR-0152 v3.1 J-2 (R-core): the vesting row is the third source. Liability rows are not pruned
+    // while a vesting row exists (X29), so this is a fallback, not a path the live chain expects;
+    // the map is empty wherever `palw_rcore_plus` is dormant.
+    let row = state.vesting_row(claim_id)?;
     Some(PalwOffenceTargetV1 {
         claim_id: *claim_id,
         class_id: row.class_id,
-        artifact_root: artifact_of(&row.class_id),
-        executor_bond: row.executor_bond,
+        artifact_root: row.artifact_root,
+        executor_bond: row.producer_bond,
         execution_root: row.execution_root,
-        lane: None,
-        segment_count: None,
+        lane: recorded_lane(&row.job_identity, row.free_prompt),
+        segment_count: (row.segment_count != 0).then_some(row.segment_count),
         phase: None,
+        job_identity: row.job_identity,
+        trace_root: row.trace_root,
+        output_root: Hash64::default(),
     })
 }
 
@@ -367,6 +517,7 @@ pub fn palw_false_valid_admission_v1(
             Ok(PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::CourtFraud, voided_daa: *voided_daa })
         }
         C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } => Ok(PalwFalseValidAdmissionV1::ClaimProving),
         C::ProducerWithholding { .. } => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
             "ProducerWithholding is a void the producer's own silence writes, and a seat owes no disclosure it could answer it with (until F3)",
         )),
@@ -495,13 +646,19 @@ pub fn palw_false_valid_fault_site_v1(
                 Ok((PalwFaultSiteV1::Whole, 0))
             }
         },
+        // F1: 9 and 10 at `Whole` (addendum §4-bis.7). A partial seat's resume replays its segment
+        // from the committed context; whether that replay is also held to the anchor's canonical
+        // job is SEAT-S1's, and `AnyValid` waits on it (T18p-M), so only a whole attestation is
+        // liable here.
         PalwPanelContradictionV1::ForgedOutput { .. }
         | PalwPanelContradictionV1::ProducerWithholding { .. }
         | PalwPanelContradictionV1::CourtFraud { .. }
         | PalwPanelContradictionV1::ExecutorEquivocation(_)
         | PalwPanelContradictionV1::CourtExecutorGuilty { .. }
         | PalwPanelContradictionV1::ConflictingPermit { .. }
-        | PalwPanelContradictionV1::Legs(_) => Ok((PalwFaultSiteV1::Whole, 0)),
+        | PalwPanelContradictionV1::Legs(_)
+        | PalwPanelContradictionV1::IdentityMismatch { .. }
+        | PalwPanelContradictionV1::OutputMismatch { .. } => Ok((PalwFaultSiteV1::Whole, 0)),
     }
 }
 
@@ -591,6 +748,214 @@ pub fn palw_false_valid_convicts_execution_v2(
         .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)
 }
 
+/// **F1's identity rule** (ADR-0152 v3.1 J-5; the audit's SPEC §4.3, addendum §4-bis.2): does
+/// `binding` — the claim's own committed execution — answer the job and class the claim RECORDED?
+///
+/// Refused (no verdict either way, nothing is written) when the binding does not reproduce its own
+/// root (`BindingUnverified`) or is not the claim's (`PanelFalseValidWorkMismatch`), when the claim
+/// recorded no identity (`IdentityNotRecorded`: 0 never convicts) and when its lane is unknown
+/// (`LaneUnknown`). Otherwise the FIRST failing check, in the addendum's order:
+///
+/// | Check | Fault |
+/// |---|---|
+/// | J2 | the binding's profile is not the claim's class |
+/// | J1 | attempt: `job_id` is not the recorded anchor; free prompt: the context's pin is not the commitment's |
+/// | J3 | attempt: `execution_seed` is not the anchor's first 32 bytes |
+/// | J5a | attempt, on a class whose canonical job the chain derives (F1: the base class): the whole context is not the one the anchor implies |
+/// | J5b | the same, a canonical prompt of at most 4,096 ids: the prompt root is not the anchor's |
+/// | J4 | the logits trace root is not the claim's |
+///
+/// `with_prompt_root = false` leaves J5b out — the data-availability answers run every other check
+/// (SPEC §4.6: its cost belongs to the contradictions).
+///
+/// An honest binding is its own job's by construction, so no check here can fault an honest
+/// producer: its context is the anchor's canonical one (the rule its own seats hold it to), its
+/// profile is its class's and its trace root is the one it committed.
+pub fn palw_binding_identity_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    rules: PalwIdentityRulesV1,
+    with_prompt_root: bool,
+) -> Result<Option<PalwIdentityFaultV1>, PalwOffenceVerifyError> {
+    use crate::palw_attempt_rules_v1::{
+        PALW_J5_INLINE_PROMPT_IDS_V1, palw_attempt_canonical_v1, palw_attempt_context_v1, palw_attempt_prompt_root_v1,
+    };
+    crate::palw_step_leg::verify_binding_v1(binding).map_err(|_| PalwOffenceVerifyError::BindingUnverified)?;
+    if binding.committed_execution_root != target.execution_root {
+        return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+    }
+    let identity = target.job_identity;
+    if identity == Hash64::default() {
+        return Err(PalwOffenceVerifyError::IdentityNotRecorded);
+    }
+    let lane = target.lane.ok_or(PalwOffenceVerifyError::LaneUnknown)?;
+    let (ctx, profile) = (&binding.job_context, &binding.shape_profile);
+    // J2 — the class. Every check below reads the profile, so it must be the claim's first.
+    if profile.shape_profile_id() != target.class_id {
+        return Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims));
+    }
+    match lane {
+        PalwClaimSourceKindV1::FreePrompt => {
+            // J1, free prompt: the commitment's pin, recomputed from the context.
+            if crate::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(ctx) != identity {
+                return Ok(Some(PalwIdentityFaultV1::JobNotTheClaims));
+            }
+        }
+        PalwClaimSourceKindV1::Attempt => {
+            // J1 and J3: the anchor names the job and seeds it.
+            if ctx.job_id != identity {
+                return Ok(Some(PalwIdentityFaultV1::JobNotTheClaims));
+            }
+            if ctx.execution_seed[..] != identity.as_byte_slice()[..32] {
+                return Ok(Some(PalwIdentityFaultV1::SeedNotTheJobs));
+            }
+            // J5: the whole context, where the chain derives the class's canonical job.
+            if let Some(canonical) = palw_attempt_canonical_v1(profile, target.class_id == rules.base_class_id) {
+                let expected = palw_attempt_context_v1(profile, &identity, canonical, ctx.prompt_token_ids_hash);
+                if ctx.context_hash() != expected.context_hash() {
+                    return Ok(Some(PalwIdentityFaultV1::ContextNotCanonical));
+                }
+                if with_prompt_root && canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
+                    let root = palw_attempt_prompt_root_v1(profile, &identity, canonical.0, rules.prompt_ids_form)
+                        .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                    if ctx.prompt_token_ids_hash != root {
+                        return Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors));
+                    }
+                }
+            }
+        }
+    }
+    // J4 — the trace root the claim committed.
+    if binding.full_logits_trace_root != target.trace_root {
+        return Ok(Some(PalwIdentityFaultV1::TraceNotTheClaims));
+    }
+    Ok(None)
+}
+
+/// **F1's output rule** (ADR-0152 v3.1 J-5, `OutputMismatch`; addendum §4-bis.4): is the claim's
+/// committed `output_root` the output its committed execution generated?
+///
+/// The binding must be the claim's (its root) and the class's (J2 is a refusal here: file
+/// `IdentityMismatch`), and the claim must have recorded its identity. The pin names the generated
+/// ids and is authenticated against the binding's logits trace root by the class's own scheme
+/// (`Base0V1` flat, `TiledV1` tiled; `FloatV2` is refused). The fault is
+/// `output_commitment_v2(ctx, ids, rendered_output_hash_v2(&[])) != output_root` — the one rendered
+/// rule, attempts and free prompts alike.
+///
+/// **F1 covers the flat-logits classes** (the floor): a model class's producers still commit a
+/// family-keyed rendered hash, and would be convicted for it, until `CoreV1` moves them onto the
+/// one rule (F1-M) — so a tiled class is refused here until then.
+pub fn palw_output_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    pin: &crate::palw_step_refute::PalwDecodeTokenPinV1,
+) -> Result<bool, PalwOffenceVerifyError> {
+    use crate::palw_step_refute::PalwDecodeTokenPinV1 as Pin;
+    crate::palw_step_leg::verify_binding_v1(binding).map_err(|_| PalwOffenceVerifyError::BindingUnverified)?;
+    if binding.committed_execution_root != target.execution_root {
+        return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+    }
+    if target.job_identity == Hash64::default() {
+        return Err(PalwOffenceVerifyError::IdentityNotRecorded);
+    }
+    if target.lane.is_none() {
+        return Err(PalwOffenceVerifyError::LaneUnknown);
+    }
+    if binding.shape_profile.shape_profile_id() != target.class_id {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "the binding is another class's: that is an IdentityMismatch (J2), not an output question",
+        ));
+    }
+    if target.output_root == Hash64::default() {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("the claim's output root is no longer recorded"));
+    }
+    if binding.shape_profile.logits_scheme_id != crate::palw_step_refute::flat_logits_scheme_id_v1() {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "a tiled class's producers render under their family's rule until CoreV1 (F1-M); the one rendered rule convicts \
+             flat-logits classes only",
+        ));
+    }
+    let ids = match pin {
+        Pin::Base0V1(tokens) => {
+            crate::palw_step_refute::check_base0_decode_pin(binding, tokens)
+                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            &tokens.generated_token_ids
+        }
+        Pin::TiledV1(tokens) => {
+            crate::palw_step_refute::check_tiled_decode_pin(binding, tokens)
+                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            &tokens.generated_token_ids
+        }
+        Pin::FloatV2(_) => return Err(PalwOffenceVerifyError::PinNotAdmitted("a Float32 class's pin")),
+    };
+    let rendered =
+        crate::palw_v2::output_commitment_v2(&binding.job_context.context_hash(), ids, &crate::palw_v2::rendered_output_hash_v2(&[]));
+    Ok(rendered != target.output_root)
+}
+
+/// **What a claim-proving contradiction (9, 10) proves about `target`**, or the refusal. The
+/// identity fault, for a 9.
+fn claim_proving_fault_v1(
+    target: &PalwOffenceTargetV1,
+    contradiction: &PalwPanelContradictionV1,
+    rules: PalwIdentityRulesV1,
+) -> Result<Option<PalwIdentityFaultV1>, PalwOffenceVerifyError> {
+    match contradiction {
+        PalwPanelContradictionV1::IdentityMismatch { binding } => {
+            palw_binding_identity_fault_v1(target, binding, rules, true)?.map(Some).ok_or(PalwOffenceVerifyError::IdentityHolds)
+        }
+        PalwPanelContradictionV1::OutputMismatch { binding, pin } => {
+            if palw_output_fault_v1(target, binding, pin)? {
+                Ok(None)
+            } else {
+                Err(PalwOffenceVerifyError::OutputHolds)
+            }
+        }
+        _ => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+    }
+}
+
+/// **A proof against the claim — its execution or the job it answers — judged once for both
+/// convicting kinds** (3 against a `Valid` signer, 4 against the executor): the execution checks
+/// against the target's root and artifact at the class's ladder, and the claim checks against its
+/// recorded identity. Returns the forfeiture scope and, for a 9, the identity check that failed.
+fn adjudicate_against_claim_v1(
+    state: &PalwChainStateV2,
+    target: &PalwOffenceTargetV1,
+    admission: PalwFalseValidAdmissionV1,
+    contradiction: &PalwPanelContradictionV1,
+    prompt_ids_opening: Option<&PalwPromptIdsOpeningV1>,
+    fp_decode_rules_active: bool,
+    rules: PalwIdentityRulesV1,
+) -> Result<(PalwForfeitScopeV1, Option<PalwIdentityFaultV1>), PalwOffenceVerifyError> {
+    let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
+    match admission {
+        PalwFalseValidAdmissionV1::NamedVoid { .. } => Ok((PalwForfeitScopeV1::None, None)),
+        PalwFalseValidAdmissionV1::ExecutionProving => {
+            if fp_decode_rules_active
+                && matches!(contradiction, PalwPanelContradictionV1::ForgedOutput { .. })
+                && target.lane != Some(PalwClaimSourceKindV1::Attempt)
+            {
+                return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+                    "ForgedOutput under ADR-0082's decode rules convicts only a claim known to be an attempt",
+                ));
+            }
+            palw_false_valid_convicts_execution_v2(
+                contradiction,
+                prompt_ids_opening,
+                target.execution_root,
+                target.artifact_root,
+                ladder,
+            )?;
+            Ok((PalwForfeitScopeV1::ByRoot, None))
+        }
+        PalwFalseValidAdmissionV1::ClaimProving => {
+            let fault = claim_proving_fault_v1(target, contradiction, rules)?;
+            Ok((PalwForfeitScopeV1::ByClaim, fault))
+        }
+    }
+}
+
 /// **The one adjudicator of a false `Valid`** (ADR-0152 v2 F2) — the processor calls it with
 /// `sig = Some(..)`, the fold with `None`, on the same state, so the verdict a node accepts and the
 /// verdict every node folds are one function. The caller has already checked the evidence digest.
@@ -605,20 +970,22 @@ pub fn palw_false_valid_convicts_execution_v2(
 /// 4. (`sig` only) the seat is `Active` or `Retiring` and signed the receipt under the chain's
 ///    domain, in the V2 or V3 message and context its form was licensed with;
 /// 5. the target resolves from state ([`palw_offence_target_v1`]);
-/// 6. no session is open on the claim — a court, or a data-availability session held or not (the
-///    claim `DefaultDisputed`); the filer waits. F2 review, F-4: this is stricter than the "court
-///    only" the peer agreed, on purpose — a void in the middle of a DA session is unhandled until F3
-///    (the session's accuser reservation and deadline would be left to a claim that is no longer
-///    disputed);
+/// 6. no COURT is open on the claim — the filer waits (ADR-0152 v3.1 J-3, post-edit 2: a
+///    data-availability session, held or not, no longer blocks a conviction; voiding under one is
+///    handled where the claim is written — the held rows dropped, the accuser's reservation given
+///    back — and a filer can no longer open a session to delay one);
 /// 7. the contradiction is admitted ([`palw_false_valid_admission_v1`]; `ProducerWithholding` is
 ///    refused until F3), and a named void is the one the chain wrote on this claim
-///    (`palw_void_binds_claim_v1`, the V1 fold's own reading);
+///    (`palw_void_binds_claim_v1`, the V1 fold's own reading) — a PROVEN `CourtFraud`, never a
+///    court's `CourtDefault` (the executor's silence, which proves nothing a seat replayed; F2
+///    residual);
 /// 8. an execution-proving contradiction convicts against the TARGET's `execution_root` and
 ///    artifact root at the class's ladder ([`palw_false_valid_convicts_execution_v2`], the prompt
 ///    read through the evidence's opening where the job commits a Merkle root) — the root pin is the
 ///    link from claim to execution, and nothing compares a job id with the claim id; a
 ///    `ForgedOutput` is refused under ADR-0082's decode rules unless the claim is known to be an
-///    attempt;
+///    attempt; a claim-proving one (F1: 9, 10) convicts against the claim's recorded identity and
+///    output ([`palw_binding_identity_fault_v1`], [`palw_output_fault_v1`]);
 /// 9. the receipt attested everything the fault's verdict rests on ([`palw_false_valid_liable_v1`]),
 ///    a partial mask being the one the panel assigned.
 pub fn palw_check_panel_false_valid_v2(
@@ -627,6 +994,7 @@ pub fn palw_check_panel_false_valid_v2(
     evidence: &[u8],
     fp_decode_rules_active: bool,
     reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
     sig: Option<PalwFalseValidSigCheckV1<'_>>,
 ) -> Result<PalwFalseValidFindingV1, PalwOffenceVerifyError> {
     if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
@@ -666,43 +1034,133 @@ pub fn palw_check_panel_false_valid_v2(
         }
     }
     let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
-    if state.open_courts_of(&target.claim_id) > 0
-        || state.held_da_missing_of(&target.claim_id).is_some()
-        || matches!(target.phase, Some(PalwClaimPhaseV2::DefaultDisputed { .. }))
-    {
+    if state.open_courts_of(&target.claim_id) > 0 {
         return Err(PalwOffenceVerifyError::ClaimUnderSession);
     }
+    let admission = palw_false_valid_admission_v1(&payload.contradiction)?;
+    if let PalwFalseValidAdmissionV1::NamedVoid { reason, voided_daa } = admission {
+        // A court's DEFAULT is not its verdict (F2 residual): the void the executor's own
+        // silence wrote proves nothing about the execution the seats replayed, so a
+        // `CourtFraud` contradiction naming it is refused by name rather than as a mismatch.
+        if state.palw_void_binds_claim_v1(&target.claim_id, PalwVoidReasonV2::CourtDefault, voided_daa) {
+            return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+                "the claim was voided by a court DEFAULT (the executor's silence), not a proven fraud; a Valid signer is \
+                 convicted only by a proof of the execution",
+            ));
+        }
+        if !state.palw_void_binds_claim_v1(&target.claim_id, reason, voided_daa) {
+            return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+        }
+    }
+    let (forfeit, _) = adjudicate_against_claim_v1(
+        state,
+        &target,
+        admission,
+        &payload.contradiction,
+        payload.prompt_ids_opening.as_ref(),
+        fp_decode_rules_active,
+        rules,
+    )?;
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
-    let execution_proving = match palw_false_valid_admission_v1(&payload.contradiction)? {
-        PalwFalseValidAdmissionV1::NamedVoid { reason, voided_daa } => {
-            if !state.palw_void_binds_claim_v1(&target.claim_id, reason, voided_daa) {
-                return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
-            }
-            false
-        }
-        PalwFalseValidAdmissionV1::ExecutionProving => {
-            if fp_decode_rules_active
-                && matches!(payload.contradiction, PalwPanelContradictionV1::ForgedOutput { .. })
-                && target.lane != Some(PalwClaimSourceKindV1::Attempt)
-            {
-                return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
-                    "ForgedOutput under ADR-0082's decode rules convicts only a claim known to be an attempt",
-                ));
-            }
-            palw_false_valid_convicts_execution_v2(
-                &payload.contradiction,
-                payload.prompt_ids_opening.as_ref(),
-                target.execution_root,
-                target.artifact_root,
-                ladder,
-            )?;
-            true
-        }
-    };
     let (site, step_leaf_count) = palw_false_valid_fault_site_v1(&payload.contradiction, ladder)?;
     let assigned = palw_false_valid_assigned_mask_v1(state, &target.claim_id, accused);
     palw_false_valid_liable_v1(&payload.receipt, site, target.segment_count, assigned, step_leaf_count)?;
-    Ok(PalwFalseValidFindingV1 { target, site, execution_proving })
+    let acts_on_claim = !matches!(admission, PalwFalseValidAdmissionV1::NamedVoid { .. });
+    Ok(PalwFalseValidFindingV1 { target, site, acts_on_claim, forfeit })
+}
+
+/// `H(domain ‖ claim)` — the evidence half of a kind-4 offence id: one refuted execution per claim,
+/// whatever contradiction or bytes proved it.
+pub fn palw_executor_refuted_ledger_key_v1(claim_id: &Hash64) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_EXECUTOR_REFUTED_KEY_DOMAIN_V1).to_state();
+    h.update(claim_id.as_byte_slice());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **One kind-4 offence per claim**: `palw_offence_id_v1(ExecutorRefuted, executor, H(claim))`.
+pub fn palw_executor_refuted_offence_id_v1(executor: &TransactionOutpoint, claim_id: &Hash64) -> Hash64 {
+    crate::palw_offence_v1::palw_offence_id_v1(
+        crate::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted,
+        executor,
+        &palw_executor_refuted_ledger_key_v1(claim_id),
+    )
+}
+
+/// **Which contradictions refute an executor** (ADR-0152 v3.1 J-4): the proofs against its own
+/// committed execution (5 `StepArithmetic`, 6 `StepStructural`, 8 `ForgedOutput`) and against the
+/// job or output its claim answers (9 `IdentityMismatch`, 10 `OutputMismatch`). A void the chain
+/// wrote, a permit, an equivocation and the v1 legs are not refutations of the claim's execution.
+pub fn palw_executor_refuted_admission_v1(
+    contradiction: &PalwPanelContradictionV1,
+) -> Result<PalwFalseValidAdmissionV1, PalwOffenceVerifyError> {
+    use PalwPanelContradictionV1 as C;
+    match contradiction {
+        C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } => Ok(PalwFalseValidAdmissionV1::ClaimProving),
+        C::ExecutorEquivocation(_)
+        | C::CourtExecutorGuilty { .. }
+        | C::ProducerWithholding { .. }
+        | C::ConflictingPermit { .. }
+        | C::CourtFraud { .. }
+        | C::Legs(_) => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "an ExecutorRefuted carries a proof against the claim's own execution, job or output (5, 6, 8, 9, 10)",
+        )),
+    }
+}
+
+/// **The adjudicator of `ExecutorRefuted` (kind 4)** (ADR-0152 v3.1 J-4) — the processor's gate and
+/// the fold's consumer call it on the same state, so a node that accepts one convicts as every node
+/// folds it. No signature: the evidence is objective and names nobody but the claim's executor. In
+/// order: the byte cap; decode, version 1, the reporter slot, an opening only beside a
+/// `StepArithmetic`; the target (claim, liability row, vesting row); the accused IS the target's
+/// executor bond; no court is open on the claim (a DA session does not block, post-edit 2); the
+/// contradiction is a refutation ([`palw_executor_refuted_admission_v1`]) and it convicts against
+/// the claim ([`adjudicate_against_claim_v1`]'s one reading, shared with kind 3).
+pub fn palw_check_executor_refuted_v1(
+    state: &PalwChainStateV2,
+    accused: &PalwBondKeyV2,
+    evidence: &[u8],
+    fp_decode_rules_active: bool,
+    reporter_armed: bool,
+    rules: PalwIdentityRulesV1,
+) -> Result<PalwExecutorRefutedFindingV1, PalwOffenceVerifyError> {
+    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+        return Err(PalwOffenceVerifyError::EvidenceTooLarge);
+    }
+    let payload: PalwExecutorRefutedEvidenceV1 =
+        borsh::from_slice(evidence).map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+    if payload.version != PALW_EXECUTOR_REFUTED_VERSION_V1 {
+        return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
+    }
+    if !payload.reporter_reveal.is_empty() && !reporter_armed {
+        return Err(PalwOffenceVerifyError::ReporterSlotNotArmed);
+    }
+    if payload.reporter_reveal.len() > PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES {
+        return Err(PalwOffenceVerifyError::EvidenceTooLarge);
+    }
+    if payload.prompt_ids_opening.is_some() && !matches!(payload.contradiction, PalwPanelContradictionV1::StepArithmetic { .. }) {
+        return Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction);
+    }
+    let target = palw_offence_target_v1(state, &payload.claim_id).ok_or(PalwOffenceVerifyError::NoTarget)?;
+    if *accused != target.executor_bond {
+        return Err(PalwOffenceVerifyError::AccusedNotTheExecutor);
+    }
+    if state.open_courts_of(&target.claim_id) > 0 {
+        return Err(PalwOffenceVerifyError::ClaimUnderSession);
+    }
+    let admission = palw_executor_refuted_admission_v1(&payload.contradiction)?;
+    let (forfeit, identity_fault) = adjudicate_against_claim_v1(
+        state,
+        &target,
+        admission,
+        &payload.contradiction,
+        payload.prompt_ids_opening.as_ref(),
+        fp_decode_rules_active,
+        rules,
+    )?;
+    Ok(PalwExecutorRefutedFindingV1 { target, forfeit, identity_fault })
 }
 
 #[cfg(test)]
@@ -716,6 +1174,12 @@ mod tests {
 
     fn h64(n: u64) -> Hash64 {
         Hash64::from_u64_word(n)
+    }
+
+    /// The identity rules these fixtures run under: the flat network form, and the fixture class as
+    /// the base one (so J5 reads the floor's canonical job wherever a test builds a floor binding).
+    fn rules() -> PalwIdentityRulesV1 {
+        PalwIdentityRulesV1 { prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat, base_class_id: h64(CLASS) }
     }
 
     fn seat(n: u64) -> PalwBondKeyV2 {
@@ -764,7 +1228,7 @@ mod tests {
     }
 
     fn judge(state: &PalwChainStateV2, payload: &PalwPanelFalseValidEvidenceV2) -> Result<PalwFalseValidFindingV1, E> {
-        palw_check_panel_false_valid_v2(state, &PalwBondKeyV2(payload.accused_seat), &bytes(payload), false, false, None)
+        palw_check_panel_false_valid_v2(state, &PalwBondKeyV2(payload.accused_seat), &bytes(payload), false, false, rules(), None)
     }
 
     fn claim_row(phase: PalwClaimPhaseV2, execution_root: Hash64) -> PalwClaimStateV2 {
@@ -1105,15 +1569,16 @@ mod tests {
         fp_claim.source = PalwClaimSourceV2::FreePrompt { quanta: 1, spent: Default::default() };
         fp.set_false_valid_rows_for_tests(h64(CLAIM), Some(fp_claim), Some(five_seat_panel()), None, 0);
         let payload = evidence(full(1), forged.clone());
-        let armed = palw_check_panel_false_valid_v2(&fp, &seat(1), &bytes(&payload), true, false, None);
+        let armed = palw_check_panel_false_valid_v2(&fp, &seat(1), &bytes(&payload), true, false, rules(), None);
         assert!(matches!(armed, Err(E::ContradictionNotAdmitted(_))), "{armed:?}");
-        let attempt = palw_check_panel_false_valid_v2(&state, &seat(1), &bytes(&payload), true, false, None);
+        let attempt = palw_check_panel_false_valid_v2(&state, &seat(1), &bytes(&payload), true, false, rules(), None);
         assert_eq!(attempt, Err(E::PanelFalseValidWorkMismatch), "an attempt claim is still judged");
         // A named void binds only the void the chain wrote: this claim, CourtFraud, this DAA.
         let contradiction = C::CourtFraud { voided_daa: 55 };
         let finding = judge(&state, &evidence(full(1), contradiction.clone())).expect("the void the chain wrote binds");
         assert_eq!(finding.site, PalwFaultSiteV1::Whole);
-        assert!(!finding.execution_proving, "a named void names a claim, not a root");
+        assert!(!finding.acts_on_claim, "a named void names a claim, not a root");
+        assert_eq!(finding.forfeit, PalwForfeitScopeV1::None);
         assert_eq!(finding.target.execution_root, h64(0xE0));
         let full_mask = full_seat();
         assert!(judge(&state, &evidence(segmented(full_mask, PalwSegmentMaskV2::full(4)), contradiction.clone())).is_ok());
@@ -1142,9 +1607,10 @@ mod tests {
         assert_eq!(
             judge(&retired, &evidence(segmented(2, PalwSegmentMaskV2::single(0)), contradiction.clone())),
             Err(E::SegmentsUnknown),
-            "a retired claim's cut is not in state until F1"
+            "a row that recorded no identity (written below F1's fence) keeps its cut unknown"
         );
-        // No target, and a claim in session: a court, or a data-availability session held or not.
+        // No target; a claim under a court; and (ADR-0152 v3.1 post-edit 2) a data-availability
+        // session, which does NOT block a conviction.
         assert_eq!(judge(&PalwChainStateV2::genesis(), &evidence(full(1), contradiction.clone())), Err(E::NoTarget));
         let mut in_court = live_state(voided(55, PalwVoidReasonV2::CourtFraud), h64(0xE0), h64(0xAF));
         in_court.set_false_valid_rows_for_tests(
@@ -1166,9 +1632,9 @@ mod tests {
         let root = refutation.binding.committed_execution_root;
         let under_da = live_state(disputed, root, artifact_root);
         let step = C::StepArithmetic { refutation, operand_openings: openings };
-        assert_eq!(judge(&under_da, &evidence(full(1), step.clone())), Err(E::ClaimUnderSession), "a DA session (F-4)");
+        judge(&under_da, &evidence(full(1), step.clone())).expect("a DA session does not defer a conviction (post-edit 2)");
         let licensed = live_state(PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 30 }, root, artifact_root);
-        judge(&licensed, &evidence(full(1), step)).expect("and the same proof convicts once the session is gone");
+        judge(&licensed, &evidence(full(1), step)).expect("and the same proof convicts with no session at all");
     }
 
     /// **A step fault whose verdict reads a neighbour segment convicts only whole attestations**
@@ -1208,7 +1674,8 @@ mod tests {
             PalwPanelContradictionV1::StepArithmetic { refutation: refutation.clone(), operand_openings: openings.clone() };
         let finding = judge(&state, &evidence(full(1), contradiction.clone())).expect("the full receipt attested everything");
         assert_eq!(finding.site, PalwFaultSiteV1::Leaf { leaf, first_read, last_read: leaf }, "the site carries what the step read");
-        assert!(finding.execution_proving);
+        assert!(finding.acts_on_claim);
+        assert_eq!(finding.forfeit, PalwForfeitScopeV1::ByRoot);
         assert_eq!(finding.target.segment_count, Some(4), "a five-seat panel is cut in four");
         judge(&state, &evidence(segmented(full_seat(), PalwSegmentMaskV2::full(4)), contradiction.clone()))
             .expect("the full seat's full mask");
@@ -1317,7 +1784,7 @@ mod tests {
         };
         let v1_bytes = borsh::to_vec(&v1).expect("a V1 payload serializes");
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &v1_bytes, false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &v1_bytes, false, false, rules(), None),
             Err(E::PanelFalseValidNeedsContradiction),
             "a V1 payload is not read as V2"
         );
@@ -1325,10 +1792,11 @@ mod tests {
         revealing.reporter_reveal = vec![0xAB; 32];
         let revealing_bytes = bytes(&revealing);
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, false, rules(), None),
             Err(E::ReporterSlotNotArmed)
         );
-        let armed = palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, true, None).expect("F7 reads the slot");
+        let armed = palw_check_panel_false_valid_v2(&state, &seat(1), &revealing_bytes, false, true, rules(), None)
+            .expect("F7 reads the slot");
         assert_eq!(armed, judge(&state, &good).unwrap(), "the slot changes nothing the adjudicator finds");
         // The ledger key is (seat, claim) and nothing else.
         let id = palw_false_valid_offence_id_v2(&seat(1).0, &h64(CLAIM));
@@ -1372,19 +1840,19 @@ mod tests {
         };
         let at_bound = with_reveal(PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES);
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &at_bound, false, true, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &at_bound, false, true, rules(), None),
             Ok(expected),
             "armed, a reveal of exactly the bound is read and changes nothing the adjudicator finds"
         );
         let past_bound = with_reveal(PALW_FALSE_VALID_MAX_REPORTER_REVEAL_BYTES + 1);
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &past_bound, false, true, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &past_bound, false, true, rules(), None),
             Err(E::EvidenceTooLarge),
             "armed, one byte past the bound is refused"
         );
         for payload in [with_reveal(1), at_bound, past_bound] {
             assert_eq!(
-                palw_check_panel_false_valid_v2(&state, &seat(1), &payload, false, false, None),
+                palw_check_panel_false_valid_v2(&state, &seat(1), &payload, false, false, rules(), None),
                 Err(E::ReporterSlotNotArmed),
                 "unarmed, any filled slot is refused before its length is read"
             );
@@ -1418,11 +1886,11 @@ mod tests {
         );
         let state = PalwChainStateV2::genesis();
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap + 1], false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap + 1], false, false, rules(), None),
             Err(E::EvidenceTooLarge)
         );
         assert_eq!(
-            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap], false, false, None),
+            palw_check_panel_false_valid_v2(&state, &seat(1), &vec![0u8; cap], false, false, rules(), None),
             Err(E::PanelFalseValidNeedsContradiction),
             "at the cap the bytes are read, and these do not decode"
         );
@@ -1454,6 +1922,7 @@ mod tests {
                     &bytes(&payload),
                     false,
                     false,
+                    rules(),
                     Some(PalwFalseValidSigCheckV1 { chain_domain: domain, seat_pubkey: &pubkey, seat_active: active, verify }),
                 )
             };
@@ -1487,6 +1956,305 @@ mod tests {
 
     /// An all-zero borsh encoding of `T` — a value of the right TYPE for a test that only needs to
     /// know which variant a contradiction is, never one any checker would accept.
+    // ---- F1 (ADR-0152 v3.1 J-1…J-5) ----------------------------------------------------------------
+    use crate::palw_attempt_rules_v1::floor_binding_for_tests_v1;
+    use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 as Form;
+    use crate::palw_step_leg::{PalwStepBindingV2, binding_commitment_root_v1};
+
+    /// A floor attempt claim's target under `binding`'s roots, recorded under `anchor`.
+    fn attempt_target(binding: &PalwStepBindingV2, anchor: Hash64) -> PalwOffenceTargetV1 {
+        PalwOffenceTargetV1 {
+            claim_id: h64(CLAIM),
+            class_id: binding.shape_profile.shape_profile_id(),
+            artifact_root: Hash64::default(),
+            executor_bond: seat(99),
+            execution_root: binding.committed_execution_root,
+            lane: Some(PalwClaimSourceKindV1::Attempt),
+            segment_count: Some(4),
+            phase: Some(PalwClaimPhaseV2::Provisional),
+            job_identity: anchor,
+            trace_root: binding.full_logits_trace_root,
+            output_root: h64(0x72),
+        }
+    }
+
+    /// `binding` with one part moved and its committed root re-derived as `verify_binding` derives
+    /// it — a self-consistent binding of another job, the only kind a filer can carry.
+    fn moved(binding: &PalwStepBindingV2, edit: impl FnOnce(&mut PalwStepBindingV2)) -> PalwStepBindingV2 {
+        let mut b = binding.clone();
+        edit(&mut b);
+        b.committed_execution_root = binding_commitment_root_v1(&b);
+        crate::palw_step_leg::verify_binding_v1(&b).expect("a re-committed binding verifies");
+        b
+    }
+
+    /// **F1's identity rule, check by check, on the floor** (SPEC §4.3, addendum §4-bis.2): an honest
+    /// binding has no fault; each check names the one moved field; the first failing check wins; the
+    /// DA answers leave J5b out; and the refusals (unverified, not the claim's, unrecorded, lane
+    /// unknown) write no verdict at all.
+    #[test]
+    fn f1_the_identity_rule_names_the_first_check_a_floor_binding_fails() {
+        let anchor = h64(0xA1C0);
+        for form in [Form::Flat, Form::MerkleV1] {
+            let honest = floor_binding_for_tests_v1(&anchor, form);
+            let class = honest.shape_profile.shape_profile_id();
+            let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: class };
+            let judge = |binding: &PalwStepBindingV2, full: bool| {
+                palw_binding_identity_fault_v1(&attempt_target(binding, anchor), binding, rules, full)
+            };
+            assert_eq!(judge(&honest, true), Ok(None), "{form:?}: the anchor's own job has no fault");
+            let other = h64(0xB0B);
+            let cases: Vec<(&str, PalwStepBindingV2, PalwIdentityFaultV1)> = vec![
+                ("J1", moved(&honest, |b| b.job_context.job_id = other), PalwIdentityFaultV1::JobNotTheClaims),
+                ("J3", moved(&honest, |b| b.job_context.execution_seed[0] ^= 1), PalwIdentityFaultV1::SeedNotTheJobs),
+                (
+                    "J5a max_context",
+                    moved(&honest, |b| b.job_context.max_context_tokens -= 1),
+                    PalwIdentityFaultV1::ContextNotCanonical,
+                ),
+                (
+                    "J5a decode",
+                    moved(&honest, |b| b.job_context.exact_decode_tokens = crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1),
+                    PalwIdentityFaultV1::ContextNotCanonical,
+                ),
+                (
+                    "J5a network",
+                    moved(&honest, |b| b.job_context.network_id = b"another".to_vec()),
+                    PalwIdentityFaultV1::ContextNotCanonical,
+                ),
+                ("J5a nullifier", moved(&honest, |b| b.job_context.job_nullifier = other), PalwIdentityFaultV1::ContextNotCanonical),
+                (
+                    "J5b",
+                    moved(&honest, |b| {
+                        b.job_context.prompt_token_ids_hash =
+                            crate::palw_attempt_rules_v1::palw_attempt_prompt_root_v1(&b.shape_profile, &other, 8, form).unwrap()
+                    }),
+                    PalwIdentityFaultV1::PromptNotTheAnchors,
+                ),
+            ];
+            for (what, binding, fault) in &cases {
+                assert_eq!(judge(binding, true), Ok(Some(*fault)), "{form:?} {what}");
+            }
+            // The DA answers run every check but J5b.
+            let relabel = &cases.iter().find(|(what, ..)| *what == "J5b").unwrap().1;
+            assert_eq!(judge(relabel, false), Ok(None), "{form:?}: J5b is the contradictions' alone");
+            // J2: a binding of another class (a different epsilon is a different class).
+            let other_class = moved(&honest, |b| {
+                b.shape_profile.base0_rms_eps_q += 1;
+                b.job_context.shape_profile_id = b.shape_profile.shape_profile_id();
+            });
+            let target = attempt_target(&honest, anchor);
+            let mut on_other = target.clone();
+            on_other.execution_root = other_class.committed_execution_root;
+            assert_eq!(
+                palw_binding_identity_fault_v1(&on_other, &other_class, rules, true),
+                Ok(Some(PalwIdentityFaultV1::ClassNotTheClaims))
+            );
+            // J4: the claim committed another trace root beside this binding.
+            let mut swapped = target.clone();
+            swapped.trace_root = h64(0x7ACE_0002);
+            assert_eq!(
+                palw_binding_identity_fault_v1(&swapped, &honest, rules, true),
+                Ok(Some(PalwIdentityFaultV1::TraceNotTheClaims))
+            );
+            // The first failing check wins: J1 before J4.
+            let j1 = &cases[0].1;
+            let mut both = attempt_target(j1, anchor);
+            both.trace_root = h64(0x7ACE_0003);
+            assert_eq!(palw_binding_identity_fault_v1(&both, j1, rules, true), Ok(Some(PalwIdentityFaultV1::JobNotTheClaims)));
+            // Refusals.
+            let mut unrecorded = attempt_target(j1, anchor);
+            unrecorded.job_identity = Hash64::default();
+            assert_eq!(palw_binding_identity_fault_v1(&unrecorded, j1, rules, true), Err(E::IdentityNotRecorded), "0 never convicts");
+            let mut laneless = target.clone();
+            laneless.lane = None;
+            assert_eq!(palw_binding_identity_fault_v1(&laneless, &honest, rules, true), Err(E::LaneUnknown));
+            let mut not_its = target.clone();
+            not_its.execution_root = h64(0xE0);
+            assert_eq!(palw_binding_identity_fault_v1(&not_its, &honest, rules, true), Err(E::PanelFalseValidWorkMismatch));
+            let mut unverified = honest.clone();
+            unverified.job_context.job_id = other;
+            assert_eq!(palw_binding_identity_fault_v1(&target, &unverified, rules, true), Err(E::BindingUnverified));
+            // **The F1-M residual, pinned:** on a class whose canonical job the chain does not derive
+            // (every class but the base one, until CoreV1) the relabel has no fault here.
+            let model_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(0xBA5E) };
+            assert_eq!(
+                palw_binding_identity_fault_v1(&attempt_target(relabel, anchor), relabel, model_rules, true),
+                Ok(None),
+                "{form:?}: the model-class relabel is F1-M's"
+            );
+        }
+    }
+
+    fn fp_job(tokenizer: Hash64) -> crate::palw_freeprompt_v3::PalwFreePromptJobV3 {
+        crate::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: crate::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: h64(0xD0),
+            class_id: h64(CLASS),
+            executor_bond: seat(99).0,
+            executor_pubkey: vec![7; 4],
+            operator_id: h64(0x09),
+            anchor_block: h64(0xAB),
+            anchor_daa: 77,
+            job_nonce: [0x46; 32],
+            tokenizer_id: tokenizer,
+            prompt_token_ids_hash: h64(0x1D5),
+            prompt_tokens: 4,
+            decode_token_limit: 6,
+            max_context_tokens: 40,
+            privacy_mode: crate::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: crate::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: crate::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        }
+    }
+
+    fn fp_commitment(
+        job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        executed: u32,
+    ) -> crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+        crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+            job,
+            trace_root: Hash64::default(),
+            output_root: Hash64::default(),
+            schedule_root: Hash64::default(),
+            execution_root: Hash64::default(),
+            decode_tokens_executed: executed,
+            stop_reason: crate::palw_freeprompt_v3::PalwFpStopReasonV3::EndOfGeneration,
+            work_leaves: 0,
+            trace_manifest_root: Hash64::default(),
+            trace_chunk_count: 1,
+            trace_retention_daa: 0,
+        }
+    }
+
+    /// **`fp_pin_spellings_agree` (T18h's half): the pin a free-prompt claim records from its
+    /// commitment is the pin its own context reproduces** — the context `palw_fp_job_context_v3`
+    /// builds from the same job and run — and each identity field of the context moves it. Then
+    /// J1 on the free-prompt lane: a binding whose context is the commitment's has no fault; one whose
+    /// context names another run (a prompt, a ceiling, a tokenizer, a decode count) is
+    /// `JobNotTheClaims`.
+    #[test]
+    fn f1_fp_pin_spellings_agree_and_convict_on_the_free_prompt_lane() {
+        use crate::palw_fp_execution_v3::{
+            PalwFpClassFactsV3, palw_fp_job_context_v3, palw_fp_job_pin_of_context_v1, palw_fp_job_pin_v1,
+            palw_fp_run_facts_for_executed_v1,
+        };
+        let floor = floor_binding_for_tests_v1(&h64(0xF9), Form::Flat);
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: floor.shape_profile.shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        };
+        let job = fp_job(h64(0x70C));
+        let executed = 3;
+        let ctx = palw_fp_job_context_v3(&job, &class, &palw_fp_run_facts_for_executed_v1(&job, executed), b"misaka-palw-rc")
+            .expect("a well-formed run");
+        let commitment = fp_commitment(job.clone(), executed);
+        let pin = palw_fp_job_pin_v1(&commitment);
+        assert_eq!(palw_fp_job_pin_of_context_v1(&ctx), pin, "one spelling from the commitment and from the context");
+        for (what, edit) in [
+            ("job id", Box::new(|c: &mut crate::palw_v2::PalwJobContextV2| c.job_id = h64(1)) as Box<dyn Fn(&mut _)>),
+            ("seed", Box::new(|c: &mut crate::palw_v2::PalwJobContextV2| c.execution_seed[3] ^= 1)),
+            ("tokenizer", Box::new(|c: &mut crate::palw_v2::PalwJobContextV2| c.tokenizer_id = h64(2))),
+            ("prompt", Box::new(|c: &mut crate::palw_v2::PalwJobContextV2| c.prompt_token_ids_hash = h64(3))),
+            ("prefill", Box::new(|c: &mut crate::palw_v2::PalwJobContextV2| c.declared_prefill_tokens += 1)),
+            ("decode", Box::new(|c: &mut crate::palw_v2::PalwJobContextV2| c.exact_decode_tokens += 1)),
+            ("ceiling", Box::new(|c: &mut crate::palw_v2::PalwJobContextV2| c.max_context_tokens += 1)),
+        ] {
+            let mut moved_ctx = ctx.clone();
+            edit(&mut moved_ctx);
+            assert_ne!(palw_fp_job_pin_of_context_v1(&moved_ctx), pin, "the pin reads the {what}");
+        }
+        let rules = PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id };
+        let fp_binding = moved(&floor, |b| b.job_context = ctx.clone());
+        let mut target = attempt_target(&fp_binding, pin);
+        target.lane = Some(PalwClaimSourceKindV1::FreePrompt);
+        assert_eq!(palw_binding_identity_fault_v1(&target, &fp_binding, rules, true), Ok(None), "the commitment's own run");
+        let longer = moved(&fp_binding, |b| b.job_context.max_context_tokens += 1);
+        let mut on_longer = target.clone();
+        on_longer.execution_root = longer.committed_execution_root;
+        assert_eq!(
+            palw_binding_identity_fault_v1(&on_longer, &longer, rules, true),
+            Ok(Some(PalwIdentityFaultV1::JobNotTheClaims)),
+            "another run's context under the commitment's pin"
+        );
+    }
+
+    /// **F1's output rule** (addendum §4-bis.4, flat classes in F1): the pin authenticates the
+    /// generated ids against the binding's trace root, and the claim's `output_root` is held to
+    /// `output_commitment_v2(ctx, ids, rendered_output_hash_v2(&[]))`.
+    #[test]
+    fn f1_the_output_rule_holds_the_output_root_to_the_generated_ids() {
+        use crate::palw_step_refute::{PalwBase0DecodeTokensV1, PalwDecodeTokenPinV1, base0_logits_trace_root_v1};
+        let anchor = h64(0x0A7);
+        let floor = floor_binding_for_tests_v1(&anchor, Form::Flat);
+        let vocab = floor.shape_profile.vocab_size as usize;
+        let rows = vec![(0..vocab as i32).map(|v| (v * 7919) % 1013).collect::<Vec<i32>>()];
+        let ids = vec![5u32];
+        let binding = moved(&floor, |b| b.full_logits_trace_root = base0_logits_trace_root_v1(&b.job_context, &rows, &ids));
+        let pin =
+            PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 { logits_rows: rows.clone(), generated_token_ids: ids.clone() });
+        let honest_output = crate::palw_v2::output_commitment_v2(
+            &binding.job_context.context_hash(),
+            &ids,
+            &crate::palw_v2::rendered_output_hash_v2(&[]),
+        );
+        let mut target = attempt_target(&binding, anchor);
+        target.output_root = honest_output;
+        assert_eq!(palw_output_fault_v1(&target, &binding, &pin), Ok(false), "the run's own output");
+        target.output_root = h64(0x0B0B);
+        assert_eq!(palw_output_fault_v1(&target, &binding, &pin), Ok(true), "a ground output root");
+        // The pin is authenticated: other ids under the same trace root are refused, not believed.
+        let lying = PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 { logits_rows: rows, generated_token_ids: vec![6] });
+        assert_eq!(palw_output_fault_v1(&target, &binding, &lying), Err(E::PanelFalseValidNeedsContradiction));
+        // Refusals: no identity recorded; another class's binding is 9's (J2), not 10's.
+        let mut unrecorded = target.clone();
+        unrecorded.job_identity = Hash64::default();
+        assert_eq!(palw_output_fault_v1(&unrecorded, &binding, &pin), Err(E::IdentityNotRecorded));
+        let mut other_class = target.clone();
+        other_class.class_id = h64(0xC1A55);
+        assert!(matches!(palw_output_fault_v1(&other_class, &binding, &pin), Err(E::ContradictionNotAdmitted(_))));
+    }
+
+    /// **The admission tables** (addendum §4-bis.7): 9 and 10 are claim-proving for kind 3 and kind
+    /// 4; kind 4 admits the execution- and claim-proving contradictions and refuses every void,
+    /// permit, equivocation and the v1 legs by name; the finding's forfeiture scope follows the class.
+    #[test]
+    fn f1_the_admission_tables_and_the_executor_refuted_key() {
+        use PalwPanelContradictionV1 as Cx;
+        let binding = floor_binding_for_tests_v1(&h64(1), Form::Flat);
+        let pin = crate::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(crate::palw_step_refute::PalwBase0DecodeTokensV1 {
+            logits_rows: vec![],
+            generated_token_ids: vec![],
+        });
+        for c in [Cx::IdentityMismatch { binding: binding.clone() }, Cx::OutputMismatch { binding: binding.clone(), pin }] {
+            assert_eq!(palw_false_valid_admission_v1(&c), Ok(PalwFalseValidAdmissionV1::ClaimProving));
+            assert_eq!(palw_executor_refuted_admission_v1(&c), Ok(PalwFalseValidAdmissionV1::ClaimProving));
+        }
+        for c in [
+            Cx::CourtFraud { voided_daa: 5 },
+            Cx::ProducerWithholding { voided_daa: 5 },
+            Cx::ConflictingPermit { span: 1, round: 2, permit_index: 3 },
+            Cx::CourtExecutorGuilty { offence_id: h64(4) },
+        ] {
+            assert!(matches!(palw_executor_refuted_admission_v1(&c), Err(E::ContradictionNotAdmitted(_))), "{c:?}");
+        }
+        // One offence per claim, whatever the proof.
+        let executor = seat(99).0;
+        assert_eq!(
+            palw_executor_refuted_offence_id_v1(&executor, &h64(CLAIM)),
+            crate::palw_offence_v1::palw_offence_id_v1(
+                crate::palw_offence_v1::PalwOffenceKindV1::ExecutorRefuted,
+                &executor,
+                &palw_executor_refuted_ledger_key_v1(&h64(CLAIM))
+            )
+        );
+        assert_ne!(palw_executor_refuted_ledger_key_v1(&h64(CLAIM)), palw_false_valid_ledger_key_v2(&h64(CLAIM)), "its own domain");
+    }
+
     fn zeroed<T: borsh::BorshDeserialize>() -> T {
         let zeros = vec![0u8; 1 << 16];
         T::deserialize(&mut zeros.as_slice()).expect("an all-zero encoding decodes")

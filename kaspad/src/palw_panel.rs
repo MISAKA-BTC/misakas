@@ -94,6 +94,8 @@ pub(crate) fn own_claim_events_v1(
                     // ADR-0152 v22 skeleton: declared (SR-9, Q-5), written by no rule yet.
                     R::UnavailableQuorum => "unavailable_quorum",
                     R::NotReplayBacked => "not_replay_backed",
+                    // ADR-0152 F2 residual: a court default, past `palw_offence_attribution`.
+                    R::CourtDefault => "court_default",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }

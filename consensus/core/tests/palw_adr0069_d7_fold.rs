@@ -476,6 +476,7 @@ fn fp_params() -> PalwStateParamsV2 {
 
 fn fp_commit(claim_word: u64, work_leaves: u64) -> Obj {
     Obj::FreePromptCommitted {
+        job_pin: kaspa_hashes::Hash64::default(),
         claim: h(claim_word),
         class_id: h(BASE),
         bond: bond_key(1),

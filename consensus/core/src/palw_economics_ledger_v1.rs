@@ -338,6 +338,8 @@ pub fn palw_void_reason_name_v1(reason: &PalwVoidReasonV2) -> &'static str {
         // ADR-0152 v22 skeleton: declared, written by nobody yet.
         PalwVoidReasonV2::UnavailableQuorum => "unavailable_quorum",
         PalwVoidReasonV2::NotReplayBacked => "not_replay_backed",
+        // ADR-0152 F2 residual: a court default, past `palw_offence_attribution`.
+        PalwVoidReasonV2::CourtDefault => "court_default",
     }
 }
 

@@ -201,6 +201,36 @@ enum Fault {
     /// A non-canonical step-leaf count (`+ 1`), re-committed — a shape the structural pass answers
     /// from the binding alone.
     Shape,
+    /// **F1 T18e (the relabel):** the producer runs ANOTHER anchor's prompt with this block's anchor
+    /// written into the context as `job_id` and `execution_seed` — the attack J1 and J3 cannot see
+    /// and J5 (the whole canonical context, its prompt root) does.
+    Relabel,
+    /// **F1 T18d (the output grind):** the honest run, committed under an `output_root` that is not
+    /// its generated output's.
+    OutputGrind,
+    /// **F1 T18f (J4):** the honest binding, committed beside a trace root that is not its logits
+    /// trace root.
+    TraceSwap,
+    /// **F1 T18c(iv), the R1 residual:** an honest step tree over garbage logits — one lane of the
+    /// selecting row bent without moving its argmax, the trace root re-committed. Nothing in F1
+    /// proves it (F1c's `LogitsNotStepOutput` does).
+    GarbageLogits,
+}
+
+/// The roots an attempt carries.
+#[derive(Clone, Copy)]
+struct AttemptRoots {
+    trace: Hash64,
+    output: Hash64,
+    execution: Hash64,
+    manifest: Hash64,
+    chunks: u32,
+}
+
+impl AttemptRoots {
+    fn as_attempt_roots(&self) -> AttemptRoots {
+        *self
+    }
 }
 
 /// A claim the chain opened from the producer's own work.
@@ -219,6 +249,11 @@ struct RealClaim {
     contradiction: Option<C>,
     /// The step leaf the fault is at (`Step`).
     fault_leaf: Option<u64>,
+    /// The generated ids and logits rows the claim's binding commits (the honest producer's own,
+    /// or the faulted run's) — the pin an `OutputMismatch` carries.
+    pin: Option<kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1>,
+    /// The header that carried the attempt (its pre-PoW hash names the anchor).
+    header: Header,
 }
 
 impl RealClaim {
@@ -367,6 +402,15 @@ impl H {
     fn genesis_walk(&self) -> Walk {
         let last = *self.genesis.last_point().expect("the genesis fold records its point");
         Walk { state: self.genesis.clone(), daa: last.daa_score, blue: last.blue_score }
+    }
+
+    /// **The identity rules this network's gate and fold read** (ADR-0152 v3.1 J-5): its prompt-id
+    /// form and its base class.
+    fn rules(&self) -> kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+        kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+            prompt_ids_form: self.form(),
+            base_class_id: self.floor(),
+        }
     }
 
     /// The adjudicator's ladder for the floor — the fold's and the processor's.
@@ -588,6 +632,51 @@ impl H {
         masses.transient_mass
     }
 
+    /// **Kind 4's evidence as a filer sends it** (ADR-0152 v3.1 J-4): the claim, the contradiction in
+    /// the network's carriage, no receipt and an empty reporter slot.
+    fn refuted_payload(
+        &self,
+        claim: Hash64,
+        contradiction: C,
+    ) -> kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 {
+        let (contradiction, prompt_ids_opening) = self.carried(contradiction);
+        kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1 {
+            version: kaspa_consensus_core::palw_offence_attribution_v1::PALW_EXECUTOR_REFUTED_VERSION_V1,
+            claim_id: claim,
+            contradiction,
+            prompt_ids_opening,
+            reporter_reveal: Vec::new(),
+        }
+    }
+
+    /// `ExecutorRefuted` against card 0 — every claim here is card 0's — on `claim`.
+    fn refuted(&self, claim: Hash64, contradiction: C) -> Obj {
+        offence(
+            PalwOffenceKindV1::ExecutorRefuted,
+            self.cards[EXECUTOR],
+            borsh::to_vec(&self.refuted_payload(claim, contradiction)).unwrap(),
+        )
+    }
+
+    /// The kind-4 adjudicator's verdict on `contradiction` against `claim` in `state` — what the gate
+    /// and the fold both run.
+    fn judge_refuted(
+        &self,
+        state: &PalwChainStateV2,
+        claim: Hash64,
+        contradiction: C,
+    ) -> Result<kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedFindingV1, E> {
+        let bytes = borsh::to_vec(&self.refuted_payload(claim, contradiction)).unwrap();
+        kaspa_consensus_core::palw_offence_attribution_v1::palw_check_executor_refuted_v1(
+            state,
+            &self.cards[EXECUTOR],
+            &bytes,
+            false,
+            false,
+            self.rules(),
+        )
+    }
+
     fn v1(&self, card: usize, claim: Hash64, valid_receipt: PalwSeatReceiptV2, contradiction: C) -> Obj {
         let payload = PalwPanelFalseValidEvidenceV1 {
             version: PALW_PANEL_FALSE_VALID_VERSION_V1,
@@ -615,7 +704,7 @@ impl H {
 
         // The template this node builds, and the job its anchor implies.
         let template = self.ctx.build_block_template_keeping_time(nonce);
-        let mut header: Header = template.block.header.clone();
+        let header: Header = template.block.header.clone();
         assert!(
             kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id),
             "a ConsensusV2 template declares the attempt lane"
@@ -645,13 +734,7 @@ impl H {
             assert_eq!(again.committed_execution_root, direct.execution_root, "rebind recomputes verify_binding's root");
         }
 
-        struct Roots {
-            trace: Hash64,
-            output: Hash64,
-            execution: Hash64,
-            manifest: Hash64,
-            chunks: u32,
-        }
+        type Roots = AttemptRoots;
         let of = |o: &kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1| Roots {
             trace: o.trace_root,
             output: o.output_root,
@@ -660,12 +743,97 @@ impl H {
             chunks: o.trace_chunk_count,
         };
         let ladder = self.ladder(&walk.state);
+        let honest_pin = kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {
+            logits_rows: direct.logits_rows.clone(),
+            generated_token_ids: direct.generated_token_ids.clone(),
+        };
+        let mut pin = Some(honest_pin.clone());
         let (roots, binding, material, contradiction, fault_leaf) = match fault {
             Fault::Honest => {
                 let (binding, ..) = base0_material_decode_v1(&honest.material).expect("the capture decodes");
                 (of(&honest), binding, honest.material.clone(), None, None)
             }
+            Fault::Relabel => {
+                // Another anchor's canonical job and prompt — what the producer actually ran …
+                let other = Hash64::from_u64_word(0x4E1A_BE10_0000_0000 ^ nonce);
+                let (their, their_prompt) = self.backend.job_for_anchor(other).expect("the floor implies a job");
+                assert_ne!(their_prompt, prompt, "another anchor names another prompt");
+                // … with THIS block's anchor written where J1 and J3 look.
+                let mut relabelled = palw_attempt_job_v1(their, prefill_draw);
+                relabelled.job_id = anchor;
+                relabelled.execution_seed = anchor.as_byte_slice()[..32].try_into().unwrap();
+                let run = base0_execute_for_attempt_v1(&artifact, self.backend.profile(), &relabelled, &their_prompt)
+                    .expect("the relabelled job runs");
+                let material = misaka_palw_base0::produce::base0_material_encode_v1(&run).expect("encodes");
+                pin = Some(kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {
+                    logits_rows: run.logits_rows.clone(),
+                    generated_token_ids: run.generated_token_ids.clone(),
+                });
+                let roots = Roots {
+                    trace: run.trace_root,
+                    output: run.output_root,
+                    execution: run.execution_root,
+                    manifest: run.trace_manifest_root,
+                    chunks: run.trace_chunk_count,
+                };
+                let contradiction = C::IdentityMismatch { binding: run.binding.clone() };
+                (roots, run.binding, material, Some(contradiction), None)
+            }
+            Fault::OutputGrind => {
+                let ground = kaspa_consensus_core::palw_v2::output_commitment_v2(
+                    &direct.binding.job_context.context_hash(),
+                    &direct.generated_token_ids,
+                    &kaspa_consensus_core::palw_v2::rendered_output_hash_v2(b"a rendering the class never makes"),
+                );
+                assert_ne!(ground, honest.output_root, "the ground root is not the run's");
+                let roots = Roots { output: ground, ..of(&honest) };
+                let contradiction = C::OutputMismatch {
+                    binding: direct.binding.clone(),
+                    pin: kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(honest_pin.clone()),
+                };
+                (roots, direct.binding.clone(), honest.material.clone(), Some(contradiction), None)
+            }
+            Fault::TraceSwap => {
+                let swapped = Hash64::from_u64_word(0x7ACE_5A9E ^ nonce);
+                let roots = Roots {
+                    trace: swapped,
+                    manifest: attempt_trace_manifest_root_v1(swapped, honest.trace_chunk_count),
+                    ..of(&honest)
+                };
+                let contradiction = C::IdentityMismatch { binding: direct.binding.clone() };
+                (roots, direct.binding.clone(), honest.material.clone(), Some(contradiction), None)
+            }
+            Fault::GarbageLogits => {
+                // Bend the selecting row's runner-up lane toward — never past — the argmax, so the
+                // committed token stays the row's own selection and no decode check can object.
+                let mut rows = direct.logits_rows.clone();
+                let row = &mut rows[0];
+                let top = (0..row.len()).max_by_key(|i| (row[*i], std::cmp::Reverse(*i))).unwrap();
+                let lane = (0..row.len()).find(|i| *i != top && row[*i] < row[top] - 1).expect("a lane below the argmax by two");
+                row[lane] += 1;
+                let mut binding = direct.binding.clone();
+                binding.full_logits_trace_root = kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(
+                    &binding.job_context,
+                    &rows,
+                    &direct.generated_token_ids,
+                );
+                rebind(&mut binding);
+                verify_binding_v1(&binding).expect("the bent commitment is well-formed");
+                pin = Some(kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 {
+                    logits_rows: rows,
+                    generated_token_ids: direct.generated_token_ids.clone(),
+                });
+                let roots = Roots {
+                    trace: binding.full_logits_trace_root,
+                    output: honest.output_root,
+                    execution: binding.committed_execution_root,
+                    manifest: attempt_trace_manifest_root_v1(binding.full_logits_trace_root, 1),
+                    chunks: 1,
+                };
+                (roots, binding, honest.material.clone(), None, None)
+            }
             Fault::Step | Fault::StepGather | Fault::StepAt(_) | Fault::KCacheWrite { .. } => {
+                pin = None;
                 // The first leaf the capture holds and the prover opens, from the middle of the step
                 // space on (or from its first leaf, or at a named one). Nothing is chosen for
                 // convictability: that the lie at this leaf convicts is asserted once the claim is
@@ -718,6 +886,7 @@ impl H {
                 (of(&lying), binding, lying.material.clone(), Some(contradiction), Some(leaf))
             }
             Fault::Forged => {
+                pin = None;
                 let rows = direct.logits_rows.clone();
                 let mut toks = direct.generated_token_ids.clone();
                 toks[0] = (toks[0] + 1) % self.backend.profile().vocab_size;
@@ -745,6 +914,7 @@ impl H {
                 (roots, binding, honest.material.clone(), Some(contradiction), None)
             }
             Fault::Shape => {
+                pin = None;
                 let mut binding = direct.binding.clone();
                 binding.step_leaf_count += 1;
                 rebind(&mut binding);
@@ -756,7 +926,71 @@ impl H {
             }
         };
         assert_eq!(binding.committed_execution_root, roots.execution, "the claim's root is its binding's");
+        let (claim_id, envelope, header) = self.fold_own_attempt(walk, header, anchor, pre_pow, &facts, roots.as_attempt_roots());
+        let claim = RealClaim { claim_id, anchor, job, prompt, envelope, binding, material, contradiction, fault_leaf, pin, header };
+        if claim.contradiction.is_none() || matches!(fault, Fault::Honest | Fault::GarbageLogits) {
+            assert_eq!(claim.binding.job_context.job_id, anchor, "an honest binding's job id is the block's execution anchor");
+        }
+        if let Some(contradiction) = &claim.contradiction
+            && matches!(contradiction, C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. })
+        {
+            let root = walk.state.claim(&claim.claim_id).unwrap().execution_root;
+            self.convicts(contradiction, root, ladder).expect("the proof convicts the claim's own committed root");
+        }
+        claim
+    }
 
+    /// **A claim that carries ANOTHER claim's roots** (F1 T18b, the borrowed root): the template on
+    /// `nonce` — another block, another anchor — carrying `lender`'s trace, output and execution
+    /// roots and nothing of its own run. The chain admits it (nothing in admission rebuilds a root);
+    /// its binding, which is the lender's, answers the lender's anchor.
+    fn open_borrowed_claim(&self, walk: &mut Walk, nonce: u64, lender: &RealClaim) -> RealClaim {
+        use kaspa_consensus_core::hashing::header::pre_pow_hash_64;
+        let template = self.ctx.build_block_template_keeping_time(nonce);
+        let header: Header = template.block.header.clone();
+        let bond = self.cards[EXECUTOR];
+        let facts = self.ctx.consensus.palw_producer_facts_v2(self.floor(), Some(bond.0)).expect("testnet-12 answers for its floor");
+        let pre_pow = pre_pow_hash_64(&header);
+        let anchor = execution_anchor_v3(self.domain, pre_pow, facts.class_id, &bond.0, header.nonce);
+        assert_ne!(anchor, lender.anchor, "another block, another anchor");
+        let lent = &lender.envelope.attempt;
+        let roots = AttemptRoots {
+            trace: lent.trace_root,
+            output: lent.output_root,
+            execution: lent.execution_root,
+            manifest: lent.trace_manifest_root,
+            chunks: lent.trace_chunk_count,
+        };
+        let (claim_id, envelope, header) = self.fold_own_attempt(walk, header, anchor, pre_pow, &facts, roots);
+        RealClaim {
+            header,
+            claim_id,
+            anchor,
+            job: lender.job.clone(),
+            prompt: lender.prompt.clone(),
+            envelope,
+            binding: lender.binding.clone(),
+            material: lender.material.clone(),
+            contradiction: Some(C::IdentityMismatch { binding: lender.binding.clone() }),
+            fault_leaf: None,
+            pin: lender.pin.clone(),
+        }
+    }
+
+    /// The attempt carrying `roots`, with `palw_producer_facts_v2`'s facts, signed by card 0 and
+    /// folded as the template block's OWN work — as the pipeline folds it. Asserts the three facts
+    /// F2 exists for and returns the claim the fold opened (its job, binding and proof to be filled).
+    fn fold_own_attempt(
+        &self,
+        walk: &mut Walk,
+        mut header: Header,
+        anchor: Hash64,
+        pre_pow: Hash64,
+        facts: &kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2,
+        roots: AttemptRoots,
+    ) -> (Hash64, PalwAttemptEnvelopeV2, Header) {
+        use kaspa_consensus_core::hashing::header::pre_pow_hash_64;
+        let bond = self.cards[EXECUTOR];
         // The attempt, with `palw_producer_facts_v2`'s facts, signed by card 0.
         let bond_facts = facts.bond.as_ref().expect("a genesis card is a registered bond");
         let attempt = PalwAttemptUnsignedV2 {
@@ -782,12 +1016,16 @@ impl H {
         header.finalize();
         assert_eq!(pre_pow_hash_64(&header), pre_pow, "the carriage is outside the pre-PoW hash, so the anchor is the block's");
 
-        // Folded as this block's OWN work, as the pipeline folds it.
+        // Folded as this block's OWN work, as the pipeline folds it — at the template's own point, or,
+        // for a second claim on a walk the first already advanced (the node's virtual has not moved:
+        // no block is mined here), one blue score and one DAA past the walk. The anchor is the
+        // header's pre-PoW hash either way; the fold reads the point only for its clocks.
+        let daa_score = if header.daa_score >= walk.daa && header.blue_score > walk.blue { header.daa_score } else { walk.daa + 1 };
         let point = PalwBlockContextV2 {
             block: header.hash,
-            daa_score: header.daa_score,
-            blue_score: header.blue_score,
-            subsidy: self.vp().coinbase_manager.calc_block_subsidy(header.daa_score),
+            daa_score,
+            blue_score: header.blue_score.max(walk.blue + 1),
+            subsidy: self.vp().coinbase_manager.calc_block_subsidy(daa_score),
         };
         assert!(point.blue_score > walk.blue && point.daa_score >= walk.daa, "the template block follows the walk");
         let (next, _delta, skips) = self
@@ -802,17 +1040,16 @@ impl H {
         let claim_id = opened[0];
         walk.advance(&point, next);
 
-        // **Up front, the three facts F2 exists for.**
+        // **Up front, the three facts F2 exists for, and F1's.**
         assert_eq!(claim_id, attempt_id_v2(&envelope.attempt), "the chain keyed the claim under attempt_id_v2(attempt)");
-        assert_eq!(binding.job_context.job_id, anchor, "the binding's job id is the block's execution anchor");
         assert_ne!(anchor, claim_id, "the anchor is not the claim id — the V1 rule's job_id == claim_id is a fixed point");
         let claim = walk.state.claim(&claim_id).expect("the claim is live");
         assert!(matches!(claim.phase, PalwClaimPhaseV2::Provisional) && matches!(claim.source, PalwClaimSourceV2::Attempt));
         assert_eq!((claim.execution_root, claim.trace_root, claim.bond), (roots.execution, roots.trace, bond));
-        if let Some(contradiction) = &contradiction {
-            self.convicts(contradiction, claim.execution_root, ladder).expect("the proof convicts the claim's own committed root");
-        }
-        RealClaim { claim_id, anchor, job, prompt, envelope, binding, material, contradiction, fault_leaf }
+        // F1 (J-1): past `palw_offence_attribution` the claim records the anchor its block carried.
+        let recorded = if self.config.params.palw_offence_attribution_active_at(point.daa_score) { anchor } else { Hash64::default() };
+        assert_eq!(claim.job_identity, recorded, "the claim records the anchor its carrying header names");
+        (claim_id, envelope, header)
     }
 
     /// `PanelBound` with cards 1–5, folded directly.
@@ -1031,8 +1268,8 @@ async fn t46b_injected_step_fault_convicts_before_final() {
         claim.binding.step_leaf_count
     );
     let payload = borsh::to_vec(&h.v2_payload(full, id, licence.segmented(full), c.clone())).unwrap();
-    let finding =
-        palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, None).expect("the full seat is liable");
+    let finding = palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, h.rules(), None)
+        .expect("the full seat is liable");
     let PalwFaultSiteV1::Leaf { leaf: at, first_read, last_read } = finding.site else { panic!("a step site: {:?}", finding.site) };
     eprintln!("[t46b] the step read leaves {first_read}..={last_read}");
     assert_eq!(at, leaf, "the site is the faulted leaf");
@@ -1227,8 +1464,10 @@ async fn t46e_after_final() {
 }
 
 /// **T46f: after retirement only the liability row is left.** A `Full` receipt the seat signed
-/// through the V1 licence path is convicted against the row; a V3 receipt cannot be placed without
-/// the claim's segment cut, which the row does not record until F1: `SegmentsUnknown`.
+/// through the V1 licence path is convicted against the row. **F1 lifts F2's `SegmentsUnknown`:**
+/// past `palw_offence_attribution` the row records the claim's segment cut (and its identity, lane
+/// and trace root), so a V3 full-mask receipt is placed and convicts against the row too — while a
+/// partial mask cannot be, the panel that assigned it having retired (`SegmentMaskNotAssigned`).
 #[tokio::test]
 async fn t46f_after_retirement() {
     let h = harness(true);
@@ -1255,10 +1494,38 @@ async fn t46f_after_retirement() {
     let (card, receipt) = receipts[0].clone();
     let seat = h.cards[card];
     assert!(row.valid_signers.iter().any(|(s, _)| *s == seat.0), "the row lists the seat");
-    // The V3 form of the same Valid: signed, verified — and not placeable.
-    let v3 =
-        h.v3_receipt(card, id, h.domain, receipt.signed_daa, kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::full(4));
-    h.refused(&walk, &h.v2(card, id, PalwFalseValidReceiptV1::Segmented(v3), c.clone()), &E::SegmentsUnknown.to_string());
+    // F1: the row recorded what the claim record held.
+    assert_eq!(
+        (row.job_identity, row.free_prompt, row.trace_root, row.segment_count),
+        (claim.anchor, false, claim.envelope.attempt.trace_root, 4),
+        "the row copies the identity, the lane, the trace root and the five-seat panel's cut"
+    );
+    // The V3 form of another seat's Valid: a full mask is placed by the recorded cut and convicts;
+    // a partial mask is not, its assignment having retired with the panel.
+    let (other, other_receipt) = receipts[1].clone();
+    let partial = h.v3_receipt(
+        other,
+        id,
+        h.domain,
+        other_receipt.signed_daa,
+        kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::single(0),
+    );
+    h.refused(&walk, &h.v2(other, id, PalwFalseValidReceiptV1::Segmented(partial), c.clone()), &E::SegmentMaskNotAssigned.to_string());
+    let v3 = h.v3_receipt(
+        other,
+        id,
+        h.domain,
+        other_receipt.signed_daa,
+        kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::full(4),
+    );
+    let other_before = walk.state.bond(&h.cards[other]).unwrap().collateral;
+    let other_lock = walk.state.slashable_lock(h.cards[other], id).map(|l| l.amount).unwrap_or(0);
+    h.carry(&mut walk, vec![h.v2(other, id, PalwFalseValidReceiptV1::Segmented(v3), c.clone())]);
+    assert_eq!(
+        walk.state.bond(&h.cards[other]).unwrap().collateral as u128,
+        other_before as u128 - other_lock,
+        "the full-mask V3 seat is convicted against the row"
+    );
     // The full receipt the V1 licence carried: convicted against the row.
     let lock = walk.state.slashable_lock(seat, id).copied();
     let (before, _) = h.carry(&mut walk, vec![h.v2(card, id, PalwFalseValidReceiptV1::Full(receipt), c)]);
@@ -1273,7 +1540,7 @@ async fn t46f_after_retirement() {
         (PalwOffenceKindV1::PanelFalseValidV2, charged, row.execution_root)
     );
     let marked = s.panel_liability(&id).expect("the row stands");
-    assert_eq!((marked.voided_daa, marked.void_reason), (Some(walk.daa), Some(PalwVoidReasonV2::CourtFraud)), "the row is marked");
+    assert_eq!(marked.void_reason, Some(PalwVoidReasonV2::CourtFraud), "the row is marked (by the first conviction)");
     assert!(s.palw_execution_root_is_forfeited_v1(&row.execution_root));
 }
 
@@ -1456,6 +1723,16 @@ async fn t46g_fp_claim() {
     assert_eq!(context.job_id, fp_job_id_v3(&job), "the binding's job id is the job's");
     assert_ne!(context.job_id, id, "and not the claim id");
     h.convicts(&c, opened.execution_root, ladder).expect("the proof pins the claim's root");
+    // F1 (J-1, T18h): the claim records the commitment's job pin — the identity its binding's own
+    // context reproduces, so the claim's own execution answers its own job.
+    let pin = kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_v1(&commitment);
+    assert_eq!(opened.job_identity, pin, "a free-prompt claim records its commitment's pin");
+    assert_eq!(kaspa_consensus_core::palw_fp_execution_v3::palw_fp_job_pin_of_context_v1(&context), pin, "one spelling");
+    let (own_binding, ..) = base0_material_decode_v1(&lying.outcome.material).expect("decodes");
+    let target = palw_offence_target_v1(&walk.state, &id).expect("the claim");
+    assert_eq!(target.lane, Some(kaspa_consensus_core::palw_offence_attribution_v1::PalwClaimSourceKindV1::FreePrompt));
+    assert_eq!(palw_binding_identity_fault_v1(&target, &own_binding, h.rules(), true), Ok(None), "its own job: no identity fault");
+    h.refused(&walk, &h.refuted(id, C::IdentityMismatch { binding: own_binding }), &E::IdentityHolds.to_string());
 
     h.bind(&mut walk, id);
     let licence = h.license_v2(&mut walk, id);
@@ -1467,7 +1744,7 @@ async fn t46g_fp_claim() {
     h.convicts(&pinned, opened.execution_root, ladder).expect("the pinned proof convicts too");
     let site_of = |proof: &C| {
         let payload = borsh::to_vec(&h.v2_payload(full, id, licence.segmented(full), proof.clone())).unwrap();
-        palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, None)
+        palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, h.rules(), None)
             .expect("the full seat is liable")
             .site
     };
@@ -1673,7 +1950,7 @@ async fn t46i_honest_run_no_fault() {
         let payload = h.v2_payload(full, id, licence.segmented(full), C::StepArithmetic { refutation, operand_openings });
         let bytes = borsh::to_vec(&payload).unwrap();
         assert_eq!(
-            palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &bytes, false, false, None),
+            palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &bytes, false, false, h.rules(), None),
             Err(E::PanelFalseValidNeedsContradiction),
             "leaf {leaf}"
         );
@@ -1820,8 +2097,10 @@ async fn t46l_one_offence_per_seat_claim() {
     );
     // Armed, the slot changes nothing the adjudicator finds, so nothing the ledger keys on.
     let plain_bytes = borsh::to_vec(&h.v2_payload(full, id, licence.segmented(full), c.clone())).unwrap();
-    let plain = palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &plain_bytes, false, true, None).expect("convicts");
-    let armed = palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &revealed_bytes, false, true, None).expect("convicts");
+    let plain =
+        palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &plain_bytes, false, true, h.rules(), None).expect("convicts");
+    let armed =
+        palw_check_panel_false_valid_v2(&licensed, &h.cards[full], &revealed_bytes, false, true, h.rules(), None).expect("convicts");
     assert_eq!(armed, plain, "the reveal is outside the finding");
     assert_eq!(palw_false_valid_offence_id_v2(&h.cards[full].0, &armed.target.claim_id), offence_id, "and outside the ledger key");
 
@@ -1871,13 +2150,16 @@ async fn t46m_reorg_and_restart() {
     h.restarts(point.block, &convicted);
 }
 
-/// **T46n: a claim under a session is not convicted — the filer waits.** A held data-availability
-/// session opened by a bonded bystander through the real gate, an open court session, and a NON-held
-/// data-availability session (a real `DefaultAccused` through the gate — F2 review, F-4: the claim is
-/// `DefaultDisputed` with no held unit, which the adjudicator did not see before, and a void in the
-/// middle of it is unhandled until F3) each make the full seat's conviction `ClaimUnderSession`:
-/// refused at the gate and in the fold, dropped by the walk, and nothing written — the lock, the bond
-/// and the ledger as they were.
+/// **T46n (restated by ADR-0152 v3.1 post-edit 2): only a COURT defers a conviction.** An open
+/// court session on the claim makes the full seat's conviction — kind 3 — and the executor's — kind 4
+/// — `ClaimUnderSession`: refused at the gate and in the fold, dropped by the walk, nothing written.
+/// A data-availability session does NOT: a held one opened by a bonded bystander through the real gate
+/// (T18y's first half) and a non-held one (a real `DefaultAccused`) each let the conviction land —
+/// the claim voids `CourtFraud`, the session's held rows go with it, the accuser's reservation comes
+/// back uncharged, and the state passes the loader's consistency check. (F2 review F-4 had deferred
+/// here, reading a void mid-session as unhandled; the claim write drops the held rows and releases
+/// the accuser at every exit from `DefaultDisputed`, which this pins, and deferring gave a filer a
+/// session to open for delay.)
 #[tokio::test]
 async fn t46n_session_open() {
     use kaspa_consensus_core::palw_held_da_v1::{
@@ -1889,13 +2171,32 @@ async fn t46n_session_open() {
     let id = claim.claim_id;
     let c = claim.contradiction();
     let full = licence.full_card();
-    let object = h.v2(full, id, licence.segmented(full), c);
+    let kind3 = h.v2(full, id, licence.segmented(full), c.clone());
+    let kind4 = h.refuted(id, c.clone());
     let under_session = E::ClaimUnderSession.to_string();
     let untouched = |before: &PalwChainStateV2, after: &PalwChainStateV2| {
         let seat = h.cards[full];
         assert_eq!(after.slashable_lock(seat, id), before.slashable_lock(seat, id));
         assert_eq!(after.bond(&seat).unwrap().collateral, before.bond(&seat).unwrap().collateral);
         assert!(after.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).is_none());
+        assert!(after.consumed_offence(&palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &id)).is_none());
+    };
+    // A conviction landing mid-session: the claim voids, the session and its rows go, the accuser is
+    // released uncharged, and the state reloads.
+    let lands = |mut session_walk: Walk, object: &Obj, accuser: PalwBondKeyV2| {
+        let accuser_collateral = session_walk.state.bond(&accuser).unwrap().collateral;
+        let held_by_accuser = session_walk.state.reserved_exposure(&accuser);
+        h.carry(&mut session_walk, vec![object.clone()]);
+        let s = &session_walk.state;
+        assert!(
+            matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "the conviction lands mid-session: {:?}",
+            s.claim(&id).unwrap().phase
+        );
+        assert!(s.held_da_missing_of(&id).is_none(), "the session's held unit goes with the claim");
+        assert_eq!(s.bond(&accuser).unwrap().collateral, accuser_collateral, "the accuser pays nothing");
+        assert!(s.reserved_exposure(&accuser) < held_by_accuser, "and its reservation comes back");
+        h.reloads(s);
     };
 
     // 1. A held DA session: a bonded bystander demands one committed step leaf.
@@ -1916,18 +2217,13 @@ async fn t46n_session_open() {
     h.carry(&mut held_walk, vec![Obj::DefaultAccusedHeld { accusation: Box::new(accusation) }]);
     assert!(matches!(held_walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::DefaultDisputed { .. }), "the session is open");
     assert!(held_walk.state.held_da_missing_of(&id).is_some());
-    h.refused(&held_walk, &object, &under_session);
-    assert_eq!(h.fold_refusal(&held_walk, &object), under_session);
-    let point = held_walk.next();
-    let carried = h.accepted(&held_walk.state, &point, std::slice::from_ref(&object));
-    let block = h.fold(&held_walk.state, &point, &carried).expect("folds");
-    assert_eq!(block.state_root(), h.fold(&held_walk.state, &point, &[]).unwrap().state_root(), "nothing is written");
-    untouched(&held_walk.state, &block);
+    lands(held_walk.clone(), &kind3, h.cards[BYSTANDER]);
+    lands(held_walk, &kind4, h.cards[BYSTANDER]);
 
     // 2. An open court session on the claim (testnet-12's held regime opens none through a
     //    `CourtOpened`, so the session row is written through the carriage with the challenger's
     //    stake where the loader demands it — nowhere past `palw_rcore_plus`, where A-6 keeps it off
-    //    the claim ledger).
+    //    the claim ledger): both kinds wait.
     let mut court_walk = walk.clone();
     let at = court_walk.daa;
     let reserved = court_walk.state.claim(&id).unwrap().reserved;
@@ -1964,9 +2260,15 @@ async fn t46n_session_open() {
         }
     });
     assert_eq!(court_walk.state.open_courts_of(&id), 1, "the court is open");
-    h.refused(&court_walk, &object, &under_session);
-    assert_eq!(h.fold_refusal(&court_walk, &object), under_session);
-    untouched(&walk.state, &court_walk.state);
+    for object in [&kind3, &kind4] {
+        h.refused(&court_walk, object, &under_session);
+        assert_eq!(h.fold_refusal(&court_walk, object), under_session);
+        let point = court_walk.next();
+        let carried = h.accepted(&court_walk.state, &point, std::slice::from_ref(object));
+        let block = h.fold(&court_walk.state, &point, &carried).expect("folds");
+        assert_eq!(block.state_root(), h.fold(&court_walk.state, &point, &[]).unwrap().state_root(), "nothing is written");
+        untouched(&court_walk.state, &block);
+    }
 
     // 3. A non-held data-availability session: a bonded bystander accuses one trace event.
     let mut da_walk = walk.clone();
@@ -1988,13 +2290,8 @@ async fn t46n_session_open() {
         da_walk.state.held_da_missing_of(&id).is_none() && da_walk.state.open_courts_of(&id) == 0,
         "and it is neither held nor a court"
     );
-    h.refused(&da_walk, &object, &under_session);
-    assert_eq!(h.fold_refusal(&da_walk, &object), under_session);
-    let point = da_walk.next();
-    let carried = h.accepted(&da_walk.state, &point, std::slice::from_ref(&object));
-    let block = h.fold(&da_walk.state, &point, &carried).expect("folds");
-    assert_eq!(block.state_root(), h.fold(&da_walk.state, &point, &[]).unwrap().state_root(), "nothing is written");
-    untouched(&da_walk.state, &block);
+    lands(da_walk.clone(), &kind3, accuser);
+    lands(da_walk, &kind4, accuser);
 }
 
 /// **The carriage, pinned on the step it matters most for: the embedding gather of prompt position
@@ -2134,7 +2431,7 @@ async fn t46p_a_lie_in_one_segment_convicts_no_honest_partial_downstream() {
     let full = licence.full_card();
     let site_for = |state: &PalwChainStateV2, card: usize, c: &C| {
         let payload = borsh::to_vec(&h.v2_payload(card, id, licence.segmented(card), c.clone())).unwrap();
-        palw_check_panel_false_valid_v2(state, &h.cards[card], &payload, false, false, None).map(|finding| finding.site)
+        palw_check_panel_false_valid_v2(state, &h.cards[card], &payload, false, false, h.rules(), None).map(|finding| finding.site)
     };
 
     // Downstream: every reader "convicts" the root; only the full seat is liable for it.
@@ -2185,7 +2482,7 @@ async fn t46p_a_lie_in_one_segment_convicts_no_honest_partial_downstream() {
     let c = boundary.contradiction();
     let full = licence.full_card();
     let payload = borsh::to_vec(&h.v2_payload(full, boundary.claim_id, licence.segmented(full), c.clone())).unwrap();
-    let site = palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, None)
+    let site = palw_check_panel_false_valid_v2(&walk.state, &h.cards[full], &payload, false, false, h.rules(), None)
         .expect("the full seat attested it")
         .site;
     let PalwFaultSiteV1::Leaf { leaf, first_read, last_read } = site else { panic!("a step site: {site:?}") };
@@ -2395,4 +2692,823 @@ async fn t46r_a_producer_withholding_void_convicts_no_seat() {
     assert_eq!(block.slashable_lock(seat, id), walk.state.slashable_lock(seat, id));
     assert_eq!(block.bond(&seat).unwrap().collateral, walk.state.bond(&seat).unwrap().collateral);
     assert!(block.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).is_none());
+}
+
+// ---------------------------------------------------------------------------------------------
+// T46s–t — the F2 residual: a court's DEFAULT is not its verdict
+// ---------------------------------------------------------------------------------------------
+
+/// A court the chain voided the claim by, driven to its end on a real claim.
+struct CourtDefaultRun {
+    walk: Walk,
+    claim: RealClaim,
+    licence: Licence,
+    /// The chain with the court open, before the executor's silence ran its rung out.
+    in_court: PalwChainStateV2,
+    voided_daa: u64,
+    reason: PalwVoidReasonV2,
+}
+
+/// **The attack the F2 residual names, on a real claim**: an HONEST floor claim licensed by its
+/// five seats through Verification V2; a bonded bystander (card 6) opens a court on it; the
+/// producer, colluding, never moves; its rung runs out and the sweep ends the court against it.
+///
+/// testnet-12's held regime opens no court through a `CourtOpened`; the session is the one a
+/// one-move accusation at a fused leaf opens (`open_held_dissection_v1`), and on the floor — which
+/// has no fused site — it is written through the carriage with the challenger's stake, as T46n
+/// writes it, at the ladder's opening rung. The ending is the sweep's own `Responder` arm: the floor
+/// bears weight, so the opening-rung mercy (a weightless class's) does not reach it, and a silent
+/// responder DEFAULTS — the same arm, and the same charge, a fused terminal's withheld root claim
+/// reaches past the deep fence (pinned on the drill in `palw_state_v2`'s
+/// `f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence`).
+fn court_default_on(h: &H) -> CourtDefaultRun {
+    let (walk, claim, licence) = h.licensed(Fault::Honest);
+    let id = claim.claim_id;
+    let mut walk = walk;
+    let at = walk.daa;
+    let reserved = walk.state.claim(&id).unwrap().reserved;
+    let (challenger, executor) = (h.cards[BYSTANDER], h.cards[EXECUTOR]);
+    let first_rung = at + h.sp().turn_deadline_daa();
+    let ladder = kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open(
+        &id,
+        &claim.envelope.attempt.trace_root,
+        &kaspa_consensus_core::palw_court_v2::court_party_id_v2(&challenger),
+        &kaspa_consensus_core::palw_court_v2::court_party_id_v2(&executor),
+        kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+        h.bundle.court.max_step_leaf_count(),
+        at,
+        first_rung,
+    )
+    .expect("a ladder opens");
+    let session_id = ladder.session_id();
+    walk.state = h.rebuilt(&walk.state, |carriage| {
+        carriage.court_sessions.insert(
+            session_id,
+            kaspa_consensus_core::palw_state_v2::PalwCourtSessionStateV2 {
+                claim: id,
+                challenger_bond: challenger,
+                opened_daa: at,
+                deadline_daa: at + h.sp().window_court(),
+                ladder,
+                dissection: None,
+            },
+        );
+        *carriage.reserved_exposure.entry(challenger).or_insert(0) += reserved;
+    });
+    assert_eq!(walk.state.open_courts_of(&id), 1, "the court is open");
+    assert!(first_rung < at + h.sp().window_court(), "the rung fires before the backstop, which would close challenger-side");
+    let in_court = walk.state.clone();
+    // The producer's silence: empty blocks until the court ends.
+    for _ in 0..20_000 {
+        let point = walk.next();
+        let next = h.fold(&walk.state, &point, &[]).expect("an empty block folds");
+        walk.advance(&point, next);
+        if walk.state.open_courts_of(&id) == 0 {
+            break;
+        }
+    }
+    assert_eq!(walk.state.open_courts_of(&id), 0, "the rung ran out and the court ended");
+    let PalwClaimPhaseV2::Voided { voided_daa, reason } = walk.state.claim(&id).unwrap().phase else {
+        panic!("the executor's silence ended the court against it: {:?}", walk.state.claim(&id).unwrap().phase)
+    };
+    assert_eq!(voided_daa, walk.daa, "voided in the block whose sweep ended the court");
+    assert!(voided_daa > first_rung, "by the rung, after it passed");
+    CourtDefaultRun { walk, claim, licence, in_court, voided_daa, reason }
+}
+
+/// The debit a bond took between two states.
+fn debit(before: &PalwChainStateV2, after: &PalwChainStateV2, bond: PalwBondKeyV2) -> u64 {
+    before.bond(&bond).unwrap().collateral - after.bond(&bond).unwrap().collateral
+}
+
+/// **T46s (F2 residual): a court DEFAULT is charged as a fraud and convicts no seat.**
+///
+/// On testnet-12 the silent executor's claim is voided `CourtDefault` — below the fence (the same
+/// run with `palw_offence_attribution` unset) it is `CourtFraud`, as it always was — and the executor
+/// pays exactly what the dormant chain charges it: its reservation, its escrow and the court's time.
+/// The bystander pays nothing, and no seat's lock or bond moves.
+///
+/// Then kind 3: `CourtFraud { voided_daa }` naming the default against the full-mask seat, every
+/// partial seat, and the full seat's V2-form receipt is refused by name at the gate and in the
+/// fold, dropped by the walk, and the block that carried them is the empty block. The red twin
+/// shows why the reason is the whole fix: the same chain with the void recorded as `CourtFraud` —
+/// what the fold wrote before — convicts the honest full seat of its whole lock.
+#[tokio::test]
+async fn t46s_a_court_default_convicts_no_seat() {
+    let h = harness(true);
+    let run = court_default_on(&h);
+    let dormant_h = harness(false);
+    let dormant = court_default_on(&dormant_h);
+    let id = run.claim.claim_id;
+    assert_eq!(run.reason, PalwVoidReasonV2::CourtDefault, "past the fence the default is recorded as one");
+    assert_eq!(dormant.reason, PalwVoidReasonV2::CourtFraud, "below it, byte for byte what the fold always wrote");
+
+    // Charged as a fraud: the same debit the dormant chain takes, and at least the reservation and
+    // the escrow a proven fraud forfeits.
+    let executor = h.cards[EXECUTOR];
+    let claim = run.in_court.claim(&id).unwrap().clone();
+    let escrow = h.sp().claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
+    let charged = debit(&run.in_court, &run.walk.state, executor);
+    assert_eq!(
+        charged,
+        debit(&dormant.in_court, &dormant.walk.state, dormant_h.cards[EXECUTOR]),
+        "the executor pays what the dormant chain's CourtFraud charges it"
+    );
+    assert!(u128::from(charged) >= claim.reserved + escrow + claim.rights_reserved, "reservation, escrow and rights at least");
+    assert_eq!(debit(&run.in_court, &run.walk.state, h.cards[BYSTANDER]), 0, "the bystander pays nothing");
+    for card in PANEL {
+        let seat = h.cards[card];
+        // The void starts the liability clock (`persist_panel_liability` extends the expiry); the
+        // amount a conviction could take is what must not move.
+        assert_eq!(
+            run.walk.state.slashable_lock(seat, id).map(|lock| lock.amount),
+            run.in_court.slashable_lock(seat, id).map(|lock| lock.amount),
+            "card {card}'s lock stands"
+        );
+        assert!(run.walk.state.slashable_lock(seat, id).is_some(), "card {card} still holds it");
+        assert_eq!(debit(&run.in_court, &run.walk.state, seat), 0, "card {card} paid nothing");
+    }
+    let row = run.walk.state.panel_liability(&id).expect("the void keeps the liability row");
+    assert_eq!((row.voided_daa, row.void_reason), (Some(run.voided_daa), Some(PalwVoidReasonV2::CourtDefault)));
+    assert!(run.walk.state.palw_void_binds_claim_v1(&id, PalwVoidReasonV2::CourtDefault, run.voided_daa));
+    assert!(!run.walk.state.palw_void_binds_claim_v1(&id, PalwVoidReasonV2::CourtFraud, run.voided_daa));
+
+    // Kind 3 naming the default: refused by name, for every receipt form and every seat.
+    let contradiction = C::CourtFraud { voided_daa: run.voided_daa };
+    let full = run.licence.full_card();
+    let full_v2 = PalwFalseValidReceiptV1::Full(h.full_receipt(full, id, h.domain, run.licence.licensed_daa));
+    let mut filed: Vec<(usize, PalwFalseValidReceiptV1)> = vec![(full, run.licence.segmented(full)), (full, full_v2)];
+    filed.extend(run.licence.partials().into_iter().map(|card| (card, run.licence.segmented(card))));
+    let point = run.walk.next();
+    let empty = h.fold(&run.walk.state, &point, &[]).expect("an empty block folds").state_root();
+    for (card, receipt) in filed {
+        let payload = h.v2_payload(card, id, receipt.clone(), contradiction.clone());
+        let why = palw_check_panel_false_valid_v2(
+            &run.walk.state,
+            &h.cards[card],
+            &borsh::to_vec(&payload).unwrap(),
+            false,
+            false,
+            h.rules(),
+            None,
+        )
+        .expect_err("a default convicts no seat");
+        assert!(matches!(why, E::ContradictionNotAdmitted(reason) if reason.contains("DEFAULT")), "card {card}: {why:?}");
+        let why = why.to_string();
+        let object = h.v2(card, id, receipt, contradiction.clone());
+        h.refused(&run.walk, &object, &why);
+        assert_eq!(h.fold_refusal(&run.walk, &object), why, "the fold refuses it by the same name");
+        let carried = h.accepted(&run.walk.state, &point, std::slice::from_ref(&object));
+        let block = h.fold(&run.walk.state, &point, &carried).expect("folds");
+        assert_eq!(block.state_root(), empty, "nothing is written");
+    }
+
+    // The red twin: the same chain with the default recorded as the fraud the fold used to write.
+    let voided_daa = run.voided_daa;
+    let mut red = Walk { state: run.walk.state.clone(), daa: run.walk.daa, blue: run.walk.blue };
+    red.state = h.rebuilt(&red.state, |carriage| {
+        carriage.claims.get_mut(&id).unwrap().phase = PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtFraud };
+        carriage.panel_liabilities.get_mut(&id).unwrap().void_reason = Some(PalwVoidReasonV2::CourtFraud);
+    });
+    let seat = h.cards[full];
+    let lock = *red.state.slashable_lock(seat, id).expect("the honest full seat's lock");
+    let before = red.state.clone();
+    h.carry(&mut red, vec![h.v2(full, id, run.licence.segmented(full), contradiction)]);
+    assert!(red.state.slashable_lock(seat, id).is_none(), "recorded as CourtFraud, the silence takes the honest seat's lock");
+    assert_eq!(u128::from(debit(&before, &red.state, seat)), lock.amount, "all of it");
+}
+
+/// **T46t (F2 residual): a PROVEN `CourtFraud` still convicts.** The one-move court's verdict is a
+/// proof: a bonded bystander's `ShardCourtAccused` at the drill's faulted leaf passes the gate, the
+/// fold finds the executor guilty and voids the claim `CourtFraud` — never `CourtDefault` — and kind
+/// 3's `CourtFraud { voided_daa }` then convicts the full-mask seat of its lock through the gate, the
+/// walk and the fold. It is the only kind-3 route for a fault larger than one carrier, so the
+/// residual's fix must leave it standing.
+#[tokio::test]
+async fn t46t_a_proven_court_fraud_still_convicts() {
+    use kaspa_consensus_core::palw_shard_court_v1::{
+        PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, PALW_SHARD_COURT_VERSION_V1, PalwShardCourtAccusationV1,
+        palw_shard_court_session_id_v1,
+    };
+    let h = harness(true);
+    let (mut walk, claim, licence) = h.licensed(Fault::Step);
+    let id = claim.claim_id;
+    let (carried, prompt_ids_opening) = h.carried(claim.contradiction());
+    let C::StepArithmetic { refutation, operand_openings } = carried else { panic!("the drill's fault is a step") };
+    let mut accusation = PalwShardCourtAccusationV1 {
+        version: PALW_SHARD_COURT_VERSION_V1,
+        claim: id,
+        execution_root: claim.envelope.attempt.execution_root,
+        trace_root: claim.envelope.attempt.trace_root,
+        executor_bond: h.cards[EXECUTOR],
+        accuser_bond: h.cards[BYSTANDER],
+        leaf_index: claim.fault_leaf.unwrap(),
+        refutation,
+        artifact_openings: operand_openings,
+        prompt_ids_opening,
+        signature: Vec::new(),
+    };
+    accusation.signature = sign(
+        BYSTANDER,
+        palw_shard_court_session_id_v1(h.domain.as_byte_slice(), &accusation).as_byte_slice(),
+        PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
+    );
+    h.carry(&mut walk, vec![Obj::ShardCourtAccused { accusation: Box::new(accusation) }]);
+    let voided_daa = walk.daa;
+    assert!(
+        matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { voided_daa: d, reason: PalwVoidReasonV2::CourtFraud } if d == voided_daa),
+        "the one-move verdict is a proof, recorded CourtFraud: {:?}",
+        walk.state.claim(&id).unwrap().phase
+    );
+    let full = licence.full_card();
+    let seat = h.cards[full];
+    let lock = *walk.state.slashable_lock(seat, id).expect("the full seat's lock");
+    let before = walk.state.clone();
+    h.carry(&mut walk, vec![h.v2(full, id, licence.segmented(full), C::CourtFraud { voided_daa })]);
+    assert!(walk.state.slashable_lock(seat, id).is_none(), "the lock is taken");
+    assert_eq!(u128::from(debit(&before, &walk.state, seat)), lock.amount, "the full seat pays its lock");
+    let row = walk.state.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).expect("one kind-3 row");
+    assert_eq!(
+        (row.kind, row.execution_root),
+        (PalwOffenceKindV1::PanelFalseValidV2, Hash64::default()),
+        "a named void forfeits no root"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// F1 (ADR-0152 v3.1 J-1…J-5, the audit's SPEC §4.7): the job identity — recorded, checked, convicted
+// ---------------------------------------------------------------------------------------------
+
+use kaspa_consensus_core::palw_offence_attribution_v1::{
+    PalwForfeitScopeV1, PalwIdentityFaultV1, palw_binding_identity_fault_v1, palw_executor_refuted_offence_id_v1,
+    palw_offence_target_v1,
+};
+
+/// The first nonce of bucket `n` — a template on it anchors another job (the anchor keys on the
+/// nonce's bucket, `nonce >> PALW_TICKET_NONCE_BUCKET_LOG2`).
+fn bucket(n: u64) -> u64 {
+    n << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2
+}
+
+/// What an `ExecutorRefuted` conviction before `Final` must have written: the claim voided
+/// `CourtFraud` at the conviction, the executor charged its reservation, escrow and rights — and
+/// nothing else — one kind-4 row under the per-claim key with the debit and `recorded_root`, the
+/// liability row saying `CourtFraud`, and every seat's lock and bond untouched.
+fn assert_refuted_before_final(
+    h: &H,
+    before: &PalwChainStateV2,
+    s: &PalwChainStateV2,
+    claim_id: Hash64,
+    daa: u64,
+    recorded_root: Hash64,
+) {
+    let claim = before.claim(&claim_id).expect("the claim before the conviction").clone();
+    assert!(
+        matches!(s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtFraud } if voided_daa == daa),
+        "the claim is voided CourtFraud at the conviction: {:?}",
+        s.claim(&claim_id).unwrap().phase
+    );
+    let executor = h.cards[EXECUTOR];
+    let escrow = h.sp().claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
+    let debit = before.bond(&executor).unwrap().collateral - s.bond(&executor).unwrap().collateral;
+    assert_eq!(u128::from(debit), claim.reserved + escrow + claim.rights_reserved, "the executor pays reservation, escrow and rights");
+    let row = s.consumed_offence(&palw_executor_refuted_offence_id_v1(&executor.0, &claim_id)).expect("one kind-4 row per claim");
+    assert_eq!(
+        (row.kind, row.accused, row.amount, row.accepted_daa, row.execution_root),
+        (PalwOffenceKindV1::ExecutorRefuted, executor.0, debit, daa, recorded_root),
+        "kind 4, the executor, the debit it paid, the root only for a proven-false execution"
+    );
+    if let Some(liability) = s.panel_liability(&claim_id) {
+        assert_eq!((liability.voided_daa, liability.void_reason), (Some(daa), Some(PalwVoidReasonV2::CourtFraud)));
+    }
+    for card in PANEL {
+        let seat = h.cards[card];
+        assert_eq!(
+            s.slashable_lock(seat, claim_id).map(|l| l.amount),
+            before.slashable_lock(seat, claim_id).map(|l| l.amount),
+            "card {card}'s lock: kind 4 charges the executor alone"
+        );
+        assert_eq!(s.bond(&seat).unwrap().collateral, before.bond(&seat).unwrap().collateral, "card {card}'s bond");
+    }
+}
+
+/// **T-THREAD, the harness half: a claim records the anchor its carrying header names** (J-1). The
+/// block's own attempt (`palw_v2_fold_attempt_for_tests`: the processor's own `palw_attempt_keys_v1`
+/// of the header) records `execution_anchor_v3` of that header; the same attempt carried as MERGED
+/// work (the pipeline's own `palw_merged_attempt_work_v1`) records the same anchor from the blue's
+/// OWN header; a merged work whose header the store cannot serve records 0 — never the attempt id —
+/// and so does every claim with the fence off.
+#[tokio::test]
+async fn t18_thread_a_claim_records_the_anchor_of_its_own_header() {
+    let h = harness(true);
+    let mut walk = h.genesis_walk();
+    let parent = walk.state.clone();
+    let claim = h.open_claim(&mut walk, Fault::Honest);
+    let recorded = walk.state.claim(&claim.claim_id).unwrap().job_identity;
+    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&claim.header);
+    let anchor = execution_anchor_v3(h.domain, pre_pow, h.floor(), &h.cards[EXECUTOR].0, claim.header.nonce);
+    assert_eq!((recorded, claim.anchor), (anchor, anchor), "own work: the header's execution anchor");
+    assert_eq!(recorded, claim.binding.job_context.job_id, "the job the producer ran");
+
+    // The same attempt as merged work under another chain block, from the blue's own header.
+    let point = PalwBlockContextV2 {
+        block: Hash64::from_u64_word(0x7EAD_0001),
+        daa_score: claim.header.daa_score,
+        blue_score: claim.header.blue_score + 1,
+        subsidy: 0,
+    };
+    let subsidy = h.vp().coinbase_manager.calc_block_subsidy(claim.header.daa_score);
+    let (merged, _, skips) = h
+        .vp()
+        .palw_v2_fold_merged_attempt_for_tests(
+            &parent,
+            h.sp(),
+            &point,
+            claim.header.hash,
+            Some(&claim.header),
+            &claim.envelope,
+            subsidy,
+        )
+        .expect("the merged attempt folds");
+    assert!(skips.is_empty(), "the merged attempt is admitted: {skips:?}");
+    assert_eq!(merged.claim(&claim.claim_id).expect("merged work opens the claim").job_identity, anchor, "merged: the blue's anchor");
+    let (headless, _, _) = h
+        .vp()
+        .palw_v2_fold_merged_attempt_for_tests(&parent, h.sp(), &point, claim.header.hash, None, &claim.envelope, subsidy)
+        .expect("folds");
+    assert_eq!(
+        headless.claim(&claim.claim_id).expect("opened").job_identity,
+        Hash64::default(),
+        "no header, no anchor: 0 (never the attempt-id fallback the execution key takes)"
+    );
+
+    // Fence off: nothing is recorded (the claim builder asserts it on every claim it opens).
+    let dormant = harness(false);
+    let mut dormant_walk = dormant.genesis_walk();
+    let quiet = dormant.open_claim(&mut dormant_walk, Fault::Honest);
+    assert_eq!(dormant_walk.state.claim(&quiet.claim_id).unwrap().job_identity, Hash64::default());
+}
+
+/// **`f1_job_identity_survives_reorg_across_admission`**: the block that admitted a claim is
+/// reverted by its delta to the parent's root exactly, the same attempt is accepted again as merged
+/// work under another chain block, and it records the same identity; the state round-trips through
+/// the loader and the node's own tip row with the identity in it.
+#[tokio::test]
+async fn t18_job_identity_survives_reorg_across_admission() {
+    let h = harness(true);
+    let mut walk = h.genesis_walk();
+    let parent = walk.state.clone();
+    let claim = h.open_claim(&mut walk, Fault::Honest);
+    let point = PalwBlockContextV2 {
+        block: claim.header.hash,
+        daa_score: claim.header.daa_score,
+        blue_score: claim.header.blue_score,
+        subsidy: h.vp().coinbase_manager.calc_block_subsidy(claim.header.daa_score),
+    };
+    let (admitted, delta, _) =
+        h.vp().palw_v2_fold_attempt_for_tests(&parent, h.sp(), &point, &[], &claim.envelope, &claim.header).expect("admits");
+    assert_eq!(admitted.state_root(), walk.state.state_root(), "the same block folds to the same root");
+    assert_eq!(admitted.claim(&claim.claim_id).unwrap().job_identity, claim.anchor);
+    let reverted = revert_delta_v2(&admitted, &delta, h.sp()).expect("the admission reverts");
+    assert_eq!(reverted.state_root(), parent.state_root(), "revert restores the parent exactly");
+    assert!(reverted.claim(&claim.claim_id).is_none());
+    let other = PalwBlockContextV2 { block: Hash64::from_u64_word(0x7EAD_0002), blue_score: point.blue_score + 1, ..point };
+    let (again, _, _) = h
+        .vp()
+        .palw_v2_fold_merged_attempt_for_tests(
+            &reverted,
+            h.sp(),
+            &other,
+            claim.header.hash,
+            Some(&claim.header),
+            &claim.envelope,
+            point.subsidy,
+        )
+        .expect("accepted again as merged work");
+    assert_eq!(again.claim(&claim.claim_id).unwrap().job_identity, claim.anchor, "the same identity under another chain block");
+    h.reloads(&admitted);
+    h.reloads(&again);
+    h.restarts(point.block, &admitted);
+}
+
+/// **T18b: a borrowed root answers another job.** C0 is an honest run, bound and licensed. C1 and C2
+/// are later blocks of the same executor that carry C0's roots — and nothing of their own run — and
+/// the chain admits both (no admission rebuilds a root).
+///
+/// * C1's data-availability answer is C0's event: it opens against the borrowed roots exactly as it
+///   did before F1, and past the fence the identity rule refuses it as an answer (J1: the binding's
+///   job is C0's anchor); the producer's silence then voids C1 for withholding, the bystander uncharged.
+/// * On C2 an `ExecutorRefuted { IdentityMismatch }` through the gate, the walk and the fold voids it
+///   `CourtFraud` and charges its executor; the kind-4 row records root 0 (forfeiture by claim); C0's
+///   record, panel, locks and rights are byte-identical and its root is not forfeit.
+/// * The colluding full seat that signed `Valid` on C2 follows through kind 3 (`CourtFraud` naming
+///   the void); a partial seat is not liable at `Whole`.
+#[tokio::test]
+async fn t18b_a_borrowed_root_answers_another_job() {
+    let h = harness(true);
+    let mut walk = h.genesis_walk();
+    let c0 = h.open_claim_at_nonce(&mut walk, Fault::Honest, 0);
+    h.bind(&mut walk, c0.claim_id);
+    let lic0 = h.license_v2(&mut walk, c0.claim_id);
+    let root = c0.envelope.attempt.execution_root;
+
+    // C1, and a bystander's event accusation on it.
+    let c1 = h.open_borrowed_claim(&mut walk, bucket(1), &c0);
+    let rec1 = walk.state.claim(&c1.claim_id).unwrap().clone();
+    assert_eq!((rec1.execution_root, rec1.trace_root), (root, c0.envelope.attempt.trace_root), "the lender's roots");
+    assert_eq!(rec1.job_identity, c1.anchor, "and its own block's anchor");
+    h.bind(&mut walk, c1.claim_id);
+    let accuser = h.cards[BYSTANDER];
+    // A held-DA demand carrying the borrowed binding is not about THIS claim's job: the fold refuses it
+    // by the identity rule (its filer proves the borrow with `ExecutorRefuted` instead).
+    {
+        use kaspa_consensus_core::palw_held_da_v1::{
+            PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT, PALW_HELD_DA_VERSION_V1, PalwHeldAccusationV1, PalwHeldMissingV1,
+            palw_held_da_accusation_message_v1,
+        };
+        let mut accusation = PalwHeldAccusationV1 {
+            version: PALW_HELD_DA_VERSION_V1,
+            claim: c1.claim_id,
+            missing: PalwHeldMissingV1::StepRange { first: 0, count: 1 },
+            accuser,
+            binding: c0.binding.clone(),
+            signature: Vec::new(),
+        };
+        accusation.signature = sign(
+            BYSTANDER,
+            palw_held_da_accusation_message_v1(h.domain.as_byte_slice(), &accusation).as_byte_slice(),
+            PALW_HELD_DA_MLDSA87_ACCUSE_CONTEXT,
+        );
+        let demand = Obj::DefaultAccusedHeld { accusation: Box::new(accusation) };
+        let point = walk.next();
+        assert!(h.accepted(&walk.state, &point, std::slice::from_ref(&demand)).is_empty(), "the walk drops it");
+        match h.fold(&walk.state, &point, std::slice::from_ref(&demand)) {
+            Err(PalwStateV2Error::HeldDaRefused { why, .. }) => assert!(why.contains("answers another job or class (J1)"), "{why}"),
+            other => panic!("the fold refuses the borrowed demand by the identity rule: {other:?}"),
+        }
+    }
+    let message = kaspa_consensus_core::palw_state_v2::palw_da_accusation_message_v2(h.domain, &c1.claim_id, 0, &accuser);
+    let accused = Obj::DefaultAccused {
+        claim: c1.claim_id,
+        missing_event_index: 0,
+        accuser,
+        signature: sign(
+            BYSTANDER,
+            message.as_byte_slice(),
+            kaspa_consensus_core::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+        ),
+    };
+    let accuser_collateral = walk.state.bond(&accuser).unwrap().collateral;
+    h.carry(&mut walk, vec![accused]);
+    assert!(matches!(walk.state.claim(&c1.claim_id).unwrap().phase, PalwClaimPhaseV2::DefaultDisputed { .. }));
+    // The lender's event — which opens against the borrowed roots, as it did before F1.
+    let disclosure = kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat {
+        binding: Box::new(c0.binding.clone()),
+        pin: c0.pin.clone().expect("the lender's rows"),
+    };
+    kaspa_consensus_core::palw_step_refute::check_trace_event_disclosure_v1(
+        rec1.trace_root,
+        rec1.execution_root,
+        0,
+        0,
+        &disclosure,
+        kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+    )
+    .expect("the lender's event opens against the borrowed roots: without F1 it was an answer");
+    let digest = kaspa_consensus_core::palw_state_v2::palw_da_disclosure_digest_v1(&disclosure);
+    let answer_message = kaspa_consensus_core::palw_state_v2::palw_da_disclosure_message_v3(h.domain, &c1.claim_id, 0, &digest);
+    let answer = Obj::MaterialDisclosed {
+        claim: c1.claim_id,
+        event_index: 0,
+        disclosure,
+        signature: sign(
+            EXECUTOR,
+            answer_message.as_byte_slice(),
+            kaspa_consensus_core::palw_state_v2::PALW_DA_DISCLOSURE_V2_MLDSA87_CONTEXT,
+        ),
+    };
+    let point = walk.next();
+    assert!(h.accepted(&walk.state, &point, std::slice::from_ref(&answer)).is_empty(), "the walk drops the borrowed answer");
+    match h.fold(&walk.state, &point, std::slice::from_ref(&answer)) {
+        Err(PalwStateV2Error::DaOpeningRefused { why, .. }) => {
+            assert!(why.contains("answers another job or class (J1)"), "{why}")
+        }
+        other => panic!("the fold refuses the borrowed answer by the identity rule: {other:?}"),
+    }
+    // The producer's silence: the disclose window closes on it.
+    let mut voided = None;
+    for _ in 0..20_000 {
+        let point = walk.next();
+        let next = h.fold(&walk.state, &point, &[]).expect("an empty block folds");
+        walk.advance(&point, next);
+        if let PalwClaimPhaseV2::Voided { reason, .. } = walk.state.claim(&c1.claim_id).unwrap().phase {
+            voided = Some(reason);
+            break;
+        }
+    }
+    assert_eq!(voided, Some(PalwVoidReasonV2::ProducerWithholding), "silence voids the borrower for withholding");
+    assert_eq!(walk.state.bond(&accuser).unwrap().collateral, accuser_collateral, "and the accuser is not charged");
+
+    // C2: bound, licensed by a colluding panel, and refuted.
+    let c2 = h.open_borrowed_claim(&mut walk, bucket(2), &c0);
+    h.bind(&mut walk, c2.claim_id);
+    let lic2 = h.license_v2(&mut walk, c2.claim_id);
+    let refutation = c2.contradiction();
+    let finding = h.judge_refuted(&walk.state, c2.claim_id, refutation.clone()).expect("the borrowed binding answers C0's job");
+    assert_eq!((finding.forfeit, finding.identity_fault), (PalwForfeitScopeV1::ByClaim, Some(PalwIdentityFaultV1::JobNotTheClaims)));
+    let lender_before = (
+        walk.state.claim(&c0.claim_id).cloned(),
+        walk.state.panel(&c0.claim_id).cloned(),
+        lic0.receipts.iter().map(|(card, _)| walk.state.slashable_lock(h.cards[*card], c0.claim_id).copied()).collect::<Vec<_>>(),
+        walk.state.panel_liability(&c0.claim_id).cloned(),
+    );
+    let (before, _) = h.carry(&mut walk, vec![h.refuted(c2.claim_id, refutation.clone())]);
+    let daa = walk.daa;
+    assert_refuted_before_final(&h, &before, &walk.state, c2.claim_id, daa, Hash64::default());
+    let lender_after = (
+        walk.state.claim(&c0.claim_id).cloned(),
+        walk.state.panel(&c0.claim_id).cloned(),
+        lic0.receipts.iter().map(|(card, _)| walk.state.slashable_lock(h.cards[*card], c0.claim_id).copied()).collect::<Vec<_>>(),
+        walk.state.panel_liability(&c0.claim_id).cloned(),
+    );
+    assert_eq!(lender_after, lender_before, "the honest lender's claim, panel, locks and rows are byte-identical");
+    assert!(!walk.state.palw_execution_root_is_forfeited_v1(&root), "and its root is not forfeit");
+    // A second proof of the same claim's refutation is one offence.
+    let again = h.refuted(c2.claim_id, refutation);
+    let why = h.validate(&walk.state, &walk.next(), &again).expect_err("one offence per claim");
+    assert!(why.contains("already refuted"), "{why}");
+
+    // The colluding full seat follows by kind 3; a partial seat is not liable at `Whole`.
+    let full = lic2.full_card();
+    let court_fraud = C::CourtFraud { voided_daa: daa };
+    for partial in lic2.partials() {
+        h.refused(&walk, &h.v2(partial, c2.claim_id, lic2.segmented(partial), court_fraud.clone()), &E::SiteNotAttested.to_string());
+    }
+    let seat = h.cards[full];
+    let lock = *walk.state.slashable_lock(seat, c2.claim_id).expect("the full seat's lock");
+    let (licensed, _) = h.carry(&mut walk, vec![h.v2(full, c2.claim_id, lic2.segmented(full), court_fraud)]);
+    assert!(walk.state.slashable_lock(seat, c2.claim_id).is_none());
+    assert_eq!(licensed.bond(&seat).unwrap().collateral - walk.state.bond(&seat).unwrap().collateral, lock.amount as u64);
+    h.reloads(&walk.state);
+}
+
+/// **T18c: before any licence, the executor is refuted by its own execution** — (i) the drill's
+/// injected arithmetic fault and (iii) a non-canonical leaf count, each through the gate, the walk
+/// and the fold on a `Provisional` claim, root recorded and forfeit (execution-proving). (ii) A root
+/// with no preimage is answered by nobody: a bystander's event accusation runs out and voids the claim
+/// for withholding. (iv) **The R1 residual, pinned:** an honest step tree over garbage logits (the
+/// argmax unmoved) is refused by every route F1 has — `ForgedOutput`, `IdentityMismatch`,
+/// `OutputMismatch`, the shape pass — until F1c's `LogitsNotStepOutput`.
+#[tokio::test]
+async fn t18c_before_licence_the_executor_is_refuted() {
+    let h = harness(true);
+    for fault in [Fault::Step, Fault::Shape] {
+        let mut walk = h.genesis_walk();
+        let claim = h.open_claim(&mut walk, fault);
+        let finding = h.judge_refuted(&walk.state, claim.claim_id, claim.contradiction()).expect("the proof refutes the execution");
+        assert_eq!(finding.forfeit, PalwForfeitScopeV1::ByRoot, "{fault:?}");
+        let (before, _) = h.carry(&mut walk, vec![h.refuted(claim.claim_id, claim.contradiction())]);
+        let daa = walk.daa;
+        let root = claim.envelope.attempt.execution_root;
+        assert_refuted_before_final(&h, &before, &walk.state, claim.claim_id, daa, root);
+        assert!(walk.state.palw_execution_root_is_forfeited_v1(&root), "{fault:?}: a proven-false root is forfeit");
+    }
+
+    // (ii) A root with no preimage: nobody can answer for it.
+    let mut walk = h.genesis_walk();
+    let lender = h.open_claim_at_nonce(&mut walk, Fault::Honest, 0);
+    let mut fake = lender;
+    fake.envelope.attempt.execution_root = Hash64::from_u64_word(0x0000_F4CE);
+    let orphan = h.open_borrowed_claim(&mut walk, bucket(3), &fake);
+    assert_eq!(walk.state.claim(&orphan.claim_id).unwrap().execution_root, Hash64::from_u64_word(0x0000_F4CE));
+    assert!(
+        matches!(h.judge_refuted(&walk.state, orphan.claim_id, orphan.contradiction()), Err(E::PanelFalseValidWorkMismatch)),
+        "no binding reproduces a root with no preimage"
+    );
+    h.bind(&mut walk, orphan.claim_id);
+    let accuser = h.cards[BYSTANDER];
+    let message = kaspa_consensus_core::palw_state_v2::palw_da_accusation_message_v2(h.domain, &orphan.claim_id, 0, &accuser);
+    h.carry(
+        &mut walk,
+        vec![Obj::DefaultAccused {
+            claim: orphan.claim_id,
+            missing_event_index: 0,
+            accuser,
+            signature: sign(
+                BYSTANDER,
+                message.as_byte_slice(),
+                kaspa_consensus_core::palw_state_v2::PALW_DA_ACCUSATION_V2_MLDSA87_CONTEXT,
+            ),
+        }],
+    );
+    let executor_before = walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral;
+    let mut voided = None;
+    for _ in 0..20_000 {
+        let point = walk.next();
+        let next = h.fold(&walk.state, &point, &[]).expect("an empty block folds");
+        walk.advance(&point, next);
+        if let PalwClaimPhaseV2::Voided { reason, .. } = walk.state.claim(&orphan.claim_id).unwrap().phase {
+            voided = Some(reason);
+            break;
+        }
+    }
+    assert_eq!(voided, Some(PalwVoidReasonV2::ProducerWithholding));
+    assert!(walk.state.bond(&h.cards[EXECUTOR]).unwrap().collateral < executor_before, "the withholding producer is charged");
+
+    // (iv) Garbage logits over an honest step tree — the R1 residual.
+    let mut walk = h.genesis_walk();
+    let bent = h.open_claim(&mut walk, Fault::GarbageLogits);
+    let pin = bent.pin.clone().unwrap();
+    let routes = [
+        ("ForgedOutput", C::ForgedOutput { binding: bent.binding.clone(), pin: pin.clone(), position: 0 }),
+        ("IdentityMismatch", C::IdentityMismatch { binding: bent.binding.clone() }),
+        (
+            "OutputMismatch",
+            C::OutputMismatch {
+                binding: bent.binding.clone(),
+                pin: kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(pin.clone()),
+            },
+        ),
+        ("Shape", C::StepStructural(PalwStepRefutationV1 { binding: bent.binding.clone(), evidence: PalwStepEvidenceV1::Shape })),
+    ];
+    for (route, contradiction) in routes {
+        let why = h.judge_refuted(&walk.state, bent.claim_id, contradiction.clone()).expect_err("R1 has no F1 route");
+        eprintln!("[t18c(iv)] {route}: {why}");
+        h.refused(&walk, &h.refuted(bent.claim_id, contradiction), &why.to_string());
+    }
+}
+
+/// **T18d: an output root that is not the run's output is refuted** (`OutputMismatch`, the one
+/// rendered rule): the ground root convicts through the gate, the walk and the fold, root 0 and
+/// forfeiture by claim; the honest root with the honest pin is `OutputHolds`, refused at the gate and
+/// in the fold.
+#[tokio::test]
+async fn t18d_the_output_grind_is_refuted() {
+    let h = harness(true);
+    let (mut walk, claim, _licence) = h.licensed(Fault::OutputGrind);
+    let finding = h.judge_refuted(&walk.state, claim.claim_id, claim.contradiction()).expect("the ground root is not the run's");
+    assert_eq!((finding.forfeit, finding.identity_fault), (PalwForfeitScopeV1::ByClaim, None));
+    let (before, _) = h.carry(&mut walk, vec![h.refuted(claim.claim_id, claim.contradiction())]);
+    assert_refuted_before_final(&h, &before, &walk.state, claim.claim_id, walk.daa, Hash64::default());
+
+    let (honest_walk, honest, _) = h.licensed_at_nonce(Fault::Honest, bucket(5));
+    let control = C::OutputMismatch {
+        binding: honest.binding.clone(),
+        pin: kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(honest.pin.clone().unwrap()),
+    };
+    let object = h.refuted(honest.claim_id, control);
+    h.refused(&honest_walk, &object, &E::OutputHolds.to_string());
+    assert_eq!(h.fold_refusal(&honest_walk, &object), E::OutputHolds.to_string());
+}
+
+/// **T18e (the floor): the relabel is refuted by J5.** The producer ran another anchor's prompt with
+/// this block's anchor written as the job id and the seed, so J1 and J3 hold and the seats' OWN rule
+/// (the floor backend's whole-context check) is what the binding fails; on chain the J5 check
+/// (the prompt root the anchor implies, J5b) convicts it — the DA answers, which leave J5b out, do
+/// not. On a model class the same relabel is F1-M's residual (the core unit test pins it).
+#[tokio::test]
+async fn t18e_the_floor_relabel_is_refuted_by_j5() {
+    let h = harness(true);
+    let (mut walk, claim, _) = h.licensed(Fault::Relabel);
+    let binding = &claim.binding;
+    assert_eq!(binding.job_context.job_id, claim.anchor, "J1 holds: the anchor is written");
+    assert_eq!(&binding.job_context.execution_seed[..], &claim.anchor.as_byte_slice()[..32], "J3 holds");
+    let target = palw_offence_target_v1(&walk.state, &claim.claim_id).unwrap();
+    assert_eq!(palw_binding_identity_fault_v1(&target, binding, h.rules(), true), Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors)));
+    assert_eq!(palw_binding_identity_fault_v1(&target, binding, h.rules(), false), Ok(None), "J5b is the contradictions'");
+    // The seats' own rule sees the same thing: the capture is not the anchor's canonical job.
+    let verdict = h.backend.verify_material(
+        &claim.material,
+        kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
+            execution_root: claim.envelope.attempt.execution_root,
+            trace_root: claim.envelope.attempt.trace_root,
+            anchor: claim.anchor,
+            attempt_draw: Some(true),
+        },
+    );
+    assert_eq!(verdict, kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Mismatch, "a seat refuses the relabel");
+    let (before, _) = h.carry(&mut walk, vec![h.refuted(claim.claim_id, claim.contradiction())]);
+    assert_refuted_before_final(&h, &before, &walk.state, claim.claim_id, walk.daa, Hash64::default());
+}
+
+/// **T18f (J4): the claim committed another trace root beside its binding** — refuted by
+/// `IdentityMismatch` (`TraceNotTheClaims`), forfeiture by claim.
+#[tokio::test]
+async fn t18f_a_trace_root_that_is_not_the_bindings_is_refuted() {
+    let h = harness(true);
+    let (mut walk, claim, _) = h.licensed(Fault::TraceSwap);
+    let finding = h.judge_refuted(&walk.state, claim.claim_id, claim.contradiction()).expect("J4");
+    assert_eq!(finding.identity_fault, Some(PalwIdentityFaultV1::TraceNotTheClaims));
+    let (before, _) = h.carry(&mut walk, vec![h.refuted(claim.claim_id, claim.contradiction())]);
+    assert_refuted_before_final(&h, &before, &walk.state, claim.claim_id, walk.daa, Hash64::default());
+}
+
+/// **T18g: an unrecorded identity never convicts** — the borrowed claim of T18b with its identity
+/// zeroed (what a claim admitted with no header, or below the fence, records) is refused
+/// `IdentityNotRecorded` at the gate and in the fold, and the walk drops it.
+#[tokio::test]
+async fn t18g_an_unrecorded_identity_never_convicts() {
+    let h = harness(true);
+    let mut walk = h.genesis_walk();
+    let c0 = h.open_claim_at_nonce(&mut walk, Fault::Honest, 0);
+    let c1 = h.open_borrowed_claim(&mut walk, bucket(1), &c0);
+    let object = h.refuted(c1.claim_id, c1.contradiction());
+    h.judge_refuted(&walk.state, c1.claim_id, c1.contradiction()).expect("recorded, the borrower is refuted");
+    walk.state = h.rebuilt(&walk.state, |carriage| carriage.claims.get_mut(&c1.claim_id).unwrap().job_identity = Hash64::default());
+    h.refused(&walk, &object, &E::IdentityNotRecorded.to_string());
+    assert_eq!(h.fold_refusal(&walk, &object), E::IdentityNotRecorded.to_string());
+}
+
+/// **T18k: forfeiture by claim leaves the lender's rights intact.** C0 (honest) and C2 (its borrower)
+/// both reach `Final` on ONE execution root; a schedule and a pending snapshot minted over both
+/// Finals are written through the carriage (as T46e writes one). C2 is refuted after `Final`: its
+/// `Final` is reversed, its own Final and tickets leave the schedule, the snapshot and the span's
+/// gathered Finals — so no later snapshot takes it — while C0's rows, on the same root, are exactly
+/// what they were and the root is not forfeit.
+#[tokio::test]
+async fn t18k_forfeiture_by_claim_leaves_the_lenders_rights() {
+    use kaspa_consensus_core::palw_execution_lane_v1::{PalwExecFinalV1, PalwExecScheduleV1, palw_execution_schedule_snapshot_v1};
+    use kaspa_consensus_core::palw_execution_quanta_v1::{PALW_EXECUTION_QUANTUM_V1, palw_execution_mint_quanta_bounded_v1};
+    let h = harness(true);
+    let mut walk = h.genesis_walk();
+    let c0 = h.open_claim_at_nonce(&mut walk, Fault::Honest, 0);
+    let c2 = h.open_borrowed_claim(&mut walk, bucket(2), &c0);
+    for id in [c0.claim_id, c2.claim_id] {
+        h.bind(&mut walk, id);
+        h.license_v2(&mut walk, id);
+    }
+    h.sweep_to_final(&mut walk, c0.claim_id);
+    if !matches!(walk.state.claim(&c2.claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }) {
+        h.sweep_to_final(&mut walk, c2.claim_id);
+    }
+    let root = c0.envelope.attempt.execution_root;
+    let final_of = |id: Hash64, domain: u64| PalwExecFinalV1 {
+        domain: Hash64::from_u64_word(domain),
+        bond: h.cards[EXECUTOR],
+        operator_id: walk.state.bond(&h.cards[EXECUTOR]).unwrap().operator_id,
+        claim_id: id,
+        execution_root: root,
+        credit: 4 * PALW_EXECUTION_QUANTUM_V1,
+    };
+    // One schedule per span, each minted over one of the two Finals — a mint over both would give the
+    // shared root's tickets to one claim only (`palw_execution_mint_quanta_bounded_v1` dedups by root).
+    let (span, _) = walk.state.round_finals();
+    let seed = Hash64::from_u64_word(0x5EED_0018);
+    let mint = |span_index: u64, f: PalwExecFinalV1| {
+        let finals = [f];
+        PalwExecScheduleV1 {
+            span_index,
+            seed,
+            domains: palw_execution_schedule_snapshot_v1(span_index, &finals).domains,
+            finals: finals.to_vec(),
+            quanta: palw_execution_mint_quanta_bounded_v1(
+                &finals,
+                seed,
+                u128::from(PALW_EXECUTION_QUANTUM_V1),
+                10_000,
+                0,
+                &Default::default(),
+                1 << 16,
+            ),
+        }
+    };
+    let (lender_span, borrower_span) = (span + 7, span + 8);
+    let lender_schedule = mint(lender_span, final_of(c0.claim_id, 0xD0));
+    let borrower_schedule = mint(borrower_span, final_of(c2.claim_id, 0xD2));
+    assert!(!lender_schedule.quanta.is_empty() && !borrower_schedule.quanta.is_empty(), "both Finals hold tickets");
+    let minted_span = borrower_span;
+    let pending = palw_execution_schedule_snapshot_v1(minted_span + 1, &[final_of(c0.claim_id, 0xD0), final_of(c2.claim_id, 0xD2)]);
+    walk.state = h.rebuilt(&walk.state, |c| {
+        c.round_schedules.insert(lender_span, lender_schedule.clone());
+        c.round_schedules.insert(borrower_span, borrower_schedule.clone());
+        c.round_pending.insert(minted_span + 1, pending.clone());
+    });
+    let gathered_c0 = walk.state.round_finals().1.get(&c0.claim_id).copied();
+    assert!(
+        walk.state.round_finals().1.contains_key(&c2.claim_id),
+        "the borrower's Final is gathered for its span's snapshot — the path by-claim forfeiture must close"
+    );
+    let (before, _) = h.carry(&mut walk, vec![h.refuted(c2.claim_id, c2.contradiction())]);
+    let s = &walk.state;
+    assert!(
+        matches!(s.claim(&c2.claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+        "the borrower's Final is reversed"
+    );
+    assert!(matches!(s.claim(&c0.claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the lender stays Final");
+    assert!(before.safe_weight() > s.safe_weight(), "the reversed Final's weight is taken back");
+    let pruned = s.round_schedule(borrower_span);
+    assert!(
+        pruned
+            .is_none_or(|p| p.finals.iter().all(|f| f.claim_id != c2.claim_id) && p.quanta.iter().all(|q| q.final_id != c2.claim_id)),
+        "the borrower's Final and tickets left its span's schedule"
+    );
+    assert_eq!(s.round_schedule(lender_span), Some(&lender_schedule), "the lender's schedule, on the same root, byte-identical");
+    let snapshot = s.round_pending_snapshots().get(&(minted_span + 1)).expect("the snapshot stands on the lender's Final");
+    assert!(snapshot.finals.iter().all(|f| f.claim_id != c2.claim_id) && snapshot.finals.iter().any(|f| f.claim_id == c0.claim_id));
+    assert!(s.round_finals().1.get(&c2.claim_id).is_none(), "no later snapshot can take the voided claim");
+    assert_eq!(s.round_finals().1.get(&c0.claim_id).copied(), gathered_c0, "the lender's gathered Final, as it was");
+    assert!(!s.palw_execution_root_is_forfeited_v1(&root), "the root is the lender's too: not forfeit");
+    let row = s.consumed_offence(&palw_executor_refuted_offence_id_v1(&h.cards[EXECUTOR].0, &c2.claim_id)).unwrap();
+    assert_eq!((row.amount, row.execution_root), (0, Hash64::default()), "no post-Final executor debit here (R-core's S3), root 0");
+    h.reloads(s);
 }

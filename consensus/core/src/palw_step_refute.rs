@@ -3493,7 +3493,7 @@ pub fn base0_decode_token_select_v1(values: &[i32]) -> usize {
 /// recomputed outer root must be the claim's own. The id count is the context's decode count and
 /// the row count equals it — the committed set is one selecting row per generated token, which is
 /// what [`tiled_logits_trace_root_v1`]'s callers commit.
-fn check_tiled_decode_pin(binding: &PalwStepBindingV2, pin: &PalwTiledDecodeTokensV1) -> Result<(), PalwStepRefuteError> {
+pub(crate) fn check_tiled_decode_pin(binding: &PalwStepBindingV2, pin: &PalwTiledDecodeTokensV1) -> Result<(), PalwStepRefuteError> {
     if binding.shape_profile.logits_scheme_id != tiled_logits_scheme_id_v1() {
         return Err(PalwStepRefuteError::InputSetNotCanonical(
             "this class does not commit tiled selecting rows — the tiled pin is not its scheme",

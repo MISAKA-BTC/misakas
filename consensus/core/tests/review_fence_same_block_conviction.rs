@@ -163,6 +163,7 @@ fn fp_commit(class_id: Hash64, bond: PalwBondKeyV2, pk: Vec<u8>, work_leaves: u6
 #[allow(clippy::too_many_arguments)]
 fn fp_commit_on(class_id: Hash64, bond: PalwBondKeyV2, pk: Vec<u8>, work_leaves: u64, prompt: &[u32], decode: u32, claim: Hash64, execution_root: Hash64) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::FreePromptCommitted {
+        job_pin: kaspa_hashes::Hash64::default(),
         claim,
         class_id,
         bond,

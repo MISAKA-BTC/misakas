@@ -145,22 +145,30 @@ async fn rcore_v22_objects_are_dropped_by_the_gate_and_the_walk_and_refused_by_t
     }
 }
 
-/// **An `ObjectiveOffence` of kind 4, 5 or 6 is dropped by the gate and the walk and refused by the
-/// fold, fence on or off**, whatever its evidence — before any key, slash or forfeiture is reached.
+/// **An `ObjectiveOffence` of kind 5 or 6 is dropped by the gate and the walk and refused by the
+/// fold, fence on or off, by name and for good** (the skeleton review's F1: both are records only the
+/// fold writes), whatever its evidence — before any key, slash or forfeiture is reached. Kind 4 is
+/// M2's and is judged (`palw_offence_attribution` is armed in both twins): refused by its adjudicator
+/// when its evidence does not decode. Nothing is written either way.
 #[tokio::test]
 async fn rcore_v22_offence_kinds_are_dropped_by_the_gate_and_the_walk_and_refused_by_the_fold() {
+    use kaspa_consensus_core::palw_offence_v1::PalwOffenceVerifyError as E;
     for armed in [true, false] {
         let s = skeleton(armed);
         for kind in [PalwOffenceKindV1::ExecutorRefuted, PalwOffenceKindV1::DaDefault, PalwOffenceKindV1::CourtConviction] {
             let evidence = vec![kind as u8; 16];
             let object =
                 Obj::ObjectiveOffence { kind, accused: s.cards[0], evidence_id: palw_offence_evidence_digest_v1(&evidence), evidence };
-            let why = s.validate(&object).expect_err("the gate refuses a declared-not-landed kind");
-            assert!(why.contains("declared by the v22 skeleton"), "armed {armed}, {kind:?}: {why}");
+            let want = match kind {
+                PalwOffenceKindV1::ExecutorRefuted => E::PanelFalseValidNeedsContradiction.to_string(),
+                _ => E::KindNotFileable(kind.not_fileable_reason_v1()).to_string(),
+            };
+            let why = s.validate(&object).expect_err("the gate refuses it");
+            assert_eq!(why, want, "armed {armed}, {kind:?}");
             assert!(s.accepted(&object).is_empty(), "armed {armed}, {kind:?}: the walk drops it");
             let err = s.fold(&object).expect_err("the fold refuses it too");
             assert!(
-                matches!(&err, PalwStateV2Error::ObjectiveOffenceRefused(_, why) if why.contains("declared by the v22 skeleton")),
+                matches!(&err, PalwStateV2Error::ObjectiveOffenceRefused(_, why) if *why == want),
                 "armed {armed}, {kind:?}: {err}"
             );
         }

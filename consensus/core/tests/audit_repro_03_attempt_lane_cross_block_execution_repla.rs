@@ -445,6 +445,7 @@ fn audit_repro_03_the_refusal_exists_only_inside_one_transition() {
             subsidy,
             escrow_carve: carve_params,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         },
         PalwMergedWorkV1 {
             carrying_block: h(0xB2),
@@ -453,6 +454,7 @@ fn audit_repro_03_the_refusal_exists_only_inside_one_transition() {
             subsidy,
             escrow_carve: carve_params,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         },
         PalwMergedWorkV1 {
             carrying_block: h(0xB3),
@@ -461,6 +463,7 @@ fn audit_repro_03_the_refusal_exists_only_inside_one_transition() {
             subsidy,
             escrow_carve: carve_params,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         },
     ];
 
@@ -494,6 +497,7 @@ fn audit_repro_03_the_refusal_exists_only_inside_one_transition() {
             subsidy,
             escrow_carve: carve_params,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         }];
         let (next, _, sk) = apply_palw_transition_v7(
             &spread,

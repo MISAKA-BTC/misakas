@@ -514,6 +514,7 @@ mod tests {
         };
         let (s1, _) = apply(&PalwChainStateV2::genesis(), &ctx(1, 100, 1), &registrations());
         let commit = PalwConsensusObjectV2::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
             claim: h64(CLAIM),
             class_id: h64(1),
             bond: PalwBondKeyV2(bond_op(1)),

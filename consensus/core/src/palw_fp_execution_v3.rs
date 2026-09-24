@@ -316,6 +316,71 @@ pub fn palw_fp_execution_seed_v3(job: &PalwFreePromptJobV3) -> [u8; 32] {
     seed
 }
 
+/// Keyed-BLAKE2b-512 domain of [`palw_fp_job_pin_v1`].
+pub const PALW_FP_V3_DOMAIN_JOB_PIN: &[u8] = b"misaka-palw/fp-v3/job-pin/v1";
+
+/// The pin over the seven identity facts of a free-prompt context, in one spelling for both
+/// readers below.
+fn palw_fp_job_pin_of_facts_v1(
+    job_id: &Hash64,
+    execution_seed: &[u8; 32],
+    tokenizer_id: &Hash64,
+    prompt_token_ids_hash: &Hash64,
+    prompt_tokens: u32,
+    decode_tokens_executed: u32,
+    max_context_tokens: u32,
+) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_FP_V3_DOMAIN_JOB_PIN).to_state();
+    h.update(job_id.as_byte_slice());
+    h.update(execution_seed);
+    h.update(tokenizer_id.as_byte_slice());
+    h.update(prompt_token_ids_hash.as_byte_slice());
+    h.update(&prompt_tokens.to_le_bytes());
+    h.update(&decode_tokens_executed.to_le_bytes());
+    h.update(&max_context_tokens.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **The job identity a free-prompt claim records** (ADR-0152 v3.1 J-1, the audit's SPEC §4.3):
+/// the identity fields [`palw_fp_job_context_v3`] writes into the context the claim's execution
+/// root commits to — `fp_job_id_v3(job)`, the derived `execution_seed`, the tokenizer, the prompt's
+/// commitment, the prefill, the decode count executed and the context ceiling — read here from the
+/// COMMITMENT, which the chain holds when the claim is created.
+///
+/// A free-prompt claim's id hashes the whole commitment, which contains the execution root, so the
+/// id can never be the job id (the fixed point F2 found); the pin is what a binding's context must
+/// reproduce instead ([`palw_fp_job_pin_of_context_v1`]). The class facts (model, runtime, shape)
+/// are not in it: the shape is J2's, against the claim's class id.
+pub fn palw_fp_job_pin_v1(commitment: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3) -> Hash64 {
+    let job = &commitment.job;
+    palw_fp_job_pin_of_facts_v1(
+        &crate::palw_freeprompt_v3::fp_job_id_v3(job),
+        &palw_fp_execution_seed_v3(job),
+        &job.tokenizer_id,
+        &job.prompt_token_ids_hash,
+        job.prompt_tokens,
+        commitment.decode_tokens_executed,
+        job.max_context_tokens,
+    )
+}
+
+/// **The same pin, read back from a job context** — what a binding claims its run was. Equal to
+/// [`palw_fp_job_pin_v1`] of the commitment exactly when the context carries the commitment's own
+/// identity fields, which is what [`palw_fp_job_context_v3`] writes.
+pub fn palw_fp_job_pin_of_context_v1(ctx: &PalwJobContextV2) -> Hash64 {
+    palw_fp_job_pin_of_facts_v1(
+        &ctx.job_id,
+        &ctx.execution_seed,
+        &ctx.tokenizer_id,
+        &ctx.prompt_token_ids_hash,
+        ctx.declared_prefill_tokens,
+        ctx.exact_decode_tokens,
+        ctx.max_context_tokens,
+    )
+}
+
 /// The `committed_execution_root` a free-prompt commitment must carry.
 ///
 /// Exactly `execution_commitment_root_v2` over the derived context and the four measured leg

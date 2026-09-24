@@ -590,6 +590,30 @@ pub fn palw_execution_snapshot_forfeit_v1(snapshot: &PalwExecSnapshotV1, forfeit
     Some(palw_execution_schedule_snapshot_v1(snapshot.target_span, &finals))
 }
 
+/// **[`palw_execution_schedule_forfeit_v1`] keyed by CLAIM** (ADR-0152 v3.1 V-2b, SPEC §4.5): the
+/// schedule less the one claim's Finals and the quanta they earned, its domains re-taken — `None`
+/// when the claim has no Final in it. A claim-proving conviction (the claim answers the wrong job or
+/// output) forfeits this way, because another claim — an honest lender's — may carry the same root.
+pub fn palw_execution_schedule_forfeit_claim_v1(schedule: &PalwExecScheduleV1, claim_id: &Hash64) -> Option<PalwExecScheduleV1> {
+    if !schedule.finals.iter().any(|f| f.claim_id == *claim_id) {
+        return None;
+    }
+    let finals: Vec<PalwExecFinalV1> = schedule.finals.iter().copied().filter(|f| f.claim_id != *claim_id).collect();
+    let quanta = schedule.quanta.iter().copied().filter(|q| q.final_id != *claim_id).collect();
+    let domains = palw_execution_schedule_snapshot_v1(schedule.span_index, &finals).domains;
+    Some(PalwExecScheduleV1 { span_index: schedule.span_index, seed: schedule.seed, domains, finals, quanta })
+}
+
+/// [`palw_execution_snapshot_forfeit_v1`] keyed by CLAIM, for the reason
+/// [`palw_execution_schedule_forfeit_claim_v1`] gives.
+pub fn palw_execution_snapshot_forfeit_claim_v1(snapshot: &PalwExecSnapshotV1, claim_id: &Hash64) -> Option<PalwExecSnapshotV1> {
+    if !snapshot.finals.iter().any(|f| f.claim_id == *claim_id) {
+        return None;
+    }
+    let finals: Vec<PalwExecFinalV1> = snapshot.finals.iter().copied().filter(|f| f.claim_id != *claim_id).collect();
+    Some(palw_execution_schedule_snapshot_v1(snapshot.target_span, &finals))
+}
+
 /// **The schedule's tickets past ADR-0151's bundle**: minted onto the span's own rounds by
 /// [`crate::palw_execution_quanta_v1::palw_execution_mint_quanta_windowed_v1`], at most
 /// `window_rounds` of them. `quantum == 0` leaves the lottery in force, as above.

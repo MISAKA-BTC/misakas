@@ -3112,6 +3112,20 @@ pub enum PalwVoidReasonV2 {
     /// S0′, charged as a second `ReceiptTimeout`. Borsh discriminant 6. Declared by S; written by M4,
     /// by nobody yet.
     NotReplayBacked,
+    /// **A court ended against the executor by DEFAULT, not by proof** (ADR-0152 F2 residual, past
+    /// `Params::palw_offence_attribution` only). Borsh discriminant 7, appended.
+    ///
+    /// Two endings convict the executor without a verdict on the arithmetic: the responder's rung
+    /// running out (`sweep_court_deadlines`' `Responder` arm) and an executor-side close declaration
+    /// that never assembled (`convict_close_declarer_v1`). Both are charged exactly as a proven
+    /// fraud is — the producer did default on the only defence it had — but they are NOT a proof
+    /// that the execution was false: a colluding producer's deliberate silence in a bystander's
+    /// dissection writes this reason on an HONEST execution. `CourtFraud` is what kind 3's
+    /// `CourtFraud { voided_daa }` contradiction names against the claim's full-mask `Valid`
+    /// signers, so a default written under that reason would let the producer's silence slash the
+    /// honest full seats. Past the fence the defaults write this reason instead and kind 3 refuses
+    /// it by name; below the fence they write `CourtFraud`, byte for byte as before.
+    CourtDefault,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -4353,6 +4367,12 @@ pub enum PalwConsensusObjectV2 {
         /// `prompt_token_ids`: the object is built inside a node, never hashed into a root,
         /// never sent to a peer. The rule is behind `palw_fp_derived_work`.
         consumed_prefix_state: crate::palw_freeprompt_v3::PalwFpPrefixStateV1,
+        /// **ADR-0152 v3.1 J-1 (F1): the commitment's job pin**
+        /// ([`crate::palw_fp_execution_v3::palw_fp_job_pin_v1`]) — the identity a free-prompt claim
+        /// records past `palw_offence_attribution`, which a binding's context must reproduce (J1).
+        /// Built by the extractor from the commitment it decoded; like the fields above it never
+        /// rides, is never sent to a peer and is hashed into nothing, so it moves no wire and no root.
+        job_pin: Hash64,
     },
     /// **ADR-0075 Decision 1: a drilled family enters the chain's certified set through its own
     /// evidence.** The transition grades `evidence` with the shipped court's grader
@@ -4974,6 +4994,13 @@ pub struct PalwMergedWorkV1<'a> {
     /// ADR-0132 Upgrade C: the merged block's own compact `bits`, for its claim's snapshot. `0` for
     /// non-attempt work and where no header was at hand.
     pub bits: u32,
+    /// **ADR-0152 v3.1 J-1 (F1): the merged attempt's execution anchor**
+    /// (`execution_anchor_v3(net, MB pre_pow, class, bond, nonce)`), from the merged block's OWN
+    /// header — the job the attempt had to answer, which the claim records as its identity.
+    /// `Hash64::default()` where no header was at hand (never the attempt-id fallback the execution
+    /// key takes: a default identity records nothing, a made-up one would convict) and for non-attempt
+    /// work.
+    pub job_anchor: Hash64,
 }
 
 /// Where an attempt entered the chain — its own chain block, or a merged blue (ADR-0058).
@@ -5007,6 +5034,11 @@ struct PalwAttemptOriginV1 {
     /// ADR-0132 Upgrade C: the compact `bits` of the block that carried the attempt — the network
     /// lottery the forward faced — for the claim's snapshot. `0` where no header was at hand.
     carrying_bits: u32,
+    /// **ADR-0152 v3.1 J-1 (F1): the carrying header's execution anchor** — own work from
+    /// `extras.own_job_anchor`, merged work from [`PalwMergedWorkV1::job_anchor`]. `apply_attempt`
+    /// records it as the claim's `job_identity` where it is the anchor the execution key was
+    /// derived under.
+    job_anchor: Hash64,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -5665,6 +5697,20 @@ fn forfeit_close_deposit_v1(
     builder.slash_bond(declarer, deposit as u128)
 }
 
+/// **The reason a court's DEFAULT against the executor is recorded under** (ADR-0152 F2 residual).
+///
+/// A court can end against the executor two ways: a verdict on the arithmetic (a close, a one-move
+/// accusation, a held leaf — `CourtFraud`, the proof), or the executor's default on its own
+/// defence — its rung running out, or its own close declaration never assembling. The default is
+/// charged exactly as the proof is, but it proves nothing about the execution, and kind 3 reads a
+/// `CourtFraud` void as that proof against every full-mask `Valid` signer. So past
+/// `palw_offence_attribution` the two default endings write [`PalwVoidReasonV2::CourtDefault`];
+/// below it they write `CourtFraud` as they always did, and every dormant network's fold is byte
+/// for byte what it was.
+pub fn palw_court_default_void_reason_v1(offence_attribution_active: bool) -> PalwVoidReasonV2 {
+    if offence_attribution_active { PalwVoidReasonV2::CourtDefault } else { PalwVoidReasonV2::CourtFraud }
+}
+
 /// **A failed declaration loses on its OWN side** (ADR-0080 design A, W5's second requirement, in
 /// one spelling for the two places that reach it).
 ///
@@ -5700,9 +5746,11 @@ fn convict_close_declarer_v1(
             // executor that will not stand behind its own announced root: it has not been convicted
             // of arithmetic, but it HAS defaulted on the only defence available to it. A late
             // conviction against an already-terminal claim closes the session and changes nothing
-            // else, exactly as a late verdict does.
+            // else, exactly as a late verdict does. Recorded as a DEFAULT past
+            // `palw_offence_attribution` ([`palw_court_default_void_reason_v1`]), charged the same.
             if !claim.phase.is_terminal() {
-                builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                let reason = palw_court_default_void_reason_v1(builder.extras.offence_attribution_active);
+                builder.void_and_slash(session.claim, &claim, ctx.daa_score, reason)?;
                 // C-03 (deep fence): the guilty responder also pays for the time it kept the court
                 // open — a share of the claim's reserved stake proportional to the session's length.
                 builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
@@ -12707,6 +12755,13 @@ impl<'a> TransitionBuilder<'a> {
             .params
             .rcore_plus_active_at(now_daa)
             .then(|| (claim.rcore.licence_door, claim.rcore.basis_k, self.read().rcore_g_res(claim)));
+        let attribution = self.extras.offence_attribution_active;
+        let segment_count = self
+            .state
+            .panels
+            .get(&claim_id)
+            .map(|panel| crate::palw_verification_v2::palw_segment_count_v2(u16::try_from(panel.seats.len()).unwrap_or(u16::MAX)))
+            .unwrap_or(0);
         self.write_panel_liability(
             claim_id,
             Some(crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 {
@@ -12722,13 +12777,15 @@ impl<'a> TransitionBuilder<'a> {
                 locked_sompi,
                 expiry_daa,
                 settled_at_final: self.state.settled_attempt_finals,
-                // ADR-0152 v22 skeleton: M2 copies the four attribution fields here where
-                // `offence_attribution_active`, and S-3 the door, the basis and the residual gain
-                // past `palw_rcore_plus`. Until they land no row records any of them.
-                job_identity: Hash64::default(),
-                free_prompt: false,
-                trace_root: Hash64::default(),
-                segment_count: 0,
+                // **ADR-0152 v3.1 J-1 (F1, SPEC §4.1): the attribution copies**, past
+                // `offence_attribution_active` only — what a conviction reads once the claim row has
+                // retired: the identity, the lane, the trace root (J4) and the panel's segment cut
+                // (a V3 receipt's liability).
+                job_identity: if attribution { claim.job_identity } else { Hash64::default() },
+                free_prompt: attribution && matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }),
+                trace_root: if attribution { claim.trace_root } else { Hash64::default() },
+                segment_count: if attribution { segment_count } else { 0 },
+                // v22 row 8 (S-3): the door, the basis and the residual gain, past `palw_rcore_plus`.
                 licence_door: rcore_row.map(|(door, _, _)| door).unwrap_or(None),
                 basis_k: rcore_row.map(|(_, basis_k, _)| basis_k).unwrap_or(0),
                 g_res_sompi: rcore_row.map(|(_, _, g_res)| g_res).unwrap_or(0),
@@ -12753,14 +12810,14 @@ impl<'a> TransitionBuilder<'a> {
         if !self.extras.objective_offence_at(ctx.daa_score) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
-        // **ADR-0152 v3.1 §6, the v22 skeleton: kinds 4, 5 and 6 are declared, not landed.** Refused
-        // by name on every network before anything else is read, so no ledger key, slash or
-        // forfeiture can be reached through one until its owner (M2: 4; M3: 5; S-4: 6) replaces this
-        // refusal with the rule. The processor's gate refuses the same kinds first.
-        if kind.is_declared_not_landed_v1() {
+        // **ADR-0152 v3.1: kinds 5 and 6 are records the FOLD writes — never filed** (the skeleton
+        // review's F1). Refused by name on every network before anything else is read, permanently:
+        // landing the fold's own writer (M3: 5; S-4: 6) opens no filing route. The processor's gate
+        // refuses the same kinds first.
+        if kind.is_fold_recorded_only_v1() {
             return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                 evidence_id,
-                crate::palw_offence_v1::PalwOffenceVerifyError::KindNotLanded(kind.not_landed_reason_v1()).to_string(),
+                crate::palw_offence_v1::PalwOffenceVerifyError::KindNotFileable(kind.not_fileable_reason_v1()).to_string(),
             ));
         }
         // **ADR-0152 v2 F2: past `palw_offence_attribution` a false `Valid` has ONE route.** The V1
@@ -12778,13 +12835,13 @@ impl<'a> TransitionBuilder<'a> {
                     ));
                 }
                 PalwOffenceKindV1::PanelFalseValidV2 => return self.consume_false_valid_v2(ctx, accused, evidence_id, evidence),
+                // ADR-0152 v3.1 J-4 (F1): the executor's own conviction, judged by the same reading.
+                PalwOffenceKindV1::ExecutorRefuted => return self.consume_executor_refuted_v1(ctx, accused, evidence_id, evidence),
                 PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::CourtExecutorGuilty => {}
                 // Refused above; listed so a routing change that forgets them fails to compile.
-                PalwOffenceKindV1::ExecutorRefuted
-                | PalwOffenceKindV1::DaDefault
-                | PalwOffenceKindV1::CourtConviction => {}
+                PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {}
             }
-        } else if matches!(kind, PalwOffenceKindV1::PanelFalseValidV2) {
+        } else if matches!(kind, PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted) {
             return Err(PalwStateV2Error::ObjectiveOffenceDormant);
         }
         if matches!(kind, PalwOffenceKindV1::CourtExecutorGuilty) {
@@ -12814,6 +12871,14 @@ impl<'a> TransitionBuilder<'a> {
                 let payload: PalwPanelFalseValidEvidenceV1 = borsh::from_slice(evidence).map_err(|_| {
                     PalwStateV2Error::ObjectiveOffenceRefused(offence_id, "PanelFalseValid evidence does not decode".into())
                 })?;
+                // V1 parity (ADR-0152 v3.1, addendum §4-bis.7): a tag the V1 payload could not
+                // decode before the attribution contradictions existed is refused exactly as it was.
+                if payload.contradiction.is_attribution_only_v1() {
+                    return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                        offence_id,
+                        "PanelFalseValid evidence does not decode".into(),
+                    ));
+                }
                 if payload.accused_seat != accused.0 {
                     return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                         offence_id,
@@ -12877,21 +12942,22 @@ impl<'a> TransitionBuilder<'a> {
                 }
             }
             PalwOffenceKindV1::CourtExecutorGuilty => 0,
-            // Routed above on every network: consumed by `consume_false_valid_v2` past the fence,
-            // refused as dormant below it. An `Err`, never `unreachable!`, so a routing change
-            // that forgot this arm refuses the object instead of panicking the node.
-            PalwOffenceKindV1::PanelFalseValidV2 => {
+            // Routed above on every network: consumed by `consume_false_valid_v2` /
+            // `consume_executor_refuted_v1` past the fence, refused as dormant below it. An `Err`,
+            // never `unreachable!`, so a routing change that forgot this arm refuses the object
+            // instead of panicking the node.
+            PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted => {
                 return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                     offence_id,
                     crate::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string(),
                 ));
             }
-            // ADR-0152 v22 skeleton: refused at the top of this function on every network; an
-            // `Err` here too, never `unreachable!`, for the reason the arm above gives.
-            PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {
+            // Refused at the top of this function on every network; an `Err` here too, never
+            // `unreachable!`, for the reason the arm above gives.
+            PalwOffenceKindV1::DaDefault | PalwOffenceKindV1::CourtConviction => {
                 return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                     offence_id,
-                    crate::palw_offence_v1::PalwOffenceVerifyError::KindNotLanded(kind.not_landed_reason_v1()).to_string(),
+                    crate::palw_offence_v1::PalwOffenceVerifyError::KindNotFileable(kind.not_fileable_reason_v1()).to_string(),
                 ));
             }
         };
@@ -12976,6 +13042,7 @@ impl<'a> TransitionBuilder<'a> {
             evidence,
             self.params.fp_decode_rules_at(ctx.daa_score),
             false,
+            self.identity_rules_v1(),
             None,
         )
         .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
@@ -13005,11 +13072,7 @@ impl<'a> TransitionBuilder<'a> {
         // What the bond can pay: `slash_bond` clamps at the collateral, and the row says what it took.
         let debit = amount.min(self.state.bonds.get(&accused).ok_or(PalwStateV2Error::MissingBond(accused))?.collateral);
         self.slash_bond(accused, debit as u128)?;
-        let recorded_root = if finding.execution_proving && self.extras.economic_safety.is_some() {
-            finding.target.execution_root
-        } else {
-            Hash64::default()
-        };
+        let recorded_root = self.recorded_forfeit_root_v1(finding.forfeit, &finding.target);
         self.write_consumed_offence(
             offence_id,
             Some(PalwConsumedOffenceV1 {
@@ -13023,27 +13086,169 @@ impl<'a> TransitionBuilder<'a> {
                 claim_id: Hash64::default(),
             }),
         );
-        if finding.execution_proving {
-            match self.state.claims.get(&claim_id).cloned() {
-                Some(claim) => match claim.phase {
-                    PalwClaimPhaseV2::Provisional
-                    | PalwClaimPhaseV2::PanelBound { .. }
-                    | PalwClaimPhaseV2::ReceiptLicensed { .. }
-                    | PalwClaimPhaseV2::DefaultDisputed { .. } => {
-                        self.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
-                    }
-                    PalwClaimPhaseV2::Final { .. } => {
-                        self.reverse_convicted_final(ctx, claim_id)?;
-                        self.mark_liability_convicted(claim_id, ctx.daa_score);
-                    }
-                    PalwClaimPhaseV2::Voided { .. } => {}
-                },
-                None => self.mark_liability_convicted(claim_id, ctx.daa_score),
-            }
-            // What the convicted execution already holds in a minted schedule or a pending
-            // snapshot (#7), by the root the forfeiture set now carries; zero is a no-op.
-            self.forfeit_minted_round_rights(&recorded_root);
+        if finding.acts_on_claim {
+            self.act_on_convicted_claim_v1(ctx, claim_id)?;
+            self.forfeit_convicted_rights_v1(finding.forfeit, claim_id, &recorded_root);
         }
+        Ok(())
+    }
+
+    /// **ADR-0152 v3.1 J-5 / SPEC §4.6: is a data-availability binding an answer about THIS claim's
+    /// job?** Past `offence_attribution_active`, a binding that reproduces the claim's root but fails
+    /// the identity rule (J2, J1, J3, J5a, J4 — J5b's prompt recompute is left to the contradictions)
+    /// answers another job or class: it is not an answer, and an accusation carrying one is not an
+    /// accusation about this claim (its filer sends `ExecutorRefuted` instead). `None` — the old
+    /// behaviour — below the fence and wherever the rule cannot be asked (no identity recorded, a
+    /// binding that is not the claim's, which the unit's own check refuses anyway).
+    fn da_binding_answers_another_job_v1(
+        &self,
+        claim_id: &Hash64,
+        binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ) -> Option<String> {
+        if !self.extras.offence_attribution_active {
+            return None;
+        }
+        let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&self.state, claim_id)?;
+        match crate::palw_offence_attribution_v1::palw_binding_identity_fault_v1(&target, binding, self.identity_rules_v1(), false) {
+            Ok(Some(fault)) => Some(format!("the binding answers another job or class ({})", fault.code())),
+            Ok(None) | Err(_) => None,
+        }
+    }
+
+    /// The identity rules the attribution adjudicators read: the network's prompt-id form and the
+    /// base class (F1's J5 derives the base class's canonical job).
+    fn identity_rules_v1(&self) -> crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+        crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
+            prompt_ids_form: self.extras.prompt_ids_form_v1(),
+            base_class_id: self.params.base_class_id(),
+        }
+    }
+
+    /// **The root a conviction's ledger row records**: the target's execution root for a fault
+    /// that proves the EXECUTION false, where ADR-0151 is armed — the forfeiture set is a function
+    /// of it — and zero otherwise: a named void proves nothing about a root, and a claim-proving
+    /// fault (F1: 9, 10) proves the CLAIM answers the wrong job or output, not that the root is
+    /// false — recording it would forfeit an honest lender's rights on the same root (SPEC §4.5).
+    fn recorded_forfeit_root_v1(
+        &self,
+        forfeit: crate::palw_offence_attribution_v1::PalwForfeitScopeV1,
+        target: &crate::palw_offence_attribution_v1::PalwOffenceTargetV1,
+    ) -> Hash64 {
+        match forfeit {
+            crate::palw_offence_attribution_v1::PalwForfeitScopeV1::ByRoot if self.extras.economic_safety.is_some() => {
+                target.execution_root
+            }
+            _ => Hash64::default(),
+        }
+    }
+
+    /// **A claim proven false, acted on by its phase** (SPEC §3.5 step 7, §4.4): voided `CourtFraud`
+    /// with its executor slashed before `Final` (reservation, escrow and rights — a live claim's
+    /// data-availability session ends with it, its accuser's reservation given back where the
+    /// claim is written), its `Final` reversed after, and its liability row marked either way. A
+    /// claim already voided keeps the void that happened first; one that has retired leaves only its
+    /// row to mark.
+    fn act_on_convicted_claim_v1(&mut self, ctx: &PalwBlockContextV2, claim_id: Hash64) -> Result<(), PalwStateV2Error> {
+        match self.state.claims.get(&claim_id).cloned() {
+            Some(claim) => match claim.phase {
+                PalwClaimPhaseV2::Provisional
+                | PalwClaimPhaseV2::PanelBound { .. }
+                | PalwClaimPhaseV2::ReceiptLicensed { .. }
+                | PalwClaimPhaseV2::DefaultDisputed { .. } => {
+                    self.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                }
+                PalwClaimPhaseV2::Final { .. } => {
+                    self.reverse_convicted_final(ctx, claim_id)?;
+                    self.mark_liability_convicted(claim_id, ctx.daa_score);
+                }
+                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score),
+            },
+            None => self.mark_liability_convicted(claim_id, ctx.daa_score),
+        }
+        Ok(())
+    }
+
+    /// **What the convicted work already holds in a minted schedule or a pending snapshot** (the
+    /// DoS audit's #7): by ROOT for an execution-proving fault (the root the ledger row now
+    /// carries; zero is a no-op), by CLAIM for a claim-proving one (F1, SPEC §4.5) — so a borrowed
+    /// root never removes the lender's rights.
+    fn forfeit_convicted_rights_v1(
+        &mut self,
+        forfeit: crate::palw_offence_attribution_v1::PalwForfeitScopeV1,
+        claim_id: Hash64,
+        recorded_root: &Hash64,
+    ) {
+        match forfeit {
+            crate::palw_offence_attribution_v1::PalwForfeitScopeV1::ByRoot => self.forfeit_minted_round_rights(recorded_root),
+            crate::palw_offence_attribution_v1::PalwForfeitScopeV1::ByClaim => self.forfeit_minted_round_rights_of_claim(&claim_id),
+            crate::palw_offence_attribution_v1::PalwForfeitScopeV1::None => {}
+        }
+    }
+
+    /// **ADR-0152 v3.1 J-4 (F1): the executor refuted, judged once and charged once per claim.**
+    ///
+    /// The fold's half of `ExecutorRefuted` (kind 4): the SAME adjudicator the processor runs
+    /// ([`crate::palw_offence_attribution_v1::palw_check_executor_refuted_v1`]), then:
+    ///
+    /// 1. **One offence per claim** ([`crate::palw_offence_attribution_v1::palw_executor_refuted_offence_id_v1`]):
+    ///    a second proof of the same claim's falsehood is a no-op.
+    /// 2. **The claim, by phase** ([`Self::act_on_convicted_claim_v1`]): live → `void_and_slash`
+    ///    (`CourtFraud` — a proven refutation), the executor charged its reservation, escrow and
+    ///    rights; `Final` → reversed (the executor's post-`Final` charge is R-core's S3, not this
+    ///    stage's); voided or retired → the row marked.
+    /// 3. **The ledger row** records the debit the executor actually paid (its collateral before
+    ///    less after), and the root only for an execution-proving fault where ADR-0151 is armed.
+    /// 4. **The rights**, by root or by claim ([`Self::forfeit_convicted_rights_v1`]).
+    ///
+    /// The `Valid` signers follow through kind 3 — `CourtFraud { voided_daa }` naming this void, or
+    /// the same contradiction.
+    fn consume_executor_refuted_v1(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        accused: PalwBondKeyV2,
+        evidence_id: Hash64,
+        evidence: &[u8],
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_offence_attribution_v1::{palw_check_executor_refuted_v1, palw_executor_refuted_offence_id_v1};
+        use crate::palw_offence_v1::{PalwConsumedOffenceV1, PalwOffenceKindV1};
+        if crate::palw_offence_v1::palw_offence_evidence_digest_v1(evidence) != evidence_id {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                evidence_id,
+                "evidence_id is not the digest of the evidence bytes".into(),
+            ));
+        }
+        let finding = palw_check_executor_refuted_v1(
+            &self.state,
+            &accused,
+            evidence,
+            self.params.fp_decode_rules_at(ctx.daa_score),
+            false,
+            self.identity_rules_v1(),
+        )
+        .map_err(|e| PalwStateV2Error::ObjectiveOffenceRefused(evidence_id, e.to_string()))?;
+        let claim_id = finding.target.claim_id;
+        let offence_id = palw_executor_refuted_offence_id_v1(&accused.0, &claim_id);
+        if self.state.consumed_offences.contains_key(&offence_id) {
+            return Ok(());
+        }
+        let before = self.state.bonds.get(&accused).map(|bond| bond.collateral).unwrap_or(0);
+        self.act_on_convicted_claim_v1(ctx, claim_id)?;
+        let debit = before.saturating_sub(self.state.bonds.get(&accused).map(|bond| bond.collateral).unwrap_or(0));
+        let recorded_root = self.recorded_forfeit_root_v1(finding.forfeit, &finding.target);
+        self.write_consumed_offence(
+            offence_id,
+            Some(PalwConsumedOffenceV1 {
+                kind: PalwOffenceKindV1::ExecutorRefuted,
+                accused: accused.0,
+                amount: debit,
+                accepted_daa: ctx.daa_score,
+                execution_root: recorded_root,
+                // ADR-0152 v22 skeleton: S-4's conviction funnel records these past `palw_rcore_plus`.
+                collected: 0,
+                claim_id: Hash64::default(),
+            }),
+        );
+        self.forfeit_convicted_rights_v1(finding.forfeit, claim_id, &recorded_root);
         Ok(())
     }
 
@@ -13102,6 +13307,48 @@ impl<'a> TransitionBuilder<'a> {
             if let Some(pruned) = pruned {
                 // A snapshot is written only when it lists a domain (`rotate_round_lane`); one the
                 // conviction emptied is dropped the same way, and its span is idle, explicitly.
+                self.write_round_pending(target, (!pruned.domains.is_empty()).then_some(pruned));
+            }
+        }
+    }
+
+    /// **ADR-0152 v3.1 V-2b / SPEC §4.5: forfeiture by CLAIM** — the sibling of
+    /// [`Self::forfeit_minted_round_rights`] for a fault that proves the claim answers the wrong job
+    /// or output (F1: 9, 10). The claim's own Finals leave the minted schedules and the pending
+    /// snapshots with the quanta they earned; every other claim's rows — an honest lender's on the
+    /// SAME execution root included — are untouched. At most three rows, as there; zero rows touched
+    /// when the claim has none.
+    ///
+    /// **And the open span's gathered Finals** (T18k): a root forfeit is filtered out of the next
+    /// snapshot by the forfeiture set the ledger row feeds, but a claim-proving conviction records
+    /// root 0 — so the claim's own entry in `round_finals` leaves here, or the span it finalized in
+    /// would snapshot and mint the voided claim's rights at its end. The span marker goes with the
+    /// last entry, as the rotation clears it.
+    fn forfeit_minted_round_rights_of_claim(&mut self, claim_id: &Hash64) {
+        use crate::palw_execution_lane_v1::{palw_execution_schedule_forfeit_claim_v1, palw_execution_snapshot_forfeit_claim_v1};
+        if self.state.round_finals.contains_key(claim_id) {
+            self.write_round_final(*claim_id, None);
+            if self.state.round_finals.is_empty() {
+                self.write_round_span(0);
+            }
+        }
+        for span in self.state.round_schedules.keys().copied().collect::<Vec<_>>() {
+            let pruned = self
+                .state
+                .round_schedules
+                .get(&span)
+                .and_then(|schedule| palw_execution_schedule_forfeit_claim_v1(schedule, claim_id));
+            if let Some(pruned) = pruned {
+                self.write_round_schedule(span, Some(pruned));
+            }
+        }
+        for target in self.state.round_pending.keys().copied().collect::<Vec<_>>() {
+            let pruned = self
+                .state
+                .round_pending
+                .get(&target)
+                .and_then(|snapshot| palw_execution_snapshot_forfeit_claim_v1(snapshot, claim_id));
+            if let Some(pruned) = pruned {
                 self.write_round_pending(target, (!pruned.domains.is_empty()).then_some(pruned));
             }
         }
@@ -13280,6 +13527,10 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::StepStructural(_)
             | PalwPanelContradictionV1::Legs(_)
             | PalwPanelContradictionV1::ForgedOutput { .. } => {}
+            // V1 parity: refused right after decode by the caller; here too, as it was refused.
+            PalwPanelContradictionV1::IdentityMismatch { .. } | PalwPanelContradictionV1::OutputMismatch { .. } => {
+                return Err(refused("PanelFalseValid evidence does not decode".into()));
+            }
         }
         let _ = ctx;
         Ok(())
@@ -15462,7 +15713,9 @@ impl<'a> TransitionBuilder<'a> {
         // CourtFraud takes, so withholding is never the cheaper way to fail. The cost falls on a
         // producer whose node is simply down as well; that is the trade the decision accepts.
         let escrow_forfeit = match reason {
-            PalwVoidReasonV2::CourtFraud => true,
+            // A court default is charged exactly as a proven fraud (ADR-0152 F2 residual): only the
+            // reason it is recorded under differs, so kind 3 cannot read it as a proof.
+            PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault => true,
             PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
             // ADR-0152 v3.1 S0′ (v22 skeleton): both are a second failed panel and are charged as the
             // second `ReceiptTimeout` is. No writer emits either yet (S-5 writes 5, M4 writes 6), so
@@ -15867,7 +16120,7 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<(), PalwStateV2Error> {
         let mut voided = claim.clone();
         voided.phase = PalwClaimPhaseV2::Voided { voided_daa, reason };
-        if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::ProducerWithholding) {
+        if matches!(reason, PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::ProducerWithholding) {
             self.note_model_probe(claim, false);
         }
         // ADR-0132 Upgrade C: a voided claim is paid nothing, so its snapshot leaves with it.
@@ -16656,6 +16909,7 @@ pub fn apply_palw_transition_v7(
                     escrow_carve,
                     execution_key: own_execution_key,
                     carrying_bits,
+                    job_anchor: extras.own_job_anchor,
                 },
             );
             builder.room_exempt_class = None;
@@ -16758,6 +17012,7 @@ pub fn apply_palw_transition_v7(
                                     escrow_carve: merged.escrow_carve,
                                     execution_key: merged.execution_key,
                                     carrying_bits: merged.bits,
+                                    job_anchor: merged.job_anchor,
                                 },
                             ) {
                                 Ok(()) => None,
@@ -17676,9 +17931,13 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                         // index it was asked about has not been convicted of arithmetic, but it
                         // HAS defaulted on the only defence available to it. A late default
                         // against an already-terminal claim closes the session and changes
-                        // nothing else, exactly as a late verdict does.
+                        // nothing else, exactly as a late verdict does. Past
+                        // `palw_offence_attribution` it is recorded as the default it is
+                        // ([`palw_court_default_void_reason_v1`]) — charged the same, but never a
+                        // proof a `Valid` signer can be convicted by.
                         if !claim.phase.is_terminal() {
-                            builder.void_and_slash(session.claim, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
+                            let reason = palw_court_default_void_reason_v1(builder.extras.offence_attribution_active);
+                            builder.void_and_slash(session.claim, &claim, ctx.daa_score, reason)?;
                             // C-03 (deep fence): the defaulting responder also pays for the time it
                             // kept the session open (a no-op below the fence).
                             builder.charge_court_time_v1(claim.bond, claim.reserved, session.opened_daa, ctx.daa_score)?;
@@ -19336,6 +19595,11 @@ fn apply_object(
                 builder.extras.prompt_ids_form_v1(),
             )
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
+            // F1 (SPEC §4.6): an accusation whose binding fails the claim's identity is not about
+            // this claim's job — its filer proves that with `ExecutorRefuted`, not with a session.
+            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, &accusation.binding) {
+                return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
+            }
             // **ADR-0111 Decision 3: a leaf's evidence is demanded by a seat, once.** The seat of
             // the claim's bound panel, never a stranger — whose leaf is one its own draw assigned
             // it is the acceptance layer's check, which holds the network domain the draw is keyed
@@ -19410,6 +19674,10 @@ fn apply_object(
                 builder.extras.prompt_ids_form_v1(),
             )
             .map_err(|e| PalwStateV2Error::HeldDaRefused { claim: claim_id, why: e.to_string() })?;
+            // F1 (SPEC §4.6): an identity-faulty binding is not an answer about this claim's job.
+            if let Some(why) = builder.da_binding_answers_another_job_v1(&claim_id, &disclosure.binding) {
+                return Err(PalwStateV2Error::HeldDaRefused { claim: claim_id, why });
+            }
             // **ADR-0111 Decision 4: a leaf's evidence is adjudicated, by the one-move verdict.**
             // Guilty: the executor convicted itself by answering — the claim voids `CourtFraud`
             // exactly as `ShardCourtAccused` voids it, and the accuser's stake comes back where every
@@ -21297,6 +21565,13 @@ fn apply_object(
                 crate::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             )
             .map_err(|e| PalwStateV2Error::DaOpeningRefused { claim: *claim_id, why: e.to_string() })?;
+            // **F1 (SPEC §4.6): the answer must be about THIS claim's job.** A borrowed root's
+            // producer can open the lender's events verbatim; past the fence that binding fails the
+            // identity rule and is no answer — the session runs out, and the claim voids for
+            // withholding with the accuser uncharged.
+            if let Some(why) = builder.da_binding_answers_another_job_v1(claim_id, disclosure.binding()) {
+                return Err(PalwStateV2Error::DaOpeningRefused { claim: *claim_id, why });
+            }
             // **Only the accuser pays** (SA-4). Not the dissenting seats, not the `Unavailable`
             // ones: past ADR-0065 D4 an `Unavailable` vote is an abstention, and charging it
             // re-creates the transport-loss slashing D4 removed — a third of every remote seat's
@@ -21347,6 +21622,7 @@ fn apply_object(
             trace_chunk_count,
             trace_retention_daa,
             consumed_prefix_state,
+            job_pin,
         } => {
             if builder.state.claims.contains_key(claim_id) {
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
@@ -21595,9 +21871,10 @@ fn apply_object(
                 work_id: Some(work_id),
                 phase: PalwClaimPhaseV2::Provisional,
                 rights_reserved,
-                // ADR-0152 v22 skeleton: M2's `palw_fp_job_pin_v1` lands here past
-                // `palw_offence_attribution`; R-core+'s fields are dormant.
-                job_identity: Hash64::default(),
+                // **ADR-0152 v3.1 J-1 (F1): the commitment's job pin**, past
+                // `palw_offence_attribution` only — the identity a binding's context must reproduce
+                // (a free-prompt claim's id can never be its job id). R-core+'s fields are dormant.
+                job_identity: if builder.extras.offence_attribution_active { *job_pin } else { Hash64::default() },
                 rcore: PalwClaimRcoreV1::default(),
             };
             builder.reserve_for_claim(&claim)?;
@@ -22426,6 +22703,11 @@ pub struct PalwTransitionExtrasV1 {
     /// real fold's step 3 and the block with it. Read ONLY by that rehearsal, and only past
     /// `palw_audit_2026_09_23`; `None` by `Default`.
     pub own_attempt_class: Option<Hash64>,
+    /// **ADR-0152 v3.1 J-1 (F1): the block's own attempt's execution anchor**
+    /// (`execution_anchor_v3` of this block's header), which `apply_attempt` records as the claim's
+    /// job identity past `offence_attribution_active`. `Hash64::default()` by `Default` and for a
+    /// block with no attempt — records nothing.
+    pub own_job_anchor: Hash64,
 }
 
 /// What each `Valid` signer of one set locks: `every` seat's price, except the one seat a door
@@ -23584,9 +23866,20 @@ fn apply_attempt(
         phase: PalwClaimPhaseV2::Provisional,
         // An attempt's cash gain is its escrow; it mints no receipt quanta.
         rights_reserved: 0,
-        // ADR-0152 v22 skeleton: M2 writes the job identity here past `palw_offence_attribution`;
-        // until then it is not recorded, and R-core+'s fields are dormant.
-        job_identity: Hash64::default(),
+        // **ADR-0152 v3.1 J-1 (F1): the job this claim answers**, past `palw_offence_attribution`
+        // only: the carrying header's execution anchor, where it is the anchor this attempt's
+        // execution key was derived under (`execution_commitment_v3(attempt, anchor)`, one hash) —
+        // so a processor that could not read the header (a zero anchor, or the attempt-id fallback)
+        // records 0, which never convicts and never refuses the attempt (a refused own attempt
+        // would fail the whole block). R-core+'s fields are dormant.
+        job_identity: if builder.extras.offence_attribution_active
+            && origin.job_anchor != Hash64::default()
+            && crate::palw_attempt_v2::execution_commitment_v3(attempt, origin.job_anchor) == origin.execution_key
+        {
+            origin.job_anchor
+        } else {
+            Hash64::default()
+        },
         rcore: PalwClaimRcoreV1::default(),
     };
     // **2026-09-23 audit, finding 17: the ceiling holds on the state the claim actually joins.**
@@ -29695,6 +29988,7 @@ pub(crate) mod tests {
                         subsidy: 0,
                         escrow_carve: None,
                         bits: 0,
+                        job_anchor: kaspa_hashes::Hash64::default(),
                     },
                     PalwMergedWorkV1 {
                         carrying_block: h64(0xB2),
@@ -29703,6 +29997,7 @@ pub(crate) mod tests {
                         subsidy: 0,
                         escrow_carve: None,
                         bits: 0,
+                        job_anchor: kaspa_hashes::Hash64::default(),
                     },
                 ];
                 let (s3, _, skips) = apply_palw_transition_v7(
@@ -36558,6 +36853,7 @@ pub(crate) mod tests {
 
     fn fp_commit(claim_word: u64, pwu: u64, quanta: u32) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
             claim: h64(claim_word),
             class_id: h64(1),
             bond: bond_key(1),
@@ -36810,6 +37106,7 @@ pub(crate) mod tests {
             subsidy: 0,
             escrow_carve: None,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         }];
         let (with_skip, delta_with, skips) =
             apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
@@ -36840,6 +37137,7 @@ pub(crate) mod tests {
             subsidy: 0,
             escrow_carve: None,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         }];
         let (s2, _, skips) = apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
             .expect("the accepting block stands");
@@ -36887,6 +37185,7 @@ pub(crate) mod tests {
                 subsidy: 0,
                 escrow_carve: None,
                 bits: 0,
+                job_anchor: kaspa_hashes::Hash64::default(),
             },
             PalwMergedWorkV1 {
                 carrying_block: h64(0xB2),
@@ -36895,6 +37194,7 @@ pub(crate) mod tests {
                 subsidy: 0,
                 escrow_carve: None,
                 bits: 0,
+                job_anchor: kaspa_hashes::Hash64::default(),
             },
         ];
 
@@ -36975,6 +37275,7 @@ pub(crate) mod tests {
             subsidy: MB_SUBSIDY,
             escrow_carve: None,
             bits: 0,
+            job_anchor: kaspa_hashes::Hash64::default(),
         }];
         let carve = p.worker_carve(MB_SUBSIDY);
         assert!(carve > 0, "62 % of 50 G sompi is a real carve");
@@ -37092,6 +37393,7 @@ pub(crate) mod tests {
                 subsidy: T11_SUBSIDY,
                 escrow_carve,
                 bits: 0,
+                job_anchor: kaspa_hashes::Hash64::default(),
             }]
         };
         for (record, extras, expected, why) in [
@@ -37393,6 +37695,7 @@ pub(crate) mod tests {
     /// which bond is asking.
     fn derived_commit_from(bond: u64, claim_word: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {
+            job_pin: kaspa_hashes::Hash64::default(),
             claim: h64(claim_word),
             class_id: derived_profile().shape_profile_id(),
             bond: bond_key(bond),
@@ -37798,6 +38101,7 @@ pub(crate) mod tests {
 
         fn commit(class: Hash64, claim_word: u64, bond: u64, prompt: &[u32], decode: u32, work_leaves: u64) -> PalwConsensusObjectV2 {
             PalwConsensusObjectV2::FreePromptCommitted {
+                job_pin: kaspa_hashes::Hash64::default(),
                 claim: h64(claim_word),
                 class_id: class,
                 bond: bond_key(bond),
@@ -38485,6 +38789,7 @@ pub(crate) mod tests {
                 consumed_prefix_state,
                 ..
             } => PalwConsensusObjectV2::FreePromptCommitted {
+                job_pin: kaspa_hashes::Hash64::default(),
                 claim,
                 class_id,
                 bond,
@@ -39537,6 +39842,54 @@ pub(crate) mod tests {
             ),
             "the backstop convicts the executor even without a declaration — the fixture proves nothing"
         );
+    }
+
+    /// **ADR-0152 F2 residual: an executor's failed declaration is a court DEFAULT past
+    /// `palw_offence_attribution`** — charged exactly as the `CourtFraud` above, recorded under the
+    /// reason kind 3 does not read as a proof. The test above, with only the fence's bit set: every
+    /// bond is identical to the dormant sweep's, and the claim differs in its reason alone.
+    #[test]
+    fn f2_residual_a_declaring_executor_that_never_assembles_is_a_court_default_past_the_fence() {
+        let (p, s5, claim_id, session_id) = split_close_fixture();
+        let backstop = s5.court_session(&session_id).unwrap().deadline_daa;
+        let (declared, _) = apply(&s5, &p, &ctx(6, 200, 6), &[declare_close(session_id, PalwCourtSideV1::Executor, 8)], None);
+        let sweep = |attribution: bool| {
+            let extras = PalwTransitionExtrasV1 { offence_attribution_active: attribution, ..Default::default() };
+            let (swept, _) = apply_palw_transition_v2_with_extras(
+                &declared,
+                &p,
+                &ctx(7, backstop + 1, 7),
+                &[],
+                None,
+                false,
+                false,
+                false,
+                false,
+                &extras,
+            )
+            .expect("the sweep applies");
+            swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+            swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+            assert!(swept.court_session(&session_id).is_none(), "the backstop closed the session");
+            swept
+        };
+        let (armed, dormant) = (sweep(true), sweep(false));
+        assert_eq!(
+            armed.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { voided_daa: backstop + 1, reason: PalwVoidReasonV2::CourtDefault }
+        );
+        assert_eq!(
+            dormant.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::Voided { voided_daa: backstop + 1, reason: PalwVoidReasonV2::CourtFraud }
+        );
+        for bond in declared.bonds.keys() {
+            assert_eq!(armed.bond(bond), dormant.bond(bond), "bond {bond:?} is charged exactly as the fraud charged it");
+        }
+        let executor = declared.claim(&claim_id).unwrap().bond;
+        assert!(armed.bond(&executor).unwrap().slashed > declared.bond(&executor).unwrap().slashed, "the executor is charged");
+        let mut relabelled = armed.claim(&claim_id).unwrap().clone();
+        relabelled.phase = dormant.claim(&claim_id).unwrap().phase.clone();
+        assert_eq!(&relabelled, dormant.claim(&claim_id).unwrap(), "the claim differs in its reason alone");
     }
 
     /// A CHALLENGER's failed declaration is the unproven accusation it always was: the
@@ -45347,6 +45700,76 @@ pub(crate) mod tests {
             );
         }
 
+        /// **ADR-0152 F2 residual: past `palw_offence_attribution` a withheld root claim is a court
+        /// DEFAULT, charged as a fraud and recorded as a default.**
+        ///
+        /// C-08's conviction above is the right charge for a responder that withholds a root claim it
+        /// could build — but the drill here is HONEST (`Drill::new(false)`): the executor's silence is
+        /// a choice, and a producer colluding against its own seats makes exactly this choice in a
+        /// bystander's dissection. Recorded as `CourtFraud`, the void is what kind 3's `CourtFraud`
+        /// contradiction convicts every full-mask `Valid` signer by. So the same sweep, on the same
+        /// state, with only `offence_attribution_active` set, must write `CourtDefault` and change
+        /// NOTHING ELSE: every bond (the executor's debit, the court-time charge, the challenger's
+        /// release) and the claim record except its reason are identical to the dormant sweep's.
+        #[test]
+        fn f2_residual_a_withheld_root_claim_is_a_court_default_past_the_attribution_fence() {
+            let p = params_with_ladder();
+            let drill = Drill::new(false);
+            let (state, claim_id, sid, _daa) = court_at_the_fused_leaf(&p, &drill);
+            let session = state.court_session(&sid).expect("the session lives");
+            assert!(session.dissection.is_none(), "nobody has filed a root claim — the withholding scenario");
+            let after = session.ladder.last_deadline_daa() + 1;
+            assert!(after < session.deadline_daa, "the RUNG is what fires, not the backstop");
+            let sweep = |attribution: bool| {
+                let extras = PalwTransitionExtrasV1 {
+                    court_responder_coverage_active: true,
+                    audit_2026_09_11_deep_active: true,
+                    offence_attribution_active: attribution,
+                    ..Default::default()
+                };
+                let (swept, _) = apply_palw_transition_v2_with_extras(
+                    &state,
+                    &p,
+                    &ctx(after, after, after),
+                    &[],
+                    None,
+                    false,
+                    false,
+                    false,
+                    false,
+                    &extras,
+                )
+                .expect("the sweep applies");
+                swept.assert_internal_consistency(&p).expect("internal consistency after apply");
+                swept.assert_deadline_consistency(&p).expect("deadline consistency after apply");
+                assert!(swept.court_session(&sid).is_none(), "the session is decided and gone");
+                swept
+            };
+            let (armed, dormant) = (sweep(true), sweep(false));
+            assert_eq!(
+                armed.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { voided_daa: after, reason: PalwVoidReasonV2::CourtDefault },
+                "past the fence the withheld root claim is recorded as the default it is"
+            );
+            assert_eq!(
+                dormant.claim(&claim_id).unwrap().phase,
+                PalwClaimPhaseV2::Voided { voided_daa: after, reason: PalwVoidReasonV2::CourtFraud },
+                "below it, byte for byte the conviction C-08 shipped"
+            );
+            let executor = state.claim(&claim_id).unwrap().bond;
+            assert!(armed.bond(&executor).unwrap().slashed > state.bond(&executor).unwrap().slashed, "the executor is charged");
+            for bond in state.bonds.keys() {
+                assert_eq!(armed.bond(bond), dormant.bond(bond), "bond {bond:?} is charged exactly as the fraud charged it");
+            }
+            let mut relabelled = armed.claim(&claim_id).unwrap().clone();
+            relabelled.phase = dormant.claim(&claim_id).unwrap().phase.clone();
+            assert_eq!(&relabelled, dormant.claim(&claim_id).unwrap(), "and the claim differs in its reason alone");
+            assert_ne!(armed.state_root(), dormant.state_root(), "the reason is state");
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtDefault).unwrap(), vec![7], "appended: Borsh discriminant 7");
+            assert_eq!(crate::palw_state_v2::palw_court_default_void_reason_v1(false), PalwVoidReasonV2::CourtFraud);
+            assert_eq!(crate::palw_state_v2::palw_court_default_void_reason_v1(true), PalwVoidReasonV2::CourtDefault);
+        }
+
         /// **A dissection phase reports its OWN turn to the responder** (ADR-0082 Decision 2;
         /// mainnet audit 2026-09-06, H-5 item d).
         ///
@@ -47996,6 +48419,7 @@ pub(crate) mod tests {
                 admission_independence_daa: None,
                 seat_gate_possession_daa: None,
                 own_attempt_class: None,
+                own_job_anchor: Hash64::default(),
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -48242,6 +48666,7 @@ pub(crate) mod tests {
                 admission_independence_daa: None,
                 seat_gate_possession_daa: None,
                 own_attempt_class: None,
+                own_job_anchor: Hash64::default(),
                 fp_derived_work_daa: None,
                 single_lottery_active: false,
                 verification_v2_active: false,
@@ -49608,12 +50033,14 @@ pub(crate) mod tests {
             assert_eq!(&bytes[head - 16..head], &claim.rights_reserved.to_le_bytes(), "`rights_reserved` stays right before them");
         }
 
-        /// **The enum slots sit at their frozen indices** (S-SPEC 1c): void reasons 5 and 6.
+        /// **The enum slots sit at their frozen indices** (S-SPEC 1c): void reasons 5 and 6, and the
+        /// F2 residual's `CourtDefault` appended after them at 7.
         #[test]
         fn the_v22_void_reasons_are_pinned() {
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::UnavailableQuorum).unwrap(), vec![5]);
             assert_eq!(borsh::to_vec(&PalwVoidReasonV2::NotReplayBacked).unwrap(), vec![6]);
-            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[7]).is_err(), "no eighth reason");
+            assert_eq!(borsh::to_vec(&PalwVoidReasonV2::CourtDefault).unwrap(), vec![7]);
+            assert!(borsh::from_slice::<PalwVoidReasonV2>(&[8]).is_err(), "no ninth reason");
         }
 
         /// **Every new delta entry (66–73) round-trips through borsh, applies onto its parent and
@@ -49881,8 +50308,12 @@ pub(crate) mod tests {
             assert!(palw_rcore_object_name_v1(&licence).is_none());
         }
 
-        /// **The fold refuses a filed `ObjectiveOffence` of kind 4, 5 or 6 by name** where the ledger
-        /// is armed (below it, the ledger's own dormancy refuses first), whatever its evidence.
+        /// **The fold refuses a filed `ObjectiveOffence` of kind 5 or 6 by name, permanently, and
+        /// judges a kind 4** where the ledger is armed (below it, the ledger's own dormancy refuses
+        /// first), whatever its evidence. 5 and 6 are records only the fold writes (the skeleton
+        /// review's F1): `KindNotFileable`, fence on or off, nothing written. Kind 4 is M2's: dormant
+        /// below `palw_offence_attribution`, and past it judged — garbage evidence is refused by its
+        /// adjudicator as undecodable.
         #[test]
         fn the_fold_refuses_offence_kinds_4_5_6_by_name() {
             use crate::palw_offence_v1::PalwOffenceKindV1;
@@ -49914,12 +50345,21 @@ pub(crate) mod tests {
                         false,
                         &extras,
                     )
-                    .expect_err("a declared-not-landed kind is refused");
-                    let named = matches!(
-                        &err,
-                        PalwStateV2Error::ObjectiveOffenceRefused(_, why) if why.contains("declared by the v22 skeleton")
-                    );
+                    .expect_err("a filed kind 5 or 6, or an undecodable kind 4, is refused");
+                    let named = match kind {
+                        PalwOffenceKindV1::ExecutorRefuted if attribution => matches!(
+                            &err,
+                            PalwStateV2Error::ObjectiveOffenceRefused(_, why)
+                                if *why == crate::palw_offence_v1::PalwOffenceVerifyError::PanelFalseValidNeedsContradiction.to_string()
+                        ),
+                        PalwOffenceKindV1::ExecutorRefuted => matches!(&err, PalwStateV2Error::ObjectiveOffenceDormant),
+                        _ => matches!(
+                            &err,
+                            PalwStateV2Error::ObjectiveOffenceRefused(_, why) if why.contains("is a record the fold writes")
+                        ),
+                    };
                     assert!(named, "{kind:?} (attribution {attribution}): {err}");
+                    assert!(kind == PalwOffenceKindV1::ExecutorRefuted || kind.is_fold_recorded_only_v1());
                 }
                 let err = apply_palw_transition_v2_with_extras(
                     &s1,

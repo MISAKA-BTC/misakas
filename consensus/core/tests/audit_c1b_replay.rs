@@ -640,6 +640,7 @@ fn audit_c1b_the_sibling_arrives_as_merged_work_and_is_admitted_anyway() {
         subsidy,
         escrow_carve: Some(kaspa_consensus_core::palw_reward_v2::PalwRewardParamsV2::new(720).expect("legal carve")),
         bits: 0,
+        job_anchor: kaspa_hashes::Hash64::default(),
     }];
     let (s3, _, skips) = apply_palw_transition_v7(
         &s2,
