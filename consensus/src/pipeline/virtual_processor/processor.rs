@@ -3979,6 +3979,8 @@ impl VirtualStateProcessor {
             step_ladder,
             form,
             self.palw_held_context_at(daa_score),
+            // ADR-0152 v3.1 addendum §4-bis.9: the court door.
+            self.palw_offence_attribution_at(daa_score),
         )
         .ok()
     }
@@ -7256,6 +7258,8 @@ impl VirtualStateProcessor {
                                 // ADR-0119 Decision 4: a fused site's rows open at the claim's
                                 // ladder under the held regime.
                                 self.palw_held_context_at(point.daa_score),
+                                // ADR-0152 v3.1 addendum §4-bis.9: the court door.
+                                self.palw_offence_attribution_at(point.daa_score),
                             )
                             .map_err(|e| e.to_string())?;
                             if derived != *verdict {
@@ -7563,6 +7567,8 @@ impl VirtualStateProcessor {
                         self.palw_prompt_ids_form_at(point.daa_score),
                         // ADR-0119 Decision 4.
                         self.palw_held_context_at(point.daa_score),
+                        // ADR-0152 v3.1 addendum §4-bis.9: the court door.
+                        self.palw_offence_attribution_at(point.daa_score),
                     )
                     .map_err(|e| e.to_string())?;
                     if derived != *verdict {
@@ -7871,6 +7877,23 @@ impl VirtualStateProcessor {
                         self.palw_audit_2026_09_23_at(point.daa_score),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
+                    // **ADR-0152 v3.1 addendum §4-bis.8: every claim of the class must be
+                    // attributable.** Past `palw_offence_attribution` a registration is refused
+                    // unless its canonical job is the formula's (a class too narrow for it is
+                    // refused too, so `IdentityNotDerivable` is no registrant's way out of J5), its
+                    // logits row is a provable step output (which refuses Float32), it reaches no
+                    // Kimi K3 kernel, and a canonical prompt past J5b's inline bound is committed in
+                    // the Merkle form. Processor only: the gate decides, the fold never re-derives a
+                    // registration.
+                    if self.palw_offence_attribution_at(point.daa_score) {
+                        kaspa_consensus_core::palw_attempt_rules_v1::palw_attributable_class_v1(
+                            &carriage.profile,
+                            &carriage.canonical,
+                            false,
+                            self.palw_prompt_ids_form_at(point.daa_score),
+                        )
+                        .map_err(|e| format!("class {class_id} is not attributable past palw_offence_attribution: {e}"))?;
+                    }
                 }
                 // **The receipt quorum, verified where the design always said it was** (audit
                 // M-01). `PalwConsensusObjectV2::ReceiptLicensed`'s own doc said it carried "the
