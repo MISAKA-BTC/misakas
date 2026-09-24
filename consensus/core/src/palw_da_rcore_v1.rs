@@ -38,6 +38,18 @@ pub const PALW_DA_SESSIONS_PER_CLAIM_TOTAL_V1: u16 = 16;
 /// DA-8: sessions one seat of the claim's current panel opens on the claim over its life, at most.
 /// Seats are exempt from the lifetime cap above; this is their own budget.
 pub const PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1: u8 = 4;
+/// **Have seats landed automatic DA answering?** — `false` in this build. DA-7's S4 on covering
+/// signers and N9's `ProducerWithholding` against them are fair only because a covering signer can
+/// answer the demanded unit itself with the material it retained (DA-4, X7: any bond with a live
+/// lock on the claim may disclose). While kaspad's seats do not yet do that, both stay DORMANT
+/// ([`crate::palw_state_v2::palw_da_signer_liability_armed_v1`] reads this const); the producer's
+/// DA-7 charge, the `DaDefault` record, the reward and every other DA rule stay live.
+///
+/// **Owned by the peer's Phase 2, P2-7**, which flips it to `true` together with its tests when
+/// kaspad seats auto-answer DA units with retained material as covering signers. A consensus
+/// constant, not a switch: the fold reads it through `PalwTransitionExtrasV1::seat_da_answer_landed`,
+/// which the processor sets to exactly this value, and which only tests set otherwise.
+pub const PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1: bool = false;
 /// DA-6: `r`, the refuted-session cost as a fraction of the stage's reward base, in basis points —
 /// the reporter reward's `r` (R-1, `PALW_RCORE_REPORTER_REWARD_BPS_V1`), so the refuted cost never
 /// exceeds the reward a correct accusation earns.

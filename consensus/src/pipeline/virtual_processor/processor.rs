@@ -9005,6 +9005,13 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_offence_attribution_v1::PalwIdentityRulesV1 {
             prompt_ids_form: self.palw_prompt_ids_form_at(daa_score),
             base_class_id: self.palw_v2_bundle.as_ref().map(|bundle| bundle.base_class_id).unwrap_or_default(),
+            // ADR-0152 N9 (M3): the fold's one predicate, read from the same bundle mirror.
+            da_signer_liability: self.palw_v2_bundle.as_ref().is_some_and(|bundle| {
+                kaspa_consensus_core::palw_state_v2::palw_da_signer_liability_armed_v1(
+                    &bundle.state,
+                    kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
+                )
+            }),
         }
     }
 
@@ -9629,6 +9636,8 @@ impl VirtualStateProcessor {
             // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
             // after the gate refused it.
             offence_attribution_active: self.palw_offence_attribution_at(daa_score),
+            // ADR-0152 X7 / N9 (M3): the peer's P2-7 constant, and nothing else.
+            seat_da_answer_landed: kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
             // the SAME ladder the acceptance arm adjudicates at, so both derive one verdict.
             // Written explicitly for the reason the two lines above give.
