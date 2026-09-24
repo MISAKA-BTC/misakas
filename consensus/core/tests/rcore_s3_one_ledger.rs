@@ -19,8 +19,9 @@ use kaspa_consensus_core::palw_admission_v2::{PalwAdmissionV2Error, PalwEpochBud
 use kaspa_consensus_core::palw_panel_v2::{PalwPanelValidLockV1, PalwRcoreSeatFilterV1};
 use kaspa_consensus_core::palw_producer_v2::palw_producer_facts_v4;
 use kaspa_consensus_core::palw_state_v2::{
-    PalwBlockContextV2, PalwStateV2Error, palw_accuser_exposure_v1, palw_bond_collateral_is_locked_v6, palw_bond_committed_raw_v1,
-    palw_bond_committed_v1, palw_rcore_bind_prices_v1, palw_rcore_seat_lock_v1, palw_second_clock_depth_v1,
+    PALW_RCORE_VESTING_ROWS_LANDED_V1, PalwBlockContextV2, PalwStateV2Error, palw_accuser_exposure_v1,
+    palw_bond_collateral_is_locked_v6, palw_bond_committed_raw_v1, palw_bond_committed_v1, palw_rcore_bind_prices_v1,
+    palw_rcore_duty_bind_v1, palw_rcore_lock_vested_v1, palw_rcore_seat_lock_v1, palw_second_clock_depth_v1,
     palw_v2_object_licenses_claim_v1,
 };
 
@@ -128,7 +129,7 @@ fn t08_fold_admission_producer_facts_and_draw_read_one_committed_number() {
     // What one more attempt reserves (no subsidy: no escrow term), read off the fold on the rich bond.
     let (env, key, id) = floor_attempt(&c, 1, 0x0804);
     let ctx_t = PalwBlockContextV2 { block: h(0x0800_0000 + t), daa_score: t, blue_score: t, subsidy: 0 };
-    let probe = fold(&p, &c.sp, &c.s, &ctx_t, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the rich bond takes it").0;
+    let probe = c.try_fold(&c.s, &ctx_t, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the rich bond takes it").0;
     let r = probe.claim(&id).expect("recorded").reserved;
     let x = u64::try_from(2 * (committed + r)).expect("fits");
 
@@ -136,8 +137,7 @@ fn t08_fold_admission_producer_facts_and_draw_read_one_committed_number() {
         let s = with_collateral(&c.sp, &c.s, bond_key(1), collateral);
         assert_eq!(palw_bond_committed_raw_v1(&s, &c.sp, &bond_key(1), t, raw), committed, "collateral moves no commitment");
         let adm = check_palw_attempt_admission_v2(&s, &c.sp, &b.admission, &ctx_t, &env, fences(&p, t));
-        let (next, _, skips) =
-            fold(&p, &c.sp, &s, &ctx_t, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands either way");
+        let (next, _, skips) = c.try_fold(&s, &ctx_t, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands either way");
         if fits {
             adm.expect("admission admits at the exact ceiling");
             assert!(skips.is_empty() && next.claim(&id).is_some(), "the fold records it: {skips:?}");
@@ -175,9 +175,14 @@ fn t08_fold_admission_producer_facts_and_draw_read_one_committed_number() {
 
 /// **T15: the lock each counted signer posts is L-1's `lock_{max(k,2)}`** — the V1 quorum door
 /// (basis 3) at `lock_3`, the coverage door (basis 2) at `lock_2`, S2 (basis 1) at `lock_2` for the
-/// full seat and the partial alike (`lock_1` is gone) — each with its attested mask and the cut; the
-/// floor's values are ADR §2's to 0.02 MSK (this fixture folds without the execution lane's rights,
-/// ~0.01 MSK of `G_res`).
+/// full seat and the partial alike (`lock_1` is gone) — each with its attested mask and the cut.
+///
+/// This build has no vesting row (`PALW_RCORE_VESTING_ROWS_LANDED_V1 = false`, the S review's H1), so
+/// the fold prices every lock on the WHOLE gain `G = G_res + E` (no market on the floor: `s = 0`):
+/// three `lock_3` and two `lock_2` out-value `G` with the margin — 1,173.69 / 1,760.53 MSK on the
+/// floor. The ADR §2 residual prices the vesting build will post, 106.74 / 160.11 MSK, are pinned
+/// from the same `G_res` through `palw_rcore_lock_vested_v1`. Both read the processor's extras: the
+/// execution lane's quantum counts the execution rights `R` (the S review's L1).
 #[test]
 fn t15_every_door_locks_l1s_price_with_the_attested_mask() {
     let seats5 = |c: &Chain| c.floor_seats();
@@ -204,11 +209,12 @@ fn t15_every_door_locks_l1s_price_with_the_attested_mask() {
             },
         };
         let claim = c.claim(&id);
-        let extras_now = extras(&c.p, c.daa + 1);
+        let extras_now = c.extras_at(c.daa + 1);
+        let g_res = palw_rcore_bind_prices_v1(&c.s, &c.sp, &extras_now, &id, &claim, 5, c.daa + 1).g_res;
         c.step(&[object]);
         let licensed = c.claim(&id);
         let k = licensed.rcore.basis_k;
-        let price = palw_rcore_seat_lock_v1(&c.s, &c.sp, &extras_now, &claim, k);
+        let price = palw_rcore_seat_lock_v1(&c.s, &c.sp, &extras_now, &id, &claim, k);
         let signers: Vec<_> = seats.iter().enumerate().filter(|(i, _)| licensed.rcore.served_mask & (1 << i) != 0).collect();
         assert!(!signers.is_empty());
         for (i, (seat, _)) in &signers {
@@ -222,74 +228,104 @@ fn t15_every_door_locks_l1s_price_with_the_attested_mask() {
             };
             assert_eq!(lock.attested, want, "{door}: seat {i} records the mask it attested (a V2 receipt the full cut)");
         }
-        table.push((door, k, price));
+        table.push((door, k, price, g_res, claim.escrowed_reward));
     }
-    let lock3 = table[0].2;
-    let lock2 = table[1].2;
     assert_eq!((table[0].1, table[1].1, table[2].1), (3, 2, 1), "the recounts");
-    assert_eq!(table[2].2, lock2, "S2 prices at lock_2: lock_1 is gone");
-    assert!(lock2 > lock3, "fewer colluders, a dearer lock");
+    assert_eq!(table[2].2, table[1].2, "S2 prices at lock_2: lock_1 is gone");
+    assert!(table[1].2 > table[0].2, "fewer colluders, a dearer lock");
+    assert!(!PALW_RCORE_VESTING_ROWS_LANDED_V1, "H1: no vesting row in this build");
     let near = |got: u128, adr: f64| (msk_of(got) - adr).abs() < 0.02;
+    for (door, k, price, g_res, e) in &table {
+        let gain = g_res + u128::from(*e);
+        let colluders = u128::from((*k).max(2));
+        assert!(colluders * price > gain + gain / 10 - colluders, "{door}: {colluders} locks out-value G with the margin");
+    }
+    let (lock3, lock2, g_res, e) = (table[0].2, table[1].2, table[0].3, table[0].4);
     assert!(
-        near(lock3, 106.74) && near(lock2, 160.11),
-        "floor lock_3 / lock_2 = {:.4} / {:.4} MSK (ADR 106.74 / 160.11)",
+        near(lock3, 1_173.69) && near(lock2, 1_760.53),
+        "floor lock_3 / lock_2 on G = {:.4} / {:.4} MSK (1,173.69 / 1,760.53)",
         msk_of(lock3),
         msk_of(lock2)
     );
-    println!("T15 floor: lock_3 {:.4} MSK, lock_2 {:.4} MSK (ADR §2: 106.74 / 160.11)", msk_of(lock3), msk_of(lock2));
+    let (vested3, vested2) = (palw_rcore_lock_vested_v1(g_res, e, 0, 3), palw_rcore_lock_vested_v1(g_res, e, 0, 2));
+    assert!(
+        near(vested3, 106.74) && near(vested2, 160.11),
+        "floor residual lock_3 / lock_2 = {:.4} / {:.4} MSK (ADR 106.74 / 160.11)",
+        msk_of(vested3),
+        msk_of(vested2)
+    );
+    println!(
+        "T15 floor: G {:.4} MSK (G_res {:.4}); lock_3 {:.4}, lock_2 {:.4} on G; residual (vesting build) {:.4} / {:.4}",
+        msk_of(g_res + u128::from(e)),
+        msk_of(g_res),
+        msk_of(lock3),
+        msk_of(lock2),
+        msk_of(vested3),
+        msk_of(vested2)
+    );
 }
 
 /// **T77: `duty_bind` per class and the ≤ 1 bound** — the duty the bind writes is L-4's
-/// `min(max(λ, lock_2), commitment / 5)`: the floor at λ (256.07 MSK), the 8k row at `lock_2`, the
-/// 2M row at the cap; `5 · duty ≤ commitment` on every class (amplification 0.40 / ≤ 1 / 1.00).
+/// `min(max(λ, lock_2), commitment / 5)`, and `5 · duty ≤ commitment` on every class. With the lock on
+/// the whole gain (no vesting row, the S review's H1) `lock_2 > commitment / 5` on every class, so the
+/// cap binds everywhere (amplification 1.00). ADR §2's residual duties — the floor at λ (256.07 MSK),
+/// the 8k row at `lock_2` (459.12), the 2M row at the cap (12,588.76) — are pinned through the same
+/// formula from the residual `lock_2` the vesting build will price (processor extras, L1).
 #[test]
 fn t77_duty_bind_per_class_and_the_amplification_bound() {
     let p = t12();
     let (short, id2m) = model_classes(&p);
-    // Floor.
-    let mut c = Chain::new(p.clone());
-    let id = c.floor_claim(0x7701);
-    let seats = c.floor_seats();
-    let claim = c.claim(&id);
-    let prices = palw_rcore_bind_prices_v1(&c.s, &c.sp, &extras(&p, c.daa + 1), &claim, 5, c.daa + 1);
-    c.bind(id, &seats);
-    let duty = c.s.panel_duty_row_of(&id).expect("a duty row").seat_exposure;
-    assert_eq!(duty, prices.duty_bind, "floor: the row stores duty_bind");
-    assert_eq!(duty, prices.lambda_term, "floor: λ binds");
-    assert!((msk_of(duty) - 256.07).abs() < 0.01, "floor duty {:.4} MSK (ADR 256.07)", msk_of(duty));
-    let amp = |duty: u128, commitment: u128| (5 * duty) as f64 / commitment as f64;
-    assert!(5 * duty <= prices.commitment, "floor: n·duty ≤ commitment");
-    let floor_amp = amp(duty, prices.commitment);
-    assert!((floor_amp - 0.4).abs() < 0.001, "floor amplification {floor_amp:.4}");
-    // 8k and 2M.
-    let mut rows = vec![("floor", duty, floor_amp)];
-    for (name, class) in [("8k", short), ("2M", id2m)] {
-        let mut c = model_chain(p.clone(), class, 1);
-        let id = model_claim(&mut c, class, 1, 0x7710 + rows.len() as u64);
+    let mut rows = Vec::new();
+    for (name, class) in [("floor", None), ("8k", Some(short)), ("2M", Some(id2m))] {
+        let (mut c, id, seats) = match class {
+            None => {
+                let mut c = Chain::new(p.clone());
+                let id = c.floor_claim(0x7701);
+                let seats = c.floor_seats();
+                (c, id, seats)
+            }
+            Some(class) => {
+                let mut c = model_chain(p.clone(), class, 1);
+                let id = model_claim(&mut c, class, 1, 0x7710 + rows.len() as u64);
+                c.s = readied(&c.sp, &c.s, &honest(&c.p), class, c.daa);
+                (c, id, honest_seats(&p, 5))
+            }
+        };
         let claim = c.claim(&id);
-        let prices = palw_rcore_bind_prices_v1(&c.s, &c.sp, &room_extras(&p, c.daa + 1), &claim, 5, c.daa + 1);
-        let seats = honest_seats(&c.p, 5);
-        c.s = readied(&c.sp, &c.s, &honest(&c.p), class, c.daa);
+        let prices = palw_rcore_bind_prices_v1(&c.s, &c.sp, &c.extras_at(c.daa + 1), &id, &claim, 5, c.daa + 1);
         c.bind(id, &seats);
         let duty = c.s.panel_duty_row_of(&id).expect("a duty row").seat_exposure;
         assert_eq!(duty, prices.duty_bind, "{name}: the row stores duty_bind");
         assert!(5 * duty <= prices.commitment, "{name}: n·duty ≤ commitment");
-        match name {
-            "8k" => assert_eq!(duty, prices.lock_2.max(prices.lambda_term).min(prices.commitment / 5), "8k: L-4"),
-            _ => assert_eq!(duty, prices.commitment / 5, "2M: the cap binds"),
-        }
-        rows.push((name, duty, amp(duty, prices.commitment)));
+        assert_eq!(duty, prices.commitment / 5, "{name}: the whole-gain lock_2 is above the cap, so the cap binds");
+        assert!(prices.lock_2 > prices.commitment / 5, "{name}: the premise");
+        let residual_lock_2 = palw_rcore_lock_vested_v1(prices.g_res, claim.escrowed_reward, 0, 2);
+        let residual = palw_rcore_duty_bind_v1(prices.lambda_term, residual_lock_2, prices.commitment, 5);
+        let (adr, binds) = match name {
+            "floor" => (256.07, prices.lambda_term),
+            "8k" => (459.12, residual_lock_2),
+            _ => (12_588.76, prices.commitment / 5),
+        };
+        assert_eq!(residual, binds, "{name}: the ADR's binding term");
+        assert!((msk_of(residual) - adr).abs() < 0.02, "{name}: residual duty {:.4} MSK (ADR {adr})", msk_of(residual));
+        rows.push((name, duty, residual, (5 * duty) as f64 / prices.commitment as f64));
     }
-    assert!(rows[2].2 > 0.9999, "2M amplification is the cap's: {:.4}", rows[2].2);
-    for (name, duty, a) in &rows {
-        println!("T77 {name}: duty_bind {:.4} MSK, amplification {a:.4}", msk_of(*duty));
+    for (name, duty, residual, amp) in &rows {
+        assert!(*amp > 0.9999, "{name}: amplification is the cap's: {amp:.4}");
+        println!(
+            "T77 {name}: duty_bind {:.4} MSK (amplification {amp:.4}); residual (vesting build) {:.4}",
+            msk_of(*duty),
+            msk_of(*residual)
+        );
     }
 }
 
 /// **T78 (2M): the licence takes the top-up above the duty from the seat's room, and the draw's
 /// eligibility is `lock_2`** (L-4b generalized: `max(duty_bind, lock_2)`). The bind reserves the
-/// capped duty; the V1 licence locks `lock_3` and the committed ledger grows by exactly `lock_3 −
-/// duty`; the draw's filter at `eligibility = lock_2` admits a seat iff `committed + lock_2` fits.
+/// capped duty (12,588.76 MSK); the V1 licence locks `lock_3` and the committed ledger grows by
+/// exactly `lock_3 − duty`; the draw's filter at `eligibility = lock_2` admits a seat iff
+/// `committed + lock_2` fits. The locks are on the whole gain (H1); the residual `lock_3 / lock_2`
+/// the vesting build will price are ADR §2's 22,252.74 / 33,379.11 MSK (processor extras, L1).
 #[test]
 fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
     let p = t12();
@@ -297,9 +333,17 @@ fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
     let mut c = model_chain(p.clone(), id2m, 1);
     let id = model_claim(&mut c, id2m, 1, 0x7801);
     let claim = c.claim(&id);
-    let prices = palw_rcore_bind_prices_v1(&c.s, &c.sp, &room_extras(&p, c.daa + 1), &claim, 5, c.daa + 1);
+    let prices = palw_rcore_bind_prices_v1(&c.s, &c.sp, &c.extras_at(c.daa + 1), &id, &claim, 5, c.daa + 1);
     assert!(prices.lock_2 > prices.duty_bind, "the premise: on 2M the lock exceeds the capped duty");
     assert_eq!(prices.eligibility, prices.lock_2, "L-4b: eligibility is lock_2");
+    assert!((msk_of(prices.duty_bind) - 12_588.76).abs() < 0.02, "2M duty {:.4} MSK (ADR 12,588.76)", msk_of(prices.duty_bind));
+    let residual = |k| palw_rcore_lock_vested_v1(prices.g_res, claim.escrowed_reward, 0, k);
+    assert!(
+        (msk_of(residual(3)) - 22_252.74).abs() < 0.02 && (msk_of(residual(2)) - 33_379.11).abs() < 0.02,
+        "2M residual lock_3 / lock_2 = {:.4} / {:.4} MSK (ADR 22,252.74 / 33,379.11)",
+        msk_of(residual(3)),
+        msk_of(residual(2))
+    );
     let seats = honest_seats(&c.p, 5);
     let seat = seats[0].0;
     let committed_at = |c: &Chain, at: u64| palw_bond_committed_v1(&c.s, &seat, at, None, c.sp.window_court());
@@ -328,7 +372,7 @@ fn t78_the_2m_top_up_and_the_lock_2_eligibility() {
         receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect(),
     }]);
     let lock = c.s.slashable_lock(seat, id).expect("locked").amount;
-    assert_eq!(lock, palw_rcore_seat_lock_v1(&c.s, &c.sp, &room_extras(&p, c.daa), &claim, 3), "lock_3");
+    assert_eq!(lock, palw_rcore_seat_lock_v1(&c.s, &c.sp, &c.extras_at(c.daa), &id, &claim, 3), "lock_3");
     assert_eq!(committed_at(&c, c.daa) - committed, lock - prices.duty_bind, "the top-up is the lock's excess over the duty");
     println!(
         "T78 2M: duty {:.2} MSK, lock_3 {:.2}, top-up {:.2}, lock_2 eligibility {:.2}",
@@ -383,7 +427,7 @@ fn t33_a_licence_is_the_backed_subsets_and_the_predicate_agrees() {
             f.capability_bound,
             f.uncertified_weightless,
             f.da_court,
-            &extras(&c.p, at),
+            &c.extras_at(at),
         );
         c.step(&[object]);
         let after = c.claim(&id);
@@ -473,7 +517,7 @@ fn t84_a_court_challenger_accuses_on_its_free_half() {
         for (collateral, label) in [(full, "500‰ full"), (short, "one sompi short of the free half")] {
             let s = with_collateral(&c.sp, &c.s, challenger, collateral);
             let reserved_before = s.reserved_exposure(&challenger);
-            let result = fold(&c.p, &c.sp, &s, &ctx_at, &[open()], PalwBlockWorkV3::None, Hash64::default());
+            let result = c.try_fold(&s, &ctx_at, &[open()], PalwBlockWorkV3::None, Hash64::default());
             if armed && collateral == full {
                 let (next, _, _) = result.expect("the court opens on the free half");
                 assert_eq!(next.reserved_exposure(&challenger), reserved_before, "A-6: nothing enters reserved_exposure");
@@ -542,7 +586,7 @@ fn t17_u2_a_producer_below_the_floor_after_s0_prime_is_refused_until_it_re_regis
         // The own attempt: skipped past the fence, the block standing; recorded below it.
         let (env, key, id2) = floor_attempt(&c, 1, 0x1702);
         let ctx_at = PalwBlockContextV2 { block: h(0x1700_0000 + at), daa_score: at, blue_score: at, subsidy: 0 };
-        let (next, _, skips) = fold(&p, &c.sp, &c.s, &ctx_at, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands");
+        let (next, _, skips) = c.try_fold(&c.s, &ctx_at, &[], PalwBlockWorkV3::Attempt(&env), key).expect("the block stands");
         assert_eq!(next.claim(&id2).is_some(), !armed, "armed={armed}");
         if armed {
             assert!(skips.len() == 1 && skips[0].1.contains("producer floor"), "{skips:?}");

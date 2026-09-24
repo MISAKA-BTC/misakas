@@ -22,6 +22,7 @@ use kaspa_consensus_core::config::params::{
 use kaspa_consensus_core::palw_mode_v2::{
     PalwConsensusMode, PalwModeV2Error, palw_v2_signature_contexts_root_v4, palw_v2_signature_contexts_root_v5,
 };
+use kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2;
 use kaspa_hashes::Hash64;
 
 /// `(network, consensus_params_id, consensus_identity_id, consensus_schedule_id)` at `f1192685`, the
@@ -163,7 +164,8 @@ fn every_other_preset_moves_only_by_the_v22_version_re_pin() {
 
 /// **One negative case per refusal** (T24): each prerequisite removed or raised above the fence, the
 /// fence past genesis, the second clock unset, shard licensing beside it, a context root other than
-/// V5, each mirror disagreeing, and C7 without the fence or outside the genesis held rows. Each is
+/// V5, each mirror disagreeing, a panel quorum other than the colluding quorum the locks are priced
+/// for (S-3's SR-6 check), and C7 without the fence or outside the genesis held rows. Each is
 /// named by `validate_palw_rcore_plus_v1` and refused by `validate_palw_v2`.
 #[test]
 fn validate_refuses_the_fence_without_each_prerequisite() {
@@ -230,6 +232,27 @@ fn validate_refuses_the_fence_without_each_prerequisite() {
                 }
             }),
             "disagree with the V2 bundle's mirrors",
+        ),
+        // S-3 (SR-6) reads the colluding quorum the lock is priced for; the S review's L6 negative.
+        (
+            "panel quorum 4",
+            Box::new(|p| {
+                if let PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode {
+                    bundle.panel =
+                        PalwPanelParamsV2::new(bundle.panel.seat_count(), 4, bundle.panel.anchor_delay()).expect("five seats, four");
+                }
+            }),
+            "panel quorum other than PALW_PANEL_COLLUDING_QUORUM_V1",
+        ),
+        (
+            "panel quorum 5",
+            Box::new(|p| {
+                if let PalwConsensusMode::ConsensusV2(bundle) = &mut p.palw_consensus_mode {
+                    bundle.panel =
+                        PalwPanelParamsV2::new(bundle.panel.seat_count(), 5, bundle.panel.anchor_delay()).expect("five seats, five");
+                }
+            }),
+            "panel quorum other than PALW_PANEL_COLLUDING_QUORUM_V1",
         ),
         (
             "C7 outside the held rows",

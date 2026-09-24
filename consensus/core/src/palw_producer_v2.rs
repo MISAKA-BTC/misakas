@@ -54,6 +54,10 @@ pub struct PalwProducerBondFactsV2 {
     /// admission and the fold refuse the attempt (`ProducerBelowFloor`, non-fatal for the own
     /// attempt) while this is `Some`.
     pub producer_floor_shortfall: Option<u64>,
+    /// **ADR-0152 A-6: what this bond holds as an accuser** (`palw_accuser_exposure_v1`) past
+    /// `Params::palw_rcore_plus`, `0` below it. The work gate never lets `committed + accuser` pass
+    /// the collateral (the S review's M1).
+    pub accuser_exposure: u128,
 }
 
 impl PalwProducerBondFactsV2 {
@@ -63,10 +67,13 @@ impl PalwProducerBondFactsV2 {
     }
 
     /// **The ceiling as admission and the fold measure it** (ADR-0152 SR-7): `committed + claim <=
-    /// ceiling`. Equal to [`Self::has_exposure_room`] below the fence up to registration exposure,
-    /// which admission item 8 always counted.
+    /// ceiling` and, past the fence, `committed + accuser + claim <= collateral` (the one invariant's
+    /// work gate, `palw_rcore_gate_room_of_v1`). Equal to [`Self::has_exposure_room`] below the fence
+    /// up to registration exposure, which admission item 8 always counted (the accuser ledger is `0`
+    /// there and the ratio is at most 1000‰, so the second clause is implied).
     pub fn has_committed_room(&self) -> bool {
         self.committed.saturating_add(self.claim_exposure) <= self.exposure_ceiling
+            && self.committed.saturating_add(self.accuser_exposure).saturating_add(self.claim_exposure) <= self.collateral as u128
     }
 }
 
@@ -427,6 +434,11 @@ pub fn palw_producer_facts_v4(
                 state.reserved_exposure(key).saturating_add(state.registration_exposure(key))
             },
             producer_floor_shortfall: crate::palw_state_v2::palw_bond_producer_floor_shortfall_v1(state, state_params, key, daa_score),
+            accuser_exposure: if state_params.rcore_plus_active_at(daa_score) {
+                crate::palw_state_v2::palw_accuser_exposure_v1(state, key)
+            } else {
+                0
+            },
         })
     });
     Some(PalwProducerFactsV2 {

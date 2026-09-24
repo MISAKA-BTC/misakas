@@ -14,8 +14,9 @@
 //! seats, one 2M attempt accepted, bound, licensed and swept to Final, and at each step
 //! `(short room, 2M room)` as op 186 prints them. Beside it, the licensed state read twice more
 //! through the carriage: with only the 2M row's ADR-0119 ladder removed, which holds it all the same
-//! (the hold is the window's), and with only its window taken under 1,000 spans, where the licence
-//! does release it.
+//! (the hold is the window's), and with only its window taken under 1,000 spans — still held by
+//! testnet-12's C7 list (`palw_rcore_conservative_classes`, read at every room site since the S
+//! review's L2), and released by the licence once the list is empty too.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_held_claim_is_charged_to_every_class_until_final
 
@@ -81,14 +82,24 @@ fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
     });
     assert!(!ladder_removed.class_is_held_v1(&id2m) && palw_panel_held_to_final_v1(ladder_removed.model_lifecycle(&id2m).unwrap()));
     let ladder_removed_rooms = rooms(&ladder_removed, daa);
-    // And with only its window taken under C7's 1,000 spans (read here, never folded): not held,
-    // so the licence frees its replay from every class's budget.
+    // And with only its window taken under C7's 1,000 spans (read here, never folded): the window
+    // rule no longer holds it — but C7 is the window rule UNITED with `palw_rcore_conservative_classes`
+    // at every room site (the S review's L2), and testnet-12's list names the 2M row, so it is held
+    // all the same. Read with the list empty (the R-core+ fence-off twin's params), the licence frees
+    // its replay from every class's budget.
     let released = edited(&sp, &s, |c| {
         c.model_lifecycles.get_mut(&id2m).unwrap().profile.verification_window_spans = PALW_RCORE_C7_WINDOW_SPANS_V1 - 1;
     });
     assert!(released.class_is_held_v1(&id2m) && !palw_panel_held_to_final_v1(released.model_lifecycle(&id2m).unwrap()));
-    let released_short_room = rooms(&released, daa).0;
-    let released_2m_owed = owed(&p, &released, id2m);
+    let listed_2m_owed = owed(&p, &released, id2m);
+    let licensed_2m_owed = owed(&p, &s, id2m);
+    let mut unlisted = p.clone();
+    unlisted.palw_rcore_plus = None;
+    unlisted.palw_rcore_conservative_classes = &[];
+    unlisted.sync_palw_rcore_plus();
+    let unlisted_sp = bundle(&unlisted).state.clone();
+    let released_short_room = op186(&unlisted, &unlisted_sp, &released, short, daa).panel_room;
+    let released_2m_owed = owed(&unlisted, &released, id2m);
 
     // One block past the challenge window: the claim is Final and charges no class.
     let challenge = sp.window_challenge_at(licensed_daa);
@@ -99,8 +110,9 @@ fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
     let final_rooms = rooms(&s, daa);
     println!(
         "(short room, 2M room): empty {empty:?}; 2M provisional {provisional:?}; 2M licensed {licensed_rooms:?}; \
-         licensed with the 2M ladder removed {ladder_removed_rooms:?}; licensed with a {}-span 2M window: short room \
-         {released_short_room}, 2M owes {released_2m_owed}; Final {final_rooms:?}; licence-to-Final window {challenge} DAA",
+         licensed with the 2M ladder removed {ladder_removed_rooms:?}; licensed with a {}-span 2M window: 2M owes \
+         {listed_2m_owed} on the C7 list (licensed: {licensed_2m_owed}), and off it short room {released_short_room}, 2M owes \
+         {released_2m_owed}; Final {final_rooms:?}; licence-to-Final window {challenge} DAA",
         PALW_RCORE_C7_WINDOW_SPANS_V1 - 1
     );
 
@@ -108,10 +120,15 @@ fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
     assert_eq!(provisional, (3, 0), "an accepted 2M claim takes two short-row claims' room and fills its own");
     assert_eq!(licensed_rooms, provisional, "licensed, it charges both rows exactly as before: held to Final");
     assert_eq!(ladder_removed_rooms, licensed_rooms, "without its ladder the 2M row is held all the same: the hold is the window's");
+    assert!(licensed_2m_owed > 0, "the premise: the licensed 2M claim is owed");
+    assert_eq!(
+        listed_2m_owed, licensed_2m_owed,
+        "under 1,000 spans the 2M row is still C7 by testnet-12's conservative list: its licensed claim is still owed"
+    );
     assert_eq!(
         (released_short_room, released_2m_owed),
         (5, 0),
-        "under 1,000 spans the 2M row is not held: the licence releases its claim from every class's budget"
+        "under 1,000 spans and off the list the 2M row is not held: the licence releases its claim from every class's budget"
     );
     assert_eq!(final_rooms, empty, "Final releases both");
 }
