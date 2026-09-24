@@ -305,8 +305,11 @@ fn run(p: &Params, force_audit_off: bool) -> String {
 /// record appends move every state root the dump prints (`genesis root …`, `  root …`) and nothing
 /// else it prints: the length and the line count are the parent's to the byte, as they must be when
 /// only fixed-width 128-hex roots changed. Derived from the build under test (the parent cannot print
-/// a v22 root); the v21 digest was `50f81bb0…`.
-const PARENT_DUMP_BLAKE2B_256: &str = "8254eab6f35a92cc9e73f85d2282d5a12c1d54dd29b9c8ba532195588d8e85a7";
+/// a v22 root); the v21 digest was `50f81bb0…`. Re-pinned once more within v22 for the S-4 review's
+/// tail append to `PalwClaimRcoreV1` (`g_res_sompi`, 16 zero bytes per claim here): again only the
+/// printed roots move — the length and the line count are unchanged — and the pre-field digest was
+/// `8254eab6…`.
+const PARENT_DUMP_BLAKE2B_256: &str = "62b729ae9cb73d701681a56244d5012258b818d2dc19dc6c2609dc5307be4656";
 const PARENT_DUMP_BYTES: usize = 686_879;
 const PARENT_DUMP_LINES: usize = 1_953;
 

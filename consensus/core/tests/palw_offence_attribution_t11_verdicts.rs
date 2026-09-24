@@ -80,16 +80,21 @@ const BIND_REAL_SHAPED: &str = "Ok(())";
 /// consumed offence's `collected`/`claim_id`, all dormant) move every root; the lock, both
 /// collaterals and every verdict string are unchanged, which is the parity this file pins. v21:
 /// licensed `5406163a…`, after the conviction `9c9d4a01…`, the next empty block `4c1670c8…`.
+/// Within v22, before it shipped (the S-4 review's G freeze), `PalwClaimRcoreV1` gained
+/// `g_res_sompi` at its tail — 16 zero bytes per claim on testnet-11, which never writes it — so the
+/// three roots moved once more and nothing else did: the lock, both collaterals and every verdict are
+/// the same values. Pre-field: licensed `fa02c3ff…`, after the conviction `46e89978…`, the next empty
+/// block `a5b94a7a…`.
 const ROOT_LICENSED: &str =
-    "fa02c3ffa9521e5c8daed3ff4ebdf689da96217c6dc4741e4cf09b347cb861b2258376fb6d1f2d412e6460b301ab0c15e804bacc9bb14caa59396cf841856770";
+    "5a95c61d556352f416bd60181f879bdde8b2651072df8775a325fe8ad4fb1705b69dc7a45709e3540f5d7bf4281a31bd20c8f9bddc64c231fd91ebf2093071a4";
 const SEAT_LOCK_SOMPI: u128 = 162_677_341;
 const SEAT_COLLATERAL_BEFORE: u64 = 1_000_000_000_000;
 const ROOT_AFTER_V1_CONVICTION: &str =
-    "46e8997848ab4d0636d2ddcb0c65bd05f5fec6e863433c53b82b851e488feaaae66b4200b463d7d66c30fa77c22559f8d0444430f4f46c95920b74d9e47bdec5";
+    "6b4662d0e9064ee8a4241b891dc7bf68b57c0df2d3ff9549a2baf26904d3312243a828a5032ac8caa8b527c3e76f116f4b7f40cd83418df2c6494f16072dd2de";
 const SEAT_COLLATERAL_AFTER: u64 = 999_837_322_659;
 /// The root the next block folds to when it carries nothing.
 const ROOT_EMPTY_NEXT: &str =
-    "a5b94a7ab98bad42ddb2e28fd44a387d7e31dce1f745acac9e5fda30e5894563102c49264b5c3ddd7a69a1e1b39f4779093847246e795b2e7cdff424e0b284e5";
+    "94f497ccc4b92f3aa198b063c469b974bbb2f36f9923f76bb47311cc610a5809f3914a49311cc30b3e6d56443bf49ae2f56f1c70aaea5a27efc07d818586c266";
 
 // ---- The fixture ---------------------------------------------------------------------------------
 
