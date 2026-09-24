@@ -133,17 +133,100 @@ fn c5_a_held_class_past_the_answerable_context_is_refused_past_the_fence() {
     use kaspa_consensus_core::palw_class_admission_v2::{PalwClassAdmissionError, palw_held_class_is_attributable_v1};
     let row = |n_ctx: u32| kaspa_consensus_core::palw_context_ladder::palw_a16_context_row_profile_v7(n_ctx).expect("a held row");
     for n_ctx in [1_024u32, 4_096, 8_192] {
-        assert_eq!(palw_held_class_is_attributable_v1(&row(n_ctx), true), Ok(()), "n_ctx {n_ctx} is answerable");
+        assert_eq!(palw_held_class_is_attributable_v1(&row(n_ctx), true, T12_TURN), Ok(()), "n_ctx {n_ctx} is answerable");
     }
     for n_ctx in [16_384u32, 2_097_152] {
-        let refused = palw_held_class_is_attributable_v1(&row(n_ctx), true).expect_err("unattributable");
+        let refused = palw_held_class_is_attributable_v1(&row(n_ctx), true, T12_TURN).expect_err("unattributable");
         assert_eq!(refused, PalwClassAdmissionError::HeldClassUnattributable { n_ctx, bound: PALW_HELD_ANSWERABLE_N_CTX_V1 });
         assert_eq!(refused.code(), "HELD_CLASS_UNATTRIBUTABLE");
-        assert_eq!(palw_held_class_is_attributable_v1(&row(n_ctx), false), Ok(()), "below the fence the gate is as it was");
+        assert_eq!(palw_held_class_is_attributable_v1(&row(n_ctx), false, T12_TURN), Ok(()), "below the fence the gate is as it was");
     }
     let floor =
         kaspa_consensus_core::palw_base0_profile::base0_profile_v1(kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
             .expect("the floor");
     assert!(!kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&floor));
-    assert_eq!(palw_held_class_is_attributable_v1(&floor, true), Ok(()), "a class that is not held is never asked");
+    assert_eq!(palw_held_class_is_attributable_v1(&floor, true, T12_TURN), Ok(()), "a class that is not held is never asked");
+}
+
+/// testnet-12's court turn (`PalwCourtParamsV2::turn_deadline_daa`, derived from its window and
+/// ladder — `the_answerability_budget_is_testnet_12s_turn` pins it).
+const T12_TURN: u64 = 42;
+
+/// **The review's F4 and F5: answerability is a class's replay, not its context alone.** One
+/// predicate, `palw_held_class_unanswerable_v1`, behind the bundle's mirror (C1), a registration (C5)
+/// and a backend's `supports_dissection` (N4):
+/// * F5 — a held dense row whose whole-context reference replay does not fit one 42-DAA turn is
+///   unanswerable inside the context bound: Qwen2.5-3B at 8,192 (the 1.5B at 8,192 fits);
+/// * F4 — a held hybrid row (Qwen3.6, recurrent layers) is unanswerable at any context: no family has
+///   a windowed builder for it;
+/// * testnet-12's genesis 8k row stays answerable and its mirror is the 2M row alone; the budget is
+///   its own turn.
+#[test]
+fn f4_f5_answerability_is_the_classs_replay_inside_a_turn() {
+    use kaspa_consensus_core::palw_class_admission_v2::{
+        PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1, PalwClassAdmissionError, PalwHeldUnanswerableV1, palw_held_class_is_attributable_v1,
+        palw_held_class_unanswerable_v1,
+    };
+    let t12 = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &t12.palw_consensus_mode else { panic!("testnet-12 runs V2") };
+    assert_eq!(bundle.court.turn_deadline_daa(), T12_TURN, "the budget is testnet-12's own turn");
+    assert_eq!(PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1, 1);
+
+    // The 1.5B row at 8,192 fits; the 3B row at the same context does not (F5).
+    let dense = |geometry: kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1| {
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v7(geometry).expect("a held dense row")
+    };
+    let small = dense(kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+        n_ctx: 8_192,
+        ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B
+    });
+    let large = dense(kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+        n_ctx: 8_192,
+        ..kaspa_consensus_core::palw_qwen25_profile::QWEN25_3B
+    });
+    assert_eq!(palw_held_class_unanswerable_v1(&small, T12_TURN), None, "the 8k 1.5B row is answerable");
+    let Some(PalwHeldUnanswerableV1::ReplayPastTurn { replay_ms, budget_ms }) = palw_held_class_unanswerable_v1(&large, T12_TURN)
+    else {
+        panic!("the 8k 3B row's replay does not fit the turn")
+    };
+    assert_eq!(budget_ms, T12_TURN * 120_000, "one reference replay a turn: 42 × 120 s");
+    assert!(replay_ms > budget_ms, "{replay_ms} ms > {budget_ms} ms");
+    let refused = palw_held_class_is_attributable_v1(&large, true, T12_TURN).expect_err("C5 refuses it past the fence");
+    assert_eq!(
+        refused,
+        PalwClassAdmissionError::HeldClassUnanswerable { why: PalwHeldUnanswerableV1::ReplayPastTurn { replay_ms, budget_ms } }
+    );
+    assert_eq!(refused.code(), "HELD_CLASS_UNANSWERABLE");
+    assert_eq!(palw_held_class_is_attributable_v1(&large, false, T12_TURN), Ok(()), "below the fence, as it was");
+    // A shorter turn makes the same 1.5B row unanswerable: the budget is the network's own.
+    assert!(matches!(palw_held_class_unanswerable_v1(&small, 20), Some(PalwHeldUnanswerableV1::ReplayPastTurn { .. })));
+
+    // F4: the held hybrid row, at a context the dense one answers.
+    let hybrid = kaspa_consensus_core::palw_context_ladder::palw_qwen36_context_row_profile_v7(512).expect("a held hybrid row");
+    assert!(kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&hybrid));
+    assert!(matches!(palw_held_class_unanswerable_v1(&hybrid, T12_TURN), Some(PalwHeldUnanswerableV1::Recurrent { .. })));
+    assert!(matches!(
+        palw_held_class_is_attributable_v1(&hybrid, true, T12_TURN),
+        Err(PalwClassAdmissionError::HeldClassUnanswerable { why: PalwHeldUnanswerableV1::Recurrent { .. } })
+    ));
+
+    // testnet-12's genesis: the 8k row answerable, the mirror the 2M row alone.
+    let sp = &bundle.state;
+    let held: Vec<_> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(c), .. }
+                if kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&c.profile) =>
+            {
+                Some((*class_id, c.profile.n_ctx, palw_held_class_unanswerable_v1(&c.profile, T12_TURN)))
+            }
+            _ => None,
+        })
+        .collect();
+    for (class_id, n_ctx, why) in &held {
+        assert_eq!(why.is_some(), *n_ctx > 8_192, "genesis row {class_id} at n_ctx {n_ctx}: {why:?}");
+        assert_eq!(sp.held_class_is_unanswerable_v1(class_id), why.is_some(), "the mirror is the predicate");
+    }
+    assert_eq!(held.iter().filter(|(_, _, why)| why.is_none()).count(), 1, "the 8k row, answerable");
 }

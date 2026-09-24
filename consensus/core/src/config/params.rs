@@ -5261,7 +5261,7 @@ impl Params {
         let armed = self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never());
         match &self.palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if armed => {
-                crate::palw_state_v2::palw_held_unanswerable_classes_of_v1(&bundle.genesis_objects)
+                crate::palw_state_v2::palw_held_unanswerable_classes_of_v1(&bundle.genesis_objects, bundle.court.turn_deadline_daa())
             }
             _ => Vec::new(),
         }

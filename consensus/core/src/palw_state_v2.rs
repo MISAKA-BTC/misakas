@@ -1407,17 +1407,19 @@ pub const PALW_SHORT_CHALLENGE_WINDOW_DAA_V1: u64 = 120;
 /// a fused accusation of it is refused, and a registration of such a class is refused (C5).
 pub const PALW_HELD_ANSWERABLE_N_CTX_V1: u32 = 8_192;
 
-/// **The held classes a bundle's genesis registers above [`PALW_HELD_ANSWERABLE_N_CTX_V1`]** — the
-/// one derivation `Params::sync_palw_held_answerability` writes into the mirror and
-/// `validate_palw_v2` checks it against: every genesis `ClassRegistered` whose published profile
-/// registers a held (v4) map and whose `n_ctx` is past the bound, by class id, ascending.
-pub fn palw_held_unanswerable_classes_of_v1(genesis_objects: &[PalwConsensusObjectV2]) -> Vec<Hash64> {
+/// **The held classes a bundle's genesis registers that no honest party can dissect inside a turn of
+/// `turn_deadline_daa`** — the one derivation `Params::sync_palw_held_answerability` writes into the
+/// mirror and `validate_palw_v2` checks it against: every genesis `ClassRegistered` whose published
+/// held profile [`crate::palw_class_admission_v2::palw_held_class_unanswerable_v1`] refuses (past
+/// [`PALW_HELD_ANSWERABLE_N_CTX_V1`], a recurrent layer, or a whole-context replay past the turn),
+/// by class id, ascending. The same predicate C5 refuses a registration by and N4 declines a
+/// dissection by.
+pub fn palw_held_unanswerable_classes_of_v1(genesis_objects: &[PalwConsensusObjectV2], turn_deadline_daa: u64) -> Vec<Hash64> {
     let mut classes: Vec<Hash64> = genesis_objects
         .iter()
         .filter_map(|object| match object {
             PalwConsensusObjectV2::ClassRegistered { class_id, admission: Some(carriage), .. }
-                if crate::palw_state_chunk_map::palw_profile_is_held_v4(&carriage.profile)
-                    && carriage.profile.n_ctx > PALW_HELD_ANSWERABLE_N_CTX_V1 =>
+                if crate::palw_class_admission_v2::palw_held_class_unanswerable_v1(&carriage.profile, turn_deadline_daa).is_some() =>
             {
                 Some(*class_id)
             }

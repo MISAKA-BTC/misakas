@@ -1304,6 +1304,12 @@ pub enum PalwClassAdmissionError {
          attention lies are attributable to nobody (ADR-0152 §4-ter C5)"
     )]
     HeldClassUnattributable { n_ctx: u32, bound: u32 },
+    /// **ADR-0152 §4-ter C5, the review's F4 and F5: a held class inside the context bound that no
+    /// honest party can still answer** — a recurrent (gated-delta) layer, for which no family has a
+    /// windowed builder (F4), or a whole-context replay the reference verifier does not finish inside
+    /// one court turn (F5). See [`palw_held_class_unanswerable_v1`].
+    #[error("a held class no honest party can dissect inside a turn: {why} (ADR-0152 §4-ter C5)")]
+    HeldClassUnanswerable { why: PalwHeldUnanswerableV1 },
 }
 
 impl PalwClassAdmissionError {
@@ -1335,6 +1341,7 @@ impl PalwClassAdmissionError {
             Self::LinearInTheContext { .. } => "LINEAR_IN_THE_CONTEXT",
             Self::ChainWallOrderUnknown { .. } => "CHAIN_WALL_ORDER_UNKNOWN",
             Self::HeldClassUnattributable { .. } => "HELD_CLASS_UNATTRIBUTABLE",
+            Self::HeldClassUnanswerable { .. } => "HELD_CLASS_UNANSWERABLE",
         }
     }
 }
@@ -1999,20 +2006,105 @@ pub fn verify_class_admission_v8(
     )
 }
 
-/// **ADR-0152 §4-ter C5: is a held class's attention lie attributable?** Past
-/// `palw_offence_attribution` (`attribution`), a registration whose profile registers the held map
-/// at `n_ctx > PALW_HELD_ANSWERABLE_N_CTX_V1` is refused ([`PalwClassAdmissionError::HeldClassUnattributable`]):
-/// neither party could compute an honest dissection move inside a turn, so the class would join the
-/// unanswerable set the genesis 2M row alone was accepted into. Every other profile, and every
-/// profile below the fence, passes. Asked by the acceptance layer beside
-/// [`verify_class_admission_v9`] for a post-genesis registration; genesis rows are judged by
-/// `validate_palw_v2` and listed in the bundle's unanswerable mirror instead.
-pub fn palw_held_class_is_attributable_v1(profile: &PalwShapeProfileV3, attribution: bool) -> Result<(), PalwClassAdmissionError> {
-    let bound = crate::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1;
-    if attribution && crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) && profile.n_ctx > bound {
-        return Err(PalwClassAdmissionError::HeldClassUnattributable { n_ctx: profile.n_ctx, bound });
+/// **ADR-0152 §4-ter (the review's F5): how many reference replays of a held class's whole context
+/// one court turn must hold.** The responder's move 1 and the challenger's first choice each need one
+/// plain forward to the disputed site (≤ `n_ctx` positions, the windowed builder's N1/N2); a class
+/// is answerable where that forward, at [`crate::palw_verification_profile_v1::PALW_VERIFICATION_REFERENCE_V1`]'s
+/// rate, fits `turn_deadline_daa × PALW_ANCHOR_PERIOD_MS_V1 / this`.
+///
+/// **One, not two, and why.** Testnet-12's genesis 8k row prices at 13.70 T MAC-eq for its whole
+/// context — 3,424 s at the reference's 4 G MAC-eq/s — and its turn is 42 DAA × 120 s = 5,040 s. At
+/// two replays a turn the budget is 2,520 s and the row the launch gate answers would itself be
+/// unanswerable; at one it passes with 1.47× to spare. The reference is the fleet's 2026-09-17
+/// dense-tier rate; ADR-0121 measured the A16 engine at 91 s for 1,024 positions of the same model,
+/// ≈ 4× the reference, so one reference replay a turn is ≈ 4 measured replays. The real-weight timing
+/// run (T-A5) is what should replace this with a measured rate.
+pub const PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1: u64 = 1;
+
+/// **Why a held class's dissection cannot be answered inside a turn** (ADR-0152 §4-ter; the review's
+/// F4 and F5). One predicate for the bundle's genesis mirror (C1), a registration (C5) and a
+/// backend's `supports_dissection` (N4), so the three cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwHeldUnanswerableV1 {
+    /// `n_ctx` past [`crate::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1`] (the 2M row).
+    ContextPastBound { n_ctx: u32, bound: u32 },
+    /// A recurrent (gated-delta) layer: no family has a windowed builder for the hybrid held site —
+    /// the dense A16 family's N1/N2 read an attention-only state (the review's F4).
+    Recurrent { layers: u16 },
+    /// A reference replay of the whole context does not fit the turn (the review's F5).
+    ReplayPastTurn { replay_ms: u64, budget_ms: u64 },
+    /// The class's replay cost cannot be derived from its profile.
+    Unpriced,
+}
+
+impl core::fmt::Display for PalwHeldUnanswerableV1 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ContextPastBound { n_ctx, bound } => write!(f, "n_ctx {n_ctx} is past the {bound}-position bound"),
+            Self::Recurrent { layers } => write!(f, "{layers} recurrent layer(s): no windowed builder answers the hybrid held site"),
+            Self::ReplayPastTurn { replay_ms, budget_ms } => {
+                write!(f, "a reference replay of the whole context takes {replay_ms} ms and a court turn holds {budget_ms} ms")
+            }
+            Self::Unpriced => write!(f, "the class's replay cost cannot be derived"),
+        }
     }
-    Ok(())
+}
+
+/// **ADR-0152 §4-ter: can an honest party answer this held class's dissection inside a turn of
+/// `turn_deadline_daa`?** `None` for an answerable held class and for every class that is not held;
+/// otherwise the first reason it is not ([`PalwHeldUnanswerableV1`]): the context bound, a recurrent
+/// layer (F4), the whole-context replay against the turn (F5, [`PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1`]).
+pub fn palw_held_class_unanswerable_v1(profile: &PalwShapeProfileV3, turn_deadline_daa: u64) -> Option<PalwHeldUnanswerableV1> {
+    use crate::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, PalwCanonicalExecutionFactsV1, palw_canonical_work_v1};
+    use crate::palw_verification_profile_v1::{PALW_ANCHOR_PERIOD_MS_V1, PALW_VERIFICATION_REFERENCE_V1};
+    if !crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
+        return None;
+    }
+    let bound = crate::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1;
+    if profile.n_ctx > bound {
+        return Some(PalwHeldUnanswerableV1::ContextPastBound { n_ctx: profile.n_ctx, bound });
+    }
+    let recurrent =
+        (0..profile.layer_count).filter(|&l| profile.layer_kind(l) != crate::palw_step::PalwLayerKindV1::Attention).count() as u16;
+    if recurrent > 0 {
+        return Some(PalwHeldUnanswerableV1::Recurrent { layers: recurrent });
+    }
+    let Some(mac_eq) = PalwCanonicalClassDescriptorV1::of(profile, Hash64::default())
+        .ok()
+        .and_then(|descriptor| palw_canonical_work_v1(&descriptor, &PalwCanonicalExecutionFactsV1::uncached(profile.n_ctx, 1)).ok())
+        .map(|work| work.arithmetic_mac_eq())
+    else {
+        return Some(PalwHeldUnanswerableV1::Unpriced);
+    };
+    let replay_ms = (mac_eq / u128::from(PALW_VERIFICATION_REFERENCE_V1.mac_eq_per_ms.max(1))).min(u128::from(u64::MAX)) as u64;
+    let budget_ms = turn_deadline_daa.saturating_mul(PALW_ANCHOR_PERIOD_MS_V1) / PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1.max(1);
+    (replay_ms > budget_ms).then_some(PalwHeldUnanswerableV1::ReplayPastTurn { replay_ms, budget_ms })
+}
+
+/// **ADR-0152 §4-ter C5: is a held class's attention lie attributable?** Past
+/// `palw_offence_attribution` (`attribution`), a registration whose held profile no honest party can
+/// dissect inside a turn of `turn_deadline_daa` ([`palw_held_class_unanswerable_v1`]) is refused —
+/// [`PalwClassAdmissionError::HeldClassUnattributable`] for the context bound (the 2M row's), and
+/// [`PalwClassAdmissionError::HeldClassUnanswerable`] for a recurrent layer (F4) or a replay past the
+/// turn (F5): the class would join the unanswerable set the genesis 2M row alone was accepted into.
+/// Every other profile, and every profile below the fence, passes. Asked by the acceptance layer
+/// beside [`verify_class_admission_v9`] for a post-genesis registration; genesis rows are judged by
+/// `validate_palw_v2` and listed in the bundle's unanswerable mirror instead.
+pub fn palw_held_class_is_attributable_v1(
+    profile: &PalwShapeProfileV3,
+    attribution: bool,
+    turn_deadline_daa: u64,
+) -> Result<(), PalwClassAdmissionError> {
+    if !attribution {
+        return Ok(());
+    }
+    match palw_held_class_unanswerable_v1(profile, turn_deadline_daa) {
+        None => Ok(()),
+        Some(PalwHeldUnanswerableV1::ContextPastBound { n_ctx, bound }) => {
+            Err(PalwClassAdmissionError::HeldClassUnattributable { n_ctx, bound })
+        }
+        Some(why) => Err(PalwClassAdmissionError::HeldClassUnanswerable { why }),
+    }
 }
 
 /// [`verify_class_admission_v8`] with the Kimi family fence as an argument.

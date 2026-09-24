@@ -318,8 +318,12 @@ pub fn palw_model_preflight_v1(
     )
     // ADR-0152 §4-ter C5, asked where the processor asks it (beside the gate).
     .and_then(|entry| {
-        crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(profile, params.palw_offence_attribution_active_at(daa_score))
-            .map(|()| entry)
+        crate::palw_class_admission_v2::palw_held_class_is_attributable_v1(
+            profile,
+            params.palw_offence_attribution_active_at(daa_score),
+            bundle.court.turn_deadline_daa(),
+        )
+        .map(|()| entry)
     });
 
     let mut reject_code = String::new();

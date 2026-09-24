@@ -856,11 +856,12 @@ pub struct Qwen25A16Backend {
     /// (a fold keeps no tiles: what it serves it replays). Keyed by the job's context hash, so the
     /// same instance judges every other job honestly. `None` everywhere but a drill.
     drill_fault: std::sync::Mutex<Option<(Hash64, A16DrillLieV1)>>,
-    /// **ADR-0152 §4-ter N4's selector**: `palw_offence_attribution_fence().is_some()` for the chain
-    /// this backend serves ([`Self::with_offence_attribution_v1`]). Past it
-    /// [`PalwExecutionBackendV1::supports_dissection`] is held-size aware; `false` (every network
-    /// without the fence) keeps it byte for byte what it was.
-    offence_attribution: bool,
+    /// **ADR-0152 §4-ter N4's selector** ([`Self::with_held_answerability_v1`]): the court turn of the
+    /// chain this backend serves where `palw_offence_attribution` is armed, `None` elsewhere. Past it
+    /// [`PalwExecutionBackendV1::supports_dissection`] asks the consensus predicate
+    /// (`palw_held_class_unanswerable_v1`); `None` (every network without the fence) keeps it byte for
+    /// byte what it was.
+    held_answer_turn: Option<u64>,
     /// **The representation the cache is held in** (ADR-0151 follow-up): a node-local, named
     /// choice the resource profile prices and the telemetry reports. The same canonical execution
     /// commits the same rows and roots under every value — that is what makes it a runtime profile
@@ -957,7 +958,7 @@ impl Qwen25A16Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
-            offence_attribution: false,
+            held_answer_turn: None,
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
@@ -1078,12 +1079,13 @@ impl Qwen25A16Backend {
         self.drill_fault_v1().filter(|(context, _)| *context == ctx.context_hash()).and_then(|(_, lie)| lie.attn())
     }
 
-    /// **ADR-0152 §4-ter N4: whether the chain this backend serves is past
-    /// `palw_offence_attribution`** — the node's `palw_offence_attribution_fence().is_some()`. Past
-    /// it a held class answers a dissection only where an honest party can inside a turn
-    /// ([`PalwExecutionBackendV1::supports_dissection`]).
-    pub fn with_offence_attribution_v1(mut self, active: bool) -> Self {
-        self.offence_attribution = active;
+    /// **ADR-0152 §4-ter N4: the court turn of a chain past `palw_offence_attribution`** —
+    /// `Some(bundle.court.turn_deadline_daa())` where the node's `palw_offence_attribution_fence()`
+    /// is armed, `None` elsewhere. Past it a held class answers a dissection only where an honest
+    /// party can inside that turn ([`PalwExecutionBackendV1::supports_dissection`], the predicate C1
+    /// and C5 read: the context bound, a recurrent layer, a whole-context replay past the turn).
+    pub fn with_held_answerability_v1(mut self, court_turn_daa: Option<u64>) -> Self {
+        self.held_answer_turn = court_turn_daa;
         self
     }
 
@@ -1205,7 +1207,7 @@ impl Qwen25A16Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             drill_fault: std::sync::Mutex::new(None),
-            offence_attribution: false,
+            held_answer_turn: None,
             runtime_profile: crate::engine_a16::KV_STORAGE_SHIPPED_V1,
             seat_memo: Default::default(),
             attempt_rules: Default::default(),
@@ -3346,19 +3348,20 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         .map_err(|e| crate::attn_responder::base0_attn_name_the_missing_anchor_v1(e, filing))
     }
 
-    /// **ADR-0152 §4-ter N4: held-size aware past `palw_offence_attribution`**
-    /// ([`Qwen25A16Backend::with_offence_attribution_v1`]). A held class's dissection is answered by
+    /// **ADR-0152 §4-ter N4: held-answerability aware past `palw_offence_attribution`**
+    /// ([`Qwen25A16Backend::with_held_answerability_v1`]). A held class's dissection is answered by
     /// the windowed builder ([`Self::attn_site_evidence_held_v1`] — this family has both halves, N1
-    /// and N2) and only where an honest party can answer inside a turn:
-    /// `n_ctx ≤ PALW_HELD_ANSWERABLE_N_CTX_V1`. A held class past it (the 2M row) says `false`, so the
-    /// producer's guard refuses to underwrite a claim it could never defend. Below the fence, byte
-    /// for byte what it was.
+    /// and N2) and only where an honest party can answer inside the chain's turn — the consensus
+    /// predicate `palw_held_class_unanswerable_v1` (the context bound; the review's F5, a
+    /// whole-context reference replay past the turn). A held class it refuses (the 2M row) says
+    /// `false`, so the producer's guard refuses to underwrite a claim it could never defend. Below
+    /// the fence, byte for byte what it was.
     fn supports_dissection(&self) -> bool {
         self.court_capable
             && kaspa_consensus_core::palw_class_admission_v2::palw_fused_sites_are_dissectable_v1(&self.profile)
-            && !(self.offence_attribution
-                && kaspa_consensus_core::palw_state_chunk_map::palw_profile_is_held_v4(&self.profile)
-                && self.profile.n_ctx > kaspa_consensus_core::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1)
+            && !self.held_answer_turn.is_some_and(|turn| {
+                kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&self.profile, turn).is_some()
+            })
     }
 
     /// **ADR-0152 §4-ter N1/N2: a held fused site's evidence, windowed** — see
@@ -7100,8 +7103,10 @@ mod aheld_windowed_builder {
         }
     }
 
-    /// **N4: past `palw_offence_attribution` a held class past the answerable context declines the
-    /// dissection; below it, and for an answerable one, nothing changed.**
+    /// **N4: past `palw_offence_attribution` a held class the consensus predicate refuses declines the
+    /// dissection (`palw_held_class_unanswerable_v1`: past the answerable context, or — the review's
+    /// F5 — a whole-context replay past the turn); below the fence, and for an answerable one, nothing
+    /// changed.**
     #[test]
     fn past_the_attribution_fence_a_held_class_past_the_answerable_context_declines_the_dissection() {
         let answerable = kaspa_consensus_core::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1;
@@ -7110,8 +7115,15 @@ mod aheld_windowed_builder {
             assert!(palw_profile_is_held_v4(&profile));
             let below = backend(&artifact, &profile, PAST_THE_CAP);
             assert!(below.supports_dissection(), "n_ctx {n_ctx}: below the fence the answer is what it was");
-            let fenced = backend(&artifact, &profile, PAST_THE_CAP).with_offence_attribution_v1(true);
+            let fenced = backend(&artifact, &profile, PAST_THE_CAP).with_held_answerability_v1(Some(42));
             assert_eq!(fenced.supports_dissection(), !past, "n_ctx {n_ctx}: past the fence");
+            // N4 is the consensus predicate C1 and C5 read (the review's F5 bound included — the
+            // fixture's replay is milliseconds, so the context bound is what refuses it here).
+            assert_eq!(
+                fenced.supports_dissection(),
+                kaspa_consensus_core::palw_class_admission_v2::palw_held_class_unanswerable_v1(&profile, 42).is_none(),
+                "n_ctx {n_ctx}: the backend's answer is the predicate's"
+            );
         }
     }
 }
