@@ -518,8 +518,17 @@ fn t18_da7_a_live_default_is_s1_and_writes_one_da_default_record() {
                 "kind 5, root 0 (by claim), the actual debit collected, the claim named"
             );
             assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(1)), 0, "the confirmed session's exposure is returned");
+            // R-4 (S-7, wired at integration): the default opens the reporter reward in its own block,
+            // named — the accuser, no reveal (V3S-03) — at ⌊r × collected⌋ on the producer's debit
+            // (X = 0: the producer's own tier).
+            let key = palw_da_offence_id_v1(&producer.0, &id);
+            let pending = *c.s.reward_pending(&key).expect("the DA default's reward is pending");
+            assert_eq!(pending.amount, kaspa_consensus_core::palw_state_v2::palw_reporter_reward_amount_v1(debit, 0));
+            assert!(pending.amount > 0 && pending.evidence_id == Hash64::default() && !pending.accepts_reveals());
+            assert_eq!(pending.best.map(|winner| winner.reporter), Some(bond_key(1)), "the accuser, named");
         } else {
             assert!(record.is_none(), "fence off: no DaDefault record");
+            assert!(c.s.reward_pending_iter().next().is_none(), "fence off: no reward");
         }
     }
 }
@@ -587,7 +596,7 @@ fn t32_c7_body(landed: bool) {
 }
 
 /// **DA-5 / DA-7 after `Final` (T66's core half, V3S-02, V3S-04).** A `Final` claim with an unmatured
-/// vesting row (written through the carriage — the row writer is the vesting work's) is accusable:
+/// vesting row (the one the vesting work writes at `Final`) is accusable:
 /// the session re-keys the row to at least its deadline plus the challenge window and re-dates every
 /// live lock to it, so neither the row nor a lock can lapse under it. It runs out: the producer takes
 /// S3 (`min(25% · C, 3 G)`), the covering (full-mask) signer S4, the `Final` is reversed, a `DaDefault`
@@ -607,36 +616,12 @@ fn t66_body(landed: bool) {
     let full = full_mask_seats(&c, &id, &seats);
     c.finalize(id);
     let PalwClaimPhaseV2::Final { final_daa } = c.claim(&id).phase else { panic!("Final") };
-    assert!(matches!(try_step(&c, &[accuse(id, bond_key(1), 0)]), Err(PalwStateV2Error::DaClaimNotAccusable(_))), "no row, no session");
+    // The vesting work wrote the claim's row at `Final` (integration: the row writer is in this line,
+    // so the test reads the real row rather than writing one through the carriage).
     let (producer, _, _) = floor_producer(&c.p);
-    let expiry = final_daa + c.sp.window_court();
-    c.s = edited(&c.sp, &c.s, |carriage| {
-        carriage.vesting.insert(
-            id,
-            kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
-                claim_id: id,
-                producer_bond: producer,
-                class_id: genesis_classes(&c.p)[0].0,
-                execution_root: Hash64::default(),
-                artifact_root: Hash64::default(),
-                job_identity: Hash64::default(),
-                free_prompt: false,
-                trace_root: Hash64::default(),
-                segment_count: 0,
-                licence_door: PalwLicenceDoorTagV1::Coverage,
-                basis_k: 2,
-                escrowed_reward: 0,
-                buyback_bound: 0,
-                producer: kaspa_consensus_core::palw_state_v2::PalwPayoutV2 { payload: h(0x66), amount: 0 },
-                seats: Vec::new(),
-                reserve: 0,
-                final_daa,
-                expiry_daa: expiry,
-                settled_at_final: c.s.settled_attempt_finals(),
-                matured_at: None,
-            },
-        );
-    });
+    let row = c.s.vesting_row(&id).expect("the vesting work's row, written at Final").clone();
+    assert_eq!((row.producer_bond, row.final_daa), (producer, final_daa), "the claim's own row");
+    let expiry = row.expiry_daa;
     // Accused late in the row's life: the session outlives the row's own expiry.
     let at = expiry - 100;
     c.step_at(at, &[accuse(id, bond_key(1), 0)], PalwBlockWorkV3::None, Hash64::default(), 0);
@@ -653,11 +638,24 @@ fn t66_body(landed: bool) {
         matches!(c.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
         "the Final is reversed (#8)"
     );
-    let g = {
+    // S3 = min(25% · C₀, 3 G), with G read LIVE at the default (`claim_g_v1`: the live claim's
+    // G_res + E). The liability row holds G as recorded at Final; G_res's realizable-rights term can
+    // only have shrunk since (integration: on this line it is 1,000,000 sompi lower by the default),
+    // so the row's G bounds it from above and E from below, and the DaDefault record's amount is the
+    // action the fold computed.
+    let (g_final, escrow) = {
         let row = c.s.panel_liability(&id).expect("the liability row");
-        row.g_res_sompi + u128::from(row.escrowed_reward)
+        (row.g_res_sompi + u128::from(row.escrowed_reward), u128::from(row.escrowed_reward))
     };
-    assert_eq!(u128::from(producer_before - c.s.bond(&producer).unwrap().collateral), (u128::from(producer_before) / 4).min(3 * g), "S3");
+    let debit = u128::from(producer_before - c.s.bond(&producer).unwrap().collateral);
+    let record = c
+        .s
+        .consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id))
+        .expect("the DaDefault record")
+        .clone();
+    assert_eq!(debit, u128::from(record.amount), "S3: the producer's debit is the record's action");
+    let quarter = u128::from(producer_before) / 4;
+    assert!(debit <= quarter.min(3 * g_final) && debit >= quarter.min(3 * escrow), "S3 = min(25% C, 3 G), G live: {debit}");
     if landed {
         assert!(full_before > c.s.bond(&full[0]).unwrap().collateral, "S4 on the covering signer, its lock still live");
     } else {
@@ -843,8 +841,8 @@ fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
     let retention = final_daa + c.sp.claim_retirement_daa() + 1_500;
     c.s = edited(&c.sp, &c.s, |carriage| {
         carriage.claims.get_mut(&id).unwrap().trace_retention_daa = retention;
-        carriage.vesting.insert(id, final_row(&c, id, producer, final_daa));
     });
+    assert_eq!(c.s.vesting_row(&id).map(|row| row.producer_bond), Some(producer), "the vesting work's row, written at Final");
     let retire = c.s.deadline_of(&id).expect("the retirement");
     assert_eq!(retire, final_daa + c.sp.claim_retirement_daa());
     // Fence off, a Final claim is never accusable (ADR-0062: terminal claims refuse).
@@ -869,29 +867,3 @@ fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
     run_out(&mut c, id, bond_key(1));
 }
 
-/// A `Final` claim's unmatured vesting row, as the vesting work writes it (the row writer is not in
-/// this line; the row is written through the carriage).
-fn final_row(c: &Chain, id: Hash64, producer: PalwBondKeyV2, final_daa: u64) -> kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
-    kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
-        claim_id: id,
-        producer_bond: producer,
-        class_id: genesis_classes(&c.p)[0].0,
-        execution_root: Hash64::default(),
-        artifact_root: Hash64::default(),
-        job_identity: Hash64::default(),
-        free_prompt: false,
-        trace_root: Hash64::default(),
-        segment_count: 0,
-        licence_door: PalwLicenceDoorTagV1::Quorum,
-        basis_k: 3,
-        escrowed_reward: 0,
-        buyback_bound: 0,
-        producer: kaspa_consensus_core::palw_state_v2::PalwPayoutV2 { payload: h(0x08), amount: 0 },
-        seats: Vec::new(),
-        reserve: 0,
-        final_daa,
-        expiry_daa: final_daa + c.sp.window_court(),
-        settled_at_final: c.s.settled_attempt_finals(),
-        matured_at: None,
-    }
-}

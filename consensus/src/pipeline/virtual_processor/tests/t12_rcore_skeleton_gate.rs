@@ -29,25 +29,29 @@ struct Skeleton {
 /// testnet-12 with harness cards at genesis; `armed = false` is the fence-off twin (the fence and
 /// C7 unset, the bundle's mirrors re-synced to the dormant values).
 fn skeleton(armed: bool) -> Skeleton {
-    let (config, bundle, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
+    let (config, _harness_bundle, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
     assert!(config.params.palw_rcore_plus.is_some_and(|f| f.is_active(0)), "testnet-12 arms R-core+ from genesis");
-    let (config, bundle): (Config, PalwConsensusParamsV2) = if armed {
-        (config, bundle)
+    let config: Config = if armed {
+        config
     } else {
         let mut params = config.params.clone();
         params.palw_rcore_plus = None;
         params.palw_rcore_conservative_classes = &[];
         params.sync_palw_rcore_plus();
-        let config = ConfigBuilder::new(params).skip_proof_of_work().build();
-        // The twin's own bundle (its mirrors re-synced), so the fold this harness drives reads the
-        // ruleset the processor reads — M3's tag 55 folds past the fence and is refused below it.
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(twin) = &config.params.palw_consensus_mode else {
-            unreachable!("testnet-12 is ConsensusV2")
-        };
-        let twin = twin.clone();
-        (config, twin)
+        ConfigBuilder::new(params).skip_proof_of_work().build()
     };
     config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
+    // The bundle the FOLD reads is the config's own: the fence-off twin re-synced its mirrors
+    // (`PalwStateParamsV2::rcore_plus_active_at` is what the fold asks), so the harness's copy —
+    // mirrored armed — would fold the twin as armed (S-7 review; M3 found the same for tag 55,
+    // which folds past the fence and is refused below it).
+    let bundle = match &config.params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => {
+            assert_eq!(b.state.rcore_plus_active_at(0), armed, "the fold's mirror follows the fence");
+            b.clone()
+        }
+        _ => unreachable!("testnet-12 is ConsensusV2"),
+    };
     let ctx = TestContext::new(TestConsensus::new(&config));
     let (_, state) =
         ctx.consensus.virtual_processor().palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
@@ -136,17 +140,23 @@ impl Skeleton {
     }
 }
 
-/// **Tags 53, 54 and 56 are dropped by the gate and the walk and refused by the fold, fence on or
-/// off; tag 55 is M3's past `palw_rcore_plus`.** The stateless ride table admits each (their shape
+/// **Tags 53–56 are dropped by the gate and the walk and refused by the fold by name** — on the
+/// fence-off twin all four, and on the shipped ruleset the one still declared-not-landed (56). S-7
+/// landed 53/54 past `palw_rcore_plus` (their armed behaviour is `t12_rcore_s7_reporter_gate`); tag
+/// 55 is M3's past the fence and is judged: this one's signature is junk, so the gate refuses it for
+/// that, the walk drops it, and the fold — which never reads a signature — refuses it for the claim
+/// it names, which this chain does not hold. The stateless ride table admits each (their shape
 /// rules are their owners'), so what keeps the declared ones inert is the acceptance layer and the
-/// fold, by name. Tag 55 past the fence is judged: this one's signature is junk, so the gate refuses
-/// it for that, the walk drops it, and the fold — which never reads a signature — refuses it for the
-/// claim it names, which this chain does not hold. Below the fence it is declared-not-landed.
+/// fold, by name.
 #[tokio::test]
 async fn rcore_v22_objects_are_dropped_by_the_gate_and_the_walk_and_refused_by_the_fold() {
     for armed in [true, false] {
         let s = skeleton(armed);
         for (tag, object) in (53u8..).zip(s.objects()) {
+            if armed && tag <= 54 {
+                // ADR-0152 S-7: landed past the fence; `t12_rcore_s7_reporter_gate` pins them.
+                continue;
+            }
             assert_eq!(borsh::to_vec(&object).unwrap()[0], tag, "{object:?}");
             kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
                 .expect("the ride table admits the shape; acceptance drops it");
