@@ -5913,6 +5913,99 @@ mod held_real_row_probe {
         drill("held-fixture", &artifact, &profile, 64, 8, FIXTURE_NETWORK, &|| fixture_backend(&artifact, &profile));
     }
 
+    /// **t12's bound one-move verdict on the executor's own evidence** (`palw_audit_2026_09_23`).
+    /// At a FUSED leaf of a held class the builder's object carries the site's history, which the
+    /// bound verdict refuses; the filer's strip makes it the object the chain takes
+    /// (`NeedsDissection`), smaller than the builder's. Below the fence both read v1's
+    /// `NeedsDissection`. At a non-fused leaf the bound verdict is v1's.
+    #[test]
+    fn the_executors_own_fused_evidence_stripped_is_what_the_bound_verdict_takes() {
+        use kaspa_consensus_core::palw_shard_court_v1::{
+            PalwOneMoveClaimV2, PalwShardCourtError, PalwShardCourtVerdictV1, palw_leaf_evidence_bytes_v1,
+        };
+        let (artifact, profile) = fixture();
+        let backend = fixture_backend(&artifact, &profile);
+        let form = backend.prompt_ids_form();
+        let vocab = artifact.shape.vocab;
+        let positions = 24u32;
+        let prompt: Vec<usize> = (0..positions as usize).map(|i| (i * 7919 + 1013) % vocab).collect();
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 4242,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_commitment_v1(form, &ids).expect("the ids commit"),
+            prompt_tokens: positions,
+            decode_token_limit: 4,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+            sampling_seed: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_SEED_GREEDY,
+            temperature_q: kaspa_consensus_core::palw_decode_select_v2::PALW_DECODE_TEMPERATURE_GREEDY,
+        };
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the held producer runs");
+        let leaves = run.facts.step_leaf_count;
+        let capture = run.outcome.material.clone();
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+            attempt_draw: None,
+        };
+        let binding = crate::produce::base0_material_decode_any_v1(&capture).expect("decodes").binding().clone();
+        let fused_at = |leaf: u64| {
+            kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &binding.job_context, leaf).map(|c| {
+                (c.position, profile.resolve_node_slot(c.node_slot).is_some_and(|(n, _)| n.op_kind == PalwStepOpKindV1::AttnFused))
+            })
+        };
+        let fused_leaf = (0..leaves).find(|l| fused_at(*l).is_some_and(|(p, f)| f && p >= 12)).expect("a fused leaf past position 12");
+        let plain_leaf =
+            (0..fused_leaf).rev().find(|l| fused_at(*l).is_some_and(|(_, f)| !f)).expect("a leaf before it that is not fused");
+        let root = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+        let bound_to =
+            PalwOneMoveClaimV2 { execution_root: claim.execution_root, class_id: profile.shape_profile_id(), artifact_root: root };
+        let ladder = PALW_HELD_STEP_LADDER_V1;
+        let build = |leaf: u64| {
+            kaspa_consensus_core::palw_leaf_evidence_v1::palw_leaf_evidence_from_capture_v1(
+                &backend, &capture, &ids, claim, leaves, leaf, form,
+            )
+            .expect("the executor builds its leaf's evidence")
+        };
+
+        let fused = build(fused_leaf);
+        assert!(!fused.refutation.inputs.is_empty(), "the builder carries the site's canonical rows");
+        assert_eq!(fused.verdict_v1(bound_to.class_id, root, ladder), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+        assert_eq!(fused.verdict_at_v2(&bound_to, ladder, false), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+        assert!(
+            matches!(fused.verdict_at_v2(&bound_to, ladder, true), Err(PalwShardCourtError::FusedLeafCarriesTheHistory { .. })),
+            "{:?}",
+            fused.verdict_at_v2(&bound_to, ladder, true)
+        );
+        let stripped = fused.clone().for_the_one_move_v2();
+        assert_eq!(stripped.verdict_at_v2(&bound_to, ladder, true), Ok(PalwShardCourtVerdictV1::NeedsDissection));
+        let (full, lean) = (palw_leaf_evidence_bytes_v1(&fused), palw_leaf_evidence_bytes_v1(&stripped));
+        eprintln!("fused leaf {fused_leaf}: builder {full} B, stripped {lean} B");
+        assert!(lean < full && lean <= kaspa_consensus_core::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES);
+
+        // The non-fused leaves before it, whatever each reads: the bound verdict is v1's, exactly.
+        let mut cleared = 0;
+        for leaf in (0..plain_leaf + 1).rev().filter(|l| fused_at(*l).is_some_and(|(_, f)| !f)).take(48) {
+            let plain = build(leaf);
+            assert_eq!(plain.clone().for_the_one_move_v2(), plain, "leaf {leaf}: a non-fused leaf's evidence is untouched");
+            let v1 = plain.verdict_v1(bound_to.class_id, root, ladder);
+            assert_eq!(plain.verdict_at_v2(&bound_to, ladder, true), v1, "leaf {leaf}: the non-fused verdict is v1's");
+            cleared += usize::from(v1 == Ok(PalwShardCourtVerdictV1::FalseAccusation));
+        }
+        assert!(cleared > 0, "some honest non-fused leaf clears, so the parity is not only over refusals");
+    }
+
     /// **ADR-0121 §7: a lie in a block that straddles an interval's edge is named from the edges.**
     /// Such a block is whole in neither interval, so no opening digests it and the block naming
     /// refuses it; the edges are served as their leaves and checked by the range's root walk. The

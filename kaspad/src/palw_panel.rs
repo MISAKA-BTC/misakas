@@ -5002,7 +5002,17 @@ impl PalwPanelService {
                                                 executor_bond: duty.executor_bond,
                                                 accuser_bond: duty.seat_bond,
                                                 leaf_index: leaf,
-                                                refutation: *refutation,
+                                                // t12: a fused site's history is the dissection's, and
+                                                // the bound verdict refuses it in the accusation.
+                                                refutation: if self
+                                                    .consensus_config
+                                                    .params
+                                                    .palw_audit_2026_09_23_active_at(current_daa)
+                                                {
+                                                    kaspa_consensus_core::palw_shard_court_v1::palw_one_move_refutation_v2(*refutation)
+                                                } else {
+                                                    *refutation
+                                                },
                                                 artifact_openings: openings,
                                                 prompt_ids_opening: prompt_opening,
                                                 signature: Vec::new(),
@@ -7916,7 +7926,16 @@ impl PalwPanelService {
             .filter_map(|bytes| borsh::from_slice::<PalwLeafEvidenceV1>(bytes).ok())
             .find(|evidence| evidence.leaf_index() == leaf && evidence.refutation.binding == binding);
         if let Some(evidence) = served {
-            match evidence.verdict_v1(duty.class_id, duty.artifact_root, ladder) {
+            // t12 (`palw_audit_2026_09_23`): the chain binds the one move to the claim and refuses a
+            // fused site's history, so the seat strips it and asks the verdict the chain will ask.
+            let bound = self.consensus_config.params.palw_audit_2026_09_23_active_at(current_daa);
+            let evidence = if bound { evidence.for_the_one_move_v2() } else { evidence };
+            let bound_to = kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                execution_root: duty.execution_root,
+                class_id: duty.class_id,
+                artifact_root: duty.artifact_root,
+            };
+            match evidence.verdict_at_v2(&bound_to, ladder, bound) {
                 Ok(PalwShardCourtVerdictV1::ExecutorGuilty | PalwShardCourtVerdictV1::NeedsDissection) => {
                     use kaspa_consensus_core::palw_shard_court_v1::{
                         PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, palw_shard_court_session_id_v1,

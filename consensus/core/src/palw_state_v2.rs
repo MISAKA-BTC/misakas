@@ -17311,8 +17311,23 @@ fn apply_object(
             }
             let artifact_root =
                 builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
-            let verdict = crate::palw_shard_court_v1::palw_shard_court_verdict_v1(accusation, claim.class_id, artifact_root, ladder)
-                .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?;
+            // t12 (`palw_audit_2026_09_23`): the verdict is BOUND to the claim before a fused site is
+            // deferred — the binding recomputes to the claim's root, the named tile opens under it,
+            // the rows prove against the class — so a court opens only on evidence of THIS claim.
+            // Every refusal is a refusal (the object is not folded); nothing here charges the
+            // accuser, whose signature does not cover the refutation's bytes.
+            let bound_to = crate::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                execution_root: claim.execution_root,
+                class_id: claim.class_id,
+                artifact_root,
+            };
+            let verdict = crate::palw_shard_court_v1::palw_shard_court_verdict_at_v2(
+                accusation,
+                &bound_to,
+                ladder,
+                builder.extras.audit_2026_09_23_active,
+            )
+            .map_err(|e| PalwStateV2Error::ShardCourt(e.to_string()))?;
             match verdict {
                 crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
                     builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud)?;
@@ -17483,9 +17498,13 @@ fn apply_object(
             if let crate::palw_held_da_v1::PalwHeldDisclosureV1::StepLeaf { evidence } = &disclosure.disclosure {
                 let artifact_root =
                     builder.state.classes.get(&claim.class_id).ok_or(PalwStateV2Error::MissingClass(claim.class_id))?.artifact_root;
-                match evidence.verdict_v1(claim.class_id, artifact_root, ladder).map_err(|e| PalwStateV2Error::HeldDaRefused {
-                    claim: claim_id,
-                    why: format!("the evidence does not adjudicate: {e}"),
+                let bound_to = crate::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                    execution_root: claim.execution_root,
+                    class_id: claim.class_id,
+                    artifact_root,
+                };
+                match evidence.verdict_at_v2(&bound_to, ladder, builder.extras.audit_2026_09_23_active).map_err(|e| {
+                    PalwStateV2Error::HeldDaRefused { claim: claim_id, why: format!("the evidence does not adjudicate: {e}") }
                 })? {
                     crate::palw_shard_court_v1::PalwShardCourtVerdictV1::ExecutorGuilty => {
                         return builder.void_and_slash(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::CourtFraud);
@@ -40466,6 +40485,91 @@ pub(crate) mod tests {
             held_apply(&s4, &p, &ctx(5, 111, 5), &[accuse], None, &held_extras()).expect_err("one session a claim"),
             PalwStateV2Error::ShardCourtClaimUnderSession { .. }
         ));
+    }
+
+    /// **t12 (`palw_audit_2026_09_23`): a fused accusation opens a court only if it is THIS claim's.**
+    /// The grief object of `an_accusation_at_a_fused_leaf_opens_the_dissection_at_that_leaf` — the
+    /// claim's binding, a tile and a path that are nothing — is refused and opens no court; a binding
+    /// that echoes the claim's root and commits to nothing is refused; the honest object (the
+    /// committed tile, its path, the prompt tile) still opens the dissection at the leaf, exactly as
+    /// before; and below the fence the grief object opens it as it always did.
+    #[test]
+    fn under_the_bound_verdict_only_the_claims_own_fused_evidence_opens_the_dissection() {
+        use crate::palw_shard_court_v1::PalwShardCourtAccusationV1;
+        use crate::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_leaf_index};
+        use crate::palw_step_leg::PalwStepTileLeafV1;
+        use crate::palw_step_refute::PalwExecutionStepRefutationV1;
+        let base = crate::palw_checkpoint_court_v1::tests::held_fixture(true, 20, None);
+        let profile = base.binding.shape_profile.clone();
+        let fused = profile.attn_nodes.iter().position(|n| n.op_kind == PalwStepOpKindV1::AttnFused).expect("a fused site");
+        let slot = profile.global_node_slot(crate::palw_step::PalwStepTableV1::Attn, 1, fused).expect("a slot");
+        let (node, _) = profile.resolve_node_slot(slot).expect("the node");
+        let PalwStepOutLenV1::Fixed { elements } = node.out_len else { panic!("a fused site commits a fixed row") };
+        let width = elements.min(node.tile_len);
+        let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 12, tile_index: 0 };
+        let fx = base.with_committed_tile(coord, width, vec![0; 4 * width as usize]);
+        let leaf = canonical_step_leaf_index(&profile, &fx.binding.job_context, &coord).expect("a leaf");
+        let (p, s3, claim_id) = held_setup(&fx);
+        let object = |refutation: PalwExecutionStepRefutationV1, prompt: bool| PalwConsensusObjectV2::ShardCourtAccused {
+            accusation: Box::new(PalwShardCourtAccusationV1 {
+                version: 1,
+                claim: claim_id,
+                execution_root: fx.binding.committed_execution_root,
+                trace_root: h64(HELD_TRACE_ROOT),
+                executor_bond: bond_key(1),
+                accuser_bond: bond_key(2),
+                leaf_index: leaf,
+                refutation,
+                artifact_openings: vec![],
+                prompt_ids_opening: prompt.then(|| {
+                    crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                        &crate::palw_checkpoint_court_v1::tests::fixture_prompt_ids(20),
+                        12,
+                    )
+                    .expect("the tile")
+                }),
+                signature: vec![9; 8],
+            }),
+        };
+        let honest_refutation = PalwExecutionStepRefutationV1 {
+            binding: fx.binding.clone(),
+            output_opening: fx.opening(leaf),
+            output_preimage: fx.preimages[&leaf].clone(),
+            inputs: vec![],
+            prompt_token_ids: vec![],
+            decode_tokens: None,
+            kv_checkpoint: None,
+        };
+        let mut garbage_refutation = honest_refutation.clone();
+        garbage_refutation.output_opening.siblings.clear();
+        garbage_refutation.output_preimage = PalwStepTileLeafV1 { version: 1, coord, value_count: 0, values_le: vec![] };
+        let mut unbound_refutation = honest_refutation.clone();
+        unbound_refutation.binding.step_merkle_root = h64(0xDEAD);
+
+        let bound = PalwTransitionExtrasV1 { audit_2026_09_23_active: true, ..held_extras() };
+        let no_court = |s: &PalwChainStateV2| assert!(s.court_sessions.values().all(|x| x.claim != claim_id), "no court on the claim");
+        for (name, refutation, why) in [
+            ("garbage tile", garbage_refutation.clone(), "does not open under the claim's committed step root"),
+            ("unbound binding", unbound_refutation, "does not recompute its committed execution root"),
+        ] {
+            match held_apply(&s3, &p, &ctx(4, 110, 4), &[object(refutation, false)], None, &bound) {
+                Err(PalwStateV2Error::ShardCourt(msg)) => assert!(msg.contains(why), "{name}: {msg}"),
+                other => panic!("{name}: must be refused, got {other:?}"),
+            }
+        }
+        no_court(&s3);
+
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[object(honest_refutation, true)], None, &bound)
+            .expect("the claim's own evidence opens the dissection");
+        let (_, session) = s4.court_sessions.iter().find(|(_, s)| s.claim == claim_id).expect("a session on the claim");
+        assert_eq!(session.ladder.terminal_index(), Some(leaf), "the ladder is terminal on the named leaf");
+        assert!(session.dissection.is_none(), "the responder's root claim is the first move");
+        assert_eq!(session.challenger_bond, bond_key(2));
+
+        // Dormant parity: below the fence the grief object opens the dissection exactly as it did.
+        let (s4, _) = held_apply(&s3, &p, &ctx(4, 110, 4), &[object(garbage_refutation, false)], None, &held_extras())
+            .expect("pre-fence: the dissection opens");
+        assert!(s4.court_sessions.values().any(|x| x.claim == claim_id));
     }
 
     fn held_da_accusation(

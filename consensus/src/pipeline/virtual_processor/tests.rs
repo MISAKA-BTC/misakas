@@ -14545,6 +14545,23 @@ fn every_held_court_acceptance_arm_reads_the_claims_class_ladder() {
     assert!(source.contains("palw_fp_objects_from_accepted_txs_by_class_v1("), "the walk bounds each commitment by its class");
 }
 
+/// **t12 (`palw_audit_2026_09_23`): the acceptance layer derives the one-move verdict BOUND to the
+/// claim, at the fence the fold reads** — the claim's execution root, class and artifact root, and
+/// the fence at the block's DAA. An arm that called the unfenced v1 would admit a fused accusation
+/// the fold then refuses (or the reverse below the fence): the two layers disagreeing about one
+/// object.
+#[test]
+fn the_one_move_acceptance_arm_derives_the_bound_verdict_at_the_fence() {
+    let source = include_str!("processor.rs");
+    let at = source.find("Obj::ShardCourtAccused {").expect("the arm");
+    let end = at + source[at..].find("\n                Obj::").expect("the next arm");
+    let arm = &source[at..end];
+    assert!(arm.contains("palw_shard_court_verdict_at_v2("), "the fenced verdict");
+    assert!(arm.contains("self.palw_audit_2026_09_23_at(point.daa_score)"), "at the block's own fence");
+    assert!(arm.contains("execution_root: claim.execution_root"), "bound to the claim's committed root");
+    assert!(!arm.contains("palw_shard_court_verdict_v1("), "never the unfenced verdict directly");
+}
+
 // ---- ADR-0125: the execution lane through the real pipeline ----------------------------------
 
 /// A network with the round lane open from genesis, two permits a round, and one schedule span far

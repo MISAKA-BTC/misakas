@@ -8202,11 +8202,18 @@ impl VirtualStateProcessor {
                     let class = state
                         .class(&claim.class_id)
                         .ok_or_else(|| format!("claim {claim_id} names class {} this chain does not have", claim.class_id))?;
-                    match kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_verdict_v1(
+                    // t12 (`palw_audit_2026_09_23`): bound to the claim before a fused site is deferred —
+                    // the same function, at the same fence, the fold derives the verdict with.
+                    let bound_to = kaspa_consensus_core::palw_shard_court_v1::PalwOneMoveClaimV2 {
+                        execution_root: claim.execution_root,
+                        class_id: claim.class_id,
+                        artifact_root: class.artifact_root,
+                    };
+                    match kaspa_consensus_core::palw_shard_court_v1::palw_shard_court_verdict_at_v2(
                         accusation,
-                        claim.class_id,
-                        class.artifact_root,
+                        &bound_to,
                         ladder,
+                        self.palw_audit_2026_09_23_at(point.daa_score),
                     ) {
                         // ADR-0103 Decision 5: under the held regime the accusation at a fused leaf IS
                         // the challenge — the fold opens the dissection there. Dormant, refused.
