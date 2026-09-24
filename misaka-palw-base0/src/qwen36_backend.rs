@@ -152,6 +152,8 @@ pub struct Qwen36Backend {
     network_ladder: u64,
     /// The network's prompt-commitment form (ADR-0081 Decision 3); see `Base0Backend::prompt_ids_form`.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// This instance's seat state and walk; nothing outside the instance reaches it.
+    seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
 }
 
 impl Qwen36Backend {
@@ -243,6 +245,7 @@ impl Qwen36Backend {
             profile,
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            seat_memo: Default::default(),
         }
     }
 
@@ -317,6 +320,7 @@ impl Qwen36Backend {
             profile,
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            seat_memo: Default::default(),
         }
     }
 
@@ -359,6 +363,7 @@ impl Qwen36Backend {
             profile: Some(profile),
             network_ladder: LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            seat_memo: Default::default(),
         })
     }
 
@@ -956,6 +961,7 @@ impl Qwen36Backend {
         let plan = self.plan.as_ref()?;
         let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
         crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &self.seat_memo,
             &material.binding.shape_profile,
             &material.binding.job_context,
             prompt_token_ids,
@@ -2034,9 +2040,17 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         covered: u32,
     ) -> Result<Hash64, String> {
         let interval = self.checkpoint_interval().ok_or_else(|| "this backend serves no registered graph".to_string())?;
-        crate::fp_interval::base0_fp_accept_resume_v1(resume, context, prompt_token_ids, covered, interval, self.step_ladder_cap())
-            .map(|state| state.state_chunks_root)
-            .map_err(|e| format!("{e:?}"))
+        crate::fp_interval::base0_fp_accept_resume_v1(
+            &self.seat_memo,
+            resume,
+            context,
+            prompt_token_ids,
+            covered,
+            interval,
+            self.step_ladder_cap(),
+        )
+        .map(|state| state.state_chunks_root)
+        .map_err(|e| format!("{e:?}"))
     }
 
     fn verify_fp_interval_opening(
@@ -2051,6 +2065,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             return kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1::Unverifiable;
         };
         let state = crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+            &self.seat_memo,
             opening,
             prompt_token_ids,
             interval,
@@ -2281,6 +2296,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     interval,
@@ -2328,6 +2344,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     interval,
@@ -2418,6 +2435,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     interval,
@@ -2427,6 +2445,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             &Qwen36IntervalKernels { artifact: &self.artifact, plan },
             self.prompt_ids_form,
         )
+    }
+
+    fn fp_forget_seat_state_v1(&self) {
+        crate::fp_recompute::base0_fp_seat_state_forget_v1(&self.seat_memo)
     }
 
     fn fp_committed_output_ids(&self, capture: &[u8]) -> Option<Vec<u32>> {
@@ -2498,6 +2520,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         };
         let mut kernels = crate::fp_recompute::Qwen36RecomputeKernelsV1::new(&self.artifact, plan);
         crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &self.seat_memo,
             profile,
             context,
             prompt_token_ids,

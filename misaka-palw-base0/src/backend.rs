@@ -60,6 +60,8 @@ pub struct Base0Backend {
     /// runs, and a Merkle network that forgot to set it would see its own commitments refused at
     /// the door rather than accepted under the wrong form.
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    /// This instance's seat state and walk; nothing outside the instance reaches it.
+    seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
 }
 
 impl Base0Backend {
@@ -72,6 +74,7 @@ impl Base0Backend {
             inventory_geometry: resolved.inventory_geometry,
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            seat_memo: Default::default(),
         }
     }
 
@@ -274,6 +277,7 @@ impl Base0Backend {
     ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
         let mut kernels = crate::fp_recompute::Base0RecomputeKernelsV1::new(&self.artifact);
         crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &self.seat_memo,
             &material.binding.shape_profile,
             &material.binding.job_context,
             prompt_token_ids,
@@ -718,6 +722,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // ADR-0086 Decision 2: the floor holds its own state for the named anchor, like every class.
         let mut kernels = crate::fp_recompute::Base0RecomputeKernelsV1::new(&self.artifact);
         crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+            &self.seat_memo,
             &self.profile,
             context,
             prompt_token_ids,
@@ -753,6 +758,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // ADR-0086 Decision 2: the anchor is named; the seat verifies from the state it recomputed
         // for the checkpoint check (`checkpoint_root_for_context_v1`), as the other families do.
         let state = crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+            &self.seat_memo,
             opening,
             prompt_token_ids,
             self.checkpoint_interval(),
@@ -940,6 +946,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
@@ -984,6 +991,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
@@ -1044,6 +1052,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             self.step_ladder_cap(),
             &|bytes| {
                 crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                    &self.seat_memo,
                     bytes,
                     prompt_token_ids,
                     self.checkpoint_interval(),
@@ -1053,6 +1062,10 @@ impl PalwExecutionBackendV1 for Base0Backend {
             &Base0IntervalKernels { artifact: &self.artifact },
             self.prompt_ids_form,
         )
+    }
+
+    fn fp_forget_seat_state_v1(&self) {
+        crate::fp_recompute::base0_fp_seat_state_forget_v1(&self.seat_memo)
     }
 
     fn fp_committed_output_ids(&self, capture: &[u8]) -> Option<Vec<u32>> {
@@ -2215,7 +2228,7 @@ mod tests {
                 backend.open_fp_interval(&run.outcome.material, index, &ids).unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
             // ADR-0086 Decision 2: the panel recomputes the checkpoint's state before it verifies,
             // and the verifier finds it held.
-            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            backend.fp_forget_seat_state_v1();
             if let Some((_, covered, committed)) = crate::fp_interval::base0_fp_interval_opening_anchor_v1(&opening) {
                 // The context the verifier will look the state up by is the binding's own — the
                 // floor may stop at EOG before its budget, unlike the exact-budget families.
@@ -2228,6 +2241,7 @@ mod tests {
                 assert_eq!(&decoded.binding.shape_profile, backend.profile(), "interval {index}: one profile on both sides");
                 assert!(
                     crate::fp_interval::base0_fp_interval_opening_seat_state_capped_v1(
+                        &backend.seat_memo,
                         &opening,
                         &ids,
                         backend.checkpoint_interval(),

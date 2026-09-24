@@ -1497,18 +1497,20 @@ pub fn base0_fp_interval_opening_job_context_v1(opening_bytes: &[u8]) -> Option<
 /// (ADR-0082 Decision 9).
 ///
 /// The opening says which class, which job and which interval; the covered call follows from the
-/// geometry; and the seat's own recompute is looked up under exactly those. `None` means this seat
-/// has not run the job — the row check then has no state to resume from and files `Unverifiable`,
-/// which is honest and is not an accusation.
+/// geometry; and the seat's own recompute is looked up under exactly those. `None` means this
+/// backend instance has not run the job — the row check then has no state to resume from and files
+/// `Unverifiable`, which is honest and is not an accusation.
 ///
 /// One place, because both families ask the same question and a family that asked it its own way
 /// would be a family whose seat resumed from a state computed for another call.
 pub fn base0_fp_interval_opening_seat_state_v1(
+    memo: &crate::fp_recompute::Base0FpSeatMemoV1,
     opening_bytes: &[u8],
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
 ) -> Option<crate::fp_recompute::Base0FpSeatStateV1> {
     base0_fp_interval_opening_seat_state_capped_v1(
+        memo,
         opening_bytes,
         prompt_token_ids,
         family_checkpoint_interval,
@@ -1523,6 +1525,7 @@ pub fn base0_fp_interval_opening_seat_state_v1(
 /// `None` here is the difference between a seat that resumes from its OWN state and one that files
 /// `Unverifiable` on an honest producer.
 pub fn base0_fp_interval_opening_seat_state_capped_v1(
+    memo: &crate::fp_recompute::Base0FpSeatMemoV1,
     opening_bytes: &[u8],
     prompt_token_ids: &[u32],
     family_checkpoint_interval: u32,
@@ -1538,7 +1541,7 @@ pub fn base0_fp_interval_opening_seat_state_capped_v1(
     // seat holds the right state and cannot find it, so every honest graph-v5 opening is
     // `Unverifiable`.
     let covered = geometry.anchor_covered_call(index)?;
-    crate::fp_recompute::base0_fp_seat_state_held_v1(&binding.shape_profile, &binding.job_context, prompt_token_ids, covered)
+    crate::fp_recompute::base0_fp_seat_state_held_v1(memo, &binding.shape_profile, &binding.job_context, prompt_token_ids, covered)
 }
 
 /// **Which classes may not be served the history** (ADR-0082 Decision 9, Decision 4).
@@ -3929,10 +3932,11 @@ pub fn base0_fp_verify_resume_v1(
 }
 
 /// **The whole state, fetched and verified, as the seat's own** — what a seat holding every layer
-/// replays from on the Resume route. Remembered where the row check finds a recomputed state, so
-/// the interval verification that follows cannot tell (and need not) which route produced it: a
+/// replays from on the Resume route. Kept in the instance's memo, where its row check finds a
+/// recomputed state, so the interval verification that follows cannot tell (and need not) which route produced it: a
 /// seat that resumed and a seat that recomputed reach the same verdict (ADR-0103 Invariant 6).
 pub fn base0_fp_accept_resume_v1(
+    memo: &crate::fp_recompute::Base0FpSeatMemoV1,
     bytes: &[u8],
     ctx: &PalwJobContextV2,
     prompt_token_ids: &[u32],
@@ -3952,7 +3956,7 @@ pub fn base0_fp_accept_resume_v1(
         state_chunks_root: opened.leaf.state_chunks_root,
         chunks: verified.into_values().collect(),
     };
-    crate::fp_recompute::base0_fp_seat_state_remember_v1(&opened.binding.shape_profile, ctx, prompt_token_ids, &state);
+    crate::fp_recompute::base0_fp_seat_state_remember_v1(memo, &opened.binding.shape_profile, ctx, prompt_token_ids, &state);
     Ok(state)
 }
 
@@ -6603,6 +6607,7 @@ mod tests {
     fn check_a_seat_that_resumes_reaches_the_verdict_a_seat_that_recomputes_does(
         form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) {
+        let memo = crate::fp_recompute::Base0FpSeatMemoV1::default();
         let (artifact, profile, ctx, prompt, run) = dense_v7_run_with_form(8, 14, form);
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         assert!(
@@ -6641,8 +6646,8 @@ mod tests {
             let covered = geometry.anchor_covered_call(index).expect("an anchored interval");
             let served = base0_open_fp_resume_v1(&material, index, &ids, interval, ladder, None, &recompute, form)
                 .unwrap_or_else(|e| panic!("interval {index}: the executor serves its state: {e:?}"));
-            crate::fp_recompute::base0_fp_seat_state_forget_v1();
-            let resumed = base0_fp_accept_resume_v1(&served, &ctx, &ids, covered, interval, ladder)
+            crate::fp_recompute::base0_fp_seat_state_forget_v1(&memo);
+            let resumed = base0_fp_accept_resume_v1(&memo, &served, &ctx, &ids, covered, interval, ladder)
                 .unwrap_or_else(|e| panic!("interval {index}: an honest state verifies: {e:?}"));
             let own = recompute(covered).expect("this seat recomputes");
             assert_eq!(resumed.state_chunks_root, own.state_chunks_root, "interval {index}: one committed state");
@@ -6673,13 +6678,13 @@ mod tests {
         let mut forged = Base0FpResumeOpeningV1::decode_v1(&served).expect("decodes");
         let first_slice = forged.slices[0];
         forged.chunks[0][0] ^= 0x5A;
-        crate::fp_recompute::base0_fp_seat_state_forget_v1();
+        crate::fp_recompute::base0_fp_seat_state_forget_v1(&memo);
         assert_eq!(
-            base0_fp_accept_resume_v1(&forged.encode_v1().unwrap(), &ctx, &ids, covered, interval, ladder),
+            base0_fp_accept_resume_v1(&memo, &forged.encode_v1().unwrap(), &ctx, &ids, covered, interval, ladder),
             Err(Base0FpResumeRefusalV1::FetchedChunkDoesNotVerify { slice: first_slice }),
         );
         assert!(
-            crate::fp_recompute::base0_fp_seat_state_held_v1(&profile, &ctx, &ids, covered).is_none(),
+            crate::fp_recompute::base0_fp_seat_state_held_v1(&memo, &profile, &ctx, &ids, covered).is_none(),
             "a state that did not verify is never the seat's"
         );
 
@@ -6691,7 +6696,7 @@ mod tests {
         assert_eq!(opened.slices, vec![0, 1]);
         assert!(!verified.is_empty() && (verified.len() as u32) < opened.leaf.state_chunk_count);
         assert!(matches!(
-            base0_fp_accept_resume_v1(&shard, &ctx, &ids, covered, interval, ladder),
+            base0_fp_accept_resume_v1(&memo, &shard, &ctx, &ids, covered, interval, ladder),
             Err(Base0FpResumeRefusalV1::NotTheWholeState { .. })
         ));
         // And the request index is its own kind on the lane.
@@ -7134,6 +7139,7 @@ mod tests {
         form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) {
         use kaspa_consensus_core::palw_context_ladder::palw_checkpoint_positions_at_v1;
+        let memo = crate::fp_recompute::Base0FpSeatMemoV1::default();
         let (artifact, profile, ctx, prompt, run) = fixture;
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let bytes = crate::produce::base0_fp_material_encode_v2(&run, &ids).expect("the fold retains");
@@ -7163,7 +7169,7 @@ mod tests {
 
             // The seat's own recompute, ordered exactly as the panel orders it — by the `covered`
             // the opening carries, in the class's own cadence unit.
-            crate::fp_recompute::base0_fp_seat_state_forget_v1();
+            crate::fp_recompute::base0_fp_seat_state_forget_v1(&memo);
             let state = match geometry.anchor_covered_call(index) {
                 None => None,
                 Some(covered) => {
@@ -7174,6 +7180,7 @@ mod tests {
                     );
                     let mut kernels = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("kernels");
                     crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+                        &memo,
                         &profile,
                         &ctx,
                         &ids,
@@ -7183,7 +7190,7 @@ mod tests {
                         form,
                     )
                     .expect("this seat can recompute its own state");
-                    base0_fp_interval_opening_seat_state_v1(&opened, &ids, interval)
+                    base0_fp_interval_opening_seat_state_v1(&memo, &opened, &ids, interval)
                 }
             };
             if index > 0 {
@@ -8047,10 +8054,12 @@ mod the_rulesets_ladder {
             attempt_draw: None,
         };
         let consulted = std::cell::Cell::new(0u32);
+        let memo = crate::fp_recompute::Base0FpSeatMemoV1::default();
         let anchor_state_for = |covered: u32| {
             consulted.set(consulted.get() + 1);
             let mut recompute = crate::fp_recompute::A16RecomputeKernelsV1::new(&artifact, Some(&plan)).expect("recompute kernels");
             crate::fp_recompute::base0_fp_seat_state_memoized_v1(
+                &memo,
                 &material.binding.shape_profile,
                 &material.binding.job_context,
                 &ids,
@@ -8124,7 +8133,6 @@ mod the_rulesets_ladder {
         }
         assert!(anchored_intervals > 0, "the fixture must exercise the anchored branch at least once");
         eprintln!("{anchored_intervals} of {} intervals resumed from a recomputed anchor", geometry.interval_count);
-        crate::fp_recompute::base0_fp_seat_state_forget_v1();
     }
 
     /// **A seat licenses an honest graph-v5 opening at the ladder it is HANDED, and refuses it by

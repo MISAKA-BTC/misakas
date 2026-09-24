@@ -802,6 +802,12 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         Err("this execution family accepts no resume state".to_string())
     }
 
+    /// **Drop the seat state and the attention walk THIS instance holds** (ADR-0082 D9; ADR-0110 §9.5).
+    /// Both are the instance's own and go with it; this is the explicit form, for a caller that keeps
+    /// an instance across claims and for a node that wants the memory back. Until the next recompute
+    /// the row check on this instance is `Unverifiable`. Defaulted: a family that keeps nothing.
+    fn fp_forget_seat_state_v1(&self) {}
+
     /// **The committed output ids of a retained capture, read by the family that wrote it**
     /// (ADR-0082 Decision 9's companion verb). A seat that recomputes the cache teacher-forces the
     /// executor's own answer, so it needs the ids the commitment binds — and it must get them
