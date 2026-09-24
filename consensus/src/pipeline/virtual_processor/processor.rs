@@ -4102,14 +4102,15 @@ impl VirtualStateProcessor {
 
     /// **ADR-0152 R-3/R-4 (Phase 2, P2-8): the reporter filer's read of one filing** — at the tip,
     /// for the DAA the virtual's next block folds at: the commitment's row, the conviction and the
-    /// reward under `offence_key`, and (when `evidence` is given) this processor's object gate on it
-    /// at that DAA, so a filing the node sends is one the gate admits. `None` with no tip state.
+    /// reward under `offence_key`, and (when `gated` is given — the evidence, the signed commitment,
+    /// or the court accusation the filer falls back to) this processor's object gate on it at that
+    /// DAA, so an object the node sends is one the gate admits. `None` with no tip state.
     pub fn palw_reporter_filing_read_v1_impl(
         &self,
         offence_key: kaspa_consensus_core::Hash64,
         commitment: kaspa_consensus_core::Hash64,
         reporter: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        evidence: Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        gated: Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwReporterFilingReadV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
@@ -4121,7 +4122,7 @@ impl VirtualStateProcessor {
             &offence_key,
             &commitment,
             &reporter,
-            evidence.as_ref(),
+            gated.as_ref(),
         )
     }
 
@@ -4138,7 +4139,7 @@ impl VirtualStateProcessor {
         offence_key: &kaspa_consensus_core::Hash64,
         commitment: &kaspa_consensus_core::Hash64,
         reporter: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
-        evidence: Option<&kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        gated: Option<&kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwReporterFilingReadV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let mut read = kaspa_consensus_core::palw_state_v2::palw_reporter_filing_read_v1(
@@ -4149,14 +4150,14 @@ impl VirtualStateProcessor {
             commitment,
             reporter,
         );
-        if let Some(object) = evidence {
+        if let Some(object) = gated {
             let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
                 block: chain_point,
                 daa_score: now_daa,
                 blue_score: 0,
                 subsidy: 0,
             };
-            read.evidence_gate = Some(self.palw_v2_validate_objects(state, state_params, &point, std::slice::from_ref(object)));
+            read.object_gate = Some(self.palw_v2_validate_objects(state, state_params, &point, std::slice::from_ref(object)));
         }
         Some(read)
     }

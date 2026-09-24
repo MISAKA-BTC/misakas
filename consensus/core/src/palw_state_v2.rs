@@ -7464,9 +7464,11 @@ impl PalwReporterCountersV1 {
 /// keeps for it, at the DAA the next block folds at, so the node commits, files, reveals and lets go
 /// by what the chain holds NOW rather than by what it sent: a commitment or a conviction a reorg took
 /// back reads as absent here, and the filer's next step is recomputed from that (re-send, or let the
-/// reward go). Built by [`palw_reporter_filing_read_v1`]; `evidence_gate` is the processor's (the
-/// object gate's verdict on the filing's evidence at that DAA, asked only when the filer is about to
-/// spend a carrier on it). Node policy's read: nothing here decides what a block accepts.
+/// reward go). Built by [`palw_reporter_filing_read_v1`]; `object_gate` is the processor's (the
+/// object gate's verdict at that DAA on the one object the filer asked about — the filing's
+/// evidence, its signed commitment, or the court accusation it falls back to — asked only when the
+/// filer is about to spend a carrier on it). Node policy's read: nothing here decides what a block
+/// accepts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwReporterFilingReadV1 {
     /// The DAA the virtual's next block folds at.
@@ -7491,8 +7493,8 @@ pub struct PalwReporterFilingReadV1 {
     pub pending: Option<PalwPendingRewardV1>,
     /// The award the sweep wrote under the key, until step 3d moves it (R-4).
     pub awarded: Option<PalwPayoutV2>,
-    /// The processor's object gate on the filing's evidence at `now_daa`, when asked.
-    pub evidence_gate: Option<Result<(), String>>,
+    /// The processor's object gate at `now_daa` on the object asked about, when one was.
+    pub object_gate: Option<Result<(), String>>,
 }
 
 /// **[`PalwReporterFilingReadV1`] on a state** — every row read through the state's own accessors,
@@ -7516,7 +7518,7 @@ pub fn palw_reporter_filing_read_v1(
         consumed: state.consumed_offence(offence_key).cloned(),
         pending: state.reward_pending(offence_key).copied(),
         awarded: state.reporter_reward(offence_key).copied(),
-        evidence_gate: None,
+        object_gate: None,
     }
 }
 

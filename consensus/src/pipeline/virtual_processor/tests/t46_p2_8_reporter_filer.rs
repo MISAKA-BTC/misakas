@@ -123,7 +123,7 @@ fn commit_then_file(h: &H, walk: &mut Walk, filing: &Filing, card: usize) -> (Pa
     let read = filing.read(h, walk, card, true);
     assert!(read.rcore_plus && read.reporter_may_commit, "R-3 is live and the seat may commit");
     assert_eq!((read.committed_daa, read.consumed.is_some()), (None, false));
-    assert_eq!(read.evidence_gate, Some(Ok(())), "the gate admits the evidence before anything is spent");
+    assert_eq!(read.object_gate, Some(Ok(())), "the gate admits the evidence before anything is spent");
     h.carry(walk, vec![filing.commit(h, card)]);
     let committed_at = walk.daa;
     assert_eq!(filing.read(h, walk, card, false).committed_daa, Some(committed_at), "the commitment is a row");
@@ -156,7 +156,7 @@ async fn t18_t54c_a_capture_arm_fault_is_committed_filed_revealed_and_paid() {
     // conviction's own block.
     let copier = BYSTANDER;
     let read = filing.read(&h, &walk, SEAT, true);
-    assert_eq!(read.evidence_gate, Some(Ok(())));
+    assert_eq!(read.object_gate, Some(Ok(())));
     h.carry(&mut walk, vec![filing.commit(&h, SEAT)]);
     let committed_at = walk.daa;
     empty(&h, &mut walk);
@@ -339,7 +339,7 @@ async fn p2_8_fence_off_twins() {
     let filing = Filing::of(capture_arm_fault(&h, &walk, &claim, claim.fault_leaf.unwrap()), [0xF0; 32]);
     let read = filing.read(&h, &walk, SEAT, true);
     assert!(!read.rcore_plus, "R-3 dormant");
-    assert_eq!(read.evidence_gate, Some(Ok(())), "kind 4 stands on the attribution fence alone");
+    assert_eq!(read.object_gate, Some(Ok(())), "kind 4 stands on the attribution fence alone");
     assert!(h.accepted(&walk.state, &walk.next(), &[filing.commit(&h, SEAT)]).is_empty(), "the commitment is dropped by name");
     let (before, _) = h.carry(&mut walk, vec![filing.object.clone()]);
     assert_refuted_before_final(&h, &before, &walk.state, id, walk.daa, claim.envelope.attempt.execution_root);
@@ -353,5 +353,63 @@ async fn p2_8_fence_off_twins() {
     let filing = Filing::of(capture_arm_fault(&dormant, &walk, &claim, claim.fault_leaf.unwrap()), [0xF1; 32]);
     let read = filing.read(&dormant, &walk, SEAT, true);
     assert!(!read.rcore_plus);
-    assert_eq!(read.evidence_gate, Some(Err(E::AttributionDormant.to_string())), "the gate refuses kind 4: the court's path");
+    assert_eq!(read.object_gate, Some(Err(E::AttributionDormant.to_string())), "the gate refuses kind 4: the court's path");
+}
+
+/// **A KNOWN GAP, pinned until consensus closes it (the review of P2-8, F1; R-3/N12, the ADR owner's):
+/// a copier who re-encodes the honest evidence and gets its copy folded first takes R.** Kind 4's
+/// adjudicator verifies each operand opening and takes the first match
+/// (`PalwProvenOperandsV1::from_openings_v1`, `find_operand_v1`), so the capture arm's evidence with
+/// one opening appended again still convicts — the same offence key, another `evidence_id`, and the
+/// gate admits it. The seat commits and waits its two-DAA depth; its evidence is public in the
+/// mempool; a bystander commits to the re-encoding one block later and its copy folds before the
+/// seat's evidence (fee competition, or a miner leaving the honest carrier out for one block). The
+/// conviction consumes the copy: the reward pends on the copy's `evidence_id`, the seat's reveal is
+/// refused (its commitment binds its own evidence) and the bystander's leads. The conviction and its
+/// charge are unaffected; only R moves. When the fold makes kind-3/4 evidence canonical (or R-3's
+/// commitment binds a canonical digest of the contradiction), the gate refuses the copy — or the
+/// copy's commitment no longer beats the seat's — and this test is flipped to say so.
+#[tokio::test]
+async fn p2_8_known_gap_a_re_encoded_copy_folded_first_takes_r() {
+    use kaspa_consensus_core::palw_offence_attribution_v1::PalwExecutorRefutedEvidenceV1;
+    let h = harness(true);
+    let mut walk = h.genesis_walk();
+    let claim = h.open_claim(&mut walk, Fault::Step);
+    let id = claim.claim_id;
+    h.bind(&mut walk, id);
+    let honest = Filing::of(capture_arm_fault(&h, &walk, &claim, claim.fault_leaf.unwrap()), [0xA1; 32]);
+    let Obj::ObjectiveOffence { evidence, .. } = &honest.object else { panic!("an objective offence") };
+    let payload: PalwExecutorRefutedEvidenceV1 = borsh::from_slice(evidence).expect("kind 4's evidence");
+    let C::StepArithmetic { refutation, mut operand_openings } = payload.contradiction else { panic!("the capture arm's fault") };
+    operand_openings.push(operand_openings[0].clone());
+    let copy = Filing::of(
+        palw_executor_refuted_object_v1(
+            h.cards[EXECUTOR],
+            id,
+            C::StepArithmetic { refutation, operand_openings },
+            payload.prompt_ids_opening,
+        ),
+        [0xC0; 32],
+    );
+    assert_eq!(copy.key, honest.key, "one offence");
+    assert_ne!(copy.evidence_id, honest.evidence_id, "two encodings of it");
+    assert_eq!(copy.read(&h, &walk, BYSTANDER, true).object_gate, Some(Ok(())), "the gate admits the re-encoding");
+
+    h.carry(&mut walk, vec![honest.commit(&h, SEAT)]);
+    let seat_committed_at = walk.daa;
+    empty(&h, &mut walk);
+    // The seat's evidence is in the mempool now; the copy commits, and folds first.
+    h.carry(&mut walk, vec![copy.commit(&h, BYSTANDER)]);
+    h.carry(&mut walk, vec![copy.object.clone()]);
+    let pending = walk.state.reward_pending(&honest.key).copied().expect("the reward pends");
+    assert_eq!(pending.evidence_id, copy.evidence_id, "on the copy's evidence");
+    assert!(honest.read(&h, &walk, SEAT, false).committed_daa.is_some_and(|at| at == seat_committed_at), "the seat committed first");
+    assert_eq!(
+        reveal_refused(&h, &walk, &honest.reveal(&h, SEAT)),
+        "no commitment of this reporter opens to this key, evidence and salt"
+    );
+    h.carry(&mut walk, vec![copy.reveal(&h, BYSTANDER)]);
+    let best = walk.state.reward_pending(&honest.key).and_then(|p| p.best).expect("a reveal leads");
+    assert_eq!(best.reporter, h.cards[BYSTANDER], "the copier's");
+    assert!(matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
 }

@@ -7999,34 +7999,32 @@ impl PalwPanelService {
                                     // this seat found, and it is recorded rather than dropped.
                                     CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {
                                         self.note_seat_fault_v1(duty.claim_id, leaf, 1);
-                                        // **P2-8 (SR-8): past `palw_rcore_plus` the proven fault is
-                                        // filed as `ExecutorRefuted` through the reporter filer**; the
-                                        // one-move court below is its fallback, and the whole path
-                                        // below the fence.
-                                        if self.capture_arm_files_refutation_v1(
-                                            &session,
-                                            &mut reporter_filer,
+                                        // **P2-8 (SR-8): past `palw_rcore_plus`, `ExecutorRefuted` over
+                                        // the refutation in hand** — built before the accusation below
+                                        // takes the refutation by value; `None` below the fence.
+                                        let refuted = self.capture_arm_filing_v1(
                                             duty,
                                             deadline,
                                             current_daa,
                                             bond_key,
-                                            &network_domain,
                                             &refutation,
                                             &openings,
                                             &prompt_opening,
-                                        ) {
-                                            accused.insert(duty.claim_id);
-                                            break 'verdict None;
-                                        }
+                                        );
                                         // **The one thing a seat that found a lie files** (ADR-0098
                                         // Decision 2, ADR-0099 Decision 5): on a network whose
                                         // acceptance layer takes it, the accusation — the leaf, the
                                         // refutation it just ran, the openings it just proved —
                                         // signed under this seat's bond key and queued on the same
                                         // carrier path every court move rides. Once per claim.
-                                        if crate::palw_producer::palw_shard_court_in_force_v1(&self.consensus_config, current_daa)
-                                            && !accused.contains(&duty.claim_id)
-                                        {
+                                        let court = 'court: {
+                                            if !(crate::palw_producer::palw_shard_court_in_force_v1(
+                                                &self.consensus_config,
+                                                current_daa,
+                                            ) && !accused.contains(&duty.claim_id))
+                                            {
+                                                break 'court None;
+                                            }
                                             use kaspa_consensus_core::palw_shard_court_v1::{
                                                 PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT, PALW_SHARD_COURT_VERSION_V1,
                                                 PalwShardCourtAccusationV1, palw_shard_court_session_id_v1,
@@ -8048,7 +8046,7 @@ impl PalwPanelService {
                                                     "[{PALW_PANEL}] claim {}: {} leaves is above this network's refutation ladder of {ladder}; the fault is recorded, not accused",
                                                     duty.claim_id, refutation.binding.step_leaf_count
                                                 );
-                                                break 'verdict None;
+                                                break 'court None;
                                             }
                                             let mut accusation = PalwShardCourtAccusationV1 {
                                                 version: PALW_SHARD_COURT_VERSION_V1,
@@ -8079,14 +8077,7 @@ impl PalwPanelService {
                                                             accusation: Box::new(accusation),
                                                         };
                                                         match kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object) {
-                                                            Ok(()) => {
-                                                                info!(
-                                                                    "[{PALW_PANEL}] claim {}: accusing leaf {leaf} in the one-move court (session {session_id})",
-                                                                    duty.claim_id
-                                                                );
-                                                                accused.insert(duty.claim_id);
-                                                                court_pending.push((session_id, 0, false, object));
-                                                            }
+                                                            Ok(()) => break 'court Some((session_id, object)),
                                                             Err(why) => warn!(
                                                                 "[{PALW_PANEL}] claim {}: the accusation cannot ride a carrier ({why}); recorded, not filed",
                                                                 duty.claim_id
@@ -8099,7 +8090,22 @@ impl PalwPanelService {
                                                     duty.claim_id
                                                 ),
                                             }
-                                        }
+                                            None
+                                        };
+                                        // P2-8: kind 4 through the reporter filer first, the accusation
+                                        // kept as its fallback; else the accusation, as below the fence.
+                                        self.capture_arm_files_v1(
+                                            &session,
+                                            &mut reporter_filer,
+                                            &mut accused,
+                                            &mut court_pending,
+                                            duty,
+                                            leaf,
+                                            bond_key,
+                                            &network_domain,
+                                            refuted,
+                                            court,
+                                        );
                                         break 'verdict None;
                                     }
                                 }
@@ -8998,7 +9004,7 @@ impl PalwPanelService {
             }
 
             // --- P2-8: the reporter's commit–reveal filer (ADR-0152 R-3; `reporter_filer`) ---
-            self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending);
+            self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending, &mut court_moved, &mut accused);
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
