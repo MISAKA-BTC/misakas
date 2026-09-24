@@ -672,13 +672,31 @@ fn t66_body(landed: bool) {
         let row = c.s.panel_liability(&id).expect("the liability row");
         row.g_res_sompi + u128::from(row.escrowed_reward)
     };
-    assert_eq!(u128::from(producer_before - c.s.bond(&producer).unwrap().collateral), (u128::from(producer_before) / 4).min(3 * g), "S3");
+    // S3 fires through the burn hook (S-4): `burn_vesting_row` → `Some` (the row burned, its deletion
+    // the once-per-claim marker) ⇒ `min(25% · C₀, 3 G)`; `None` ⇒ nothing. The hook's body is the
+    // vesting work's and lands with `PALW_RCORE_VESTING_ROWS_LANDED_V1`; S's stub burns nothing.
+    let debit = u128::from(producer_before - c.s.bond(&producer).unwrap().collateral);
+    if kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1 {
+        assert!(c.s.vesting_row(&id).is_none(), "the row is burned: S3's marker");
+        assert_eq!(debit, (u128::from(producer_before) / 4).min(3 * g), "S3");
+    } else {
+        assert!(c.s.vesting_row(&id).is_some(), "S's stub hook burns no row");
+        assert_eq!(debit, 0, "no row burned: no S3");
+    }
     if landed {
         assert!(full_before > c.s.bond(&full[0]).unwrap().collateral, "S4 on the covering signer, its lock still live");
     } else {
         assert_eq!(full_before, c.s.bond(&full[0]).unwrap().collateral, "dormant: no signer is charged");
     }
-    assert!(c.s.consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id)).is_some());
+    let record = c
+        .s
+        .consumed_offence(&kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1(&producer.0, &id))
+        .expect("one DaDefault record");
+    assert_eq!(
+        (u128::from(record.amount), u128::from(record.collected), record.claim_id, record.accepted_daa),
+        (debit, debit, id, closed),
+        "the record: the producer's nominal tier, its collected debit (its exit shut), the claim"
+    );
     let retire = c.s.deadline_of(&id).expect("the retirement re-arms");
     assert_eq!(retire, (closed + c.sp.claim_retirement_daa()).max(closed + 1), "max(terminal + retirement, close + 1)");
 }

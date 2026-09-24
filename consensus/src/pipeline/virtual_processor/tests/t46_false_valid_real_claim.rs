@@ -1193,10 +1193,51 @@ impl H {
     }
 }
 
+/// **ADR-0152 §3.6 (S-4): `G = g_res + escrowed_reward` of `claim_id`**, from its liability row (the
+/// void's or the Final's, in the conviction's block: the claim's own gain terms, IMPL-15).
+fn g_of(s: &PalwChainStateV2, claim_id: Hash64) -> u128 {
+    let row = s.panel_liability(&claim_id).expect("the claim's liability row");
+    row.g_res_sompi + u128::from(row.escrowed_reward)
+}
+
+/// **S4's charge on a seat past `palw_rcore_plus`**: its lock plus `min(25% · C₀, 3 G)`, clamped at what
+/// the bond holds; below the fence the lock alone (F2's rule). `C₀` is the seat's collateral before the
+/// conviction. Returns `(nominal, debit)`.
+fn s4_charge(h: &H, before: &PalwChainStateV2, seat: PalwBondKeyV2, lock: u128, g: u128, daa: u64) -> (u128, u128) {
+    let c0 = before.bond(&seat).unwrap().collateral;
+    let nominal = if h.sp().rcore_plus_active_at(daa) {
+        lock + kaspa_consensus_core::palw_state_v2::palw_rcore_s3s4_action_v1(c0, g)
+    } else {
+        lock
+    };
+    (nominal, nominal.min(u128::from(c0)))
+}
+
+/// **The executor's charge for a proven fraud before `Final`**: the forfeit (`w + esc + rr`, a court's
+/// `CourtFraud` charge) plus, past `palw_rcore_plus`, S2's `min(10% · C₀, 3 G)` (S-4). Returns
+/// `(nominal, debit)`.
+fn s2_charge(h: &H, before: &PalwChainStateV2, claim_id: Hash64, g: u128, daa: u64) -> (u128, u128) {
+    let claim = before.claim(&claim_id).expect("the live claim");
+    let c0 = before.bond(&claim.bond).unwrap().collateral;
+    let forfeit =
+        claim.reserved + h.sp().claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward) + claim.rights_reserved;
+    let nominal = if h.sp().rcore_plus_active_at(daa) {
+        forfeit + kaspa_consensus_core::palw_state_v2::palw_rcore_s1s2_action_v1(c0, g)
+    } else {
+        forfeit
+    };
+    (nominal, nominal.min(u128::from(c0)))
+}
+
 /// What a conviction before `Final` must have written, for each convicted seat: its lock taken
-/// FIRST and its bond reduced by exactly that lock, one kind-3 row under the (seat, claim) key with
-/// the claim's root, the claim voided `CourtFraud` at the conviction, its executor charged its
-/// reservation and escrow, and the liability row saying so.
+/// FIRST and its bond reduced by exactly S4's charge (the lock, and past `palw_rcore_plus` the action
+/// `min(25% · C₀, 3 G)`), one kind-3 row under the (seat, claim) key with the claim's root, the claim
+/// voided `CourtFraud` at the conviction, its executor charged its reservation, escrow and rights
+/// (and S2's action past the fence), and the liability row saying so. Past `palw_rcore_plus` (S-4) the
+/// rows carry the funnel's record: `amount` the nominal legs — the first conviction's the seat's and
+/// the executor's (it voided the claim), every later one its seat's alone — `collected` the debits
+/// (every bond here is Active: its exit gate is shut) and `claim_id`; below it `amount` is the debit
+/// and `collected` / `claim_id` are the dormant defaults.
 fn assert_convicted_before_final(
     h: &H,
     licensed: &PalwChainStateV2,
@@ -1206,23 +1247,38 @@ fn assert_convicted_before_final(
     daa: u64,
 ) {
     let claim = licensed.claim(&claim_id).expect("the licensed claim").clone();
-    for &card in convicted {
+    let rcore = h.sp().rcore_plus_active_at(daa);
+    let g = g_of(s, claim_id);
+    let (executor_nominal, executor_debit) = s2_charge(h, licensed, claim_id, g, daa);
+    for (i, &card) in convicted.iter().enumerate() {
         let seat = h.cards[card];
         let lock = *licensed.slashable_lock(seat, claim_id).expect("the Valid seat locked at the licence");
         assert!(lock.amount > 0, "card {card} locked collateral for its Valid");
         assert!(s.slashable_lock(seat, claim_id).is_none(), "card {card}'s lock is taken");
+        let (nominal, debit) = s4_charge(h, licensed, seat, lock.amount, g, daa);
         assert_eq!(
             s.bond(&seat).unwrap().collateral as u128,
-            licensed.bond(&seat).unwrap().collateral as u128 - lock.amount,
-            "card {card}'s bond is reduced by exactly its lock"
+            licensed.bond(&seat).unwrap().collateral as u128 - debit,
+            "card {card}'s bond is reduced by exactly S4's charge (its lock{})",
+            if rcore { " and min(25% · C₀, 3 G)" } else { "" }
         );
         let row =
             s.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &claim_id)).expect("one row under the (seat, claim) key");
         assert_eq!(
-            (row.kind, row.accused, row.amount as u128, row.accepted_daa, row.execution_root),
-            (PalwOffenceKindV1::PanelFalseValidV2, seat.0, lock.amount, daa, claim.execution_root),
-            "card {card}: kind 3, the lock, the claim's root"
+            (row.kind, row.accused, row.accepted_daa, row.execution_root),
+            (PalwOffenceKindV1::PanelFalseValidV2, seat.0, daa, claim.execution_root),
+            "card {card}: kind 3, the claim's root"
         );
+        if rcore {
+            let (first_nominal, first_debit) = if i == 0 { (executor_nominal, executor_debit) } else { (0, 0) };
+            assert_eq!(
+                (row.amount as u128, row.collected as u128, row.claim_id),
+                (nominal + first_nominal, debit + first_debit, claim_id),
+                "card {card}: the funnel's record — the nominal legs, the debits collected, the claim"
+            );
+        } else {
+            assert_eq!((row.amount as u128, row.collected, row.claim_id), (debit, 0, Hash64::default()), "card {card}: the debit");
+        }
     }
     assert!(
         matches!(s.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtFraud } if voided_daa == daa),
@@ -1234,8 +1290,8 @@ fn assert_convicted_before_final(
     let executor = h.cards[EXECUTOR];
     assert_eq!(
         s.bond(&executor).unwrap().collateral as u128,
-        licensed.bond(&executor).unwrap().collateral as u128 - (claim.reserved + escrow + claim.rights_reserved),
-        "the executor pays its reservation and its escrow, as a court's CourtFraud charges it"
+        licensed.bond(&executor).unwrap().collateral as u128 - executor_debit,
+        "the executor pays its reservation, its escrow and its rights, as a court's CourtFraud charges it — and S2's action past the fence"
     );
     let row = s.panel_liability(&claim_id).expect("the void keeps the liability row");
     assert_eq!((row.voided_daa, row.void_reason), (Some(daa), Some(PalwVoidReasonV2::CourtFraud)), "the row says CourtFraud");
@@ -1476,20 +1532,31 @@ async fn t46e_after_final() {
     assert_eq!(honest_after, honest_before, "the honest tickets keep their rounds");
     assert!(s.palw_execution_root_is_forfeited_v1(&root));
     assert!(s.slashable_lock(h.cards[full], id).is_none());
+    // S-4: S4 on the seat — its lock and, past `palw_rcore_plus`, `min(25% · C₀, 3 G)`.
+    let g = g_of(s, id);
+    let (nominal, seat_debit) = s4_charge(&h, &with_schedule, h.cards[full], lock.amount, g, daa);
     assert_eq!(
         s.bond(&h.cards[full]).unwrap().collateral as u128,
-        with_schedule.bond(&h.cards[full]).unwrap().collateral as u128 - lock.amount
+        with_schedule.bond(&h.cards[full]).unwrap().collateral as u128 - seat_debit
+    );
+    // S3 rides the burn hook (S-4): the producer is charged `min(25% · C₀, 3 G)` iff
+    // `burn_vesting_row` burned the claim's vesting row — the vesting work's body, which lands with
+    // `PALW_RCORE_VESTING_ROWS_LANDED_V1`; S's stub burns none, and this build writes no row.
+    let s3 = if kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1 {
+        kaspa_consensus_core::palw_state_v2::palw_rcore_s3s4_action_v1(executor_before, g)
+    } else {
+        0
+    };
+    assert_eq!(
+        u128::from(executor_before - s.bond(&h.cards[EXECUTOR]).unwrap().collateral),
+        s3,
+        "S3 after Final: through the burn hook only"
     );
     let consumed = s.consumed_offence(&palw_false_valid_offence_id_v2(&h.cards[full].0, &id)).expect("one kind-3 row");
     assert_eq!(
-        (consumed.kind, consumed.amount as u128, consumed.execution_root),
-        (PalwOffenceKindV1::PanelFalseValidV2, lock.amount, root)
-    );
-    // RESIDUAL (spec §5 item 8, SR-8 is the peer's): no executor charge after Final.
-    assert_eq!(
-        s.bond(&h.cards[EXECUTOR]).unwrap().collateral,
-        executor_before,
-        "SR-8 residual: the executor is not charged after Final"
+        (consumed.kind, consumed.amount as u128, consumed.collected as u128, consumed.claim_id, consumed.execution_root),
+        (PalwOffenceKindV1::PanelFalseValidV2, nominal + s3, seat_debit + s3, id, root),
+        "the funnel's record: the seat's S4 and the producer's S3, collected, the claim, the root"
     );
     h.reloads(s);
 }
@@ -1550,25 +1617,38 @@ async fn t46f_after_retirement() {
         kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2::full(4),
     );
     let other_before = walk.state.bond(&h.cards[other]).unwrap().collateral;
-    let other_lock = walk.state.slashable_lock(h.cards[other], id).map(|l| l.amount).unwrap_or(0);
+    let other_lock = walk.state.slashable_lock(h.cards[other], id).map(|l| l.amount);
+    // S-4: after retirement `G` is the liability row's (`claim_g_v1`), and S4 adds its action only
+    // on a lock the chain still holds (a seat the row lists without one is convicted for 0).
+    let g = g_of(&walk.state, id);
+    let pre = walk.state.clone();
+    let (_, other_debit) = match other_lock {
+        Some(lock) => s4_charge(&h, &pre, h.cards[other], lock, g, walk.daa + 1),
+        None => (0, 0),
+    };
     h.carry(&mut walk, vec![h.v2(other, id, PalwFalseValidReceiptV1::Segmented(v3), c.clone())]);
     assert_eq!(
         walk.state.bond(&h.cards[other]).unwrap().collateral as u128,
-        other_before as u128 - other_lock,
+        other_before as u128 - other_debit,
         "the full-mask V3 seat is convicted against the row"
     );
     // The full receipt the V1 licence carried: convicted against the row.
     let lock = walk.state.slashable_lock(seat, id).copied();
+    let conviction_daa = walk.daa + 1;
     let (before, _) = h.carry(&mut walk, vec![h.v2(card, id, PalwFalseValidReceiptV1::Full(receipt), c)]);
     let s = &walk.state;
-    let charged = lock.map(|l| l.amount).unwrap_or(0);
+    let (nominal, charged) = match lock {
+        Some(lock) => s4_charge(&h, &before, seat, lock.amount, g, conviction_daa),
+        None => (0, 0),
+    };
     eprintln!("[t46f] the seat's lock at conviction: {lock:?}");
     assert_eq!(s.bond(&seat).unwrap().collateral as u128, before.bond(&seat).unwrap().collateral as u128 - charged);
     assert!(s.slashable_lock(seat, id).is_none());
     let consumed = s.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).expect("one kind-3 row");
     assert_eq!(
-        (consumed.kind, consumed.amount as u128, consumed.execution_root),
-        (PalwOffenceKindV1::PanelFalseValidV2, charged, row.execution_root)
+        (consumed.kind, consumed.amount as u128, consumed.collected as u128, consumed.claim_id, consumed.execution_root),
+        (PalwOffenceKindV1::PanelFalseValidV2, nominal, charged, id, row.execution_root),
+        "S4 against the row; no S3 without a vesting row"
     );
     let marked = s.panel_liability(&id).expect("the row stands");
     assert_eq!(marked.void_reason, Some(PalwVoidReasonV2::CourtFraud), "the row is marked (by the first conviction)");
@@ -1786,35 +1866,78 @@ async fn t46g_fp_claim() {
     for other in licence.partials().into_iter().filter(|card| *card != holder) {
         h.refused(&walk, &h.v2(other, id, licence.segmented(other), c.clone()), &E::SiteNotAttested.to_string());
     }
-    let (licensed, _) =
-        h.carry(&mut walk, vec![h.v2(full, id, licence.segmented(full), c.clone()), h.v2(holder, id, licence.segmented(holder), c)]);
+    let before_conviction = walk.clone();
+    let convictions = vec![h.v2(full, id, licence.segmented(full), c.clone()), h.v2(holder, id, licence.segmented(holder), c)];
+    let (licensed, _) = h.carry(&mut walk, convictions.clone());
     let s = &walk.state;
     let daa = walk.daa;
-    for card in [full, holder] {
+    let g = g_of(s, id);
+    let (executor_nominal, executor_debit) = s2_charge(&h, &licensed, id, g, daa);
+    for (i, card) in [full, holder].into_iter().enumerate() {
         let seat = h.cards[card];
         let lock = *licensed.slashable_lock(seat, id).expect("locked at the licence");
         assert!(s.slashable_lock(seat, id).is_none());
-        assert_eq!(s.bond(&seat).unwrap().collateral as u128, licensed.bond(&seat).unwrap().collateral as u128 - lock.amount);
+        let (nominal, debit) = s4_charge(&h, &licensed, seat, lock.amount, g, daa);
+        assert_eq!(s.bond(&seat).unwrap().collateral as u128, licensed.bond(&seat).unwrap().collateral as u128 - debit, "S4");
         let row = s.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).expect("one kind-3 row");
+        let (first_nominal, first_debit) = if i == 0 { (executor_nominal, executor_debit) } else { (0, 0) };
         assert_eq!(
-            (row.kind, row.amount as u128, row.execution_root),
-            (PalwOffenceKindV1::PanelFalseValidV2, lock.amount, opened.execution_root)
+            (row.kind, row.amount as u128, row.collected as u128, row.claim_id, row.execution_root),
+            (PalwOffenceKindV1::PanelFalseValidV2, nominal + first_nominal, debit + first_debit, id, opened.execution_root)
         );
     }
     assert!(
         matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtFraud } if voided_daa == daa)
     );
-    let claim_row = licensed.claim(&id).unwrap();
     let executor = h.cards[EXECUTOR];
     assert_eq!(
         s.bond(&executor).unwrap().collateral as u128,
-        licensed.bond(&executor).unwrap().collateral as u128
-            - (claim_row.reserved
-                + h.sp().claim_escrow_reservation_v1(claim_row.accepted_daa, claim_row.escrowed_reward)
-                + claim_row.rights_reserved),
-        "the FP executor pays its reservation and its receipt rights"
+        licensed.bond(&executor).unwrap().collateral as u128 - executor_debit,
+        "the FP executor pays its reservation and its receipt rights, and S2's action past the fence"
     );
     assert_eq!(s.panel_liability(&id).unwrap().void_reason, Some(PalwVoidReasonV2::CourtFraud));
+
+    // **T22 / U3 (post-edit 12): the same lie convicted AFTER the claim's `Final`.** An FP claim writes
+    // no vesting row, so S3 has nothing to burn; U3 charges its executor the capped producer tier
+    // `min(25% · C₀, 3 G_fp)`, `G_fp` the liability row's `g_res_sompi + escrowed_reward` (written at
+    // the Final), once — on the first conviction binding the claim (the row's mark is the marker). The
+    // signers take S4, the root is forfeited as before, and the block reverts to its parent exactly.
+    let mut after_final = before_conviction;
+    h.sweep_to_final(&mut after_final, id);
+    assert!(matches!(after_final.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+    let row = after_final.state.panel_liability(&id).expect("the Final's liability row").clone();
+    assert!(row.free_prompt && row.voided_daa.is_none(), "an FP Final's row, unmarked");
+    let g_fp = row.g_res_sompi + u128::from(row.escrowed_reward);
+    let (at_final, delta) = h.carry(&mut after_final, convictions);
+    let s = &after_final.state;
+    let daa = after_final.daa;
+    let c0 = at_final.bond(&executor).unwrap().collateral;
+    let u3 = kaspa_consensus_core::palw_state_v2::palw_rcore_s3s4_action_v1(c0, g_fp);
+    assert!(u3 > 0 && u3 <= 3 * g_fp, "capped at m · G_fp");
+    assert_eq!(u128::from(c0 - s.bond(&executor).unwrap().collateral), u3, "U3: the executor pays the capped tier, once");
+    for (i, card) in [full, holder].into_iter().enumerate() {
+        let seat = h.cards[card];
+        let lock = *at_final.slashable_lock(seat, id).expect("the lock outlives the Final");
+        let (nominal, debit) = s4_charge(&h, &at_final, seat, lock.amount, g_fp, daa);
+        assert_eq!(u128::from(at_final.bond(&seat).unwrap().collateral - s.bond(&seat).unwrap().collateral), debit, "card {card}: S4");
+        let conviction = s.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).expect("one kind-3 row");
+        let (first_nominal, first_debit) = if i == 0 { (u3, u3) } else { (0, 0) };
+        assert_eq!(
+            (u128::from(conviction.amount), u128::from(conviction.collected), conviction.claim_id),
+            (nominal + first_nominal, debit + first_debit, id),
+            "card {card}: the first conviction carries U3"
+        );
+    }
+    assert!(
+        matches!(s.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { voided_daa, reason: PalwVoidReasonV2::CourtFraud } if voided_daa == daa),
+        "the Final is reversed"
+    );
+    assert!(s.palw_execution_root_is_forfeited_v1(&opened.execution_root), "the root is forfeited as before");
+    assert_eq!(
+        kaspa_consensus_core::palw_state_v2::revert_delta_v2(s, &delta, h.sp()).expect("reverts").state_root(),
+        at_final.state_root(),
+        "the revert restores the root"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2854,6 +2977,21 @@ async fn t46s_a_court_default_convicts_no_seat() {
         debit(&dormant.in_court, &dormant.walk.state, dormant_h.cards[EXECUTOR]),
         "the executor pays what the dormant chain's CourtFraud charges it"
     );
+    // S-4: a court default is charged EXACTLY as a proven `CourtFraud` — S2's action
+    // `min(10% · C₀, 3 G)` included past `palw_rcore_plus`. (This harness's attribution-off chain keeps
+    // testnet-12's bundle, whose R-core+ mirror is armed, so its `CourtFraud` carries the action too:
+    // the equality above is the two reasons charged alike under one fold.)
+    let c0 = run.in_court.bond(&executor).unwrap().collateral;
+    let action = if h.sp().rcore_plus_active_at(run.voided_daa) {
+        kaspa_consensus_core::palw_state_v2::palw_rcore_s1s2_action_v1(c0, g_of(&run.walk.state, id))
+    } else {
+        0
+    };
+    assert!(h.sp().rcore_plus_active_at(run.voided_daa) && action > 0, "the premise: testnet-12 arms R-core+");
+    assert!(
+        u128::from(charged) >= (claim.reserved + escrow + claim.rights_reserved + action).min(u128::from(c0)),
+        "the forfeit and S2's action at least"
+    );
     assert!(u128::from(charged) >= claim.reserved + escrow + claim.rights_reserved, "reservation, escrow and rights at least");
     assert_eq!(debit(&run.in_court, &run.walk.state, h.cards[BYSTANDER]), 0, "the bystander pays nothing");
     for card in PANEL {
@@ -2913,9 +3051,10 @@ async fn t46s_a_court_default_convicts_no_seat() {
     let seat = h.cards[full];
     let lock = *red.state.slashable_lock(seat, id).expect("the honest full seat's lock");
     let before = red.state.clone();
+    let (_, s4) = s4_charge(&h, &before, seat, lock.amount, g_of(&before, id), red.daa + 1);
     h.carry(&mut red, vec![h.v2(full, id, run.licence.segmented(full), contradiction)]);
     assert!(red.state.slashable_lock(seat, id).is_none(), "recorded as CourtFraud, the silence takes the honest seat's lock");
-    assert_eq!(u128::from(debit(&before, &red.state, seat)), lock.amount, "all of it");
+    assert_eq!(u128::from(debit(&before, &red.state, seat)), s4, "all of it, and S4's action past the fence");
 }
 
 /// **T46t (F2 residual): a PROVEN `CourtFraud` still convicts.** The one-move court's verdict is a
@@ -2953,20 +3092,34 @@ async fn t46t_a_proven_court_fraud_still_convicts() {
         palw_shard_court_session_id_v1(h.domain.as_byte_slice(), &accusation).as_byte_slice(),
         PALW_SHARD_COURT_MLDSA87_ACCUSE_CONTEXT,
     );
-    h.carry(&mut walk, vec![Obj::ShardCourtAccused { accusation: Box::new(accusation) }]);
+    let (in_court, _) = h.carry(&mut walk, vec![Obj::ShardCourtAccused { accusation: Box::new(accusation) }]);
     let voided_daa = walk.daa;
     assert!(
         matches!(walk.state.claim(&id).unwrap().phase, PalwClaimPhaseV2::Voided { voided_daa: d, reason: PalwVoidReasonV2::CourtFraud } if d == voided_daa),
         "the one-move verdict is a proof, recorded CourtFraud: {:?}",
         walk.state.claim(&id).unwrap().phase
     );
+    // T81 / T26 (S-4): a PROVEN court verdict writes ONE `CourtConviction` (kind 6) under
+    // (producer, H(court domain ‖ claim)): the forfeit and S2's action nominal, the executor's debit
+    // collected (its exit gate shut), the claim, root 0 (forfeiture by claim).
+    let executor = h.cards[EXECUTOR];
+    let (s2_nominal, s2_debit) = s2_charge(&h, &in_court, id, g_of(&walk.state, id), voided_daa);
+    assert_eq!(u128::from(debit(&in_court, &walk.state, executor)), s2_debit, "S2: the forfeit and the action");
+    let key = kaspa_consensus_core::palw_state_v2::palw_court_conviction_offence_id_v1(&executor.0, &id);
+    let kind6 = walk.state.consumed_offence(&key).expect("one CourtConviction record").clone();
+    assert_eq!(
+        (kind6.kind, kind6.accused, u128::from(kind6.amount), u128::from(kind6.collected), kind6.claim_id, kind6.execution_root),
+        (PalwOffenceKindV1::CourtConviction, executor.0, s2_nominal, s2_debit, id, Hash64::default()),
+        "kind 6: nominal, collected, the claim, root 0"
+    );
     let full = licence.full_card();
     let seat = h.cards[full];
     let lock = *walk.state.slashable_lock(seat, id).expect("the full seat's lock");
     let before = walk.state.clone();
+    let (_, s4) = s4_charge(&h, &before, seat, lock.amount, g_of(&before, id), walk.daa + 1);
     h.carry(&mut walk, vec![h.v2(full, id, licence.segmented(full), C::CourtFraud { voided_daa })]);
     assert!(walk.state.slashable_lock(seat, id).is_none(), "the lock is taken");
-    assert_eq!(u128::from(debit(&before, &walk.state, seat)), lock.amount, "the full seat pays its lock");
+    assert_eq!(u128::from(debit(&before, &walk.state, seat)), s4, "the full seat pays S4: its lock and, past the fence, the action");
     let row = walk.state.consumed_offence(&palw_false_valid_offence_id_v2(&seat.0, &id)).expect("one kind-3 row");
     assert_eq!(
         (row.kind, row.execution_root),
@@ -3011,13 +3164,25 @@ fn assert_refuted_before_final(
     let executor = h.cards[EXECUTOR];
     let escrow = h.sp().claim_escrow_reservation_v1(claim.accepted_daa, claim.escrowed_reward);
     let debit = before.bond(&executor).unwrap().collateral - s.bond(&executor).unwrap().collateral;
-    assert_eq!(u128::from(debit), claim.reserved + escrow + claim.rights_reserved, "the executor pays reservation, escrow and rights");
+    // S-4: S2 — the forfeit and, past `palw_rcore_plus`, `min(10% · C₀, 3 G)`.
+    let (nominal, expected) = s2_charge(h, before, claim_id, g_of(s, claim_id), daa);
+    assert!(nominal >= claim.reserved + escrow + claim.rights_reserved);
+    assert_eq!(u128::from(debit), expected, "the executor pays reservation, escrow and rights, and S2's action past the fence");
     let row = s.consumed_offence(&palw_executor_refuted_offence_id_v1(&executor.0, &claim_id)).expect("one kind-4 row per claim");
     assert_eq!(
-        (row.kind, row.accused, row.amount, row.accepted_daa, row.execution_root),
-        (PalwOffenceKindV1::ExecutorRefuted, executor.0, debit, daa, recorded_root),
-        "kind 4, the executor, the debit it paid, the root only for a proven-false execution"
+        (row.kind, row.accused, row.accepted_daa, row.execution_root),
+        (PalwOffenceKindV1::ExecutorRefuted, executor.0, daa, recorded_root),
+        "kind 4, the executor, the root only for a proven-false execution"
     );
+    if h.sp().rcore_plus_active_at(daa) {
+        assert_eq!(
+            (u128::from(row.amount), row.collected, row.claim_id),
+            (nominal, debit, claim_id),
+            "T81: the funnel's record — the nominal tier, the debit collected, the claim"
+        );
+    } else {
+        assert_eq!((row.amount, row.collected, row.claim_id), (debit, 0, Hash64::default()), "the debit it paid");
+    }
     if let Some(liability) = s.panel_liability(&claim_id) {
         assert_eq!((liability.voided_daa, liability.void_reason), (Some(daa), Some(PalwVoidReasonV2::CourtFraud)));
     }

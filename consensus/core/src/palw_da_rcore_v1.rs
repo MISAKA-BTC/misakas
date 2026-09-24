@@ -478,8 +478,8 @@ pub fn palw_da_stage_reward_base_v1(stage: PalwDaStageV1, commitment_full: u128,
 /// The S3/S4 action tier, `min(25% · C, 3 G)` (m = 3): what a post-`Final` default charges the
 /// producer (S3) and every covering signer on top of its lock (S4).
 pub fn palw_da_producer_action_v1(collateral: u64, g: u128) -> u128 {
-    let quarter = u128::from(collateral) * u128::from(crate::palw_state_v2::PALW_RCORE_S3S4_ACTION_PERMILLE_V1) / 1000;
-    quarter.min(g.saturating_mul(u128::from(crate::palw_state_v2::PALW_RCORE_ACTION_MULTIPLE_V1)))
+    // One spelling of the tier (S-4): the funnel's own function.
+    crate::palw_state_v2::palw_rcore_s3s4_action_v1(collateral, g)
 }
 
 // ---------------------------------------------------------------------------------------------
