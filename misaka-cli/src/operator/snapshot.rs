@@ -261,7 +261,10 @@ pub(crate) async fn connect_to(network: &str, rpc: Option<&str>, timeout: Durati
         Err(_) => (None, true),
     };
     let peers = client.get_connected_peer_info().await.ok().map(|r| r.peer_info);
-    let nv = NodeView::from_parts(client, &server);
+    // The operator surface reads; it never signs through this view, so the network's own params
+    // serve its display (a drill node's are the same rules on another genesis). Signers go through
+    // `wallet::connect`, or check `node_status` against `wallet::chain_params` (`model add`).
+    let nv = NodeView::from_parts(client, &server, kaspa_consensus_core::config::params::Params::from(server.network_id));
     let windows = Windows::of(&nv.params);
     Ok(NodeRead { nv, url, server, peers, windows, node_status, ops_0122 })
 }

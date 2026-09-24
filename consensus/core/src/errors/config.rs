@@ -19,6 +19,11 @@ pub enum ConfigError {
     )]
     PalwRcoreVestingRowsNotLanded(String),
 
+    /// ADR-0152 §8.2 (P2-12): a testnet-12 drill node refused at start-up — the string names the
+    /// rule it broke and the fix (`kaspad/src/palw_drill.rs`).
+    #[error("Configuration: --palw-drill-genesis-salt: {0}")]
+    PalwDrillRefused(String),
+
     #[error("Configuration: --addpeer and --connect cannot be used together")]
     MixedConnectAndAddPeers,
 

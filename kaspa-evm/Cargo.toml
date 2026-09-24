@@ -36,7 +36,12 @@ revm = { version = "14", default-features = false, features = ["std"] }
 # Ethereum keccak256 MPT roots (state / storage / tx / receipts) and RLP. Share
 # revm's alloy-primitives 0.8.26 (no duplicate primitive types / version skew);
 # the `rlp` feature gives `U256`/`B256: Encodable` for account/storage encoding.
-alloy-primitives = { version = "0.8", features = ["rlp"] }
+alloy-primitives = { version = "0.8", features = ["rlp", "k256"] }
+# ADR-0152 §8.2 (P2-12): the address of a testnet-12 drill's drill-only EVM account, from the secret
+# consensus-core derives (`config::drill::palw_drill_evm_secret_v1`; that crate is secp-free). The
+# same k256 revm/alloy already link for ecrecover — no new crate enters the graph, and it stays
+# behind the `evm` feature with the rest of this crate.
+k256 = { version = "0.13", default-features = false, features = ["ecdsa"] }
 alloy-trie = "0.7"
 alloy-rlp = "0.3"
 # EIP-2718 typed-transaction decode + secp/k256 sender recovery (`k256` enables

@@ -101,8 +101,11 @@ pub(crate) async fn connect(ctx: &Ctx) -> Result<Reader, CliError> {
     }
     // The domain a derivation was signed under is bound to the GENESIS, not the network's name:
     // two incarnations of testnet-11 are two different chains and an object of one is not an
-    // object of the other. Taken from the node so it cannot be a constant the CLI gets wrong.
-    let params = kaspa_consensus_core::config::params::Params::from(server.network_id);
+    // object of the other — and a testnet-12 drill is another genesis under the same name
+    // (ADR-0152 §8.2). So the params are the chain the salt names, checked against the node's
+    // own genesis before anything is derived or signed.
+    let (params, salt) = crate::wallet::chain_params(ctx, server.network_id)?;
+    crate::wallet::check_node_genesis(&client, &params, salt.as_ref()).await?;
     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
         params.net.to_string().as_bytes(),
         Some(params.genesis.hash),

@@ -474,7 +474,11 @@ pub async fn submit(ctx: &Ctx, manifest: &Path, ks: &KeySource, bond: Option<&st
             exit_for(&report)?;
             let inputs = class_registration_inputs_v1(&mf.parsed, &mf.dir, &env)
                 .map_err(|e| CliError::new(exit::EXTENSION_REFUSED, e.to_string()))?;
-            let params = params_for(net).map_err(|e| CliError::generic(e.to_string()))?;
+            params_for(net).map_err(|e| CliError::generic(e.to_string()))?;
+            // The registration and the manifest are signed under this chain's genesis: the drill's
+            // with `--palw-drill-genesis-salt` (ADR-0152 §8.2). `node_daa` above went through
+            // `palw_derived::connect`, which refused a node on another genesis.
+            let (params, _) = crate::wallet::chain_params(ctx, net)?;
             let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
                 return Err(CliError::generic(format!("{net} has no PALW V2 bundle")));
             };

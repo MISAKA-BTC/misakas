@@ -1457,6 +1457,7 @@ impl<'a> Wizard<'a> {
             evm_rpc: self.ctx.evm_rpc.clone(),
             timeout_secs: self.ctx.timeout_secs,
             quiet: true,
+            palw_drill_genesis_salt: self.ctx.palw_drill_genesis_salt.clone(),
         };
         crate::wallet::send(&ctx, &self.key_source(), &address, amount, false, true, false)
             .await

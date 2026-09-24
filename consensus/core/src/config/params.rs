@@ -15144,6 +15144,48 @@ pub fn palw_t12_shipped_params() -> Params {
         })
         .collect();
     let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(base.net);
+    palw_t12_params_with_registry_v1(base, bonds, genesis_utxos)
+}
+
+/// **A testnet-12 drill's params: the shipping ruleset on the drill's genesis** (ADR-0152 §8.2,
+/// `phase2-plan.md` §1.8, P2-12). What `Params::from(testnet-12)` returns, with exactly three
+/// substitutions, each the salt's (`config::drill`):
+///
+/// * the genesis block — the drill marker, the drill premine's `utxo_commitment`, the hash over both
+///   ([`crate::config::drill::palw_t12_drill_genesis_block_v1`]);
+/// * the genesis bond registry — public testnet-12's seats at the same premine indices, named on
+///   the drill's premine txid and re-keyed with drill-only keys, so nothing a drill seat signs is
+///   signed by a card key;
+/// * `dns_seeders` emptied: a drill finds its peers by explicit address only, never through public
+///   testnet-12's seeders (not a consensus input; `consensus_params_id` excludes it).
+///
+/// Every rule — every fence, window, class row, panel shape and the R-core+ bundle — is assembled by
+/// the same [`palw_t12_params_with_registry_v1`] the public preset takes, so a drill drills the rules
+/// that ship. The ids move only through the genesis and the registry: `consensus_params_id` and
+/// `consensus_identity_id` hash both, and the handshake refuses on the genesis hash before either.
+/// **Never called by `Params::from`**: only kaspad's `--palw-drill-genesis-salt` reaches it, and it
+/// installs the salt on the node's `Config` in the same place, which the start-up guard checks.
+pub fn palw_t12_drill_params_v1(salt: &crate::config::drill::PalwDrillSaltV1) -> Params {
+    let mut base = palw_t12_base_params();
+    base.genesis = crate::config::drill::palw_t12_drill_genesis_block_v1(salt);
+    base.dns_seeders = &[];
+    if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+        return with_registered_models(base);
+    }
+    let bonds = crate::config::drill::palw_t12_drill_genesis_bonds_v1(salt);
+    let genesis_utxos = crate::config::drill::palw_t12_drill_genesis_utxos_v1(salt);
+    // `Params::from(NetworkId)` wraps every preset in `with_registered_models`; the drill takes the
+    // same wrapper so the two differ in the three fields above and nowhere else.
+    with_registered_models(palw_t12_params_with_registry_v1(base, bonds, genesis_utxos))
+}
+
+/// **testnet-12's assembly over a given genesis registry** — the one body [`palw_t12_shipped_params`]
+/// and [`palw_t12_drill_params_v1`] share, so a drill cannot run a ruleset the network does not.
+fn palw_t12_params_with_registry_v1(
+    base: Params,
+    bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+    genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
+) -> Params {
     let params = palw_v2_params_with_class_rows_v1(
         base,
         PALW_RC_GENESIS_ARTIFACT_ROOT,

@@ -232,9 +232,94 @@ pub fn admit_tx_info(raw: &[u8]) -> Result<AdmittedEvmTx, String> {
     })
 }
 
+/// **The EVM address of a secp256k1 secret** — `keccak256(uncompressed pubkey)[12..]`, the account
+/// that secret signs for. `None` when the bytes are not a scalar in `1..n`.
+///
+/// Used for a testnet-12 drill's drill-only EVM accounts (ADR-0152 §8.2, P2-12 review finding 2):
+/// consensus-core derives the secrets from the drill salt without a curve
+/// (`config::drill::palw_drill_evm_secret_v1`), and kaspad names the accounts with this — the
+/// keyring manifest's `evm` rows, the `--evm-fee-recipient` a salted node accepts, and the senders
+/// its `eth_sendRawTransaction` admits. The EVM lane is the one place the salt does not separate a
+/// drill from public testnet-12 (one `EVM_CHAIN_ID`, no genesis in the signature), so a drill signs
+/// with no other account.
+pub fn evm_address_of_secret_v1(secret: &[u8; 32]) -> Option<[u8; 20]> {
+    let key = k256::ecdsa::SigningKey::from_slice(secret).ok()?;
+    Some(Address::from_private_key(&key).into_array())
+}
+
+/// **A testnet-12 drill's EVM accounts**, index `0..PALW_DRILL_KEYRING_SPAN_V1` of the salt's
+/// keyring (ADR-0152 §8.2): the only senders a salted node's EVM ingress admits and the only
+/// `--evm-fee-recipient` it accepts. 32 key generations — a salted node asks once per EVM
+/// submission, never a public one.
+pub fn palw_drill_evm_accounts_v1(salt: &kaspa_consensus_core::config::drill::PalwDrillSaltV1) -> Vec<[u8; 20]> {
+    kaspa_consensus_core::config::drill::PalwDrillKeyringV1::new(*salt)
+        .evm_secrets()
+        .iter()
+        .map(|secret| evm_address_of_secret_v1(secret).expect("palw_drill_evm_secret_v1 returns a scalar in 1..n"))
+        .collect()
+}
+
+/// **The EVM ingress rule of a testnet-12 drill** (ADR-0152 §8.2; P2-12 review finding 2): `None`
+/// (admit) on every real network — `salt` is the node's `Config::palw_drill_genesis_salt` — and for
+/// a drill's own accounts; the refusal's sentence for any other sender. One rule, which
+/// `FlowContext::submit_rpc_evm_transaction` applies to every RPC-submitted EVM transaction.
+pub fn palw_drill_evm_sender_refusal_v1(
+    salt: Option<&kaspa_consensus_core::config::drill::PalwDrillSaltV1>,
+    sender: &[u8; 20],
+) -> Option<String> {
+    let salt = salt?;
+    if palw_drill_evm_accounts_v1(salt).contains(sender) {
+        return None;
+    }
+    Some(format!(
+        "this node is a testnet-12 DRILL (salt id {}) and admits EVM transactions only from its keyring's drill-only accounts; 0x{} \
+         is not one (kaspad --palw-drill-write-keyring lists them). The EVM lane is the one the salt does not separate: an account \
+         that holds value on public testnet-12 would sign a transaction valid there at the same nonce",
+        salt.id(),
+        lower_hex(sender)
+    ))
+}
+
+fn lower_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The textbook vector (secret 1 → `0x7E5F…5Bdf`) and the refusals: zero and `n` are not keys.
+    #[test]
+    fn the_address_of_a_secret_is_ethereums() {
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        let expected: [u8; 20] =
+            [0x7E, 0x5F, 0x45, 0x52, 0x09, 0x1A, 0x69, 0x12, 0x5d, 0x5D, 0xfC, 0xb7, 0xb8, 0xC2, 0x65, 0x90, 0x29, 0x39, 0x5B, 0xdf];
+        assert_eq!(evm_address_of_secret_v1(&one), Some(expected));
+        assert_eq!(evm_address_of_secret_v1(&[0u8; 32]), None, "zero is not a key");
+        let order: [u8; 32] = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xBA, 0xAE, 0xDC, 0xE6,
+            0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+        ];
+        assert_eq!(evm_address_of_secret_v1(&order), None, "nor is the group order");
+
+        // A drill's accounts: one per index, per salt, each the address of the keyring's secret.
+        use kaspa_consensus_core::config::drill::{PALW_DRILL_KEYRING_SPAN_V1, PalwDrillSaltV1, palw_drill_evm_secret_v1};
+        let salt = PalwDrillSaltV1::from_bytes([0x5E; 32]).unwrap();
+        let accounts = palw_drill_evm_accounts_v1(&salt);
+        assert_eq!(accounts.len(), PALW_DRILL_KEYRING_SPAN_V1 as usize);
+        assert_eq!(Some(accounts[7]), evm_address_of_secret_v1(&palw_drill_evm_secret_v1(&salt, 7)));
+        assert_eq!(accounts.iter().collect::<std::collections::HashSet<_>>().len(), accounts.len(), "distinct");
+        let other = palw_drill_evm_accounts_v1(&PalwDrillSaltV1::from_bytes([0x5F; 32]).unwrap());
+        assert!(accounts.iter().all(|a| !other.contains(a)), "another drill's accounts are not these");
+
+        // The ingress rule: a public node admits anyone; a drill admits its own accounts only.
+        assert_eq!(palw_drill_evm_sender_refusal_v1(None, &other[0]), None, "no salt, no drill rule");
+        assert_eq!(palw_drill_evm_sender_refusal_v1(Some(&salt), &accounts[31]), None, "a drill account");
+        let why = palw_drill_evm_sender_refusal_v1(Some(&salt), &other[0]).expect("another drill's account is refused");
+        assert!(why.contains(&salt.id()) && why.contains(&lower_hex(&other[0])), "{why}");
+        assert!(palw_drill_evm_sender_refusal_v1(Some(&salt), &expected).is_some(), "an ordinary account is refused");
+    }
 
     /// O1: the memoized recovery returns the identical sender as a direct
     /// recovery, and the two-generation eviction keeps the cache bounded
