@@ -4342,6 +4342,7 @@ dependencies = [
  "kaspa-notify",
  "kaspa-p2p-lib",
  "kaspa-p2p-mining",
+ "kaspa-pow",
  "kaspa-txscript",
  "kaspa-utils",
  "kaspa-utils-tower",

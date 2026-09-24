@@ -945,14 +945,59 @@ impl FlowContext {
         };
         match self.palw_heartbeat_relay.observe(hash, &block.header, parent.daa_score) {
             V::NotHeartbeat | V::First => true,
+            // H-1: a second beat for the slot is still announced when it carries a pending carrier.
+            // The first beat may carry nothing, and a beat kept at the first hop keeps its carriers
+            // out of every other node's DAG until some descendant pulls it in as an orphan root.
             V::Repeat => {
+                let exempt = self.palw_heartbeat_h1_exempt(block, true).await;
                 debug!(
-                    "[palw-heartbeat-relay] heartbeat {hash} is not the first for its slot (DAA {} over {}) — kept, not announced",
-                    block.header.daa_score, parent.daa_score
+                    "[palw-heartbeat-relay] heartbeat {hash} is not the first for its slot (DAA {} over {}) — {}",
+                    block.header.daa_score,
+                    parent.daa_score,
+                    if exempt { "announced: it carries a pending lifecycle carrier (ADR-0152 H-1)" } else { "kept, not announced" }
                 );
-                false
+                exempt
             }
         }
+    }
+
+    /// **ADR-0152 v3.1 H-1's relay half (P2-9): is this heartbeat spared H2's two rules?**
+    ///
+    /// H2 bounds what one peer can make this node download (the allowance) and what a slot's
+    /// surplus beats cost the network (one announcement per slot). H-1 says neither may drop a
+    /// heartbeat for carrying a conviction, DA or reporter object. The decision is
+    /// [`crate::palw_heartbeat_relay::palw_heartbeat_h1_exemption_v1`] (gate, the beat's own proof
+    /// of work, at most eight payloads decoded, ONE mempool query, the claim ledger — see
+    /// `palw_heartbeat_relay`'s module doc); this runs it off the async threads, in one
+    /// `spawn_blocking`, since it takes the mempool lock and hashes a header.
+    ///
+    /// `claim` spends the beat's open carriers on it: a VALIDATED beat only — the one the allowance
+    /// spared (`HandleRelayInvsFlow`, right after its `block_task`) and a `Repeat` at its
+    /// announcement ([`Self::palw_heartbeat_relay_admits`]); the allowance gate itself, which runs
+    /// before validation, only asks. All three run before the block's `on_new_block` takes its
+    /// transactions out of the mempool. Only where R-core+ is in force; elsewhere nothing is
+    /// spared, as before, and no thread is spawned.
+    pub async fn palw_heartbeat_h1_exempt(&self, block: &Block, claim: bool) -> bool {
+        if block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
+            || !self.config.params.palw_rcore_plus_active_at(block.header.daa_score)
+        {
+            return false;
+        }
+        let (ctx, block) = (self.clone(), block.clone());
+        tokio::task::spawn_blocking(move || {
+            let mempool = ctx.mining_manager().clone();
+            crate::palw_heartbeat_relay::palw_heartbeat_h1_exemption_v1(
+                &ctx.config.params,
+                &block,
+                &ctx.palw_heartbeat_relay,
+                crate::palw_heartbeat_relay::palw_heartbeat_pow_passes_v1,
+                |candidates| mempool.has_pooled_transactions_blocking(candidates),
+                claim,
+            )
+        })
+        .await
+        // A panicked worker is a node-local fault: spare nothing, as H2 would.
+        .unwrap_or(false)
     }
 
     /// Whether this network runs the PALW ConsensusV2 ruleset — the gate on every PALW gossip

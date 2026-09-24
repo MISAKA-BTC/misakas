@@ -2349,8 +2349,9 @@ where
 /// `Params::palw_panel_economy` (`panel_economy`, resolved at the carrying block) a
 /// `ReceiptLicensed` object on a claim ALREADY licensed is acceptable while its receipt window is
 /// open, provided every receipt it carries is a `Valid` one of a seat on duty the chain has not
-/// credited — see [`validate_supplementary_receipts_v1`]. `false` is byte-identical to the check
-/// before the door existed.
+/// credited — or, on a licence awaiting its replay past `Params::palw_rcore_plus`, one it has not
+/// counted over the whole job (ADR-0152 V3S-01) — see [`validate_supplementary_receipts_v1`]. `false`
+/// is byte-identical to the check before the door existed.
 #[allow(clippy::too_many_arguments)]
 pub fn validate_receipt_quorum_v2_with_economy<V>(
     state: &PalwChainStateV2,
@@ -2838,9 +2839,15 @@ where
         if receipt.claim != *claim_id {
             return Err(PalwPanelV2Error::ReceiptClaimMismatch { got: receipt.claim, expected: *claim_id });
         }
+        // ADR-0152 V3S-01: on a licence awaiting its replay, a credited seat not yet counted over the
+        // whole job is taken as well — the fold's one predicate, so this layer and the fold agree.
         match duties.get(&receipt.seat_bond) {
             None => return Err(PalwPanelV2Error::NotASeat(receipt.seat_bond)),
-            Some(at) if *at != 0 => return Err(PalwPanelV2Error::SeatAlreadyCredited(receipt.seat_bond)),
+            Some(at)
+                if *at != 0 && !crate::palw_state_v2::palw_rcore_v2_widens_seat_v1(state, claim_id, claim, &receipt.seat_bond) =>
+            {
+                return Err(PalwPanelV2Error::SeatAlreadyCredited(receipt.seat_bond));
+            }
             Some(_) => {}
         }
         if answered.contains(&receipt.seat_bond) {
@@ -2989,6 +2996,234 @@ where
         return Err(PalwPanelV2Error::SupplementaryV3Refused("abstentions only, on a claim whose unserved_seen is already latched"));
     }
     Ok(PalwReceiptQuorumV2::Supplementary { credited: answered.len() as u16 })
+}
+
+/// **The V3 supplementary set a collector offers for a licensed claim, if any** (ADR-0152 SR-10 and
+/// Q-7, node policy: it decides what a node carries, never what a block accepts).
+///
+/// After an S2 licence — the full seat's `Valid` and at most one rider (post-edit 13) — the seats the
+/// licence did not carry still file, and their receipts are the only thing that can raise the claim
+/// to `basis_k ≥ 2` before DL-1's gate redraws it (Q-5), complete SR-1b's release, or pay a seat that
+/// answered. SR-10's door takes them in a `ReceiptLicensedV2` on the licensed claim; this picks the
+/// set, and it counts nothing itself:
+///
+/// 1. **What the door could credit**: this claim's `Valid`s and `Sampled`s, from seats the chain has
+///    not counted ([`crate::palw_state_v2::palw_seat_uncounted_on_licence_v1`]), one receipt a seat —
+///    its `Valid` before its `Sampled` (a carried `Sampled` credits the seat, so its `Valid` could
+///    never ride after it), otherwise in arrival order.
+///    **Abstentions are never carried**: an `Unavailable` or `Incapable` is neither credited nor
+///    counted, and all the door records of one is `unserved_seen` — the latch that holds the
+///    producer's escrow to `Final` (C1), even if that very seat serves later. Accusing the producer
+///    is the DA court's (P2-6's `DefaultAccused`), never a collector's.
+///    **`Sampled` is filed here** (Q-1): not a licence and not a vote, it is credited for seat pay and
+///    latches `unserved_seen` — so it rides a licence set only as a rider and otherwise this door.
+/// 2. **Each alone through `validate`** — [`validate_supplementary_receipts_v3`] at the carrying
+///    point, bound as the acceptance arm binds it: its signature, window and mask. A receipt it
+///    refuses is dropped, never fatal (a poisoned pool must not sink the set), and the next receipt
+///    of that seat is tried.
+/// 3. **The set through `validate`, then through `effect`** — the fold's own answer
+///    ([`crate::palw_state_v2::palw_v2_supplementary_effect_v1`]). Only the seats the fold credits
+///    are carried: a `Valid` whose seat cannot post `lock_{max(k,2)}` (SR-6) moves nothing, so it is
+///    dropped and the rest are put to the fold once more. `None` when the fold credits nobody.
+/// 4. **On a licence awaiting its replay a `Valid` rides only in a set that upgrades it** (Q-5,
+///    V3S-01; the M4 review's finding 1). A set that pays partial seats without lifting the claim off
+///    DL-1's gate gains nothing there — a redraw drops the credit and releases the locks, and after
+///    the upgrade the same receipts ride as pay — while it locks those seats' stake on a claim that
+///    may redraw, and before the V2 door widened a counted seat it barred their whole-job replays
+///    from the upgrade (the fold now takes them: `palw_rcore_v2_widens_seat_v1`, so a third party's
+///    pay set cannot do that harm either). Such a set's `Valid`s are dropped and its `Sampled`s,
+///    which count nowhere and are paid, are offered alone.
+pub fn palw_select_supplementary_v3_v1<V, E>(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    candidates: &[PalwSeatReceiptV3],
+    validate: V,
+    effect: E,
+) -> Option<(Vec<PalwSeatReceiptV3>, crate::palw_state_v2::PalwSupplementaryEffectV1)>
+where
+    V: Fn(&[PalwSeatReceiptV3]) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>,
+    E: Fn(&[PalwSeatReceiptV3]) -> Option<crate::palw_state_v2::PalwSupplementaryEffectV1>,
+{
+    let rank = |signed: &PalwSeatReceiptV3| match signed.receipt.verdict {
+        PalwReceiptVerdictV2::Valid => Some(0u8),
+        PalwReceiptVerdictV2::Sampled => Some(1),
+        PalwReceiptVerdictV2::Unavailable { .. } | PalwReceiptVerdictV2::Incapable => None,
+    };
+    let mut ordered: Vec<(u8, &PalwSeatReceiptV3)> = candidates
+        .iter()
+        .filter(|signed| signed.receipt.claim == *claim_id)
+        .filter(|signed| crate::palw_state_v2::palw_seat_uncounted_on_licence_v1(state, claim_id, &signed.receipt.seat_bond))
+        .filter_map(|signed| rank(signed).map(|r| (r, signed)))
+        .collect();
+    // A stable sort: arrival order survives inside a rank.
+    ordered.sort_by_key(|(r, _)| *r);
+    let accepts = |set: &[PalwSeatReceiptV3]| matches!(validate(set), Ok(PalwReceiptQuorumV2::Supplementary { .. }));
+    let mut kept: Vec<PalwSeatReceiptV3> = Vec::new();
+    for (_, signed) in ordered {
+        if kept.iter().any(|k| k.receipt.seat_bond == signed.receipt.seat_bond) {
+            continue;
+        }
+        if accepts(std::slice::from_ref(signed)) {
+            kept.push(signed.clone());
+        }
+    }
+    if kept.is_empty() || !accepts(&kept) {
+        return None;
+    }
+    let mut folded = effect(&kept)?;
+    if folded.credited.len() < kept.len() {
+        kept.retain(|signed| folded.credited.contains(&signed.receipt.seat_bond));
+        if kept.is_empty() || !accepts(&kept) {
+            return None;
+        }
+        folded = effect(&kept)?;
+    }
+    // 4. A licence awaiting its replay takes a `Valid` only in a set that upgrades it.
+    let awaits = state.claim(claim_id).is_some_and(crate::palw_state_v2::palw_rcore_licence_awaits_replay_v1);
+    if awaits && !folded.upgrades && kept.iter().any(|signed| matches!(signed.receipt.verdict, PalwReceiptVerdictV2::Valid)) {
+        kept.retain(|signed| matches!(signed.receipt.verdict, PalwReceiptVerdictV2::Sampled));
+        if kept.is_empty() || !accepts(&kept) {
+            return None;
+        }
+        folded = effect(&kept)?;
+    }
+    (!folded.credited.is_empty()).then_some((kept, folded))
+}
+
+/// **The full-replay V2 `Valid`s a collector carries through the V2 door to lift a licence off Q-5's
+/// gate** (ADR-0152 V3S-01, Q-7; node policy — it decides what a node carries, never what a block
+/// accepts).
+///
+/// A V2 `Valid` is a whole-job replay: it covers every segment, so ONE of them from any seat — a
+/// partial seat the S2 licence left out, the licence's own rider, a seat a V3 set paid, a seat that
+/// filed `Sampled` — raises every segment's count by one and lifts `basis_k` 1 to 2 (Q-3). Past
+/// SEAT-R every replaying seat of a floor or 8k panel files its whole-job V2 beside its V3, so it is
+/// the route that survives a silent partial seat, where the V3 route needs every segment's holder.
+///
+/// `None` unless the claim awaits its replay ([`crate::palw_state_v2::palw_rcore_licence_awaits_replay_v1`]).
+/// Otherwise the candidates are taken in the caller's order (own first, then heard): this claim's
+/// `Valid`s from seats the V2 door takes ([`crate::palw_state_v2::palw_rcore_v2_door_takes_seat_v1`]),
+/// one a seat, each alone through `validate` ([`validate_supplementary_receipts_v1`] bound as the
+/// acceptance arm binds it — a refused one is dropped, never fatal), then added to the set while the
+/// set still validates and the fold still takes it (`effect`: a seat that cannot post its lock
+/// refuses the whole object in the fold, SR-6, so it is left out). The first set the fold says
+/// UPGRADES is the offer — normally one receipt; more ride only where one could not lift it. A set
+/// that never upgrades is not offered: a pay-only V2 is the seat's own carrier's to send (ADR-0124
+/// Decision 2), after the claim is replay-backed.
+pub fn palw_select_supplementary_v2_upgrade_v1<V, E>(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    candidates: &[PalwSeatReceiptV2],
+    validate: V,
+    effect: E,
+) -> Option<(Vec<PalwSeatReceiptV2>, crate::palw_state_v2::PalwSupplementaryEffectV1)>
+where
+    V: Fn(&[PalwSeatReceiptV2]) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>,
+    E: Fn(&[PalwSeatReceiptV2]) -> Option<crate::palw_state_v2::PalwSupplementaryEffectV1>,
+{
+    let claim = state.claim(claim_id)?;
+    if !crate::palw_state_v2::palw_rcore_licence_awaits_replay_v1(claim) {
+        return None;
+    }
+    let accepts = |set: &[PalwSeatReceiptV2]| matches!(validate(set), Ok(PalwReceiptQuorumV2::Supplementary { .. }));
+    let mut kept: Vec<PalwSeatReceiptV2> = Vec::new();
+    for receipt in candidates.iter().filter(|receipt| {
+        receipt.claim == *claim_id
+            && matches!(receipt.verdict, PalwReceiptVerdictV2::Valid)
+            && crate::palw_state_v2::palw_rcore_v2_door_takes_seat_v1(state, claim_id, claim, &receipt.seat_bond)
+    }) {
+        if kept.iter().any(|k| k.seat_bond == receipt.seat_bond) || !accepts(std::slice::from_ref(receipt)) {
+            continue;
+        }
+        let mut trial = kept.clone();
+        trial.push(receipt.clone());
+        if !accepts(&trial) {
+            continue;
+        }
+        let Some(folded) = effect(&trial) else { continue };
+        kept = trial;
+        if folded.upgrades {
+            return Some((kept, folded));
+        }
+    }
+    None
+}
+
+/// **The one supplementary set a collector offers for a licensed claim this tick** (ADR-0152 SR-10,
+/// Q-5, Q-7 and V3S-01; node policy). One object a claim a tick — a second one built on the same tip
+/// would name seats the first credits, and the acceptance walk would drop it for its fee:
+///
+/// * the V3 set ([`palw_select_supplementary_v3_v1`]) where it lifts an awaiting licence off the gate
+///   — it credits every seat it can and may complete SR-1b's release;
+/// * otherwise, on a licence awaiting its replay, the V2 door's upgrade
+///   ([`palw_select_supplementary_v2_upgrade_v1`]) — BEFORE any pay set, so a silent partial seat
+///   cannot hold an honest S2 claim on the gate while other seats have replayed the whole job;
+/// * otherwise the V3 set (pay, a release, or `Sampled`s), if any.
+///
+/// `validate_v3` / `validate_v2` are the acceptance validators bound as the gate binds them;
+/// `effect` is the fold's own answer on the object
+/// ([`crate::palw_state_v2::palw_v2_supplementary_effect_v1`]).
+#[allow(clippy::too_many_arguments)]
+pub fn palw_select_supplementary_offer_v1<V3, V2, E>(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    v3_candidates: &[PalwSeatReceiptV3],
+    v2_candidates: &[PalwSeatReceiptV2],
+    validate_v3: V3,
+    validate_v2: V2,
+    effect: E,
+) -> Option<crate::palw_state_v2::PalwSupplementaryOfferV1>
+where
+    V3: Fn(&[PalwSeatReceiptV3]) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>,
+    V2: Fn(&[PalwSeatReceiptV2]) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>,
+    E: Fn(&crate::palw_state_v2::PalwConsensusObjectV2) -> Option<crate::palw_state_v2::PalwSupplementaryEffectV1>,
+{
+    use crate::palw_state_v2::{PalwConsensusObjectV2 as Obj, PalwSupplementaryOfferV1 as Offer};
+    let claim = *claim_id;
+    let awaits = state.claim(claim_id).is_some_and(crate::palw_state_v2::palw_rcore_licence_awaits_replay_v1);
+    let v3 = palw_select_supplementary_v3_v1(state, claim_id, v3_candidates, validate_v3, |set| {
+        effect(&Obj::ReceiptLicensedV2 { claim, receipts: set.to_vec() })
+    });
+    if awaits && !v3.as_ref().is_some_and(|(_, folded)| folded.upgrades) {
+        let v2 = palw_select_supplementary_v2_upgrade_v1(state, claim_id, v2_candidates, validate_v2, |set| {
+            effect(&Obj::ReceiptLicensed { claim, receipts: set.to_vec() })
+        });
+        if let Some((receipts, folded)) = v2 {
+            return Some(Offer { object: Obj::ReceiptLicensed { claim, receipts }, effect: folded });
+        }
+    }
+    v3.map(|(receipts, folded)| Offer { object: Obj::ReceiptLicensedV2 { claim, receipts }, effect: folded })
+}
+
+/// **Which licence door a node offers first** (ADR-0152 Q-7's X22; node policy).
+///
+/// Past `Params::palw_rcore_plus` (`x22`): a set that licenses at `basis_k ≥ 2` — the coverage door,
+/// then the V1 quorum door (≥ 3 whole-job V2 `Valid`s and the outsider, so `basis_k` 3) — before the
+/// optimistic fast path, and S2 only when neither can be built from what is on hand. S2 recounts to
+/// 1 (the full seat and at most one rider) and lands the claim on DL-1's Q-5 gate, where it needs an
+/// upgrade before `bound + window_receipt` or it redraws; a V1 set the pool already holds lands it
+/// replay-backed. Below the fence an S2 licence simply finalizes, and the order is what it was:
+/// coverage, optimistic, then V1.
+///
+/// Each door is asked lazily, so a door is built only when every door before it had nothing.
+/// Returns the object and the door it came through.
+pub fn palw_licence_offer_order_v1<O>(
+    x22: bool,
+    coverage: impl FnOnce() -> Option<O>,
+    quorum: impl FnOnce() -> Option<O>,
+    optimistic: impl FnOnce() -> Option<O>,
+) -> Option<(O, crate::palw_economic_safety_v1::PalwLicenceDoorTagV1)> {
+    use crate::palw_economic_safety_v1::PalwLicenceDoorTagV1 as Door;
+    let covered = coverage().map(|object| (object, Door::Coverage));
+    if x22 {
+        covered
+            .or_else(|| quorum().map(|object| (object, Door::Quorum)))
+            .or_else(|| optimistic().map(|object| (object, Door::Optimistic)))
+    } else {
+        covered
+            .or_else(|| optimistic().map(|object| (object, Door::Optimistic)))
+            .or_else(|| quorum().map(|object| (object, Door::Quorum)))
+    }
 }
 
 /// **One shard's part** (ADR-0100 Decision 4): the same receipt checks, over the seats of THAT
