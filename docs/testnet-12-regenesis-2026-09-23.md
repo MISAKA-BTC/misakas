@@ -208,9 +208,53 @@ view が移った時点でまだ先にある ticket（窓の末尾）。
 
 ## 配備の順序（予定）
 
-DoS 修正の merge → release build（上表の TBD を埋める）→ drill（出荷する binary で、fence 1000 を
-跨ぐまで）→ 4 ホストへ配備 → seeder 切替 → 告知（告知は運用者が行う）。一般参加者向けの手順は
-[`testnet12-join-mining.md`](testnet12-join-mining.md)。
+DoS 修正の merge → release build（上表の TBD を埋める）→ 4 ホストへ配備 → seeder 切替 → 告知
+（告知は運用者が行う）→ **公開後に** drill（出荷する binary を **drill salt 付きで**、drill 専用鍵で。
+下の「drill（P2-12）」）。drill は公開前の gate ではない（運用者の決定 2026-09-24、ADR-0152 §8.3 item 3、
+§9.3 Q12 (b)）。一般参加者向けの手順は [`testnet12-join-mining.md`](testnet12-join-mining.md)。
+
+## drill（P2-12、ADR-0152 §8.2 — 公開後に実施）
+
+**drill は「出荷する binary で testnet-12 を動かす」ことではなくなった。「出荷する binary を drill salt
+付きで動かす」ことである。** salt 無しで出荷 binary を私設で動かすと、それは公開 testnet-12 と同じ
+genesis・同じ premine txid・同じ network domain の chain になり、そこで card 鍵が署名したものは公開
+chain でも有効になる（premine の spend も、登録も、receipt も）。salt はそれを構造的に閉じる。
+
+* **起動**: `kaspad --testnet --netsuffix=12 --palw-drill-genesis-salt=<64 hex> --nodnsseed
+  --addpeer=<他の drill ホスト> --appdir=<専用>`。salt は `openssl rand -hex 32` で作り、全 drill ホストに
+  同じものを渡す。**コマンドラインのみ**（環境変数・config file からは読まない。公開ノードと env を共有
+  しても事故で salt が付かない）。
+* **salt が動かすもの**: premine txid と community txid（`PALW_T12_PREMINE_SALT` の後ろに salt を足した
+  同じ導出）→ genesis の全 outpoint、`utxo_commitment`、genesis hash（coinbase marker も
+  `misaka-palw-t12-drill`）→ network domain（全 V2 署名）と `consensus_params_id` / `consensus_identity_id`。
+  ルール（fence・window・class 行・R-core+）は出荷物そのもの（`t53_the_drill_runs_the_shipping_rules_on_its_own_genesis`
+  が「genesis と registry 以外は fingerprint まで同じ」を検査）。
+* **drill 専用鍵**: genesis の 8 席（bond 鍵・operator 鍵・payout／fee float）、main wallet、heartbeat の
+  支払先、drill で登録する bond（D-9 の 130,000 MSK 席、D-10 の再登録）はすべて salt から導出する鍵。
+  card 鍵は一切使わない。`kaspad ... --palw-drill-genesis-salt=<salt> --palw-drill-write-keyring=<dir>` が
+  seed file（0600）と `manifest.json`（drill genesis、各席の bond outpoint・fee float・address、
+  heartbeat／payout address、公開 t12 の genesis を並記）を書いて終了する。drill script はこの manifest
+  だけを読む（鍵を自分で導出しない）。
+* **起動時に拒否されるもの**（`kaspad/src/palw_drill.rs`）: testnet-12 以外／`--nodnsseed` 無し／明示
+  peer 無し／`--override-params-file`／drill keyring に無い `--palw-producer-key`（card 鍵を含む）・
+  `--palw-producer-pay-address`・`--palw-heartbeat-miner-address`／公開 t12 の genesis txid を指す
+  `--palw-producer-bond`・`--palw-fee-outpoint`（公開 unit の flag の写し）。
+* **app dir**: drill は `<appdir>/misaka-testnet-12/palw-drill-genesis` に marker を書く。marker の無い
+  既存データ（公開ノードの可能性）を drill は開かない — 開けば genesis 検査で「DB を消すか」と聞かれ、
+  `--yes` なら公開ノードの DB を消す。逆に salt 無しのノードは marker のある dir を開かない。
+* **公開 chain とは互いに拒否**: handshake は genesis で `WrongGenesis`（`t53_the_handshake_refuses_a_drill_and_public_testnet_12_to_each_other`）。
+  drill の登録・attempt・有罪判定を公開 t12 の test consensus に流すと missing UTXO／domain で拒否
+  （`t53_drill_isolation`）。同じ blue score で同じ miner script なら 2 chain の coinbase txid は一致する
+  （これが drill 専用鍵が要る理由）— drill 専用 script なら一致しない。
+* **devnet/simnet 専用だった drill 注入器**（`--palw-drill-tamper-fp-leaf`、`--palw-drill-answer-only`、
+  `--palw-drill-refuse-leaf-evidence`）は salt 付き drill でも使える（公開 t12 では従来どおり拒否）。
+* **場所**: 4 ホスト以上の fleet。**この Mac では絶対に動かさない。公開 t12 ノードが動いているホストでも
+  動かさない**（09-23 の crash loop の教訓）。`scripts/misaka-palw-t12-rcore-drill.sh check-host` が両方を
+  拒否する。
+* **手順と証拠**: `scripts/misaka-palw-t12-rcore-drill.sh`（D-1〜D-10、位置で番号付け。証拠は各 action の
+  後に書かれた log と RPC だけ）、`scripts/misaka-palw-t12-rcore-analyze.py`（door／withheld histogram＝p、
+  秒／DAA の実測、licence の cadence と O-1 判定）。どちらも構文検査と analyzer の合成データ self-test のみ
+  で、どのホストにも流していない。
 
 ---
 
@@ -295,6 +339,10 @@ one it cannot now refuses to start.*
    bare `kill` in a script is not protected.
 
 ### Drill evidence (first deployment)
+
+*Superseded as a method (P2-12, 2026-09-25): the drill below ran the shipped binary on public testnet-12's
+own genesis. From P2-12 on, a drill runs the shipped binary **with the drill salt** and drill-only keys, so
+nothing it signs or mints is valid on public testnet-12 — see "drill（P2-12）" above.*
 
 Same binary as shipped. `consensus/tests/palw_t12_liveness.rs` and
 `consensus/core/tests/t12_economic_safety_drill.rs` cover the rule-level half; this is the live half.

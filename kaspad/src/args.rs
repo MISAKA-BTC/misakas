@@ -286,6 +286,17 @@ pub struct Args {
     pub palw_producer_class: Option<String>,
     /// Re-run every licensed claim and open a court against the ones this node cannot reproduce.
     pub palw_challenge: bool,
+    /// **ADR-0152 §8.2 (P2-12): run a testnet-12 DRILL chain** — the shipping ruleset on a genesis
+    /// this 32-byte hex salt moves, with drill-only keys (`kaspad/src/palw_drill.rs` lists what a
+    /// salted node refuses). **Command line only**: `#[serde(skip)]` keeps it out of config files and
+    /// it has no environment variable, so a unit file or an env file shared with a public node can
+    /// never salt one by accident.
+    #[serde(skip)]
+    pub palw_drill_genesis_salt: Option<String>,
+    /// With the salt: write the drill's keyring (seeds, addresses, seat outpoints, the drill genesis)
+    /// into this directory and exit. What the drill script reads, so it never re-derives a key.
+    #[serde(skip)]
+    pub palw_drill_write_keyring: Option<String>,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY (devnet/simnet): this node's canonical free-prompt claims commit a capture with
@@ -491,6 +502,8 @@ impl Default for Args {
             palw_bond_collateral: None,
             palw_producer_class: None,
             palw_challenge: false,
+            palw_drill_genesis_salt: None,
+            palw_drill_write_keyring: None,
             palw_drill_tamper_leaf: None,
             palw_drill_tamper_fp_leaf: None,
             palw_drill_challenge_all: false,
@@ -612,6 +625,24 @@ impl Args {
         }
         config.evm_prune_legacy_206 = self.evm_prune_legacy_206; // C-01 S9b-prune: one-shot bulk reclamation of legacy 206
         config.evm_materialize_pp_anchor = self.evm_materialize_pp_anchor; // F2c: one-shot pp EVM anchor backfill
+
+        // **ADR-0152 §8.2 (P2-12): a testnet-12 drill — the salted params and the salt, together.**
+        // The one site either is installed, so the consensus factory's start-up guard (which
+        // recomputes the genesis set from `config.palw_drill_genesis_salt` and compares it with the
+        // params' genesis) can never see one without the other. `validate_args` has already
+        // refused a malformed salt and every network but testnet-12; the swap comes before every
+        // other params edit below, which are all devnet-only and so never meet it.
+        if let Some(hex) = self.palw_drill_genesis_salt.as_deref() {
+            let salt = kaspa_consensus_core::config::drill::PalwDrillSaltV1::from_hex(hex)
+                .unwrap_or_else(|e| panic!("--palw-drill-genesis-salt: {e} (validate_args refuses this first)"));
+            assert_eq!(
+                self.network(),
+                kaspa_consensus_core::config::drill::palw_drill_network_v1(),
+                "--palw-drill-genesis-salt is testnet-12's alone (validate_args refuses this first)"
+            );
+            config.params = kaspa_consensus_core::config::params::palw_t12_drill_params_v1(&salt);
+            config.palw_drill_genesis_salt = Some(salt);
+        }
 
         // The floor-only devnet ruleset: the shipped devnet carries testnet-11's class set, so its
         // floor holds a sliver of the share and ADR-0076 seeds it at ~MAX/12,663 — a fixture
@@ -1336,6 +1367,26 @@ pub fn cli() -> Command {
                     "PALW DRILL ONLY: this node's canonical free-prompt claims (--palw-canonical-claims) commit a capture \
                      with one lane of this step leaf corrupted, the commitment re-derived so only a re-execution sees it — \
                      so the one-move court (ADR-0100) can be shown convicting on a live chain. DEVNET/SIMNET ONLY.",
+                ),
+        )
+        .arg(
+            // No `.env(...)` on purpose (ADR-0152 §8.2): the salt is typed on the command line of a
+            // drill node, never inherited from an environment a public node might share.
+            Arg::new("palw-drill-genesis-salt")
+                .long("palw-drill-genesis-salt")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "ADR-0152 §8.2: run a testnet-12 DRILL chain — the shipping rules on a genesis this 64-hex salt moves                      (`openssl rand -hex 32`). testnet-12 only; needs --nodnsseed, an explicit --addpeer/--connect list, drill-only                      keys (see --palw-drill-write-keyring) and an app dir no public node uses. Its peers are other nodes of the same                      drill: public testnet-12 refuses it at the handshake and it refuses public testnet-12.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-drill-write-keyring")
+                .long("palw-drill-write-keyring")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "With --palw-drill-genesis-salt: write the drill's keyring — seed files (0600) and manifest.json with the drill                      genesis, every seat's bond and fee-float outpoint, and the drill-only heartbeat and payout addresses — into this                      directory, and exit.",
                 ),
         )
         .arg(
@@ -2218,6 +2269,8 @@ impl Args {
             palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
+            palw_drill_genesis_salt: m.get_one::<String>("palw-drill-genesis-salt").cloned(),
+            palw_drill_write_keyring: m.get_one::<String>("palw-drill-write-keyring").cloned(),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_tamper_fp_leaf: m.get_one::<u64>("palw-drill-tamper-fp-leaf").copied().or(defaults.palw_drill_tamper_fp_leaf),
             palw_drill_challenge_all: m

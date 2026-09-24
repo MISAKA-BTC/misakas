@@ -274,13 +274,27 @@ pub const PALW_T12_PREMINE_SALT: &[u8] = b"misaka-palw-t12/premine/v2/2026-09-24
 /// The keyed-hash domain the network-separated premine txids are derived under.
 const PREMINE_TXID_DOMAIN: &[u8] = b"misaka-premine-txid/v1";
 
+/// **The tag a drill genesis salt enters the preimage under** (ADR-0152 §8.2, P2-12). Appended
+/// after [`PALW_T12_PREMINE_SALT`], never in its place, so a drill txid is a separation OF public
+/// testnet-12's txid rather than a sibling of it — and tagged, so no salt's bytes can spell a
+/// preimage another derivation in this file produces.
+const PREMINE_DRILL_SALT_TAG: &[u8] = b"misaka-palw-drill-genesis-salt/v1";
+
 /// A sentinel txid made this network's own: `BLAKE2b-512(key = PREMINE_TXID_DOMAIN,
-/// sentinel ‖ network id ‖ PALW_T12_PREMINE_SALT)`.
-fn network_separated_txid(sentinel: &[u8; 64], net: NetworkId) -> Hash64 {
-    let mut preimage = Vec::with_capacity(64 + 16 + PALW_T12_PREMINE_SALT.len());
+/// sentinel ‖ network id ‖ PALW_T12_PREMINE_SALT [‖ drill tag ‖ drill salt])`.
+///
+/// `drill = None` is the public derivation byte for byte (the pinned genesis tests say so); a drill
+/// salt extends the same preimage, so the premine and community txids — and with them every
+/// genesis outpoint, the `utxo_commitment` and the genesis hash — move together or not at all.
+fn network_separated_txid(sentinel: &[u8; 64], net: NetworkId, drill: Option<&super::drill::PalwDrillSaltV1>) -> Hash64 {
+    let mut preimage = Vec::with_capacity(64 + 16 + PALW_T12_PREMINE_SALT.len() + 80);
     preimage.extend_from_slice(sentinel);
     preimage.extend_from_slice(net.to_string().as_bytes());
     preimage.extend_from_slice(PALW_T12_PREMINE_SALT);
+    if let Some(salt) = drill {
+        preimage.extend_from_slice(PREMINE_DRILL_SALT_TAG);
+        preimage.extend_from_slice(salt.as_bytes());
+    }
     kaspa_hashes::blake2b_512_keyed(PREMINE_TXID_DOMAIN, &preimage)
 }
 
@@ -296,7 +310,7 @@ fn premine_is_network_separated(net: NetworkId) -> bool {
 /// private testnet-12 instances with the same card keys) is a spend on it.
 pub fn premine_txid_for(net: NetworkId) -> Hash64 {
     if premine_is_network_separated(net) {
-        network_separated_txid(&MISAKA_PREMINE_TXID, net)
+        network_separated_txid(&MISAKA_PREMINE_TXID, net, None)
     } else {
         Hash64::from_bytes(MISAKA_PREMINE_TXID)
     }
@@ -515,7 +529,40 @@ pub fn testnet12_community_utxos() -> UtxoCollection {
 /// same table, so a member's spend there replayed here. Derived from the sentinel, the network id
 /// and [`PALW_T12_PREMINE_SALT`] exactly as [`premine_txid_for`] derives the premine's.
 pub fn testnet12_community_txid() -> Hash64 {
-    network_separated_txid(&TESTNET12_COMMUNITY_TXID, NetworkId::with_suffix(NetworkType::Testnet, 12))
+    network_separated_txid(&TESTNET12_COMMUNITY_TXID, NetworkId::with_suffix(NetworkType::Testnet, 12), None)
+}
+
+/// **A testnet-12 drill's premine txid** (ADR-0152 §8.2, P2-12): the same derivation as
+/// [`premine_txid_for`]`(testnet-12)` with the drill salt appended. Every genesis output of a drill
+/// chain sits on it, so no outpoint a drill spends exists on public testnet-12 (T53: missing UTXO).
+pub fn palw_t12_drill_premine_txid_v1(salt: &super::drill::PalwDrillSaltV1) -> Hash64 {
+    network_separated_txid(&MISAKA_PREMINE_TXID, super::drill::palw_drill_network_v1(), Some(salt))
+}
+
+/// **A testnet-12 drill's community txid** — [`testnet12_community_txid`] with the drill salt, for
+/// the same reason as [`palw_t12_drill_premine_txid_v1`].
+pub fn palw_t12_drill_community_txid_v1(salt: &super::drill::PalwDrillSaltV1) -> Hash64 {
+    network_separated_txid(&TESTNET12_COMMUNITY_TXID, super::drill::palw_drill_network_v1(), Some(salt))
+}
+
+/// **A testnet-12 drill's genesis UTXO set**: public testnet-12's shape — the same 10B cap, the same
+/// collateral per seat at the same indices, the same fee floats, the same community table — on the
+/// drill's own txids, with the main wallet and every seat's float at the drill's own keys
+/// (`cards` = `(premine index, payout payload)`, `main_payload` = the drill main wallet's). Built by
+/// [`bonded_genesis_utxos_on`], the one construction path every bonded genesis takes.
+pub(crate) fn palw_t12_drill_bonded_utxos_v1(
+    salt: &super::drill::PalwDrillSaltV1,
+    cards: &[(u32, [u8; 64])],
+    main_payload: &[u8; 64],
+) -> UtxoCollection {
+    let community = community_utxos_v1(palw_t12_drill_community_txid_v1(salt).as_bytes(), TESTNET12_COMMUNITY_ALLOCATIONS);
+    bonded_genesis_utxos_on(
+        palw_t12_drill_premine_txid_v1(salt),
+        main_payload,
+        genesis_bond_collateral_for(super::drill::palw_drill_network_v1()),
+        cards,
+        community,
+    )
 }
 
 /// The one construction path both community tables take: `(address, whole MSK)` rows become one
@@ -652,7 +699,29 @@ pub(crate) fn bonded_genesis_utxos(
     cards: &[(u32, [u8; 64])],
     community: impl IntoIterator<Item = (TransactionOutpoint, UtxoEntry)>,
 ) -> UtxoCollection {
-    let main_spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
+    bonded_genesis_utxos_on(
+        premine_txid_for(net),
+        &owner_payload(main_address_for(net)),
+        genesis_bond_collateral_for(net),
+        cards,
+        community,
+    )
+}
+
+/// [`bonded_genesis_utxos`] with its three network facts supplied — the premine txid, the main
+/// wallet's owner payload and the per-seat collateral — so a testnet-12 drill
+/// ([`palw_t12_drill_bonded_utxos_v1`]) is minted by the same arithmetic as the network it drills
+/// and cannot drift from it. `premine_outpoint_for(net, i)` is `(premine_txid_for(net), i)`, so the
+/// public networks' sets are unchanged byte for byte.
+fn bonded_genesis_utxos_on(
+    premine_txid: Hash64,
+    main_payload: &[u8; 64],
+    collateral: u64,
+    cards: &[(u32, [u8; 64])],
+    community: impl IntoIterator<Item = (TransactionOutpoint, UtxoEntry)>,
+) -> UtxoCollection {
+    let main_spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(main_payload);
+    let outpoint = |index: u32| TransactionOutpoint { transaction_id: premine_txid, index };
 
     let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(2 * cards.len() + 1);
     let mut carved: u64 = 0;
@@ -661,20 +730,16 @@ pub(crate) fn bonded_genesis_utxos(
     // identity — `PalwBondKeyV2(premine_outpoint_for(net, card.premine_index))` — so the collateral goes
     // where the bond points, not where the card happens to sit in the list), owned by the main
     // wallet's key: "the main wallet bonds", there is no custody block.
-    let collateral = genesis_bond_collateral_for(net);
     for (premine_index, _) in cards {
         assert!(*premine_index < MAIN_PREMINE_INDEX, "a genesis bond may not stake the main wallet itself or a float index");
-        utxos.push((premine_outpoint_for(net, *premine_index), premine_entry(collateral, main_spk.clone())));
+        utxos.push((outpoint(*premine_index), premine_entry(collateral, main_spk.clone())));
         carved = carved.checked_add(collateral).expect("collateral cannot overflow");
     }
 
     // Per-bond fee floats, after the main wallet's index, at each bond's own payout key.
     for (i, (_, payout_payload)) in cards.iter().enumerate() {
         let script_public_key = crate::mldsa87_primitives::p2pkh_mldsa87_spk(payout_payload);
-        utxos.push((
-            premine_outpoint_for(net, MAIN_PREMINE_INDEX + 1 + i as u32),
-            premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key),
-        ));
+        utxos.push((outpoint(MAIN_PREMINE_INDEX + 1 + i as u32), premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key)));
         carved = carved.checked_add(PALW_RC_BOND_FEE_FLOAT_SOMPI).expect("floats cannot overflow");
     }
 
@@ -689,7 +754,7 @@ pub(crate) fn bonded_genesis_utxos(
     let main_amount = MISAKA_PREMINE_CAP_SOMPI
         .checked_sub(carved)
         .expect("the 10B premine cap is a hard invariant: collateral + floats + community exceed it — shrink the carve-outs, never raise the cap");
-    utxos.push((premine_outpoint_for(net, MAIN_PREMINE_INDEX), premine_entry(main_amount, main_spk)));
+    utxos.push((outpoint(MAIN_PREMINE_INDEX), premine_entry(main_amount, main_spk)));
 
     UtxoCollection::from_iter(utxos)
 }

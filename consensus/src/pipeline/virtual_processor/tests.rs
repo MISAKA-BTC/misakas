@@ -16228,3 +16228,6 @@ mod t12_stake_draw_integration;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;
+// ADR-0152 §8.2 / T53 (P2-12): what a testnet-12 drill chain produces — a registration and its
+// carrier, an attempt, a conviction, a coinbase — replayed into public testnet-12, refused.
+mod t53_drill_isolation;

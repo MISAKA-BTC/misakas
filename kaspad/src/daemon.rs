@@ -159,6 +159,11 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     // network's own params, like the EVM check above.
     palw_rcore_build_can_run_v1(&args.network().into(), kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1)?;
 
+    // **ADR-0152 §8.2 (P2-12): a testnet-12 drill node's own rules** — testnet-12 only, no
+    // discovery, the shipping rules unedited, drill-only keys (`palw_drill.rs`). A no-op without
+    // `--palw-drill-genesis-salt`.
+    crate::palw_drill::palw_drill_validate_args_v1(args)?;
+
     if !args.connect_peers.is_empty() && !args.add_peers.is_empty() {
         return Err(ConfigError::MixedConnectAndAddPeers);
     }
@@ -394,6 +399,10 @@ fn public_evm_rpc_allowed() -> bool {
 /// (dropped) before the `Core` is shut down.
 ///
 pub fn create_core(args: Args, fd_total_budget: i32) -> (Arc<Core>, Arc<RpcCoreService>) {
+    // ADR-0152 §8.2 (P2-12): a drill's argument rules, its keyring export (which exits) and its
+    // app-directory guard run BEFORE the logger opens a file under the app directory — a drill
+    // pointed at a public node's directory is refused before it writes a line there.
+    crate::palw_drill::palw_drill_preflight_v1(&args);
     let rt = Runtime::from_args(&args);
     create_core_with_runtime(&rt, &args, fd_total_budget)
 }
@@ -758,6 +767,10 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
 
     let app_dir = get_app_dir_from_args(args);
     let db_dir = app_dir.join(network.to_prefixed()).join(DEFAULT_DATA_DIR);
+    // ADR-0152 §8.2 (P2-12): the app-directory guard again, before any database opens — for an
+    // entry point that reached here without `create_core`'s pre-flight. A drill never opens a
+    // directory holding another node's data, and a public node never opens a drill's.
+    crate::palw_drill::palw_drill_datadir_guard_or_exit_v1(args, config.palw_drill_genesis_salt.as_ref());
 
     // Print package name and version
     info!("{} v{}", env!("CARGO_PKG_NAME"), git::with_short_hash(version()));
@@ -1795,14 +1808,12 @@ Do you confirm? (y/n)";
                         canonical_class: args.palw_canonical_class.clone(),
                         canonical_interval_daa: args.palw_canonical_interval_daa,
                         drill_tamper_fp_leaf: match args.palw_drill_tamper_fp_leaf {
-                            Some(leaf)
-                                if !matches!(
-                                    network.network_type,
-                                    kaspa_consensus_core::network::NetworkType::Devnet
-                                        | kaspa_consensus_core::network::NetworkType::Simnet
-                                ) =>
-                            {
-                                panic!("--palw-drill-tamper-fp-leaf={leaf} is a drill fault injector and is devnet/simnet only")
+                            // Devnet, simnet, or a salted testnet-12 drill (ADR-0152 §8.2) — a
+                            // private chain by construction; never public testnet-12.
+                            Some(leaf) if !crate::palw_drill::palw_private_drill_network_v1(network, args) => {
+                                panic!(
+                                    "--palw-drill-tamper-fp-leaf={leaf} is a drill fault injector and is devnet/simnet (or a salted testnet-12 drill) only"
+                                )
                             }
                             Some(leaf) => {
                                 warn!(
@@ -1817,14 +1828,11 @@ Do you confirm? (y/n)";
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
                         drill_answer_only: {
-                            let drill = matches!(
-                                network.network_type,
-                                kaspa_consensus_core::network::NetworkType::Devnet
-                                    | kaspa_consensus_core::network::NetworkType::Simnet
-                            );
+                            let drill = crate::palw_drill::palw_private_drill_network_v1(network, args);
                             if (args.palw_drill_answer_only || args.palw_drill_refuse_leaf_evidence) && !drill {
                                 panic!(
-                                    "--palw-drill-answer-only and --palw-drill-refuse-leaf-evidence are drills and are devnet/simnet only"
+                                    "--palw-drill-answer-only and --palw-drill-refuse-leaf-evidence are drills and are devnet/simnet (or a \
+                                     salted testnet-12 drill) only"
                                 )
                             }
                             if args.palw_drill_answer_only {
