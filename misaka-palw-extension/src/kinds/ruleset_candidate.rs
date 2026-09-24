@@ -214,6 +214,22 @@ pub fn would_print_v1(params: &Params) -> PalwWouldPrintV1 {
     }
 }
 
+/// **The arming build's derived depths, re-derived after its fences are set.** A V2 network's
+/// `finality_depth` and `pruning_depth` are derived from its bundle and fences, not carried: past
+/// `palw_class_verify_deadline` the pruning depth is the D_cap claim lattice (ADR-0152 §4-quater
+/// P-1 — 74,920 on testnet-12, against 12,002 without the fence). The arming build derives them
+/// after its fences are set ([`Params::with_palw_v2_depths`], raised, never lowered), so the
+/// candidate does the same — else a genesis candidate for that fence prints a params id the arming
+/// build never prints, and trips K18 on a depth the arming build would never carry. A V1 network is
+/// returned as it is.
+pub fn with_derived_depths_v1(arming: Params) -> Params {
+    let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &arming.palw_consensus_mode else {
+        return arming;
+    };
+    let bundle = bundle.clone();
+    arming.with_palw_v2_depths(&bundle)
+}
+
 pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensionError> {
     let manifest = cx.manifest();
     let requested: Vec<(String, PalwFenceRequestV1)> = manifest.requires.fences.iter().map(|(n, r)| (n.clone(), r.clone())).collect();
@@ -273,6 +289,7 @@ pub(crate) fn verify(cx: &mut VerifyCx<'_>) -> Result<KindOutcomeV1, PalwExtensi
             }
         }
     }
+    let arming = with_derived_depths_v1(arming);
 
     let arm = would_print_v1(&arming);
     cx.record("arming.params_id", &arm.params_id);
