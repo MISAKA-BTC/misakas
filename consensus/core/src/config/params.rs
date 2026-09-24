@@ -692,6 +692,45 @@ pub struct PalwPanelExposureFloorV1 {
     pub reward_multiple_permille: u32,
 }
 
+/// **ADR-0152-adjacent: the Activation Pool and the listing rules it rides on** (user decision
+/// 2026-09-25; the adversarial review's §4, R1 and R2) — see
+/// [`crate::palw_activation_pool_v1`].
+///
+/// One fence arms three rules: R1 (silence reclamation spares a class that cannot produce and a
+/// genesis row), R2 (the registry's span step skips Dormant and Frozen classes and audits a
+/// `Candidate` only at its own staggered span) and the pool (a per-class side map funded by
+/// sink-bound top-ups, paying a once-per-operator preparation reward at the audit and an activation
+/// bonus at `Probation → ActiveLimited`). `terms` is the companion value: hashed into
+/// `consensus_params_id`, reported beside the height in `consensus_schedule_id`, invisible to the
+/// fence visitor.
+///
+/// Genesis-only — R1 and R2 change rules every existing class is stepped by, and a crossing would
+/// need a drill that crosses it — and refused by [`Params::validate_palw_v2`] without
+/// `palw_model_registry`, `palw_admission_independence` and `palw_audit_2026_09_23` armed at
+/// genesis beside it, or with terms that cannot run. `Some(0)` on testnet-12 only; `None` on every
+/// other preset, and hashed Some-only everywhere, so every other network's ids are byte-identical
+/// to a build without it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwActivationPoolParamsV1 {
+    /// When R1, R2 and the pool take effect — genesis or never.
+    pub activation: ForkActivation,
+    /// The pool's numbers ([`crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1`] on
+    /// testnet-12).
+    pub terms: crate::palw_activation_pool_v1::PalwActivationPoolTermsV1,
+}
+
+/// The Activation Pool's terms, in declaration order, into a fingerprint (`consensus_params_id`
+/// and `consensus_schedule_id` write the same bytes).
+fn palw_activation_pool_terms_write_v1(h: &mut ConsensusParamsId, terms: &crate::palw_activation_pool_v1::PalwActivationPoolTermsV1) {
+    h.write(terms.prep_base_sompi.to_le_bytes());
+    h.write(terms.prep_share_permille.to_le_bytes());
+    h.write(terms.bonus_share_permille.to_le_bytes());
+    h.write(terms.ramp_daa.to_le_bytes());
+    h.write(terms.prep_payee_cap.to_le_bytes());
+    h.write(terms.bonus_payee_cap.to_le_bytes());
+    h.write(terms.min_topup_sompi.to_le_bytes());
+}
+
 /// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
 /// fork-choice work leaves `calc_work(header.bits)`.**
 ///
@@ -1363,6 +1402,9 @@ pub struct Params {
     /// presets built by struct update (`..TESTNET_PARAMS`) cannot carry one (a `Vec` gives the type
     /// drop glue a const cannot evaluate). The bundle's mirror is the `Vec` the spec names.
     pub palw_rcore_conservative_classes: &'static [crate::Hash64],
+    /// **ADR-0152-adjacent: the Activation Pool, R1 and R2** (user decision 2026-09-25) — see
+    /// [`PalwActivationPoolParamsV1`]. `Some` at genesis on testnet-12 only; hashed Some-only.
+    pub palw_activation_pool: Option<PalwActivationPoolParamsV1>,
     /// **ADR-0143: an artifact root has one owner on the chain.** Past it the chain keeps a rooted
     /// index `artifact_root -> (class_id, line_id, version)`, every entrance where a root enters
     /// state refuses one that is already owned, and the positional lookups that answered "which
@@ -3661,6 +3703,43 @@ impl Params {
                 ));
             }
         }
+        // **ADR-0152-adjacent: the Activation Pool, R1 and R2 (user decision 2026-09-25) are armed at
+        // genesis or not at all.** R1 and R2 change how every existing class is reclaimed and stepped,
+        // and the pool's rows open at registration: a later crossing would reclaim or keep a class by
+        // two rules either side of one height, with no drill that crosses it. They read the registry
+        // rows (`palw_model_registry`), ADR-0147's jury and its `Candidate` state
+        // (`palw_admission_independence`) and the P-B1 refund route and payout cap
+        // (`palw_audit_2026_09_23`), so all three must be armed at genesis beside it.
+        if let Some(pool) = self.palw_activation_pool
+            && pool.activation != ForkActivation::never()
+        {
+            if !matches!(self.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool is armed on a network that is not ConsensusV2: its rows and rules are the V2 \
+                     registry's (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
+            if pool.activation.daa_score() != 0 {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool may only be armed at genesis (DAA 0): R1 and R2 change how every class is reclaimed \
+                     and stepped, and a crossing would reclaim one class by two rules (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
+            let at_genesis = |f: Option<ForkActivation>| f.is_some_and(|f| f != ForkActivation::never() && f.daa_score() == 0);
+            if !(at_genesis(self.palw_model_registry)
+                && at_genesis(self.palw_admission_independence)
+                && at_genesis(self.palw_audit_2026_09_23))
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_activation_pool is armed without palw_model_registry, palw_admission_independence and \
+                     palw_audit_2026_09_23 all armed at genesis: the pool reads the registry's rows, ADR-0147's jury and \
+                     the P-B1 refund route (ADR-0152-adjacent: Activation Pool)",
+                ));
+            }
+            if let Some(why) = pool.terms.refusal() {
+                return Err(PalwModeV2Error::Invalid(why));
+            }
+        }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             // ADR-0152 R-core+ is asked LAST on both paths, so every older fence's own refusal —
             // the prerequisites' rules — names itself before R-core+ names the missing prerequisite.
@@ -4745,6 +4824,11 @@ impl Params {
         // ADR-0152 R-core+: Some-only hashed, so the same collapse.
         if self.palw_rcore_plus == Some(ForkActivation::never()) {
             self.palw_rcore_plus = None;
+        }
+        // ADR-0152-adjacent (Activation Pool): Some-only hashed, the carve's shape — the whole option
+        // collapses, so the terms beside a never-armed fence leave the identity with it.
+        if self.palw_activation_pool.is_some_and(|pool| pool.activation == ForkActivation::never()) {
+            self.palw_activation_pool = None;
         }
         if self.palw_artifact_root_ownership == Some(ForkActivation::never()) {
             self.palw_artifact_root_ownership = None;
@@ -6095,6 +6179,24 @@ impl Params {
         self.palw_rcore_plus_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
+    /// **ADR-0152-adjacent: the Activation Pool's fence** (R1, R2 and the pool), resolved off a
+    /// ConsensusV2 ruleset — the ONE place it is decided; the fold's extras, the transaction
+    /// validator's sink rule and the mempool read this and never the raw field.
+    pub fn palw_activation_pool_fence(&self) -> Option<PalwActivationPoolParamsV1> {
+        match (&self.palw_consensus_mode, self.palw_activation_pool) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(pool)) if pool.activation != ForkActivation::never() => {
+                Some(pool)
+            }
+            _ => None,
+        }
+    }
+
+    /// The pool's terms where R1, R2 and the pool are in force at `daa_score`
+    /// (`PalwTransitionExtrasV1::activation_pool`), else `None` — every preset but testnet-12.
+    pub fn palw_activation_pool_at(&self, daa_score: u64) -> Option<crate::palw_activation_pool_v1::PalwActivationPoolTermsV1> {
+        self.palw_activation_pool_fence().filter(|pool| pool.activation.is_active(daa_score)).map(|pool| pool.terms)
+    }
+
     /// Whether a false `Valid` is judged by `palw_check_panel_false_valid_v2` at `daa_score`
     /// (`PalwTransitionExtrasV1::offence_attribution_active`): the V1 kind refused, the V2 kind
     /// admitted. `false` on every preset but testnet-12.
@@ -6225,6 +6327,7 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
+            palw_activation_pool,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -6326,6 +6429,7 @@ impl Params {
             ("palw_clock_floor", *palw_clock_floor),
             ("palw_offence_attribution", *palw_offence_attribution),
             ("palw_rcore_plus", *palw_rcore_plus),
+            ("palw_activation_pool", palw_activation_pool.map(|pool| pool.activation)),
             ("palw_artifact_root_ownership", *palw_artifact_root_ownership),
             ("palw_operator_id_unique", *palw_operator_id_unique),
             ("palw_objective_offence", *palw_objective_offence),
@@ -6688,6 +6792,14 @@ impl Params {
             h.write(b"palw_rcore_plus");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0152-adjacent (Activation Pool), NAMED for the same reason and Some-only, with its terms
+        // beside the height for the SA-4 reason the carve's numbers are: two operators arming the
+        // pool with different terms must see it in the log.
+        if let Some(pool) = self.palw_activation_pool {
+            h.write(b"palw_activation_pool");
+            h.write(pool.activation.daa_score().to_le_bytes());
+            palw_activation_pool_terms_write_v1(&mut h, &pool.terms);
+        }
         // ADR-0083 Decision 1's fence, NAMED for the same reason: it changes the bits every header
         // past it must carry, so an operator reading the schedule must see it.
         if let Some(priced) = self.palw_difficulty_priced_rows {
@@ -6882,6 +6994,7 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes: _,
+            palw_activation_pool,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -7197,6 +7310,11 @@ impl Params {
         // ADR-0152 R-core+: SOME-ONLY, as the floor above and for its reason.
         if let Some(activation) = palw_rcore_plus.as_mut() {
             fork(activation, visit);
+        }
+        // ADR-0152-adjacent (Activation Pool): the height only, SOME-ONLY, as the floor above and for
+        // its reason — the terms are a value beside it (the D1 rule).
+        if let Some(pool) = palw_activation_pool.as_mut() {
+            fork(&mut pool.activation, visit);
         }
         // ADR-0143 the artifact-root ownership fence.
         match palw_artifact_root_ownership.as_mut() {
@@ -7782,6 +7900,7 @@ impl Params {
             palw_offence_attribution,
             palw_rcore_plus,
             palw_rcore_conservative_classes,
+            palw_activation_pool,
             palw_artifact_root_ownership,
             palw_operator_id_unique,
             palw_objective_offence,
@@ -8079,6 +8198,13 @@ impl Params {
             for class in palw_rcore_conservative_classes.iter() {
                 h.write(class.as_byte_slice());
             }
+        }
+        // ADR-0152-adjacent (Activation Pool): the height and its terms, Some-only, so every preset
+        // but testnet-12 fingerprints byte-identically to a build without the field.
+        if let Some(pool) = palw_activation_pool {
+            h.write(b"palw_activation_pool");
+            h.write(pool.activation.daa_score().to_le_bytes());
+            palw_activation_pool_terms_write_v1(&mut h, &pool.terms);
         }
         // ADR-0143 the artifact-root ownership fence, Some-only for the same reason.
         if let Some(activation) = palw_artifact_root_ownership {
@@ -8848,6 +8974,10 @@ impl Params {
             // dropped, instead of silently disarming R-core+.
             palw_rcore_plus: self.palw_rcore_plus,
             palw_rcore_conservative_classes: self.palw_rcore_conservative_classes,
+            // ADR-0152-adjacent (Activation Pool): CARRIED for R-core+'s reason — an overridden
+            // testnet-12 fails `validate_palw_v2` on the prerequisite the override dropped
+            // (`palw_admission_independence`) instead of silently disarming R1, R2 and the pool.
+            palw_activation_pool: self.palw_activation_pool,
             palw_artifact_root_ownership: None,
             palw_operator_id_unique: None,
             palw_objective_offence: self.palw_objective_offence,
@@ -9851,6 +9981,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_activation_pool: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10070,6 +10201,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_activation_pool: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -10271,6 +10403,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_activation_pool: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,
@@ -15952,6 +16085,16 @@ pub fn palw_t12_arm_every_rule_from_genesis(params: &mut Params) {
     // `sync_palw_rcore_plus` where the bundle is assembled.
     params.palw_rcore_plus = Some(at);
     params.palw_rcore_conservative_classes = &PALW_T12_RCORE_CONSERVATIVE_CLASSES;
+    // **ADR-0152-adjacent: the Activation Pool, R1 and R2** (`Params::palw_activation_pool`, user
+    // decision 2026-09-25): a listing is not reclaimed for the network's absence, the registry's
+    // step audits a `Candidate` only at its own staggered span and skips Dormant and Frozen classes,
+    // and a per-class pool pays preparation and activation out of sink-bound top-ups. Genesis-only;
+    // its three prerequisites are armed above or by pass 2's walk. The terms are the user's
+    // illustrative scale, to be tuned.
+    params.palw_activation_pool = Some(PalwActivationPoolParamsV1 {
+        activation: at,
+        terms: crate::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1,
+    });
     // **ADR-0065 D4 — an `Unavailable` receipt convicts nobody.** Armed on testnet-11 from its
     // first block and left `None` here by omission, which made this the ONE rule of testnet-11's
     // that the regenesis did not carry: three seats that merely failed to RECEIVE a claim's
@@ -16473,6 +16616,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_offence_attribution: None,
     palw_rcore_plus: None,
     palw_rcore_conservative_classes: &[],
+    palw_activation_pool: None,
     palw_artifact_root_ownership: None,
     palw_operator_id_unique: None,
     palw_objective_offence: None,

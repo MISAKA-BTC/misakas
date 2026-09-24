@@ -563,6 +563,10 @@ pub struct VirtualStateProcessor {
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
     /// the other way.
     pub(super) palw_offence_attribution: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): `Params::palw_activation_pool`
+    /// (`Some` at genesis on testnet-12 alone), resolved once in [`Self::palw_activation_pool_at`];
+    /// the fold's R1, R2 and pool rules and the mempool's pool gate read it there.
+    pub(super) palw_activation_pool: Option<kaspa_consensus_core::config::params::PalwActivationPoolParamsV1>,
     /// **ADR-0152 R-core+: `Params::palw_rcore_plus`** (`Some(0)` on testnet-12 alone; genesis-only
     /// by `validate_palw_rcore_plus_v1`), resolved once in [`Self::palw_rcore_plus_at`]. M4 reads it
     /// at a claim's ANCHOR for the stake-weighted draw (`palw_panel_draw_policy_at`, SW-1) and at the
@@ -1063,6 +1067,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
+            palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
@@ -10139,6 +10144,10 @@ impl VirtualStateProcessor {
             // the V2 kind as dormant after the gate admitted it, and the V1 kind by the old rule
             // after the gate refused it.
             offence_attribution_active: self.palw_offence_attribution_at(daa_score),
+            // ADR-0152-adjacent (Activation Pool): R1, R2 and the pool's terms at this block. Written
+            // explicitly for the reason every line above gives: an unwritten default here would
+            // reclaim a listing by the old rule on a network that has armed the new one.
+            activation_pool: self.palw_activation_pool_at(daa_score),
             // ADR-0152 X7 / N9 (M3): the peer's P2-7 constant, and nothing else.
             seat_da_answer_landed: kaspa_consensus_core::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1,
             // ADR-0100: the one-move court's ladder rides to the fold when the court is armed —
@@ -10411,6 +10420,16 @@ impl VirtualStateProcessor {
     /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
     pub(super) fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
         self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0152-adjacent: the Activation Pool's terms at `daa_score`, resolved in exactly one
+    /// place** — `Some` past `Params::palw_activation_pool` (genesis on testnet-12), `None` on every
+    /// other network.
+    pub(super) fn palw_activation_pool_at(
+        &self,
+        daa_score: u64,
+    ) -> Option<kaspa_consensus_core::palw_activation_pool_v1::PalwActivationPoolTermsV1> {
+        self.palw_activation_pool.filter(|pool| pool.activation.is_active(daa_score)).map(|pool| pool.terms)
     }
 
     /// **ADR-0152 R-core+, resolved in exactly one place.** `false` on every network but

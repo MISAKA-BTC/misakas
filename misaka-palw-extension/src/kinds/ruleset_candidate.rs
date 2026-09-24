@@ -32,6 +32,19 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
             )),
         }
     }
+    /// A fence `validate_palw_v2` refuses anywhere but at genesis: a candidate at a height is refused
+    /// by name, before any fingerprint is printed for a ruleset no build can run.
+    fn genesis_only(name: &str, at: ForkActivation) -> Result<(), String> {
+        if at == ForkActivation::always() {
+            Ok(())
+        } else {
+            Err(format!(
+                "`{name}` is genesis-only: it is armed at genesis or not at all, so a candidate at a height ({}) is a \
+                 regenesis, not a flag day",
+                at.daa_score()
+            ))
+        }
+    }
     match name {
         "palw_bootstrap_activation" => params.palw_bootstrap_activation = Some(at),
         "palw_unavailable_abstains" => params.palw_unavailable_abstains = Some(at),
@@ -120,6 +133,15 @@ pub fn set_fence_by_name(params: &mut Params, name: &str, at: ForkActivation) ->
         "palw_rcore_plus" => {
             params.palw_rcore_plus = Some(at);
             params.sync_palw_rcore_plus();
+        }
+        // ADR-0152-adjacent (Activation Pool): genesis-only (R1 and R2 change how every class is
+        // reclaimed and stepped), so a height is refused here by name. At genesis the terms this preset
+        // carries are kept, and a preset that carries none takes the user's illustrative scale — the
+        // numbers `validate_palw_v2` checks either way.
+        "palw_activation_pool" => {
+            genesis_only(name, at)?;
+            let terms = params.palw_activation_pool.map(|pool| pool.terms).unwrap_or_default();
+            params.palw_activation_pool = Some(kaspa_consensus_core::config::params::PalwActivationPoolParamsV1 { activation: at, terms });
         }
         "palw_artifact_root_ownership" => params.palw_artifact_root_ownership = Some(at),
         "palw_operator_id_unique" => params.palw_operator_id_unique = Some(at),
@@ -336,9 +358,33 @@ mod tests {
                         "{name}: setting by name did not land on the fence the list reads"
                     );
                 }
-                Err(why) => assert!(why.contains("companion value"), "{name}: {why}"),
+                // A genesis-only fence is refused at a height by name (ADR-0152 §4-quater).
+                Err(why) => assert!(why.contains("companion value") || why.contains("is genesis-only"), "{name}: {why}"),
             }
         }
         assert!(set_fence_by_name(&mut params.clone(), "palw_no_such_fence", ForkActivation::always()).is_err());
+    }
+
+    /// **The Activation Pool's fence is refused at a height and set, with its terms, at genesis**
+    /// (ADR-0152-adjacent: Activation Pool, user decision 2026-09-25): it is genesis-only, so a
+    /// candidate naming a height is a regenesis and is refused by name before any fingerprint is
+    /// printed; at genesis a preset without terms takes the user's scale.
+    #[test]
+    fn the_activation_pool_fence_is_refused_at_a_height_and_set_with_its_terms_at_genesis() {
+        let params: Params = NetworkId::with_suffix(NetworkType::Testnet, 11).into();
+        let name = "palw_activation_pool";
+        let at_height = set_fence_by_name(&mut params.clone(), name, ForkActivation::new(9_000_000));
+        assert!(at_height.as_ref().is_err_and(|why| why.contains("is genesis-only")), "{at_height:?}");
+        let mut armed = params.clone();
+        set_fence_by_name(&mut armed, name, ForkActivation::always()).expect("genesis is accepted");
+        let after = armed.palw_fences_v1().into_iter().find(|(n, _)| *n == name).and_then(|(_, v)| v);
+        assert_eq!(after, Some(ForkActivation::always()), "set by name");
+        assert_eq!(
+            armed.palw_activation_pool.map(|pool| pool.terms),
+            Some(kaspa_consensus_core::palw_activation_pool_v1::PALW_ACTIVATION_POOL_TERMS_V1),
+            "a preset without terms takes the user's scale"
+        );
+        // testnet-11 arms none of its prerequisites at genesis, so the candidate is a refusal there.
+        assert!(armed.validate_palw_v2().is_err_and(|e| e.to_string().contains("palw_activation_pool")));
     }
 }

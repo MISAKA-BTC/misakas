@@ -22842,6 +22842,14 @@ fn apply_class_reclamation(
 
     // Share-bearing and Active: a frozen class is out of the lane by verdict and its silence is the
     // verdict's doing, and a pre-activation class has no budget to have filled.
+    //
+    // **R1 (ADR-0152-adjacent: Activation Pool; the review's §4 R1, the design's P1), past
+    // `Params::palw_activation_pool`: a class that cannot produce is not measured, and neither is a
+    // genesis row** — see [`palw_class_reclamation_exempt_v1`]. Its silence counts for nothing: a
+    // streak it carried in (a `Probation` class that went `Held`) is cleared, so a listing that
+    // reaches its panel after half a year starts the clock at zero the day it can first produce.
+    // Below the fence (every network but testnet-12) the walk is the old one, byte for byte.
+    let r1 = builder.extras.activation_pool.is_some();
     let walking: Vec<Hash64> = builder
         .state
         .class_shares
@@ -22851,6 +22859,16 @@ fn apply_class_reclamation(
         .collect();
     let mut reclaims: Vec<Hash64> = Vec::new();
     for id in &walking {
+        if r1 && palw_class_reclamation_exempt_v1(&builder.state, id) {
+            // Written only where a streak stands, so a listing that never produced (every
+            // `Candidate`) writes no walk row at all.
+            if let Some(walk) = builder.state.class_walks.get(id).copied()
+                && walk.idle_streak != 0
+            {
+                builder.write_class_walk(*id, Some(PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() }));
+            }
+            continue;
+        }
         let mut walk = builder.state.class_walks.get(id).copied().unwrap_or_default();
         // Each closed epoch folds exactly once, whatever order this boundary's blocks arrive in.
         if walk.last_epoch == closed_epoch && builder.state.class_walks.contains_key(id) {
@@ -22910,6 +22928,39 @@ fn apply_class_reclamation(
         }
     }
     Ok(())
+}
+
+/// **R1: is this class spared silence reclamation?** (ADR-0152-adjacent: Activation Pool, user
+/// decision 2026-09-25; the review's §4 R1 and the design's P1.) Read only past
+/// `Params::palw_activation_pool`.
+///
+/// * **A class whose registry row exists and does not admit claims** — `Candidate`, `Registered`,
+///   `Prefetching`, `Held`. Such a class cannot produce, so "no block for twelve epochs" measures
+///   the network's absence, not the class's: a `Candidate` waits for a jury the network draws, a
+///   `Prefetching` class for seats the network proves, a `Held` one for seats to come back. A
+///   registration is a long-lived, asynchronous listing (the user's first principle), and the
+///   old rule put a ~17-day deadline between it and its first panel and charged another burn to
+///   come back.
+/// * **A genesis row** (no registrant bond), like the floor: the network was born with it, nobody
+///   holds an exposure reservation for it to release, and — unlike a bought class — there is no
+///   registration to replay. On testnet-12 the two genesis held rows (8k and 2M) are share-bearing
+///   `Active` records (the genesis assembly grants each a share) whose epoch budgets are at least
+///   one block, so the old rule walked them and would have reclaimed an idle one.
+///
+/// **A bought class that never had a `Final` is NOT exempt once it admits claims**, and that is a
+/// decision (the review's R1 wording names it): a row in `Probation`, `ActiveLimited` or `Active`
+/// has a drawable panel — the listing has reached the panel the user's principle protects the way
+/// to — so its silence is producers declining it, which is exactly what Decision 5 measures (an
+/// attempt that later voids is still a produced block, so the ADR-0147 outsider's `Incapable` does
+/// not make a class look silent). A `Probation` class that loses its seats leaves for `Held` and is
+/// exempt again. And "never had a Final" is not a fact this state keeps: claims retire, so a scan
+/// of the live claims cannot tell "never" from "not lately", and the one counter that could stand
+/// in for it (`probes_passed`) resets on every state change. Exempting on it would need a new rooted
+/// flag for a case the lifecycle already covers.
+pub fn palw_class_reclamation_exempt_v1(state: &PalwChainStateV2, class_id: &Hash64) -> bool {
+    let genesis_row = state.classes.get(class_id).is_some_and(|record| record.registrant_bond.is_none());
+    let cannot_produce = state.model_lifecycles.get(class_id).is_some_and(|row| !row.state.admits_claims());
+    genesis_row || cannot_produce
 }
 
 /// Give `amount` permille back to the incumbents, largest remainder over their current holdings,
@@ -27316,6 +27367,11 @@ pub struct PalwTransitionExtrasV1 {
     /// execution-proving conviction voiding or reversing the claim. `false` by `Default`, which
     /// refuses the V2 kind as dormant and leaves the fold byte for byte what it was.
     pub offence_attribution_active: bool,
+    /// **ADR-0152-adjacent: `Params::palw_activation_pool` resolved at the block's DAA** (user
+    /// decision 2026-09-25) — the pool's terms where R1, R2 and the pool are in force, `None`
+    /// elsewhere. `None` by `Default`, which keeps the old reclamation and the old span step byte for
+    /// byte and refuses `ActivationPoolFunded` as dormant.
+    pub activation_pool: Option<crate::palw_activation_pool_v1::PalwActivationPoolTermsV1>,
     /// **ADR-0152 X7 / N9 (M3): have seats landed automatic DA answering?** The processor sets it to
     /// [`crate::palw_da_rcore_v1::PALW_RCORE_SEAT_DA_ANSWER_LANDED_V1`] and nothing else (`true` since
     /// P2-7); `false` by `Default`, the fence-dormant presets', where it is read by nothing (the
@@ -55336,6 +55392,7 @@ pub(crate) mod tests {
                 audit_2026_09_23_active: false,
                 settled_anchor_depth: None,
                 offence_attribution_active: false,
+                activation_pool: None,
                 seat_da_answer_landed: false,
                 share_growth_final_active: false,
                 epoch_budget_release_active: false,
@@ -55583,6 +55640,7 @@ pub(crate) mod tests {
                 audit_2026_09_23_active: false,
                 settled_anchor_depth: None,
                 offence_attribution_active: false,
+                activation_pool: None,
                 seat_da_answer_landed: false,
                 share_growth_final_active: false,
                 epoch_budget_release_active: false,
@@ -57468,6 +57526,8 @@ pub(crate) mod tests {
     // fold refuses every new object and offence kind by name.
     // ADR-0152 V-1…V-8 (the vesting work): the rows through the fold, in their own file.
     mod vesting_fold_v1;
+    // ADR-0152-adjacent (Activation Pool, user decision 2026-09-25): R1 on the real cards.
+    mod activation_pool_r1_v1;
 
     mod rcore_v22_skeleton {
         use super::*;

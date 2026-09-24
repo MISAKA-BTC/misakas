@@ -307,6 +307,12 @@ impl PalwStateSyncV2 {
                     // walks this path today (`processes/mod.rs` declares it and nothing calls it);
                     // arming it means one constructor field, resolved per step like the audit fence.
                     offence_attribution_active: false,
+                    // **ADR-0152-adjacent's `palw_activation_pool` is NOT threaded here either**, for the
+                    // same reason and with the same consequence on testnet-12 (which arms it from
+                    // genesis): this walk would reclaim and step classes by the old rules and fold no
+                    // pool. No production caller walks this path today; arming it is one constructor
+                    // field, resolved per step.
+                    activation_pool: None,
                     // The model-registry and EVM fences are NOT resolved here, and that is the
                     // pre-existing behaviour rather than a decision taken with this patch: this
                     // walk passed `PalwTransitionExtrasV1::default()` before it, and it is a REAL

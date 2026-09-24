@@ -140,6 +140,9 @@ pub mod mining_rules;
 pub mod mldsa87_primitives;
 pub mod muhash;
 pub mod network;
+/// ADR-0152-adjacent (user decision 2026-09-25): the Activation Pool and the listing rules it rides
+/// on (R1, R2), behind `Params::palw_activation_pool`.
+pub mod palw_activation_pool_v1;
 pub mod palw_admission_v2;
 /// MISAKA PALW adversarial suite (§12 gate / v0.1 §29 gate 4): a permanent red-team harness of
 /// executable attacks against the Layer-1 machinery — reassociation, FMA smuggling,
