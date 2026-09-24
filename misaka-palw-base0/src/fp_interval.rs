@@ -3576,7 +3576,11 @@ fn seed_token_from_opened_row_v1(
 /// The checkpoint the interval resumes from must be the one the CLAIM committed: its leaf opens
 /// against `checkpoint_merkle_root`, its chunks re-derive its own `state_chunks_root`, and it
 /// covers exactly the decode call the geometry names.
-fn checkpoint_anchor_is_the_bindings_v1(binding: &PalwStepBindingV2, anchor: &PalwCheckpointKvOperandsV1, covered: u32) -> bool {
+pub(crate) fn checkpoint_anchor_is_the_bindings_v1(
+    binding: &PalwStepBindingV2,
+    anchor: &PalwCheckpointKvOperandsV1,
+    covered: u32,
+) -> bool {
     if anchor.leaf.state_chunk_count as usize != anchor.chunks.len() {
         return false;
     }

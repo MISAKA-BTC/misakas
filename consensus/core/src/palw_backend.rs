@@ -260,24 +260,32 @@ pub trait PalwExecutionBackendV1: Send + Sync {
 
     /// **ADR-0133 S1 (1): the producer publishes the checkpoint at a V2 segment's start.**
     ///
-    /// Opaque family bytes: the checkpoint leaf the trace already commits, its state chunks, the
-    /// seed token the next call consumes, and the committed leaf hashes of `[leaf_start, leaf_end)`.
-    /// A seat that holds the capture extracts this without a forward pass. Defaulted to a refusal:
-    /// a family with no checkpoint leg cannot make a partial seat cheaper than a full replay.
+    /// Opaque family bytes that a seat authenticates against the CLAIM before it replays (SEAT-S4):
+    /// the claim's binding, the committed checkpoint the replay resumes from (its leaf, its opening
+    /// against the checkpoint leg and its state chunks; none is genesis), the claim's decode pin when
+    /// the resume consumes a generated id, and the sibling path of the segment's range to the step
+    /// root — no leaf hash, the leaves are the seat's own. A seat that holds the capture extracts
+    /// this without a forward pass. Defaulted to a refusal: a family with no checkpoint leg cannot
+    /// make a partial seat cheaper than a full replay.
     fn open_segment_checkpoint_v1(&self, _capture: &[u8], _seat_count: u16, _segment_index: u16) -> Result<Vec<u8>, String> {
         Err("this execution family publishes no per-segment checkpoint".to_string())
     }
 
     /// **ADR-0133 S1 (2)(3): replay one assigned segment from its published checkpoint.**
     ///
-    /// Restores the KV cache (dense first; a hybrid falls back to the same restore when the
-    /// capture retained chunks) and runs only the decode calls in the window. `matches` is
-    /// whether the recomputed hashes agree with the hashes the opening carried.
+    /// SEAT-S4: the opening is authenticated against `claim` FIRST — its binding must rebuild the
+    /// claim's `execution_root` (with its trace root, the seat's own `job`, the class's profile), its
+    /// segment must be `claim`'s cut and index, its checkpoint must open against the committed leg
+    /// with chunks that root to it, and its seed must be the claim's committed id. A link that fails
+    /// is `Err` and nothing is replayed. Then the KV cache is restored and only the window runs, and
+    /// `matches` is whether the seat's own leaves root, under the served path, to the claim's step
+    /// root. `job` is the job the seat derived for the claim (never the opening's).
     fn replay_segment_from_checkpoint_v1(
         &self,
         _job: &PalwJobContextV2,
         _prompt: &[usize],
         _opening: &[u8],
+        _claim: crate::palw_segment_resume_v1::PalwSegmentClaimV1,
     ) -> Result<crate::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
         Err("this execution family cannot resume a segment from a checkpoint".to_string())
     }
@@ -285,7 +293,10 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// **ADR-0133 S3: recompute one sampled `(layer, position)` from committed activations.**
     ///
     /// `Ok(true)` is agreement with the capture; `Ok(false)` is a lie the court can try; `Err`
-    /// is "I could not check" (no opening, no layer weights). Defaulted to a refusal.
+    /// is "I could not check" (no opening, no layer weights). The segment holding the site is
+    /// replayed from the capture's own authenticated opening (SEAT-S4) — against the CAPTURE's
+    /// binding, so whether the capture is the claim's is the caller's question, asked first
+    /// (`verify_material`). Defaulted to a refusal.
     fn replay_layer_site_v3(
         &self,
         _capture: &[u8],
@@ -298,7 +309,8 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// **ADR-0133 S1 (4): resume from the checkpoint covering an accused segment's first leaf.**
     ///
     /// The court already has per-leaf anchored replay; this names the segment-scoped entry so a
-    /// close that names a segment does not walk from genesis. Defaulted to a refusal.
+    /// close that names a segment does not walk from genesis. The opening is the capture's own,
+    /// authenticated against the capture's binding and `job` (SEAT-S4). Defaulted to a refusal.
     fn replay_accused_segment_v1(
         &self,
         _capture: &[u8],

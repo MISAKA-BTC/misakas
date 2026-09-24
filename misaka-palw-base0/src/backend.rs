@@ -208,8 +208,8 @@ impl Base0Backend {
 /// and how to run one forward call. A family that re-implemented the coordinate rule here would
 /// commit its replay at coordinates the leg does not use, and every comparison would fail for a
 /// reason that is not the producer's.
-struct Base0IntervalKernels<'a> {
-    artifact: &'a Base0ArtifactV1,
+pub(crate) struct Base0IntervalKernels<'a> {
+    pub(crate) artifact: &'a Base0ArtifactV1,
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
@@ -482,44 +482,61 @@ impl PalwExecutionBackendV1 for Base0Backend {
         })
     }
 
+    /// SEAT-S4: the authenticated `SC02` opening, at this class's ladder.
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
-        crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())
+        crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
+            capture,
+            seat_count,
+            segment_index,
+            Some(&self.profile),
+            self.step_ladder_cap(),
+        )
+        .map_err(|e| e.to_string())
     }
 
+    /// SEAT-S4: authenticated against `claim` and this seat's `job` before the floor's kernels replay.
     fn replay_segment_from_checkpoint_v1(
         &self,
         job: &PalwJobContextV2,
         prompt: &[usize],
         opening: &[u8],
+        claim: kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1,
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        crate::produce::base0_replay_segment_from_checkpoint_v1(
-            &self.artifact,
+        crate::segment_opening::base0_replay_segment_opening_v2(
+            &Base0IntervalKernels { artifact: &self.artifact },
             &self.profile,
             job,
             prompt,
             opening,
-            self.network_ladder,
+            claim,
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
         )
-            .map_err(|e| e.to_string())
+        .map_err(String::from)
     }
 
+    /// The capture's own opening, authenticated against the capture's binding (and its job — the
+    /// floor's court resumes the capture's own, as it always has).
     fn replay_accused_segment_v1(
         &self,
         capture: &[u8],
         seat_count: u16,
         segment_index: u16,
-        _job: &PalwJobContextV2,
+        job: &PalwJobContextV2,
         prompt: &[usize],
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        crate::produce::base0_replay_accused_segment_v1(
-            &self.artifact,
+        crate::segment_opening::base0_replay_capture_segment_v2(
+            &Base0IntervalKernels { artifact: &self.artifact },
+            &self.profile,
             capture,
             seat_count,
             segment_index,
-            prompt,
-            self.network_ladder,
+            None,
+            &crate::segment_opening::base0_court_prompt_v1(self, job.job_id, prompt),
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
         )
-            .map_err(|e| e.to_string())
+        .map_err(String::from)
     }
 
     /// The non-streaming verb IS the streaming one with a callback that does nothing — never the

@@ -8411,7 +8411,15 @@ impl PalwPanelService {
                     return PalwV2SeatPathV1::Waiting;
                 }
             };
-            match backend.replay_segment_from_checkpoint_v1(job, prompt, &opening) {
+            // SEAT-S4: the opening is authenticated against the CLAIM's roots and this seat's own
+            // segment before a step replays; a refusal is `Err` (nothing served), never `Valid`.
+            let segment_claim = kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1 {
+                execution_root: duty.execution_root,
+                trace_root: duty.trace_root,
+                seat_count: seats,
+                segment_index: index,
+            };
+            match backend.replay_segment_from_checkpoint_v1(job, prompt, &opening, segment_claim) {
                 Ok(replay) if replay.matches => {}
                 Ok(_) => {
                     self.note_seat_fault_v1(duty.claim_id, 0, 0);
