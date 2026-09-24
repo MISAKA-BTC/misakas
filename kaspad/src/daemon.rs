@@ -1893,6 +1893,9 @@ Do you confirm? (y/n)";
             consensus_manager.clone(),
             app_dir.join(network.to_prefixed()).join("palw-retention"),
             std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
+            // ADR-0152 DA-8 (P2-7): past it a `Final` free-prompt claim is still accused, so its
+            // capture is kept to the claim's retention.
+            config_for_palw_panel.params.palw_rcore_plus_fence(),
         )));
     }
     // **ADR-0067 Decision 6: declarations this node did not watch arrive.** A pruned sync brings

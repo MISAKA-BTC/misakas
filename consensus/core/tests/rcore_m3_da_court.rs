@@ -973,6 +973,18 @@ fn p2_7_the_disclosure_duties_follow_the_open_sessions_and_the_covering_locks() 
         }
         assert_eq!(read(&c.s, &[partials[1]], at).retain, vec![(id, retention)], "a partial seat's live lock keeps it too");
         assert!(read(&c.s, &[bystander], at).retain.is_empty());
+        // The retention predicate `retain` and the node's janitor share (DA-8): owed through the
+        // claim's retention on every phase a session can carry — `Final` too (a `FinalRow` session,
+        // S3) — and never on a voided claim, whose sessions are released with it.
+        {
+            use kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1;
+            let record = c.claim(&id);
+            assert!(palw_da_material_owed_v1(&record, retention) && !palw_da_material_owed_v1(&record, retention + 1));
+            let with = |phase: PalwClaimPhaseV2| kaspa_consensus_core::palw_state_v2::PalwClaimStateV2 { phase, ..record.clone() };
+            assert!(palw_da_material_owed_v1(&with(PalwClaimPhaseV2::Final { final_daa: at }), at), "a Final claim is still accused");
+            let voided = with(PalwClaimPhaseV2::Voided { voided_daa: at, reason: PalwVoidReasonV2::ProducerWithholding });
+            assert!(!palw_da_material_owed_v1(&voided, at), "a voided claim owes nothing");
+        }
         // An answered unit leaves the list: a Flat on record answers (0, 0), never row 7 (past the run).
         let flat = edited(&c.sp, &c.s, |carriage| carriage.da_claims.get_mut(&id).expect("the record").flat_answered = true);
         for mine in [producer, full] {

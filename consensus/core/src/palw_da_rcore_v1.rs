@@ -45,15 +45,21 @@ pub const PALW_DA_SESSIONS_PER_SEAT_PER_CLAIM_V1: u8 = 4;
 /// `palw_producer_v2::palw_disclosure_duties_v1` — the units of every open session on a claim where
 /// its live lock's mask covers them, by the fold's own covering predicate — and answers each with a
 /// `MaterialDisclosedV2` built by [`palw_da_answer_object_v1`] from the material it kept while the
-/// lock lives (its verified copy, or an attempt capture re-made by replaying the claim's job). So
-/// both are ARMED past `palw_rcore_plus` ([`crate::palw_state_v2::palw_da_signer_liability_armed_v1`]
-/// reads this const).
+/// lock lives (`palw_disclosure_duties_v1`'s `retain` pins it). So both are ARMED past
+/// `palw_rcore_plus` ([`crate::palw_state_v2::palw_da_signer_liability_armed_v1`] reads this const).
 ///
-/// **The residual it arms (ADR §5.7, X7, named):** a covering signer that holds no capture it can
-/// answer from — a free-prompt claim licensed from a job-only (`FPM1`) payload, whose replay keeps
-/// roots and no capture — cannot answer and is charged S4 for a default it could not prevent; an
-/// attempt claim's signer always can (the job is chain data). A partial seat never covers a unit (C7),
-/// so interval and segment signers are never charged for what they never held.
+/// **Whom it arms, and the residual (Phase 2 plan §5.6, X7; named).** Only a FULL mask covers a unit
+/// ([`palw_da_unit_covered_by_v1`], C7): a partial seat — interval, segment or resume signer — is
+/// never charged for what it never held, held units included (the audit's M3 deviation 5, decided
+/// 2026-09-24: placing a held unit in a segment needs a v22 step-leaf count, and partial seats are
+/// not bound at launch). So the plan's "free-prompt interval signers hold nothing to disclose"
+/// charges nobody, and X7's liability is the full mask's — the full seat, a V2 `Valid`. Such a
+/// signer answers from its verified copy, or from a capture re-made by replaying the claim's job
+/// and checked against its roots: an attempt claim's from its block (chain data), a free-prompt
+/// claim's from the job payload the seat kept when it licensed (a job-only `FPM1` licence keeps no
+/// capture, so kaspad re-makes it on demand). The residual: a full-mask signer of a free-prompt claim
+/// that no longer holds that job — lost to its disk, or taken by the retention janitor's space rule,
+/// which drops such copies last — cannot answer, and is charged S4 for a default it could not prevent.
 ///
 /// A consensus constant, not a switch: the fold reads it through
 /// `PalwTransitionExtrasV1::seat_da_answer_landed`, which the processor sets to exactly this value,
@@ -671,6 +677,22 @@ pub fn palw_da_answer_object_v1(
 /// the rest, instead of paying a carrier for an answer the fold then refuses `DaUnitAlreadyAnswered`.
 pub fn palw_da_flat_answers_unit_v1(unit: &PalwDaUnitV1, in_run_rows: u32) -> bool {
     palw_da_unit_answered_v1(&PalwDaClaimV1 { flat_answered: true, ..Default::default() }, unit, in_run_rows)
+}
+
+/// **DA-8 for retention (P2-7): can a session still demand a unit of `claim` at `now_daa` or
+/// later?** A session opens only while `now + W_disclose ≤ trace_retention_daa` (the fold's
+/// `da_admission_v1`), so none is open past `trace_retention_daa`; a voided claim's sessions are
+/// released with it (`da_release_all_v1`) and no new one opens. So the material a unit is answered
+/// from — the producer's capture, a covering signer's copy — is owed exactly while this holds, on
+/// every phase that can carry a session, `Final` included (a `FinalRow` session is the S3 path).
+/// Conservative at `Final`: a matured row stops new sessions earlier, never one already open.
+///
+/// Past `palw_rcore_plus` only: the caller reads the fence (below it ADR-0062's court decides by
+/// the claim's phase, and a `Final` claim is never accused). Node policy's retention reads it — the
+/// janitor for a producer's own free-prompt capture, the duty read for a signer's copy — so the two
+/// cannot disagree with the court about how long a unit can be asked for.
+pub fn palw_da_material_owed_v1(claim: &crate::palw_state_v2::PalwClaimStateV2, now_daa: u64) -> bool {
+    !matches!(claim.phase, crate::palw_state_v2::PalwClaimPhaseV2::Voided { .. }) && now_daa <= claim.trace_retention_daa
 }
 
 /// Every domain and context this module keys — listed in `PALW_STATE_V2_ALL_DOMAINS` (the family

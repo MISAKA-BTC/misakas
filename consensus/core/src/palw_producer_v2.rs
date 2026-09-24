@@ -1261,9 +1261,12 @@ pub struct PalwDisclosureDutiesV1 {
     /// Soonest deadline first.
     pub duties: Vec<PalwDisclosureDutyV1>,
     /// `(claim, trace_retention_daa)` for every claim on which a bond of `mine` holds a live lock
-    /// (X7) while a session can still be open on it (`now ≤ trace_retention_daa`: DA-8 opens none
-    /// that would end later). The chain's locks are the memory of "I signed `Valid`" (plan P2-7), so
-    /// the retention they pin survives a restart that forgets the seat's own duty book.
+    /// (X7) while a session can still be open on it
+    /// ([`crate::palw_da_rcore_v1::palw_da_material_owed_v1`]: not voided, `now ≤
+    /// trace_retention_daa`, since DA-8 opens none that would end later). The chain's locks are the
+    /// memory of "I signed `Valid`" (plan P2-7), so the retention they pin survives a restart that
+    /// forgets the seat's own duty book. A producer's own capture is the retention janitor's, by the
+    /// same predicate.
     pub retain: Vec<(Hash64, u64)>,
 }
 
@@ -1299,6 +1302,12 @@ pub fn palw_disclosure_duties_v1(
     let claims: std::collections::BTreeSet<Hash64> = state.da_deadlines_iter().map(|(_, claim, _)| *claim).collect();
     for claim_id in claims {
         let Some(claim) = state.claim(&claim_id) else { continue };
+        // Neither the producer nor a lock holder: nothing here is this node's (and the covering
+        // walk below, a pass over the lock map a unit, is not paid for a stranger's claim).
+        let producer = mine.contains(&claim.bond);
+        if !producer && !mine.iter().any(|bond| state.slashable_lock(*bond, claim_id).is_some()) {
+            continue;
+        }
         let Some(artifact_root) = state.class(&claim.class_id).map(|class| class.artifact_root) else { continue };
         let record = state.da_claim(&claim_id).cloned().unwrap_or_default();
         let in_run_rows = palw_da_in_run_rows_v1(claim, extras.fp_da_pins_active);
@@ -1314,7 +1323,7 @@ pub fn palw_disclosure_duties_v1(
             }
         }
         for (unit, deadline_daa) in units {
-            let (discloser, role, signer_rank) = if mine.contains(&claim.bond) {
+            let (discloser, role, signer_rank) = if producer {
                 (claim.bond, PalwDisclosureRoleV1::Producer, 0)
             } else {
                 let covering = crate::palw_state_v2::palw_da_covering_signers_v1(state, params, extras, &claim_id, &unit, now_daa);
@@ -1347,9 +1356,10 @@ pub fn palw_disclosure_duties_v1(
         .iter()
         .flat_map(|bond| state.slashable_locks_of(bond).map(|((seat, claim_id), _)| (*seat, *claim_id)))
         .filter_map(|(seat, claim_id)| {
-            let until = state.claim(&claim_id)?.trace_retention_daa;
-            (now_daa <= until && crate::palw_state_v2::palw_da_lock_live_v1(state, params, extras, &seat, &claim_id, now_daa))
-                .then_some((claim_id, until))
+            let claim = state.claim(&claim_id)?;
+            (crate::palw_da_rcore_v1::palw_da_material_owed_v1(claim, now_daa)
+                && crate::palw_state_v2::palw_da_lock_live_v1(state, params, extras, &seat, &claim_id, now_daa))
+            .then_some((claim_id, claim.trace_retention_daa))
         })
         .collect();
     retain.sort_unstable();
