@@ -1483,3 +1483,9 @@ async fn p2_t29_the_rehearsal_and_the_fold_agree_at_a_1016_row_queue_with_maturi
     );
     palw_vesting_consistency_v1(&folded).expect("V-3");
 }
+
+/// **ADR-0152 Phase 2, P2-3: the vesting rows across a reorg and a pruned sync** (T48, T49, and the
+/// undecodable-delta test extended to the vesting variants) — a child of this suite, so it drives the
+/// same `Minting` on more than one node and holds every block a builder mines to `after`.
+#[path = "p2_reorg_and_ibd.rs"]
+mod p2_reorg_and_ibd;

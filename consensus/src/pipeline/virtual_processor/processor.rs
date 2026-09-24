@@ -1460,7 +1460,8 @@ impl VirtualStateProcessor {
     /// Calculates the UTXO state of `to` starting from the state of `from`.
     /// The provided `diff` is assumed to initially hold the UTXO diff of `from` from virtual.
     /// The function returns the top-most UTXO-valid block on `chain(to)` which is ideally
-    /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified).
+    /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified,
+    /// and of returning the old-chain block whose PALW delta the backward walk could not revert).
     /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual
     pub(super) fn calculate_utxo_state_relatively(
         &self,
@@ -1613,19 +1614,24 @@ impl VirtualStateProcessor {
                 break;
             }
 
-            let mergeset_diff = self.utxo_diffs_store.get(current).unwrap();
-            // Apply the diff in reverse
-            diff.with_diff_in_place(&mergeset_diff.as_reversed()).unwrap();
-            if track_bonds {
-                // Mirror the reverse on the bond view. `current` is leaving the
-                // selected chain, so its acceptance data is committed.
-                bond_view.revert(&self.dns_bond_mutations_for_chain_block(current, bond_view));
-            }
             // ADR-0042 Unit C: the PALW state walks in lockstep with `diff`, for the same reason
             // the bond view does — a candidate's V2 standing must be a fold over THAT candidate's
             // chain and never a read of the node's sink (P0-4, the partition this layout exists to
             // make unrepresentable). `revert_delta_v2` verifies every value it replaces, so a
             // delta applied to the wrong parent is an error rather than a quiet divergence.
+            //
+            // **Reverted FIRST, before `diff` and the bond view** (ADR-0152 Phase 2, P2-3: found by
+            // `p2_an_undecodable_vesting_delta_is_a_fault_and_the_reorg_it_blocks_holds_the_sink`).
+            // This used to run after both had been reversed through `current` and then return
+            // `from`, breaking this function's one guarantee — `diff` holds the diff of the block
+            // it returns: the caller took `from` as established while `diff` stood one block lower,
+            // so a node holding on a delta row it could not revert (an undecodable or pruned row
+            // under its sink, with a heavier chain in reach) committed a virtual UTXO set without
+            // its sink's own acceptance — spent outputs back, created ones gone — and every later
+            // walk from there reversed the same block again. The PALW revert touches neither, so
+            // the order of the two is free; running it first means a stop leaves `diff` and the
+            // bond view at `current`, which is what is returned — `from` itself when the gap is
+            // the first block. A node-local fault path only: on a store that reads, nothing moves.
             if let Some(state) = palw_state.as_mut() {
                 // The backward twin of the forward leg's rule: a row this node does not have is a
                 // gap in this node. Stopping returns the last point actually established, which is
@@ -1638,13 +1644,21 @@ impl VirtualStateProcessor {
                     Ok(previous) => *state = previous,
                     Err(why) => {
                         error!(
-                            "PALW V2 state cannot be reverted through chain block {current} ({why}); the UTXO walk stops at {from} \
-                             and virtual will hold there. This is a gap in THIS node's delta store, not a fault of the chain — \
+                            "PALW V2 state cannot be reverted through chain block {current} ({why}); the UTXO walk stops at {current} \
+                             and virtual will not move onto {to}. This is a gap in THIS node's delta store, not a fault of the chain — \
                              resync this data directory if it persists."
                         );
-                        return from;
+                        return current;
                     }
                 }
+            }
+            let mergeset_diff = self.utxo_diffs_store.get(current).unwrap();
+            // Apply the diff in reverse
+            diff.with_diff_in_place(&mergeset_diff.as_reversed()).unwrap();
+            if track_bonds {
+                // Mirror the reverse on the bond view. `current` is leaving the
+                // selected chain, so its acceptance data is committed.
+                bond_view.revert(&self.dns_bond_mutations_for_chain_block(current, bond_view));
             }
         }
 
