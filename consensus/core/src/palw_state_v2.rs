@@ -12527,6 +12527,13 @@ pub fn palw_model_carrier_payout_rows_v1(tx: &crate::tx::Transaction) -> Option<
 /// applies): those rows are the margin for the claim and seat rows that block may write, which the
 /// market never refuses, so that what a node mined as fitting is not later refused for want of a
 /// refund row by the acceptance filter, which counts them.
+///
+/// **Past `Params::palw_rcore_plus` (ADR-0152 V-2/V-7; phase2-plan F5) those claim and seat rows
+/// no longer arrive at step 2**: a `Final` writes a vesting row, and step 3d writes the matured legs
+/// AFTER every object — exempt from the cap (M-10) and bounded by V-7's budget, so a committed queue
+/// holds at most the cap plus one drain. The room stays conservative for the same arithmetic: the
+/// drain's rows are still not credited, and a tip queue above the cap gives zero. Doc only; the rule
+/// is unchanged.
 pub fn palw_model_payout_room_v1(state: &PalwChainStateV2) -> usize {
     PALW_V2_MAX_PENDING_PAYOUTS.saturating_sub(state.pending_payouts.len())
 }
