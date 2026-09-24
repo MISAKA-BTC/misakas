@@ -2753,7 +2753,11 @@ fn court_default_on(h: &H) -> CourtDefaultRun {
                 dissection: None,
             },
         );
-        *carriage.reserved_exposure.entry(challenger).or_insert(0) += reserved;
+        // The challenger's stake sits in `reserved_exposure` below ADR-0152's `palw_rcore_plus`;
+        // past it (A-6, S-3) the open session is the stake, read by the accuser ledger.
+        if h.sp().rcore_plus_from_daa().is_none() {
+            *carriage.reserved_exposure.entry(challenger).or_insert(0) += reserved;
+        }
     });
     assert_eq!(walk.state.open_courts_of(&id), 1, "the court is open");
     assert!(first_rung < at + h.sp().window_court(), "the rung fires before the backstop, which would close challenger-side");
