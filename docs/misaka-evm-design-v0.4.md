@@ -299,6 +299,15 @@ UTXO_balances + EVM_deposit_locks + EVM_native_balances + burned == issued
 
 検証は `evm_total_native_balance` 累積器(§4.2)により O(1) で行う(監査 AM-5 解決)。priority fee 移転 + burn + 残高変化も本 invariant を満たす(invariant I6)。
 
+**ブリッジ台帳(2026-09-24、`Params::evm_bridge_ledger_activation_daa_score`、testnet-12 は genesis から有効)。** 本ブリッジは lock-and-mint ではなく burn-and-mint であり、プールが無い。したがって L1 が出金として materialize できる額を抑えているのは executor の正しさだけで、deposit を経ない EVM 残高(インタプリタ/intercept の欠陥)はそのまま出金でき、累積器は飽和演算で黙って吸収していた。fence 以降、累積器は **L1 が裏付けた EVM 供給の台帳** として checked で扱う:
+
+- 増加: deposit claim(tip 含む全額)、ADR-0089 の market sell credit。
+- 減少: basefee burn、F002 出金、約定した market escrow の settlement burn。
+- escrow の予約: market writer に escrow を置く tx の時点で、そのブロックの余力(台帳 − 同ブロックで予約済みの escrow)から予約する。台帳そのものが減るのは子ブロックの settlement で約定分が burn されたときで、拒否された escrow は EVM 内で返金され台帳は変わらない。予約は、burn の時点では置いた tx をもうスキップできないために行う。
+- 規則: user tx の引き出し(自分の basefee burn + F002 出金 + escrow)が台帳の残り(= 台帳 − 同ブロックで予約済みの escrow)を超える場合、その tx は **class-2 skip**(state を破棄。nonce・burn・出金なし)。ブロック全体を拒否しないのは、delayed acceptance 下では tx が mergeset 経由で必ず受理対象になるため、ブロック拒否だと 1 件の tx でチェーンが止まるから。
+- 天井: 台帳は総額なので、lock-and-mint のプールと同じく「裏付けられた総額」までは出金され得る。それ以上は一切 materialize されない。
+- fence 未満(testnet-11・mainnet 既定 `u64::MAX`)では累積器は従来どおり飽和演算で、実行はバイト同一。fingerprint には有限値のときだけ入る。
+
 ### 9.2 Deposit(2 段階、v0.2 から不変)
 
 1. **Lock:** user が UTXO レーンで `EVM_DEPOSIT_LOCK` output(subnet `0x20`、`ScriptClass::EvmDepositLock`)を作る。lock は宛先 `EvmAddress`・`timeout_daa_score`・`claim_tip_sompi`(claim 包含インセンティブ、AH-1)を持つ。

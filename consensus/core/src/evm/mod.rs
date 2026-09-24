@@ -797,6 +797,11 @@ pub struct EvmExecutionHeader {
     /// Total native (wei) balance held across ALL EVM accounts after this
     /// block — the O(1) supply-invariant accumulator (v0.4 §9.1, audit AM-5):
     /// `total(B) = total(parent) + deposits(B) − withdrawals(B) − burn(B)`.
+    ///
+    /// Past `Params::evm_bridge_ledger_activation_daa_score` this is the **bridge ledger**: the
+    /// same identity (plus market credits, less market escrow burns), CHECKED, and a user tx that
+    /// would take it below zero is skipped — so it bounds what the L1 materializes by what the L1
+    /// bridged in, not by what the EVM's balances say. Below the fence it saturates.
     pub evm_total_native_balance: EvmU256,
     /// Cumulative EVM basefee burn up to and including this block (design §9.2).
     pub evm_burn_accumulator: EvmU256,

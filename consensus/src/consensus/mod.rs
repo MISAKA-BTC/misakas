@@ -2643,10 +2643,11 @@ impl ConsensusApi for Consensus {
             .map_err(|e| kaspa_consensus_core::errors::consensus::ConsensusError::GeneralOwned(e.to_string()))
     }
 
-    fn evm_activation_fences(&self) -> (u64, u64, u64) {
+    fn evm_activation_fences(&self) -> (u64, u64, u64, u64) {
         (
             self.config.params.evm_gas_pool_v2_activation_daa_score,
             self.config.params.evm_f002_withdraw_cap_activation_daa_score,
+            self.config.params.evm_bridge_ledger_activation_daa_score,
             self.config.params.evm_f003_mldsa_verify_activation_daa_score,
         )
     }
