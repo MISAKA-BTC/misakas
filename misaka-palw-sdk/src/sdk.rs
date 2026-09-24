@@ -88,6 +88,11 @@ pub struct PalwClassSdk {
     /// [`Self::with_chain_classes_v1`], which a node exposes as an operator flag — never a
     /// default — until the ADR's fuzz gate has run to its stated saturation.
     chain_classes: bool,
+    /// **The attempt rule every backend this SDK resolves runs, and every registration it builds is
+    /// priced at** (ADR-0152 v3.1, addendum §4-bis.1): `CoreV1` on a network that arms
+    /// `palw_offence_attribution`, `Legacy` elsewhere. Set with [`Self::with_attempt_rules_v1`] from
+    /// the node's params; `Legacy` by default, so every existing caller keeps its roots.
+    attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
 }
 
 /// The model a row is a revision OF: `"Qwen/Qwen2.5-1.5B/graph-v2"` → `"Qwen/Qwen2.5-1.5B"`.
@@ -140,7 +145,37 @@ impl PalwClassSdk {
         assert_eq!(ids.len(), lineages.len(), "two lineages share a lineage id");
         let fallbacks = lineages.iter().filter(|l| l.is_container_fallback()).count();
         assert!(fallbacks <= 1, "{fallbacks} lineages claim the container-fallback slot, and files can only fall back to one");
-        Self { lineages, court, prompt_ids_form, network_id, chain_classes: false }
+        Self { lineages, court, prompt_ids_form, network_id, chain_classes: false, attempt_rules: Default::default() }
+    }
+
+    /// **Run the chain's attempt rule** (ADR-0152 v3.1 J-5): every backend this SDK resolves gets it
+    /// (`set_attempt_rules_v1`), and a registration it builds takes the formula canonical job
+    /// ([`Self::registration_canonical_v1`]). A node passes
+    /// `palw_attempt_rules_of_params_v1(&params)`.
+    pub fn with_attempt_rules_v1(mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) -> Self {
+        self.attempt_rules = rules;
+        self
+    }
+
+    pub fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+        self.attempt_rules
+    }
+
+    /// **The canonical job a registration of `entry` carries**: the table's under `Legacy`; under
+    /// `CoreV1` the formula's (`palw_attempt_canonical_v1`), since admission past
+    /// `palw_offence_attribution` refuses any other — registrants no longer choose it (addendum
+    /// §4-bis.8(a), the operator's decision). A profile too narrow for the formula cannot register.
+    pub fn registration_canonical_v1(&self, entry: &PalwClassEntryV1) -> Result<kaspa_consensus_core::palw_v2::PalwJobContextV2, String> {
+        match self.attempt_rules {
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy => Ok(entry.canonical_context()),
+            kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 => {
+                let (prefill, decode) = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_canonical_v1(&entry.profile, false)
+                    .ok_or_else(|| {
+                        format!("{}'s context ({} tokens) is too narrow for the canonical job formula", entry.model_id, entry.profile.n_ctx)
+                    })?;
+                Ok(kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, prefill, decode))
+            }
+        }
     }
 
     /// Add one lineage to an already-built SDK — the composition point for a lineage that lives
@@ -148,7 +183,9 @@ impl PalwClassSdk {
     pub fn with_lineage(mut self, lineage: Arc<dyn PalwModelLineageV1>) -> Self {
         let mut lineages = std::mem::take(&mut self.lineages);
         lineages.push(lineage);
+        let attempt_rules = self.attempt_rules;
         Self::with_lineages(lineages, self.court, self.prompt_ids_form, std::mem::take(&mut self.network_id))
+            .with_attempt_rules_v1(attempt_rules)
     }
 
     pub fn prompt_ids_form(&self) -> kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
@@ -352,6 +389,12 @@ impl PalwClassSdk {
         Ok(candidates.pop().expect("length checked above"))
     }
 
+    /// A resolved backend, running this SDK's attempt rule.
+    fn ruled_v1(&self, mut backend: Box<dyn PalwExecutionBackendV1>) -> Box<dyn PalwExecutionBackendV1> {
+        backend.set_attempt_rules_v1(self.attempt_rules);
+        backend
+    }
+
     /// **Resolve the class the chain named into something that can run it.** `class_id` and
     /// `artifact_root` come off the class record, so they are the chain's answer; each lineage
     /// either serves it, refuses it by name, or passes. A node that cannot serve a class says so —
@@ -367,7 +410,7 @@ impl PalwClassSdk {
             if let Some(outcome) =
                 lineage.resolve(&self.court, self.prompt_ids_form, class_id, artifact_root, holdings, &self.network_id)
             {
-                return outcome;
+                return outcome.map(|backend| self.ruled_v1(backend));
             }
         }
         Err(format!("this node cannot serve the registered class {class_id} (artifact root {artifact_root})"))
@@ -523,7 +566,10 @@ impl PalwClassSdk {
             // testnet-11 by registration (ADR-0118) — was refused by its own producer and seats,
             // and its retained blocks were addressed at a level the seats did not derive.
             return Ok(Box::new(
-                backend.with_step_ladder_cap(self.court.max_step_leaf_count()).with_prompt_ids_form(self.prompt_ids_form),
+                backend
+                    .with_step_ladder_cap(self.court.max_step_leaf_count())
+                    .with_prompt_ids_form(self.prompt_ids_form)
+                    .with_attempt_rules(self.attempt_rules),
             ));
         }
         if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_registered_root(holdings, artifact_root, profile) {
@@ -534,7 +580,10 @@ impl PalwClassSdk {
                 (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
             )?;
             return Ok(Box::new(
-                backend.with_step_ladder_cap(self.court.max_step_leaf_count()).with_prompt_ids_form(self.prompt_ids_form),
+                backend
+                    .with_step_ladder_cap(self.court.max_step_leaf_count())
+                    .with_prompt_ids_form(self.prompt_ids_form)
+                    .with_attempt_rules(self.attempt_rules),
             ));
         }
         Err(format!(
@@ -582,7 +631,7 @@ impl PalwClassSdk {
         chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
         shape: &PalwAdmissionShapeV1,
     ) -> Result<PalwClassCatalogEntryV2, String> {
-        let canonical = entry.canonical_context();
+        let canonical = self.registration_canonical_v1(entry)?;
         // The build's certified families (ADR-0069 Decision 5) — the same set the consensus gate
         // reads, so a preflight that says "this would be admitted" is answering the question the
         // chain will actually ask.
@@ -703,7 +752,7 @@ impl PalwClassSdk {
         // number is the bundle's, never the executor's constant (audit D H-5b).
         palw_post_genesis_registration_capped_v1(
             candidate.entry.profile.clone(),
-            candidate.entry.canonical_context(),
+            self.registration_canonical_v1(&candidate.entry)?,
             candidate.artifact_root,
             if prosecutable { terms.min_grantable_share_permille } else { 0 },
             terms.initial_target,

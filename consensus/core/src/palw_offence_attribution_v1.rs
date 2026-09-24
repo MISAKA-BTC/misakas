@@ -233,7 +233,7 @@ pub struct PalwIdentityRulesV1 {
 }
 
 /// **Which identity check a binding failed** — the first, in the addendum's order (§4-bis.2):
-/// J2, J1, J3, J5a, J5b, J4.
+/// J2, J1, J3, J5a, J5b, J4, J6, J7.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwIdentityFaultV1 {
     /// J2: the binding's shape profile is not the claim's class (a class id IS its profile id).
@@ -252,6 +252,12 @@ pub enum PalwIdentityFaultV1 {
     PromptNotTheAnchors,
     /// J4: the binding's logits trace root is not the claim's committed trace root.
     TraceNotTheClaims,
+    /// J6 (both lanes): the activation leg is not the integer classes' "taps nothing" statement
+    /// over this context (`palw_int_activation_leg_root_v1`) — a free root with a real preimage.
+    ActivationLegNotCanonical,
+    /// J7 (both lanes): the checkpoint profile is not the class's canonical one
+    /// (`palw_canonical_checkpoint_profile_v1`) — the interval the filer would otherwise choose.
+    CheckpointProfileNotCanonical,
 }
 
 impl PalwIdentityFaultV1 {
@@ -264,6 +270,8 @@ impl PalwIdentityFaultV1 {
             Self::ContextNotCanonical => "J5a",
             Self::PromptNotTheAnchors => "J5b",
             Self::TraceNotTheClaims => "J4",
+            Self::ActivationLegNotCanonical => "J6",
+            Self::CheckpointProfileNotCanonical => "J7",
         }
     }
 }
@@ -771,9 +779,11 @@ pub fn palw_false_valid_convicts_execution_v2(
 /// | J2 | the binding's profile is not the claim's class |
 /// | J1 | attempt: `job_id` is not the recorded anchor; free prompt: the context's pin is not the commitment's |
 /// | J3 | attempt: `execution_seed` is not the anchor's first 32 bytes |
-/// | J5a | attempt, on a class whose canonical job the chain derives (F1: the base class): the whole context is not the one the anchor implies |
-/// | J5b | the same, a canonical prompt of at most 4,096 ids: the prompt root is not the anchor's |
+/// | J5a | attempt: the whole context is not the `CoreV1` one the anchor implies at the class's canonical job (the floor's, or the model formula `(n_ctx/8 − 1, 2)`); a class too narrow for the formula is refused `IdentityNotDerivable` |
+/// | J5b | the same, a canonical prompt of at most 4,096 ids: the prompt root is not the anchor's (a longer one is `PromptNotAnchored`'s) |
 /// | J4 | the logits trace root is not the claim's |
+/// | J6 | the activation leg is not `palw_int_activation_leg_root_v1(ctx)` (both lanes) |
+/// | J7 | the checkpoint profile is not `palw_canonical_checkpoint_profile_v1(profile)` (both lanes) |
 ///
 /// `with_prompt_root = false` leaves J5b out — the data-availability answers run every other check
 /// (SPEC §4.6: its cost belongs to the contradictions).
@@ -819,18 +829,18 @@ pub fn palw_binding_identity_fault_v1(
             if ctx.execution_seed[..] != identity.as_byte_slice()[..32] {
                 return Ok(Some(PalwIdentityFaultV1::SeedNotTheJobs));
             }
-            // J5: the whole context, where the chain derives the class's canonical job.
-            if let Some(canonical) = palw_attempt_canonical_v1(profile, target.class_id == rules.base_class_id) {
-                let expected = palw_attempt_context_v1(profile, &identity, canonical, ctx.prompt_token_ids_hash);
-                if ctx.context_hash() != expected.context_hash() {
-                    return Ok(Some(PalwIdentityFaultV1::ContextNotCanonical));
-                }
-                if with_prompt_root && canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
-                    let root = palw_attempt_prompt_root_v1(profile, &identity, canonical.0, rules.prompt_ids_form)
-                        .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
-                    if ctx.prompt_token_ids_hash != root {
-                        return Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors));
-                    }
+            // J5: the whole context `CoreV1` derives from the anchor at the class's canonical job.
+            let canonical = palw_attempt_canonical_v1(profile, target.class_id == rules.base_class_id)
+                .ok_or(PalwOffenceVerifyError::IdentityNotDerivable)?;
+            let expected = palw_attempt_context_v1(profile, &identity, canonical, ctx.prompt_token_ids_hash);
+            if ctx.context_hash() != expected.context_hash() {
+                return Ok(Some(PalwIdentityFaultV1::ContextNotCanonical));
+            }
+            if with_prompt_root && canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
+                let root = palw_attempt_prompt_root_v1(profile, &identity, canonical.0, rules.prompt_ids_form)
+                    .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+                if ctx.prompt_token_ids_hash != root {
+                    return Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors));
                 }
             }
         }
@@ -838,6 +848,14 @@ pub fn palw_binding_identity_fault_v1(
     // J4 — the trace root the claim committed.
     if binding.full_logits_trace_root != target.trace_root {
         return Ok(Some(PalwIdentityFaultV1::TraceNotTheClaims));
+    }
+    // J6 and J7 (addendum §4-bis.2), both lanes: the two leg parts a filer would otherwise choose
+    // freely with a real preimage (the probe's T2 and T3).
+    if binding.activation_leg_root != crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(ctx) {
+        return Ok(Some(PalwIdentityFaultV1::ActivationLegNotCanonical));
+    }
+    if binding.checkpoint_profile != crate::palw_attempt_rules_v1::palw_canonical_checkpoint_profile_v1(profile) {
+        return Ok(Some(PalwIdentityFaultV1::CheckpointProfileNotCanonical));
     }
     Ok(None)
 }
@@ -852,9 +870,9 @@ pub fn palw_binding_identity_fault_v1(
 /// `output_commitment_v2(ctx, ids, rendered_output_hash_v2(&[])) != output_root` — the one rendered
 /// rule, attempts and free prompts alike.
 ///
-/// **F1 covers the flat-logits classes** (the floor): a model class's producers still commit a
-/// family-keyed rendered hash, and would be convicted for it, until `CoreV1` moves them onto the
-/// one rule (F1-M) — so a tiled class is refused here until then.
+/// Every class, both lanes: past `palw_offence_attribution` every producer commits its output root
+/// by `CoreV1`'s one rendered rule (ADR-0152 v3.1 post-edit 4 unified the free-prompt lane's too),
+/// so the rule holds a model class's claim as it holds the floor's.
 pub fn palw_output_fault_v1(
     target: &PalwOffenceTargetV1,
     binding: &crate::palw_step_leg::PalwStepBindingV2,
@@ -879,12 +897,6 @@ pub fn palw_output_fault_v1(
     if target.output_root == Hash64::default() {
         return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("the claim's output root is no longer recorded"));
     }
-    if binding.shape_profile.logits_scheme_id != crate::palw_step_refute::flat_logits_scheme_id_v1() {
-        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
-            "a tiled class's producers render under their family's rule until CoreV1 (F1-M); the one rendered rule convicts \
-             flat-logits classes only",
-        ));
-    }
     let ids = match pin {
         Pin::Base0V1(tokens) => {
             crate::palw_step_refute::check_base0_decode_pin(binding, tokens)
@@ -898,9 +910,7 @@ pub fn palw_output_fault_v1(
         }
         Pin::FloatV2(_) => return Err(PalwOffenceVerifyError::PinNotAdmitted("a Float32 class's pin")),
     };
-    let rendered =
-        crate::palw_v2::output_commitment_v2(&binding.job_context.context_hash(), ids, &crate::palw_v2::rendered_output_hash_v2(&[]));
-    Ok(rendered != target.output_root)
+    Ok(crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, ids) != target.output_root)
 }
 
 /// **What a claim-proving contradiction (9, 10) proves about `target`**, or the refusal. The
@@ -1858,10 +1868,21 @@ mod tests {
         let mut other_claim = good.clone();
         other_claim.receipt = PalwFalseValidReceiptV1::Full(v2_receipt(1, h64(CLAIM + 1), PalwReceiptVerdictV2::Valid));
         assert_eq!(judge(&state, &other_claim), Err(E::PanelFalseValidWorkMismatch));
-        for verdict in [PalwReceiptVerdictV2::Incapable, PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 1 }] {
+        for verdict in [
+            PalwReceiptVerdictV2::Incapable,
+            PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: 1 },
+            // ADR-0152 Q-1 / Q-6: a sampler is never liable — `Sampled` is not `Valid`.
+            PalwReceiptVerdictV2::Sampled,
+        ] {
             let mut not_valid = good.clone();
             not_valid.receipt = PalwFalseValidReceiptV1::Full(v2_receipt(1, h64(CLAIM), verdict));
             assert_eq!(judge(&state, &not_valid), Err(E::PanelFalseValidNotValidVerdict), "{verdict:?}");
+            let mut segmented_not_valid = good.clone();
+            segmented_not_valid.receipt = PalwFalseValidReceiptV1::Segmented(PalwSeatReceiptV3 {
+                receipt: v2_receipt(1, h64(CLAIM), verdict),
+                segments: PalwSegmentMaskV2::single(0),
+            });
+            assert_eq!(judge(&state, &segmented_not_valid), Err(E::PanelFalseValidNotValidVerdict), "segmented {verdict:?}");
         }
     }
 
@@ -2021,8 +2042,16 @@ mod tests {
     /// `binding` with one part moved and its committed root re-derived as `verify_binding` derives
     /// it — a self-consistent binding of another job, the only kind a filer can carry.
     fn moved(binding: &PalwStepBindingV2, edit: impl FnOnce(&mut PalwStepBindingV2)) -> PalwStepBindingV2 {
+        use crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1 as canonical_leg;
         let mut b = binding.clone();
+        let before = canonical_leg(&b.job_context);
+        let was_canonical = b.activation_leg_root == before;
         edit(&mut b);
+        // A context edit carries the statement over to the new context, as a producer of that
+        // context would file it — so a test moves the one field it names and nothing else.
+        if was_canonical && b.activation_leg_root == before {
+            b.activation_leg_root = canonical_leg(&b.job_context);
+        }
         b.committed_execution_root = binding_commitment_root_v1(&b);
         crate::palw_step_leg::verify_binding_v1(&b).expect("a re-committed binding verifies");
         b
@@ -2115,13 +2144,44 @@ mod tests {
             let mut unverified = honest.clone();
             unverified.job_context.job_id = other;
             assert_eq!(palw_binding_identity_fault_v1(&target, &unverified, rules, true), Err(E::BindingUnverified));
-            // **The F1-M residual, pinned:** on a class whose canonical job the chain does not derive
-            // (every class but the base one, until CoreV1) the relabel has no fault here.
-            let model_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(0xBA5E), da_signer_liability: false };
+            // J6 and J7: each leg part moved alone, re-committed.
             assert_eq!(
-                palw_binding_identity_fault_v1(&attempt_target(relabel, anchor), relabel, model_rules, true),
-                Ok(None),
-                "{form:?}: the model-class relabel is F1-M's"
+                judge(&moved(&honest, |b| b.activation_leg_root = other), true),
+                Ok(Some(PalwIdentityFaultV1::ActivationLegNotCanonical))
+            );
+            assert_eq!(
+                judge(&moved(&honest, |b| b.checkpoint_profile.checkpoint_interval = 2), true),
+                Ok(Some(PalwIdentityFaultV1::CheckpointProfileNotCanonical))
+            );
+            // **F1-M: a model class is held to its own formula job** (the floor's graph at 128, as a
+            // class of its own): its CoreV1 binding has no fault; a relabel of another anchor's prompt
+            // is J5b; the floor's job under a model class's identity is J5a; and a class too narrow
+            // for the formula is not derivable.
+            let model = crate::palw_attempt_rules_v1::model_binding_for_tests_v1(&anchor, 128, form);
+            let model_class = model.shape_profile.shape_profile_id();
+            assert_ne!(model_class, class, "a class of its own");
+            let model_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: class, da_signer_liability: false };
+            let judge_model = |binding: &PalwStepBindingV2| {
+                palw_binding_identity_fault_v1(&attempt_target(binding, anchor), binding, model_rules, true)
+            };
+            assert_eq!(judge_model(&model), Ok(None), "{form:?}: the model class's own CoreV1 job");
+            assert_eq!(model.job_context.declared_prefill_tokens, 15, "(128/8 − 1, 2)");
+            let model_relabel = moved(&model, |b| {
+                b.job_context.prompt_token_ids_hash =
+                    crate::palw_attempt_rules_v1::palw_attempt_prompt_root_v1(&b.shape_profile, &other, 15, form).unwrap()
+            });
+            assert_eq!(judge_model(&model_relabel), Ok(Some(PalwIdentityFaultV1::PromptNotTheAnchors)), "{form:?}: model relabel");
+            let short = moved(&model, |b| b.job_context.declared_prefill_tokens = 8);
+            assert_eq!(judge_model(&short), Ok(Some(PalwIdentityFaultV1::ContextNotCanonical)), "{form:?}: a short prefill");
+            let legacy_field = moved(&model, |b| b.job_context.tokenizer_id = other);
+            assert_eq!(judge_model(&legacy_field), Ok(Some(PalwIdentityFaultV1::ContextNotCanonical)), "{form:?}: an artifact field");
+            let mut narrow = model.clone();
+            narrow.shape_profile.n_ctx = 8;
+            narrow.job_context.shape_profile_id = narrow.shape_profile.shape_profile_id();
+            let narrow = moved(&narrow, |_| {});
+            assert_eq!(
+                palw_binding_identity_fault_v1(&attempt_target(&narrow, anchor), &narrow, model_rules, true),
+                Err(E::IdentityNotDerivable)
             );
         }
     }
@@ -2209,7 +2269,10 @@ mod tests {
             assert_ne!(palw_fp_job_pin_of_context_v1(&moved_ctx), pin, "the pin reads the {what}");
         }
         let rules = PalwIdentityRulesV1 { prompt_ids_form: Form::Flat, base_class_id: class.shape_profile_id, da_signer_liability: false };
-        let fp_binding = moved(&floor, |b| b.job_context = ctx.clone());
+        let fp_binding = moved(&floor, |b| {
+            b.job_context = ctx.clone();
+            b.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&ctx);
+        });
         let mut target = attempt_target(&fp_binding, pin);
         target.lane = Some(PalwClaimSourceKindV1::FreePrompt);
         assert_eq!(palw_binding_identity_fault_v1(&target, &fp_binding, rules, true), Ok(None), "the commitment's own run");

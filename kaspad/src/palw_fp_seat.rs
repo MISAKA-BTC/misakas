@@ -672,7 +672,7 @@ mod tests {
     }
 
     fn roots() -> PalwClaimRootsV1 {
-        PalwClaimRootsV1 { execution_root: h(4), trace_root: h(5), anchor: h(9), attempt_draw: None }
+        PalwClaimRootsV1 { execution_root: h(4), trace_root: h(5), anchor: h(9), attempt_draw: None, output_root: None }
     }
 
     /// **The whole path: draw, ask, verify, file** — on a fixture claim whose executor answers

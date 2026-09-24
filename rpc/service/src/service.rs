@@ -2842,6 +2842,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             response.bond_reserved_exposure = bond_facts.reserved_exposure.to_string();
             response.bond_exposure_ceiling = bond_facts.exposure_ceiling.to_string();
             response.bond_claim_exposure = bond_facts.claim_exposure.to_string();
+            // ADR-0152 P6: the ledger the fold measures past `palw_rcore_plus`, the producer floor
+            // and A-6's accuser ledger — read off the same facts the verdict below reads.
+            response.bond_committed = bond_facts.committed.to_string();
+            response.bond_producer_floor_shortfall = bond_facts.producer_floor_shortfall.unwrap_or(0);
+            response.bond_accuser_exposure = bond_facts.accuser_exposure.to_string();
         }
         // **The verdict is computed for every request, not only for bonds that exist.**
         //
@@ -2854,7 +2859,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // sentence of its own rather than an empty string: readiness is a property of a bond, and
         // not asking about one is not the same as asking and being told yes.
         //
-        // The verdict still comes from `ready_to_produce` rather than being re-derived here — the
+        // The verdict still comes from consensus-core (`ready_to_produce_v3`) rather than being re-derived here — the
         // RPC and the producer must not be able to disagree about what "ready" means. Its key check
         // is against the caller's own key, which this server does not hold, so the answer is given
         // for the key the bond registered; with no bond there is no such key and the first arm
@@ -2863,7 +2868,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             "no bond was named in this request — readiness is a property of a bond".to_string()
         } else {
             let key = facts.bond.as_ref().map(|b| b.registered_pubkey.as_slice()).unwrap_or(&[]);
-            match (facts.ready_to_produce(key), facts.class_admission_refusal.as_deref()) {
+            // ADR-0152 P6: `ready_to_produce_v3` at the candidate's DAA — the producer floor and the
+            // committed ledger past `palw_rcore_plus`, `ready_to_produce` byte for byte below it — the
+            // one verdict kaspad's producer loop reads too.
+            let rcore_plus = self.config.params.palw_rcore_plus_active_at(facts.daa_score);
+            match (facts.ready_to_produce_v3(key, rcore_plus), facts.class_admission_refusal.as_deref()) {
                 // The sentence first — the CLI matches on it — then the gate's own words.
                 (Err(why), Some(detail)) if why == kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_CLASS_NOT_ADMITTING_V2 => {
                     format!("{why} [{detail}]")

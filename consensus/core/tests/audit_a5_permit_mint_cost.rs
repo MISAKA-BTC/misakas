@@ -25,7 +25,7 @@ fn bond(n: u64) -> PalwBondKeyV2 {
 }
 
 fn one_final(credit: u64) -> PalwExecFinalV1 {
-    PalwExecFinalV1 { domain: h(1), bond: bond(7), operator_id: h(2), claim_id: h(3), execution_root: h(4), credit }
+    PalwExecFinalV1 { domain: h(1), bond: bond(7), operator_id: h(2), claim_id: h(3), execution_root: h(4), credit, accepted_blue_score: 0 }
 }
 
 /// **MEASURED**: how long `palw_execution_mint_quanta_v1` takes, and how many tickets it produces,

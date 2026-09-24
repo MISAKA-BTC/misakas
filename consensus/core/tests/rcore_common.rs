@@ -1,8 +1,9 @@
 //! **ADR-0152 R-core+ — the shared fixture of the `rcore_s*` suites.** Included through `#[path]`;
 //! as its own test target it holds no test.
 //!
-//! [`Chain`] folds one block per step through testnet-12's own fold (`dos_l5_common`'s extras, or
-//! `panel_room_common`'s for the model classes' gate) and checks every block three ways: the delta
+//! [`Chain`] folds one block per step through testnet-12's own fold with the extras the processor
+//! resolves (`dos_l5_common`'s with the execution lane, or `panel_room_common`'s for the model
+//! classes' gate — [`Chain::extras_at`]) and checks every block three ways: the delta
 //! re-applies to the child and reverts to the parent, and the child's carriage reloads under its
 //! committed root (`into_state`: the ledger re-derived from the claims' commitments, R-core+'s load
 //! invariants, DL-1's deadlines exactly).
@@ -19,7 +20,8 @@ pub use kaspa_consensus_core::palw_panel_v2::{PalwReceiptVerdictV2, PalwSeatRece
 pub use kaspa_consensus_core::palw_pwu::palw_pwu_v1;
 pub use kaspa_consensus_core::palw_state_v2::{
     PalwBlockWorkV3, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimRcoreV1, PalwClaimStateV2, PalwConsensusObjectV2,
-    PalwStateCarriageV2, PalwStateParamsV2, apply_delta_v2, palw_claim_commitment_v1, palw_rcore_counts_licensed_v1, revert_delta_v2,
+    PalwStateCarriageV2, PalwStateParamsV2, PalwTransitionExtrasV1, apply_delta_v2, palw_claim_commitment_v1,
+    palw_rcore_counts_licensed_v1, revert_delta_v2,
 };
 pub use kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2;
 
@@ -50,13 +52,17 @@ pub struct Chain {
     pub daa: u64,
     /// Whether steps fold with `panel_room`'s extras (the model classes' gate) or `dos_l5`'s.
     pub room: bool,
+    /// Whether steps fold with `palw_offence_attribution` armed as the processor resolves it on
+    /// testnet-12 (`dos_l5`'s extras hold it dormant, deliberately, for the V1-route suites): the
+    /// court's defaults are then `CourtDefault` and kinds 3 and 4 are admitted.
+    pub attribution: bool,
 }
 
 impl Chain {
     pub fn new(p: Params) -> Self {
         let sp = bundle(&p).state.clone();
         let s = genesis_state(&p);
-        Self { p, sp, s, daa: 1_000, room: false }
+        Self { p, sp, s, daa: 1_000, room: false, attribution: false }
     }
 
     /// One block at `daa`: folded, re-applied, reverted, reloaded.
@@ -65,12 +71,8 @@ impl Chain {
         self.daa = daa;
         let c = ctx(0xCA_0000 + daa, daa, daa, subsidy);
         let parent = self.s.clone();
-        let (child, delta, skips) = if self.room {
-            go(&self.p, &self.sp, &parent, &c, objects, work, key)
-        } else {
-            fold(&self.p, &self.sp, &parent, &c, objects, work, key)
-        }
-        .unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
+        let (child, delta, skips) =
+            self.try_fold(&parent, &c, objects, work, key).unwrap_or_else(|e| panic!("the block at DAA {daa} folds: {e}"));
         assert!(skips.is_empty(), "nothing skipped at {daa}: {skips:?}");
         assert_eq!(apply_delta_v2(&parent, &delta, &self.sp).expect("re-applies"), child, "DAA {daa}: the delta is the transition");
         assert_eq!(revert_delta_v2(&child, &delta, &self.sp).expect("reverts"), parent, "DAA {daa}: the delta reverts");
@@ -79,6 +81,38 @@ impl Chain {
             .unwrap_or_else(|e| panic!("DAA {daa}: the carriage reloads (ledger, R-core+ invariants, DL-1): {e}"));
         assert_eq!(reloaded, child, "DAA {daa}: reload is the state");
         self.s = child;
+    }
+
+    /// **The extras this chain folds with at `daa`** — the processor's: `dos_l5`'s with the execution
+    /// lane as the processor resolves it ([`processor_round_lane`]: its quantum counts a claim's
+    /// execution rights `R`, the S review's L1), or `panel_room`'s (the model classes' gate) on a
+    /// model chain.
+    pub fn extras_at(&self, daa: u64) -> PalwTransitionExtrasV1 {
+        let mut e = if self.room {
+            room_extras(&self.p, daa)
+        } else {
+            let mut e = extras(&self.p, daa);
+            e.round_lane = processor_round_lane(&self.p, daa);
+            e
+        };
+        e.offence_attribution_active = self.attribution && self.p.palw_offence_attribution_active_at(daa);
+        e
+    }
+
+    /// One block on `parent` with this chain's extras ([`Self::extras_at`]), unchecked — the probe a
+    /// test takes beside [`Self::step_at`].
+    pub fn try_fold(
+        &self,
+        parent: &PalwChainStateV2,
+        c: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: &[PalwConsensusObjectV2],
+        work: PalwBlockWorkV3<'_>,
+        key: Hash64,
+    ) -> Result<
+        (PalwChainStateV2, kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2, Vec<(Hash64, String)>),
+        kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
+    > {
+        fold_with(&self.p, &self.sp, parent, c, objects, work, key, &self.extras_at(c.daa_score))
     }
 
     pub fn step(&mut self, objects: &[PalwConsensusObjectV2]) {

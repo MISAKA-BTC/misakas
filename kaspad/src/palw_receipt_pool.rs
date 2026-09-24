@@ -1110,7 +1110,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     //! The pool against the audit's flood, on a real bound five-seat panel: real ML-DSA-87 keys
     //! registered in a real `PalwChainStateV2`, the chain-fact read the node makes
     //! (`palw_receipt_pool_facts_v1`), the acceptance validators the assembler binds
@@ -1154,18 +1154,18 @@ mod tests {
     /// A chain holding one claim `PanelBound` on a five-seat panel (the shipped seats and quorum),
     /// every bond registered under a real ML-DSA-87 key. Bond 1 is the executor; 2, 3, 4, 7, 8, 9
     /// are six eligible operators for five seats, so one registered bond is a stranger to the panel.
-    struct Chain {
-        state: PalwChainStateV2,
-        claim: Hash64,
+    pub(crate) struct Chain {
+        pub(crate) state: PalwChainStateV2,
+        pub(crate) claim: Hash64,
         sp: PalwStateParamsV2,
         p: PalwPanelParamsV2,
-        net: Hash64,
-        seats: Vec<PalwBondKeyV2>,
+        pub(crate) net: Hash64,
+        pub(crate) seats: Vec<PalwBondKeyV2>,
         keys: HashMap<PalwBondKeyV2, MLDSA87KeyPair>,
     }
 
     impl Chain {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let ctx = |block: u64, daa: u64| PalwBlockContextV2 {
                 block: kaspa_consensus_core::BlockHash::from_u64_word(block),
                 daa_score: daa,
@@ -1253,7 +1253,7 @@ mod tests {
         }
 
         /// The node's read, as the service makes it: the chain's own `palw_receipt_pool_facts_v1`.
-        fn facts(&self) -> ReceiptChainFactsV1 {
+        pub(crate) fn facts(&self) -> ReceiptChainFactsV1 {
             let mut facts = ReceiptChainFactsV1::default();
             let bonds = self.every_bond();
             facts.refresh(palw_receipt_pool_facts_v1(&self.state, &[self.claim], &bonds), &bonds.iter().copied().collect());
@@ -1274,7 +1274,7 @@ mod tests {
 
         /// Seat `seat`'s genuine V3 `Valid` receipt, its assigned mask, signed with `rnd` (a re-send
         /// is the same receipt signed with other randomness).
-        fn v3(&self, seat: &PalwBondKeyV2, rnd: u8) -> PalwSeatReceiptV3 {
+        pub(crate) fn v3(&self, seat: &PalwBondKeyV2, rnd: u8) -> PalwSeatReceiptV3 {
             let panel = self.state.panel(&self.claim).unwrap();
             let mask = palw_segment_assignment_v2(panel.anchor, self.claim, self.seats.len() as u16).mask_of(self.seat_index(seat));
             let message = palw_receipt_message_v3(self.net, self.claim, PalwReceiptVerdictV2::Valid, SIGNED_DAA, mask);
@@ -1290,7 +1290,7 @@ mod tests {
             }
         }
 
-        fn v2(&self, seat: &PalwBondKeyV2, rnd: u8) -> PalwSeatReceiptV2 {
+        pub(crate) fn v2(&self, seat: &PalwBondKeyV2, rnd: u8) -> PalwSeatReceiptV2 {
             let message = palw_receipt_message_v2(self.net, self.claim, PalwReceiptVerdictV2::Valid, SIGNED_DAA);
             PalwSeatReceiptV2 {
                 claim: self.claim,
@@ -1306,7 +1306,7 @@ mod tests {
         }
 
         /// Whether the coverage door licenses from `candidates`, as the assembler asks it.
-        fn v3_licenses(&self, candidates: &[PalwSeatReceiptV3]) -> bool {
+        pub(crate) fn v3_licenses(&self, candidates: &[PalwSeatReceiptV3]) -> bool {
             let here = self.here();
             let coverage = |receipts: &[PalwSeatReceiptV3]| {
                 validate_receipt_coverage_v2(
@@ -1328,7 +1328,7 @@ mod tests {
         /// Whether the V1 quorum licenses from `candidates`, by the processor's greedy assembler
         /// (`palw_v2_receipt_quorum_assemble_impl`): a candidate that keeps the set clean stays, one
         /// that poisons it is dropped.
-        fn v2_licenses(&self, candidates: &[PalwSeatReceiptV2]) -> bool {
+        pub(crate) fn v2_licenses(&self, candidates: &[PalwSeatReceiptV2]) -> bool {
             let here = self.here();
             let mut kept: Vec<PalwSeatReceiptV2> = Vec::new();
             let mut licensed = false;

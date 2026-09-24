@@ -303,7 +303,27 @@ fn dos_l5_6_composite_alive_but_palw_stalls() {
     assert_eq!(admitted, attempts, "an attacker sized by #9 gets every attempt of the flood");
     assert_eq!(void_reasons.get("ReceiptTimeout").copied().unwrap_or(0), attempts, "every junk claim withholds to its second ReceiptTimeout");
     assert_eq!(slashed as u128, per.reservation * attempts as u128, "#10: each forfeits weight + escrow");
-    assert_eq!(daa_2m_dead, 0, "option A's bonds hold the flood's floor duty and a 2M seat: this composite no longer closes the 2M lane");
+    if kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1 {
+        assert_eq!(
+            daa_2m_dead, 0,
+            "option A's bonds hold the flood's floor duty and a 2M seat: this composite no longer closes the 2M lane"
+        );
+    } else {
+        // **While no vesting row exists (the S review's H1) every lock is priced on the whole gain**,
+        // so on the floor `lock_2 > (w + E) / 5` and ADR-0152 L-4's duty is the cap: each junk claim
+        // pins its whole forfeit across its five seats (amplification 1.00, F14's bound) instead of
+        // λ's 2/5 of it, and this flood closes the 2M lane for a stretch again. It is paid sompi for
+        // sompi — the attacker forfeits at least the honest collateral it pins, asserted below — and
+        // the residual price the vesting rows re-arm restores the stronger property above.
+        println!("H1: the floor duty is the cap (w + E) / 5 per seat; the 2M lane unbindable {daa_2m_dead} DAA");
+        // The S re-review's N2: measured 965 of 3,650 DAA — bounded at 30% of the window, not merely
+        // "reopens before the end".
+        assert!(
+            daa_2m_dead * 10 <= 3 * (end - start),
+            "the 2M lane is unbindable for at most 30% of the window: {daa_2m_dead} of {}",
+            end - start
+        );
+    }
     assert!(attacker_integral >= honest_integral, "the attacker locks at least the capital x time it pins");
     // **The bound: an attack that denies a lane must cost at least what it denies.** Stated as: a
     // producer whose claims pinned others' collateral and never settled must lose at least the

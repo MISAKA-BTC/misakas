@@ -396,6 +396,7 @@ mod tests {
             claim_id: one,
             execution_root: Hash64::from_u64_word(0x4B33),
             credit: 250_000,
+            accepted_blue_score: 0,
         };
         let copy = PalwExecFinalV1 { claim_id: two, ..a };
         let minted = palw_execution_mint_quanta_v1(&[a, copy], seed, PALW_EXECUTION_QUANTUM_V1 as u128, 1);

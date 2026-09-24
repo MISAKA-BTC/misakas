@@ -94,6 +94,25 @@ pub fn get_app_dir() -> PathBuf {
     return get_home_dir().join(".rusty-kaspa");
 }
 
+/// **ADR-0152 (the S re-review's N1): a network that arms `palw_rcore_plus` is refused, by name, by a
+/// build whose vesting rows have not landed** (`vesting_rows_landed` is
+/// `PALW_RCORE_VESTING_ROWS_LANDED_V1`). Until they land, a `Final` pays the escrow out and nothing
+/// can take it back, so R-core+ prices every seat lock on the WHOLE gain (the S review's H1) — and
+/// then the bind, which checks room for `lock_2` but reserves only the duty, can leave a floor or 8k
+/// licence needing a top-up its seats no longer have: the licence goes inert, the claim is redrawn
+/// and an honest producer can take RT#2. With the rows the top-up is 0. So such a build must never
+/// run a node on such a network; every other network (and a build with the rows) passes. The vesting
+/// work flips the constant with its body, in the integration line.
+pub fn palw_rcore_build_can_run_v1(
+    params: &kaspa_consensus_core::config::params::Params,
+    vesting_rows_landed: bool,
+) -> ConfigResult<()> {
+    if params.palw_rcore_plus.is_some() && !vesting_rows_landed {
+        return Err(ConfigError::PalwRcoreVestingRowsNotLanded(params.net.to_string()));
+    }
+    Ok(())
+}
+
 pub fn validate_args(args: &Args) -> ConfigResult<()> {
     #[cfg(feature = "devnet-prealloc")]
     {
@@ -135,6 +154,10 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
             kaspa_consensus_core::palw_state_v2::PALW_STATE_V2_VERSION,
         ));
     }
+
+    // **ADR-0152 (the S re-review's N1): never RUN R-core+ without the vesting rows.** Read from the
+    // network's own params, like the EVM check above.
+    palw_rcore_build_can_run_v1(&args.network().into(), kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1)?;
 
     if !args.connect_peers.is_empty() && !args.add_peers.is_empty() {
         return Err(ConfigError::MixedConnectAndAddPeers);
@@ -2152,6 +2175,46 @@ mod tests {
             "testnet-12 is this build's network"
         );
         assert!(validate_args(&parse(&[])).is_ok(), "the default network is untouched");
+    }
+
+    /// **ADR-0152 (the S re-review's N1): a build without the vesting rows refuses a network that
+    /// arms `palw_rcore_plus`, by name** — testnet-12 is refused while the constant is `false` and runs
+    /// once it is `true`; its fence-off twin, testnet-11, devnet and mainnet never are.
+    #[test]
+    fn n1_rcore_plus_needs_the_vesting_rows_at_startup() {
+        use kaspa_consensus_core::config::params::Params;
+        use kaspa_consensus_core::network::{NetworkId, NetworkType};
+        let t12 = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+        assert!(t12.palw_rcore_plus.is_some(), "testnet-12 arms R-core+");
+        match palw_rcore_build_can_run_v1(&t12, false) {
+            Err(ConfigError::PalwRcoreVestingRowsNotLanded(net)) => {
+                let message = ConfigError::PalwRcoreVestingRowsNotLanded(net.clone()).to_string();
+                assert!(net.contains("12"), "{net}");
+                assert!(
+                    message.contains("PALW_RCORE_VESTING_ROWS_LANDED_V1") && message.contains("vesting rows have not landed"),
+                    "{message}"
+                );
+            }
+            other => panic!("testnet-12 without the vesting rows must be refused by name, got {other:?}"),
+        }
+        assert!(palw_rcore_build_can_run_v1(&t12, true).is_ok(), "with the rows testnet-12 runs");
+        let mut twin = t12.clone();
+        twin.palw_rcore_plus = None;
+        assert!(palw_rcore_build_can_run_v1(&twin, false).is_ok(), "the fence-off twin runs");
+        for (name, params) in [
+            ("mainnet", Params::from(NetworkId::new(NetworkType::Mainnet))),
+            ("devnet", Params::from(NetworkId::new(NetworkType::Devnet))),
+            ("testnet-11", Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11))),
+        ] {
+            assert!(palw_rcore_build_can_run_v1(&params, false).is_ok(), "{name} never arms R-core+");
+        }
+        // Wired into the startup check, with this build's constant.
+        let t12_args = validate_args(&parse(&["--testnet", "--netsuffix=12"]));
+        if kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1 {
+            assert!(!matches!(t12_args, Err(ConfigError::PalwRcoreVestingRowsNotLanded(_))));
+        } else {
+            assert!(matches!(t12_args, Err(ConfigError::PalwRcoreVestingRowsNotLanded(_))), "{t12_args:?}");
+        }
     }
 
     #[test]

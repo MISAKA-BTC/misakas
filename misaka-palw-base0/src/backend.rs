@@ -62,6 +62,10 @@ pub struct Base0Backend {
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     /// This instance's seat state and walk; nothing outside the instance reaches it.
     seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
+    /// **The attempt rule of the network this instance serves** (ADR-0152 v3.1). The floor's job
+    /// and output are one rule under both, so the producer reads nothing of it; the SEAT does — the
+    /// material route binds a claim's output root only under `CoreV1` (T18p-M).
+    attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
 }
 
 impl Base0Backend {
@@ -75,7 +79,14 @@ impl Base0Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            attempt_rules: Default::default(),
         }
+    }
+
+    /// The network's attempt rule — see the field.
+    pub fn with_attempt_rules(mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) -> Self {
+        self.attempt_rules = rules;
+        self
     }
 
     /// **The ladder top from the ruleset**, for a caller that holds `PalwCourtParamsV2`. Passing
@@ -211,8 +222,8 @@ impl Base0Backend {
 /// and how to run one forward call. A family that re-implemented the coordinate rule here would
 /// commit its replay at coordinates the leg does not use, and every comparison would fail for a
 /// reason that is not the producer's.
-struct Base0IntervalKernels<'a> {
-    artifact: &'a Base0ArtifactV1,
+pub(crate) struct Base0IntervalKernels<'a> {
+    pub(crate) artifact: &'a Base0ArtifactV1,
 }
 
 impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
@@ -452,6 +463,14 @@ impl Base0Backend {
 }
 
 impl PalwExecutionBackendV1 for Base0Backend {
+    fn set_attempt_rules_v1(&mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) {
+        self.attempt_rules = rules;
+    }
+
+    fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+        self.attempt_rules
+    }
+
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -486,44 +505,61 @@ impl PalwExecutionBackendV1 for Base0Backend {
         })
     }
 
+    /// SEAT-S4: the authenticated `SC02` opening, at this class's ladder.
     fn open_segment_checkpoint_v1(&self, capture: &[u8], seat_count: u16, segment_index: u16) -> Result<Vec<u8>, String> {
-        crate::produce::base0_open_segment_checkpoint_v1(capture, seat_count, segment_index).map_err(|e| e.to_string())
+        crate::segment_opening::base0_open_segment_checkpoint_capped_v2(
+            capture,
+            seat_count,
+            segment_index,
+            Some(&self.profile),
+            self.step_ladder_cap(),
+        )
+        .map_err(|e| e.to_string())
     }
 
+    /// SEAT-S4: authenticated against `claim` and this seat's `job` before the floor's kernels replay.
     fn replay_segment_from_checkpoint_v1(
         &self,
         job: &PalwJobContextV2,
         prompt: &[usize],
         opening: &[u8],
+        claim: kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentClaimV1,
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        crate::produce::base0_replay_segment_from_checkpoint_v1(
-            &self.artifact,
+        crate::segment_opening::base0_replay_segment_opening_v2(
+            &Base0IntervalKernels { artifact: &self.artifact },
             &self.profile,
             job,
             prompt,
             opening,
-            self.network_ladder,
+            claim,
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
         )
-            .map_err(|e| e.to_string())
+        .map_err(String::from)
     }
 
+    /// The capture's own opening, authenticated against the capture's binding (and its job — the
+    /// floor's court resumes the capture's own, as it always has).
     fn replay_accused_segment_v1(
         &self,
         capture: &[u8],
         seat_count: u16,
         segment_index: u16,
-        _job: &PalwJobContextV2,
+        job: &PalwJobContextV2,
         prompt: &[usize],
     ) -> Result<kaspa_consensus_core::palw_segment_resume_v1::PalwSegmentReplayV1, String> {
-        crate::produce::base0_replay_accused_segment_v1(
-            &self.artifact,
+        crate::segment_opening::base0_replay_capture_segment_v2(
+            &Base0IntervalKernels { artifact: &self.artifact },
+            &self.profile,
             capture,
             seat_count,
             segment_index,
-            prompt,
-            self.network_ladder,
+            None,
+            &crate::segment_opening::base0_court_prompt_v1(self, job.job_id, prompt),
+            self.step_ladder_cap(),
+            self.prompt_ids_form,
         )
-            .map_err(|e| e.to_string())
+        .map_err(String::from)
     }
 
     /// The non-streaming verb IS the streaming one with a callback that does nothing — never the
@@ -566,22 +602,11 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // would be a tautology — and it is precisely the tautology that made a gossiped capture
         // re-mineable by anyone, forever, with no inference. The caller derives the anchor from the
         // BLOCK; here we only insist the capture answers it.
-        if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
-            return PalwMaterialVerdictV1::Mismatch;
-        }
-        // **The whole job, not only its id** (ADR-0117): an attempt claim's material must
-        // answer the job the block asked for — `palw_attempt_job_v1` of the anchor's canonical
-        // job at the block's own draw rule. The id alone let a smaller job through: decode calls
-        // skipped, or a prompt of another length, vouched for by every seat that held it.
-        if let Some(prefill_draw) = claim.attempt_draw
-            && claim.anchor != Hash64::default()
-        {
-            let Ok((canonical, _)) = self.job_for_anchor(claim.anchor) else {
-                return PalwMaterialVerdictV1::Unverifiable;
-            };
-            if decoded.0.job_context != kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(canonical, prefill_draw) {
-                return PalwMaterialVerdictV1::Mismatch;
-            }
+        //
+        // **The whole job, not only its id** (ADR-0117; SEAT-S1): one rule for every family and
+        // retention, `base0_material_job_is_the_claims_v1`.
+        if let Err(verdict) = crate::produce::base0_material_answers_the_claim_v1(self, &decoded.0, &decoded.3, &claim) {
+            return verdict;
         }
         // **A capture for some other profile is not this backend's to vouch for** — the check the
         // A16 and Qwen3.6 tiers already make. A free-prompt claim's roots are tied to no profile
@@ -1366,6 +1391,7 @@ mod tests {
             trace_root: outcome.trace_root,
             anchor: Hash64::default(),
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
     }
@@ -1480,6 +1506,7 @@ mod tests {
             trace_root: o.trace_root,
             anchor,
             attempt_draw: draw,
+            output_root: None,
         };
         let full = backend.execute(&canonical, &prompt).expect("the canonical job runs");
         let short = backend.execute(&one_forward, &prompt).expect("the one-forward job runs");
@@ -1523,8 +1550,13 @@ mod tests {
         let outcome = backend.execute(&job, &prompt).expect("the floor runs");
 
         // Its own block: roots and anchor both this run's.
-        let mine =
-            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor, attempt_draw: None };
+        let mine = PalwClaimRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            anchor,
+            attempt_draw: None,
+            output_root: None,
+        };
         assert_eq!(backend.verify_material(&outcome.material, mine), PalwMaterialVerdictV1::Matches);
 
         // Somebody else's block, borrowing this run's roots. The roots are genuine and the
@@ -1667,6 +1699,7 @@ mod tests {
             trace_root: lying.trace_root,
             anchor: Hash64::default(),
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(
             backend.verify_material(&lying.material, its_own),
@@ -1702,6 +1735,7 @@ mod tests {
             trace_root: outcome.trace_root,
             anchor: Hash64::default(),
             attempt_draw: None,
+            output_root: None,
         };
 
         assert_eq!(backend.verify_material(b"not material at all", claim), PalwMaterialVerdictV1::Unverifiable);
@@ -1757,6 +1791,7 @@ mod tests {
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&capture, roots), PalwMaterialVerdictV1::Matches);
         let attempt_anchor = PalwClaimRootsV1 { anchor: Hash64::from_u64_word(0xA71E), ..roots };
@@ -1867,6 +1902,7 @@ mod tests {
             trace_root: commitment.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         assert_eq!(backend.verify_material(&lying.outcome.material, roots), PalwMaterialVerdictV1::Matches);
 
@@ -2016,6 +2052,7 @@ mod tests {
             trace_root: run.outcome.trace_root,
             anchor: fp_job_id_v3(&job),
             attempt_draw: None,
+            output_root: None,
         };
         let build = |run: &kaspa_consensus_core::palw_backend::PalwFpRunV1, leaf: u64| {
             let work = backend.capture_shape(&run.outcome.material).expect("a shape").step_leaf_count;
@@ -2082,6 +2119,7 @@ mod tests {
                 trace_root: run.outcome.trace_root,
                 anchor: fp_job_id_v3(&job),
                 attempt_draw: None,
+                output_root: None,
             };
             let opening = backend.open_fp_interval(capture, 0, &ids).expect("interval 0 opens");
             let verdict = backend.verify_fp_interval_opening(&opening, roots, 0, &ids, work);
@@ -2212,6 +2250,7 @@ mod tests {
             // reads off the accepted commitment.
             anchor: Hash64::default(),
             attempt_draw: None,
+            output_root: None,
         };
         let draw = palw_fp_interval_draw_v1(
             &job.network_domain,

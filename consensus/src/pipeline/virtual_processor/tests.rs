@@ -14921,6 +14921,7 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let with_schedule = |used: &[(u64, u64)]| {
@@ -15019,6 +15020,7 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let scheduled = {
@@ -15196,6 +15198,7 @@ async fn adr0130_a_span_is_seeded_at_its_first_block_from_the_anchor_of_the_span
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let planted = {
@@ -15300,6 +15303,7 @@ async fn execution_quanta_turn_one_final_into_n_algo10_round_permits() {
                 claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
                 execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
                 credit: 500_000,
+                accepted_blue_score: 0,
             },
             PalwExecFinalV1 {
                 domain: bundle.base_class_id,
@@ -15308,6 +15312,7 @@ async fn execution_quanta_turn_one_final_into_n_algo10_round_permits() {
                 claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A2),
                 execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
                 credit: 500_000,
+                accepted_blue_score: 0,
             },
         ],
     );
@@ -15403,6 +15408,7 @@ async fn adr0130_a_round_block_whose_permit_the_previous_round_held_is_not_grant
         claim_id: kaspa_hashes::Hash64::from_u64_word(claim),
         execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
         credit,
+        accepted_blue_score: 0,
     };
     let schedule = adr0125_schedule_of(0, &[earned(bundle.base_class_id, 0xC1A1, 5), earned(other_domain, 0xC1A2, 1)]);
     assert_eq!(schedule.domains.len(), 2, "two domains");
@@ -15581,6 +15587,7 @@ async fn adr0127_round_burst(with_round_blocks: bool) -> Adr0127BurstOutcome {
             claim_id: kaspa_hashes::Hash64::from_u64_word(0xC1A1),
             execution_root: kaspa_hashes::Hash64::from_u64_word(0xE0),
             credit: 1,
+            accepted_blue_score: 0,
         }],
     );
     let scheduled = {
@@ -16250,7 +16257,18 @@ mod t12_offence_attribution_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
 // refused by the fold until their owners land them.
 mod t12_rcore_skeleton_gate;
+// ADR-0152 v3.1 S-6: the per-bond share in the producer's own pre-check and the free-prompt price.
+mod t12_rcore_s6_producer_share;
+// ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
+// and the fold past `palw_rcore_plus`, with real card signatures.
+mod t12_rcore_s7_reporter_gate;
+// ADR-0152 SR-10: the processor's gate routes a set on a licensed claim to the V3 supplementary door
+// past `palw_rcore_plus`, and nothing below it (M4 review, finding 1).
+mod t12_rcore_sr10_door_gate;
 mod t12_round_lane_e2e;
+// ADR-0152 M4: the stake-weighted draw where the chain draws — the one resolver (SW-1) and the
+// one-state, bind-only-in-the-anchor-block derivation (SW-8, T89) on a real testnet-12 chain.
+mod t12_stake_draw_integration;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
 mod t46_false_valid_real_claim;

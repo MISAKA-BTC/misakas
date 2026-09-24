@@ -342,6 +342,19 @@ pub fn fp_worker_prompt_ids_form_v1(
     Ok(Params::from(net).palw_prompt_ids_form_v1())
 }
 
+/// **The attempt rule of the network this worker is started for** (ADR-0152 v3.1, addendum
+/// §4-bis.1, post-edit 4), derived as [`fp_worker_prompt_ids_form_v1`] derives the form: `CoreV1`
+/// where the preset arms `palw_offence_attribution` — every output root this worker commits is
+/// then the one rendered rule the chain holds a free-prompt claim to — and `Legacy` elsewhere.
+pub fn fp_worker_attempt_rules_v1(network_id: &str) -> Result<kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1, String> {
+    use kaspa_consensus_core::config::params::Params;
+    use kaspa_consensus_core::network::NetworkId;
+    let net: NetworkId = network_id.parse().map_err(|e| {
+        format!("{network_id} is not a network this build knows ({e}); it must be the string kaspad prints for params.net")
+    })?;
+    Ok(kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(&Params::from(net)))
+}
+
 pub struct FpWorkerFamilyV1 {
     /// The catalog row this worker embodies, e.g. `Qwen/Qwen2.5-1.5B/graph-v2`.
     pub model_id: String,

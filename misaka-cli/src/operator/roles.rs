@@ -185,6 +185,19 @@ pub(crate) async fn verifier_status(ctx: &crate::node::Ctx, profile: Profile) ->
     let duties = node.client().get_palw_claims(bond.clone(), "seat".into(), false, 200).await.map_err(|e| {
         CliError::new(exit::CONNECTION, format!("getPalwClaims: {e} (a node older than ADR-0122 does not list seat duties)"))
     })?;
+    // **The receipt deadline a seat is held to is the chain's per-claim one** (`bound + W_r(c)`,
+    // ADR-0133 §11.3), which the panel view carries; a claim row carries the global window's. Read
+    // once for this bond's seats; a node that cannot answer leaves the rows' own.
+    let per_claim_deadline: std::collections::HashMap<String, u64> = node
+        .client()
+        .get_palw_panel_assignments(kaspa_rpc_core::GetPalwPanelAssignmentsRequest { claim_id: String::new(), seat_id: bond.clone() })
+        .await
+        .map(|r| r.assignments.into_iter().map(|a| (a.claim_id, a.deadline_daa)).collect())
+        .unwrap_or_default();
+    let deadline_of = |c: &kaspa_rpc_core::RpcPalwClaimRow| match c.phase.as_str() {
+        "panel_bound" => per_claim_deadline.get(&c.claim_id).copied().or(c.deadline_daa),
+        _ => c.deadline_daa,
+    };
     // What the bond is seated for: a bond judges only the classes it declared, and a registration
     // declares none.
     let base = match &node.nv.params.palw_consensus_mode {
@@ -211,7 +224,7 @@ pub(crate) async fn verifier_status(ctx: &crate::node::Ctx, profile: Profile) ->
                 "tip_daa": duties.tip_daa,
                 "duties": duties.claims.iter().map(|c| json!({
                     "claim_id": c.claim_id, "class_id": c.class_id, "executor_bond": c.executor_bond, "phase": c.phase,
-                    "seat": c.seats.iter().position(|s| *s == bond).map(|i| i + 1), "seats": c.seats.len(), "deadline_daa": c.deadline_daa,
+                    "seat": c.seats.iter().position(|s| *s == bond).map(|i| i + 1), "seats": c.seats.len(), "deadline_daa": deadline_of(c),
                     "free_prompt": c.is_free_prompt,
                 })).collect::<Vec<_>>(),
                 "paid": false,
@@ -249,8 +262,7 @@ pub(crate) async fn verifier_status(ctx: &crate::node::Ctx, profile: Profile) ->
         for c in &duties.claims {
             let seat =
                 c.seats.iter().position(|s| *s == bond).map(|i| format!("{}/{}", i + 1, c.seats.len())).unwrap_or_else(|| "?".into());
-            let due = c
-                .deadline_daa
+            let due = deadline_of(c)
                 .map(|d| if d > now { format!("DAA {} (in {})", group(d), group(d - now)) } else { format!("DAA {}", group(d)) })
                 .unwrap_or_default();
             println!(

@@ -401,13 +401,17 @@ fn lock_ledger_run(p: &kaspa_consensus_core::config::params::Params) -> LockLedg
         licensed += 1;
         if rcore {
             // T09: the one ledger, term by term — the seat's own ledger (its duties, here) plus, per
-            // claim it locks, the live lock's excess over its duty — and it never passes the ceiling.
+            // claim it locks, the lock's excess over its duty where the lock is live on its clocks or
+            // its claim still lives (the S review's L5) — and it never passes the ceiling.
             let escaped = palw_second_clock_depth_v1(depth, s.recent_anchor_daas(), daa, sp.window_court());
             let committed = palw_bond_committed_v1(&s, &seat, daa, escaped, sp.window_court());
             let settled = s.settled_attempt_finals();
             let by_claim: u128 = s
                 .slashable_locks_of(&seat)
-                .filter(|(_, lock)| lock.is_live_v3(daa, settled, escaped, sp.window_court()))
+                .filter(|((_, c), lock)| {
+                    lock.is_live_v3(daa, settled, escaped, sp.window_court())
+                        || s.claim(c).is_some_and(|claim| !claim.phase.is_terminal())
+                })
                 .map(|((_, c), lock)| lock.amount.saturating_sub(palw_seat_duty_of_v1(&s, c, &seat)))
                 .sum();
             let expected = s.reserved_exposure(&seat) + s.registration_exposure(&seat) + by_claim;
@@ -464,6 +468,14 @@ fn print_lock_ledger_run(label: &str, r: &LockLedgerRun, p: &kaspa_consensus_cor
 /// with 150% of a seat's collateral committed. Past it (A-1, A-3, L-4b) a seat's `committed` is its
 /// own ledger plus Σ `max(duty, live lock)` per claim, recomputed here independently at every step,
 /// and the bind and the licence ask it against the one ceiling: no sompi backs two claims.
+///
+/// **While no vesting row exists** (`PALW_RCORE_VESTING_ROWS_LANDED_V1 = false`, the S review's H1)
+/// every lock is priced on the whole gain — 1,173.64 MSK per floor claim here, about eleven times
+/// the residual price — and a seat's live locks (each alive `challenge + window_court` DAA) reach its
+/// 500‰ ceiling after ~400 back-to-back claims. That stall is the one ledger bounding throughput by
+/// collateral, so it must come AT the ceiling — the bind's eligibility refusal with less than one
+/// `lock_2` of room left — never below it and never past it. Once the rows land the residual price
+/// returns and the run must license all 2,000 claims.
 #[test]
 fn dos_l5_4b_one_ledger_backs_every_lock_and_duty() {
     let p = t12();
@@ -476,11 +488,22 @@ fn dos_l5_4b_one_ledger_backs_every_lock_and_duty() {
         "I2: no sompi backs two claims ({:.1}% of posted)",
         100.0 * (r.locks + r.ceiling) as f64 / r.posted as f64
     );
-    if let Some((_, why)) = r.stuck {
-        panic!(
+    match r.stuck {
+        None => {}
+        Some((at, why)) if !kaspa_consensus_core::palw_state_v2::PALW_RCORE_VESTING_ROWS_LANDED_V1 => {
+            assert_eq!(why, "PanelBound inert (seat lock not eligible)", "the whole-gain stall is the bind's room question");
+            assert!(
+                r.ceiling.saturating_sub(r.committed) < 2 * r.lock_each,
+                "the stall at claim {at} is at the one ledger's ceiling: {:.2} MSK of room left under {:.2} MSK",
+                msk(r.ceiling.saturating_sub(r.committed)),
+                msk(r.ceiling)
+            );
+            assert_eq!(u128::from(r.licensed) * r.lock_each, r.committed, "every sompi committed is a live lock of a licensed claim");
+        }
+        Some((_, why)) => panic!(
             "the one ledger stopped licensing within 2,000 claims ({why}) while committed peaked at {:.3} of the ceiling",
             r.worst_committed.0
-        );
+        ),
     }
 }
 

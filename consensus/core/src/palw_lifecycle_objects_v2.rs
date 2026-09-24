@@ -450,14 +450,25 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::MaterialDisclosed { .. } => Err(
             "a data-availability disclosure must carry the producer's signature — unsigned, a third party could bind a producer to material it never published",
         ),
-        // **ADR-0152 v3.1 §6 row 24, the v22 skeleton: tags 53–56 ride, and fold nothing.** They
-        // decode now, so this stateless table decides whether a carrier is block-valid; it admits
-        // them, and the acceptance layer (`palw_v2_validate_objects`) drops each by name while the
-        // fold refuses it — a block carrying one stands, as a block carrying any object the chain
-        // refuses at acceptance does. Their shape rules (a present signature for 53 and 55, a
-        // bounded receipt list for 56, the close ceiling for 55) are their owners' to add with the
-        // rule (S-7, M3, S-5), before M5 freezes the layout; a shape refused here is a BLOCK rule,
-        // and adding one to a live chain would be a fork, so none is guessed at now.
+        // **ADR-0152 v3.1 R-3 (S-7): a reporter's commitment must carry the reporter's signature**
+        // — a bond key is a public outpoint, and an unsigned commitment filed under a stranger's
+        // bond would take one of its 64 open slots. The shape rule the skeleton left to S-7, added
+        // before testnet-12 launches — no live chain holds a v22 object (testnet-11's v20 layout
+        // does not decode tag 53) — so it forks nothing; the acceptance layer then verifies the
+        // signature against the bond's key. A reveal (tag 54) carries none by design: anyone may
+        // carry it, the salt is the secret.
+        PalwConsensusObjectV2::ReporterCommitted { signature, .. } if signature.is_empty() => Err(
+            "a reporter commitment must carry the reporter's signature — a bond key is a public outpoint, so without one anyone could spend a stranger's commitment slots",
+        ),
+        // **ADR-0152 v3.1 §6 row 24, the v22 skeleton: tags 53–56 ride, and fold nothing** until
+        // their owners land the rule. They decode now, so this stateless table decides whether a
+        // carrier is block-valid; it admits them, and the acceptance layer
+        // (`palw_v2_validate_objects`) drops each not landed by name while the fold refuses it — a
+        // block carrying one stands, as a block carrying any object the chain refuses at acceptance
+        // does. The remaining shape rules (a bounded receipt list for 56, the close ceiling for 55)
+        // are their owners' to add with the rule (M3, S-5), before M5 freezes the layout; a shape
+        // refused here is a BLOCK rule, and adding one to a live chain would be a fork, so none is
+        // guessed at now.
         //
         // M3 (DA-4) adds tag 55's one stateless rule, the one `MaterialDisclosed` has: the answer
         // carries its discloser's signature (the acceptance layer verifies it; the close ceiling,
@@ -1068,6 +1079,23 @@ mod tests {
             assert!(out.objects.is_empty(), "and it must not reach the transition");
             assert_eq!(out.skipped.len(), 1, "skipped with its reason, not silently dropped");
         }
+    }
+
+    /// **ADR-0152 R-3 (S-7): an unsigned reporter commitment may not ride; a signed one and a
+    /// reveal (unsigned by design) may.** This table refuses the shape only; the acceptance layer
+    /// verifies the signature against the reporter bond's registered key.
+    #[test]
+    fn an_unsigned_reporter_commitment_may_not_ride() {
+        let unsigned = PalwConsensusObjectV2::ReporterCommitted { commitment: h64(0x53), reporter: bond(3), signature: Vec::new() };
+        let err = palw_lifecycle_object_may_ride_v2(&unsigned).unwrap_err();
+        assert!(err.contains("must carry the reporter's signature"), "the refusal must say why: got {err}");
+        let out = palw_lifecycle_objects_from_accepted_txs_v2(&[lifecycle_tx(unsigned)]);
+        assert!(out.objects.is_empty(), "it must not reach the transition");
+        assert_eq!(out.skipped.len(), 1, "skipped with its reason, not silently dropped");
+        let signed = PalwConsensusObjectV2::ReporterCommitted { commitment: h64(0x53), reporter: bond(3), signature: vec![1; 8] };
+        palw_lifecycle_object_may_ride_v2(&signed).expect("a present signature is the shape; acceptance verifies it");
+        let reveal = PalwConsensusObjectV2::ReporterRevealed { offence_key: h64(0x54), reporter: bond(3), salt: [5; 32] };
+        palw_lifecycle_object_may_ride_v2(&reveal).expect("a reveal carries no signature by design");
     }
 
     /// The three kinds that may not ride, each for its own reason, each skipped with that reason

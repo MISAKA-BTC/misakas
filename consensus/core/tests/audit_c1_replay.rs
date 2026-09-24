@@ -46,6 +46,7 @@ fn final_of(claim: u64, root: u64, credit: u64, domain: u64) -> PalwExecFinalV1 
         claim_id: h(claim),
         execution_root: h(root),
         credit,
+        accepted_blue_score: 0,
     }
 }
 

@@ -208,9 +208,12 @@ fn from_node(i: &MinerInputs<'_>, remote: bool) -> MinerView {
             epoch: Some(facts.epoch_index),
             produced: Some(facts.epoch_produced_blocks),
             budget: Some(facts.epoch_budget_blocks),
-            reserved: facts.bond_reserved_exposure.parse().ok(),
+            // ADR-0152 P6: the one committed ledger — what the fold compares with the ceiling past
+            // `palw_rcore_plus`; an older node reports its reserved exposure there.
+            reserved: facts.bond_committed.parse().ok().or_else(|| facts.bond_reserved_exposure.parse().ok()),
             ceiling: facts.bond_exposure_ceiling.parse().ok(),
             per_claim: facts.bond_claim_exposure.parse().ok(),
+            floor_shortfall: (facts.bond_producer_floor_shortfall > 0).then_some(facts.bond_producer_floor_shortfall),
         };
         let f = catalog::not_ready(&facts.not_ready_reason, &n, i.bond);
         return view(MinerState::Holding, f.title.clone(), Some(f), "rpc");
