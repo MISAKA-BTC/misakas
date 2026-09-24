@@ -1378,6 +1378,12 @@ message GetPalwProducerFactsResponseMessage {
   // ADR-0118 Decision 3: the form THIS class's jobs commit their prompt ids in (true = tiled
   // Merkle root) — `promptIdsMerkle` for every class but a held one on a network minted flat.
   bool classPromptIdsMerkle = 30;
+  // ADR-0152 P6: the one committed ledger (decimal u128), the producer floor's shortfall in sompi
+  // (0 = met or not in force), and A-6's accuser exposure (decimal u128). An older node sends
+  // none: read as its reserved exposure, 0 and "0".
+  string bondCommitted = 31;
+  uint64 bondProducerFloorShortfall = 32;
+  string bondAccuserExposure = 33;
   RPCError error = 1000;
 }
 

@@ -2365,6 +2365,21 @@ pub struct GetPalwProducerFactsResponse {
     /// holds no class and reads the network's). A version-7 or older node cannot have a class that
     /// differs, so it reads as `prompt_ids_merkle`.
     pub class_prompt_ids_merkle: bool,
+    /// **ADR-0152 P6 (version 9): the one committed ledger** — decimal `u128`,
+    /// `PalwProducerBondFactsV2::committed`, the number the fold compares with the ceiling past
+    /// `palw_rcore_plus` (below it, the same ledger `bond_reserved_exposure` reports). A reader
+    /// that sized room from `bond_reserved_exposure` past the fence saw room the fold refuses. A
+    /// version-8 or older node reads as its `bond_reserved_exposure` — the only ledger it has.
+    pub bond_committed: String,
+    /// **ADR-0152 U2 (version 9): how far the bond's posted collateral is below the producer
+    /// floor**, in sompi; `0` when it meets the floor or the fence is not in force. Past the fence
+    /// a bond short of it produces nothing (`ProducerBelowFloor` on both lanes) and
+    /// `not_ready_reason` says so. An older node reads as `0`: it cannot be asserting a floor.
+    pub bond_producer_floor_shortfall: u64,
+    /// **ADR-0152 A-6 (version 9): what the bond holds as an accuser** — decimal `u128`, counted
+    /// against its collateral beside `bond_committed` by every gate. `"0"` below the fence and
+    /// from an older node.
+    pub bond_accuser_exposure: String,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2393,7 +2408,7 @@ impl Serializer for GetPalwProducerFactsResponse {
         // `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
         // reader stops where its version ended and this reader tolerates an older writer by
         // leaving the later fields at their defaults — additive, never re-ordered.
-        store!(u16, &8, writer)?;
+        store!(u16, &9, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2424,6 +2439,9 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(bool, &self.prompt_ids_merkle, writer)?;
         store!(bool, &self.fp_decode_constraint_armed, writer)?;
         store!(bool, &self.class_prompt_ids_merkle, writer)?;
+        store!(String, &self.bond_committed, writer)?;
+        store!(u64, &self.bond_producer_floor_shortfall, writer)?;
+        store!(String, &self.bond_accuser_exposure, writer)?;
         Ok(())
     }
 }
@@ -2477,6 +2495,13 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // the network's (it refuses the held fence past genesis), so its class form IS the network
         // form it reported — the one reading that neither invents a difference nor hides one.
         let class_prompt_ids_merkle = if version >= 8 { load!(bool, reader)? } else { prompt_ids_merkle };
+        // Version 9 (ADR-0152 P6): an older node has one ledger, the one it reported; it cannot be
+        // asserting a producer floor or an accuser ledger.
+        let (bond_committed, bond_producer_floor_shortfall, bond_accuser_exposure) = if version >= 9 {
+            (load!(String, reader)?, load!(u64, reader)?, load!(String, reader)?)
+        } else {
+            (bond_reserved_exposure.clone(), 0, "0".to_string())
+        };
         Ok(Self {
             available,
             chain_point,
@@ -2508,6 +2533,9 @@ impl Deserializer for GetPalwProducerFactsResponse {
             prompt_ids_merkle,
             fp_decode_constraint_armed,
             class_prompt_ids_merkle,
+            bond_committed,
+            bond_producer_floor_shortfall,
+            bond_accuser_exposure,
         })
     }
 }
@@ -10334,6 +10362,11 @@ mod palw_producer_facts_wire_tests {
             // Version 8 (ADR-0118 Decision 3): DIFFERENT from `prompt_ids_merkle`, so a field lost
             // on the wire, or read from the wrong slot, cannot pass as carried.
             class_prompt_ids_merkle: false,
+            // Version 9 (ADR-0152 P6): committed DIFFERENT from reserved, so the old ledger cannot
+            // pass as the new one.
+            bond_committed: "7000".to_string(),
+            bond_producer_floor_shortfall: 4_200,
+            bond_accuser_exposure: "320".to_string(),
         }
     }
 
@@ -10357,6 +10390,11 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.class_target, response.class_target);
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
         assert_eq!(back.not_ready_reason, response.not_ready_reason);
+        assert_eq!(
+            (back.bond_committed.as_str(), back.bond_producer_floor_shortfall, back.bond_accuser_exposure.as_str()),
+            ("7000", 4_200, "320"),
+            "ADR-0152 P6: the one ledger, the floor and the accuser ledger"
+        );
     }
 
     /// **ADR-0080 design A: a declared close's arrival bitmap survives the wRPC wire.**
@@ -10478,6 +10516,11 @@ mod palw_producer_facts_wire_tests {
         assert_eq!(back.fp_quanta_per_canonical_job, r.fp_quanta_per_canonical_job);
         assert_eq!(back.fp_max_quanta_per_receipt, r.fp_max_quanta_per_receipt);
         assert!(!back.fp_decode_rules_armed, "a version-3 peer knows nothing about the fence — read fail-closed");
+        assert_eq!(
+            (back.bond_committed.as_str(), back.bond_producer_floor_shortfall, back.bond_accuser_exposure.as_str()),
+            (r.bond_reserved_exposure.as_str(), 0, "0"),
+            "a pre-P6 peer: its one ledger, no floor, no accuser ledger"
+        );
     }
 }
 

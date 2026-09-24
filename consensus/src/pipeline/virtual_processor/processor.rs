@@ -4447,8 +4447,9 @@ impl VirtualStateProcessor {
     /// function over the tip state, at the DAA a commitment sent now would be accepted at, with the
     /// bond's room by the fold's two terms. A gateway reads this AFTER its job ran and BEFORE the
     /// commitment is written, so what it checks and what the ledger reserves are one expression.
-    /// Past `palw_rcore_plus` the price is the fold's `BondClassShareExceeded` for a bond already at
-    /// its ADR-0152 T-2(a) share of the class — a refusal the commitment arm reaches before it prices.
+    /// Past `palw_rcore_plus` the price is the fold's `ProducerBelowFloor` for a bond short of the
+    /// producer floor, then its `BondClassShareExceeded` for a bond already at its ADR-0152 T-2(a)
+    /// share of the class — refusals the commitment arm reaches, in that order, before it prices.
     pub fn palw_fp_commitment_price_impl(
         &self,
         class_id: kaspa_hashes::Hash64,
@@ -4508,9 +4509,26 @@ impl VirtualStateProcessor {
             )
             .err()
         });
-        let price = match share_refusal {
-            Some(refusal) => Err(refusal),
-            None => price,
+        // **ADR-0152 U2 (P6): the producer floor, which the commitment arm asks before the class
+        // gate and the share** — so a bond short of it is answered with the fold's own
+        // `ProducerBelowFloor` by name, first, and neither a gateway nor the canonical rail runs a
+        // job into a commitment the acceptance rehearsal drops. `None` below the fence.
+        let floor_refusal = bond.and_then(|outpoint| {
+            let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint);
+            kaspa_consensus_core::palw_state_v2::palw_bond_producer_floor_shortfall_v1(&state, state_params, &key, daa_score).map(
+                |shortfall| {
+                    let floor = state_params.min_collateral_sompi();
+                    kaspa_consensus_core::palw_state_v2::PalwStateV2Error::ProducerBelowFloor {
+                        bond: key,
+                        collateral: floor.saturating_sub(shortfall),
+                        floor,
+                    }
+                },
+            )
+        });
+        let price = match (floor_refusal, share_refusal) {
+            (Some(refusal), _) | (None, Some(refusal)) => Err(refusal),
+            (None, None) => price,
         };
         let bond_room = bond.and_then(|outpoint| {
             // ADR-0152 SR-7: the one committed ledger past `palw_rcore_plus`, as the FP ceiling reads it.

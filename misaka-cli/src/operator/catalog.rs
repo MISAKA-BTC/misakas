@@ -8,8 +8,8 @@
 use crate::exit;
 use crate::operator::finding::Finding;
 use kaspa_consensus_core::palw_producer_v2::{
-    PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_CLASS_NOT_ADMITTING_V2, PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2,
-    PALW_NOT_READY_KEY_MISMATCH_V2,
+    PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2, PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
+    PALW_NOT_READY_EPOCH_BUDGET_V2, PALW_NOT_READY_EXPOSURE_FULL_V2, PALW_NOT_READY_KEY_MISMATCH_V2,
 };
 
 const JOIN: &str = "docs/testnet11-join-mining.md";
@@ -125,6 +125,8 @@ pub(crate) struct HoldNumbers {
     pub(crate) reserved: Option<u128>,
     pub(crate) ceiling: Option<u128>,
     pub(crate) per_claim: Option<u128>,
+    /// ADR-0152 U2: how far the bond is below the producer floor, where the node said so.
+    pub(crate) floor_shortfall: Option<u64>,
 }
 
 impl HoldNumbers {
@@ -145,6 +147,8 @@ impl HoldNumbers {
                     }
                 }
                 "per_claim" => n.per_claim = v.parse().ok(),
+                // Past ADR-0152 R-core+ the producer appends `ledger=committed floor_shortfall=<n>`.
+                "floor_shortfall" => n.floor_shortfall = v.parse().ok(),
                 _ => {}
             }
         }
@@ -182,13 +186,31 @@ pub(crate) fn not_ready(reason: &str, n: &HoldNumbers, bond: Option<&str>) -> Fi
     if reason.starts_with(PALW_NOT_READY_KEY_MISMATCH_V2) {
         return key_mismatch(bond, None, None);
     }
-    if reason.starts_with(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2) {
-        let mut f = Finding::error("E-MODEL-NOT-ADMITTING", exit::NOT_READY, "Not mining: the chain admits no new claim of this class now")
+    if reason.starts_with(PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2) {
+        let mut f = Finding::error("E-BOND-BELOW-PRODUCER-FLOOR", exit::NOT_READY, "Not mining: the bond is below the producer floor")
             .reason(
-                "a registered model class takes claims only in Probation, ActiveLimited or Active, and then only while its \
-                 ready seats have room to verify them",
+                "past ADR-0152 R-core+ a bond produces only with the producer floor posted; the chain refuses its attempts and \
+                 free-prompt commitments (ProducerBelowFloor)",
             )
-            .docs(DOCS_CLASS);
+            .docs(DOCS_BOND);
+        if let Some(shortfall) = n.floor_shortfall {
+            f = f.current(format!("{} short of the floor", msk(u128::from(shortfall))));
+        }
+        return f
+            .fix(
+                "a registered bond's collateral cannot be raised: register a bond of at least the floor under a NEW key \
+                  (misaka key gen --out <new seed>, then misaka mining setup --key-file <new seed>) and produce with that one",
+            )
+            .fix("misaka bond retire releases what this bond still holds");
+    }
+    if reason.starts_with(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2) {
+        let mut f =
+            Finding::error("E-MODEL-NOT-ADMITTING", exit::NOT_READY, "Not mining: the chain admits no new claim of this class now")
+                .reason(
+                    "a registered model class takes claims only in Probation, ActiveLimited or Active, and then only while its \
+                 ready seats have room to verify them",
+                )
+                .docs(DOCS_CLASS);
         if let Some((_, detail)) = reason.split_once(" [") {
             f = f.current(detail.trim_end_matches(']').to_string());
         }
@@ -266,6 +288,11 @@ pub(crate) fn hold_from_log(detail: &str, bond: Option<&str>) -> Finding {
         return class_unknown(rest.split_whitespace().next().unwrap_or(rest));
     }
     let sentence = detail.rfind(" [").map(|i| &detail[..i]).unwrap_or(detail);
+    // ADR-0152 P6: the producer's floor hold carries its own sentence (the top-up and the way out),
+    // not the verdict's; it is the verdict all the same.
+    if sentence.starts_with("top up ") && sentence.contains("to reach the producer floor") {
+        return not_ready(PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2, &HoldNumbers::from_bracket(detail), bond);
+    }
     not_ready(sentence, &HoldNumbers::from_bracket(detail), bond)
 }
 

@@ -431,6 +431,9 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         prompt_ids_merkle: item.prompt_ids_merkle,
         fp_decode_constraint_armed: item.fp_decode_constraint_armed,
         class_prompt_ids_merkle: item.class_prompt_ids_merkle,
+        bond_committed: item.bond_committed.clone(),
+        bond_producer_floor_shortfall: item.bond_producer_floor_shortfall,
+        bond_accuser_exposure: item.bond_accuser_exposure.clone(),
         error: None,
     }
 });
@@ -2216,6 +2219,12 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         // bit is never below the network's — and a node that predates the field (proto3 reads an
         // absent bool as false) answers the network's form, which is its every class's.
         class_prompt_ids_merkle: item.class_prompt_ids_merkle || item.prompt_ids_merkle,
+        // ADR-0152 P6. proto3 reads an absent string as "": a node that predates the fields has one
+        // ledger, the one it reported, and asserts no floor and no accuser ledger (as the wRPC
+        // reader of a version-8 writer).
+        bond_committed: if item.bond_committed.is_empty() { item.bond_reserved_exposure.clone() } else { item.bond_committed.clone() },
+        bond_producer_floor_shortfall: item.bond_producer_floor_shortfall,
+        bond_accuser_exposure: if item.bond_accuser_exposure.is_empty() { "0".to_string() } else { item.bond_accuser_exposure.clone() },
     }
 });
 try_from!(item: &protowire::GetPalwDerivedArtifactsRequestMessage, kaspa_rpc_core::GetPalwDerivedArtifactsRequest, {
@@ -3686,6 +3695,10 @@ mod palw_producer_facts_tests {
             // false, and a conversion that dropped it would pass against a false fixture.
             fp_decode_rules_armed: true,
             palw_retention_dir: "/var/lib/misaka/testnet-11/palw-retention".to_string(),
+            // ADR-0152 P6: committed DIFFERENT from reserved, so a dropped field cannot pass.
+            bond_committed: "123000".to_string(),
+            bond_producer_floor_shortfall: 4_200,
+            bond_accuser_exposure: "320".to_string(),
         };
         let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwProducerFactsResponse = GetPalwProducerFactsResponse::try_from(&wire).unwrap();
@@ -3698,6 +3711,20 @@ mod palw_producer_facts_tests {
             ..wire.clone()
         };
         assert!(GetPalwProducerFactsResponse::try_from(&older).unwrap().class_prompt_ids_merkle, "a Merkle genesis's classes");
+        assert_eq!(
+            (back.bond_committed.as_str(), back.bond_producer_floor_shortfall, back.bond_accuser_exposure.as_str()),
+            ("123000", 4_200, "320"),
+            "ADR-0152 P6: the one ledger, the floor and the accuser ledger survive the gRPC wire"
+        );
+        // A node that predates them sends none: its one ledger, no floor, no accuser ledger.
+        let pre_p6 = crate::protowire::GetPalwProducerFactsResponseMessage {
+            bond_committed: String::new(),
+            bond_producer_floor_shortfall: 0,
+            bond_accuser_exposure: String::new(),
+            ..wire.clone()
+        };
+        let pre_p6 = GetPalwProducerFactsResponse::try_from(&pre_p6).unwrap();
+        assert_eq!((pre_p6.bond_committed, pre_p6.bond_accuser_exposure), (response.bond_reserved_exposure.clone(), "0".to_string()));
         assert_eq!(back.available, response.available);
         assert_eq!(back.chain_point, response.chain_point);
         assert_eq!(back.daa_score, response.daa_score);

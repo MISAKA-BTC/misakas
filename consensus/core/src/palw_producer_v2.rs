@@ -230,6 +230,37 @@ impl PalwProducerFactsV2 {
         }
         Ok(())
     }
+
+    /// **[`Self::ready_to_produce`] on the ledger the chain measures it by** (ADR-0152 P6, U2) —
+    /// the one verdict kaspad's producer loop and `getPalwProducerFacts` both read. `rcore_plus` is
+    /// `Params::palw_rcore_plus` at the candidate's DAA (the facts' `daa_score`).
+    ///
+    /// Below the fence this IS `ready_to_produce`, byte for byte. Past it, in the order
+    /// `apply_attempt` refuses: the key and the bond, then the producer floor
+    /// ([`PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2`], `ProducerBelowFloor`, checked before the class
+    /// gate), the class gate, the epoch budget, and the committed room
+    /// ([`PalwProducerBondFactsV2::has_committed_room`] — the one ledger and A-6's accuser clause,
+    /// not `reserved_exposure`). Without it the RPC said "ready" for a bond the fold refuses.
+    pub fn ready_to_produce_v3(&self, local_pubkey: &[u8], rcore_plus: bool) -> Result<(), &'static str> {
+        if !rcore_plus {
+            return self.ready_to_produce(local_pubkey);
+        }
+        self.ready_to_spend_receipts(local_pubkey)?;
+        let bond = self.bond.as_ref().ok_or(PALW_NOT_READY_BOND_UNKNOWN_V2)?;
+        if bond.producer_floor_shortfall.is_some() {
+            return Err(PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2);
+        }
+        if self.class_admission_refusal.is_some() {
+            return Err(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2);
+        }
+        if !self.has_epoch_room() {
+            return Err(PALW_NOT_READY_EPOCH_BUDGET_V2);
+        }
+        if !bond.has_committed_room() {
+            return Err(PALW_NOT_READY_EXPOSURE_FULL_V2);
+        }
+        Ok(())
+    }
 }
 
 // **The four verdicts, by name** (ADR-0122 Decision 3). The sentences are the ones this function
@@ -247,15 +278,22 @@ pub const PALW_NOT_READY_KEY_MISMATCH_V2: &str = "the local signing key is not t
 /// ADR-0152 R-core+, the bond already holds its T-2(a) share of the class. The detail is
 /// `PalwProducerFactsV2::class_admission_refusal`.
 pub const PALW_NOT_READY_CLASS_NOT_ADMITTING_V2: &str = "the model registry admits no new claim of this class now";
+/// `ready_to_produce_v3` past ADR-0152 `palw_rcore_plus`: the bond's posted collateral is below the
+/// producer floor (`PalwProducerBondFactsV2::producer_floor_shortfall` is `Some`), which the fold
+/// refuses as `ProducerBelowFloor` on both lanes. A registered bond's collateral cannot be raised:
+/// the way out is a new bond at the floor under a new key.
+pub const PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2: &str = "the bond's posted collateral is below the producer floor";
 /// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).
 pub const PALW_NOT_READY_EPOCH_BUDGET_V2: &str = "this class's epoch budget is already spent";
 /// `ready_to_produce`: every sompi of the bond's exposure ceiling is reserved by live claims.
 pub const PALW_NOT_READY_EXPOSURE_FULL_V2: &str = "the bond's exposure ceiling leaves no room for another claim";
 
-/// Every sentence `ready_to_produce` can return, in the order it checks them.
-pub const PALW_NOT_READY_REASONS_V2: [&str; 5] = [
+/// Every sentence `ready_to_produce_v3` can return, in the order it checks them (the floor's only
+/// past `palw_rcore_plus`).
+pub const PALW_NOT_READY_REASONS_V2: [&str; 6] = [
     PALW_NOT_READY_BOND_UNKNOWN_V2,
     PALW_NOT_READY_KEY_MISMATCH_V2,
+    PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2,
     PALW_NOT_READY_CLASS_NOT_ADMITTING_V2,
     PALW_NOT_READY_EPOCH_BUDGET_V2,
     PALW_NOT_READY_EXPOSURE_FULL_V2,
@@ -585,6 +623,46 @@ mod tests {
             .unwrap()
             .with_rcore_plus_mirrors(Some(0), 0, Vec::new());
         assert_eq!(facts(&high_floor, None).bond.unwrap().producer_floor_shortfall, Some(1_000_000));
+    }
+
+    /// **ADR-0152 P6: `ready_to_produce_v3`, the verdict the node and the RPC share.** Below the
+    /// fence it is `ready_to_produce` whatever the bond's R-core facts say. Past it the producer
+    /// floor is asked after the key and before the class gate (as `apply_attempt` refuses), and the
+    /// room is the committed ledger with A-6's accuser clause — not `reserved_exposure`, which the
+    /// old verdict read and which said "ready" for a bond the fold refuses.
+    #[test]
+    fn ready_to_produce_v3_reads_the_floor_and_the_committed_ledger_past_the_fence() {
+        let state = state();
+        let params = state_params();
+        let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+        let bond_key = PalwBondKeyV2(bond_outpoint());
+        let base = palw_producer_facts_v2(&state, &params, &admission, crate::BlockHash::from_u64_word(1), 101, h64(1), Some(&bond_key), None)
+            .expect("facts");
+        assert_eq!(base.ready_to_produce_v3(&[7; 4], true), Ok(()), "an honest bond is ready on either side");
+        let mut f = base.clone();
+        {
+            let bond = f.bond.as_mut().unwrap();
+            bond.producer_floor_shortfall = Some(5);
+            bond.committed = bond.exposure_ceiling;
+        }
+        assert_eq!(f.ready_to_produce_v3(&[7; 4], false), f.ready_to_produce(&[7; 4]), "below the fence: the old verdict");
+        assert_eq!(f.ready_to_produce_v3(&[7; 4], false), Ok(()), "which reads neither the floor nor the committed ledger");
+        assert_eq!(f.ready_to_produce_v3(&[7; 4], true), Err(PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2), "past it: the floor");
+        assert_eq!(f.ready_to_produce_v3(&[9; 4], true), Err(PALW_NOT_READY_KEY_MISMATCH_V2), "the key is still asked first");
+        f.class_admission_refusal = Some("class … is Held under the model registry".to_string());
+        assert_eq!(f.ready_to_produce_v3(&[7; 4], true), Err(PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2), "the floor before the gate");
+        f.class_admission_refusal = None;
+        f.bond.as_mut().unwrap().producer_floor_shortfall = None;
+        assert_eq!(f.ready_to_produce_v3(&[7; 4], true), Err(PALW_NOT_READY_EXPOSURE_FULL_V2), "then the committed ledger");
+        let mut g = base.clone();
+        {
+            let bond = g.bond.as_mut().unwrap();
+            bond.committed = 0;
+            bond.accuser_exposure = u128::from(bond.collateral);
+        }
+        assert_eq!(g.ready_to_produce_v3(&[7; 4], true), Err(PALW_NOT_READY_EXPOSURE_FULL_V2), "A-6: the accuser's exposure");
+        assert_eq!(g.ready_to_produce(&[7; 4]), Ok(()), "which the old verdict never read");
+        assert_eq!(PALW_NOT_READY_REASONS_V2[2], PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2, "listed in the order it is checked");
     }
 
     /// **Build an attempt from NOTHING but the facts, and see whether the chain takes it.**

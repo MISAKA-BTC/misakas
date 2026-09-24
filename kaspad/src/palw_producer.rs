@@ -400,34 +400,26 @@ pub(crate) fn palw_rcore_plus_producer_floor_v1(
 /// not a refusal of the attempt — the fold accepts it and the draw voids it later — so it is asked
 /// only after every question that is.
 ///
-/// **Not yet the RPC's verdict.** `getPalwProducerFacts`' `not_ready_reason` still answers
-/// `ready_to_produce`, so past the fence it can say "ready" for a bond this node holds; closing that
-/// needs the verdict in consensus-core, where the RPC and this loop can both call it.
+/// **The verdict is consensus-core's** (`PalwProducerFactsV2::ready_to_produce_v3`), which
+/// `getPalwProducerFacts`' `not_ready_reason` reads too, so the RPC and this loop cannot disagree
+/// about "ready". This adds only what is the node's own: the floor's sentence carries the top-up
+/// and the way out (a hold, not just the reason), and the stake question comes last.
 pub(crate) fn palw_producer_ready_v1(
     facts: &PalwProducerFactsV2,
     local_pubkey: &[u8],
     rcore_plus: Option<PalwRcorePlusReadsV1>,
 ) -> Result<(), PalwProducerHoldV1> {
-    use kaspa_consensus_core::palw_producer_v2::{
-        PALW_NOT_READY_BOND_UNKNOWN_V2, PALW_NOT_READY_CLASS_NOT_ADMITTING_V2, PALW_NOT_READY_EPOCH_BUDGET_V2,
-        PALW_NOT_READY_EXPOSURE_FULL_V2,
-    };
+    use kaspa_consensus_core::palw_producer_v2::PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2;
     let Some(reads) = rcore_plus else {
-        return facts.ready_to_produce(local_pubkey).map_err(PalwProducerHoldV1::NotReady);
+        return facts.ready_to_produce_v3(local_pubkey, false).map_err(PalwProducerHoldV1::NotReady);
     };
-    facts.ready_to_spend_receipts(local_pubkey).map_err(PalwProducerHoldV1::NotReady)?;
-    let bond = facts.bond.as_ref().ok_or(PalwProducerHoldV1::NotReady(PALW_NOT_READY_BOND_UNKNOWN_V2))?;
-    if let Some(shortfall) = bond.producer_floor_shortfall {
-        return Err(PalwProducerHoldV1::BelowProducerFloor { shortfall, floor: reads.producer_floor });
-    }
-    if facts.class_admission_refusal.is_some() {
-        return Err(PalwProducerHoldV1::NotReady(PALW_NOT_READY_CLASS_NOT_ADMITTING_V2));
-    }
-    if !facts.has_epoch_room() {
-        return Err(PalwProducerHoldV1::NotReady(PALW_NOT_READY_EPOCH_BUDGET_V2));
-    }
-    if !bond.has_committed_room() {
-        return Err(PalwProducerHoldV1::NotReady(PALW_NOT_READY_EXPOSURE_FULL_V2));
+    match facts.ready_to_produce_v3(local_pubkey, true) {
+        Err(why) if why == PALW_NOT_READY_BELOW_PRODUCER_FLOOR_V2 => {
+            let shortfall = facts.bond.as_ref().and_then(|bond| bond.producer_floor_shortfall).unwrap_or(reads.producer_floor);
+            return Err(PalwProducerHoldV1::BelowProducerFloor { shortfall, floor: reads.producer_floor });
+        }
+        Err(why) => return Err(PalwProducerHoldV1::NotReady(why)),
+        Ok(()) => {}
     }
     if reads.eligible_stake_at_floor == Some(false) {
         return Err(PalwProducerHoldV1::EligibleStakeBelowFloor);
