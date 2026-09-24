@@ -2232,6 +2232,46 @@ pub fn palw_bond_collateral_is_locked_v5(
     retiring_held || (duty_gate && palw_bond_backs_live_duty_v2(state, key, now_daa, depth, window_court))
 }
 
+/// **B-3's vesting term: is `key` payee of a row still unmatured by V-4(a)?** (ADR-0152 B-3; the
+/// processor's `palw_bond_collateral_is_locked_v6`, S's, calls it past `palw_rcore_plus`.) S-1
+/// declared it beside v6 with this signature and a `false` body; the integration (rcore/int-1)
+/// deleted that stub for this, the vesting work's body, kept in this module so v6 reads it by name
+/// (`crate::palw_vesting_v1` re-exports it). The lock predicate with the escape — NOT the halt
+/// (V-4(b)), NOT an open DA session, NOT presence in the table, and NOT a latched row still waiting
+/// to move (a latched row is mature).
+///
+/// **O(log n) through the payee index** (phase2-plan I-12: this runs per bond per block and per
+/// mempool cache miss). The bond's unlatched rows are walked from the latest DAA expiry down. A row
+/// whose DAA clock is still running holds at once. Past that only the second clock can hold, and
+/// only for `2 × window_court` past a row's expiry, so the walk ends at the first row past that
+/// bound, or at once when the escaped depth is `None`. `raw_depth` is the fold's extras' (I-8).
+pub fn palw_bond_is_payee_of_unmatured_row_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    key: &PalwBondKeyV2,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+) -> bool {
+    use crate::palw_panel_var_v1::palw_second_clock_holds_v1;
+    let window_court = params.window_court();
+    let escaped = palw_second_clock_depth_v1(raw_depth, &state.recent_anchor_daas, now_daa, window_court);
+    let settled_now = state.settled_attempt_finals;
+    for (expiry_daa, claim_id) in state.vesting_unlatched_of_payee(key).rev() {
+        if now_daa < expiry_daa {
+            return true;
+        }
+        if escaped.is_none() || now_daa >= expiry_daa.saturating_add(window_court.saturating_mul(2)) {
+            return false;
+        }
+        // A payee entry without its row is an invariant break; holding is the safe direction.
+        let settled_at_final = state.vesting.get(&claim_id).map(|row| row.settled_at_final).unwrap_or(u64::MAX);
+        if palw_second_clock_holds_v1(escaped, settled_now, settled_at_final, expiry_daa, now_daa, window_court) {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
     match bond.status {
         PalwBondStatusV2::Active => true,
@@ -2499,19 +2539,6 @@ pub fn palw_bond_collateral_is_locked_v6(
     palw_bond_collateral_is_locked_v5(state, key, bond, now_daa, withdrawal_delay_daa, escaped, duty_gate, window_court)
         || (rcore && palw_accuser_exposure_v1(state, key) > 0)
         || (rcore && palw_bond_is_payee_of_unmatured_row_v1(state, params, key, now_daa, raw_depth))
-}
-
-/// **B-3's third clause: is `key` the payee of a vesting row not yet mature by V-4(a)?** The body is
-/// the vesting work's (the payee index, O(log n), I-12); S ships `false` so v6 is v5 plus the accuser
-/// clause until it lands.
-pub fn palw_bond_is_payee_of_unmatured_row_v1(
-    _state: &PalwChainStateV2,
-    _params: &PalwStateParamsV2,
-    _key: &PalwBondKeyV2,
-    _now_daa: u64,
-    _raw_depth: Option<u64>,
-) -> bool {
-    false
 }
 
 /// L-1's escrow term, in permille of the vested-but-unbought escrow per load-bearing signer.
@@ -7052,6 +7079,23 @@ pub struct PalwChainStateV2 {
     /// **R-3's prune queue (S-SPEC 1g): `(committed_daa, commitment)`**, so step 2's prune is one range
     /// cut. Same maintenance as `commitments_by_reporter`.
     commitments_by_daa: BTreeSet<(u64, Hash64)>,
+    // ---- ADR-0152 V-3 (the vesting work): the vesting rows' derived indexes. Never serialized,
+    // never hashed; kept in lockstep by the builder's `write_vesting` (the one writer of `vesting`)
+    // and by `apply_delta_entry`'s `Vesting` arm on apply and revert, and rebuilt from `vesting` on
+    // import (`rebuild_vesting_indices`), which `assert_internal_consistency_v3` checks. ----
+    /// Every row by `(expiry_daa, claim_id)` — V-7's move order.
+    vesting_order: BTreeSet<(u64, Hash64)>,
+    /// The rows NOT yet latched, by `(expiry_daa, claim_id)` — step 3d's latch walk, so a backlog of
+    /// latched rows waiting to move is never re-examined.
+    vesting_unlatched: BTreeSet<(u64, Hash64)>,
+    /// The same unlatched rows by `(settled_at_final, claim_id)` — the second clock's side of the
+    /// latch walk (review finding 5, phase2-plan I-12): the rows whose anchor count is met are a
+    /// prefix here, as the rows whose DAA clock has run are a prefix of `vesting_unlatched`, and
+    /// the latch walks the two in lockstep so it pays for the smaller side only.
+    vesting_unlatched_by_settled: BTreeSet<(u64, Hash64)>,
+    /// `(payee bond, latched, expiry_daa, claim_id)` for each bond a row pays (its producer and each
+    /// credited seat) — B-3's O(log n) payee question reads the `latched == false` half.
+    vesting_payees: BTreeSet<(PalwBondKeyV2, bool, u64, Hash64)>,
 }
 
 impl PalwChainStateV2 {
@@ -7142,6 +7186,10 @@ impl PalwChainStateV2 {
             courts_by_challenger: BTreeSet::new(),
             commitments_by_reporter: BTreeMap::new(),
             commitments_by_daa: BTreeSet::new(),
+            vesting_order: BTreeSet::new(),
+            vesting_unlatched: BTreeSet::new(),
+            vesting_unlatched_by_settled: BTreeSet::new(),
+            vesting_payees: BTreeSet::new(),
         }
     }
 
@@ -8613,6 +8661,105 @@ impl PalwChainStateV2 {
         self.vesting_counters
     }
 
+    // ---- ADR-0152 V-3 / phase2-plan §2.3 (the vesting work): the rows through their derived
+    // indexes. ----
+
+    /// Every vesting row in V-7's order, `(expiry_daa, claim_id)` (phase2-plan §2.3).
+    pub fn vesting_iter_by_expiry(&self) -> impl Iterator<Item = &crate::palw_vesting_v1::PalwVestingRowV1> + '_ {
+        self.vesting_order.iter().map(move |(_, claim_id)| self.vesting.get(claim_id).expect("the vesting order indexes live rows"))
+    }
+
+    /// How many vesting rows the state holds.
+    pub fn vesting_len(&self) -> usize {
+        self.vesting.len()
+    }
+
+    /// The rows `bond` is payee of (producer or credited seat), latched or not, unlatched first.
+    pub fn vesting_rows_of_payee<'s>(
+        &'s self,
+        bond: &PalwBondKeyV2,
+    ) -> impl Iterator<Item = &'s crate::palw_vesting_v1::PalwVestingRowV1> + use<'s> {
+        let bond = *bond;
+        self.vesting_payees
+            .range((bond, false, 0, ZERO_HASH64)..)
+            .take_while(move |(payee, ..)| *payee == bond)
+            .map(move |(_, _, _, claim_id)| self.vesting.get(claim_id).expect("the payee index names live rows"))
+    }
+
+    /// **Every leg `bond` is payee of** (phase2-plan §2.3's `vesting_legs_of_payee`, for RPC):
+    /// through the payee index, each of its rows (latched or not) with the legs that pay it — a
+    /// producer that also sat on its own claim's panel is named twice, once per leg.
+    pub fn vesting_legs_of_payee<'s>(
+        &'s self,
+        bond: &PalwBondKeyV2,
+    ) -> impl Iterator<Item = (&'s crate::palw_vesting_v1::PalwVestingRowV1, crate::palw_vesting_v1::PalwVestingLegV1)> + use<'s> {
+        let bond = *bond;
+        self.vesting_rows_of_payee(&bond)
+            .flat_map(move |row| row.legs().filter(|leg| leg.payee_bond == Some(bond)).map(|leg| (row, leg)).collect::<Vec<_>>())
+    }
+
+    /// `(expiry_daa, claim_id)` of every UNLATCHED row `bond` is payee of, ascending — B-3's walk
+    /// (`palw_bond_is_payee_of_unmatured_row_v1`) reads it from the top.
+    pub fn vesting_unlatched_of_payee<'s>(&'s self, bond: &PalwBondKeyV2) -> impl DoubleEndedIterator<Item = (u64, Hash64)> + use<'s> {
+        self.vesting_payees
+            .range((*bond, false, 0, ZERO_HASH64)..=(*bond, false, u64::MAX, Hash64::from_bytes([0xFF; 64])))
+            .map(|(_, _, expiry_daa, claim_id)| (*expiry_daa, *claim_id))
+    }
+
+    /// One queued payout, by key (V-7's "new key" question).
+    pub fn pending_payout(&self, key: &Hash64) -> Option<&PalwPayoutV2> {
+        self.pending_payouts.get(key)
+    }
+
+    /// Enter one row into the four vesting indexes (ADR-0152 V-3).
+    fn vesting_index_insert(&mut self, row: &crate::palw_vesting_v1::PalwVestingRowV1) {
+        self.vesting_order.insert((row.expiry_daa, row.claim_id));
+        let latched = row.matured_at.is_some();
+        if !latched {
+            self.vesting_unlatched.insert((row.expiry_daa, row.claim_id));
+            self.vesting_unlatched_by_settled.insert((row.settled_at_final, row.claim_id));
+        }
+        for payee in row.payee_bonds() {
+            self.vesting_payees.insert((payee, latched, row.expiry_daa, row.claim_id));
+        }
+    }
+
+    /// Take one row out of the four vesting indexes — the exact entries `vesting_index_insert`
+    /// made for it, so a row's rewrite (its latch, M3's DA-5 re-key) is remove-old-then-insert-new.
+    fn vesting_index_remove(&mut self, row: &crate::palw_vesting_v1::PalwVestingRowV1) {
+        self.vesting_order.remove(&(row.expiry_daa, row.claim_id));
+        let latched = row.matured_at.is_some();
+        self.vesting_unlatched.remove(&(row.expiry_daa, row.claim_id));
+        self.vesting_unlatched_by_settled.remove(&(row.settled_at_final, row.claim_id));
+        for payee in row.payee_bonds() {
+            self.vesting_payees.remove(&(payee, latched, row.expiry_daa, row.claim_id));
+        }
+    }
+
+    /// Rebuild the four vesting indexes from `vesting` (import; phase2-plan I-7).
+    fn rebuild_vesting_indices(&mut self) {
+        self.vesting_order.clear();
+        self.vesting_unlatched.clear();
+        self.vesting_unlatched_by_settled.clear();
+        self.vesting_payees.clear();
+        let rows: Vec<crate::palw_vesting_v1::PalwVestingRowV1> = self.vesting.values().cloned().collect();
+        for row in &rows {
+            self.vesting_index_insert(row);
+        }
+    }
+
+    /// Do the vesting indexes describe exactly the rows? (`assert_internal_consistency_v3`.)
+    fn vesting_indices_are_consistent(&self) -> bool {
+        let mut rebuilt = PalwChainStateV2::genesis();
+        for row in self.vesting.values() {
+            rebuilt.vesting_index_insert(row);
+        }
+        rebuilt.vesting_order == self.vesting_order
+            && rebuilt.vesting_unlatched == self.vesting_unlatched
+            && rebuilt.vesting_unlatched_by_settled == self.vesting_unlatched_by_settled
+            && rebuilt.vesting_payees == self.vesting_payees
+    }
+
     /// **Does this state hold any R-core+ data?** The one predicate the root block and the
     /// carriage tail are both guarded by, so the two cannot disagree about when the block exists.
     fn has_rcore_plus_data(&self) -> bool {
@@ -9319,6 +9466,10 @@ impl PalwChainStateV2 {
             != (self.commitments_by_reporter.clone(), self.commitments_by_daa.clone())
         {
             return Err(PalwStateV2Error::CarriageInconsistent("reporter-commitment indexes differ from the commitments".into()));
+        }
+        // ADR-0152 V-3 (the vesting work): the rows' four derived indexes, against the rows.
+        if !self.vesting_indices_are_consistent() {
+            return Err(PalwStateV2Error::CarriageInconsistent("the vesting indexes differ from the vesting rows".into()));
         }
         // Every deadline belongs to a live, non-terminal claim in the phase its kind implies —
         // and every non-terminal claim without an open court has exactly one deadline.
@@ -12371,21 +12522,6 @@ impl<'a> TransitionBuilder<'a> {
             *count = count.saturating_add(1);
         }
         self.entries.push(PalwDeltaEntryV2::ReporterCommit { key, old, new });
-    }
-
-    /// **The vesting work's burn hook** (S-SPEC §2, P5): burn `claim_id`'s vesting row for a
-    /// conviction and say how much it held — `Some(burned)` iff a row existed and is now deleted
-    /// (S3's once-per-claim marker), `None` for no row (a free-prompt claim, a row already moved or
-    /// already burned). The body is the vesting work's, which also emits `VestingNote::Burned`; S
-    /// ships `Ok(None)` and the conviction funnel (S-4) is its caller.
-    #[allow(dead_code)]
-    fn burn_vesting_row(
-        &mut self,
-        _claim_id: Hash64,
-        _offence_id: Hash64,
-        _kind: crate::palw_offence_v1::PalwOffenceKindV1,
-    ) -> Result<Option<u64>, PalwStateV2Error> {
-        Ok(None)
     }
 
     /// **ADR-0152 A-1 on this fold's clocks**: [`palw_bond_committed_v1`] at `now_daa` and the
@@ -16088,6 +16224,19 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0042 Decision 10: `Final` is where escrow becomes payable, so it is where the
         // release is recorded. Nothing is minted here — this only names an amount and a payee for
         // the next block's coinbase, which is the block that can actually carry an output.
+        //
+        // **ADR-0152 V-2 (R-core+, testnet-12): past `palw_rcore_plus` the same amounts VEST.**
+        // Every sompi this branch would write into `pending_payouts` — the producer's share, each
+        // credited seat's `per_seat`, the reserve, or the whole reward where no duty row exists —
+        // is named instead in one `PalwVestingRowV1`, written below once the liability record is
+        // (so the row copies its attribution fields), and step 3d moves it into the queue only once
+        // V-4 matures it. The amounts are exactly the ones below (phase2-plan I-11), so T03's
+        // identity closes. NOT vested (V-2): the ADR-0091 buyback slice, which still executes here
+        // and is recorded as the row's `buyback_bound`; the work-price remainder, which is never
+        // named at all; FP receipt-spend payouts and execution-lane rights, which never pass here.
+        // Below the fence (every other network, and a t12 twin with the fence off) nothing moves.
+        let vests = self.params.rcore_plus_active_at(final_daa);
+        let mut vested: Option<PalwVestedRewardV1> = None;
         if claim.escrowed_reward > 0 {
             // The bond must still be there to name a payee. It is, unless the registry dropped a
             // bond that still had live claims — an invariant break, not a payout policy — so this
@@ -16137,21 +16286,49 @@ impl<'a> TransitionBuilder<'a> {
                         duties.len(),
                         credited.len(),
                     );
-                    if split.producer > 0 {
-                        self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: split.producer }));
-                    }
-                    if split.per_seat > 0 {
-                        for seat in &credited {
-                            let seat_payload = self.state.bonds.get(seat).ok_or(PalwStateV2Error::MissingBond(*seat))?.payout_payload;
-                            self.add_panel_payout(seat_payload, split.per_seat)?;
+                    if vests {
+                        // V-2: the same legs, named in the row — each credited seat's payload read
+                        // from its bond HERE, at Final (I-5: a moved leg never re-reads the bond).
+                        let mut seats = Vec::new();
+                        if split.per_seat > 0 {
+                            for seat in &credited {
+                                let seat_payload =
+                                    self.state.bonds.get(seat).ok_or(PalwStateV2Error::MissingBond(*seat))?.payout_payload;
+                                seats.push((*seat, PalwPayoutV2 { payload: seat_payload, amount: split.per_seat }));
+                            }
                         }
+                        vested = Some(PalwVestedRewardV1 {
+                            producer: PalwPayoutV2 { payload: payout_payload, amount: split.producer },
+                            seats,
+                            reserve: split.reserve,
+                            buyback: slice,
+                        });
+                    } else {
+                        if split.producer > 0 {
+                            self.write_payout(id, Some(PalwPayoutV2 { payload: payout_payload, amount: split.producer }));
+                        }
+                        if split.per_seat > 0 {
+                            for seat in &credited {
+                                let seat_payload =
+                                    self.state.bonds.get(seat).ok_or(PalwStateV2Error::MissingBond(*seat))?.payout_payload;
+                                self.add_panel_payout(seat_payload, split.per_seat)?;
+                            }
+                        }
+                        let reserve = self
+                            .state
+                            .panel_reserve_sompi
+                            .checked_add(split.reserve)
+                            .ok_or(PalwStateV2Error::Overflow("panel reserve"))?;
+                        self.write_panel_reserve(reserve);
                     }
-                    let reserve = self
-                        .state
-                        .panel_reserve_sompi
-                        .checked_add(split.reserve)
-                        .ok_or(PalwStateV2Error::Overflow("panel reserve"))?;
-                    self.write_panel_reserve(reserve);
+                }
+                None if vests => {
+                    vested = Some(PalwVestedRewardV1 {
+                        producer: PalwPayoutV2 { payload: payout_payload, amount: reward },
+                        seats: Vec::new(),
+                        reserve: 0,
+                        buyback: slice,
+                    });
                 }
                 None => {
                     if reward > 0 {
@@ -16166,6 +16343,11 @@ impl<'a> TransitionBuilder<'a> {
         // below drops the row this reads.
         self.release_seat_duties(&id)?;
         self.persist_panel_liability(id, claim, final_daa, None)?;
+        // ADR-0152 V-1/V-2: the row, after the liability record so it can copy that record's
+        // attribution fields in the same funnel (N8).
+        if let Some(vested) = vested {
+            self.write_vesting_row_at_final(id, claim, final_daa, vested)?;
+        }
         // ADR-0125: past the lane's fence a finalized attempt is a credit in its span's schedule.
         if let Some(lane) = self.extras.round_lane {
             self.record_round_final(id, claim, final_daa, lane.schedule_span_daa)?;
@@ -16648,6 +16830,346 @@ pub fn apply_palw_transition_v6(
     )
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0152 V-1…V-8: the vesting writers (the vesting work — B, in S's window; testnet-12 only)
+// ---------------------------------------------------------------------------------------------
+//
+// Every function here writes only past `Params::palw_rcore_plus` (read through the state-params
+// mirror, `PalwStateParamsV2::rcore_plus_active_at`): `finalize_claim` calls the row writer only
+// there, step 3d runs only there, and the burn hook finds a row only where one was written. The
+// pure half — keys, maturity, the planner, the payee question — is `crate::palw_vesting_v1`.
+
+/// **What `finalize_claim` names past `palw_rcore_plus` instead of writing payouts** (ADR-0152 V-2):
+/// exactly the amounts it wrote before (phase2-plan I-11), plus the buyback slice it executed.
+struct PalwVestedRewardV1 {
+    producer: PalwPayoutV2,
+    seats: Vec<(PalwBondKeyV2, PalwPayoutV2)>,
+    reserve: u64,
+    buyback: u64,
+}
+
+impl<'a> TransitionBuilder<'a> {
+    /// **The one writer of `vesting`** (ADR-0152 V-3): the row map, its four derived indexes and
+    /// the `Vesting` (71) delta entry in one step, so apply, revert and the fold cannot disagree
+    /// about the indexes. M3's DA-5 re-key (a session moves its row's `expiry_daa`) writes through
+    /// this too — rewriting a row is remove-old-then-insert-new in every index.
+    fn write_vesting(&mut self, key: Hash64, new: Option<crate::palw_vesting_v1::PalwVestingRowV1>) {
+        let old = self.state.vesting.remove(&key);
+        if let Some(previous) = &old {
+            self.state.vesting_index_remove(previous);
+        }
+        if let Some(row) = &new {
+            self.state.vesting.insert(key, row.clone());
+            self.state.vesting_index_insert(row);
+        }
+        if old != new {
+            self.entries.push(PalwDeltaEntryV2::Vesting { key, old, new });
+        }
+    }
+
+    /// The vesting counters (73), journaled whole as `SettledFinals` is.
+    fn write_vesting_counters(&mut self, new: crate::palw_vesting_v1::PalwVestingCountersV1) {
+        let old = self.state.vesting_counters;
+        if old != new {
+            self.state.vesting_counters = new;
+            self.entries.push(PalwDeltaEntryV2::VestingCounters { old, new });
+        }
+    }
+
+    /// A journal-only note (72): the cause of a vesting change (phase2-plan §2.5).
+    fn note_vesting(&mut self, note: crate::palw_vesting_v1::PalwVestingNoteV1) {
+        self.entries.push(PalwDeltaEntryV2::VestingNote(note));
+    }
+
+    /// **ADR-0152 V-1/V-2: write a Final claim's row** (from `finalize_claim`, past
+    /// `palw_rcore_plus` only). The attribution fields are COPIES (v3.1 N8): from the liability
+    /// record `persist_panel_liability` has just written — M2 fills its four fields where
+    /// `offence_attribution_active` — else the claim record's `job_identity` and zeros; the door
+    /// and the basis are `claim.rcore`'s (S's licence doors write them; until they land the door
+    /// is `None` and the row records `Quorum`, the zero tag, with `basis_k` 0). The expiry and the
+    /// settled count are the lock's (`palw_panel_liability_expiry_v1(final_daa, window_court)`, the
+    /// state's `settled_attempt_finals`), so the row and the claim's locks run on the same two
+    /// clocks (V-4(a)). Counters: `created`. Note: the buyback slice (V-3's identity).
+    fn write_vesting_row_at_final(
+        &mut self,
+        id: Hash64,
+        claim: &PalwClaimStateV2,
+        final_daa: u64,
+        vested: PalwVestedRewardV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_vesting_v1::{PalwVestingNoteV1, PalwVestingRowV1};
+        debug_assert!(!self.state.vesting.contains_key(&id), "a claim finalizes once, so it writes one row");
+        let (job_identity, free_prompt, trace_root, segment_count) = match self.state.panel_liabilities.get(&id) {
+            Some(record) => (record.job_identity, record.free_prompt, record.trace_root, record.segment_count),
+            None => (claim.job_identity, false, Hash64::default(), 0),
+        };
+        let row = PalwVestingRowV1 {
+            claim_id: id,
+            producer_bond: claim.bond,
+            class_id: claim.class_id,
+            execution_root: claim.execution_root,
+            artifact_root: self.state.classes.get(&claim.class_id).map(|class| class.artifact_root).unwrap_or_default(),
+            job_identity,
+            free_prompt,
+            trace_root,
+            segment_count,
+            licence_door: claim.rcore.licence_door.unwrap_or(crate::palw_economic_safety_v1::PalwLicenceDoorTagV1::Quorum),
+            basis_k: claim.rcore.basis_k,
+            escrowed_reward: claim.escrowed_reward,
+            buyback_bound: vested.buyback,
+            producer: vested.producer,
+            seats: vested.seats,
+            reserve: vested.reserve,
+            final_daa,
+            expiry_daa: crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(final_daa, self.params.window_court),
+            settled_at_final: self.state.settled_attempt_finals,
+            matured_at: None,
+        };
+        let mut counters = self.state.vesting_counters;
+        counters.created =
+            counters.created.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting created"))?;
+        self.write_vesting(id, Some(row));
+        self.write_vesting_counters(counters);
+        if vested.buyback > 0 {
+            self.note_vesting(PalwVestingNoteV1::BuybackAtFinal { claim_id: id, sompi: vested.buyback });
+        }
+        Ok(())
+    }
+
+    /// **ADR-0152 V-5: the burn hook** (S-SPEC P5/P12; S-4's conviction funnel calls it, S ships a
+    /// stub until this lands). Deletes `claim_id`'s row if one exists and returns its whole amount —
+    /// `Some` is S3's once-per-claim marker; `None` when the claim has no row (never written, an FP
+    /// claim, already burned, or already MOVED to the queue, after which there is nothing to burn).
+    /// A row is burnable until it moves, latched-but-carried included. Burned value goes to
+    /// `vesting_burned` and is never minted. Counters: `burned`. Note: `Burned`, naming the offence
+    /// and its kind so Phase 2 can attribute every burn (V-2b).
+    #[allow(dead_code)] // S-4's conviction funnel calls it; until it lands only the tests do.
+    fn burn_vesting_row(
+        &mut self,
+        claim_id: Hash64,
+        offence_id: Hash64,
+        kind: crate::palw_offence_v1::PalwOffenceKindV1,
+    ) -> Result<Option<u64>, PalwStateV2Error> {
+        let Some(row) = self.state.vesting.get(&claim_id).cloned() else {
+            return Ok(None);
+        };
+        let mut counters = self.state.vesting_counters;
+        counters.burned = counters.burned.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting burned"))?;
+        self.write_vesting(claim_id, None);
+        self.write_vesting_counters(counters);
+        let sompi = row.total_sompi();
+        self.note_vesting(crate::palw_vesting_v1::PalwVestingNoteV1::Burned {
+            claim_id,
+            offence_id,
+            kind,
+            sompi,
+            legs: row.legs().collect(),
+        });
+        Ok(Some(sompi))
+    }
+
+    /// **ADR-0152 V-4: step 3d's latch.** Every unlatched row `palw_vesting_row_maturity_v1` calls
+    /// mature gets `matured_at = now`, once; nothing ever clears it but a delta revert (I-9). During
+    /// a licence halt (V-4(b), chain-wide) nothing latches and nothing is walked.
+    ///
+    /// **The walk is the size of what latches, not of what waits** (phase2-plan I-12; review of the
+    /// vesting work, finding 5 — the first cut re-examined every row the second clock held, each for
+    /// up to `2 × window_court`, every block). Not halted, an unlatched row is mature iff its DAA
+    /// clock has run (`expiry ≤ now`) and either no second clock holds (escaped depth `None`, or
+    /// `expiry ≤ now − 2 × window_court`, the per-obligation bound) or `depth` anchors have settled
+    /// since its Final (`settled_at_final ≤ settled_now − depth`). So:
+    /// 1. **the DAA side**: the rows with `expiry` at or below `released` — `now` with no second
+    ///    clock, `now − 2 × window_court` with one — are a prefix of `vesting_unlatched`, and every
+    ///    one of them latches here, so each is walked once in its life;
+    /// 2. **the band** `(released, now]` with a second clock: the mature rows are A ∩ B, A the band
+    ///    of `vesting_unlatched`, B the prefix of `vesting_unlatched_by_settled` at
+    ///    `settled_now − depth`. The two are walked in lockstep and the walk stops at whichever ends
+    ///    first; that side's rows are then tested against the other side's bound, so the result is
+    ///    exactly A ∩ B and the cost is `2 × min(|A|, |B|)`. **Along one chain the two clocks are
+    ///    co-monotone** — a row written in a later block has a later expiry (`final + window_court`,
+    ///    and DAA only grows) and a settled count no smaller (the counter only grows) — so a row in
+    ///    A but not B (the second clock holds it) and a row in B but not A (its DAA clock runs) cannot
+    ///    both exist: the first would be older than the second yet have counted more anchors. One of
+    ///    `A ∖ B`, `B ∖ A` is empty, and the walk costs `2 × (rows latched + 1)`. Only a row written
+    ///    out of order — M3's DA-5 re-key moves a row's expiry later and keeps its old count — can
+    ///    add to it, one step per such row.
+    ///
+    /// The candidates are then put through `palw_vesting_row_maturity_v1` itself, the one
+    /// definition of V-4 (so M3's V-4(c) session check applies here unchanged), and latched in
+    /// `(expiry_daa, claim_id)` order.
+    fn latch_matured_vesting_rows(&mut self, now_daa: u64, raw_depth: Option<u64>) {
+        use crate::palw_vesting_v1::{PalwVestingNoteV1, PalwVestingRowV1, palw_vesting_row_maturity_v1};
+        use std::ops::Bound;
+        let window_court = self.params.window_court;
+        let escaped = palw_second_clock_depth_v1(raw_depth, &self.state.recent_anchor_daas, now_daa, window_court);
+        if raw_depth.is_some() && escaped.is_none() {
+            // V-4(b): a licence halt (`palw_chain_vesting_halted_v1`) latches nothing.
+            return;
+        }
+        let top = Hash64::from_bytes([0xFF; 64]);
+        // A depth of zero holds nothing (`palw_second_clock_holds_v1`: no count is below zero), so
+        // it is the DAA clock alone, as no second clock is.
+        let second_clock = escaped.filter(|depth| *depth > 0);
+        let released = match second_clock {
+            None => Some(now_daa),
+            Some(_) => now_daa.checked_sub(window_court.saturating_mul(2)),
+        };
+        let mut candidates: Vec<(u64, Hash64)> = Vec::new();
+        // 1. The DAA side: every row here is mature by the DAA clock alone.
+        if let Some(released) = released {
+            candidates.extend(self.state.vesting_unlatched.range(..=(released, top)).copied());
+        }
+        // 2. The band, where the second clock decides: A ∩ B by the lockstep walk.
+        if let Some(depth) = second_clock
+            && let Some(settled_bound) = self.state.settled_attempt_finals.checked_sub(depth)
+        {
+            let lower = match released {
+                Some(released) => Bound::Excluded((released, top)),
+                None => Bound::Unbounded,
+            };
+            let in_band = |expiry: u64| expiry <= now_daa && released.is_none_or(|released| expiry > released);
+            let mut band = self.state.vesting_unlatched.range((lower, Bound::Included((now_daa, top))));
+            let mut counted = self.state.vesting_unlatched_by_settled.range(..=(settled_bound, top));
+            let mut walked_band: Vec<(u64, Hash64)> = Vec::new();
+            let mut walked_counted: Vec<(u64, Hash64)> = Vec::new();
+            let band_ended = loop {
+                match band.next() {
+                    None => break true,
+                    Some(entry) => walked_band.push(*entry),
+                }
+                match counted.next() {
+                    None => break false,
+                    Some(entry) => walked_counted.push(*entry),
+                }
+            };
+            if band_ended {
+                // Every band row seen: keep the ones whose anchor count is met.
+                for (expiry, claim_id) in walked_band {
+                    if self.state.vesting.get(&claim_id).is_some_and(|row| row.settled_at_final <= settled_bound) {
+                        candidates.push((expiry, claim_id));
+                    }
+                }
+            } else {
+                // Every count-met row seen: keep the ones in the band.
+                for (_, claim_id) in walked_counted {
+                    if let Some(row) = self.state.vesting.get(&claim_id)
+                        && in_band(row.expiry_daa)
+                    {
+                        candidates.push((row.expiry_daa, claim_id));
+                    }
+                }
+            }
+        }
+        candidates.sort_unstable();
+        for (_, claim_id) in candidates {
+            let Some(row) = self.state.vesting.get(&claim_id) else { continue };
+            if palw_vesting_row_maturity_v1(&self.state, self.params, row, now_daa, raw_depth).mature_now {
+                let latched = PalwVestingRowV1 { matured_at: Some(now_daa), ..row.clone() };
+                self.write_vesting(claim_id, Some(latched));
+                self.note_vesting(PalwVestingNoteV1::Latched { claim_id, matured_at: now_daa });
+            }
+        }
+    }
+
+    /// **ADR-0152 V-7: move one planned move into the queue.** Each leg through the queue's own
+    /// writers (phase2-plan I-2): a producer leg under its A-KEY key, a seat leg through
+    /// `add_panel_payout` (0xFE, accumulated per payee), a reporter leg under its A-KEY key, the
+    /// reserve into `panel_reserve_sompi`. The payee is the payload stored at Final or conviction,
+    /// never re-read from a bond (I-5), so a retired or emptied payee is still paid. Then the row
+    /// (or the reporter entry) leaves; counters `moved`; notes `Moved` and, for a positive reserve,
+    /// `ReserveCredited`. Maturity inserts are exempt from `PALW_V2_MAX_PENDING_PAYOUTS` (M-10):
+    /// the budget, not the cap, bounds them.
+    fn apply_vesting_move(&mut self, next: &crate::palw_vesting_v1::PalwVestingMoveV1) -> Result<(), PalwStateV2Error> {
+        use crate::palw_vesting_v1::{
+            PalwVestingLegKindV1, PalwVestingNoteV1, PalwVestingSourceV1, palw_reporter_payout_key_v1, palw_vesting_payout_key_v1,
+        };
+        let own_key = match &next.source {
+            PalwVestingSourceV1::Row { claim_id } => palw_vesting_payout_key_v1(claim_id),
+            PalwVestingSourceV1::Reporter { offence_id } => palw_reporter_payout_key_v1(offence_id),
+        };
+        for leg in next.legs.iter().filter(|leg| leg.amount > 0) {
+            match leg.kind {
+                PalwVestingLegKindV1::Seat => self.add_panel_payout(leg.payload, leg.amount)?,
+                PalwVestingLegKindV1::Reserve => {
+                    let reserve =
+                        self.state.panel_reserve_sompi.checked_add(leg.amount).ok_or(PalwStateV2Error::Overflow("panel reserve"))?;
+                    self.write_panel_reserve(reserve);
+                }
+                PalwVestingLegKindV1::Producer | PalwVestingLegKindV1::Reporter => {
+                    debug_assert_eq!(leg.queue_key, Some(own_key), "a producer or reporter leg lands on its source's A-KEY key");
+                    // One key per claim or offence, so it holds no row; accumulated all the same,
+                    // so no path can overwrite a queued sompi.
+                    let held = self.state.pending_payouts.get(&own_key).map(|row| row.amount).unwrap_or(0);
+                    let amount = held.checked_add(leg.amount).ok_or(PalwStateV2Error::Overflow("vesting payout"))?;
+                    self.write_payout(own_key, Some(PalwPayoutV2 { payload: leg.payload, amount }));
+                }
+            }
+        }
+        match &next.source {
+            PalwVestingSourceV1::Row { claim_id } => {
+                let row = self.state.vesting.get(claim_id).cloned().ok_or(PalwStateV2Error::MissingClaim(*claim_id))?;
+                let mut counters = self.state.vesting_counters;
+                counters.moved =
+                    counters.moved.checked_add(row.total_sompi_u128()).ok_or(PalwStateV2Error::Overflow("vesting moved"))?;
+                self.write_vesting(*claim_id, None);
+                self.write_vesting_counters(counters);
+                self.note_vesting(PalwVestingNoteV1::Moved { source: next.source.clone(), legs: next.legs.clone() });
+                if row.reserve > 0 {
+                    self.note_vesting(PalwVestingNoteV1::ReserveCredited { claim_id: *claim_id, sompi: row.reserve });
+                }
+            }
+            PalwVestingSourceV1::Reporter { offence_id } => {
+                // Row 11: S-7 wrote it at step 2; 3d moves it and deletes it (the `ReporterReward`
+                // entry, 69). The reporter counters are S's, written at the award.
+                let old = self.state.reporter_rewards.remove(offence_id);
+                if old.is_some() {
+                    self.entries.push(PalwDeltaEntryV2::ReporterReward { key: *offence_id, old, new: None });
+                }
+                self.note_vesting(PalwVestingNoteV1::Moved { source: next.source.clone(), legs: next.legs.clone() });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// **ADR-0152 V-4/V-7: step 3d — maturity: latch, then plan, then move** (phase2-plan §2.0 option A,
+/// §2.4; the fold-order table of V-4). Runs after 3′ and 3c and before 3a (I-1), past
+/// `palw_rcore_plus` only, so it reads the clocks AFTER this block's objects (I-10): a licence in
+/// this block can mature a row here, and a same-block conviction burns its row before this sees it
+/// (T12). The latch is `palw_vesting_row_maturity_v1`; the plan is exactly
+/// `palw_vesting_mint_plan_v1(state_after_latch, 8 − non-market rows waiting,
+/// palw_vesting_market_rows_waiting_v1(state_after_latch))` (ADR §7.3's three-argument form). A
+/// caller holding the committed parent (the RPC, the Phase 2 coinbase harness) does not call that
+/// planner on it: it calls `palw_vesting_next_block_plan_v1(parent, params, daa, raw_depth)`, which
+/// replays this block's 1b drain and this latch on the parent before the same planning rule, and
+/// equals this plan for a block with no objects (review of the vesting work, finding 1). The move
+/// writes the legs into `pending_payouts`, which the next block's step 1b drains and its coinbase
+/// pays (`palw_v2_payout_outputs`, unchanged). Nothing before 3d writes the queue past the fence
+/// (I-3), so the processor's acceptance rehearsal needs no change (phase2-plan F4).
+fn apply_vesting_maturity(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    use crate::palw_vesting_v1::{
+        PALW_V2_VESTING_LEGS_PER_BLOCK, palw_vesting_market_rows_waiting_v1, palw_vesting_mint_plan_v1,
+        palw_vesting_non_market_rows_waiting_v1,
+    };
+    // The RAW depth (I-8), as every other reader of the second clock takes it: `None` below
+    // `palw_audit_2026_09_23`; the escape is computed from it by the pure functions.
+    let raw_depth = palw_settled_anchor_depth_v1(builder.extras);
+    builder.latch_matured_vesting_rows(ctx.daa_score, raw_depth);
+    // The fold's belt: the non-market rows still waiting after 1b's drain come off the width. Zero
+    // under the queue lemma (every step 3d on testnet-12), so the planner is handed the full width;
+    // `palw_vesting_next_block_plan_v1` computes the same width off the committed parent.
+    let budget_new_keys = PALW_V2_VESTING_LEGS_PER_BLOCK.saturating_sub(palw_vesting_non_market_rows_waiting_v1(&builder.state));
+    let plan = palw_vesting_mint_plan_v1(&builder.state, budget_new_keys, palw_vesting_market_rows_waiting_v1(&builder.state));
+    for next in &plan.moves {
+        builder.apply_vesting_move(next)?;
+    }
+    debug_assert!(
+        crate::palw_vesting_v1::palw_vesting_counters_consistent_v1(&builder.state).is_ok(),
+        "V-3: created = live + moved + burned, and no row above escrowed − buyback"
+    );
+    Ok(())
+}
+
 /// **A-1 fix — the acceptance filter's view of the fold's step 3 (mainnet audit 2026-09-11).**
 ///
 /// The one-shot fold [`apply_palw_transition_v7`] applies every accepted object in step 3, then
@@ -16935,6 +17457,13 @@ pub fn apply_palw_transition_v7(
     //     and each answered with a settlement the selected child will carry.
     apply_evm_market_actions(&mut builder, ctx)?;
     builder.own_attempt_class = None;
+    // 3d. ADR-0152 V-4/V-7 (R-core+; testnet-12 only, read through the state-params mirror of
+    //     `Params::palw_rcore_plus`): maturity — latch, then plan, then move. After 3′ and 3c, so
+    //     the market's moves this block see the queue before any maturity insert, and before 3a.
+    //     Below the fence this is skipped entirely and the fold is byte-identical to before.
+    if builder.params.rcore_plus_active_at(ctx.daa_score) {
+        apply_vesting_maturity(&mut builder, ctx)?;
+    }
 
     // 3a. Condition 12/13: any class whose activation score this block reaches becomes `Active`
     //     and takes its share. A CLOCK, not an object — nobody submits it, so there is nothing to
@@ -24285,7 +24814,20 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
             }
             state.reporter_counters = *install;
         }
-        PalwDeltaEntryV2::Vesting { key, old, new } => swap_write!(state.vesting, key, old, new),
+        // ADR-0152 V-3 (the vesting work): `swap_write!`'s verify-then-install, with the row's
+        // derived indexes moved in the same step — out with the row it replaces, in with the row
+        // it installs — so apply and revert keep them exact without a rebuild.
+        PalwDeltaEntryV2::Vesting { key, old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            expect_matches(&state.vesting.get(key).cloned(), expected)?;
+            if let Some(previous) = state.vesting.remove(key) {
+                state.vesting_index_remove(&previous);
+            }
+            if let Some(row) = install {
+                state.vesting.insert(*key, row.clone());
+                state.vesting_index_insert(row);
+            }
+        }
         PalwDeltaEntryV2::VestingNote(_) => {}
         PalwDeltaEntryV2::VestingCounters { old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
@@ -25425,9 +25967,15 @@ impl PalwStateCarriageV2 {
             courts_by_challenger: BTreeSet::new(),
             commitments_by_reporter: BTreeMap::new(),
             commitments_by_daa: BTreeSet::new(),
+            vesting_order: BTreeSet::new(),
+            vesting_unlatched: BTreeSet::new(),
+            vesting_unlatched_by_settled: BTreeSet::new(),
+            vesting_payees: BTreeSet::new(),
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
+        // ADR-0152 V-3 / phase2-plan I-7: the vesting rows' derived indexes are rebuilt on import.
+        state.rebuild_vesting_indices();
         state.assert_internal_consistency_v3(params, uncertified_weightless, canonical_work_daa)?;
         state.assert_deadline_consistency(params)?;
         if let Some(expected) = expected_root {
@@ -50104,6 +50652,9 @@ pub(crate) mod tests {
     // frozen indices; every new delta entry applies and reverts to the exact parent and root; the
     // R-core+ root block and carriage tail are Some-only, carried, and separate every item; and the
     // fold refuses every new object and offence kind by name.
+    // ADR-0152 V-1…V-8 (the vesting work): the rows through the fold, in their own file.
+    mod vesting_fold_v1;
+
     mod rcore_v22_skeleton {
         use super::*;
         use crate::palw_vesting_v1::{PalwVestingCountersV1, PalwVestingNoteV1, PalwVestingRowV1, PalwVestingSourceV1};
@@ -50159,6 +50710,8 @@ pub(crate) mod tests {
             s.vesting_counters = PalwVestingCountersV1 { created: 9, moved: 10, burned: 11 };
             // S-1: the derived indexes over what was just inserted, as any load would build them.
             rebuild_deadline_free_indices(&mut s);
+            // The vesting work: the rows' derived indexes, as every writer and the import keep them.
+            s.rebuild_vesting_indices();
             s
         }
 
@@ -50850,9 +51403,53 @@ pub(crate) mod tests {
                 palw_bond_collateral_is_locked_v6(&s, &armed, &key, &record, 20_000, delay, None, true),
                 "past: the accuser clause holds it"
             );
+            assert!(!palw_bond_is_payee_of_unmatured_row_v1(&s, &armed, &key, 20_000, None), "the courted bond pays no vesting row");
+
+            // **The payee clause is the vesting work's body** (the integration deleted S-1's `false`
+            // stub): a released bond with no duty and no court, producer of a row whose DAA clock
+            // still runs, is held past the fence by that clause alone, and let go once the row's
+            // clock has run (no second clock asked) — below the fence never.
+            let payee = bond_key(7);
+            s.bonds.insert(payee, bond(1_000, retiring(0)));
+            let payee_record = s.bonds.get(&payee).unwrap().clone();
+            s.vesting.insert(
+                h64(0xE7),
+                crate::palw_vesting_v1::PalwVestingRowV1 {
+                    claim_id: h64(0xE7),
+                    producer_bond: payee,
+                    class_id: h64(0xC1),
+                    execution_root: h64(0x73),
+                    artifact_root: h64(0xAF),
+                    job_identity: h64(0x7A),
+                    free_prompt: false,
+                    trace_root: h64(0x71),
+                    segment_count: 4,
+                    licence_door: PalwLicenceDoorTagV1::Quorum,
+                    basis_k: 2,
+                    escrowed_reward: 12,
+                    buyback_bound: 3,
+                    producer: PalwPayoutV2 { payload: h64(0xA1), amount: 9 },
+                    seats: Vec::new(),
+                    reserve: 0,
+                    final_daa: 18_000,
+                    expiry_daa: 21_000,
+                    settled_at_final: 4,
+                    matured_at: None,
+                },
+            );
+            s.rebuild_vesting_indices();
             assert!(
-                !palw_bond_is_payee_of_unmatured_row_v1(&s, &armed, &key, 20_000, None),
-                "the payee clause is the vesting work's stub"
+                !palw_bond_collateral_is_locked_v6(&s, &dormant, &payee, &payee_record, 20_000, delay, None, true),
+                "below: v5 only"
+            );
+            assert!(palw_bond_is_payee_of_unmatured_row_v1(&s, &armed, &payee, 20_000, None));
+            assert!(
+                palw_bond_collateral_is_locked_v6(&s, &armed, &payee, &payee_record, 20_000, delay, None, true),
+                "past: the payee clause holds it"
+            );
+            assert!(
+                !palw_bond_collateral_is_locked_v6(&s, &armed, &payee, &payee_record, 21_000, delay, None, true),
+                "the row's clock has run: nothing holds it"
             );
         }
 
