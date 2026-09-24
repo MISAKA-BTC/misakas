@@ -3691,6 +3691,8 @@ mod m3_da_court {
         assert!(session.accuser_is_seat && walk.state.deadline_of(&id).is_none(), "a seat session pauses the claim");
         let exposure = session.exposure;
         h.reloads(&walk.state);
+        // T40: a node restarting mid-session reloads the state the fold wrote.
+        h.restarts(walk.next().block, &walk.state);
         // Refusals: a bond with no lock, a unit nobody demands.
         let bystander = answer(&h, id, BYSTANDER, PalwDaUnitV1::Event { row: 0, tile: 0 }, flat(&claim));
         assert!(matches!(fold_refuses(&h, &walk, &bystander), PalwStateV2Error::DaDiscloserNotLiable { .. }));

@@ -745,3 +745,153 @@ fn t27_t68_body(landed: bool) {
         }
     }
 }
+
+/// **T84 / T42 (DA part, A-6): an accuser uses its free half, and its exposure is on the ledger B-3
+/// reads until the claim resolves.** A bond whose own claims fill its 500‰ work ceiling still
+/// accuses (`max(committed, 500‰·C) + accuser + new ≤ C`), and the session's exposure is on its
+/// accuser ledger (`palw_accuser_exposure_v1`, the clause `palw_bond_collateral_is_locked_v6` holds
+/// exit on) until the claim's default convicts it and returns the exposure. The fence-off twin:
+/// ADR-0062's accusation reserves under the 500‰ ceiling, which the full bond fails.
+#[test]
+fn t84_t42_an_accuser_uses_its_free_half_and_its_exposure_is_held_until_the_claim_resolves() {
+    for armed in [true, false] {
+        let p = if armed { t12() } else { twin(&t12()) };
+        let mut c = Chain::new(p);
+        c.step(&[bond_obj(1, 20_000 * MSK)]);
+        for seed in 0..3u64 {
+            let (env, key, _) = floor_attempt(&c, 1, 0x4210 + seed);
+            c.step_at(c.daa + 1, &[], PalwBlockWorkV3::Attempt(&env), key, T12_BLOCK_SUBSIDY_SOMPI);
+        }
+        let (id, _, _) = bound_floor_claim(&mut c, 0x42);
+        let committed = palw_bond_committed_v1(&c.s, &bond_key(1), c.daa + 1, None, c.sp.window_court());
+        // The premise: the bond's own work fills its 500‰ ceiling (collateral set to exactly twice it).
+        let full = u64::try_from(2 * committed).unwrap();
+        c.s = edited(&c.sp, &c.s, |carriage| carriage.bonds.get_mut(&bond_key(1)).unwrap().collateral = full);
+        let result = try_step(&c, &[accuse(id, bond_key(1), 0)]);
+        if !armed {
+            assert!(matches!(result, Err(PalwStateV2Error::AccusationExposureCeiling { .. })), "fence off: the 500‰ ceiling refuses");
+            continue;
+        }
+        result.expect("the free half admits the accusation");
+        c.step(&[accuse(id, bond_key(1), 0)]);
+        assert!(palw_accuser_exposure_v1(&c.s, &bond_key(1)) > 0, "B-3's accuser clause reads it");
+        run_out(&mut c, id, bond_key(1));
+        assert_eq!(palw_accuser_exposure_v1(&c.s, &bond_key(1)), 0, "nothing held once the claim is convicted");
+    }
+}
+
+/// **T34 (M3's half): DA on every class — the 8k row.** A licensed attempt claim of testnet-12's
+/// short-window model class: a seat's event session pauses it, draws nothing (a held-context
+/// attempt), runs out, and the producer takes S1 — the whole commitment, `w + esc + rr` — and the
+/// claim voids `ProducerWithholding` with a `DaDefault` recorded. Every block reloads. The fence-off
+/// twin: ADR-0062's session takes the phase and its lapse voids the same claim for the same charge.
+#[test]
+fn t34_da_on_the_8k_row_defaults_like_the_floor() {
+    for armed in [true, false] {
+        t34_body(armed);
+    }
+}
+
+fn t34_body(armed: bool) {
+    use kaspa_consensus_core::palw_da_rcore_v1::palw_da_offence_id_v1;
+    let p = if armed { t12() } else { twin(&t12()) };
+    let (short, _) = model_classes(&p);
+    let mut m = model_chain(p, short, 1);
+    let id = model_claim(&mut m, short, 1, 0x34);
+    let seats = honest_seats(&m.p, 5);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    let bound = m.bind(id, &seats);
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    m.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    let claim = m.claim(&id);
+    let commitment = palw_claim_bond_reservation_v1(&m.sp, &claim).unwrap();
+    let before = m.s.bond(&bond_key(1)).unwrap().collateral;
+    m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+    m.step(&[accuse(id, seats[0].0, 0)]);
+    if armed {
+        assert_eq!(m.s.da_session(&id, &seats[0].0).unwrap().units.len(), 1, "a held-context attempt's event session draws nothing");
+        assert_eq!(m.s.deadline_of(&id), None, "the seat's session pauses the licensed claim");
+        m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+        run_out(&mut m, id, seats[0].0);
+    } else {
+        assert!(matches!(m.claim(&id).phase, PalwClaimPhaseV2::DefaultDisputed { .. }), "fence off: the v1 session");
+        let lapse = m.daa + m.sp.window_challenge() + 1;
+        m.s = readied(&m.sp, &m.s, &honest(&m.p), short, m.daa);
+        m.step_at(lapse, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    }
+    assert!(matches!(m.claim(&id).phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. }));
+    assert_eq!(u128::from(before - m.s.bond(&bond_key(1)).unwrap().collateral), commitment, "S1: w + esc + rr");
+    assert_eq!(m.s.consumed_offence(&palw_da_offence_id_v1(&bond_key(1).0, &id)).is_some(), armed, "a DaDefault past the fence only");
+}
+
+/// **DA-8 / C8: the post-`Final` window is the record's life, deferred by open sessions and bounded
+/// by retention.** A `Final` claim with an unmatured row is accusable until its record retires; a
+/// session opened near the end defers retirement past `F + claim_retirement_daa`; an accusation
+/// whose disclose window would run past `trace_retention_daa` is refused (`DaOutsideRetention`) —
+/// the one bound that holds the chain of overlapping sessions (acceptance + 4,200 on the floor's
+/// retention).
+#[test]
+fn da8_the_post_final_window_is_the_records_life_bounded_by_retention() {
+    let mut c = Chain::new(t12());
+    c.step(&[bond_obj(1, 20_000 * MSK), bond_obj(2, 20_000 * MSK)]);
+    let (id, seats, bound) = bound_floor_claim(&mut c, 0x08);
+    c.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seats.iter().map(|(k, _)| valid(id, *k, bound)).collect() }]);
+    c.finalize(id);
+    let PalwClaimPhaseV2::Final { final_daa } = c.claim(&id).phase else { panic!("Final") };
+    let (producer, _, _) = floor_producer(&c.p);
+    // Retention pinned short (the junk attempt's is 999,999): the chain's own bound.
+    let retention = final_daa + c.sp.claim_retirement_daa() + 1_500;
+    c.s = edited(&c.sp, &c.s, |carriage| {
+        carriage.claims.get_mut(&id).unwrap().trace_retention_daa = retention;
+        carriage.vesting.insert(id, final_row(&c, id, producer, final_daa));
+    });
+    let retire = c.s.deadline_of(&id).expect("the retirement");
+    assert_eq!(retire, final_daa + c.sp.claim_retirement_daa());
+    // Fence off, a Final claim is never accusable (ADR-0062: terminal claims refuse).
+    {
+        let mut t = Chain::new(twin(&t12()));
+        t.step(&[bond_obj(1, 20_000 * MSK)]);
+        let (tid, tseats, tbound) = bound_floor_claim(&mut t, 0x08);
+        t.step(&[PalwConsensusObjectV2::ReceiptLicensed { claim: tid, receipts: tseats.iter().map(|(k, _)| valid(tid, *k, tbound)).collect() }]);
+        t.finalize(tid);
+        assert!(matches!(try_step(&t, &[accuse(tid, bond_key(1), 0)]), Err(PalwStateV2Error::WrongPhase { .. })), "fence off");
+    }
+    // Accused just before retirement: the session defers it.
+    c.step_at(retire - 1, &[accuse(id, bond_key(1), 0)], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert_eq!(c.s.deadline_of(&id), None, "retirement is deferred while the session is open");
+    // A second accuser past the retention bound is refused.
+    let late = retention - c.sp.window_challenge() + 1;
+    c.step_at(late - 1, &[], PalwBlockWorkV3::None, Hash64::default(), 0);
+    assert!(
+        matches!(try_step(&c, &[accuse(id, bond_key(2), 0)]), Err(PalwStateV2Error::DaOutsideRetention { .. })),
+        "past trace_retention_daa − W_disclose nothing opens"
+    );
+    run_out(&mut c, id, bond_key(1));
+}
+
+/// A `Final` claim's unmatured vesting row, as the vesting work writes it (the row writer is not in
+/// this line; the row is written through the carriage).
+fn final_row(c: &Chain, id: Hash64, producer: PalwBondKeyV2, final_daa: u64) -> kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
+    kaspa_consensus_core::palw_vesting_v1::PalwVestingRowV1 {
+        claim_id: id,
+        producer_bond: producer,
+        class_id: genesis_classes(&c.p)[0].0,
+        execution_root: Hash64::default(),
+        artifact_root: Hash64::default(),
+        job_identity: Hash64::default(),
+        free_prompt: false,
+        trace_root: Hash64::default(),
+        segment_count: 0,
+        licence_door: PalwLicenceDoorTagV1::Quorum,
+        basis_k: 3,
+        escrowed_reward: 0,
+        buyback_bound: 0,
+        producer: kaspa_consensus_core::palw_state_v2::PalwPayoutV2 { payload: h(0x08), amount: 0 },
+        seats: Vec::new(),
+        reserve: 0,
+        final_daa,
+        expiry_daa: final_daa + c.sp.window_court(),
+        settled_at_final: c.s.settled_attempt_finals(),
+        matured_at: None,
+    }
+}
