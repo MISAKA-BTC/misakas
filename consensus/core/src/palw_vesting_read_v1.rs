@@ -197,6 +197,15 @@ pub struct PalwVestingReadV1 {
     /// **B-3**: the bond is payee of a row still unmatured by V-4(a), so its collateral is locked
     /// ([`palw_bond_is_payee_of_unmatured_row_v1`]). `false` for other queries.
     pub payee_holds_collateral: bool,
+    /// **Of EVERY matched row, not just the page, the ones whose lock is live**
+    /// ([`PalwVestingRowReadV1::lock_live`]), and the latest DAA clock among them. For a bond these
+    /// are the rows B-3 holds its collateral for, so `payee_holds_collateral == (lock_live_rows > 0)`
+    /// (pinned by T51). Counted over the whole match because a page cannot say it: V-7 orders by
+    /// expiry, so the latched rows — which hold nobody — come first and the rows that hold a bond
+    /// (unlatched, latest expiries) come LAST; a seat payee of 500+ latched rows after a halt read
+    /// "held" beside "0 unmatured rows" off its first page (review of P2-10, finding 1).
+    pub lock_live_rows: usize,
+    pub lock_live_last_expiry_daa: Option<u64>,
     /// The page of rows, in V-7's order.
     pub rows: Vec<PalwVestingRowReadV1>,
     /// Every row the query matched, before the page.
@@ -296,9 +305,9 @@ impl<'s> PalwVestingReaderV1<'s> {
 
     /// Reads for `rows` (any order in; V-7's order is the caller's), with the legs `legs_of`
     /// selects, the positions of all of them from ONE walk.
-    pub fn read_rows<'r>(
+    pub fn read_rows(
         &self,
-        rows: &[&'r PalwVestingRowV1],
+        rows: &[&PalwVestingRowV1],
         legs_of: impl Fn(&PalwVestingRowV1) -> Vec<PalwVestingLegV1>,
     ) -> Vec<PalwVestingRowReadV1> {
         let wanted: BTreeSet<Hash64> = rows.iter().map(|row| row.claim_id).collect();
@@ -476,14 +485,22 @@ pub fn palw_vesting_read_v1(
             .filter(|row| row.producer.payload == *payload || row.seats.iter().any(|(_, payout)| payout.payload == *payload))
             .collect(),
     };
+    // One pass over the whole match for everything the page cannot carry: the sums, and B-3's
+    // row term (`lock_live` is cheap — two clock comparisons — so this stays one walk).
     let mut maturing_sompi = 0u128;
     let mut latched_sompi_of_query = 0u128;
+    let mut lock_live_rows = 0usize;
+    let mut lock_live_last_expiry_daa: Option<u64> = None;
     for row in &matched {
         let sompi: u128 = legs_of(row).iter().map(|leg| leg.amount as u128).sum();
         if row.matured_at.is_some() {
             latched_sompi_of_query += sompi;
         } else {
             maturing_sompi += sompi;
+        }
+        if reader.lock_live(row) {
+            lock_live_rows += 1;
+            lock_live_last_expiry_daa = lock_live_last_expiry_daa.max(Some(row.expiry_daa));
         }
     }
     let rows_total = matched.len();
@@ -571,6 +588,8 @@ pub fn palw_vesting_read_v1(
         claim_stage,
         bond_known,
         payee_holds_collateral,
+        lock_live_rows,
+        lock_live_last_expiry_daa,
         rows,
         rows_total,
         next_after,
@@ -919,6 +938,11 @@ mod tests {
                 );
                 let held_by_rows = read.rows.iter().any(|r| r.lock_live);
                 assert_eq!(read.payee_holds_collateral, held_by_rows, "bond {bond} at {daa} with raw depth {raw:?}");
+                // The whole-match count agrees with the page when the page is the whole match.
+                let live: Vec<&PalwVestingRowReadV1> = read.rows.iter().filter(|r| r.lock_live).collect();
+                assert_eq!(read.lock_live_rows, live.len(), "bond {bond} at {daa} with raw depth {raw:?}");
+                assert_eq!(read.lock_live_last_expiry_daa, live.iter().map(|r| r.row.expiry_daa).max());
+                assert_eq!(read.payee_holds_collateral, read.lock_live_rows > 0);
                 assert!(read.rows.iter().all(|r| !(r.lock_live && r.row.matured_at.is_some())), "a latched row never holds");
                 seen.insert(held_by_rows);
             }
@@ -930,6 +954,44 @@ mod tests {
                 .payee_holds_collateral
         };
         assert!(!bond3(None, 130) && bond3(Some(3), 130) && !bond3(Some(3), 1_200));
+    }
+
+    /// **B-3's rows are counted over the whole match, not the page** (review of P2-10, finding 1).
+    /// V-7 puts the latched rows first and the rows that hold a bond — unlatched, latest expiries —
+    /// last, so a seat payee of 550 latched rows and 50 unmatured ones has NONE of the 50 on its
+    /// first 500-row page. The read still says how many rows hold the bond and until when.
+    #[test]
+    fn t51_the_rows_that_hold_a_bond_are_counted_past_the_page() {
+        let mut rows: Vec<PalwVestingRowV1> = (0..550).map(|i| row(0x1_0000 + i, 3, &[2], 100 + i, Some(700))).collect();
+        rows.extend((0..50).map(|i| row(0x2_0000 + i, 3, &[2], 2_000 + i, None)));
+        let state = seeded(&rows);
+        let p = params();
+        let read =
+            palw_vesting_read_v1(&state, &p, 1_000, None, &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))), 0, None);
+        assert_eq!((read.rows_total, read.rows.len()), (600, PALW_VESTING_READ_ROW_CAP_V1));
+        assert!(read.payee_holds_collateral);
+        assert!(read.rows.iter().all(|r| !r.lock_live), "the page is all latched rows: it cannot say why the bond is held");
+        assert_eq!((read.lock_live_rows, read.lock_live_last_expiry_daa), (50, Some(2_049)));
+        // Paging on to the end finds exactly the rows the whole-match count named.
+        let mut on_pages = Vec::new();
+        let mut after = None;
+        loop {
+            let page = palw_vesting_read_v1(
+                &state,
+                &p,
+                1_000,
+                None,
+                &PalwVestingQueryV1::Payee(PalwVestingPayeeV1::Bond(bond_key(2))),
+                0,
+                after,
+            );
+            on_pages.extend(page.rows.iter().filter(|r| r.lock_live).map(|r| r.row.expiry_daa));
+            match page.next_after {
+                Some(cursor) => after = Some(cursor),
+                None => break,
+            }
+        }
+        assert_eq!((on_pages.len(), on_pages.iter().max().copied()), (read.lock_live_rows, read.lock_live_last_expiry_daa));
     }
 
     /// **The backlog is the latched rows' keys and the awarded reporter rewards'**, at V-7's full
@@ -991,7 +1053,7 @@ mod tests {
         };
         let p = params();
         let state = seeded_with(&rows, extra(), &p);
-        let read = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Executor, true, 0, 50, None);
+        let read = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Executor, true, 0, Some((50, None)));
         let ids: BTreeSet<Hash64> = read.rows.iter().map(|r| r.claim_id).collect();
         assert_eq!(ids, BTreeSet::from([h(0x60), h(0x61), h(0x62), h(0x63)]));
         let stage = |id| read.vesting.get(&h(id)).map(|v| v.stage);
@@ -1004,10 +1066,15 @@ mod tests {
         // The retired rows: the executor view lists what bond 2 produced, the seat view where it sat.
         assert_eq!(read.vesting_only.iter().map(|r| r.row.claim_id).collect::<Vec<_>>(), vec![h(0x64)]);
         assert!(read.vesting_only[0].row.matured_at.is_some() && !read.vesting_only_truncated);
-        let seat = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Seat, true, 0, 50, None);
+        let seat = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Seat, true, 0, Some((50, None)));
         assert_eq!(seat.vesting_only.iter().map(|r| r.row.claim_id).collect::<Vec<_>>(), vec![h(0x65)]);
-        let live_only = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Executor, false, 0, 50, None);
+        let live_only = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Executor, false, 0, Some((50, None)));
         assert!(live_only.vesting_only.is_empty() && live_only.vesting.is_empty(), "no terminal claims asked, none listed");
+        // **The node-policy entry reads the rows alone** (review of P2-10, finding 4): the same
+        // rows, bond and payouts, and no vesting half built for a caller that drops it.
+        let rows_alone = palw_bond_claims_v1(&state, &p, &bond_key(2), PalwClaimRoleV1::Executor, true, 0, None);
+        assert_eq!((&rows_alone.rows, rows_alone.truncated, &rows_alone.bond), (&read.rows, read.truncated, &read.bond));
+        assert!(rows_alone.vesting.is_empty() && rows_alone.vesting_only.is_empty() && !rows_alone.vesting_only_truncated);
         // `getPalwVesting` on the moved claim: no row, and the stage says where the reward went.
         let moved = palw_vesting_read_v1(&state, &p, 50, None, &PalwVestingQueryV1::Claim(h(0x61)), 0, None);
         assert_eq!((moved.rows.len(), moved.claim_stage), (0, Some(PalwClaimVestingStageV1::Moved)));
@@ -1019,7 +1086,7 @@ mod tests {
         // read says R-core+ is not in force and plans nothing.
         let off = params_from(None);
         let state = seeded_with(&[], extra(), &off);
-        let read = palw_bond_claims_v1(&state, &off, &bond_key(2), PalwClaimRoleV1::Executor, true, 0, 50, None);
+        let read = palw_bond_claims_v1(&state, &off, &bond_key(2), PalwClaimRoleV1::Executor, true, 0, Some((50, None)));
         assert!(read.vesting.is_empty() && read.vesting_only.is_empty());
         assert_eq!(read.rows.iter().find(|r| r.claim_id == h(0x61)).and_then(|r| r.payout_pending), Some(9));
         let chain = palw_vesting_read_v1(&state, &off, 50, None, &PalwVestingQueryV1::Claim(h(0x61)), 0, None);

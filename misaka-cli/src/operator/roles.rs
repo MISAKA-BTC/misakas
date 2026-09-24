@@ -7,8 +7,9 @@
 //!
 //! **ADR-0152 (testnet-12): `final` is not paid.** Past `palw_rcore_plus` a Final names its reward
 //! in a vesting row, and the reward is minted only once the row matures and moves — a conviction
-//! first burns it. So a Final whose row lives is `vesting`, one whose row moved is `minted`, and only
-//! a Final that never vested (below the fence) is `paid` (phase2-plan F10).
+//! first burns it. So a Final whose row lives is `vesting` (this bond's legs of it), one whose row
+//! moved is `moved` (counted, with its escrow as an upper bound — the row that named this bond's leg
+//! is gone), and only a Final that never vested (below the fence) is `paid` (phase2-plan F10).
 //!
 //! `verifier status` shows what this bond judges as a seat. It says plainly that seats are not
 //! paid: verifying is what turns the network's claims final, this operator's own included, and a
@@ -47,10 +48,13 @@ pub(crate) struct Rewards {
     /// once it matures and moves, burned if a conviction lands first. Not money yet.
     pub(crate) vesting_sompi: u64,
     pub(crate) vesting_claims: usize,
-    /// ADR-0152: escrow of vested Finals whose row moved — a coinbase minted it (spendable or
-    /// maturing in the wallet).
-    pub(crate) minted_sompi: u64,
-    pub(crate) minted_claims: usize,
+    /// ADR-0152: vested Finals whose row MOVED (minted by the block after the move), and their
+    /// escrow — an UPPER BOUND on what this bond was minted, not its leg: the row that named the
+    /// split left the table when it moved, and the escrow also holds the buyback slice executed at
+    /// Final, the seats' legs, the reserve and the remainder work pricing never named
+    /// (`finalize_claim`). Its unit is not [`Self::vesting_sompi`]'s (review of P2-10, finding 3).
+    pub(crate) moved_escrow_sompi: u64,
+    pub(crate) moved_claims: usize,
     /// Escrow of voided claims: destroyed, never paid.
     pub(crate) forfeited_sompi: u64,
     pub(crate) forfeited_claims: usize,
@@ -58,6 +62,30 @@ pub(crate) struct Rewards {
     pub(crate) quanta_spent: u64,
     pub(crate) prompt_final_claims: usize,
     pub(crate) prompt_pending_claims: usize,
+}
+
+/// **The vesting track's lines of `misaka rewards`** (ADR-0152), none where nothing vested:
+/// `vesting` in this bond's own legs of the rows that live, and `moved` counted with its escrow
+/// marked `≤` — the one figure left once a row moved, and an upper bound, never a mint (review of
+/// P2-10, finding 3). `(label, amount, claims, what)`.
+pub(crate) fn vesting_lines(r: &Rewards) -> Vec<(&'static str, String, usize, &'static str)> {
+    if r.vesting_claims == 0 && r.moved_claims == 0 {
+        return Vec::new();
+    }
+    vec![
+        (
+            "vesting",
+            msk(r.vesting_sompi),
+            r.vesting_claims,
+            "this bond's legs of Finals still vesting: minted only once each row matures (misaka palw vesting)",
+        ),
+        (
+            "moved",
+            format!("≤ {}", msk(r.moved_escrow_sompi)),
+            r.moved_claims,
+            "vested Finals whose row moved (minted by the block after): at most their escrow — this bond's leg left with the row",
+        ),
+    ]
 }
 
 /// Sum the works' reward track. Only rows the node served carry an escrow; a row read off the log
@@ -83,8 +111,8 @@ pub(crate) fn sum(works: &[crate::operator::snapshot::WorkRow]) -> (Rewards, usi
                     r.vesting_claims += 1;
                 }
                 (None, Some(_)) => {
-                    r.minted_sompi += extra.escrow_sompi;
-                    r.minted_claims += 1;
+                    r.moved_escrow_sompi += extra.escrow_sompi;
+                    r.moved_claims += 1;
                 }
                 (None, None) => {
                     r.paid_sompi += extra.escrow_sompi;
@@ -174,19 +202,8 @@ pub(crate) async fn rewards(ctx: &crate::node::Ctx, profile: Profile) -> CliResu
             r.forfeited_claims.to_string(),
             "escrow of voided claims — a Final convicted while it vested included: destroyed, not paid",
         );
-        if r.vesting_claims > 0 || r.minted_claims > 0 {
-            line(
-                "vesting",
-                msk(r.vesting_sompi),
-                r.vesting_claims.to_string(),
-                "this bond's share of Finals still vesting: minted only once each row matures (misaka palw vesting)",
-            );
-            line(
-                "minted",
-                msk(r.minted_sompi),
-                r.minted_claims.to_string(),
-                "escrow of vested Finals a coinbase minted (in the wallet above)",
-            );
+        for (label, amount, claims, what) in vesting_lines(&r) {
+            line(label, amount, claims.to_string(), what);
         }
         line("paid", msk(r.paid_sompi), r.paid_claims.to_string(), "escrow of final claims that left the queue (in the wallet above)");
         if let Some(v) = snap.wallet.as_ref().and_then(|w| w.as_ref().ok()).and_then(|w| w.vesting.as_ref()) {
@@ -390,7 +407,8 @@ mod tests {
     }
 
     /// **T52: a Final whose row lives is `vesting`, not `paid`** (ADR-0152, phase2-plan F10) — its
-    /// amount is the bond's own legs, not the escrow; a moved row is `minted`; a queued move is
+    /// amount is the bond's own legs, not the escrow; a moved row is `moved`, its escrow printed as
+    /// the upper bound it is (never as a mint: review of P2-10, finding 3); a queued move is
     /// `queued`; and only a Final that never vested is `paid`.
     #[test]
     fn t52_a_final_with_a_live_row_is_vesting_not_paid() {
@@ -416,8 +434,19 @@ mod tests {
         ];
         let (r, _) = sum(&works);
         assert_eq!((r.vesting_sompi, r.vesting_claims), (700, 2), "the bond's legs, not the escrow");
-        assert_eq!((r.minted_sompi, r.minted_claims), (1_000, 1));
+        assert_eq!((r.moved_escrow_sompi, r.moved_claims), (1_000, 1));
         assert_eq!((r.queued_sompi, r.queued_claims), (250, 1));
         assert_eq!((r.paid_sompi, r.paid_claims), (1_000, 1), "only the Final that never vested is paid");
+        // The two vesting lines keep their units apart: the live rows in this bond's legs, the moved
+        // ones as an escrow bound — the 1,000-sompi claim whose legs read 400 while it vested must
+        // not read as 1,000 minted once it moves.
+        let lines = vesting_lines(&r);
+        let (label, amount, claims, what) = &lines[0];
+        assert_eq!((*label, amount.as_str(), *claims), ("vesting", msk(700).as_str(), 2));
+        assert!(what.contains("legs"), "{what}");
+        let (label, amount, claims, what) = &lines[1];
+        assert_eq!((*label, amount.as_str(), *claims), ("moved", format!("≤ {}", msk(1_000)).as_str(), 1));
+        assert!(what.contains("at most their escrow") && !what.contains("coinbase minted"), "{what}");
+        assert!(vesting_lines(&Rewards::default()).is_empty(), "nothing vested, no vesting lines");
     }
 }

@@ -2750,5 +2750,7 @@ message GetPalwVestingResponseMessage {
   uint64 backlogKeys = 37;
   uint64 backlogBlocksEst = 38;
   string claimStage = 39;
+  uint64 lockLiveRows = 40;
+  optional uint64 lockLiveLastExpiryDaa = 41;
   RPCError error = 1000;
 }

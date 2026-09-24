@@ -2506,6 +2506,8 @@ mod mockery {
                 claim_stage: "moved".into(),
                 bond_known: mock(),
                 payee_holds_collateral: mock(),
+                lock_live_rows: mock(),
+                lock_live_last_expiry_daa: mock(),
                 rows: mock(),
                 rows_total: mock(),
                 next_after: format!("{}:{}", mock::<u64>(), mock_hex()),

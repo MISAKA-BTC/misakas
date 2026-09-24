@@ -147,8 +147,7 @@ pub(crate) struct UtxoVesting {
     /// `getPalwVesting` for the address's payload.
     pub(crate) by_address: kaspa_rpc_core::GetPalwVestingResponse,
     /// The address's bonded outputs B-3 holds: `(outpoint, the unmatured rows the bond is payee of
-    /// on the page read — the node's `lockLive`, B-3's own row term — and the latest DAA clock
-    /// among them)`.
+    /// — every one the node matched, not a page of them — and the latest DAA clock among them)`.
     pub(crate) held: Vec<(TransactionOutpoint, u64, Option<u64>)>,
 }
 
@@ -216,15 +215,17 @@ impl UtxoVesting {
     }
 }
 
-/// One [`UtxoVesting::held`] entry from the bond's `getPalwVesting` answer: the rows whose lock the
-/// node calls live (`lockLive`, the per-row term of the B-3 walk that set `payeeHoldsCollateral`),
-/// and the latest DAA clock among them.
+/// One [`UtxoVesting::held`] entry from the bond's `getPalwVesting` answer: the node's count of
+/// the rows whose lock is live (`lockLiveRows`, the per-row term of the B-3 walk that set
+/// `payeeHoldsCollateral`) and the latest DAA clock among them — over EVERY row it matched. Never
+/// counted off `rows`: that is one page in V-7's order, where the latched rows (which hold nobody)
+/// come first and the rows that hold the bond come last, so a busy seat's first page can say
+/// "held, by 0 rows" (review of P2-10, finding 1).
 fn b3_held_entry(
     outpoint: TransactionOutpoint,
     by_bond: &kaspa_rpc_core::GetPalwVestingResponse,
 ) -> (TransactionOutpoint, u64, Option<u64>) {
-    let unmatured: Vec<&kaspa_rpc_core::RpcPalwVestingRow> = by_bond.rows.iter().filter(|row| row.lock_live).collect();
-    (outpoint, unmatured.len() as u64, unmatured.iter().map(|row| row.expiry_daa).max())
+    (outpoint, by_bond.lock_live_rows, by_bond.lock_live_last_expiry_daa)
 }
 
 /// [`UtxoVesting`] for `address`, or `None` when the node cannot answer op 199 (a node older than
@@ -242,10 +243,12 @@ async fn utxo_vesting(nv: &NodeView, address: &Address, utxos: &[Funding]) -> Op
         .filter(|r| r.available && r.rcore_plus_active)?;
     let mut held = Vec::new();
     for u in utxos.iter().filter(|u| u.bonded).take(VESTING_BONDS_ASKED) {
+        // One row: the hold and its count are whole-match totals, so the page is not read.
         let Ok(by_bond) = nv
             .client
             .get_palw_vesting(kaspa_rpc_core::GetPalwVestingRequest {
                 bond: format!("{}:{}", u.outpoint.transaction_id, u.outpoint.index),
+                limit: 1,
                 ..Default::default()
             })
             .await
@@ -1148,19 +1151,21 @@ mod locked_outpoint_tests {
         assert_eq!(v.held_mark(&op(0x6d69, 8)), None, "only the held bond is marked");
         let none = UtxoVesting { by_address: GetPalwVestingResponse::default(), held: Vec::new() };
         assert!(none.lines(600).is_empty(), "nothing vesting prints nothing");
-        // The held entry counts the rows the node calls unmatured (`lockLive`, B-3's own row term):
-        // a latched row, or one past both its clocks, does not hold the bond.
+        // The held entry is the node's whole-match count of the rows whose lock is live (B-3's own
+        // row term), never the page's: here the page is the head of V-7's order — latched rows
+        // that hold nobody — while 50 rows further on hold the bond (review of P2-10, finding 1).
         let by_bond = GetPalwVestingResponse {
             payee_holds_collateral: true,
+            rows_total: 600,
+            lock_live_rows: 50,
+            lock_live_last_expiry_daa: Some(2_049),
             rows: vec![
-                RpcPalwVestingRow { lock_live: true, expiry_daa: 12_000, ..Default::default() },
-                RpcPalwVestingRow { lock_live: true, expiry_daa: 11_000, ..Default::default() },
-                RpcPalwVestingRow { lock_live: false, expiry_daa: 13_000, matured_at: Some(13_000), ..Default::default() },
-                RpcPalwVestingRow { lock_live: false, expiry_daa: 14_000, ..Default::default() },
+                RpcPalwVestingRow { lock_live: false, expiry_daa: 100, matured_at: Some(700), ..Default::default() },
+                RpcPalwVestingRow { lock_live: false, expiry_daa: 101, matured_at: Some(700), ..Default::default() },
             ],
             ..Default::default()
         };
-        assert_eq!(b3_held_entry(bond.outpoint, &by_bond), (bond.outpoint, 2, Some(12_000)));
+        assert_eq!(b3_held_entry(bond.outpoint, &by_bond), (bond.outpoint, 50, Some(2_049)));
     }
 
     /// A reservation is marked as one and held back from a spender that moves value away.

@@ -20,14 +20,16 @@ use crate::operator::status::group;
 use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_rpc_core::api::rpc::RpcApi;
 use kaspa_rpc_core::{GetPalwVestingRequest, GetPalwVestingResponse, RpcPalwVestingRow};
+use kaspa_wrpc_client::error::rpc_error_is_connection_loss;
 
 /// What the probe of op 199 says when it fails: a node that DROPPED the connection predates the op
-/// (it closes the WebSocket on an unknown one); a node still connected refused the request for its
-/// own reason, which is printed as it came.
-pub(crate) fn vesting_read_error(e: impl std::fmt::Display, still_connected: bool) -> CliError {
-    if still_connected {
-        CliError::new(exit::GENERIC, format!("getPalwVesting: {e}"))
-    } else {
+/// (it closes the WebSocket on an unknown one); any other error is the node refusing the request
+/// for its own reason, printed as it came. Told apart by the error itself
+/// ([`rpc_error_is_connection_loss`]), never by `is_connected()` afterwards: the client reconnects
+/// on its own and fails the pending call from another task, so that flag can read `true` for a
+/// node that just hung up (review of P2-10, finding 2).
+pub(crate) fn vesting_read_error(e: &kaspa_rpc_core::RpcError) -> CliError {
+    if rpc_error_is_connection_loss(e) {
         CliError::new(
             exit::COMPONENT_DOWN,
             format!(
@@ -35,6 +37,8 @@ pub(crate) fn vesting_read_error(e: impl std::fmt::Display, still_connected: boo
                  rebuild it from this tree (its rewards still vest: only the read is missing)"
             ),
         )
+    } else {
+        CliError::new(exit::GENERIC, format!("getPalwVesting: {e}"))
     }
 }
 
@@ -77,8 +81,22 @@ pub(crate) fn row_status(row: &RpcPalwVestingRow, now: u64, halted: bool, ms_per
     if !row.daa_clock_met {
         held.push(format!("the DAA clock to {}", when(row.expiry_daa)));
     }
-    if let Some(needed) = row.licences_needed.filter(|needed| row.licences_since_final < *needed) {
-        let bound = row.second_clock_bound_daa.map(|b| format!(", released by DAA {} at the latest", group(b))).unwrap_or_default();
+    // The licences hold only while the node's own V-4(a) term says the lock is live (`lockLive`):
+    // past the per-obligation bound, or once the liveness escape lifted the depth, a count short of
+    // it holds nothing. And during a halt the bound is not "the latest": the halt holds past it.
+    if row.lock_live
+        && let Some(needed) = row.licences_needed.filter(|needed| row.licences_since_final < *needed)
+    {
+        let bound = row
+            .second_clock_bound_daa
+            .map(|b| {
+                if halted {
+                    format!(", bounded at DAA {} (the halt holds it past that)", group(b))
+                } else {
+                    format!(", released by DAA {} at the latest", group(b))
+                }
+            })
+            .unwrap_or_default();
         held.push(format!("{} more licence(s) of {needed}{bound}", needed - row.licences_since_final));
     }
     if row.da_session_open {
@@ -188,10 +206,15 @@ pub(crate) fn render(r: &GetPalwVestingResponse, spend_after: u64) -> String {
             out.push_str("            the registry holds no bond at this outpoint\n");
         }
         if r.payee_holds_collateral {
-            out.push_str(
+            // The node's whole-match count: the rows that hold a bond sit at the END of V-7's
+            // order, off a first page of latched rows (review of P2-10, finding 1).
+            let last = r.lock_live_last_expiry_daa.map(|d| format!(", the last DAA clock among them runs to DAA {}", group(d)));
+            out.push_str(&format!(
                 "            B-3: this bond's collateral is LOCKED while it is payee of a row the conviction window still holds \
-                 (its outpoint cannot be spent until the last such row matures)\n",
-            );
+                 — {} such row(s){} (its outpoint cannot be spent until the last of them matures)\n",
+                r.lock_live_rows,
+                last.unwrap_or_default()
+            ));
         }
     }
     if !r.rows.is_empty() {
@@ -248,9 +271,8 @@ pub(crate) async fn run(
     };
     let reader = crate::palw_derived::connect(ctx).await?;
     let answer = reader.client.get_palw_vesting(request).await;
-    let connected = reader.client.is_connected();
     let _ = reader.client.disconnect().await;
-    let response = answer.map_err(|e| vesting_read_error(e, connected))?;
+    let response = answer.map_err(|e| vesting_read_error(&e))?;
     let params = kaspa_consensus_core::config::params::Params::from(
         <kaspa_consensus_core::network::NetworkId as std::str::FromStr>::from_str(&ctx.network)
             .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{}': {e}", ctx.network)))?,
@@ -283,6 +305,7 @@ mod tests {
             eta_estimated: true,
             total_sompi: 1_000_000_000,
             legs_sompi: 500_000_000,
+            lock_live: true,
             ..Default::default()
         }
     }
@@ -311,6 +334,19 @@ mod tests {
             None,
         );
         assert!(latched.contains("latched at DAA 9,050; waits its turn, 4 move(s) ahead"), "{latched}");
+        // A count short of the depth holds nothing once the node says the lock is spent (the
+        // escape lifted it, or its bound passed): the row is mature, not "12 more licences".
+        let escaped = row_status(
+            &RpcPalwVestingRow { daa_clock_met: true, lock_live: false, mature_now: true, eta_daa: 9_101, ..row("maturing") },
+            9_100,
+            false,
+            None,
+        );
+        assert!(escaped.starts_with("mature; latches in the next block") && !escaped.contains("licence"), "{escaped}");
+        // During a halt the second clock's bound is not "the latest".
+        let halted_bound = row_status(&RpcPalwVestingRow { daa_clock_met: true, ..row("maturing") }, 9_100, true, None);
+        assert!(halted_bound.contains("bounded at DAA 15,000 (the halt holds it past that)"), "{halted_bound}");
+        assert!(!halted_bound.contains("at the latest"), "{halted_bound}");
     }
 
     /// The answer says what B-3 does to the bond, what the chain holds and burned, each reporter
@@ -351,6 +387,8 @@ mod tests {
         let backlog = render(&GetPalwVestingResponse { backlog_keys: 21, backlog_blocks_est: 3, ..r.clone() }, 600);
         assert!(backlog.contains("latched backlog: 21 payout key(s), ≈ 3 block(s)"), "{backlog}");
         assert!(text.contains("B-3: this bond's collateral is LOCKED"), "{text}");
+        let held = render(&GetPalwVestingResponse { lock_live_rows: 50, lock_live_last_expiry_daa: Some(12_049), ..r.clone() }, 600);
+        assert!(held.contains("— 50 such row(s), the last DAA clock among them runs to DAA 12,049"), "{held}");
         assert!(
             text.contains("5.00 MSK  vesting: held") && !text.contains("10.00 MSK  vesting"),
             "a payee read prints the payee's legs (5 MSK), not the row (10): {text}"
@@ -376,15 +414,30 @@ mod tests {
         assert!(none.contains("no vesting row: the claim did not vest"), "{none}");
     }
 
-    /// **T51/T52: an old node drops the unknown op and the probe says so** — a dropped connection is
-    /// the node's age (COMPONENT_DOWN, rebuild), a refusal on a live one is the node's own reason.
+    /// **T51/T52: an old node drops the unknown op and the probe says so** — classified by the
+    /// error the call returned, whatever the client's connection flag reads by then: a dropped
+    /// connection is the node's age (COMPONENT_DOWN, rebuild), anything else the node's own reason.
+    /// The errors are the wRPC client's own renderings, flattened as its `RpcApi` methods flatten
+    /// them (`RpcSubsystem`), the pending call's `Disconnect` and a call after the drop alike.
     #[test]
     fn t51_a_dropped_connection_reads_as_a_node_older_than_op_199() {
-        let old = vesting_read_error("WebSocket closed", false);
-        assert_eq!(old.code, exit::COMPONENT_DOWN);
-        assert!(old.msg.contains("predates ADR-0152's vesting read"));
-        let refused = vesting_read_error("name at most one of bond, payoutAddress and claimId", true);
-        assert_eq!(refused.code, exit::GENERIC);
-        assert!(!refused.msg.contains("predates"));
+        use kaspa_rpc_core::RpcError;
+        use kaspa_wrpc_client::client::WebSocketError;
+        for lost in [
+            RpcError::RpcSubsystem("WebSocket disconnected".into()),
+            RpcError::RpcSubsystem(format!("WebSocket -> {}", WebSocketError::NotConnected)),
+        ] {
+            let old = vesting_read_error(&lost);
+            assert_eq!(old.code, exit::COMPONENT_DOWN, "{lost}");
+            assert!(old.msg.contains("predates ADR-0152's vesting read"));
+        }
+        for refused in [
+            RpcError::General("name at most one of bond, payoutAddress and claimId".into()),
+            RpcError::RpcSubsystem("RPC request timeout".into()),
+        ] {
+            let refused = vesting_read_error(&refused);
+            assert_eq!(refused.code, exit::GENERIC);
+            assert!(!refused.msg.contains("predates"));
+        }
     }
 }

@@ -250,12 +250,15 @@ pub(crate) async fn connect_to(network: &str, rpc: Option<&str>, timeout: Durati
     let server = client.get_server_info().await.map_err(|e| (url.clone(), format!("getServerInfo: {e}")))?;
     let (node_status, ops_0122) = match client.get_palw_node_status().await {
         Ok(status) => (Some(status), true),
-        // Still connected: the node knows the op and refused this call for its own reason.
-        Err(_) if client.is_connected() => (None, true),
-        Err(_) => {
+        // The node closed the socket on the op: it predates it. Told by the error, not by
+        // `is_connected()` afterwards, which the client's own reconnect can have set again
+        // (`rpc_error_is_connection_loss`; review of ADR-0152 P2-10, finding 2).
+        Err(e) if kaspa_wrpc_client::error::rpc_error_is_connection_loss(&e) => {
             client = open().await?;
             (None, false)
         }
+        // Anything else: the node knows the op and refused this call for its own reason.
+        Err(_) => (None, true),
     };
     let peers = client.get_connected_peer_info().await.ok().map(|r| r.peer_info);
     let nv = NodeView::from_parts(client, &server);

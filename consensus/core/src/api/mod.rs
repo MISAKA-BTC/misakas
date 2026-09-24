@@ -835,8 +835,24 @@ pub trait ConsensusApi: Send + Sync {
     /// **A bond's claims, as its operator reads them** (ADR-0122 §6.5, `getPalwClaims`): the ones
     /// it made (`Executor`) or the ones whose panels seat it (`Seat`), newest first, with the tip
     /// DAA they were read at, whether `limit` left rows out, and the bond's own registry record.
-    /// `None` off `ConsensusV2`.
+    /// `None` off `ConsensusV2`. **The rows alone** — the vesting half is empty; this is the entry
+    /// node policy reads (the panel loop's per-bond phase/deadline reads).
     fn palw_claim_rows_v1(
+        &self,
+        _bond: crate::palw_state_v2::PalwBondKeyV2,
+        _role: crate::palw_producer_v2::PalwClaimRoleV1,
+        _include_terminal: bool,
+        _limit: usize,
+    ) -> Option<crate::palw_producer_v2::PalwBondClaimsV1> {
+        None
+    }
+
+    /// [`Self::palw_claim_rows_v1`] with **claim row v3's vesting half** (ADR-0152, phase2-plan
+    /// §1.6): each vested Final's stage and row read at the next block, and the rows of the claims
+    /// that retired while they vest. The RPC's entry; it costs a next-block plan and a walk of the
+    /// vesting table's positions, which only a reader that prints them should pay (review of P2-10,
+    /// finding 4).
+    fn palw_claim_rows_with_vesting_v1(
         &self,
         _bond: crate::palw_state_v2::PalwBondKeyV2,
         _role: crate::palw_producer_v2::PalwClaimRoleV1,

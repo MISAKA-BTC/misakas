@@ -1516,7 +1516,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         };
         let include_terminal = request.include_terminal;
         let session = self.consensus_manager.consensus().unguarded_session();
-        let read = session.spawn_blocking(move |c| c.palw_claim_rows_v1(bond, role, include_terminal, limit)).await;
+        let read = session.spawn_blocking(move |c| c.palw_claim_rows_with_vesting_v1(bond, role, include_terminal, limit)).await;
         let role_name = match role {
             kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor => "executor",
             kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Seat => "seat",
@@ -2832,6 +2832,8 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             claim_stage: read.claim_stage.map(|stage| stage.name().to_string()).unwrap_or_default(),
             bond_known: read.bond_known,
             payee_holds_collateral: read.payee_holds_collateral,
+            lock_live_rows: read.lock_live_rows as u64,
+            lock_live_last_expiry_daa: read.lock_live_last_expiry_daa,
             rows: read.rows.iter().map(rpc_palw_vesting_row).collect(),
             rows_total: read.rows_total as u64,
             next_after: read.next_after.map(|(expiry, claim)| format!("{expiry}:{claim}")).unwrap_or_default(),
@@ -4519,9 +4521,22 @@ fn palw_payout_payload_of_address(address: &str, prefix: kaspa_addresses::Prefix
 /// sink and the newest chain-block sample at least [`PALW_PACE_MIN_SPAN_DAA`] below it. `None`
 /// while the chain is younger than that. A measurement, never a consensus input.
 async fn palw_measured_ms_per_daa(session: &kaspa_consensusmanager::ConsensusSessionOwned) -> Option<u64> {
-    const PALW_PACE_MIN_SPAN_DAA: u64 = 1_000;
     let sink = session.async_get_header(session.async_get_sink().await).await.ok()?;
     let samples = session.async_get_chain_block_samples().await;
+    palw_ms_per_daa_since(
+        kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp { daa_score: sink.daa_score, timestamp: sink.timestamp },
+        &samples,
+    )
+}
+
+/// [`palw_measured_ms_per_daa`]'s arithmetic, pure: `samples` ascending by DAA (as
+/// `get_chain_block_samples` returns them), the base is the newest one at least
+/// `PALW_PACE_MIN_SPAN_DAA` below `sink`.
+fn palw_ms_per_daa_since(
+    sink: kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp,
+    samples: &[kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp],
+) -> Option<u64> {
+    const PALW_PACE_MIN_SPAN_DAA: u64 = 1_000;
     let base = samples.iter().rev().find(|sample| sample.daa_score.saturating_add(PALW_PACE_MIN_SPAN_DAA) <= sink.daa_score)?;
     let span = sink.daa_score - base.daa_score;
     Some(sink.timestamp.saturating_sub(base.timestamp) / span.max(1))
@@ -4969,5 +4984,164 @@ mod palw_model_market_tests {
 
         let missing = answer(None);
         assert!(!missing.found && !missing.opened);
+    }
+}
+
+/// **The op 199 service layer, pinned field by field** (review of ADR-0152 P2-10, finding 5): the
+/// address→payload parse and its refusals, the pace arithmetic, and the two wire mappings — each
+/// on inputs whose values are all distinct, so a swapped pair of fields reads wrong.
+#[cfg(test)]
+mod palw_vesting_wire_tests {
+    use super::*;
+    use kaspa_consensus_core::daa_score_timestamp::DaaScoreTimestamp;
+    use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+    use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwPayoutV2};
+    use kaspa_consensus_core::palw_vesting_read_v1::{
+        PalwClaimVestingStageV1, PalwClaimVestingV1, PalwVestingEtaV1, PalwVestingPayeeV1, PalwVestingRowReadV1,
+        palw_vesting_legs_paying_v1,
+    };
+    use kaspa_consensus_core::palw_vesting_v1::{PalwVestingMaturityV1, PalwVestingRowV1};
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+
+    fn h(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+
+    fn bond(n: u64) -> PalwBondKeyV2 {
+        PalwBondKeyV2(TransactionOutpoint::new(TransactionId::from_u64_word(0xB000 + n), n as u32))
+    }
+
+    /// A row paying producer bond 2 (500), seats 3 (101) and 4 (103) and a reserve of 290, every
+    /// number distinct, read with the seat-3 legs.
+    fn read() -> PalwVestingRowReadV1 {
+        let row = PalwVestingRowV1 {
+            claim_id: h(0xC1),
+            producer_bond: bond(2),
+            class_id: h(0xC2),
+            execution_root: h(0xE0),
+            artifact_root: h(0xA0),
+            job_identity: Hash64::default(),
+            free_prompt: false,
+            trace_root: Hash64::default(),
+            segment_count: 0,
+            licence_door: PalwLicenceDoorTagV1::Coverage,
+            basis_k: 3,
+            escrowed_reward: 1_001,
+            buyback_bound: 7,
+            producer: PalwPayoutV2 { payload: h(0x9A02), amount: 500 },
+            seats: vec![
+                (bond(3), PalwPayoutV2 { payload: h(0x9A03), amount: 101 }),
+                (bond(4), PalwPayoutV2 { payload: h(0x9A04), amount: 103 }),
+            ],
+            reserve: 290,
+            final_daa: 11,
+            expiry_daa: 13,
+            settled_at_final: 17,
+            matured_at: Some(43),
+        };
+        let legs = palw_vesting_legs_paying_v1(&row, &PalwVestingPayeeV1::Bond(bond(3)));
+        PalwVestingRowReadV1 {
+            maturity: PalwVestingMaturityV1 {
+                matured_at: Some(43),
+                daa_clock_met: true,
+                licences_since_final: 19,
+                licences_needed: Some(23),
+                second_clock_bound_daa: Some(29),
+                halted: false,
+                da_session_open: false,
+                mature_now: false,
+            },
+            row,
+            lock_live: true,
+            legs,
+            position: Some((31, 37)),
+            in_next_block: false,
+            eta: PalwVestingEtaV1 { daa: 41, estimated: true },
+        }
+    }
+
+    /// Every number lands in its own field, and each bool flips its own field and no other.
+    #[test]
+    fn a_vesting_row_maps_field_by_field() {
+        let w = rpc_palw_vesting_row(&read());
+        assert_eq!((&w.claim_id, &w.class_id), (&h(0xC1).to_string(), &h(0xC2).to_string()));
+        assert_eq!(w.producer_bond, format!("{}:2", TransactionId::from_u64_word(0xB002)));
+        assert_eq!((w.licence_door.as_str(), w.basis_k, w.stage.as_str()), ("coverage", 3, "latched"));
+        assert_eq!((w.escrow_sompi, w.buyback_bound_sompi, w.total_sompi, w.reserve_sompi), (1_001, 7, 500 + 101 + 103 + 290, 290));
+        assert_eq!((w.final_daa, w.expiry_daa, w.settled_at_final, w.matured_at), (11, 13, 17, Some(43)));
+        assert_eq!((w.licences_since_final, w.licences_needed, w.second_clock_bound_daa), (19, Some(23), Some(29)));
+        assert_eq!((w.moves_ahead, w.keys_ahead, w.eta_daa), (Some(31), Some(37), 41));
+        assert_eq!((w.legs.len(), w.legs[0].kind.as_str(), w.legs[0].sompi, w.legs_sompi), (1, "seat", 101, 101));
+        assert_eq!(w.legs[0].payee_bond, format!("{}:3", TransactionId::from_u64_word(0xB003)));
+
+        let bools =
+            |w: &RpcPalwVestingRow| [w.lock_live, w.mature_now, w.daa_clock_met, w.da_session_open, w.in_next_block, w.eta_estimated];
+        let base = bools(&w);
+        let flips: [fn(&mut PalwVestingRowReadV1); 6] = [
+            |r| r.lock_live = !r.lock_live,
+            |r| r.maturity.mature_now = !r.maturity.mature_now,
+            |r| r.maturity.daa_clock_met = !r.maturity.daa_clock_met,
+            |r| r.maturity.da_session_open = !r.maturity.da_session_open,
+            |r| r.in_next_block = !r.in_next_block,
+            |r| r.eta.estimated = !r.eta.estimated,
+        ];
+        for (i, flip) in flips.iter().enumerate() {
+            let mut r = read();
+            flip(&mut r);
+            let mut want = base;
+            want[i] = !want[i];
+            assert_eq!(bools(&rpc_palw_vesting_row(&r)), want, "flipping input {i} flips wire field {i} alone");
+        }
+    }
+
+    /// Claim row v3's half: the stage, the whole row, the legs that pay the ASKING bond, the clocks
+    /// and the ETA; a moved claim carries its stage alone; a claim that did not vest carries nothing.
+    #[test]
+    fn claim_row_v3_vesting_fields_map_field_by_field() {
+        let vesting = PalwClaimVestingV1 { stage: PalwClaimVestingStageV1::Latched, read: Some(read()) };
+        let seat = palw_claim_row_vesting_fields(Some(&vesting), &bond(3));
+        assert_eq!((seat.vesting_stage.as_str(), seat.vesting_sompi, seat.vesting_payee_sompi), ("latched", 994, 101));
+        assert_eq!(
+            (seat.vesting_expiry_daa, seat.vesting_licences_since_final, seat.vesting_licences_needed),
+            (Some(13), 19, Some(23))
+        );
+        assert_eq!((seat.vesting_matured_at, seat.vesting_eta_daa, seat.vesting_eta_estimated), (Some(43), Some(41), true));
+        assert_eq!(palw_claim_row_vesting_fields(Some(&vesting), &bond(2)).vesting_payee_sompi, 500, "the producer's leg");
+        assert_eq!(palw_claim_row_vesting_fields(Some(&vesting), &bond(4)).vesting_payee_sompi, 103);
+        assert_eq!(palw_claim_row_vesting_fields(Some(&vesting), &bond(9)).vesting_payee_sompi, 0, "a bond the row does not pay");
+
+        let moved = PalwClaimVestingV1 { stage: PalwClaimVestingStageV1::Moved, read: None };
+        let moved = palw_claim_row_vesting_fields(Some(&moved), &bond(2));
+        assert_eq!(moved, RpcPalwClaimRow { vesting_stage: "moved".to_string(), ..Default::default() });
+        assert_eq!(palw_claim_row_vesting_fields(None, &bond(2)), RpcPalwClaimRow::default());
+    }
+
+    /// `payoutAddress` names a payload only as an ML-DSA-87 P2PKH address of this network.
+    #[test]
+    fn a_payout_address_is_a_payload_of_this_network_and_that_version() {
+        use kaspa_addresses::{Address, Prefix, Version};
+        let payload = [0x5Au8; 64];
+        let good = Address::new(Prefix::Testnet, Version::PubKeyHashMlDsa87, &payload).to_string();
+        assert_eq!(palw_payout_payload_of_address(&good, Prefix::Testnet).unwrap(), Hash64::from_bytes(payload));
+        let foreign = palw_payout_payload_of_address(&good, Prefix::Mainnet).unwrap_err().to_string();
+        assert!(foreign.contains("is not of this network"), "{foreign}");
+        let schnorr = Address::new(Prefix::Testnet, Version::PubKey, &[0x5Au8; 32]).to_string();
+        let schnorr = palw_payout_payload_of_address(&schnorr, Prefix::Testnet).unwrap_err().to_string();
+        assert!(schnorr.contains("not an ML-DSA-87 P2PKH address"), "{schnorr}");
+        let junk = palw_payout_payload_of_address("misakatest:nonsense", Prefix::Testnet).unwrap_err().to_string();
+        assert!(junk.contains("is not an address"), "{junk}");
+    }
+
+    /// The pace: over the newest sample at least 1,000 DAA below the sink; none while the chain is
+    /// younger than that.
+    #[test]
+    fn the_pace_is_measured_over_the_newest_long_enough_span() {
+        let at = |daa_score, timestamp| DaaScoreTimestamp { daa_score, timestamp };
+        let samples = [at(0, 0), at(1_000, 100_000), at(5_000, 500_000)];
+        assert_eq!(palw_ms_per_daa_since(at(5_500, 550_000), &samples), Some(100), "(550,000 − 100,000) ms over 4,500 DAA");
+        assert_eq!(palw_ms_per_daa_since(at(6_000, 1_100_000), &samples), Some(600), "the 5,000 sample is now 1,000 below");
+        assert_eq!(palw_ms_per_daa_since(at(999, 99_900), &samples), None, "no span of 1,000 DAA yet");
+        assert_eq!(palw_ms_per_daa_since(at(5_500, 550_000), &[]), None);
     }
 }

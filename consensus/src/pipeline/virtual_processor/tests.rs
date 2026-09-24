@@ -13383,7 +13383,15 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     let _ = vp.palw_v2_receipt_quorum_assemble_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1), &[]);
     // ADR-0152 P2-10: claim row v3 and `getPalwVesting` (op 199) — every query shape, each a read
     // of the one cached tip.
-    let _ = vp.palw_claim_rows_v1_impl(bond_key, kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor, true, 0);
+    for with_vesting in [false, true] {
+        let _ = vp.palw_claim_rows_v1_impl(
+            bond_key,
+            kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1::Executor,
+            true,
+            0,
+            with_vesting,
+        );
+    }
     {
         use kaspa_consensus_core::palw_vesting_read_v1::{PalwVestingPayeeV1, PalwVestingQueryV1};
         for query in [

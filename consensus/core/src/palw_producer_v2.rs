@@ -1458,7 +1458,8 @@ pub struct PalwBondClaimsV1 {
     pub bond: Option<PalwBondSummaryV1>,
     /// **Claim row v3 (ADR-0152 R-core+, phase2-plan §1.6): where each row's vested reward stands**,
     /// by claim id — only the rows that vested (past `palw_rcore_plus` at their Final). Kept beside
-    /// the rows rather than in [`PalwClaimRowV1`], whose readers build it by hand.
+    /// the rows rather than in [`PalwClaimRowV1`], whose readers build it by hand. Empty from the
+    /// node-policy entry ([`palw_bond_claims_v1`] with no `vesting_at`).
     pub vesting: std::collections::BTreeMap<Hash64, crate::palw_vesting_read_v1::PalwClaimVestingV1>,
     /// The rows of claims that RETIRED while their reward still vests (`include_terminal` only):
     /// retirement comes `claim_retirement` after Final, the row lives until it moves, and from
@@ -1468,11 +1469,16 @@ pub struct PalwBondClaimsV1 {
 }
 
 /// **`getPalwClaims`' whole answer at one tip** (ADR-0122 §6.5, claim row v3): the rows
-/// ([`palw_claim_rows_v1`]), the bond, and the vesting half read at the next block — `next_daa` is
-/// the DAA the next block folds at and `raw_depth` the raw second-clock depth there, the facts its
-/// step 3d reads (`palw_vesting_read_v1`'s I-8 inputs). Below `palw_rcore_plus` no row exists and
-/// the vesting half is empty.
-#[allow(clippy::too_many_arguments)]
+/// ([`palw_claim_rows_v1`]), the bond, and — with `vesting_at` — the vesting half read at the next
+/// block: `(next_daa, raw_depth)`, the DAA the next block folds at and the raw second-clock depth
+/// there, the facts its step 3d reads (`palw_vesting_read_v1`'s I-8 inputs). Below
+/// `palw_rcore_plus` no row exists and the vesting half is empty.
+///
+/// **`vesting_at: None` is the node-policy entry: the rows alone**, the vesting half empty. Only the
+/// RPC asks for claim row v3's half; the panel loop's per-bond reads (`kaspad`'s
+/// `palw_claim_rows_v1` callers read a row's phase and deadline) must not pay for a next-block plan,
+/// up to 500 claim positions and a retired-row read each 30 s per bond, only to drop them
+/// (review of P2-10, finding 4).
 pub fn palw_bond_claims_v1(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
@@ -1480,20 +1486,24 @@ pub fn palw_bond_claims_v1(
     role: PalwClaimRoleV1,
     include_terminal: bool,
     limit: usize,
-    next_daa: u64,
-    raw_depth: Option<u64>,
+    vesting_at: Option<(u64, Option<u64>)>,
 ) -> PalwBondClaimsV1 {
     use crate::palw_vesting_read_v1::{PalwVestingReaderV1, palw_vesting_only_rows_v1};
     let tip_daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
     let (rows, truncated) = palw_claim_rows_v1(state, state_params, bond, role, include_terminal, limit);
-    let reader = PalwVestingReaderV1::new(state, state_params, next_daa, raw_depth);
-    let claims: Vec<(Hash64, Option<&crate::palw_state_v2::PalwClaimStateV2>)> =
-        rows.iter().map(|row| (row.claim_id, state.claim(&row.claim_id))).collect();
-    let vesting = reader.claim_stages(&claims);
-    let (vesting_only, vesting_only_truncated) = if include_terminal {
-        palw_vesting_only_rows_v1(&reader, bond, role == PalwClaimRoleV1::Executor, limit)
-    } else {
-        (Vec::new(), false)
+    let (vesting, (vesting_only, vesting_only_truncated)) = match vesting_at {
+        Some((next_daa, raw_depth)) => {
+            let reader = PalwVestingReaderV1::new(state, state_params, next_daa, raw_depth);
+            let claims: Vec<(Hash64, Option<&crate::palw_state_v2::PalwClaimStateV2>)> =
+                rows.iter().map(|row| (row.claim_id, state.claim(&row.claim_id))).collect();
+            let only = if include_terminal {
+                palw_vesting_only_rows_v1(&reader, bond, role == PalwClaimRoleV1::Executor, limit)
+            } else {
+                (Vec::new(), false)
+            };
+            (reader.claim_stages(&claims), only)
+        }
+        None => (Default::default(), (Vec::new(), false)),
     };
     PalwBondClaimsV1 {
         tip_daa,

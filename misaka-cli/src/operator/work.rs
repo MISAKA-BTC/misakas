@@ -613,7 +613,10 @@ fn rewarded(lane: Lane, r: &GetPalwFreePromptClaimResponse, w: Option<&Windows>,
             } else {
                 Reading::new(
                     WorkState::Rewarded,
-                    format!("final at DAA {at}; its vesting window has passed — minted unless a conviction burned it"),
+                    format!(
+                        "final at DAA {at}; its vesting window has passed — minted unless a conviction burned it or a \
+                         licence halt still holds it"
+                    ),
                 )
                 .estimated()
             }

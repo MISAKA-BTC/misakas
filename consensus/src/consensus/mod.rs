@@ -2263,7 +2263,17 @@ impl ConsensusApi for Consensus {
         include_terminal: bool,
         limit: usize,
     ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
-        self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit)
+        self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit, false)
+    }
+
+    fn palw_claim_rows_with_vesting_v1(
+        &self,
+        bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        role: kaspa_consensus_core::palw_producer_v2::PalwClaimRoleV1,
+        include_terminal: bool,
+        limit: usize,
+    ) -> Option<kaspa_consensus_core::palw_producer_v2::PalwBondClaimsV1> {
+        self.virtual_processor.palw_claim_rows_v1_impl(bond, role, include_terminal, limit, true)
     }
 
     fn palw_vesting_v1(

@@ -7597,6 +7597,12 @@ pub struct GetPalwVestingResponse {
     pub bond_known: bool,
     /// **B-3**: the bond is payee of a row still unmatured by V-4(a), so its collateral is locked.
     pub payee_holds_collateral: bool,
+    /// Of every row the query matched — not only this page — those whose lock is live
+    /// (`lockLive`), and the latest DAA clock among them. For a bond, the rows B-3 holds it for:
+    /// `payeeHoldsCollateral == (lockLiveRows > 0)`. V-7's order puts them LAST, so a page's own
+    /// `lockLive` rows can be none of them; count with these.
+    pub lock_live_rows: u64,
+    pub lock_live_last_expiry_daa: Option<u64>,
     pub rows: Vec<RpcPalwVestingRow>,
     /// Rows the query matched, before the page.
     pub rows_total: u64,
@@ -7644,6 +7650,8 @@ impl Serializer for GetPalwVestingResponse {
         store!(String, &self.claim_stage, writer)?;
         store!(bool, &self.bond_known, writer)?;
         store!(bool, &self.payee_holds_collateral, writer)?;
+        store!(u64, &self.lock_live_rows, writer)?;
+        store!(Option<u64>, &self.lock_live_last_expiry_daa, writer)?;
         serialize!(Vec<RpcPalwVestingRow>, &self.rows, writer)?;
         store!(u64, &self.rows_total, writer)?;
         store!(String, &self.next_after, writer)?;
@@ -7691,6 +7699,8 @@ impl Deserializer for GetPalwVestingResponse {
             claim_stage: load!(String, reader)?,
             bond_known: load!(bool, reader)?,
             payee_holds_collateral: load!(bool, reader)?,
+            lock_live_rows: load!(u64, reader)?,
+            lock_live_last_expiry_daa: load!(Option<u64>, reader)?,
             rows: deserialize!(Vec<RpcPalwVestingRow>, reader)?,
             rows_total: load!(u64, reader)?,
             next_after: load!(String, reader)?,
