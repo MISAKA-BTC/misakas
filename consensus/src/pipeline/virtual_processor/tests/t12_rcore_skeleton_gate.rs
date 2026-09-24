@@ -29,7 +29,7 @@ struct Skeleton {
 /// testnet-12 with harness cards at genesis; `armed = false` is the fence-off twin (the fence and
 /// C7 unset, the bundle's mirrors re-synced to the dormant values).
 fn skeleton(armed: bool) -> Skeleton {
-    let (config, bundle, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
+    let (config, _harness_bundle, _premine, _floats) = super::t12_round_lane_e2e::t12_with_harness_cards();
     assert!(config.params.palw_rcore_plus.is_some_and(|f| f.is_active(0)), "testnet-12 arms R-core+ from genesis");
     let config: Config = if armed {
         config
@@ -41,6 +41,16 @@ fn skeleton(armed: bool) -> Skeleton {
         ConfigBuilder::new(params).skip_proof_of_work().build()
     };
     config.params.validate_palw_v2().expect("the fixture is a runnable ruleset");
+    // The bundle the FOLD reads is the config's own: the fence-off twin re-synced its mirrors
+    // (`PalwStateParamsV2::rcore_plus_active_at` is what the fold asks), so the harness's copy —
+    // mirrored armed — would fold the twin as armed (S-7 review).
+    let bundle = match &config.params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => {
+            assert_eq!(b.state.rcore_plus_active_at(0), armed, "the fold's mirror follows the fence");
+            b.clone()
+        }
+        _ => unreachable!("testnet-12 is ConsensusV2"),
+    };
     let ctx = TestContext::new(TestConsensus::new(&config));
     let (_, state) =
         ctx.consensus.virtual_processor().palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
@@ -125,7 +135,9 @@ impl Skeleton {
     }
 }
 
-/// **Tags 53–56 are dropped by the gate and the walk and refused by the fold, fence on or off.**
+/// **Tags 53–56 are dropped by the gate and the walk and refused by the fold by name** — on the
+/// fence-off twin all four, and on the shipped ruleset the two still declared-not-landed (55, 56).
+/// S-7 landed 53/54 past `palw_rcore_plus`; their armed behaviour is `t12_rcore_s7_reporter_gate`.
 /// The stateless ride table admits each (their shape rules are their owners'), so what keeps them
 /// inert is the acceptance layer and the fold, by name.
 #[tokio::test]
@@ -133,6 +145,10 @@ async fn rcore_v22_objects_are_dropped_by_the_gate_and_the_walk_and_refused_by_t
     for armed in [true, false] {
         let s = skeleton(armed);
         for (tag, object) in (53u8..).zip(s.objects()) {
+            if armed && tag <= 54 {
+                // ADR-0152 S-7: landed past the fence; `t12_rcore_s7_reporter_gate` pins them.
+                continue;
+            }
             assert_eq!(borsh::to_vec(&object).unwrap()[0], tag, "{object:?}");
             kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
                 .expect("the ride table admits the shape; acceptance drops it");

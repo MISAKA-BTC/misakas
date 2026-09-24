@@ -563,6 +563,12 @@ pub struct VirtualStateProcessor {
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
     /// the other way.
     pub(super) palw_offence_attribution: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0152 v3.1 R-core+: `Params::palw_rcore_plus` (`Some(0)` on testnet-12 alone), resolved
+    /// once in [`Self::palw_rcore_plus_at`]. The object gate reads it for the objects R-core+ lands
+    /// (S-7: tags 53/54), so the gate admits exactly what the fold — which reads the bundle's mirror
+    /// of the same fence, `PalwStateParamsV2::rcore_plus_active_at` — folds. **Seam:** every other
+    /// R-core+ processor site (S-5's tag 56, M3's tag 55, the v6 switch) should read this one field.
+    pub(super) palw_rcore_plus: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// `Params::palw_settled_anchor_depth` — the second clock's depth, read only past the fence
     /// above through [`Self::palw_settled_anchor_depth_at`].
     pub(super) palw_settled_anchor_depth: Option<u64>,
@@ -1053,6 +1059,7 @@ impl VirtualStateProcessor {
             palw_audit_2026_09_11_deep: params.palw_audit_2026_09_11_deep_fence(),
             palw_audit_2026_09_23: params.palw_audit_2026_09_23_fence(),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
+            palw_rcore_plus: params.palw_rcore_plus_fence(),
             palw_settled_anchor_depth: params.palw_settled_anchor_depth,
             palw_admission_audit_period_daa: params.palw_admission_audit_period_daa,
             palw_frontier_provenance: params.palw_frontier_provenance,
@@ -4446,6 +4453,8 @@ impl VirtualStateProcessor {
     /// function over the tip state, at the DAA a commitment sent now would be accepted at, with the
     /// bond's room by the fold's two terms. A gateway reads this AFTER its job ran and BEFORE the
     /// commitment is written, so what it checks and what the ledger reserves are one expression.
+    /// Past `palw_rcore_plus` the price is the fold's `BondClassShareExceeded` for a bond already at
+    /// its ADR-0152 T-2(a) share of the class — a refusal the commitment arm reaches before it prices.
     pub fn palw_fp_commitment_price_impl(
         &self,
         class_id: kaspa_hashes::Hash64,
@@ -4456,7 +4465,7 @@ impl VirtualStateProcessor {
         bond: Option<kaspa_consensus_core::tx::TransactionOutpoint>,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwFpPriceAnswerV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
-        let (_chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
+        let (chain_point, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
         let virtual_read = self.virtual_stores.read();
         let daa_score = virtual_read.state.get().ok()?.daa_score;
         drop(virtual_read);
@@ -4483,6 +4492,32 @@ impl VirtualStateProcessor {
             decode_tokens_executed,
             work_leaves,
         );
+        // **ADR-0152 v3.1 T-2(a) (S-6): the executor's share, which the fold's commitment arm asks
+        // before it prices** — so past `palw_rcore_plus` a bond at its share of the class is
+        // answered with the fold's own refusal by name, and neither a gateway nor this node's
+        // canonical rail writes a commitment the acceptance rehearsal would drop. The share is per
+        // bond: without one there is nothing to ask.
+        let share_refusal = bond.filter(|_| state_params.rcore_plus_active_at(daa_score)).and_then(|outpoint| {
+            let extras = self.palw_transition_extras_for(&kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: chain_point,
+                daa_score,
+                blue_score: 0,
+                subsidy: 0,
+            });
+            kaspa_consensus_core::palw_state_v2::palw_bond_class_share_admits_v1(
+                &state,
+                state_params,
+                &extras,
+                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                &class_id,
+                daa_score,
+            )
+            .err()
+        });
+        let price = match share_refusal {
+            Some(refusal) => Err(refusal),
+            None => price,
+        };
         let bond_room = bond.and_then(|outpoint| {
             kaspa_consensus_core::palw_state_v2::palw_fp_bond_room_v1(
                 &state,
@@ -4570,6 +4605,24 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()
                 .map(|refusal| refusal.to_string());
+        // **ADR-0152 v3.1 T-2(a) (S-6): and the named bond's share of the class**, which the fold
+        // asks right after the class gate and skips the block's own attempt on — the attempt's
+        // inference spent and its worker carve withheld and burned (`palw_v2_skipped_own_attempt_carve`).
+        // Past `palw_rcore_plus` only; below it the share is no rule and this reads `Ok`.
+        if facts.class_admission_refusal.is_none()
+            && let Some(outpoint) = bond
+        {
+            facts.class_admission_refusal = kaspa_consensus_core::palw_state_v2::palw_bond_class_share_admits_v1(
+                &state,
+                state_params,
+                &extras,
+                &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(outpoint),
+                &class_id,
+                candidate_daa,
+            )
+            .err()
+            .map(|refusal| refusal.to_string());
+        }
         Some(facts)
     }
 
@@ -6982,15 +7035,63 @@ impl VirtualStateProcessor {
         };
         for object in objects {
             match object {
-                // **ADR-0152 v3.1 §6, the v22 skeleton: tags 53–56 are declared, not landed.**
+                // **ADR-0152 v3.1 R-3 (S-7): a reporter's commitment is authorised by the reporter
+                // bond's own key, and by nothing else** — the lock a capability declaration carries,
+                // for its reason: a bond key is a public outpoint, and a commitment filed under
+                // somebody else's bond would take one of that bond's 64 open slots (and, revealed,
+                // that bond's reward) without its owner. Signed over the network, the commitment
+                // and the reporter (`palw_reporter_commit_message_v1`) under the new ML-DSA-87
+                // context. The FENCE is checked here as well as in the fold: below
+                // `Params::palw_rcore_plus` the object is dropped by name, as the v22 skeleton
+                // dropped it, and the fold refuses it by name. Everything else — Active, the
+                // floor, the 64-per-bond cap, a rooted duplicate — is the fold's, and the
+                // rehearsal drops what the fold refuses.
+                Obj::ReporterCommitted { commitment, reporter, signature } => {
+                    if !self.palw_rcore_plus_at(point.daa_score) {
+                        return Err(format!(
+                            "{} is declared by the v22 layout (ADR-0152 R-core+) and refused until its owner lands it",
+                            kaspa_consensus_core::palw_state_v2::palw_rcore_object_name_v1(object).unwrap_or("an R-core+ object")
+                        ));
+                    }
+                    let record = state
+                        .bond(reporter)
+                        .ok_or_else(|| format!("a reporter commitment names bond {reporter:?} this chain does not have"))?;
+                    let message = kaspa_consensus_core::palw_state_v2::palw_reporter_commit_message_v1(
+                        &kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
+                        commitment,
+                        reporter,
+                    );
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &record.pubkey,
+                        &message,
+                        signature,
+                        kaspa_consensus_core::palw_state_v2::PALW_REPORTER_COMMIT_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("reporter commitment {commitment} is not signed by bond {reporter:?}'s registered key"));
+                    }
+                }
+                // **ADR-0152 v3.1 R-3/R-4 (S-7): a reveal carries no signature** — anyone may carry
+                // it; the salt is the secret and the commitment binds the reporter. Past the fence
+                // the fold judges it whole (a pending reward, its window, the rooted commitment,
+                // committed strictly before the conviction, not the accused, beating the best) and
+                // the rehearsal drops what it refuses. Below the fence it is dropped by name.
+                Obj::ReporterRevealed { .. } => {
+                    if !self.palw_rcore_plus_at(point.daa_score) {
+                        return Err(format!(
+                            "{} is declared by the v22 layout (ADR-0152 R-core+) and refused until its owner lands it",
+                            kaspa_consensus_core::palw_state_v2::palw_rcore_object_name_v1(object).unwrap_or("an R-core+ object")
+                        ));
+                    }
+                }
+                // **ADR-0152 v3.1 §6, the v22 skeleton: tags 55–56 are declared, not landed.**
                 // Dropped by name on every network, testnet-12 included, before anything else is
                 // read — the fold refuses the same objects (`RcoreObjectNotLanded`), so the gate and
                 // the fold agree, and the block carrying one stands. Each owner replaces this arm
-                // with its acceptance rule (S-7: 53/54; M3: 55; S-5: 56).
-                Obj::ReporterCommitted { .. }
-                | Obj::ReporterRevealed { .. }
-                | Obj::MaterialDisclosedV2 { .. }
-                | Obj::PanelUnavailableQuorum { .. } => {
+                // with its acceptance rule (M3: 55; S-5: 56).
+                Obj::MaterialDisclosedV2 { .. } | Obj::PanelUnavailableQuorum { .. } => {
                     return Err(format!(
                         "{} is declared by the v22 layout (ADR-0152 R-core+) and refused until its owner lands it",
                         kaspa_consensus_core::palw_state_v2::palw_rcore_object_name_v1(object).unwrap_or("an R-core+ object")
@@ -9651,6 +9752,12 @@ impl VirtualStateProcessor {
     /// the V2 kind under a fold that still read the V1 rule would drop every conviction it let in.
     fn palw_offence_attribution_at(&self, daa_score: u64) -> bool {
         self.palw_offence_attribution.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0152 v3.1 R-core+, resolved in exactly one place, at the BLOCK's own DAA** — the
+    /// processor's reading of `Params::palw_rcore_plus`. `false` on every network but testnet-12.
+    fn palw_rcore_plus_at(&self, daa_score: u64) -> bool {
+        self.palw_rcore_plus.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// The second clock's depth where the fence carries it; `None` is the DAA-only rule.

@@ -145,9 +145,11 @@ pub struct PalwProducerFactsV2 {
     pub live_total: u128,
     /// **Why the chain would refuse a new claim of this class now, if it would** — the fold's own
     /// class gate (`palw_class_admits_claim_v1`: the registry row's lifecycle, then its panel room
-    /// or inflight cap), filled by the caller that holds the block's fences. `None` is "admits".
-    /// Without it a class the registry held at `Prefetching` reported no reason not to produce,
-    /// and its producer mined claims its own chain refused (the 2026-09-23 route-matrix audit's #7).
+    /// or inflight cap) and, for a named bond past ADR-0152 R-core+, its T-2(a) share of the class
+    /// (`palw_bond_class_share_admits_v1`, which the fold asks next), filled by the caller that
+    /// holds the block's fences. `None` is "admits". Without it a class the registry held at
+    /// `Prefetching` reported no reason not to produce, and its producer mined claims its own chain
+    /// refused (the 2026-09-23 route-matrix audit's #7).
     pub class_admission_refusal: Option<String>,
 }
 
@@ -214,7 +216,8 @@ pub const PALW_NOT_READY_BOND_UNKNOWN_V2: &str = "the named bond is not register
 /// `ready_to_produce` / `ready_to_spend_receipts`: the bond exists and registered another key.
 pub const PALW_NOT_READY_KEY_MISMATCH_V2: &str = "the local signing key is not the one this bond registered";
 /// `ready_to_produce`: the model registry admits no new claim of this class now — its lifecycle
-/// state (a `Candidate` or `Prefetching` row), or its panel room or inflight cap. The detail is
+/// state (a `Candidate` or `Prefetching` row), or its panel room or inflight cap — or, past
+/// ADR-0152 R-core+, the bond already holds its T-2(a) share of the class. The detail is
 /// `PalwProducerFactsV2::class_admission_refusal`.
 pub const PALW_NOT_READY_CLASS_NOT_ADMITTING_V2: &str = "the model registry admits no new claim of this class now";
 /// `ready_to_produce`: this class's blocks for the epoch are spent (the floor class is exempt).

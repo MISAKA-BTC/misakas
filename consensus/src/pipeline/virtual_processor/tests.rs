@@ -16175,6 +16175,11 @@ mod t12_offence_attribution_gate;
 // ADR-0152 v3.1's v22 skeleton: the declared objects and offence kinds, dropped at acceptance and
 // refused by the fold until their owners land them.
 mod t12_rcore_skeleton_gate;
+// ADR-0152 v3.1 S-6: the per-bond share in the producer's own pre-check and the free-prompt price.
+mod t12_rcore_s6_producer_share;
+// ADR-0152 v3.1 S-7: the reporter's commitment (tag 53) and reveal (tag 54) at the gate, the walk
+// and the fold past `palw_rcore_plus`, with real card signatures.
+mod t12_rcore_s7_reporter_gate;
 mod t12_round_lane_e2e;
 // ADR-0152 v2 F2's acceptance suite (spec §3.6): a false Valid on a real producer-built claim,
 // through the gate, the acceptance walk and the fold.
