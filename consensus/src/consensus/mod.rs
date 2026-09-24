@@ -2364,6 +2364,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_v2_supplementary_receipt_assemble_impl(claim, &mine)
     }
 
+    fn palw_v2_supplementary_v3_assemble(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
+        self.virtual_processor.palw_v2_supplementary_v3_assemble_impl(claim, &candidates)
+    }
+
     fn import_pruning_point_palw_state(
         &self,
         pruning_point: BlockHash,

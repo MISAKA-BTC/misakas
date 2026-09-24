@@ -2991,6 +2991,81 @@ where
     Ok(PalwReceiptQuorumV2::Supplementary { credited: answered.len() as u16 })
 }
 
+/// **The V3 supplementary set a collector offers for a licensed claim, if any** (ADR-0152 SR-10 and
+/// Q-7, node policy: it decides what a node carries, never what a block accepts).
+///
+/// After an S2 licence — the full seat's `Valid` and at most one rider (post-edit 13) — the seats the
+/// licence did not carry still file, and their receipts are the only thing that can raise the claim
+/// to `basis_k ≥ 2` before DL-1's gate redraws it (Q-5), complete SR-1b's release, or pay a seat that
+/// answered. SR-10's door takes them in a `ReceiptLicensedV2` on the licensed claim; this picks the
+/// set, and it counts nothing itself:
+///
+/// 1. **What the door could credit**: this claim's `Valid`s and `Sampled`s, from seats the chain has
+///    not counted ([`crate::palw_state_v2::palw_seat_uncounted_on_licence_v1`]), one receipt a seat —
+///    its `Valid` before its `Sampled` (a carried `Sampled` credits the seat, so its `Valid` could
+///    never ride after it), otherwise in arrival order.
+///    **Abstentions are never carried**: an `Unavailable` or `Incapable` is neither credited nor
+///    counted, and all the door records of one is `unserved_seen` — the latch that holds the
+///    producer's escrow to `Final` (C1), even if that very seat serves later. Accusing the producer
+///    is the DA court's (P2-6's `DefaultAccused`), never a collector's.
+///    **`Sampled` is filed here** (Q-1): not a licence and not a vote, it is credited for seat pay and
+///    latches `unserved_seen` — so it rides a licence set only as a rider and otherwise this door.
+/// 2. **Each alone through `validate`** — [`validate_supplementary_receipts_v3`] at the carrying
+///    point, bound as the acceptance arm binds it: its signature, window and mask. A receipt it
+///    refuses is dropped, never fatal (a poisoned pool must not sink the set), and the next receipt
+///    of that seat is tried.
+/// 3. **The set through `validate`, then through `effect`** — the fold's own answer
+///    ([`crate::palw_state_v2::palw_v2_supplementary_effect_v1`]). Only the seats the fold credits
+///    are carried: a `Valid` whose seat cannot post `lock_{max(k,2)}` (SR-6) moves nothing, so it is
+///    dropped and the rest are put to the fold once more. `None` when the fold credits nobody.
+pub fn palw_select_supplementary_v3_v1<V, E>(
+    state: &PalwChainStateV2,
+    claim_id: &Hash64,
+    candidates: &[PalwSeatReceiptV3],
+    validate: V,
+    effect: E,
+) -> Option<(Vec<PalwSeatReceiptV3>, crate::palw_state_v2::PalwSupplementaryEffectV1)>
+where
+    V: Fn(&[PalwSeatReceiptV3]) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>,
+    E: Fn(&[PalwSeatReceiptV3]) -> Option<crate::palw_state_v2::PalwSupplementaryEffectV1>,
+{
+    let rank = |signed: &PalwSeatReceiptV3| match signed.receipt.verdict {
+        PalwReceiptVerdictV2::Valid => Some(0u8),
+        PalwReceiptVerdictV2::Sampled => Some(1),
+        PalwReceiptVerdictV2::Unavailable { .. } | PalwReceiptVerdictV2::Incapable => None,
+    };
+    let mut ordered: Vec<(u8, &PalwSeatReceiptV3)> = candidates
+        .iter()
+        .filter(|signed| signed.receipt.claim == *claim_id)
+        .filter(|signed| crate::palw_state_v2::palw_seat_uncounted_on_licence_v1(state, claim_id, &signed.receipt.seat_bond))
+        .filter_map(|signed| rank(signed).map(|r| (r, signed)))
+        .collect();
+    // A stable sort: arrival order survives inside a rank.
+    ordered.sort_by_key(|(r, _)| *r);
+    let accepts = |set: &[PalwSeatReceiptV3]| matches!(validate(set), Ok(PalwReceiptQuorumV2::Supplementary { .. }));
+    let mut kept: Vec<PalwSeatReceiptV3> = Vec::new();
+    for (_, signed) in ordered {
+        if kept.iter().any(|k| k.receipt.seat_bond == signed.receipt.seat_bond) {
+            continue;
+        }
+        if accepts(std::slice::from_ref(signed)) {
+            kept.push(signed.clone());
+        }
+    }
+    if kept.is_empty() || !accepts(&kept) {
+        return None;
+    }
+    let mut folded = effect(&kept)?;
+    if folded.credited.len() < kept.len() {
+        kept.retain(|signed| folded.credited.contains(&signed.receipt.seat_bond));
+        if kept.is_empty() || !accepts(&kept) {
+            return None;
+        }
+        folded = effect(&kept)?;
+    }
+    (!folded.credited.is_empty()).then_some((kept, folded))
+}
+
 /// **One shard's part** (ADR-0100 Decision 4): the same receipt checks, over the seats of THAT
 /// shard's slice of a stratified panel, at the same quorum a shard's seats are drawn for. Refused
 /// by name: a claim that does not license by parts, a part of another plan, a shard out of range,

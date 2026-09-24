@@ -826,6 +826,19 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 SR-10 / Q-7: the V3 supplementary set a collector offers for a licensed claim** —
+    /// the `ReceiptLicensedV2` of the gossip-delivered V3 receipts SR-10's door credits
+    /// (`palw_select_supplementary_v3_v1`), checked by the acceptance validator and folded by the
+    /// fold at virtual's point, with what the fold says it does. `None` while `palw_rcore_plus` is
+    /// dormant, the claim is not `ReceiptLicensed`, or the set would credit nobody.
+    fn palw_v2_supplementary_v3_assemble(
+        &self,
+        _claim: crate::Hash64,
+        _candidates: Vec<crate::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<crate::palw_state_v2::PalwSupplementaryOfferV1> {
+        None
+    }
+
     /// **The seat duties this node holds** (launch blockers §2) — the claims whose panels name a
     /// bond in `mine`, with the roots each seat must decide against.
     fn palw_seat_duties_v2(&self, _mine: Vec<crate::palw_state_v2::PalwBondKeyV2>) -> Vec<crate::palw_producer_v2::PalwSeatDutyV2> {

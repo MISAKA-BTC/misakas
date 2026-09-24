@@ -1526,14 +1526,35 @@ pub struct PalwBondClaimsV1 {
     pub bond: Option<PalwBondSummaryV1>,
 }
 
+/// **The seat duties `mine` holds**: every seat of a bound panel, and — past `Params::palw_rcore_plus`
+/// — every seat an S2 licence has not counted yet.
+///
+/// **ADR-0152 Q-5 / Q-7 (V3S-01): an S2 licence still owes its panel an answer.** An
+/// `OptimisticLicensed` claim licenses on the full seat's `Valid` and at most one rider, and is the
+/// basis for nothing until a supplementary set raises its recount to 2 (the first panel redraws,
+/// the second voids `NotReplayBacked`, at DL-1's gate). The seats that can raise it are the ones the
+/// licence did not carry — a partial seat's V3 `Valid` through SR-10's door, or any seat's
+/// full-replay V2 `Valid` through the V2 door — and their duty used to end the moment the claim left
+/// `PanelBound`: a replay still running at the licence was dropped, and an honest S2 claim waited
+/// out its gate with nobody working to upgrade it. So a claim that awaits its replay
+/// (`palw_rcore_licence_awaits_replay_v1`) keeps each seat of its panel the chain has not counted
+/// (`palw_seat_uncounted_on_licence_v1`: on duty, not credited, no lock) on duty, with the bound
+/// panel's own facts, until the upgrade lands or the gate fires. A seat already counted owes nothing
+/// more, and neither does any seat of a licence that is replay-backed. Node policy, read by kaspad's
+/// seat loop and nothing that folds; `licence_door` is written only past the fence, so below it
+/// this lists exactly what it always did.
 pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStateParamsV2, mine: &[PalwBondKeyV2]) -> Vec<PalwSeatDutyV2> {
     let mut out = Vec::new();
     for (claim_id, claim) in state.claims_iter() {
-        // Only a bound panel owes receipts; every other phase is somebody else's edge.
-        let crate::palw_state_v2::PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
-            continue;
-        };
+        // A bound panel owes receipts, and so does an S2 licence awaiting its upgrade (above); every
+        // other phase is somebody else's edge.
+        let awaits = crate::palw_state_v2::palw_rcore_licence_awaits_replay_v1(claim);
         let Some(panel) = state.panel(claim_id) else { continue };
+        let bound_daa = match claim.phase {
+            crate::palw_state_v2::PalwClaimPhaseV2::PanelBound { bound_daa } => bound_daa,
+            crate::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { .. } if awaits => panel.bound_daa,
+            _ => continue,
+        };
         // The class's registered root, read where the claim is read. A claim whose class is gone
         // from the registry is not judgeable by anyone, so it yields no duty rather than a duty
         // nobody can act on.
@@ -1542,6 +1563,9 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
         };
         for (seat_index, seat) in panel.seats.iter().enumerate() {
             if !mine.contains(&seat.bond) {
+                continue;
+            }
+            if awaits && !crate::palw_state_v2::palw_seat_uncounted_on_licence_v1(state, claim_id, &seat.bond) {
                 continue;
             }
             out.push(PalwSeatDutyV2 {

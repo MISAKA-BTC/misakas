@@ -394,6 +394,136 @@ pub(crate) fn palw_seat_receipt_forms_v1(
     }
 }
 
+/// **How close to its receipt deadline a seat may still answer `Sampled`** (ADR-0152 Q-7): the same
+/// sixty DAA Q-7 gives a stuck S2 claim's seats to get a receipt carried before the window shuts
+/// (`bound_daa + window_receipt − 60`) — a carrier queues behind at most `MAX_INFLIGHT_CARRIERS` of
+/// this node's own, and every collector on the network may carry it.
+pub(crate) const PALW_SEAT_SAMPLED_LEAD_DAA_V1: u64 = 60;
+
+/// Captures one S3 sampling tries, first to last: the material pool's bound (four a claim) and this
+/// node's two retention files. Each costs one `verify_material`; the first verified one is sampled.
+pub(crate) const PALW_SEAT_S3_CAPTURES_V1: usize = 6;
+
+/// **Whether a seat answers `Sampled` now** (ADR-0152 Q-1, Q-7, reconciled with SEAT-R).
+///
+/// Q-7: "a partial seat replays … and signs `Valid` only after the replay; if S3 is armed it also
+/// samples its sites; if only the sampling completed by the receipt deadline, it signs `Sampled`".
+/// Past SEAT-R a partial seat's `Valid` comes only from its own replay (`PartialReplays`) or SEAT-S4's
+/// verified resume (`PartialResumes`), and the legacy S1/S3 resume abstains before it reads a byte
+/// (`palw_v2_try_partial_resume_v1`: S3 attested a whole mask from a pooled capture nothing checked).
+/// So `Sampled` is not a way to a licence — it is never `Valid`, counts in no quorum, coverage or
+/// upgrade, locks nothing and is never liable — it is the answer of a seat whose replay or resume
+/// did not come to a verdict and who still audited: credited for seat pay (§9.1 Q3), and it holds the
+/// producer's escrow (`unserved_seen`, C1), which is the safe direction. Hence:
+///
+/// * **only a partial seat** that replays or resumes — never the full seat (its replay is the
+///   licence), never one that abstains (it has read nothing of the class);
+/// * **only where the chain takes it** — past SEAT-R, past `palw_rcore_plus` (below it `Sampled` is
+///   refused by name) and past S3 (`palw_verification_s3`, the sampling it attests);
+/// * **only at the end of the window** — within [`PALW_SEAT_SAMPLED_LEAD_DAA_V1`] of the deadline the
+///   loop reads for the duty, and not after it: a carried `Sampled` credits its seat, so the seat's own
+///   `Valid` could never ride after it, and a `Sampled` filed while that `Valid` was still coming
+///   would cost the seat its count and the producer its release.
+///
+/// The seat loop asks it only while no replay or resume of this seat's is running for the claim, and
+/// samples once per duty ([`palw_seat_s3_sample_v1`]).
+pub(crate) fn palw_seat_sampled_due_v1(
+    seat_r: bool,
+    sampled_admitted: bool,
+    s3_armed: bool,
+    role: PalwSeatRRoleV1,
+    deadline: u64,
+    current_daa: u64,
+) -> bool {
+    seat_r
+        && sampled_admitted
+        && s3_armed
+        && matches!(role, PalwSeatRRoleV1::PartialReplays | PalwSeatRRoleV1::PartialResumes)
+        && current_daa <= deadline
+        && current_daa.saturating_add(PALW_SEAT_SAMPLED_LEAD_DAA_V1) >= deadline
+}
+
+/// What one S3 sampling of a capture came to ([`palw_seat_s3_sample_v1`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwSeatS3SampleV1 {
+    /// Every sampled site of this seat recomputed with no mismatch: the seat answers `Sampled`.
+    Sampled,
+    /// A site disagrees with the capture the claim committed to: the court's (a refutation, P2-8),
+    /// never a receipt (Q-1).
+    Faulted,
+    /// Nothing checked — the capture is not the claim's, its shape is unreadable, no site was drawn,
+    /// or the family could not recompute one. Not an answer.
+    Unchecked,
+}
+
+/// **ADR-0133 S3 behind SEAT-S3** (ADR-0152 PE-3, Q-7): a seat's `PALW_LAYER_SAMPLE_V3_SITES` sites,
+/// drawn from the panel's anchor, the claim and its own seat index (`palw_layer_sample_v3`, public at
+/// bind), each recomputed from `capture` by the family (`replay_layer_site_v3`).
+///
+/// **SEAT-S3: the capture is used only after `verify_material(capture, roots) == Matches`** against
+/// the claim's full roots and the job anchor its block derived — the family replays a site against the
+/// CAPTURE's own binding, so whether the capture is the claim's is this question, asked first; and
+/// its shape (the layer count, the job's positions) is read only after it, because an unverified
+/// capture states whatever its author likes. One mismatching site is `Faulted`; one the family
+/// could not recompute ends the sampling `Unchecked` (an `Err` is "I could not check", not a lie).
+pub(crate) fn palw_seat_s3_sample_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    capture: &[u8],
+    roots: PalwClaimRootsV1,
+    panel_anchor: Hash64,
+    claim_id: Hash64,
+    seat_index: u16,
+    seat_count: u16,
+) -> PalwSeatS3SampleV1 {
+    use kaspa_consensus_core::palw_layer_sample_v3::{PALW_LAYER_SAMPLE_V3_SITES, palw_layer_sample_v3};
+    if backend.verify_material(capture, roots) != PalwMaterialVerdictV1::Matches {
+        return PalwSeatS3SampleV1::Unchecked;
+    }
+    let Some(shape) = backend.capture_shape(capture) else { return PalwSeatS3SampleV1::Unchecked };
+    let positions = shape.job_context.declared_prefill_tokens.saturating_add(shape.job_context.exact_decode_tokens.saturating_sub(1));
+    let sites = palw_layer_sample_v3(panel_anchor, claim_id, seat_index, shape.layer_count, positions, PALW_LAYER_SAMPLE_V3_SITES);
+    if sites.is_empty() {
+        return PalwSeatS3SampleV1::Unchecked;
+    }
+    for site in sites {
+        match backend.replay_layer_site_v3(capture, site, seat_count.max(1)) {
+            Ok(true) => {}
+            Ok(false) => return PalwSeatS3SampleV1::Faulted,
+            Err(_) => return PalwSeatS3SampleV1::Unchecked,
+        }
+    }
+    PalwSeatS3SampleV1::Sampled
+}
+
+/// **The order a collector carries V3 supplementary sets in** (ADR-0152 Q-7, SR-1b, Q-5; node policy).
+///
+/// The collector runs after every licence this tick could offer, on the same carrier budget
+/// (`MAX_INFLIGHT_CARRIERS`), so a supplementary set never takes a licence's place. Among the sets
+/// the fold says do something (`palw_select_supplementary_v3_v1`):
+///
+/// 1. **a set that releases the escrow first** — SR-1b's window, `min(L + ⌊wc(L)/2⌋, bound +
+///    window_receipt)`, is the shortest clock a supplementary set races (sixty DAA on testnet-12), and
+///    past it the release never happens;
+/// 2. **then a set that lifts an S2 licence off Q-5's gate** — past the receipt deadline the claim
+///    redraws (first panel) or voids `NotReplayBacked` (second), and nothing else can save it;
+/// 3. **then the rest** — seat pay for a seat the licence did not carry;
+///
+/// each by the DAA it must land by, soonest first, then by claim id so every node agrees.
+pub(crate) fn palw_supplementary_offer_order_v1(
+    offers: &mut [(Hash64, kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1)],
+) {
+    offers.sort_by_key(|(claim, offer)| {
+        let tier = if offer.effect.releases_escrow {
+            0u8
+        } else if offer.effect.upgrades {
+            1
+        } else {
+            2
+        };
+        (tier, offer.effect.lands_by_daa, *claim)
+    });
+}
+
 /// **What this seat has read of a duty's class from the registry** (`palw_model_registry_v1`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum PalwSeatClassReadV1 {
@@ -938,6 +1068,14 @@ impl PalwSeatReplaysV1 {
     /// pre-check is for starting one, and a replay that stands holds its own reservation.
     pub(crate) fn holds_claim(&self, claim: &Hash64) -> bool {
         self.running.keys().chain(self.detached.keys()).chain(self.done.keys()).any(|(c, _)| c == claim)
+    }
+
+    /// Whether a task of this seat's for `claim` — a whole replay or a SEAT-S4 segment, which share
+    /// these slots — is still running (or detached and not yet returned). Unlike [`Self::holds_claim`]
+    /// a result that has returned does not count: ADR-0152 Q-7's `Sampled` is the answer of a seat
+    /// whose own replay or resume is not coming, and a task still running may yet end in `Valid`.
+    pub(crate) fn runs_for_claim(&self, claim: &Hash64) -> bool {
+        self.running.keys().chain(self.detached.keys()).any(|(c, _)| c == claim)
     }
 
     /// Keep what the claims `live` answers yes for: the rest's results are forgotten and their running
@@ -4620,6 +4758,11 @@ impl PalwPanelService {
         let mut replay_refuted: HashSet<Hash64> = HashSet::new();
         let mut evidence_kept: HashSet<Hash64> = HashSet::new();
         let mut capture_sampled: HashSet<Hash64> = HashSet::new();
+        // ADR-0152 Q-7's `Sampled` route (`palw_seat_sampled_due_v1`): the S3 samplings running off
+        // the loop, one per duty, and the duties whose sampling has ended — once each, swept with
+        // `answered`.
+        let mut s3_samplings: HashMap<SeatDutyPanelKeyV1, tokio::task::JoinHandle<PalwSeatS3SampleV1>> = HashMap::new();
+        let mut s3_sampled: HashSet<SeatDutyPanelKeyV1> = HashSet::new();
         // When this seat last pulled for a claim it holds no material for, so a slow answer is
         // not re-asked every 2-second tick.
         let mut requested: HashMap<Hash64, u64> = HashMap::new();
@@ -4646,6 +4789,9 @@ impl PalwPanelService {
         // seat, the receipt rides a supplementary object until the window closes.
         let mut own_receipts: HashMap<Hash64, (PalwSeatReceiptV2, u64)> = HashMap::new();
         let mut supplementary_submitted: HashMap<Hash64, u64> = HashMap::new();
+        // ADR-0152 SR-10 / Q-7: when this node last carried a V3 supplementary set for a claim — a
+        // debounce like `submitted`'s, re-offered after the replan interval if the carrier was lost.
+        let mut supplementary_v3_submitted: HashMap<Hash64, u64> = HashMap::new();
         // One move per (session, round, side): the ladder advances on acceptance, so a move
         // resubmitted before the block that carries it lands is a duplicate the chain drops.
         // **A debounce, not a receipt.** This used to be a `HashSet` written on MEMPOOL acceptance
@@ -6360,6 +6506,54 @@ impl PalwPanelService {
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
                 let mut segments_attested: Option<kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2> = None;
+                // **ADR-0152 Q-7: `Sampled`, the answer of a partial seat whose replay is not coming**
+                // (`palw_seat_sampled_due_v1`: past SEAT-R, R-core+ and S3, within the last sixty DAA of
+                // the window). Before the memory check below, because the case it is for is the host that
+                // fits a segment but not the whole replay. The sampling runs off the loop, once per duty,
+                // on a capture SEAT-S3 verified first (`palw_seat_s3_sample_v1`); while it runs the duty
+                // waits. It ends `Sampled` (filed like any V3 receipt, over the seat's assigned mask, and
+                // carried by a licence set as a rider or by SR-10's door), `Faulted` (the court's: noted,
+                // and this seat files nothing), or nothing at all. Never `Valid`.
+                let duty_key = seat_duty_panel_key_v1(duty);
+                let mut sampled_now = false;
+                if let Some(running) = s3_samplings.get(&duty_key) {
+                    if !running.is_finished() {
+                        continue;
+                    }
+                    let finished = s3_samplings.remove(&duty_key).expect("the handle just read");
+                    s3_sampled.insert(duty_key);
+                    match finished.await {
+                        Ok(PalwSeatS3SampleV1::Sampled) => sampled_now = true,
+                        Ok(PalwSeatS3SampleV1::Faulted) => self.note_seat_fault_v1(duty.claim_id, 0, 0),
+                        Ok(PalwSeatS3SampleV1::Unchecked) | Err(_) => {}
+                    }
+                } else if !s3_sampled.contains(&duty_key)
+                    && palw_seat_sampled_due_v1(
+                        seat_r,
+                        self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                        self.consensus_config.params.palw_verification_s3_at(current_daa),
+                        seat_r_duty.role,
+                        deadline,
+                        current_daa,
+                    )
+                    && !seat_replays.runs_for_claim(&duty.claim_id)
+                    && !replay_refuted.contains(&duty.claim_id)
+                    && !self.seat_found_fault_v1(&duty.claim_id)
+                {
+                    let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                    match self.seat_s3_sampling_start_v1(&session, duty, network_domain, pooled) {
+                        Ok(Some(running)) => {
+                            s3_samplings.insert(duty_key, running);
+                            continue;
+                        }
+                        // No capture of the claim's to sample: nothing to try again.
+                        Ok(None) => {
+                            s3_sampled.insert(duty_key);
+                        }
+                        // The ledger refused: a later tick inside the lead may still fit.
+                        Err(()) => {}
+                    }
+                }
                 // **Host memory, node-local and never consensus**: a replay that would push this host
                 // past its usable memory waits for a later tick instead of starting — swap is not
                 // capacity, and a host in swap finishes no replay at all. The deadline still runs;
@@ -6368,8 +6562,8 @@ impl PalwPanelService {
                 // and a SEAT-S4 resume reserves its own figure a segment at a time — the partial seat's
                 // streamed fold, never this check's whole-job full seat, which a host that fits the
                 // segment but not the whole replay could never pass (the second pass, finding 4).
-                if !(seat_r
-                    && (seat_replays.holds_claim(&duty.claim_id) || seat_r_duty.role == PalwSeatRRoleV1::PartialResumes))
+                if !(seat_r && (seat_replays.holds_claim(&duty.claim_id) || seat_r_duty.role == PalwSeatRRoleV1::PartialResumes))
+                    && !sampled_now
                     && let Err(why) = self.replay_memory_budget_v1(&session, Some((duty.class_id, duty.artifact_root)))
                 {
                     crate::palw_backends::note_throttled_v1("panel-replay-budget", || {
@@ -6388,6 +6582,10 @@ impl PalwPanelService {
                 // nothing licenses it here, and the full seat's fault finders run on.
                 let refuted = seat_r && replay_refuted.contains(&duty.claim_id);
                 let verdict = 'verdict: {
+                    // Q-7: a finished S3 sampling is this duty's answer (above).
+                    if sampled_now {
+                        break 'verdict Some(PalwReceiptVerdictV2::Sampled);
+                    }
                     // **Class capability is decided BEFORE looking at deliveries.** This resolve
                     // lived inside the per-material loop, so a seat that received NOTHING never
                     // reached its own `Incapable` answer and fell through to `Unavailable` — a
@@ -8264,6 +8462,81 @@ impl PalwPanelService {
                         }
                     }
                 }
+                // **ADR-0152 SR-10 / Q-7: the V3 supplementary collector** — after every licence this
+                // tick could offer, on the same carrier budget, so it never takes a licence's place.
+                // For each claim the chain holds `ReceiptLicensed`, the node offers the V3 receipts
+                // SR-10's door credits: the selection (`palw_select_supplementary_v3_v1`) puts them to
+                // the acceptance validator and to the fold itself, so what rides is exactly what the
+                // door credits. That is how an S2 licence's other seats raise it to `basis_k ≥ 2`
+                // before Q-5's gate (the redraw, or `NotReplayBacked` on the second panel), complete
+                // SR-1b's release inside its window, and get paid — a `Sampled` among them. Sets that
+                // release the escrow first, then upgrades, then pay, each soonest-first
+                // (`palw_supplementary_offer_order_v1`). Only past `palw_rcore_plus`; below it the door
+                // does not exist and nothing here runs. Nothing is assembled while no carrier can go
+                // (each offer costs its signature checks and a fold of the tip).
+                if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
+                    && inflight < MAX_INFLIGHT_CARRIERS
+                    && !readiness_waiting
+                    && funding.is_some()
+                {
+                    let mut offers: Vec<(Hash64, kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1)> = Vec::new();
+                    for claim in receipt_pool_v3.claim_ids() {
+                        if supplementary_v3_submitted
+                            .get(&claim)
+                            .is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+                        {
+                            continue;
+                        }
+                        let candidates = receipt_pool_v3.candidates(&claim, &receipt_facts);
+                        if let Some(offer) = session.palw_v2_supplementary_v3_assemble(claim, candidates) {
+                            offers.push((claim, offer));
+                        }
+                    }
+                    palw_supplementary_offer_order_v1(&mut offers);
+                    for (claim, offer) in offers {
+                        if inflight >= MAX_INFLIGHT_CARRIERS || readiness_waiting {
+                            break;
+                        }
+                        let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
+                        match self.build_lifecycle_tx(&offer.object, funding_outpoint, &funding_entry) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                    Ok(()) => {
+                                        info!(
+                                            "[{PALW_PANEL}] submitted a V3 supplementary set for claim {claim} in tx {txid} — {} seat(s) \
+                                             credited, basis {} → {}{}{} (SR-10)",
+                                            offer.effect.credited.len(),
+                                            offer.effect.basis_k_before,
+                                            offer.effect.basis_k_after,
+                                            if offer.effect.upgrades { ", lifting the S2 gate" } else { "" },
+                                            if offer.effect.releases_escrow { ", releasing the escrow" } else { "" },
+                                        );
+                                        let next = TransactionOutpoint::new(txid, 0);
+                                        self.persist_fee_outpoint(next);
+                                        funding = Some((
+                                            next,
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        inflight += 1;
+                                        supplementary_v3_submitted.insert(claim, current_daa);
+                                    }
+                                    Err(e) => {
+                                        warn!("[{PALW_PANEL}] the mempool refused the V3 supplementary set for claim {claim}: {e}");
+                                        funding = None;
+                                    }
+                                }
+                            }
+                            Err(e) => warn!("[{PALW_PANEL}] cannot build the V3 supplementary carrier for claim {claim}: {e}"),
+                        }
+                    }
+                }
                 // **ADR-0124 Decision 2: a seat carries its own receipt after the licence.** For
                 // every claim this seat answered `Valid` on, once the chain has licensed it without
                 // crediting this seat, the receipt rides a supplementary `ReceiptLicensed` while
@@ -8404,7 +8677,21 @@ impl PalwPanelService {
                 retention_daa: PANEL_POOL_RETENTION_DAA,
             };
             receipt_pool_v2.sweep(&receipt_sweep);
-            receipt_pool_v3.sweep(&receipt_sweep);
+            // **ADR-0152 SR-10: past `palw_rcore_plus` a licence does not end a claim's V3 receipts.**
+            // SR-10's door takes them on the licensed claim until its receipt deadline, and the V3
+            // supplementary collector reads them from this pool — after an S2 licence they are the
+            // only thing that can lift it off Q-5's gate. So the licence this node carried does not
+            // drop them; the retention age bounds them, as it bounds every claim no duty names.
+            let carried_nothing = HashMap::new();
+            let v3_sweep = crate::palw_receipt_pool::ReceiptSweepV1 {
+                submitted: if self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+                    &carried_nothing
+                } else {
+                    &submitted
+                },
+                ..receipt_sweep
+            };
+            receipt_pool_v3.sweep(&v3_sweep);
             // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
             // keep become the thing that grows.
             first_seen
@@ -8418,6 +8705,10 @@ impl PalwPanelService {
             answered.retain(|(claim, _, _, _, _)| live.contains(claim));
             // The same argument for `replayed`, which only the duty loop reads, for a live duty.
             replayed.retain(|(claim, _, _, _, _)| live.contains(claim));
+            // Q-7's samplings go with their duties; a dropped handle detaches its task, which runs
+            // out and releases its ledger reservation on its own.
+            s3_sampled.retain(|(claim, _, _, _, _)| live.contains(claim));
+            s3_samplings.retain(|(claim, _, _, _, _), _| live.contains(claim));
             // SEAT-R's replays live exactly as long as this seat's duty on their claim: one whose claim
             // left the duties (licensed, redrawn away from this seat, voided) stops holding a slot.
             let duty_claims: HashSet<Hash64> = duties.iter().map(|duty| duty.claim_id).collect();
@@ -8490,6 +8781,7 @@ impl PalwPanelService {
             // as its window; the chain refuses anything past `receipt_deadline` regardless.
             own_receipts.retain(|_, (_, deadline)| current_daa <= *deadline);
             supplementary_submitted.retain(|claim, _| own_receipts.contains_key(claim));
+            supplementary_v3_submitted.retain(|claim, _| receipt_pool_v3.contains_claim(claim));
             // Our own executions are only needed while the dispute they support is open.
             own_executions.retain(|claim, _| live.contains(claim));
             submit_attempts.retain(|claim, _| receipt_pool_v2.contains_claim(claim));
@@ -10947,6 +11239,112 @@ impl PalwPanelService {
         session.palw_v2_receipt_coverage_assemble(claim, segmented.clone()).is_some()
             || session.palw_v2_optimistic_assemble(claim, segmented).is_some()
             || session.palw_v2_receipt_quorum_assemble(claim, whole).is_some()
+    }
+
+    /// **ADR-0152 Q-7: start this seat's S3 sampling of a claim, off the loop** — the `Sampled` route
+    /// (`palw_seat_sampled_due_v1` decides when; `palw_seat_s3_sample_v1` is the sampling). `Ok(None)`:
+    /// this node holds no capture of the claim's to sample. `Err(())`: the memory ledger refused — the
+    /// sampling replays a segment per site, so it reserves the partial seat's need of the longest
+    /// segment for its life, as SEAT-S4's resume does for one segment, and a later tick may fit.
+    fn seat_s3_sampling_start_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        network_domain: Hash64,
+        pooled: &[Vec<u8>],
+    ) -> Result<Option<tokio::task::JoinHandle<PalwSeatS3SampleV1>>, ()> {
+        let Ok(backend) = self.resolve_backend(session, duty.class_id, duty.artifact_root) else { return Ok(None) };
+        let captures = self.seat_s3_captures_v1(session, backend.as_ref(), duty, network_domain, pooled);
+        if captures.is_empty() {
+            return Ok(None);
+        }
+        let seats = duty.panel_seat_count.max(1);
+        let last = kaspa_consensus_core::palw_verification_v2::palw_segment_count_v2(seats).saturating_sub(1);
+        let need = self.backends().role_memory_need_for_backend_or_chain_v1(
+            backend.as_ref(),
+            duty.class_id,
+            duty.artifact_root,
+            None,
+            kaspa_consensus_core::palw_resource_profile_v1::PalwResourceRoleV1::PartialSeat { seat_count: seats, segment_index: last },
+            |id| self.chain_carriage_v1(session, id),
+        );
+        let reserved = match self.reserve_replay_v1("s3-sampler", &need, duty.class_id, duty.claim_id) {
+            Ok(reserved) => reserved,
+            Err(why) => {
+                crate::palw_backends::note_throttled_v1("panel-s3-ledger", || {
+                    format!("[{PALW_PANEL}] claim {}: the S3 sampling waits — {why}", duty.claim_id)
+                });
+                return Err(());
+            }
+        };
+        let (anchor, claim, seat_index) = (duty.panel_anchor, duty.claim_id, duty.seat_index as u16);
+        Ok(Some(tokio::task::spawn_blocking(move || {
+            let _held_for_the_sampling = reserved;
+            captures
+                .iter()
+                .map(|(capture, roots)| palw_seat_s3_sample_v1(backend.as_ref(), capture, *roots, anchor, claim, seat_index, seats))
+                .find(|sampled| *sampled != PalwSeatS3SampleV1::Unchecked)
+                .unwrap_or(PalwSeatS3SampleV1::Unchecked)
+        })))
+    }
+
+    /// **The captures this node holds of a claim, each with the roots SEAT-S3 checks it against**
+    /// (ADR-0152 PE-3): the claim's committed roots and the job the claim answered — for an attempt,
+    /// the anchor its block derives and ADR-0117's draw at the block's height, the same pair the
+    /// material arms verify under; for a free-prompt claim, its job's own id, off a `FPC1` payload of
+    /// the claim's class and executor. From the pool and this node's retention; at most
+    /// [`PALW_SEAT_S3_CAPTURES_V1`]. Nothing is trusted here — `palw_seat_s3_sample_v1` verifies each
+    /// before it reads a byte of its shape.
+    fn seat_s3_captures_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2,
+        network_domain: Hash64,
+        pooled: &[Vec<u8>],
+    ) -> Vec<(Vec<u8>, PalwClaimRootsV1)> {
+        let roots = |anchor: Hash64, attempt_draw: Option<bool>| PalwClaimRootsV1 {
+            execution_root: duty.execution_root,
+            trace_root: duty.trace_root,
+            anchor,
+            attempt_draw,
+            output_root: Some(duty.output_root),
+        };
+        if duty.free_prompt {
+            let form = self.class_prompt_ids_form(duty.class_id);
+            let disk = self.fp_retained_payload_paths(&duty.claim_id).into_iter().filter_map(|path| std::fs::read(path).ok());
+            return pooled
+                .iter()
+                .cloned()
+                .chain(disk)
+                .filter_map(|bytes| {
+                    let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes, form)?;
+                    let job = &payload.material.job;
+                    (job.class_id == duty.class_id && job.executor_bond == duty.executor_bond.0).then(|| {
+                        let anchor = kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job);
+                        (payload.capture.clone(), roots(anchor, None))
+                    })
+                })
+                .take(PALW_SEAT_S3_CAPTURES_V1)
+                .collect();
+        }
+        let Some(anchor) =
+            self.job_anchor_for_claim(session, backend, network_domain, duty.accepted_block, duty.class_id, &duty.executor_bond)
+        else {
+            return Vec::new();
+        };
+        let claim_roots = roots(anchor, self.attempt_draw_for_claim(session, duty.accepted_block));
+        let disk = [
+            self.retained_capture(&duty.claim_id),
+            std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok(),
+        ];
+        pooled
+            .iter()
+            .cloned()
+            .chain(disk.into_iter().flatten())
+            .take(PALW_SEAT_S3_CAPTURES_V1)
+            .map(|bytes| (bytes, claim_roots))
+            .collect()
     }
 
     /// ADR-0133 S1/S3: a partial seat resumes assigned segments (or S3 sites) from published
@@ -13547,7 +13945,7 @@ mod seat_r_tests {
         // Every exit, in a spelling this pin reads.
         const VALID: &str = "break 'verdict Some(PalwReceiptVerdictV2::Valid);";
         const ANY: &str = "break 'verdict Some(verdict);";
-        const SPELLINGS: [&str; 7] = [
+        const SPELLINGS: [&str; 8] = [
             "break 'verdict None;",
             "break 'verdict None,",
             VALID,
@@ -13555,6 +13953,8 @@ mod seat_r_tests {
             "break 'verdict Some(PalwReceiptVerdictV2::Incapable);",
             "break 'verdict Some(PalwReceiptVerdictV2::Unavailable {",
             "break 'verdict None\n",
+            // ADR-0152 Q-7: a finished S3 sampling's answer — `Sampled`, never a `Valid`.
+            "break 'verdict Some(PalwReceiptVerdictV2::Sampled);",
         ];
         for (at, _) in block.match_indices("break 'verdict") {
             assert!(
@@ -14932,5 +15332,236 @@ mod seat_s_tests {
         let key = palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 1, b"x");
         assert_ne!(key, palw_seat_s4_candidate_key_v1(h(1), h(2), 5, 2, b"x"), "a segment's own task");
         assert_ne!(key.1, h(2), "never a whole-job replay's key");
+    }
+}
+
+#[cfg(test)]
+mod q7_sampled_and_collector_tests {
+    //! **ADR-0152 Q-7 on kaspad (F4 part 2), pinned where it lives.** `Sampled` is the answer of a
+    //! partial seat whose replay or resume is not coming, past SEAT-R, R-core+ and S3, in the last
+    //! sixty DAA of its window, on a capture SEAT-S3 verified first; it is filed as a V3 receipt over
+    //! the seat's assigned mask and never as a `Valid` or a V2. The V3 supplementary collector runs
+    //! after every licence, carries a release before an upgrade before pay, soonest first, and asks
+    //! the fold (the consensus crate's tests hold the set it builds to what the door credits:
+    //! `palw_rcore_q5_gate`, `t12_rcore_sr10_door_gate`).
+    use super::{
+        MARKER_SEAT_S, PALW_SEAT_SAMPLED_LEAD_DAA_V1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatS3SampleV1,
+        palw_seat_receipt_forms_v1, palw_seat_s3_sample_v1, palw_seat_sampled_due_v1, palw_supplementary_offer_order_v1,
+    };
+    use kaspa_consensus_core::palw_backend::{
+        PalwCaptureShapeV1, PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
+    };
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwSupplementaryEffectV1, PalwSupplementaryOfferV1};
+    use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+    use kaspa_hashes::Hash64;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn h(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+
+    /// A family that verifies exactly one capture against exactly one execution root, and answers
+    /// every site the same way until `fault_at` (0-based) — counting the sites it was asked.
+    struct S3Family {
+        shape: bool,
+        fault_at: Option<usize>,
+        cannot: bool,
+        asked: AtomicUsize,
+    }
+
+    const CAPTURE: &[u8] = b"the claim's own capture";
+
+    impl S3Family {
+        fn new() -> Self {
+            Self { shape: true, fault_at: None, cannot: false, asked: AtomicUsize::new(0) }
+        }
+    }
+
+    impl PalwExecutionBackendV1 for S3Family {
+        fn model_id(&self) -> &str {
+            "s3-family"
+        }
+        fn job_for_anchor(&self, _anchor: Hash64) -> Result<(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>), String> {
+            Err("not asked".into())
+        }
+        fn execute(
+            &self,
+            _job: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+            _prompt: &[usize],
+        ) -> Result<PalwExecutionOutcomeV1, String> {
+            Err("not asked".into())
+        }
+        fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
+            if material == CAPTURE && claim.execution_root == h(0xE1) {
+                PalwMaterialVerdictV1::Matches
+            } else {
+                PalwMaterialVerdictV1::Mismatch
+            }
+        }
+        fn capture_shape(&self, _material: &[u8]) -> Option<PalwCaptureShapeV1> {
+            let profile = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(
+                kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY,
+            )
+            .expect("the floor's profile");
+            self.shape.then(|| PalwCaptureShapeV1 {
+                job_context: kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, 8, 4),
+                step_leaf_count: 100,
+                layer_count: 4,
+            })
+        }
+        fn replay_layer_site_v3(
+            &self,
+            _capture: &[u8],
+            _site: kaspa_consensus_core::palw_layer_sample_v3::PalwLayerSiteV3,
+            _seat_count: u16,
+        ) -> Result<bool, String> {
+            let n = self.asked.fetch_add(1, Ordering::SeqCst);
+            if self.cannot {
+                return Err("no opening".into());
+            }
+            Ok(self.fault_at != Some(n))
+        }
+    }
+
+    fn roots(execution_root: Hash64) -> PalwClaimRootsV1 {
+        PalwClaimRootsV1 {
+            execution_root,
+            trace_root: h(0x71),
+            anchor: h(0xA1),
+            attempt_draw: Some(false),
+            output_root: Some(h(0x01)),
+        }
+    }
+
+    fn sample(family: &S3Family, capture: &[u8], execution_root: Hash64) -> PalwSeatS3SampleV1 {
+        palw_seat_s3_sample_v1(family, capture, roots(execution_root), h(0x77), h(0xC1), 2, 5)
+    }
+
+    /// **SEAT-S3 before S3**: a capture that is not the claim's — other bytes, or the claim's bytes
+    /// under another execution root — is never sampled (not one site asked); the claim's own capture
+    /// with every site agreeing is `Sampled`; one site that disagrees is `Faulted` (the court's, not a
+    /// receipt); a site the family cannot recompute, or a shape it cannot read, is `Unchecked`.
+    #[test]
+    fn s3_samples_only_a_capture_seat_s3_verified() {
+        for (bytes, root) in [(b"somebody else's".as_slice(), h(0xE1)), (CAPTURE, h(0xBAD))] {
+            let family = S3Family::new();
+            assert_eq!(sample(&family, bytes, root), PalwSeatS3SampleV1::Unchecked);
+            assert_eq!(family.asked.load(Ordering::SeqCst), 0, "an unverified capture is never sampled");
+        }
+        let family = S3Family::new();
+        assert_eq!(sample(&family, CAPTURE, h(0xE1)), PalwSeatS3SampleV1::Sampled);
+        assert_eq!(
+            family.asked.load(Ordering::SeqCst),
+            kaspa_consensus_core::palw_layer_sample_v3::PALW_LAYER_SAMPLE_V3_SITES as usize,
+            "every drawn site recomputed"
+        );
+        let family = S3Family { fault_at: Some(2), ..S3Family::new() };
+        assert_eq!(sample(&family, CAPTURE, h(0xE1)), PalwSeatS3SampleV1::Faulted);
+        assert_eq!(family.asked.load(Ordering::SeqCst), 3, "it stops at the first lie");
+        let family = S3Family { cannot: true, ..S3Family::new() };
+        assert_eq!(sample(&family, CAPTURE, h(0xE1)), PalwSeatS3SampleV1::Unchecked);
+        let family = S3Family { shape: false, ..S3Family::new() };
+        assert_eq!(sample(&family, CAPTURE, h(0xE1)), PalwSeatS3SampleV1::Unchecked);
+        assert_eq!(family.asked.load(Ordering::SeqCst), 0);
+    }
+
+    /// **When a seat answers `Sampled`**: a partial seat that replays or resumes, past SEAT-R, R-core+
+    /// and S3, within the last `PALW_SEAT_SAMPLED_LEAD_DAA_V1` DAA of its window and not after it —
+    /// never the full seat, never an abstaining one, never with any fence dormant.
+    #[test]
+    fn sampled_is_due_only_for_a_partial_seat_at_the_end_of_its_window_past_every_fence() {
+        let deadline = 1_000;
+        let at = deadline - PALW_SEAT_SAMPLED_LEAD_DAA_V1;
+        for role in [PalwSeatRRoleV1::PartialReplays, PalwSeatRRoleV1::PartialResumes] {
+            assert!(palw_seat_sampled_due_v1(true, true, true, role, deadline, at), "{role:?} at the lead");
+            assert!(palw_seat_sampled_due_v1(true, true, true, role, deadline, deadline), "{role:?} at the deadline");
+            assert!(!palw_seat_sampled_due_v1(true, true, true, role, deadline, at - 1), "{role:?}: its Valid may still come");
+            assert!(!palw_seat_sampled_due_v1(true, true, true, role, deadline, deadline + 1), "{role:?}: past the window");
+            for (seat_r, rcore, s3) in [(false, true, true), (true, false, true), (true, true, false)] {
+                assert!(!palw_seat_sampled_due_v1(seat_r, rcore, s3, role, deadline, at), "{role:?} {seat_r} {rcore} {s3}");
+            }
+        }
+        for role in [PalwSeatRRoleV1::FullSeat, PalwSeatRRoleV1::PartialAbstains] {
+            assert!(!palw_seat_sampled_due_v1(true, true, true, role, deadline, at), "{role:?} never samples");
+        }
+    }
+
+    /// **Where `Sampled` is filed** (Q-1, SR-10): one V3 receipt over the seat's assigned mask, never
+    /// the whole-job V2 (the V2 doors take `Valid` alone), in every role that can reach it — so it
+    /// rides a licence set only as a rider (counted in nothing) or SR-10's V3 door, where it is
+    /// credited for pay and latches `unserved_seen`.
+    #[test]
+    fn sampled_is_filed_as_the_seats_v3_over_its_assigned_mask() {
+        let mask = PalwSegmentMaskV2(0b0100);
+        for role in [PalwSeatRRoleV1::PartialReplays, PalwSeatRRoleV1::PartialResumes] {
+            assert_eq!(
+                palw_seat_receipt_forms_v1(true, true, false, role, mask),
+                PalwSeatReceiptFormsV1 { segments: Some(mask), whole: false },
+                "{role:?}"
+            );
+        }
+    }
+
+    fn offer(claim: u64, releases: bool, upgrades: bool, lands_by: u64) -> (Hash64, PalwSupplementaryOfferV1) {
+        (
+            h(claim),
+            PalwSupplementaryOfferV1 {
+                object: PalwConsensusObjectV2::ReceiptLicensedV2 { claim: h(claim), receipts: Vec::new() },
+                effect: PalwSupplementaryEffectV1 {
+                    credited: Vec::new(),
+                    basis_k_before: 1,
+                    basis_k_after: if upgrades { 2 } else { 1 },
+                    upgrades,
+                    releases_escrow: releases,
+                    lands_by_daa: lands_by,
+                },
+            },
+        )
+    }
+
+    /// **The collector's order**: a set that releases the escrow before one that lifts the S2 gate
+    /// before one that only pays, each soonest-first by the DAA it must land by, then by claim id.
+    #[test]
+    fn the_collector_carries_a_release_then_an_upgrade_then_pay_soonest_first() {
+        let mut offers = vec![
+            offer(1, false, false, 10),
+            offer(2, false, true, 500),
+            offer(3, true, true, 300),
+            offer(4, false, true, 400),
+            offer(5, true, false, 200),
+            offer(6, false, false, 10),
+        ];
+        palw_supplementary_offer_order_v1(&mut offers);
+        let order: Vec<Hash64> = offers.iter().map(|(claim, _)| *claim).collect();
+        assert_eq!(order, vec![h(5), h(3), h(4), h(2), h(1), h(6)]);
+    }
+
+    /// **Where the two live in the loop.** The V3 collector runs after the licence collector (which
+    /// offers every door's licence first) and before a seat carries its own V2 receipt, and only past
+    /// `palw_rcore_plus`; `Sampled` is decided before the memory check (its case is a host that fits a
+    /// segment, not the whole replay) and answers the verdict block first.
+    #[test]
+    fn the_collector_follows_the_licences_and_sampled_precedes_the_memory_check() {
+        let whole = include_str!("palw_panel.rs");
+        let source = &whole[..whole.find(MARKER_SEAT_S).expect("the production code")];
+        let licences = source.find(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("the licence collector");
+        let collector = source.find("session.palw_v2_supplementary_v3_assemble(claim, candidates)").expect("the V3 collector");
+        let own = source.find("session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt])").expect("the own V2 receipt");
+        assert!(licences < collector && collector < own, "licences, then the V3 collector, then the seat's own receipt");
+        let gated = &source[..collector];
+        assert!(
+            gated.rfind("if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)").is_some_and(|at| at > licences),
+            "the collector runs only past the fence"
+        );
+        let duty_loop = &source[source.find("for index in order {").expect("the duty loop")..];
+        let due = duty_loop.find("palw_seat_sampled_due_v1(").expect("the Sampled decision");
+        let memory = duty_loop.find("self.replay_memory_budget_v1(").expect("the memory check");
+        let verdict = duty_loop.find("let verdict = 'verdict: {").expect("the verdict block");
+        let answers = duty_loop.find("break 'verdict Some(PalwReceiptVerdictV2::Sampled);").expect("the Sampled answer");
+        assert!(due < memory && memory < verdict && verdict < answers, "decided before the memory check, answered first");
+        assert!(
+            answers < duty_loop.find("if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {").unwrap(),
+            "ahead of every arm"
+        );
     }
 }

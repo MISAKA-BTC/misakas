@@ -361,6 +361,16 @@ impl ConsensusSessionOwned {
         self.consensus.palw_v2_supplementary_receipt_assemble(claim, mine)
     }
 
+    /// ADR-0152 SR-10 / Q-7: the V3 supplementary set a collector offers for a licensed claim, with
+    /// what the fold says it does — `None` while the door is shut or the set would credit nobody.
+    pub fn palw_v2_supplementary_v3_assemble(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+        candidates: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3>,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
+        self.consensus.palw_v2_supplementary_v3_assemble(claim, candidates)
+    }
+
     /// One virtual-UTXO point lookup — the fee-outpoint resolution the PALW panel submitter runs.
     pub fn get_virtual_utxo_entry(
         &self,
