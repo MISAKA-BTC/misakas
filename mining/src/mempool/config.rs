@@ -41,6 +41,14 @@ pub const PQ_PRODUCTION_MINIMUM_RELAY_TRANSACTION_FEE: u64 = 10_000;
 pub(crate) const DEFAULT_MINIMUM_STANDARD_TRANSACTION_VERSION: u16 = TX_VERSION;
 pub(crate) const DEFAULT_MAXIMUM_STANDARD_TRANSACTION_VERSION: u16 = TX_VERSION;
 
+/// **ADR-0152 v3.1 H-1 (P2-9): does `params` oblige a heartbeat to carry H-1's lifecycle objects?**
+/// The one reading of the ruleset behind [`Config::palw_h1_carrier_priority`] — the daemon passes
+/// it, and a test pins it per network (P2-9 review, finding 6). R-core+ is armed at genesis only, so
+/// its presence is in force at every DAA score and no height needs threading into the pool.
+pub fn palw_h1_carrier_priority_for(params: &kaspa_consensus_core::config::params::Params) -> bool {
+    params.palw_rcore_plus_fence().is_some()
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub maximum_transaction_count: usize,
@@ -95,10 +103,10 @@ pub struct Config {
     /// objects H-1 names?** Where it does, every template takes those carriers first
     /// (`TransactionsPool::build_palw_carrier_lane`) — the heartbeat miner's templates included,
     /// which is the point: during a licence halt heartbeats may be the only blocks, and a conviction
-    /// paying the minimum relay fee must not wait behind a block's worth of better-paying traffic.
+    /// paying the minimum relay fee must not wait behind a block's worth of better-paying traffic —
+    /// and a full pool keeps a reserve for them (`palw_carriers::PalwCarrierReserveV1`).
     ///
-    /// The daemon sets it from `params.palw_rcore_plus_fence().is_some()`. R-core+ may only be armed
-    /// at genesis, so presence is in force at every DAA score and no height needs threading here.
+    /// The daemon sets it from [`palw_h1_carrier_priority_for`].
     /// `false` by default, so every other network — testnet-11, devnet, mainnet — and every unit
     /// fixture selects exactly as it did before: no carrier is indexed and no lane is built.
     pub palw_h1_carrier_priority: bool,

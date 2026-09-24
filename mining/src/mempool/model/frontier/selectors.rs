@@ -425,17 +425,22 @@ impl TemplateTransactionSelector for AttestationPrioritySelector {
 /// Yields the pre-chosen carriers (`TransactionsPool::build_palw_carrier_lane`, already bounded to
 /// the lane's share of the block) in the first batch, ahead of everything `rest` selects, and then
 /// hands every refill to `rest`. `rest` is the pool's ordinary composition — attestation lane,
-/// frontier sampling — built over the frontier WITHOUT the carriers and within the mass they left,
-/// so no transaction can be selected twice and the two lanes together never exceed the block.
+/// frontier sampling, upstream's selectors unchanged — built within the mass the carriers left, so
+/// the two lanes together never exceed the block. It is built over the WHOLE frontier (an excluding
+/// build walks the frontier twice under the mempool lock; P2-9 review, finding 2), so a carrier it
+/// samples again is dropped here: nothing is selected twice, and the cost is at most the lane's
+/// mass in under-fill, only when the rest re-samples a carrier.
 ///
 /// Not the shared-budget form [`AttestationPrioritySelector`] uses, deliberately: a rejected
 /// carrier's mass is simply not re-offered to `rest` in this template. Rejections here are
-/// validation failures only (a carrier is never a market carrier or an attestation shard, so no
-/// classifier drops it), and a validation failure fails the episode — [`Self::is_successful`] turns
+/// validation failures only — the H-1 gate included (`PalwH1CarrierRefused`: the tip's fold no
+/// longer takes it) — and a validation failure fails the episode: [`Self::is_successful`] turns
 /// `false`, the builder returns the invalid set, the mining manager evicts it and the next attempt
 /// runs without it. A carrier that can never be mined must not keep the head of every template.
 pub struct PalwCarrierLaneSelector {
     carriers: Vec<SequenceSelectorTransaction>,
+    /// The lane's ids, which `rest` may select again and which are dropped from its batches.
+    lane_ids: std::collections::HashSet<TransactionId>,
     /// Whether the carriers have been yielded (they are yielded exactly once).
     emitted: bool,
     /// The yielded carriers still standing — a rejection of one of them is the lane's, not `rest`'s.
@@ -447,7 +452,8 @@ pub struct PalwCarrierLaneSelector {
 
 impl PalwCarrierLaneSelector {
     pub fn new(carriers: Vec<SequenceSelectorTransaction>, rest: Box<dyn TemplateTransactionSelector>) -> Self {
-        Self { carriers, emitted: false, standing: Default::default(), rejected: 0, rest }
+        let lane_ids = carriers.iter().map(|carrier| carrier.tx.id()).collect();
+        Self { carriers, lane_ids, emitted: false, standing: Default::default(), rejected: 0, rest }
     }
 }
 
@@ -461,7 +467,7 @@ impl TemplateTransactionSelector for PalwCarrierLaneSelector {
                 txs.push(carrier.tx.as_ref().clone());
             }
         }
-        txs.extend(self.rest.select_transactions());
+        txs.extend(self.rest.select_transactions().into_iter().filter(|tx| !self.lane_ids.contains(&tx.id())));
         txs
     }
 
@@ -741,5 +747,13 @@ mod tests {
         let _ = sel.select_transactions();
         sel.reject_selection(carrier.id());
         assert!(!sel.is_successful(), "an invalid carrier fails the episode, so the manager evicts it");
+
+        // The rest is built over the whole frontier (review finding 2), so it may select a lane
+        // carrier again: the lane drops the copy, and nothing is selected twice.
+        let rest_with_copy: Box<dyn TemplateTransactionSelector> =
+            Box::new(TakeAllSelector::new(vec![lead.clone(), carrier.clone(), other.clone()]));
+        let mut sel = PalwCarrierLaneSelector::new(vec![SequenceSelectorTransaction::new(carrier.clone(), 100)], rest_with_copy);
+        let first: Vec<_> = sel.select_transactions().iter().map(|tx| tx.id()).collect();
+        assert_eq!(first, vec![carrier.id(), lead.id(), other.id()], "the rest's copy of the carrier is dropped");
     }
 }

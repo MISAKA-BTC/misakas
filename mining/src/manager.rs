@@ -1080,6 +1080,14 @@ impl MiningManager {
         self.mempool.read().has_transaction(transaction_id, query)
     }
 
+    /// **Whether each of `transaction_ids` sits in the transaction pool (not the orphan pool), under
+    /// ONE read lock** — ADR-0152 H-1's relay asks this of a heartbeat it has not validated yet, and a
+    /// lock per carrier was a lever a peer's body could pull (P2-9 review, finding 4).
+    pub fn has_pooled_transactions(&self, transaction_ids: &[TransactionId]) -> Vec<bool> {
+        let mempool = self.mempool.read();
+        transaction_ids.iter().map(|id| mempool.has_transaction(id, TransactionQuery::TransactionsOnly)).collect()
+    }
+
     /// Whether a transaction already in this mempool spends `outpoint` — i.e. whether the outpoint
     /// is still selectable as funding by this node, which "present in the virtual UTXO set" does
     /// NOT answer (see [`Mempool::outpoint_is_spent`]).
@@ -1645,6 +1653,12 @@ impl MiningManagerProxy {
     /// Returns whether the mempool holds this transaction in any form.
     pub async fn has_transaction(self, transaction_id: TransactionId, query: TransactionQuery) -> bool {
         spawn_blocking(move || self.inner.has_transaction(&transaction_id, query)).await.unwrap()
+    }
+
+    /// [`MiningManager::has_pooled_transactions`], synchronously: for a caller already on a blocking
+    /// thread (the relay's H-1 exemption runs its whole decision inside one `spawn_blocking`).
+    pub fn has_pooled_transactions_blocking(&self, transaction_ids: &[TransactionId]) -> Vec<bool> {
+        self.inner.has_pooled_transactions(transaction_ids)
     }
 
     /// Whether a transaction already in this mempool spends `outpoint`. Synchronous on purpose: the

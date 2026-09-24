@@ -273,19 +273,22 @@ impl HandleRelayInvsFlow {
             // **ADR-0152 H-1: so is a beat carrying a pending lifecycle carrier** — a conviction, DA
             // or reporter object this node holds in its mempool and no other beat has claimed
             // (`FlowContext::palw_heartbeat_h1_exempt`). Asked only once the allowance is spent, so
-            // an honest beat never pays the decode; asked without claiming, because the block is
-            // not validated yet.
+            // an honest beat never pays the check; asked without claiming, because the block is not
+            // validated yet — and claimed below once it is (`h1_spared`).
+            let mut h1_spared = false;
             if !inv.is_orphan_root
                 && block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
                 && self.ctx.palw_heartbeat_relay_governs(block.header.daa_score)
                 && !self.heartbeat_budget.take(kaspa_core::time::unix_now())
-                && !self.ctx.palw_heartbeat_h1_exempt(&block, false).await
             {
-                debug!(
-                    "Relay heartbeat {} from {} is over the peer's heartbeat allowance — not processed (a descendant brings it back as an orphan root if the chain needs it)",
-                    inv.hash, self.router
-                );
-                continue;
+                if !self.ctx.palw_heartbeat_h1_exempt(&block, false).await {
+                    debug!(
+                        "Relay heartbeat {} from {} is over the peer's heartbeat allowance — not processed (a descendant brings it back as an orphan root if the chain needs it)",
+                        inv.hash, self.router
+                    );
+                    continue;
+                }
+                h1_spared = true;
             }
 
             let blue_work_threshold = session.async_get_virtual_merge_depth_blue_work_threshold().await;
@@ -346,6 +349,16 @@ impl HandleRelayInvsFlow {
                 }
                 Err(rule_error) => return Err(rule_error.into()),
             };
+
+            // **ADR-0152 H-1 (P2-9 review, finding 3): a beat the allowance spared spends its
+            // carriers now that it is valid**, whatever its slot verdict — a `First` beat used to leave
+            // them unspent, and one pending carrier then spared every beat a peer copied it into, one
+            // after another, until virtual processing took the carrier out of the mempool. This flow
+            // handles a peer's beats in order, so the next copy from this peer is asked after this
+            // claim and is refused. A beat that failed validation returned above and claims nothing.
+            if h1_spared {
+                self.ctx.palw_heartbeat_h1_exempt(&block, true).await;
+            }
 
             // As a policy, we only relay blocks who stand a chance to enter past(virtual).
             // The only mining rule which permanently excludes a block is the merge depth bound

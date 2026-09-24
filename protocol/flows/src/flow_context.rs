@@ -965,43 +965,39 @@ impl FlowContext {
     ///
     /// H2 bounds what one peer can make this node download (the allowance) and what a slot's
     /// surplus beats cost the network (one announcement per slot). H-1 says neither may drop a
-    /// heartbeat for carrying a conviction, DA or reporter object. So a beat is spared when it
-    /// carries an H-1 carrier (`palw_h1_carrier_ids_v1`, the list the miner's lane reads) that is
-    /// PENDING — in this node's mempool: fee paid, scripts and inputs checked, not yet in a block
-    /// this node processed — and that has bought no other beat's exemption
-    /// (`PalwHeartbeatRelayV1::h1_exemption`). Both conditions are the bound: a 0x4b payload costs
-    /// nothing to put in a block, so without them every flooded beat would carry one; with them
-    /// each spared beat costs a relay fee, once. An honest carrier-bearing beat qualifies because a
-    /// carrier travels as a transaction before a miner includes it; one that does not (this node
-    /// never saw the carrier) falls back to H2's own escape, the orphan-root fetch.
+    /// heartbeat for carrying a conviction, DA or reporter object. The decision is
+    /// [`crate::palw_heartbeat_relay::palw_heartbeat_h1_exemption_v1`] (gate, the beat's own proof
+    /// of work, at most eight payloads decoded, ONE mempool query, the claim ledger — see
+    /// `palw_heartbeat_relay`'s module doc); this runs it off the async threads, in one
+    /// `spawn_blocking`, since it takes the mempool lock and hashes a header.
     ///
-    /// `claim` spends the carrier on this beat, and only the announcement — which runs on a
-    /// validated block — passes `true`; the allowance gate runs before validation and only asks.
-    /// Asked only once a rule would drop the beat (an empty allowance, a `Repeat`), and both askers
-    /// run before the block's `on_new_block` takes its transactions out of the mempool. Only where
-    /// R-core+ is in force, the fence H-1 belongs to; elsewhere nothing is spared, as before.
+    /// `claim` spends the beat's open carriers on it: a VALIDATED beat only — the one the allowance
+    /// spared (`HandleRelayInvsFlow`, right after its `block_task`) and a `Repeat` at its
+    /// announcement ([`Self::palw_heartbeat_relay_admits`]); the allowance gate itself, which runs
+    /// before validation, only asks. All three run before the block's `on_new_block` takes its
+    /// transactions out of the mempool. Only where R-core+ is in force; elsewhere nothing is
+    /// spared, as before, and no thread is spawned.
     pub async fn palw_heartbeat_h1_exempt(&self, block: &Block, claim: bool) -> bool {
         if block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1
             || !self.config.params.palw_rcore_plus_active_at(block.header.daa_score)
         {
             return false;
         }
-        let carriers = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_ids_v1(&block.transactions);
-        if carriers.is_empty() {
-            return false;
-        }
-        let mut pending = Vec::with_capacity(carriers.len());
-        for carrier in carriers {
-            if self
-                .mining_manager()
-                .clone()
-                .has_transaction(carrier, kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
-                .await
-            {
-                pending.push(carrier);
-            }
-        }
-        self.palw_heartbeat_relay.h1_exemption(block.hash(), &pending, claim)
+        let (ctx, block) = (self.clone(), block.clone());
+        tokio::task::spawn_blocking(move || {
+            let mempool = ctx.mining_manager().clone();
+            crate::palw_heartbeat_relay::palw_heartbeat_h1_exemption_v1(
+                &ctx.config.params,
+                &block,
+                &ctx.palw_heartbeat_relay,
+                crate::palw_heartbeat_relay::palw_heartbeat_pow_passes_v1,
+                |candidates| mempool.has_pooled_transactions_blocking(candidates),
+                claim,
+            )
+        })
+        .await
+        // A panicked worker is a node-local fault: spare nothing, as H2 would.
+        .unwrap_or(false)
     }
 
     /// Whether this network runs the PALW ConsensusV2 ruleset — the gate on every PALW gossip

@@ -1299,54 +1299,77 @@ mod tests {
         assert!(selected.iter().all(|tx| tx.id() != shard_id), "quarantined shard must be held out of the next selector attempt");
     }
 
-    /// **ADR-0152 v3.1 H-1, T38's miner half: the template a heartbeat miner asks for carries a
-    /// conviction carrier under several blocks of traffic paying a hundred times its feerate.**
+    /// **ADR-0152 v3.1 H-1, T38's miner half: under a FULL mempool of transactions paying a hundred
+    /// times its feerate, a heartbeat miner's template carries the conviction carrier.**
     ///
     /// The heartbeat miner has no selector of its own — it asks `get_block_template`, and consensus
     /// only re-shapes the header and coinbase (`heartbeat_adapt_block_template` keeps every
-    /// transaction) — so this is the whole of the node's choice of what a beat carries. The carrier
-    /// enters as the panel's does, at `Priority::Low` and the minimum fee, and it leads the template
-    /// every time; the rest of the block is still the fee market's. Where the network does not arm
-    /// R-core+ (`palw_h1_carrier_priority` off) the pool indexes nothing and selects as before.
+    /// transaction) — so this is the whole of the node's choice of what a beat carries. The pool is
+    /// filled to BOTH its limits (`maximum_transaction_count`, `mempool_size_limit`) with several
+    /// blocks of better-paying traffic (P2-9 review, finding 1: five blocks of traffic in an unbounded
+    /// pool proved only the ordering). The carrier enters as the panel's does, at `Priority::Low` and
+    /// the minimum fee: the carrier reserve admits it, and it leads the template every time while the
+    /// rest of the block is still the fee market's. Where the network does not arm R-core+
+    /// (`palw_h1_carrier_priority` off) the same pool refuses it, as upstream always did.
     #[test]
-    fn a_heartbeat_template_carries_a_lifecycle_carrier_under_better_paying_traffic() {
+    fn a_heartbeat_template_carries_a_lifecycle_carrier_under_a_full_mempool() {
         use kaspa_consensus_core::{
             palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2},
             palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2},
             subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
         };
         const SMALL_BLOCK_MASS: u64 = 3_000;
-        let consensus = Arc::new(ConsensusMock::new());
-        let counters = Arc::new(MiningCounters::default());
-        let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, SMALL_BLOCK_MASS);
-        config.palw_h1_carrier_priority = true;
-        let mining_manager = MiningManager::with_config(config, None, counters, None);
-
-        let mut traffic_mass = 0;
-        for i in 0..50 {
-            let mut tx = create_transaction_with_utxo_entry(i, 0);
-            tx.calculated_fee = Some(100 * DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
-            traffic_mass += tx.calculated_non_contextual_masses.unwrap().compute_mass;
-            validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), tx).unwrap();
-        }
-        assert!(traffic_mass > 2 * SMALL_BLOCK_MASS, "the traffic is several blocks' worth: {traffic_mass}");
-
-        let mut carrier = create_transaction_with_utxo_entry(1_000, 0);
-        let accusation = PalwConsensusObjectV2::DefaultAccused {
-            claim: Hash64::from_u64_word(0xC1A1),
-            missing_event_index: 0,
-            accuser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
-            signature: vec![1; 8],
+        const TRAFFIC: u64 = 50;
+        let traffic_size = create_transaction_with_utxo_entry(0, 0).mempool_estimated_bytes();
+        let full_manager = |carrier_priority: bool| {
+            let consensus = Arc::new(ConsensusMock::new());
+            let mut config = Config::build_default(TARGET_TIME_PER_BLOCK, false, SMALL_BLOCK_MASS);
+            config.palw_h1_carrier_priority = carrier_priority;
+            config.maximum_transaction_count = TRAFFIC as usize;
+            config.mempool_size_limit = TRAFFIC as usize * traffic_size;
+            let mining_manager = MiningManager::with_config(config, None, Arc::new(MiningCounters::default()), None);
+            let mut traffic_mass = 0;
+            for i in 0..TRAFFIC {
+                let mut tx = create_transaction_with_utxo_entry(i as u32, 0);
+                assert_eq!(tx.mempool_estimated_bytes(), traffic_size, "uniform traffic fills both limits at once");
+                tx.calculated_fee = Some(100 * DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+                traffic_mass += tx.calculated_non_contextual_masses.unwrap().compute_mass;
+                validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), tx).unwrap();
+            }
+            assert!(traffic_mass > 2 * SMALL_BLOCK_MASS, "the traffic is several blocks' worth: {traffic_mass}");
+            assert_eq!(mining_manager.transaction_count(TransactionQuery::TransactionsOnly), TRAFFIC as usize, "the pool is full");
+            (consensus, mining_manager)
         };
-        let mut tx = carrier.tx.as_ref().clone();
-        tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
-        tx.payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: accusation }).unwrap();
-        carrier.tx = tx.into();
-        let carrier_mass = transaction_estimated_serialized_size(&carrier.tx);
-        carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(carrier_mass, carrier_mass));
-        let carrier_id = carrier.id();
-        validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), carrier).unwrap();
 
+        let carrier = || {
+            let mut carrier = create_transaction_with_utxo_entry(1_000, 0);
+            let accusation = PalwConsensusObjectV2::DefaultAccused {
+                claim: Hash64::from_u64_word(0xC1A1),
+                missing_event_index: 0,
+                accuser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xB0), 0)),
+                signature: vec![1; 8],
+            };
+            let mut tx = carrier.tx.as_ref().clone();
+            tx.subnetwork_id = SUBNETWORK_ID_PALW_LIFECYCLE;
+            tx.payload =
+                borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: accusation }).unwrap();
+            carrier.tx = tx.into();
+            let carrier_mass = transaction_estimated_serialized_size(&carrier.tx);
+            carrier.calculated_non_contextual_masses = Some(NonContextualMasses::new(carrier_mass, carrier_mass));
+            carrier
+        };
+
+        let (consensus, refusing) = full_manager(false);
+        let refused = validate_and_insert_mutable_transaction(&refusing, consensus.as_ref(), carrier());
+        assert!(
+            matches!(refused, Err(MiningManagerError::MempoolError(RuleError::RejectMempoolIsFull))),
+            "without the flag a full pool refuses the min-fee carrier: {refused:?}"
+        );
+
+        let (consensus, mining_manager) = full_manager(true);
+        let carrier = carrier();
+        let carrier_id = carrier.id();
+        validate_and_insert_mutable_transaction(&mining_manager, consensus.as_ref(), carrier).expect("the carrier reserve admits it");
         let miner_data = get_miner_data(Prefix::Testnet);
         for _ in 0..10 {
             mining_manager.clear_block_template();
@@ -1355,6 +1378,22 @@ mod tests {
             assert_eq!(txs.get(1).map(|tx| tx.id()), Some(carrier_id), "the carrier follows the coinbase, every build");
             assert!(txs.len() > 2, "the rest of the block is still the fee market's");
         }
+    }
+
+    /// **The daemon's switch reads the ruleset** (P2-9 review, finding 6): the lane and the reserve
+    /// are on where `palw_rcore_plus` is armed — testnet-12 — and off on testnet-11, devnet and
+    /// mainnet, which therefore select and evict exactly as before.
+    #[test]
+    fn the_carrier_priority_is_on_for_testnet_12_only() {
+        use kaspa_consensus_core::{
+            config::params::Params,
+            network::{NetworkId, NetworkType},
+        };
+        let of = |id: NetworkId| crate::mempool::config::palw_h1_carrier_priority_for(&Params::from(id));
+        assert!(of(NetworkId::with_suffix(NetworkType::Testnet, 12)), "testnet-12 arms R-core+");
+        assert!(!of(NetworkId::with_suffix(NetworkType::Testnet, 11)), "testnet-11 does not");
+        assert!(!of(NetworkId::new(NetworkType::Devnet)), "devnet does not");
+        assert!(!of(NetworkId::new(NetworkType::Mainnet)), "mainnet does not");
     }
 
     fn validate_and_insert_mutable_transaction(

@@ -35,10 +35,11 @@
 //! During a licence halt this lane may be the only one minting, and V-8 needs the conviction, DA
 //! and reporter objects filed during the halt to land during it. Where R-core+ is armed the mining
 //! manager's templates take those carriers before any other transaction (the carrier lane,
-//! `TransactionsPool::build_palw_carrier_lane`, bounded to half a block), so this service needs no
-//! selector of its own: the template it asks for already leads with them. Each minted beat says how
-//! many it carries, and the relay spares a carrier-bearing beat its H2 limits
-//! (`FlowContext::palw_heartbeat_h1_exempt`).
+//! `TransactionsPool::build_palw_carrier_lane`, bounded to half a block), a full mempool keeps a
+//! reserve for them, and only carriers the tip's fold would take get either (the virtual processor's
+//! H-1 gate) — so this service needs no selector of its own: the template it asks for already leads
+//! with them. Each minted beat says how many it carries, and the relay spares a carrier-bearing beat
+//! its H2 limits (`FlowContext::palw_heartbeat_h1_exempt`).
 
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::network::NetworkId;
