@@ -12,28 +12,46 @@
 //!   `validate_transaction_in_utxo_context`'s `SpendsNonReleasableBond`;
 //! * the burn obligations beside it, `palw_v2_bond_burn_obligations`, the same predicate negated
 //!   (a released bond that lost collateral owes `BondBurnNotPaid`);
-//! * the mempool's bond gate (`palw_mempool_locked_bonds`, memoised per tip and DAA);
+//! * the mempool's bond gate (`palw_mempool_bond_gate`, memoised per tip and DAA: the locked set
+//!   and, since this suite's review, the burn obligations);
 //! * the wallet's set, `palw_locked_bond_outpoints_v2_impl` (the RPC's `locked_bond_outpoints`,
 //!   which is how the hold reaches `misaka wallet` with no wallet change, F7).
 //!
-//! **The scenario.** Card 3 has retired long enough ago that its withdrawal delay and the
-//! retirement's own second clock have both run, and it lost `SLASHED` sompi — so the ONLY thing that
-//! can still hold its collateral is a vesting row naming it (as producer; card 4 sits on the row
-//! too, but card 4 is Active and locked regardless). The row is `Final` at `F`, its DAA clock
-//! runs out at `E = F + window_court` (3,000 on testnet-12), and its second clock needs
-//! `palw_settled_anchor_depth` (30) anchors after `F`. The six cases are the ADR's: `F + 2,999`
-//! (held), `F + 3,000` with the licences in (released), `F + 3,000` short of them (held by the
-//! second clock), the same during a licence halt (released: B-3 does not hold on the halt), a
-//! carried row (latched, not moved: released), and the per-obligation bound `E + 2 × window_court`
-//! (released). In every case the bare state without the row releases the bond, so the vesting term
-//! is the one deciding. The fence-off twin (`palw_rcore_plus` unset) releases it in all six.
+//! **The scenario.** Cards 3 and 4 have retired long enough ago that their withdrawal delay and the
+//! retirement's own second clock have both run, and each lost `SLASHED` sompi — so the ONLY thing
+//! that can still hold either collateral is the vesting row naming them, card 3 as its producer and
+//! card 4 as a credited seat (the payee index's seat entries, not only its producer entries). The
+//! row is `Final` at `F`, its DAA clock runs out at `E = F + window_court` (3,000 on testnet-12),
+//! and its second clock needs `palw_settled_anchor_depth` (30) anchors after `F`. The cases are the
+//! ADR's and their edges:
+//!
+//! | case | DAA | held |
+//! |---|---|---|
+//! | `F + 2,999` | `E − 1` | yes — the DAA clock |
+//! | a licence halt before `E` | `E − 1`, empty ring | yes — V-4(a)'s DAA clock; the halt only drops the second clock |
+//! | `F + 3,000`, the licences in | `E` | no |
+//! | `F + 3,000`, one licence short | `E` | yes — the second clock |
+//! | `F + 3,001`, one licence short | `E + 1` | yes |
+//! | a licence halt past `E` | `E + 2`, empty ring | no — B-3 does not hold on the halt |
+//! | a carried row | `E + 3`, latched | no — a latched row is mature |
+//! | one DAA inside the per-obligation bound | `E + 2w − 1` | yes |
+//! | the per-obligation bound | `E + 2w` | no |
+//!
+//! In every case the bare state without the row releases both cards, so the vesting term is the one
+//! deciding. The fence-off twin (`palw_rcore_plus` unset) releases them in every case.
+//!
+//! **Both halves of every gate.** A held card's spend is `SpendsNonReleasableBond` at the block
+//! path and at the mempool; a released card's spend that claims its whole outpoint is
+//! `BondBurnNotPaid { owed: SLASHED, left: 0 }` at both — the mempool's burn half (ADR-0109 D3,
+//! `palw_mempool_bond_gate`) was added for this suite's review, which found the mempool admitting a
+//! signed, burn-evading spend of a released, slashed bond that every template then dropped.
 //!
 //! No block is mined: the states are planted on the tip the harness chain stands at, and each site
 //! is asked at the case's DAA (the wallet's set through `palw_locked_bond_outpoints_v2_at`, the
 //! mempool through `validate_mempool_transaction_at_daa_for_tests`), because `F + 3,000` is a
-//! chain 23,000 blocks long. The spend is of card 3's real genesis collateral outpoint, unsigned:
-//! every gate asked here stands before the script check, so the gate's own error — or the next
-//! check's — says which way it went.
+//! chain 23,000 blocks long. The spends are of the cards' real genesis collateral outpoints,
+//! unsigned: every gate asked here stands before the script check, so the gate's own error — or the
+//! next check's — says which way it went.
 use super::t12_round_lane_e2e::{T12Chain, t12_genesis_chain, t12_with_harness_cards};
 use crate::pipeline::virtual_processor::utxo_validation::BondSpendFilter;
 use crate::processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags;
@@ -52,23 +70,25 @@ use kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
 use kaspa_hashes::Hash64;
 
-/// The row's `Final` DAA: far enough out that card 3's withdrawal delay (12,900 on testnet-12, the
-/// DA lattice included) ran out long before `F + 2,999`, so only the row can hold it.
+/// The row's `Final` DAA: far enough out that the cards' withdrawal delay (12,900 on testnet-12,
+/// the DA lattice included) ran out long before `F + 2,999`, so only the row can hold them.
 const F: u64 = 20_000;
 /// The anchors the chain has settled in every planted state.
 const SETTLED: u64 = 100;
-/// What card 3 lost: a released bond's spend must leave this much unclaimed.
+/// What each retired card lost: a released bond's spend must leave this much unclaimed.
 const SLASHED: u64 = 1_000;
-/// The payee (producer) and a co-payee seat.
+/// The row's payees: its producer and a credited seat. Both retired and slashed, so the row is the
+/// only hold on either — the payee index's producer entry and its seat entry are asked alike.
 const PAYEE: usize = 3;
 const SEAT: usize = 4;
+const PAYEES: [usize; 2] = [PAYEE, SEAT];
 
 struct Gate {
     chain: T12Chain,
     sink: BlockHash,
     tip: PalwChainStateV2,
-    /// Card 3's collateral as the genesis premine holds it.
-    collateral: UtxoEntry,
+    /// Each payee's collateral as the genesis premine holds it, by card.
+    collateral: [(usize, UtxoEntry); 2],
 }
 
 /// One of the ADR's cases: the DAA it is asked at, the anchor ring, whether the row's second clock
@@ -106,9 +126,11 @@ async fn gate(armed: bool) -> Gate {
     let mut chain = t12_genesis_chain(&config, &bundle, &premine, &floats);
     chain.heartbeat(config.params.target_time_per_block(), Vec::new()).await;
     let (sink, tip) = chain.tip_state();
-    let payee = chain.bonds[PAYEE];
-    let collateral =
-        premine.iter().find(|(o, _)| *o == payee.0).map(|(_, e)| e.clone()).expect("card 3's collateral is a genesis UTXO");
+    let collateral = PAYEES.map(|card| {
+        let outpoint = chain.bonds[card].0;
+        let entry = premine.iter().find(|(o, _)| *o == outpoint).map(|(_, e)| e.clone());
+        (card, entry.unwrap_or_else(|| panic!("card {card}'s collateral is a genesis UTXO")))
+    });
     Gate { chain, sink, tip, collateral }
 }
 
@@ -125,12 +147,8 @@ impl Gate {
         palw_panel_liability_expiry_v1(F, self.window_court())
     }
 
-    fn payee(&self) -> PalwBondKeyV2 {
-        self.chain.bonds[PAYEE]
-    }
-
-    fn seat(&self) -> PalwBondKeyV2 {
-        self.chain.bonds[SEAT]
+    fn bond(&self, card: usize) -> PalwBondKeyV2 {
+        self.chain.bonds[card]
     }
 
     /// The raw second-clock depth the processor passes at `daa` (`palw_settled_anchor_depth_at`).
@@ -147,9 +165,10 @@ impl Gate {
     fn row(&self, case: &Case) -> PalwVestingRowV1 {
         let payload = |bond: &PalwBondKeyV2| self.tip.bond(bond).expect("a genesis card").payout_payload;
         let settled_at_final = if case.licences_met { SETTLED - self.depth() } else { SETTLED - self.depth() + 1 };
+        let (producer, seat) = (self.bond(PAYEE), self.bond(SEAT));
         PalwVestingRowV1 {
             claim_id: Hash64::from_u64_word(0xB3_0023),
-            producer_bond: self.payee(),
+            producer_bond: producer,
             class_id: self.chain.bundle.base_class_id,
             execution_root: Hash64::from_u64_word(0xB3_00E7),
             artifact_root: Hash64::default(),
@@ -161,8 +180,8 @@ impl Gate {
             basis_k: 3,
             escrowed_reward: 1_000_000,
             buyback_bound: 0,
-            producer: PalwPayoutV2 { payload: payload(&self.payee()), amount: 800_000 },
-            seats: vec![(self.seat(), PalwPayoutV2 { payload: payload(&self.seat()), amount: 150_000 })],
+            producer: PalwPayoutV2 { payload: payload(&producer), amount: 800_000 },
+            seats: vec![(seat, PalwPayoutV2 { payload: payload(&seat), amount: 150_000 })],
             reserve: 50_000,
             final_daa: F,
             expiry_daa: self.expiry(),
@@ -171,15 +190,17 @@ impl Gate {
         }
     }
 
-    /// The tip with card 3 retired and slashed, the case's anchor ring and settled count, and —
-    /// `with_row` — the row (its counters' `created` beside it, V-3).
+    /// The tip with cards 3 and 4 retired and slashed, the case's anchor ring and settled count,
+    /// and — `with_row` — the row (its counters' `created` beside it, V-3).
     fn state(&self, case: &Case, with_row: bool) -> PalwChainStateV2 {
         let mut carriage = PalwStateCarriageV2::from_state(&self.tip);
         carriage.settled_attempt_finals = SETTLED;
         carriage.recent_anchor_daas = case.ring.clone();
-        let bond = carriage.bonds.get_mut(&self.payee()).expect("card 3 is registered");
-        bond.status = PalwBondStatusV2::Retiring { since_daa: 0, settled_at_since: 0 };
-        bond.slashed = SLASHED;
+        for card in PAYEES {
+            let bond = carriage.bonds.get_mut(&self.bond(card)).unwrap_or_else(|| panic!("card {card} is registered"));
+            bond.status = PalwBondStatusV2::Retiring { since_daa: 0, settled_at_since: 0 };
+            bond.slashed = SLASHED;
+        }
         if with_row {
             let row = self.row(case);
             carriage.vesting_counters.created += row.total_sompi_u128();
@@ -188,24 +209,26 @@ impl Gate {
         carriage.into_state(self.sp(), None).expect("the planted state is consistent")
     }
 
-    /// `palw_bond_collateral_is_locked_v6` for card 3, with exactly the arguments the processor's
+    /// `palw_bond_collateral_is_locked_v6` for `card`, with exactly the arguments the processor's
     /// `palw_v2_bond_is_locked` passes at `now`.
-    fn v6(&self, state: &PalwChainStateV2, now: u64) -> bool {
+    fn v6(&self, state: &PalwChainStateV2, now: u64, card: usize) -> bool {
         let p = &self.chain.config.params;
         let delay = palw_v2_bond_withdrawal_delay_at_v1(&self.chain.bundle, p.palw_da_court, now);
-        assert!(delay < F, "the withdrawal delay ({delay}) ran out before the row's Final: only the row can hold card 3");
+        assert!(delay < F, "the withdrawal delay ({delay}) ran out before the row's Final: only the row can hold card {card}");
         let duty_gate = p.palw_audit_2026_09_23.is_some_and(|f| f.is_active(now));
-        let bond = state.bond(&self.payee()).expect("card 3");
-        palw_bond_collateral_is_locked_v6(state, self.sp(), &self.payee(), bond, now, delay, self.raw_depth(now), duty_gate)
+        let key = self.bond(card);
+        let bond = state.bond(&key).unwrap_or_else(|| panic!("card {card}"));
+        palw_bond_collateral_is_locked_v6(state, self.sp(), &key, bond, now, delay, self.raw_depth(now), duty_gate)
     }
 
-    /// A spend of card 3's collateral that claims the whole outpoint (so a released bond's burn
+    /// A spend of `card`'s collateral that claims the whole outpoint (so a released bond's burn
     /// obligation is unpaid) — unsigned: every gate asked here stands before the script check.
-    fn spend(&self) -> Transaction {
+    fn spend(&self, card: usize) -> Transaction {
+        let (_, entry) = self.collateral.iter().find(|(c, _)| *c == card).expect("a payee card");
         Transaction::new(
             crate::constants::TX_VERSION,
-            vec![TransactionInput::new(self.payee().0, vec![], 0, 1)],
-            vec![TransactionOutput::new(self.collateral.amount, self.collateral.script_public_key.clone())],
+            vec![TransactionInput::new(self.bond(card).0, vec![], 0, 1)],
+            vec![TransactionOutput::new(entry.amount, entry.script_public_key.clone())],
             0,
             SUBNETWORK_ID_NATIVE,
             0,
@@ -217,90 +240,52 @@ impl Gate {
         let (e, w) = (self.expiry(), self.window_court());
         assert_eq!(e, F + 3_000, "testnet-12's conviction window: the row's DAA clock runs out at F + 3,000");
         let recent = |now: u64| vec![now - 10];
+        let case =
+            |name, now, ring, licences_met, latched, halted, held| Case { name, now, ring, licences_met, latched, halted, held };
         vec![
-            Case { name: "F + 2,999", now: e - 1, ring: recent(e - 1), licences_met: true, latched: false, halted: false, held: true },
-            Case {
-                name: "F + 3,000, the licences in",
-                now: e,
-                ring: recent(e),
-                licences_met: true,
-                latched: false,
-                halted: false,
-                held: false,
-            },
-            Case {
-                name: "F + 3,000, one licence short",
-                now: e + 1,
-                ring: recent(e + 1),
-                licences_met: false,
-                latched: false,
-                halted: false,
-                held: true,
-            },
-            // No anchor for `2 × window_court`: the escape drops the second clock (V-4(b) halts the
-            // latch; B-3 does not hold on it).
-            Case {
-                name: "a licence halt",
-                now: e + 2,
-                ring: Vec::new(),
-                licences_met: false,
-                latched: false,
-                halted: true,
-                held: false,
-            },
+            case("F + 2,999", e - 1, recent(e - 1), true, false, false, true),
+            // No anchor for `2 × window_court` before `E`: the halt drops the second clock, but the
+            // DAA clock has not run — V-4(a) holds on it alone.
+            case("a licence halt before E", e - 1, Vec::new(), false, false, true, true),
+            case("F + 3,000, the licences in", e, recent(e), true, false, false, false),
+            case("F + 3,000, one licence short", e, recent(e), false, false, false, true),
+            case("F + 3,001, one licence short", e + 1, recent(e + 1), false, false, false, true),
+            // No anchor for `2 × window_court` past `E`: the escape drops the second clock (V-4(b)
+            // halts the latch; B-3 does not hold on it).
+            case("a licence halt past E", e + 2, Vec::new(), false, false, true, false),
             // Latched at `E` and still in the table, waiting for V-7's budget.
-            Case {
-                name: "a carried row",
-                now: e + 3,
-                ring: recent(e + 3),
-                licences_met: false,
-                latched: true,
-                halted: false,
-                held: false,
-            },
-            Case {
-                name: "the per-obligation bound",
-                now: e + 2 * w,
-                ring: recent(e + 2 * w),
-                licences_met: false,
-                latched: false,
-                halted: false,
-                held: false,
-            },
+            case("a carried row", e + 3, recent(e + 3), false, true, false, false),
+            case("one DAA inside the per-obligation bound", e + 2 * w - 1, recent(e + 2 * w - 1), false, false, false, true),
+            case("the per-obligation bound", e + 2 * w, recent(e + 2 * w), false, false, false, false),
         ]
     }
 
-    /// Every site, asked about `state` at `now`, answers `want`.
+    /// Every site, asked about `state` at `now`, answers `want` for both payees.
     fn every_site_answers(&self, name: &str, state: &PalwChainStateV2, now: u64, want: bool) {
         let vp = self.chain.vp();
-        let payee = self.payee();
 
         // The block path's set, and the burn obligations beside it: the same predicate, negated.
         let locked = vp.palw_v2_locked_bond_outpoints(state, now);
-        assert_eq!(locked.contains(&payee.0), want, "{name}: the block path's locked set");
-        assert!(locked.contains(&self.seat().0), "{name}: an Active seat is locked whatever its rows");
         let burns = vp.palw_v2_bond_burn_obligations(state, now);
-        assert_eq!(
-            burns.get(&payee.0).copied(),
-            (!want).then_some(SLASHED),
-            "{name}: a released bond owes what it lost, a held one nothing yet"
-        );
+        for card in PAYEES {
+            let outpoint = self.bond(card).0;
+            assert_eq!(locked.contains(&outpoint), want, "{name}: card {card} in the block path's locked set");
+            assert_eq!(
+                burns.get(&outpoint).copied(),
+                (!want).then_some(SLASHED),
+                "{name}: card {card} — a released bond owes what it lost, a held one nothing yet"
+            );
+        }
 
         // The block path's per-transaction check, handed those two sets as the chain walk hands them.
         {
             let stores = vp.virtual_stores.read();
             let filter = BondSpendFilter::palw_only_for_tests(now, &locked, &burns);
-            match vp.validate_transaction_in_utxo_context(&self.spend(), &stores.utxo_set, now, TxValidationFlags::Full, Some(filter))
-            {
-                Err(TxRuleError::SpendsNonReleasableBond(outpoint)) => {
-                    assert!(want, "{name}: the block path refused a released bond's spend");
-                    assert_eq!(outpoint, payee.0);
-                }
-                Err(TxRuleError::BondBurnNotPaid { owed, left }) => {
-                    assert!(!want, "{name}: the block path let a held bond's spend reach the burn check");
-                    assert_eq!((owed, left), (SLASHED, 0));
-                }
-                other => panic!("{name}: the block path answers neither the lock nor the burn: {:?}", other.map(|_| ())),
+            for card in PAYEES {
+                let spend = self.spend(card);
+                let spent =
+                    vp.validate_transaction_in_utxo_context(&spend, &stores.utxo_set, now, TxValidationFlags::Full, Some(filter));
+                self.gate_answered(name, "the block path", card, spent.map(|_| ()), want);
             }
         }
 
@@ -312,22 +297,33 @@ impl Gate {
         let mut sorted: Vec<_> = locked.iter().copied().collect();
         sorted.sort_by(|a, b| (a.transaction_id, a.index).cmp(&(b.transaction_id, b.index)));
         assert_eq!(vp.palw_locked_bond_outpoints_v2_at(now), sorted, "{name}: the wallet's set is the block path's");
-        let mut tx = MutableTransaction::from_tx(self.spend());
-        match vp.validate_mempool_transaction_at_daa_for_tests(&mut tx, now) {
-            Err(TxRuleError::SpendsNonReleasableBond(outpoint)) => {
-                assert!(want, "{name}: the mempool refused a released bond's spend");
-                assert_eq!(outpoint, payee.0);
+        for card in PAYEES {
+            let mut tx = MutableTransaction::from_tx(self.spend(card));
+            let admitted = vp.validate_mempool_transaction_at_daa_for_tests(&mut tx, now);
+            self.gate_answered(name, "the mempool", card, admitted, want);
+        }
+    }
+
+    /// One gate's answer to `card`'s whole-outpoint spend: the lock when held, the unpaid burn when
+    /// released — both halves at both the block path and the mempool, so neither half can go quiet.
+    fn gate_answered(&self, name: &str, site: &str, card: usize, answer: Result<(), TxRuleError>, want: bool) {
+        match (answer, want) {
+            (Err(TxRuleError::SpendsNonReleasableBond(outpoint)), true) => assert_eq!(outpoint, self.bond(card).0),
+            (Err(TxRuleError::BondBurnNotPaid { owed, left }), false) => {
+                assert_eq!((owed, left), (SLASHED, 0), "{name}: {site} charges card {card} what it lost")
             }
-            other => assert!(!want, "{name}: the mempool must refuse a held payee's collateral, got {other:?}"),
+            (other, true) => panic!("{name}: {site} must refuse held card {card}'s collateral as locked, got {other:?}"),
+            (other, false) => panic!("{name}: {site} must refuse released card {card}'s burn-evading spend, got {other:?}"),
         }
     }
 }
 
 /// **T23 (processor half) / T05 (bond half): the locked set, the burn obligations, the block path's
-/// check, the mempool and the wallet's set all answer `palw_bond_collateral_is_locked_v6`** at
-/// `F + 2,999`, `F + 3,000` (with and without the second clock's licences), during a licence halt,
-/// for a carried row and at the per-obligation bound — and it is the vesting term that decides
-/// (the bare state releases the bond in every case).
+/// check, the mempool and the wallet's set all answer `palw_bond_collateral_is_locked_v6`** for the
+/// row's producer and its seat, at `F + 2,999`, `F + 3,000` (with and without the second clock's
+/// licences), `F + 3,001`, a licence halt on either side of `E`, a carried row, and both sides of
+/// the per-obligation bound — and it is the vesting term that decides (the bare state releases both
+/// cards in every case).
 #[tokio::test]
 async fn p2_t23_every_utxo_site_holds_a_vesting_payee_exactly_while_v4a_does() {
     let g = gate(true).await;
@@ -337,15 +333,21 @@ async fn p2_t23_every_utxo_site_holds_a_vesting_payee_exactly_while_v4a_does() {
         let raw = g.raw_depth(case.now);
         assert_eq!(raw, Some(g.depth()), "{}: the processor passes the raw depth (I-8)", case.name);
         assert_eq!(palw_chain_vesting_halted_v1(&state, raw, case.now, g.window_court()), case.halted, "{}: the halt", case.name);
-        assert_eq!(
-            palw_bond_is_payee_of_unmatured_row_v1(&state, g.sp(), &g.payee(), case.now, raw),
-            case.held,
-            "{}: B-3's vesting term",
-            case.name
-        );
-        assert_eq!(g.v6(&state, case.now), case.held, "{}: v6", case.name);
         let bare = g.state(&case, false);
-        assert!(!g.v6(&bare, case.now), "{}: without the row nothing holds card 3 — the vesting term decides", case.name);
+        for card in PAYEES {
+            assert_eq!(
+                palw_bond_is_payee_of_unmatured_row_v1(&state, g.sp(), &g.bond(card), case.now, raw),
+                case.held,
+                "{}: B-3's vesting term for card {card}",
+                case.name
+            );
+            assert_eq!(g.v6(&state, case.now, card), case.held, "{}: v6 for card {card}", case.name);
+            assert!(
+                !g.v6(&bare, case.now, card),
+                "{}: without the row nothing holds card {card} — the vesting term decides",
+                case.name
+            );
+        }
         g.every_site_answers(case.name, &state, case.now, case.held);
         g.every_site_answers(&format!("{} (no row)", case.name), &bare, case.now, false);
     }
@@ -355,21 +357,23 @@ async fn p2_t23_every_utxo_site_holds_a_vesting_payee_exactly_while_v4a_does() {
     assert_eq!(vp.palw_locked_bond_outpoints_v2_impl(), vp.palw_locked_bond_outpoints_v2_at(lkg));
 }
 
-/// **The fence-off twin: below `palw_rcore_plus` B-3 has no vesting term** — the same six planted
-/// states release card 3 at every site (v6 is v5 there), although the pure payee question still
+/// **The fence-off twin: below `palw_rcore_plus` B-3 has no vesting term** — the same planted
+/// states release both cards at every site (v6 is v5 there), although the pure payee question still
 /// says the row is unmatured: nothing below the fence reads it.
 #[tokio::test]
 async fn p2_t23_fence_off_twin_no_row_holds_a_bond_below_rcore_plus() {
     let g = gate(false).await;
     for case in g.cases() {
         let state = g.state(&case, true);
-        assert_eq!(
-            palw_bond_is_payee_of_unmatured_row_v1(&state, g.sp(), &g.payee(), case.now, g.raw_depth(case.now)),
-            case.held,
-            "{}: the pure question is fence-blind",
-            case.name
-        );
-        assert!(!g.v6(&state, case.now), "{}: below the fence v6 is v5 and releases card 3", case.name);
+        for card in PAYEES {
+            assert_eq!(
+                palw_bond_is_payee_of_unmatured_row_v1(&state, g.sp(), &g.bond(card), case.now, g.raw_depth(case.now)),
+                case.held,
+                "{}: the pure question is fence-blind (card {card})",
+                case.name
+            );
+            assert!(!g.v6(&state, case.now, card), "{}: below the fence v6 is v5 and releases card {card}", case.name);
+        }
         g.every_site_answers(case.name, &state, case.now, false);
     }
 }

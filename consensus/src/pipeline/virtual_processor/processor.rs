@@ -635,10 +635,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0109 Decision 1: the deposit-lock index — every lock the virtual set holds, claimed by
     /// every template unasked. Staged in `commit_virtual_state` from the same diff as the set.
     pub(super) evm_deposit_lock_store: Arc<RwLock<DbEvmDepositLockStore>>,
-    /// ADR-0109 Decision 3: the PALW locked-bond set the mempool refuses spends of, memoised per
-    /// (registry tip, DAA) so a burst of admissions does not rebuild it per transaction.
-    pub(super) palw_mempool_locked_cache:
-        parking_lot::Mutex<Option<(BlockHash, u64, Arc<std::collections::HashSet<TransactionOutpoint>>)>>,
+    /// ADR-0109 Decision 3: the PALW bond gate the mempool asks — the locked set it refuses spends
+    /// of and the burn obligations a released bond's spend must pay — memoised per (registry tip,
+    /// DAA) so a burst of admissions does not rebuild it per transaction.
+    pub(super) palw_mempool_locked_cache: parking_lot::Mutex<Option<(BlockHash, u64, Arc<PalwMempoolBondGate>)>>,
     pub(super) evm_receipts_store: Arc<crate::model::stores::evm::DbEvmReceiptsStore>,
     pub(super) evm_tx_index_store: Arc<crate::model::stores::evm::DbEvmTxIndexStore>,
     pub(super) evm_block_hash_map_store: Arc<crate::model::stores::evm::DbEvmBlockHashMapStore>,
@@ -1252,22 +1252,28 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_state_v2::PalwModelCarrierBudgetV1::at_tip(&state))
     }
 
-    /// ADR-0109 Decision 3: the PALW bonds the registry holds locked at the virtual tip — the set the
-    /// acceptance path skips spends of — memoised per (registry tip, DAA). `None` when the network
-    /// has no V2 registry or the registry has no tip yet.
-    fn palw_mempool_locked_bonds(&self, now_daa: u64) -> Option<Arc<std::collections::HashSet<TransactionOutpoint>>> {
+    /// ADR-0109 Decision 3: the PALW bond gate at the virtual tip — the bonds the registry holds
+    /// locked (the set the acceptance path skips spends of) and the burn each released, slashed bond's
+    /// spend owes (audit C-08 part three) — memoised per (registry tip, DAA). The same two functions
+    /// the chain walk and the template read (`palw_v2_locked_bond_outpoints`,
+    /// `palw_v2_bond_burn_obligations`), so the mempool refuses exactly the spends every block skips.
+    /// `None` when the network has no V2 registry or the registry has no tip yet.
+    fn palw_mempool_bond_gate(&self, now_daa: u64) -> Option<Arc<PalwMempoolBondGate>> {
         let params = self.palw_state_params_v2.as_ref()?;
         let (tip, state) = self.palw_state_v2_store.read().load_tip_cached(params).ok().flatten()?;
         let mut cache = self.palw_mempool_locked_cache.lock();
-        if let Some((cached_tip, cached_daa, set)) = cache.as_ref()
+        if let Some((cached_tip, cached_daa, gate)) = cache.as_ref()
             && *cached_tip == tip
             && *cached_daa == now_daa
         {
-            return Some(set.clone());
+            return Some(gate.clone());
         }
-        let set = Arc::new(self.palw_v2_locked_bond_outpoints(&state, now_daa));
-        *cache = Some((tip, now_daa, set.clone()));
-        Some(set)
+        let gate = Arc::new(PalwMempoolBondGate {
+            locked: self.palw_v2_locked_bond_outpoints(&state, now_daa),
+            burns: self.palw_v2_bond_burn_obligations(&state, now_daa),
+        });
+        *cache = Some((tip, now_daa, gate.clone()));
+        Some(gate)
     }
 
     pub fn worker(self: &Arc<Self>) {
@@ -4976,13 +4982,15 @@ impl VirtualStateProcessor {
     /// ([`Self::palw_v2_payout_outputs`], unchanged): `Final` names the escrow in a row instead of
     /// the queue, a conviction inside the conviction window burns the row (V-5) — withheld here and
     /// never minted, exactly as a void's forfeit — and only a matured row's legs reach a coinbase.
-    /// So every sompi withheld here ends in exactly one of: minted from a row, a live row, a row
-    /// burned (or a void's forfeit, or a skipped attempt's carve), the work-price remainder named
-    /// nowhere, the ADR-0091 buyback slice, or `panel_reserve_sompi` — V-3's coinbase identity (T03,
-    /// which attributes the minted term by coinbase position against the parent queue's keys, since
-    /// one payout script receives round fees, vesting mints and seat pay alike). Reporter rewards and
-    /// market rows are minted from the same queue and are NOT in that identity: they are funded by
-    /// slashes and by sinks, never by this carve.
+    /// So every sompi withheld here stands, at any committed state, in exactly one of: the escrow
+    /// of a claim not yet resolved (`Provisional` through `ReceiptLicensed`, still recorded on the
+    /// claim), minted from a row, moved and not yet minted (a queue row the next coinbase renders),
+    /// a live row, a row burned (or a void's forfeit, or a skipped attempt's carve), the work-price
+    /// remainder named nowhere, the ADR-0091 buyback slice, or `panel_reserve_sompi` — V-3's
+    /// coinbase identity (T03, which attributes the minted term by coinbase position against the
+    /// parent queue's keys, since one payout script receives round fees, vesting mints and seat pay
+    /// alike). Reporter rewards and market rows are minted from the same queue and are NOT in that
+    /// identity: they are funded by slashes and by sinks, never by this carve.
     pub(super) fn palw_v2_escrow_withheld_at(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -5421,8 +5429,10 @@ impl VirtualStateProcessor {
         // The SAME prefix the transition drains — see `PALW_V2_MAX_PAYOUTS_PER_BLOCK`. Both sides
         // read the selected parent's queue in `BTreeMap` key order, so "the first N" names one set
         // on every node. Paying more than the transition clears would pay a claim twice; clearing
-        // more than the coinbase pays would destroy the reward the escrow exists to deliver.
-        let outputs: Vec<TransactionOutput> = state
+        // more than the coinbase pays would destroy the reward the escrow exists to deliver. The
+        // `take` IS the width bound: `PALW_V2_COINBASE_EXTRA_OUTPUTS` is defined from the same
+        // constant, so the coinbase's output budget cannot drift from what is rendered here.
+        state
             .pending_payouts_iter()
             .take(PALW_V2_MAX_PAYOUTS_PER_BLOCK)
             .map(|(_, payout)| {
@@ -5431,10 +5441,7 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payout.payload.as_bytes()),
                 )
             })
-            .collect();
-        // `PALW_V2_COINBASE_EXTRA_OUTPUTS` budgets the coinbase for exactly this many.
-        debug_assert!(outputs.len() <= PALW_V2_MAX_PAYOUTS_PER_BLOCK, "the coinbase renders one drain's width");
-        outputs
+            .collect()
     }
 
     /// **ADR-0042 Decisions 7 and 8's consumers: every lifecycle object is ADJUDICATED before it
@@ -13530,9 +13537,13 @@ impl VirtualStateProcessor {
         // ADR-0109 Decision 3: a spend of a PALW bond the registry holds locked at the virtual tip is
         // refused here, with the merge's own error, instead of being carried by a block and skipped
         // at the merge where nobody hears it. The same set the acceptance path builds
-        // (`palw_v2_locked_bonds`), read at the tip the mempool judges against.
-        if let Some(locked) = self.palw_mempool_locked_bonds(virtual_daa_score)
-            && let Some(outpoint) = first_locked_input(&mutable_tx.tx, &locked)
+        // (`palw_v2_locked_bonds`), read at the tip the mempool judges against. Its burn half — a
+        // released, slashed bond's spend must leave what the bond lost unclaimed — needs the input
+        // amounts, so it is asked in the UTXO context below, before the script check, with the
+        // block path's own rule (`palw_bond_burn_paid`).
+        let bond_gate = self.palw_mempool_bond_gate(virtual_daa_score);
+        if let Some(gate) = bond_gate.as_ref()
+            && let Some(outpoint) = first_locked_input(&mutable_tx.tx, &gate.locked)
         {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::SpendsNonReleasableBond(outpoint));
         }
@@ -13542,7 +13553,13 @@ impl VirtualStateProcessor {
         if let Some(refusal) = self.palw_mempool_market_refusal(&mutable_tx.tx, virtual_daa_score) {
             return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
         }
-        self.validate_mempool_transaction_in_utxo_context(mutable_tx, virtual_utxo_view, virtual_daa_score, args)?;
+        self.validate_mempool_transaction_in_utxo_context(
+            mutable_tx,
+            virtual_utxo_view,
+            virtual_daa_score,
+            args,
+            bond_gate.as_ref().map(|gate| &gate.burns),
+        )?;
         Ok(())
     }
 
@@ -15720,6 +15737,17 @@ pub(super) fn deposit_lock_record(entry: &UtxoEntry) -> Option<kaspa_consensus_c
         timeout_daa_score: lock.timeout_daa_score,
         block_daa_score: entry.block_daa_score,
     })
+}
+
+/// **ADR-0109 Decision 3's mempool gate, both halves** — what the chain walk and the template hand
+/// the per-transaction check as `BondSpendFilter`'s PALW side, read at the virtual tip: the bonds a
+/// spend may not touch, and what a spend of a released, slashed bond must leave unclaimed
+/// (`BondBurnNotPaid`). The lock half alone left a signed, burn-evading spend of a released bond
+/// admitted and relayed, then dropped by every template and skipped at every merge (the PROC-A
+/// review's probe); the burn half closes that the way the lock half closed the locked spend.
+pub(super) struct PalwMempoolBondGate {
+    pub(super) locked: std::collections::HashSet<TransactionOutpoint>,
+    pub(super) burns: std::collections::HashMap<TransactionOutpoint, u64>,
 }
 
 /// ADR-0109 Decision 3: the first input of `tx` that spends a locked PALW bond, if any.
