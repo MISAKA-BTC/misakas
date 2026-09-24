@@ -4663,8 +4663,13 @@ pub enum PalwConsensusObjectV2 {
         /// **ADR-0152 v3.1 J-1 (F1): the commitment's job pin**
         /// ([`crate::palw_fp_execution_v3::palw_fp_job_pin_v1`]) — the identity a free-prompt claim
         /// records past `palw_offence_attribution`, which a binding's context must reproduce (J1).
-        /// Built by the extractor from the commitment it decoded; like the fields above it never
-        /// rides, is never sent to a peer and is hashed into nothing, so it moves no wire and no root.
+        /// Built by the extractor from the commitment it decoded, and **`#[borsh(skip)]`** (the
+        /// Phase 1–2 review's L-1): the object's Borsh encoding is exactly the pre-F1 one, so a
+        /// crafted 0x4b carrier of this tag decodes identically on a build with the field and one
+        /// without it (the lifecycle gate's undecodable-tolerance would otherwise split them), and a
+        /// decoded object reads 0, which never convicts. Every construction the fold reads is the
+        /// extractor's, which recomputes it from the commitment.
+        #[borsh(skip)]
         job_pin: Hash64,
     },
     /// **ADR-0075 Decision 1: a drilled family enters the chain's certified set through its own
@@ -14287,9 +14292,10 @@ impl<'a> TransitionBuilder<'a> {
                 amount: debit,
                 accepted_daa: ctx.daa_score,
                 execution_root: recorded_root,
-                // ADR-0152 v22 skeleton: S-4's conviction funnel records these past `palw_rcore_plus`.
-                collected: 0,
-                claim_id: Hash64::default(),
+                // ADR-0152 v3.1 R-2 (the Phase 1–2 review's L-2): what the conviction took and the
+                // claim it is about. `amount` stays the debit until S-4 settles it to the nominal tier.
+                collected: debit,
+                claim_id,
             }),
         );
         if finding.acts_on_claim {
@@ -14458,9 +14464,10 @@ impl<'a> TransitionBuilder<'a> {
                 amount: debit,
                 accepted_daa: ctx.daa_score,
                 execution_root: recorded_root,
-                // ADR-0152 v22 skeleton: S-4's conviction funnel records these past `palw_rcore_plus`.
-                collected: 0,
-                claim_id: Hash64::default(),
+                // ADR-0152 v3.1 R-2 (the Phase 1–2 review's L-2): what the conviction took and the
+                // claim it is about. `amount` stays the debit until S-4 settles it to the nominal tier.
+                collected: debit,
+                claim_id,
             }),
         );
         self.forfeit_convicted_rights_v1(finding.forfeit, claim_id, &recorded_root);
@@ -14530,9 +14537,11 @@ impl<'a> TransitionBuilder<'a> {
     /// **ADR-0152 v3.1 V-2b / SPEC §4.5: forfeiture by CLAIM** — the sibling of
     /// [`Self::forfeit_minted_round_rights`] for a fault that proves the claim answers the wrong job
     /// or output (F1: 9, 10). The claim's own Finals leave the minted schedules and the pending
-    /// snapshots with the quanta they earned; every other claim's rows — an honest lender's on the
-    /// SAME execution root included — are untouched. At most three rows, as there; zero rows touched
-    /// when the claim has none.
+    /// snapshots; every other claim's rows — an honest lender's on the SAME execution root included —
+    /// are untouched, except that a lender's Final in a minted schedule INHERITS the claim's unspent
+    /// tickets where the mint had collapsed the root into the convicted claim's (the Phase 1–2
+    /// review's M-1: `palw_execution_schedule_forfeit_claim_v1`). At most three rows, as there; zero
+    /// rows touched when the claim has none.
     ///
     /// **And the open span's gathered Finals** (T18k): a root forfeit is filtered out of the next
     /// snapshot by the forfeiture set the ledger row feeds, but a claim-proving conviction records
@@ -14548,11 +14557,13 @@ impl<'a> TransitionBuilder<'a> {
             }
         }
         for span in self.state.round_schedules.keys().copied().collect::<Vec<_>>() {
-            let pruned = self
-                .state
-                .round_schedules
-                .get(&span)
-                .and_then(|schedule| palw_execution_schedule_forfeit_claim_v1(schedule, claim_id));
+            // The review's M-1: the claim's unspent tickets pass to the root's remaining Final; a
+            // ticket whose round's permit this chain accepted is spent and leaves with the claim.
+            let pruned = self.state.round_schedules.get(&span).and_then(|schedule| {
+                palw_execution_schedule_forfeit_claim_v1(schedule, claim_id, |round| {
+                    self.state.round_permit_used(schedule.span_index, round, 0)
+                })
+            });
             if let Some(pruned) = pruned {
                 self.write_round_schedule(span, Some(pruned));
             }
@@ -16100,6 +16111,9 @@ impl<'a> TransitionBuilder<'a> {
                 claim_id: id,
                 execution_root: claim.execution_root,
                 credit,
+                // ADR-0152 v3.1 (review M-1): the order the mint collapses a root's Finals by. 0
+                // below the fence, where the mint keeps the lowest claim id as it always did.
+                accepted_blue_score: if self.extras.offence_attribution_active { claim.accepted_blue_score } else { 0 },
             }),
         );
         Ok(())
@@ -39055,6 +39069,22 @@ pub(crate) mod tests {
     }
 
     // ---- ADR-0044 (FP-03): free-prompt claims, certification, and quantum spends ----
+
+    /// **The job pin never rides** (the Phase 1–2 review's L-1): a `FreePromptCommitted`'s Borsh
+    /// bytes are the same whatever its pin, and a decoded one reads 0 — so a crafted 0x4b carrier of
+    /// the tag decodes identically on a build with the field and on one without it.
+    #[test]
+    fn a_free_prompt_commitments_job_pin_is_not_on_the_wire() {
+        let plain = fp_commit(0x51, 8, 1);
+        let mut pinned = plain.clone();
+        let PalwConsensusObjectV2::FreePromptCommitted { job_pin, .. } = &mut pinned else { unreachable!("the fixture") };
+        *job_pin = h64(0x9199);
+        assert_ne!(plain, pinned, "two objects in memory");
+        let bytes = borsh::to_vec(&pinned).unwrap();
+        assert_eq!(bytes, borsh::to_vec(&plain).unwrap(), "one encoding: the pin is not in it");
+        let back: PalwConsensusObjectV2 = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(back, plain, "a decoded commitment's pin is 0, which never convicts");
+    }
 
     fn fp_commit(claim_word: u64, pwu: u64, quanta: u32) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::FreePromptCommitted {

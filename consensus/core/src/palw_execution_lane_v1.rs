@@ -293,6 +293,24 @@ pub struct PalwExecFinalV1 {
     pub execution_root: Hash64,
     /// [`palw_execution_credit_v1`], fixed by the block that finalized the claim.
     pub credit: u64,
+    /// **The blue score of the chain block that ACCEPTED the claim** (`PalwClaimStateV2::
+    /// accepted_blue_score`), past `Params::palw_offence_attribution`; 0 below it. ADR-0152 v3.1
+    /// (the Phase 1–2 review's M-1): the order in which Finals of ONE execution root were accepted,
+    /// so the mint's collapse of a root's Finals keeps the EARLIEST-accepted claim's
+    /// ([`palw_exec_final_acceptance_order_v1`]) — the lender's, whose block a borrower had to see
+    /// before it could copy the root — and not the lowest claim id, which a borrower grinds for free.
+    /// At 0 on every Final (below the fence) the order is the claim id alone: the mint as it was.
+    pub accepted_blue_score: u64,
+}
+
+/// **The order in which a root's Finals were accepted** (ADR-0152 v3.1, the Phase 1–2 review's
+/// M-1): earliest acceptance first, the claim id breaking a tie. ONE ordering for the three places
+/// that pick a root's representative — the bounded and the windowed mint's collapse, and the
+/// successor a by-claim forfeiture hands the representative's unspent tickets to
+/// ([`palw_execution_schedule_forfeit_claim_v1`]) — so they cannot disagree about whose the
+/// tickets are.
+pub fn palw_exec_final_acceptance_order_v1(a: &PalwExecFinalV1, b: &PalwExecFinalV1) -> std::cmp::Ordering {
+    a.accepted_blue_score.cmp(&b.accepted_blue_score).then(a.claim_id.cmp(&b.claim_id))
 }
 
 /// A bond that may hold a permit in a span, and how many finalized attempts earned it the place.
@@ -591,15 +609,55 @@ pub fn palw_execution_snapshot_forfeit_v1(snapshot: &PalwExecSnapshotV1, forfeit
 }
 
 /// **[`palw_execution_schedule_forfeit_v1`] keyed by CLAIM** (ADR-0152 v3.1 V-2b, SPEC §4.5): the
-/// schedule less the one claim's Finals and the quanta they earned, its domains re-taken — `None`
-/// when the claim has no Final in it. A claim-proving conviction (the claim answers the wrong job or
-/// output) forfeits this way, because another claim — an honest lender's — may carry the same root.
-pub fn palw_execution_schedule_forfeit_claim_v1(schedule: &PalwExecScheduleV1, claim_id: &Hash64) -> Option<PalwExecScheduleV1> {
-    if !schedule.finals.iter().any(|f| f.claim_id == *claim_id) {
-        return None;
-    }
+/// schedule less the one claim's Finals, its domains re-taken — `None` when the claim has no Final
+/// in it. A claim-proving conviction (the claim answers the wrong job or output) forfeits this way,
+/// because another claim — an honest lender's — may carry the same root.
+///
+/// **And the root's tickets stay the root's** (the Phase 1–2 review's M-1, its insurance half). The
+/// mint collapsed the root's Finals into the tickets of ONE of them, so a convicted claim that was
+/// that one took the lender's right with it. Where another Final of the same root stands in this
+/// schedule, the convicted claim's tickets pass to the one the mint would have chosen without it
+/// (the earliest-accepted, [`palw_exec_final_acceptance_order_v1`]): each keeps the round it was
+/// assigned — a promise already made, as in the root forfeiture — and is re-keyed to the successor's
+/// claim, bond, operator and domain, its `quantum_id` re-derived under the successor's claim so the
+/// lineage names the Final that now holds it. A ticket already spent (`spent(round)`: its round's
+/// permit was accepted on this chain) leaves with the convicted claim: what it bought is not
+/// reachable here. With no successor every ticket of the claim leaves, as before.
+pub fn palw_execution_schedule_forfeit_claim_v1(
+    schedule: &PalwExecScheduleV1,
+    claim_id: &Hash64,
+    spent: impl Fn(u64) -> bool,
+) -> Option<PalwExecScheduleV1> {
+    let removed = schedule.finals.iter().find(|f| f.claim_id == *claim_id).copied()?;
     let finals: Vec<PalwExecFinalV1> = schedule.finals.iter().copied().filter(|f| f.claim_id != *claim_id).collect();
-    let quanta = schedule.quanta.iter().copied().filter(|q| q.final_id != *claim_id).collect();
+    let successor = finals
+        .iter()
+        .filter(|f| f.execution_root == removed.execution_root && f.credit > 0)
+        .min_by(|a, b| palw_exec_final_acceptance_order_v1(a, b))
+        .copied();
+    let work_id = crate::palw_execution_quanta_v1::palw_execution_canonical_work_id_v1(removed.execution_root);
+    let mut quanta: Vec<crate::palw_execution_quanta_v1::PalwExecQuantumV1> = schedule
+        .quanta
+        .iter()
+        .filter_map(|q| {
+            if q.final_id != *claim_id {
+                return Some(*q);
+            }
+            let heir = successor?;
+            if spent(q.scheduled_round) {
+                return None;
+            }
+            Some(crate::palw_execution_quanta_v1::PalwExecQuantumV1 {
+                quantum_id: crate::palw_execution_quanta_v1::palw_execution_quantum_id_v1(work_id, heir.claim_id, q.index),
+                final_id: heir.claim_id,
+                bond: heir.bond,
+                operator_id: heir.operator_id,
+                domain: heir.domain,
+                ..*q
+            })
+        })
+        .collect();
+    quanta.sort_by_key(|q| (q.scheduled_round, q.quantum_id));
     let domains = palw_execution_schedule_snapshot_v1(schedule.span_index, &finals).domains;
     Some(PalwExecScheduleV1 { span_index: schedule.span_index, seed: schedule.seed, domains, finals, quanta })
 }
@@ -1185,6 +1243,7 @@ mod tests {
             claim_id: h(claim),
             execution_root: h(claim + 1_000_000),
             credit,
+            accepted_blue_score: 0,
         }
     }
 

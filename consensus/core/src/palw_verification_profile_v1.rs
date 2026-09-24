@@ -373,6 +373,7 @@ pub fn palw_network_sim_v1(classes: &[PalwClassSimV1], spans: u64, reference: &P
                         claim_id: crate::Hash64::from_u64_word((i as u64) << 40 | span << 16 | k),
                         execution_root: crate::Hash64::from_u64_word(span),
                         credit: 1,
+                        accepted_blue_score: 0,
                     });
                 }
             }

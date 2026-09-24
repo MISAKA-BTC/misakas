@@ -15,10 +15,19 @@
 //! * the whole context an anchor implies ([`palw_attempt_context_v1`]) and its prompt root
 //!   ([`palw_attempt_prompt_root_v1`]), the two halves of the identity check's J5.
 //!
-//! **F1 (this stage) covers the floor.** A model class's canonical job is still its registrant's
-//! and its context still carries artifact-held fields (`CoreV1`, F1-M, replaces both), so
-//! [`palw_attempt_canonical_v1`] answers `None` for every class but the base one and J5 does not
-//! run there — the relabel on a model class is F1-M's residual until then.
+//! **F1-M (addendum §4-bis.1): one rule, `CoreV1`, for the floor and every model class.** A model
+//! class's canonical job is the profile formula `(n_ctx/8 − 1, 2)` (admission pins it past
+//! `palw_offence_attribution`), and its attempt context is the floor's construction over its own
+//! profile — the model, runtime, tokenizer, nullifier, assignment and cu fields zero, the ceiling
+//! `n_ctx`, the network `"misaka-palw-rc"` (the anchor already binds network and genesis) — so
+//! nothing held only by an artifact enters what the chain checks, and a relabelled model-class run
+//! fails J5 exactly as a floor one does. Producers and seats switch their `job_for_anchor` and every
+//! `output_root` to this rule under the same fence ([`PalwAttemptRulesV1::CoreV1`]); on every other
+//! network they keep their family's own (`Legacy`), and nothing here is consulted.
+//!
+//! The other pieces the rule reads, each moved from the producer's crate byte for byte:
+//! [`palw_int_activation_leg_root_v1`] (J6), [`palw_canonical_checkpoint_profile_v1`] (J7) and
+//! [`palw_attempt_rendered_output_v1`] (the one rendered rule `OutputMismatch` holds a claim to).
 
 use crate::palw_step::PalwShapeProfileV3;
 use crate::palw_v2::PalwJobContextV2;
@@ -33,6 +42,70 @@ pub const PALW_ATTEMPT_PROMPT_DOMAIN_V1: &[u8] = b"misaka-palw/base0/rc-job-prom
 /// 4,096 ids is 513 BLAKE2b blocks — the floor (8), a 2k row (255) and the 8k row (1,023) all sit
 /// under it. A longer prompt (the 2M row) is checked by `PromptNotAnchored` (F1-M).
 pub const PALW_J5_INLINE_PROMPT_IDS_V1: u32 = 4096;
+
+/// **The most prompt ids one block may spend recomputing a whole prompt root** (addendum §4-bis.3,
+/// `PromptNotAnchored`'s `Whole` proof): one 2M row's canonical prefill (262,143 ids) per block.
+pub const PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1: u64 = 1 << 18;
+
+/// **Which attempt rule a producer or seat runs** — the family's own (`Legacy`: its prompt domain,
+/// its context fields, its rendered-output hash) or the chain's (`CoreV1`, this module). Not
+/// consensus state and never serialized: every node derives it from its params
+/// ([`palw_attempt_rules_of_params_v1`]), so producers, seats and the chain's identity checks agree.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PalwAttemptRulesV1 {
+    #[default]
+    Legacy,
+    CoreV1,
+}
+
+/// **`CoreV1` exactly where `Params::palw_offence_attribution` is armed** (testnet-12, from genesis);
+/// `Legacy` on every other network, whose roots therefore do not move.
+pub fn palw_attempt_rules_of_params_v1(params: &crate::config::params::Params) -> PalwAttemptRulesV1 {
+    if params.palw_offence_attribution_fence().is_some() { PalwAttemptRulesV1::CoreV1 } else { PalwAttemptRulesV1::Legacy }
+}
+
+/// Domain of [`palw_int_activation_leg_root_v1`] — `misaka-palw-base0`'s
+/// `PALW_BASE0_DOMAIN_ACTIVATION_LEG`, moved with the byte string unchanged.
+pub const PALW_INT_ACTIVATION_LEG_DOMAIN_V1: &[u8] = b"misaka-palw/base0/activation-leg/v1";
+
+/// **The integer classes' activation leg: the statement that the class taps nothing** — what every
+/// producer of this tree files (the floor, A16 and Qwen3.6 all call it), moved from
+/// `base0_activation_leg_root_v1` byte for byte. J6 holds a binding to it.
+pub fn palw_int_activation_leg_root_v1(ctx: &PalwJobContextV2) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_INT_ACTIVATION_LEG_DOMAIN_V1).to_state();
+    h.update(ctx.context_hash().as_byte_slice());
+    h.update(&(ctx.declared_prefill_tokens as u64).to_le_bytes());
+    h.update(&(ctx.exact_decode_tokens as u64).to_le_bytes());
+    h.update(b"no-taps");
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **The checkpoint profile a class's producers file** — the integer-kv profile at interval 1, or,
+/// for a class with recurrence heads (the hybrid, whose map is genesis-anchored), at `n_ctx`: the
+/// rule the floor, A16 and Qwen3.6 producers apply today (`base0/produce.rs`,
+/// `qwen36_checkpoint_profile_v1`), one predicate for all. J7 holds a binding to it.
+pub fn palw_canonical_checkpoint_profile_v1(profile: &PalwShapeProfileV3) -> crate::palw_legs::PalwCheckpointProfileV1 {
+    crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(if profile.gdn_heads > 0 {
+        profile.n_ctx.max(1)
+    } else {
+        crate::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1
+    })
+}
+
+/// **The one rendered-output rule under `CoreV1`**: the empty rendering, the floor's
+/// (`output_commitment_v2(ctx, ids, rendered_output_hash_v2(&[]))`). A family's keyed rendering is a
+/// function of its ids too, so it adds nothing a consumer could not recompute — and one rule is what
+/// lets `OutputMismatch` hold every class's claims to the same arithmetic.
+pub fn palw_attempt_rendered_output_v1(_ids: &[u32]) -> Hash64 {
+    crate::palw_v2::rendered_output_hash_v2(&[])
+}
+
+/// `output_root` of `ids` under `ctx` by the `CoreV1` rule.
+pub fn palw_attempt_output_root_v1(ctx: &PalwJobContextV2, ids: &[u32]) -> Hash64 {
+    crate::palw_v2::output_commitment_v2(&ctx.context_hash(), ids, &palw_attempt_rendered_output_v1(ids))
+}
 
 /// Ids per counter block: one 64-byte BLAKE2b output read as eight little-endian `u64` words.
 const PALW_ATTEMPT_PROMPT_WORDS_PER_BLOCK_V1: u64 = 8;
@@ -80,14 +153,19 @@ pub fn palw_attempt_prompt_ids_range_v1(anchor: &Hash64, vocab: u64, start: u64,
     out
 }
 
-/// **The canonical job `(prefill, decode)` a class is attempted at, as the chain derives it** —
-/// `None` where the chain does not (yet) derive one.
+/// **The canonical job `(prefill, decode)` a class is attempted at, as the chain derives it.**
 ///
 /// The base class's is [`crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL`], the job every floor
-/// producer and seat runs. F1 stops there: a model class's canonical job is still carried by its
-/// registration and its context by its artifact, so its whole-context rule is F1-M's (`CoreV1`).
-pub fn palw_attempt_canonical_v1(_profile: &PalwShapeProfileV3, is_base: bool) -> Option<(u32, u32)> {
-    is_base.then_some(crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL)
+/// producer and seat runs. A model class's is `(f − 1, 2)` with `f` =
+/// `palw_canonical_footprint_floor_v1(n_ctx)` — exactly the held rows' formula
+/// (`qwen25_a16_held_canonical_v1`, `qwen36_held_canonical_v1`), which admission pins for every
+/// class past `palw_offence_attribution` — and `None` for a context too narrow for it (`f < 2`).
+pub fn palw_attempt_canonical_v1(profile: &PalwShapeProfileV3, is_base: bool) -> Option<(u32, u32)> {
+    if is_base {
+        return Some(crate::palw_base0_profile::PALW_RC_BASE0_CANONICAL);
+    }
+    let floor = u32::try_from(crate::palw_context_ladder::palw_canonical_footprint_floor_v1(profile.n_ctx)).ok()?;
+    (floor >= 2).then_some((floor - 1, 2))
 }
 
 /// **The whole context an anchor implies for the canonical job `(p, d)`**, with the prompt's
@@ -104,6 +182,18 @@ pub fn palw_attempt_context_v1(
     canonical: (u32, u32),
     prompt_hash: Hash64,
 ) -> PalwJobContextV2 {
+    crate::palw_attempt_v2::palw_attempt_job_v1(palw_attempt_canonical_context_v1(profile, anchor, canonical, prompt_hash), true)
+}
+
+/// **The canonical job's context before the block's draw** — what a producer's `job_for_anchor`
+/// answers under `CoreV1` (callers then apply `palw_attempt_job_v1` at the block's draw rule, as for
+/// every family). [`palw_attempt_context_v1`] is this, drawn.
+pub fn palw_attempt_canonical_context_v1(
+    profile: &PalwShapeProfileV3,
+    anchor: &Hash64,
+    canonical: (u32, u32),
+    prompt_hash: Hash64,
+) -> PalwJobContextV2 {
     let mut ctx = crate::palw_base0_profile::rc_job_context(profile, canonical.0, canonical.1);
     ctx.job_id = *anchor;
     ctx.execution_seed = anchor.as_byte_slice()[..32].try_into().expect("a 64-byte hash has 32 bytes");
@@ -111,7 +201,22 @@ pub fn palw_attempt_context_v1(
         ctx.trace_scheme_id = crate::palw_step_refute::tiled_logits_scheme_id_v1();
     }
     ctx.prompt_token_ids_hash = prompt_hash;
-    crate::palw_attempt_v2::palw_attempt_job_v1(ctx, true)
+    ctx
+}
+
+/// **A producer's `job_for_anchor` under `CoreV1`**: the canonical context (undrawn) and the prompt
+/// the anchor names, at `canonical` over the class's `profile` — the same bytes the chain's J5
+/// derives. `None` only for a prompt past the prompt-id tree.
+pub fn palw_attempt_job_for_anchor_v1(
+    profile: &PalwShapeProfileV3,
+    anchor: &Hash64,
+    canonical: (u32, u32),
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> Option<(PalwJobContextV2, Vec<usize>)> {
+    let root = palw_attempt_prompt_root_v1(profile, anchor, canonical.0, network_form)?;
+    let prompt =
+        palw_attempt_prompt_ids_v1(anchor, u64::from(profile.vocab_size), canonical.0).into_iter().map(|id| id as usize).collect();
+    Some((palw_attempt_canonical_context_v1(profile, anchor, canonical, root), prompt))
 }
 
 /// **The prompt root an anchor implies for a `p`-id prefill**, in the class's form under the
@@ -168,7 +273,42 @@ pub(crate) fn floor_binding_for_tests_v1(
         shape_profile: profile,
         checkpoint_profile: crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1),
         full_logits_trace_root: Hash64::from_u64_word(0x7ACE),
-        activation_leg_root: Hash64::from_u64_word(0xAC71),
+        activation_leg_root: Hash64::default(),
+        step_leaf_count: 64,
+        step_merkle_root: Hash64::from_u64_word(0x57E9),
+        checkpoint_count: 0,
+        checkpoint_merkle_root: Hash64::default(),
+        committed_execution_root: Hash64::default(),
+    };
+    binding.activation_leg_root = palw_int_activation_leg_root_v1(&binding.job_context);
+    binding.committed_execution_root = crate::palw_step_leg::binding_commitment_root_v1(&binding);
+    crate::palw_step_leg::verify_binding_v1(&binding).expect("the fixture binding verifies");
+    binding
+}
+
+/// [`floor_binding_for_tests_v1`]'s twin for a MODEL class: the floor's graph at `n_ctx`, registered
+/// as a class of its own (not the base one), so its canonical job is the model formula and its
+/// context is `CoreV1`'s at that job.
+#[cfg(test)]
+pub(crate) fn model_binding_for_tests_v1(
+    anchor: &Hash64,
+    n_ctx: u32,
+    network_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+) -> crate::palw_step_leg::PalwStepBindingV2 {
+    use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    let mut profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's graph");
+    profile.n_ctx = n_ctx;
+    let canonical = palw_attempt_canonical_v1(&profile, false).expect("a context wide enough for the formula");
+    let root = palw_attempt_prompt_root_v1(&profile, anchor, canonical.0, network_form).expect("a canonical prompt commits");
+    let job_context = palw_attempt_context_v1(&profile, anchor, canonical, root);
+    let mut binding = crate::palw_step_leg::PalwStepBindingV2 {
+        version: crate::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+        state_chunk_map_id: profile.state_chunk_map_id,
+        checkpoint_profile: palw_canonical_checkpoint_profile_v1(&profile),
+        activation_leg_root: palw_int_activation_leg_root_v1(&job_context),
+        job_context,
+        shape_profile: profile,
+        full_logits_trace_root: Hash64::from_u64_word(0x7ACE),
         step_leaf_count: 64,
         step_merkle_root: Hash64::from_u64_word(0x57E9),
         checkpoint_count: 0,
@@ -176,7 +316,7 @@ pub(crate) fn floor_binding_for_tests_v1(
         committed_execution_root: Hash64::default(),
     };
     binding.committed_execution_root = crate::palw_step_leg::binding_commitment_root_v1(&binding);
-    crate::palw_step_leg::verify_binding_v1(&binding).expect("the fixture binding verifies");
+    crate::palw_step_leg::verify_binding_v1(&binding).expect("the model fixture binding verifies");
     binding
 }
 
@@ -233,7 +373,12 @@ mod tests {
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
         let anchor = Hash64::from_u64_word(0xF100);
         assert_eq!(palw_attempt_canonical_v1(&profile, true), Some(PALW_RC_BASE0_CANONICAL));
-        assert_eq!(palw_attempt_canonical_v1(&profile, false), None, "F1 derives the floor's job alone");
+        let floor = crate::palw_context_ladder::palw_canonical_footprint_floor_v1(profile.n_ctx) as u32;
+        assert_eq!(
+            palw_attempt_canonical_v1(&profile, false),
+            (floor >= 2).then(|| (floor - 1, 2)),
+            "as a class of its own the floor's graph takes the model formula"
+        );
         for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
             let (ctx, ids) = palw_floor_attempt_context_v1(&profile, &anchor, PALW_RC_BASE0_CANONICAL, form, true).unwrap();
             assert_eq!((ctx.job_id, &ctx.execution_seed[..]), (anchor, &anchor.as_byte_slice()[..32]));
@@ -244,5 +389,59 @@ mod tests {
             let (full, _) = palw_floor_attempt_context_v1(&profile, &anchor, PALW_RC_BASE0_CANONICAL, form, false).unwrap();
             assert_eq!(full.exact_decode_tokens, PALW_RC_BASE0_CANONICAL.1, "without the draw, the whole canonical job");
         }
+    }
+    /// **The formula IS the held rows' canonical job**, at every ladder width the families register,
+    /// and `None` below a context that can hold it.
+    #[test]
+    fn the_model_formula_is_the_held_canonical_at_every_width() {
+        use crate::palw_qwen25_profile::qwen25_a16_held_canonical_v1;
+        use crate::palw_qwen36_profile::qwen36_held_canonical_v1;
+        let mut profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        for n_ctx in [16u32, 64, 128, 512, 2_048, 8_192, 262_144, 2_097_152] {
+            profile.n_ctx = n_ctx;
+            let formula = palw_attempt_canonical_v1(&profile, false);
+            assert_eq!(formula, Some(qwen25_a16_held_canonical_v1(n_ctx)), "A16 at {n_ctx}");
+            assert_eq!(formula, Some(qwen36_held_canonical_v1(n_ctx)), "Qwen3.6 at {n_ctx}");
+        }
+        assert_eq!(palw_attempt_canonical_v1(&profile, false), Some((262_143, 2)), "the 2M row's (ADR-0103 Decision 14)");
+        profile.n_ctx = 8_192;
+        assert_eq!(palw_attempt_canonical_v1(&profile, false), Some((1_023, 2)), "the 8k row's");
+        for narrow in [0u32, 1, 8, 15] {
+            profile.n_ctx = narrow;
+            assert_eq!(palw_attempt_canonical_v1(&profile, false), None, "{narrow}: no room for the formula");
+        }
+    }
+
+    /// **The moved activation leg and the checkpoint predicate are the producers' own**, and the
+    /// rendered rule is the floor's.
+    #[test]
+    fn the_moved_legs_are_the_producers_rules() {
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap();
+        let anchor = Hash64::from_u64_word(0xAC7);
+        let (ctx, ids) =
+            palw_floor_attempt_context_v1(&profile, &anchor, PALW_RC_BASE0_CANONICAL, PalwPromptIdsFormV1::Flat, true).unwrap();
+        // The byte string and the preimage `base0_activation_leg_root_v1` always hashed.
+        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/base0/activation-leg/v1").to_state();
+        h.update(ctx.context_hash().as_byte_slice());
+        h.update(&(ctx.declared_prefill_tokens as u64).to_le_bytes());
+        h.update(&(ctx.exact_decode_tokens as u64).to_le_bytes());
+        h.update(b"no-taps");
+        assert_eq!(palw_int_activation_leg_root_v1(&ctx).as_byte_slice(), h.finalize().as_bytes());
+        assert_eq!(
+            palw_canonical_checkpoint_profile_v1(&profile),
+            crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1),
+            "a class with no recurrence checkpoints every call"
+        );
+        let mut hybrid = profile.clone();
+        hybrid.gdn_heads = 2;
+        assert_eq!(
+            palw_canonical_checkpoint_profile_v1(&hybrid),
+            crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(hybrid.n_ctx),
+            "a hybrid at its window"
+        );
+        assert_eq!(
+            palw_attempt_output_root_v1(&ctx, &ids),
+            crate::palw_v2::output_commitment_v2(&ctx.context_hash(), &ids, &crate::palw_v2::rendered_output_hash_v2(&[]))
+        );
     }
 }

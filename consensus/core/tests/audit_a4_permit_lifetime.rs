@@ -68,6 +68,7 @@ fn the_folds_mint_puts_every_ticket_inside_the_span_its_schedule_is_judged_at() 
         claim_id: Hash64::from_u64_word(3),
         execution_root: Hash64::from_u64_word(4),
         credit: 40 * PALW_EXECUTION_QUANTUM_V1,
+        accepted_blue_score: 0,
     };
     let issued = palw_execution_mint_quanta_matured_v1(
         &[f],

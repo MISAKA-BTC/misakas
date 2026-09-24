@@ -44,7 +44,8 @@ use kaspa_hashes::Hash64;
 /// here for every existing caller.
 pub use kaspa_consensus_core::palw_step_refute::{base0_logits_trace_root_v1, PALW_BASE0_DOMAIN_LOGITS_TRACE};
 
-pub const PALW_BASE0_DOMAIN_ACTIVATION_LEG: &[u8] = b"misaka-palw/base0/activation-leg/v1";
+/// Re-exported, not re-typed: the activation leg moved to core (ADR-0152 v3.1 J6) with its domain.
+pub use kaspa_consensus_core::palw_attempt_rules_v1::PALW_INT_ACTIVATION_LEG_DOMAIN_V1 as PALW_BASE0_DOMAIN_ACTIVATION_LEG;
 pub const PALW_BASE0_DOMAIN_TRACE_MANIFEST: &[u8] = b"misaka-palw/base0/trace-manifest/v1";
 
 /// Why an execution could not become an attempt.
@@ -102,15 +103,11 @@ impl std::error::Error for ProduceError {}
 /// Not `Hash64::default()`, which is indistinguishable from a field nobody set — the difference
 /// between "this class declares no taps" and "somebody forgot" is the difference between a
 /// commitment and an omission, and only one of them can be argued about later.
+///
+/// Moved to consensus core (ADR-0152 v3.1 J6: the chain holds a binding to it) with the byte string
+/// and the preimage unchanged; this name delegates.
 pub fn base0_activation_leg_root_v1(ctx: &PalwJobContextV2) -> Hash64 {
-    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_ACTIVATION_LEG).to_state();
-    h.update(ctx.context_hash().as_byte_slice());
-    h.update(&(ctx.declared_prefill_tokens as u64).to_le_bytes());
-    h.update(&(ctx.exact_decode_tokens as u64).to_le_bytes());
-    h.update(b"no-taps");
-    let mut out = [0u8; 64];
-    out.copy_from_slice(h.finalize().as_bytes());
-    Hash64::from_bytes(out)
+    kaspa_consensus_core::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(ctx)
 }
 
 /// Re-exported, not re-typed. The derivation moved to `kaspa_consensus_core::palw_attempt_v2`;
@@ -1090,6 +1087,39 @@ pub fn base0_material_job_is_the_claims_v1<B: kaspa_consensus_core::palw_backend
         return Err(PalwMaterialVerdictV1::Mismatch);
     }
     Ok(())
+}
+
+/// **The claim's whole statement, as a seat holding its material checks it** (ADR-0152 v3.1
+/// T18p-M; the Phase 1–2 review's H-1) — every `verify_material` branch of every family, one rule:
+///
+/// * the whole job ([`base0_material_job_is_the_claims_v1`], SEAT-S1);
+/// * under `CoreV1`, and where the caller has the claim's committed `output_root`, the ANSWER: the
+///   material's generated ids must render to it under this backend's rule
+///   (`output_root_for_context_v1` over the binding's own context — the context the claim was
+///   committed under, the executed one for an early-stopping free prompt). The roots say the
+///   arithmetic is the claim's; without this a claim whose roots are the honest run's and whose
+///   `output_root` names other tokens was licensed by every seat holding the material, while only
+///   a replaying seat (SEAT-S2) compared it. `Unverifiable` where the backend cannot render one.
+///
+/// Below `CoreV1` (every `Legacy` network) the answer is not compared here, so those seats judge
+/// exactly as before. J6/J7 and the head rule are SEAT-0's (`base0_seat_rules_v1`), in the tail.
+pub fn base0_material_answers_the_claim_v1<B: kaspa_consensus_core::palw_backend::PalwExecutionBackendV1 + ?Sized>(
+    backend: &B,
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    generated_token_ids: &[u32],
+    claim: &kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+) -> Result<(), kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1> {
+    use kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1;
+    base0_material_job_is_the_claims_v1(backend, &binding.job_context, claim)?;
+    if backend.attempt_rules_v1() != kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 {
+        return Ok(());
+    }
+    let Some(committed) = claim.output_root else { return Ok(()) };
+    match backend.output_root_for_context_v1(&binding.job_context, generated_token_ids) {
+        Some(rendered) if rendered == committed => Ok(()),
+        Some(_) => Err(PalwMaterialVerdictV1::Mismatch),
+        None => Err(PalwMaterialVerdictV1::Unverifiable),
+    }
 }
 
 /// **What a panel seat checks before it signs `Valid`.**

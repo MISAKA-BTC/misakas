@@ -254,6 +254,7 @@ fn a2_the_mint_cost_grows_superlinearly() {
             claim_id: Hash64::from_u64_word(3),
             execution_root: Hash64::from_u64_word(4),
             credit,
+            accepted_blue_score: 0,
         };
         let n = credit / PALW_EXECUTION_QUANTUM_V1;
         let t = Instant::now();

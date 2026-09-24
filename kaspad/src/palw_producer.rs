@@ -458,7 +458,10 @@ impl PalwProducerService {
         // what the config said, while the panel's half worked. The two halves must agree, and the
         // agreement is this constructor.
         let net = self.config.network_id.as_bytes().to_vec();
-        if self.config.chain_classes {
+        // ADR-0152 v3.1 J-5: the attempt rule this network runs (`CoreV1` where
+        // `palw_offence_attribution` is armed), on every backend the registry resolves.
+        let rules = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(&self.consensus_config.params);
+        let registry = if self.config.chain_classes {
             crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(
                 self.config.court,
                 self.config.prompt_ids_form,
@@ -472,7 +475,8 @@ impl PalwProducerService {
                 self.class_holdings.clone(),
                 net,
             )
-        }
+        };
+        registry.with_attempt_rules_v1(rules)
     }
 
     /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's,

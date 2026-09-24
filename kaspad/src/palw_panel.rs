@@ -2005,7 +2005,10 @@ impl PalwPanelService {
     /// operator's configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         let net = self.consensus_config.params.net.to_string().into_bytes();
-        if self.config.chain_classes {
+        // ADR-0152 v3.1 J-5: the attempt rule this network runs (`CoreV1` where
+        // `palw_offence_attribution` is armed), on every backend the registry resolves.
+        let rules = kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_rules_of_params_v1(&self.consensus_config.params);
+        let registry = if self.config.chain_classes {
             crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(
                 self.config.court,
                 self.config.prompt_ids_form,
@@ -2019,7 +2022,8 @@ impl PalwPanelService {
                 self.class_holdings.clone(),
                 net,
             )
-        }
+        };
+        registry.with_attempt_rules_v1(rules)
     }
 
     /// The class id `--palw-register-class` names, as this build derives it. `None` when the

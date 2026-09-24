@@ -57,6 +57,14 @@ impl PalwBackendRegistry {
         Self { sdk: PalwClassSdk::builtin_v1(court, prompt_ids_form, network_id).with_chain_classes_v1(), holdings }
     }
 
+    /// **Every backend this registry resolves runs `rules`** (ADR-0152 v3.1 J-5) — the node passes
+    /// `palw_attempt_rules_of_params_v1(&params)`, `CoreV1` on a network that arms
+    /// `palw_offence_attribution`.
+    pub fn with_attempt_rules_v1(mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) -> Self {
+        self.sdk = self.sdk.with_attempt_rules_v1(rules);
+        self
+    }
+
     /// The SDK this registry dispatches through — the panel's registration builder asks it for
     /// candidates and admission preflight, against the same holdings `resolve` serves.
     pub fn sdk(&self) -> &PalwClassSdk {

@@ -478,6 +478,8 @@ pub enum PalwOffenceVerifyError {
     IdentityNotRecorded,
     #[error("the claim's lane is not recorded, so its identity rule cannot be chosen")]
     LaneUnknown,
+    #[error("the class's context is too narrow for the canonical job formula, so no attempt context is derivable")]
+    IdentityNotDerivable,
     #[error("the binding does not reproduce its own committed execution root")]
     BindingUnverified,
     #[error("the binding answers this claim's job and class: no identity fault")]

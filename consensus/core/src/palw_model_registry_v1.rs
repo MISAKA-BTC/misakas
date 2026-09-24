@@ -2179,6 +2179,7 @@ mod tests {
             claim_id: h(100),
             execution_root: h(7),
             credit: 1,
+            accepted_blue_score: 0,
         }];
         let snapshot = palw_execution_schedule_snapshot_v1(3, &finals);
         assert!(snapshot.domains.iter().any(|d| d.domain == h(1)) && snapshot.domains.iter().all(|d| d.domain != h(2)));
