@@ -1306,8 +1306,8 @@ pub enum PalwClassAdmissionError {
     HeldClassUnattributable { n_ctx: u32, bound: u32 },
     /// **ADR-0152 §4-ter C5, the review's F4 and F5: a held class inside the context bound that no
     /// honest party can still answer** — a recurrent (gated-delta) layer, for which no family has a
-    /// windowed builder (F4), or a whole-context replay the reference verifier does not finish inside
-    /// one court turn (F5). See [`palw_held_class_unanswerable_v1`].
+    /// windowed builder (F4), or a compute turn (`m = 2` reference replays of the whole context) past
+    /// the cap (F5). See [`palw_held_class_unanswerable_v1`].
     #[error("a held class no honest party can dissect inside a turn: {why} (ADR-0152 §4-ter C5)")]
     HeldClassUnanswerable { why: PalwHeldUnanswerableV1 },
 }
@@ -2006,24 +2006,88 @@ pub fn verify_class_admission_v8(
     )
 }
 
-/// **ADR-0152 §4-ter (the review's F5): how many reference replays of a held class's whole context
-/// one court turn must hold.** The responder's move 1 and the challenger's first choice each need one
-/// plain forward to the disputed site (≤ `n_ctx` positions, the windowed builder's N1/N2); a class
-/// is answerable where that forward, at [`crate::palw_verification_profile_v1::PALW_VERIFICATION_REFERENCE_V1`]'s
-/// rate, fits `turn_deadline_daa × PALW_ANCHOR_PERIOD_MS_V1 / this`.
-///
-/// **One, not two, and why.** Testnet-12's genesis 8k row prices at 13.70 T MAC-eq for its whole
-/// context — 3,424 s at the reference's 4 G MAC-eq/s — and its turn is 42 DAA × 120 s = 5,040 s. At
-/// two replays a turn the budget is 2,520 s and the row the launch gate answers would itself be
-/// unanswerable; at one it passes with 1.47× to spare. The reference is the fleet's 2026-09-17
-/// dense-tier rate; ADR-0121 measured the A16 engine at 91 s for 1,024 positions of the same model,
-/// ≈ 4× the reference, so one reference replay a turn is ≈ 4 measured replays. The real-weight timing
-/// run (T-A5) is what should replace this with a measured rate.
-pub const PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1: u64 = 1;
+/// **ADR-0152 §4-ter (the review's F5, the user's decision): the safety factor `m` a held class's
+/// COMPUTE turn carries** — a move whose builder re-executes the job (the responder's held root claim,
+/// the challenger's first choice) is given `m` reference replays of the whole context.
+pub const PALW_HELD_COMPUTE_REPLAYS_V1: u64 = 2;
 
-/// **Why a held class's dissection cannot be answered inside a turn** (ADR-0152 §4-ter; the review's
-/// F4 and F5). One predicate for the bundle's genesis mirror (C1), a registration (C5) and a
-/// backend's `supports_dissection` (N4), so the three cannot disagree.
+/// **ADR-0152 §4-ter (the review's F5): the longest compute turn a held class may need and still be
+/// answerable**, in DAA. 120 DAA is four hours at the 120-second anchor:
+///
+/// * it bounds how long one held session's two compute moves can freeze a licensed claim before its
+///   `Final` — 2 × 120 = 240 DAA, eight hours;
+/// * a whole held dissection at the cap fits every network that arms the fence
+///   ([`palw_held_dissection_fits_court_v1`], checked at startup): on testnet-12, `2 × 120 + 26 × 42 +
+///   216 + 1 = 1,549` of its 3,000-DAA court window, so the backstop never decides an honest
+///   dissection;
+/// * it is 2.07× the launch gate's own row (testnet-12's genesis 8k row: 13.70 T MAC-eq, 3,424 s at
+///   the reference rate, `⌈2 × 3,424 / 120⌉ = 58` DAA), so a class up to about twice that replay
+///   registers and the 2M row (814,993 DAA) does not.
+pub const PALW_HELD_COMPUTE_TURN_CAP_DAA_V1: u64 = 120;
+
+/// **The held dissection's round budget the court-window check prices**: `⌈log₂ 8,192⌉` — the widest
+/// answerable history ([`crate::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1`]) bisected one position
+/// a tile at the binary arity, the most rounds any answerable class's dissection can play.
+pub const PALW_HELD_DISSECTION_MAX_ROUNDS_V1: u64 = 13;
+
+/// **A reference verifier's whole-context replay of a held class, in milliseconds** — the class's
+/// arithmetic MAC-eq for an uncached `n_ctx` prefill (`palw_canonical_work_v1`) over
+/// [`crate::palw_verification_profile_v1::PALW_VERIFICATION_REFERENCE_V1`]'s rate. `None` for a class
+/// that is not held or whose work cannot be derived. A pure function of the profile.
+pub fn palw_held_reference_replay_ms_v1(profile: &PalwShapeProfileV3) -> Option<u64> {
+    use crate::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, PalwCanonicalExecutionFactsV1, palw_canonical_work_v1};
+    use crate::palw_verification_profile_v1::PALW_VERIFICATION_REFERENCE_V1;
+    if !crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
+        return None;
+    }
+    let mac_eq = PalwCanonicalClassDescriptorV1::of(profile, Hash64::default())
+        .ok()
+        .and_then(|descriptor| palw_canonical_work_v1(&descriptor, &PalwCanonicalExecutionFactsV1::uncached(profile.n_ctx, 1)).ok())
+        .map(|work| work.arithmetic_mac_eq())?;
+    Some((mac_eq / u128::from(PALW_VERIFICATION_REFERENCE_V1.mac_eq_per_ms.max(1))).min(u128::from(u64::MAX)) as u64)
+}
+
+/// **ADR-0152 §4-ter (the review's F5, the user's decision): a held class's COMPUTE turn, in DAA** —
+/// `⌈m × replay / anchor⌉` with `m` = [`PALW_HELD_COMPUTE_REPLAYS_V1`], `replay` =
+/// [`palw_held_reference_replay_ms_v1`] and `anchor` = 120 s (`PALW_ANCHOR_PERIOD_MS_V1`).
+/// testnet-12's genesis 8k row: 58. `None` for a class that is not held or cannot be priced.
+///
+/// **A pure function of the class profile** — no state, no ruleset — so the fold (the opening rung of
+/// a held dissection and move 1's phase), the processor (C5 through [`palw_held_class_unanswerable_v1`])
+/// and a node planning its answer read one number: [`palw_held_move_turn_daa_v1`] is the turn a
+/// compute move is given.
+pub fn palw_held_compute_turn_daa_v1(profile: &PalwShapeProfileV3) -> Option<u64> {
+    let replay_ms = palw_held_reference_replay_ms_v1(profile)?;
+    let anchor_ms = crate::palw_verification_profile_v1::PALW_ANCHOR_PERIOD_MS_V1;
+    Some(replay_ms.saturating_mul(PALW_HELD_COMPUTE_REPLAYS_V1).div_ceil(anchor_ms))
+}
+
+/// **The turn a held dissection's COMPUTE move is given** — `max(base_turn_daa, compute turn)` for
+/// the moves whose builder re-executes (the responder's held root claim, tag 57, and the challenger's
+/// first choice), `base_turn_daa` (the court's 42 on testnet-12) where the class has no compute turn.
+/// Response-only moves (every later disclosure and choice, the bottom) keep `base_turn_daa`. The one
+/// spelling the fold and a node's producer auto-response share.
+pub fn palw_held_move_turn_daa_v1(profile: &PalwShapeProfileV3, base_turn_daa: u64) -> u64 {
+    palw_held_compute_turn_daa_v1(profile).map_or(base_turn_daa, |compute| compute.max(base_turn_daa))
+}
+
+/// **Does a held dissection played at the compute cap fit the court window?** `2 × cap + 2 ×
+/// PALW_HELD_DISSECTION_MAX_ROUNDS_V1 × base_turn + assembly_reserve + 1 ≤ window_court`: the root
+/// claim and the challenger's first choice at the cap, every other disclosure and choice and the
+/// bottom at the base turn, and the close's assembly reserve inside the backstop. Asked at startup of
+/// every network that arms `palw_offence_attribution` over the held regime.
+pub fn palw_held_dissection_fits_court_v1(base_turn_daa: u64, window_court: u64, assembly_reserve_daa: u64) -> bool {
+    PALW_HELD_COMPUTE_TURN_CAP_DAA_V1
+        .saturating_mul(2)
+        .saturating_add(PALW_HELD_DISSECTION_MAX_ROUNDS_V1.saturating_mul(2).saturating_mul(base_turn_daa))
+        .saturating_add(assembly_reserve_daa)
+        .saturating_add(1)
+        <= window_court
+}
+
+/// **Why a held class's dissection cannot be answered** (ADR-0152 §4-ter; the review's F4 and F5).
+/// One predicate for the bundle's genesis mirror (C1), a registration (C5) and a backend's
+/// `supports_dissection` (N4), so the three cannot disagree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwHeldUnanswerableV1 {
     /// `n_ctx` past [`crate::palw_state_v2::PALW_HELD_ANSWERABLE_N_CTX_V1`] (the 2M row).
@@ -2031,8 +2095,8 @@ pub enum PalwHeldUnanswerableV1 {
     /// A recurrent (gated-delta) layer: no family has a windowed builder for the hybrid held site —
     /// the dense A16 family's N1/N2 read an attention-only state (the review's F4).
     Recurrent { layers: u16 },
-    /// A reference replay of the whole context does not fit the turn (the review's F5).
-    ReplayPastTurn { replay_ms: u64, budget_ms: u64 },
+    /// The class's compute turn is past [`PALW_HELD_COMPUTE_TURN_CAP_DAA_V1`] (the review's F5).
+    ComputeTurnPastCap { turn: u64, cap: u64 },
     /// The class's replay cost cannot be derived from its profile.
     Unpriced,
 }
@@ -2042,21 +2106,20 @@ impl core::fmt::Display for PalwHeldUnanswerableV1 {
         match self {
             Self::ContextPastBound { n_ctx, bound } => write!(f, "n_ctx {n_ctx} is past the {bound}-position bound"),
             Self::Recurrent { layers } => write!(f, "{layers} recurrent layer(s): no windowed builder answers the hybrid held site"),
-            Self::ReplayPastTurn { replay_ms, budget_ms } => {
-                write!(f, "a reference replay of the whole context takes {replay_ms} ms and a court turn holds {budget_ms} ms")
+            Self::ComputeTurnPastCap { turn, cap } => {
+                write!(f, "its compute turn (m = 2 reference replays of the whole context) is {turn} DAA, past the {cap}-DAA cap")
             }
             Self::Unpriced => write!(f, "the class's replay cost cannot be derived"),
         }
     }
 }
 
-/// **ADR-0152 §4-ter: can an honest party answer this held class's dissection inside a turn of
-/// `turn_deadline_daa`?** `None` for an answerable held class and for every class that is not held;
-/// otherwise the first reason it is not ([`PalwHeldUnanswerableV1`]): the context bound, a recurrent
-/// layer (F4), the whole-context replay against the turn (F5, [`PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1`]).
-pub fn palw_held_class_unanswerable_v1(profile: &PalwShapeProfileV3, turn_deadline_daa: u64) -> Option<PalwHeldUnanswerableV1> {
-    use crate::palw_canonical_work_v1::{PalwCanonicalClassDescriptorV1, PalwCanonicalExecutionFactsV1, palw_canonical_work_v1};
-    use crate::palw_verification_profile_v1::{PALW_ANCHOR_PERIOD_MS_V1, PALW_VERIFICATION_REFERENCE_V1};
+/// **ADR-0152 §4-ter: can an honest party answer this held class's dissection?** `None` for an
+/// answerable held class and for every class that is not held; otherwise the first reason it is not
+/// ([`PalwHeldUnanswerableV1`]): the context bound, a recurrent layer (F4), a compute turn past the cap
+/// (F5, [`palw_held_compute_turn_daa_v1`] against [`PALW_HELD_COMPUTE_TURN_CAP_DAA_V1`]). A pure
+/// function of the profile.
+pub fn palw_held_class_unanswerable_v1(profile: &PalwShapeProfileV3) -> Option<PalwHeldUnanswerableV1> {
     if !crate::palw_state_chunk_map::palw_profile_is_held_v4(profile) {
         return None;
     }
@@ -2069,36 +2132,27 @@ pub fn palw_held_class_unanswerable_v1(profile: &PalwShapeProfileV3, turn_deadli
     if recurrent > 0 {
         return Some(PalwHeldUnanswerableV1::Recurrent { layers: recurrent });
     }
-    let Some(mac_eq) = PalwCanonicalClassDescriptorV1::of(profile, Hash64::default())
-        .ok()
-        .and_then(|descriptor| palw_canonical_work_v1(&descriptor, &PalwCanonicalExecutionFactsV1::uncached(profile.n_ctx, 1)).ok())
-        .map(|work| work.arithmetic_mac_eq())
-    else {
+    let Some(turn) = palw_held_compute_turn_daa_v1(profile) else {
         return Some(PalwHeldUnanswerableV1::Unpriced);
     };
-    let replay_ms = (mac_eq / u128::from(PALW_VERIFICATION_REFERENCE_V1.mac_eq_per_ms.max(1))).min(u128::from(u64::MAX)) as u64;
-    let budget_ms = turn_deadline_daa.saturating_mul(PALW_ANCHOR_PERIOD_MS_V1) / PALW_HELD_ANSWER_REPLAYS_PER_TURN_V1.max(1);
-    (replay_ms > budget_ms).then_some(PalwHeldUnanswerableV1::ReplayPastTurn { replay_ms, budget_ms })
+    (turn > PALW_HELD_COMPUTE_TURN_CAP_DAA_V1)
+        .then_some(PalwHeldUnanswerableV1::ComputeTurnPastCap { turn, cap: PALW_HELD_COMPUTE_TURN_CAP_DAA_V1 })
 }
 
 /// **ADR-0152 §4-ter C5: is a held class's attention lie attributable?** Past
 /// `palw_offence_attribution` (`attribution`), a registration whose held profile no honest party can
-/// dissect inside a turn of `turn_deadline_daa` ([`palw_held_class_unanswerable_v1`]) is refused —
-/// [`PalwClassAdmissionError::HeldClassUnattributable`] for the context bound (the 2M row's), and
-/// [`PalwClassAdmissionError::HeldClassUnanswerable`] for a recurrent layer (F4) or a replay past the
-/// turn (F5): the class would join the unanswerable set the genesis 2M row alone was accepted into.
-/// Every other profile, and every profile below the fence, passes. Asked by the acceptance layer
-/// beside [`verify_class_admission_v9`] for a post-genesis registration; genesis rows are judged by
-/// `validate_palw_v2` and listed in the bundle's unanswerable mirror instead.
-pub fn palw_held_class_is_attributable_v1(
-    profile: &PalwShapeProfileV3,
-    attribution: bool,
-    turn_deadline_daa: u64,
-) -> Result<(), PalwClassAdmissionError> {
+/// dissect ([`palw_held_class_unanswerable_v1`]) is refused — [`PalwClassAdmissionError::HeldClassUnattributable`]
+/// for the context bound (the 2M row's), and [`PalwClassAdmissionError::HeldClassUnanswerable`] for a
+/// recurrent layer (F4) or a compute turn past the cap (F5): the class would join the unanswerable set
+/// the genesis 2M row alone was accepted into. Every other profile, and every profile below the
+/// fence, passes. Asked by the acceptance layer beside [`verify_class_admission_v9`] for a
+/// post-genesis registration; genesis rows are judged by `validate_palw_v2` and listed in the
+/// bundle's unanswerable mirror instead.
+pub fn palw_held_class_is_attributable_v1(profile: &PalwShapeProfileV3, attribution: bool) -> Result<(), PalwClassAdmissionError> {
     if !attribution {
         return Ok(());
     }
-    match palw_held_class_unanswerable_v1(profile, turn_deadline_daa) {
+    match palw_held_class_unanswerable_v1(profile) {
         None => Ok(()),
         Some(PalwHeldUnanswerableV1::ContextPastBound { n_ctx, bound }) => {
             Err(PalwClassAdmissionError::HeldClassUnattributable { n_ctx, bound })

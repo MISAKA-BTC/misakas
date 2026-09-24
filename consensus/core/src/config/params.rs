@@ -5261,7 +5261,7 @@ impl Params {
         let armed = self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never());
         match &self.palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) if armed => {
-                crate::palw_state_v2::palw_held_unanswerable_classes_of_v1(&bundle.genesis_objects, bundle.court.turn_deadline_daa())
+                crate::palw_state_v2::palw_held_unanswerable_classes_of_v1(&bundle.genesis_objects)
             }
             _ => Vec::new(),
         }
@@ -5287,6 +5287,23 @@ impl Params {
             return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
                 "the V2 bundle's held_unanswerable_classes disagrees with its genesis held rows under palw_offence_attribution: \
                  mirror it with Params::sync_palw_held_answerability after the bundle is assembled (ADR-0152 §4-ter)",
+            ));
+        }
+        // ADR-0152 §4-ter (the review's F5): a network that arms the attribution fence over the held
+        // regime must hold a whole held dissection at the compute cap inside its court window.
+        let armed = self.palw_offence_attribution.is_some_and(|f| f != ForkActivation::never())
+            && self.palw_held_context.is_some_and(|f| f != ForkActivation::never());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && armed
+            && !crate::palw_class_admission_v2::palw_held_dissection_fits_court_v1(
+                bundle.court.turn_deadline_daa(),
+                bundle.state.window_court(),
+                crate::palw_state_v2::palw_close_assembly_daa_v1(crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS),
+            )
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "a held dissection at the compute-turn cap does not fit this ruleset's court window (ADR-0152 §4-ter, \
+                 palw_held_dissection_fits_court_v1)",
             ));
         }
         Ok(())
