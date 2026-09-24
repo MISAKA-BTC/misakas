@@ -8,8 +8,8 @@
 //! per-court reserve about 8× lower than a whole-job claim's. Past the review the courted claims are
 //! pooled with the pending ones per class, so they come back as the one job they were.
 //!
-//! Measured through the real fold on testnet-12's params: a model class registered without a
-//! held-regime carriage (so a licence releases it, ADR-0152 T-2(a)), one-quantum commitments,
+//! Measured through the real fold on testnet-12's params: a model class whose window is under
+//! ADR-0152's C7 threshold (so a licence releases it, T-2(a)), one-quantum commitments,
 //! bound, licensed, and a `CourtOpened` on each; what the class owes is read with
 //! `palw_panel_demand_read_v1` (the read the gate and op 186 share). Also: two courts on one
 //! licensed claim charge it once.
@@ -29,7 +29,7 @@ use kaspa_consensus_core::palw_state_v2::{
     PalwPwuRuleV2, PalwStateCarriageV2, PalwTransitionExtrasV1, apply_palw_transition_v7, palw_inflight_claims_counted_v1,
     palw_operator_id_v2, palw_panel_demand_read_v1,
 };
-use kaspa_consensus_core::palw_work_target_v1::palw_panel_demand_term_v1;
+use kaspa_consensus_core::palw_work_target_v1::{palw_panel_demand_term_v1, palw_panel_held_to_final_v1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
 fn t12() -> Params {
@@ -256,8 +256,8 @@ fn courts_on_licensed_one_quantum_claims_charge_the_one_job_the_claims_pool_to()
     let window = row.profile.verification_window_spans as u64;
     let s = c.into_state_v3(sp, None, false, None).expect("rebuilds");
     assert!(
-        !s.class_is_held_v1(&model_id),
-        "the premise: registered without a carriage, the class is not held, so a licence releases it"
+        !palw_panel_held_to_final_v1(s.model_lifecycle(&model_id).unwrap()),
+        "the premise: a window under 1,000 spans, the class is not held to Final, so a licence releases it"
     );
     let per_job = sp.fp_quanta_per_canonical_job() as u64;
     let canonical = model_rule.canonical_leaves_v1();

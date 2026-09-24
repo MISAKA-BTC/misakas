@@ -15,6 +15,7 @@ use room::*;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_state_v2::{PalwBlockWorkV3, PalwClaimPhaseV2, PalwStateV2Error, palw_class_admits_claim_v1};
+use kaspa_consensus_core::palw_work_target_v1::palw_panel_held_to_final_v1;
 
 const NOW: u64 = 1_000;
 const A1: u64 = 8_801;
@@ -29,7 +30,7 @@ fn the_2m_gate_refuses_a_second_claim_after_the_first_is_licensed_past_and_below
     let g = genesis_state(&p);
     let row = g.model_lifecycle(&id2m).unwrap().profile.clone();
     let required = row.required_ready_seats as usize;
-    assert!(g.class_is_held_v1(&id2m), "the 2M row is under the held regime");
+    assert!(palw_panel_held_to_final_v1(g.model_lifecycle(&id2m).unwrap()), "the 2M row is held to Final (ADR-0152's C7)");
     assert_eq!(row.max_inflight_claims, 1, "c_2M = 1");
     let ready: Vec<_> = honest(&p).into_iter().take(required).collect();
     let s0 = readied(&sp, &activated(&sp, &g, id2m), &ready, id2m, NOW);

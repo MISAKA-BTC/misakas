@@ -1,16 +1,20 @@
-//! **Through the carriage (a node's load, a reorg's rebuild) a held class owes its licensed claim
-//! until Final, and an ordinary class's licence releases it, a court re-charges it, a revert
+//! **Through the carriage (a node's load, a reorg's rebuild) a class held to Final owes its licensed
+//! claim until Final, and an ordinary class's licence releases it, a court re-charges it, a revert
 //! re-charges it** — 2026-09-24 audit #4 review item 1 (and the cache lens the review kept).
 //!
 //! The rate rule's owed claims are a function of the state (`palw_panel_demand_read_v1`, the index
 //! walked from the state), and `into_state_v3` rebuilds what it reads (`unresolved`,
-//! `open_courts_by_claim`). At e93be0f2 a held-regime class — the 2M regime, ADR-0152 T-2(b):
-//! "2M held to Final" — was released at licence like every other class (5,368,709,120,000 → 0
-//! scaled here). This drives one attempt claim on a model class, through the carriage, across a
-//! licence, a court session on the licensed claim (the court index rebuilt from the sessions), the
-//! court removed, the licence reverted, and a DA accusation on the licensed claim
-//! (`DefaultDisputed { resumed: ReceiptLicensed }`) — once with the class under the held regime
-//! (its ladder recorded, which is what `class_is_held_v1` reads), once without it.
+//! `open_courts_by_claim`). At e93be0f2 a held class — the 2M regime, ADR-0152 T-2(b): "2M held to
+//! Final" — was released at licence like every other class (5,368,709,120,000 → 0 scaled here).
+//! This drives one attempt claim on a model class, through the carriage, across a licence, a court
+//! session on the licensed claim (the court index rebuilt from the sessions), the court removed, the
+//! licence reverted, and a DA accusation on the licensed claim
+//! (`DefaultDisputed { resumed: ReceiptLicensed }`).
+//!
+//! Held to Final is ADR-0152's C7 by the window rule (`palw_panel_held_to_final_v1`: a verification
+//! window of at least 1,000 spans), not ADR-0119's held regime (`class_is_held_v1`, a recorded step
+//! ladder). So the walk runs over both inputs: the class's window at C7's threshold or as its work
+//! derives it, each with the held ladder recorded and without it. The window alone decides.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_owed_claims_through_the_carriage_rebuild
 #![allow(dead_code)]
@@ -29,6 +33,7 @@ use kaspa_consensus_core::palw_state_v2::{
     PalwCourtSessionStateV2, PalwPwuRuleV2, PalwStateCarriageV2, PalwTransitionExtrasV1, apply_palw_transition_v7,
     palw_operator_id_v2, palw_panel_demand_read_v1,
 };
+use kaspa_consensus_core::palw_work_target_v1::{PALW_RCORE_C7_WINDOW_SPANS_V1, palw_panel_held_to_final_v1};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
 fn t12() -> Params {
@@ -144,7 +149,9 @@ fn owed_by(s: &PalwChainStateV2, sp: &kaspa_consensus_core::palw_state_v2::PalwS
     palw_panel_demand_read_v1(s, sp, seat_count).0.get(&class).copied().unwrap_or(0)
 }
 
-fn walk(held: bool) -> Owed {
+/// The walk on a model class with ADR-0119's held ladder recorded or not (`ladder`), and its window
+/// at C7's 1,000 spans or as its work derives it (`c7_window`).
+fn walk(ladder: bool, c7_window: bool) -> Owed {
     use kaspa_consensus_core::palw_execution_lane_v1::PalwExecLaneFoldV1;
     use kaspa_consensus_core::palw_model_registry_v1::{
         PALW_REGISTRY_GLOBALS_V1, PalwModelLifecycleV1, PalwModelRegistryFoldV1, PalwModelWorkV1,
@@ -237,16 +244,22 @@ fn walk(held: bool) -> Owed {
     };
     let (s1, _, _) = fold(&PalwChainStateV2::genesis(), 1, &objects, PalwBlockWorkV3::None).expect("genesis");
     let (s2, _, _) = fold(&s1, 2, &[], PalwBlockWorkV3::None).expect("span boundary");
-    // The class Active; under the held regime (as testnet-12's 2M row is) its ladder is recorded,
-    // which is what `class_is_held_v1` reads.
+    // The class Active. Held to Final, its window is C7's (as testnet-12's 2M row's is); under
+    // ADR-0119's held regime its ladder is recorded (as both of testnet-12's genesis model rows' are).
+    // No span boundary is crossed before the reads below, so the edited window stands.
     let mut c = PalwStateCarriageV2::from_state(&s2);
-    c.model_lifecycles.get_mut(&model_id).expect("the model row").state = PalwModelLifecycleV1::Active;
-    c.model_lifecycles.get_mut(&model_id).unwrap().profile.max_inflight_claims = 16;
-    if held {
+    let row = c.model_lifecycles.get_mut(&model_id).expect("the model row");
+    row.state = PalwModelLifecycleV1::Active;
+    row.profile.max_inflight_claims = 16;
+    if c7_window {
+        row.profile.verification_window_spans = PALW_RCORE_C7_WINDOW_SPANS_V1;
+    }
+    if ladder {
         c.class_step_ladders.insert(model_id, kaspa_consensus_core::palw_state_chunk_map::PALW_HELD_STEP_LADDER_V1);
     }
     let s = c.into_state_v3(sp, None, false, None).expect("rebuilds");
-    assert_eq!(s.class_is_held_v1(&model_id), held, "the premise");
+    assert_eq!(s.class_is_held_v1(&model_id), ladder, "the premise: the ladder");
+    assert_eq!(palw_panel_held_to_final_v1(s.model_lifecycle(&model_id).unwrap()), c7_window, "the premise: the window");
     let canonical = model_rule.canonical_leaves_v1();
     let tgt = s.class_target(&model_id).expect("the class target").target;
     let env = attempt(model_id, kaspa_consensus_core::palw_pwu::palw_pwu_v1(tgt, canonical), 2, 0x77);
@@ -326,20 +339,30 @@ fn walk(held: bool) -> Owed {
     }
 }
 
+/// Held to Final by the window, with or without the ladder (without it: the review's HELD-2 case).
 #[test]
-fn a_held_class_owes_its_licensed_claim_until_final_through_the_carriage() {
-    let owed = walk(true);
-    println!("held class: {owed:?}");
-    assert_eq!(
-        owed,
-        Owed { provisional: 1, licensed: 1, courted: 1, court_closed: 1, reverted: 1, disputed: 1 },
-        "no licence releases a held class's claim, and a court or an accusation adds nothing to it"
-    );
+fn a_class_held_to_final_owes_its_licensed_claim_until_final_through_the_carriage() {
+    for ladder in [false, true] {
+        let owed = walk(ladder, true);
+        println!("window {PALW_RCORE_C7_WINDOW_SPANS_V1} spans, held ladder {ladder}: {owed:?}");
+        assert_eq!(
+            owed,
+            Owed { provisional: 1, licensed: 1, courted: 1, court_closed: 1, reverted: 1, disputed: 1 },
+            "no licence releases a held class's claim, and a court or an accusation adds nothing to it (held ladder {ladder})"
+        );
+    }
 }
 
+/// A window under C7's, with or without the held ladder: an ordinary class.
 #[test]
 fn an_ordinary_class_is_released_at_licence_and_recharged_by_a_court_a_revert_or_an_accusation() {
-    let owed = walk(false);
-    println!("ordinary class: {owed:?}");
-    assert_eq!(owed, Owed { provisional: 1, licensed: 0, courted: 1, court_closed: 0, reverted: 1, disputed: 1 });
+    for ladder in [false, true] {
+        let owed = walk(ladder, false);
+        println!("the derived window, held ladder {ladder}: {owed:?}");
+        assert_eq!(
+            owed,
+            Owed { provisional: 1, licensed: 0, courted: 1, court_closed: 0, reverted: 1, disputed: 1 },
+            "held ladder {ladder}"
+        );
+    }
 }

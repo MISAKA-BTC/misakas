@@ -236,10 +236,14 @@ pub fn palw_admission_claims_per_span_v1(work: &PalwModelWorkV1, g: &PalwRegistr
     // Past the fence the rate is at least the smallest the unit can express. It cannot over-commit
     // the panel: `max_inflight_claims` is `1` for exactly these classes, so a second claim is
     // refused until the first is Final, and the verification window — not the rate — is what
-    // paces them. (Past the work target the class gate judges by the panel room; past
-    // `palw_audit_2026_09_23` it ALSO holds a held class to this cap and counts its claims to
-    // Final — the 2026-09-24 audit #4 review — so the sentence holds there too.) A class with no
-    // work, or one the panel cannot hold a single claim of, still admits nothing.
+    // paces them. (Past the work target the class gate judges by the panel room. Past
+    // `palw_audit_2026_09_23` it ALSO holds a class to this cap, and counts its claims to Final,
+    // when the class's window is at least 1,000 spans: ADR-0152's C7,
+    // `crate::palw_work_target_v1::palw_panel_held_to_final_v1`, from the 2026-09-24 audit #4
+    // review. A rate that floors to zero by the window has `window > 1,000 × max_inflight_claims`,
+    // so the sentence holds for those classes too. A class whose rate floors by the budget alone and
+    // whose window is shorter is released at licence and paced by the room.) A class with no work,
+    // or one the panel cannot hold a single claim of, still admits nothing.
     if possession_gate && inflight > 0 {
         return rate.max(1).min(u64::MAX as u128) as u64;
     }

@@ -9,9 +9,11 @@
 //!
 //! testnet-12's genesis model classes, as its fold writes them: the short-window row
 //! (`ebf44d0a…`, window 3 spans, `max_inflight_claims` 5, the review's "8k" row) and the 2M row
-//! (`74c67e63…`, window 2,799 spans, `max_inflight_claims` 1). Both are under the held regime
-//! (`class_is_held_v1`), both need 7 ready seats, and both open `Prefetching`; a test that needs a
-//! row admitting makes it `Active` through the carriage, as `dos_repro_3d` does.
+//! (`74c67e63…`, window 2,799 spans, `max_inflight_claims` 1). Both record ADR-0119's held ladder
+//! (`class_is_held_v1`), but only the 2M row is held to Final by the panel room (ADR-0152's C7,
+//! `palw_panel_held_to_final_v1`: a window of at least 1,000 spans); the short row is released at
+//! licence. Both need 7 ready seats, and both open `Prefetching`; a test that needs a row admitting
+//! makes it `Active` through the carriage, as `dos_repro_3d` does.
 #![allow(dead_code)]
 
 #[path = "dos_l5_common.rs"]

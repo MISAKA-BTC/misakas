@@ -856,9 +856,10 @@ impl PalwProducerService {
         // panel budget where ADR-0137 D5 governs, the inflight cap otherwise — on a read that counts
         // free-prompt claims past the audit fence. An attempt the gate refuses at step 4
         // disqualifies its whole block, so the producer asks first. Past `palw_audit_2026_09_23`
-        // the read's `panel_room` is the fold's rate room (2026-09-24 audit #4), and for a HELD
-        // class (testnet-12's 2M row) no more than its static inflight cap leaves — c_2M = 1, held
-        // to Final — so one number answers both questions the gate asks.
+        // the read's `panel_room` is the fold's rate room (2026-09-24 audit #4), and for a class
+        // HELD TO FINAL (ADR-0152's C7, `palw_panel_held_to_final_v1`: a window of at least 1,000
+        // spans, testnet-12's 2M row) no more than its static inflight cap leaves — c_2M = 1 — so
+        // one number answers both questions the gate asks.
         if read.panel_room_enforced {
             if class.panel_room == 0 {
                 return Some(format!("class {} has no panel room left in the network's verification budget", class.class_id));

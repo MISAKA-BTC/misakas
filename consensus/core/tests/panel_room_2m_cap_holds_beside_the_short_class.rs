@@ -21,7 +21,7 @@ use room::*;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_model_registry_v1::PalwModelLifecycleV1;
 use kaspa_consensus_core::palw_state_v2::{PalwBlockWorkV3, PalwStateV2Error};
-use kaspa_consensus_core::palw_work_target_v1::palw_panel_capacity_by_rate_v1;
+use kaspa_consensus_core::palw_work_target_v1::{palw_panel_capacity_by_rate_v1, palw_panel_held_to_final_v1};
 
 #[test]
 fn at_eight_ready_seats_with_the_short_class_admitting_a_second_2m_claim_is_refused() {
@@ -105,10 +105,11 @@ fn the_genesis_rows_empty_panel_rooms_are_pinned() {
     let fold = registry_fold(&p, now).unwrap();
     let globals = fold.globals;
     let seat_count = b.panel.seat_count() as u128;
-    for (id, window, cap) in [(short, 3u32, 5u32), (id2m, 2_799, 1)] {
+    for (id, window, cap, held) in [(short, 3u32, 5u32, false), (id2m, 2_799, 1, true)] {
         let row = g.model_lifecycle(&id).unwrap();
         assert_eq!(row.state, PalwModelLifecycleV1::Prefetching, "the genesis rows open Prefetching");
-        assert!(g.class_is_held_v1(&id), "both genesis model rows are under the held regime");
+        assert!(g.class_is_held_v1(&id), "both genesis model rows record ADR-0119's held ladder");
+        assert_eq!(palw_panel_held_to_final_v1(row), held, "only the 2M row is held to Final (ADR-0152's C7)");
         assert_eq!((row.profile.verification_window_spans, row.profile.max_inflight_claims), (window, cap));
         assert_eq!(row.profile.required_ready_seats, 7);
     }
@@ -139,7 +140,7 @@ fn the_genesis_rows_empty_panel_rooms_are_pinned() {
     assert_eq!(
         rooms,
         vec![(5, 3, 1, 3, 1), (7, 5, 1, 5, 1), (8, 5, 1, 5, 2)],
-        "both rows admitting on an empty panel: the short row's room is its capacity (at most its cap of 5), the 2M row's is \
-         its cap of 1 wherever its capacity is more"
+        "both rows admitting on an empty panel: the short row's room is its capacity (its cap of 5 is not read), the 2M \
+         row's is its cap of 1 wherever its capacity is more"
     );
 }

@@ -1,18 +1,21 @@
-//! **A held class's licensed claim stays on EVERY class's budget until Final, not only on its own
-//! cap** — 2026-09-24 audit #4 review item 1 (ADR-0152 T-2(b)), the consequence its verification of
-//! f8c91f19 asked to have recorded as a decision.
+//! **A held-to-Final class's licensed claim stays on EVERY class's budget until Final, not only on
+//! its own cap** — 2026-09-24 audit #4 review item 1 (ADR-0152 T-2(b)), the consequence its
+//! verification of f8c91f19 asked to have recorded as a decision.
 //!
-//! `palw_panel_owed_v1` makes a held class owe its whole tally, and each class's owed row is also
-//! what every OTHER class's capacity is read beside. So a licensed 2M claim keeps charging the
-//! short-window row's room through its licence-to-Final window, where T-2(a)'s licence release
-//! would have given the short row its room back at the licence. That is the hold's premise, kept
-//! deliberately: the panel is not known to have finished a held claim's replay at its licence, and
-//! the seats that owe it are the seats every class's budget is counted on.
+//! `palw_panel_owed_v1` makes a class held to Final (ADR-0152's C7, `palw_panel_held_to_final_v1`:
+//! a window of at least 1,000 spans — testnet-12's 2M row) owe its whole tally, and each class's
+//! owed row is also what every OTHER class's capacity is read beside. So a licensed 2M claim keeps
+//! charging the short-window row's room through its licence-to-Final window, where T-2(a)'s licence
+//! release would have given the short row its room back at the licence. That is the hold's
+//! premise, kept deliberately: the panel is not known to have finished a held claim's replay at its
+//! licence, and the seats that owe it are the seats every class's budget is counted on.
 //!
 //! On testnet-12's genesis through the real fold: both model rows admitting on all eight ready
 //! seats, one 2M attempt accepted, bound, licensed and swept to Final, and at each step
-//! `(short room, 2M room)` as op 186 prints them; beside it the licensed state with only the 2M
-//! row's ladder removed (not held), where the licence does release.
+//! `(short room, 2M room)` as op 186 prints them. Beside it, the licensed state read twice more
+//! through the carriage: with only the 2M row's ADR-0119 ladder removed, which holds it all the same
+//! (the hold is the window's), and with only its window taken under 1,000 spans, where the licence
+//! does release it.
 //!
 //! Run: cargo test -p kaspa-consensus-core --test panel_room_held_claim_is_charged_to_every_class_until_final
 
@@ -22,6 +25,7 @@ use room::*;
 
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::palw_state_v2::{PalwBlockWorkV3, PalwChainStateV2, PalwClaimPhaseV2};
+use kaspa_consensus_core::palw_work_target_v1::{PALW_RCORE_C7_WINDOW_SPANS_V1, palw_panel_held_to_final_v1};
 
 const PRODUCER: u64 = 9_301;
 
@@ -71,11 +75,20 @@ fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
     let licensed_daa = daa;
     assert!(matches!(s.claim(&claim).expect("the claim").phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
     let licensed_rooms = rooms(&s, daa);
-    // The same state with the 2M row not held (only its ladder removed): the licence frees its replay.
-    let released = edited(&sp, &s, |c| {
+    // The same state with only the 2M row's ADR-0119 ladder removed: held all the same.
+    let ladder_removed = edited(&sp, &s, |c| {
         c.class_step_ladders.remove(&id2m);
     });
-    let released_rooms = rooms(&released, daa);
+    assert!(!ladder_removed.class_is_held_v1(&id2m) && palw_panel_held_to_final_v1(ladder_removed.model_lifecycle(&id2m).unwrap()));
+    let ladder_removed_rooms = rooms(&ladder_removed, daa);
+    // And with only its window taken under C7's 1,000 spans (read here, never folded): not held,
+    // so the licence frees its replay from every class's budget.
+    let released = edited(&sp, &s, |c| {
+        c.model_lifecycles.get_mut(&id2m).unwrap().profile.verification_window_spans = PALW_RCORE_C7_WINDOW_SPANS_V1 - 1;
+    });
+    assert!(released.class_is_held_v1(&id2m) && !palw_panel_held_to_final_v1(released.model_lifecycle(&id2m).unwrap()));
+    let released_short_room = rooms(&released, daa).0;
+    let released_2m_owed = owed(&p, &released, id2m);
 
     // One block past the challenge window: the claim is Final and charges no class.
     let challenge = sp.window_challenge_at(licensed_daa);
@@ -86,12 +99,19 @@ fn a_licensed_2m_claim_keeps_charging_the_short_rows_room_until_final() {
     let final_rooms = rooms(&s, daa);
     println!(
         "(short room, 2M room): empty {empty:?}; 2M provisional {provisional:?}; 2M licensed {licensed_rooms:?}; \
-         licensed with the 2M row not held {released_rooms:?}; Final {final_rooms:?}; licence-to-Final window {challenge} DAA"
+         licensed with the 2M ladder removed {ladder_removed_rooms:?}; licensed with a {}-span 2M window: short room \
+         {released_short_room}, 2M owes {released_2m_owed}; Final {final_rooms:?}; licence-to-Final window {challenge} DAA",
+        PALW_RCORE_C7_WINDOW_SPANS_V1 - 1
     );
 
     assert_eq!(empty, (5, 1), "eight ready seats: five short-row claims, and the 2M row's cap of one");
     assert_eq!(provisional, (3, 0), "an accepted 2M claim takes two short-row claims' room and fills its own");
     assert_eq!(licensed_rooms, provisional, "licensed, it charges both rows exactly as before: held to Final");
-    assert_eq!(released_rooms, (5, 2), "a class not held would have released both at the licence");
+    assert_eq!(ladder_removed_rooms, licensed_rooms, "without its ladder the 2M row is held all the same: the hold is the window's");
+    assert_eq!(
+        (released_short_room, released_2m_owed),
+        (5, 0),
+        "under 1,000 spans the 2M row is not held: the licence releases its claim from every class's budget"
+    );
     assert_eq!(final_rooms, empty, "Final releases both");
 }
