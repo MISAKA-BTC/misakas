@@ -496,8 +496,8 @@ fn t11_the_v2_kind_is_dormant_at_the_gate_and_in_the_fold() {
 
 // ---- F1 (ADR-0152 v3.1): the attribution-only tags and kinds leave testnet-11 where it was -------
 
-/// **T18x: a V1 payload carrying tag 9 or 10 is refused on testnet-11 exactly as an undecodable tag
-/// was** — at the processor's V1 gate (`PanelFalseValidNeedsContradiction`, before the seat, the
+/// **T18x: a V1 payload carrying any of tags 9–13 is refused on testnet-11 exactly as an undecodable
+/// tag was** — at the processor's V1 gate (`PanelFalseValidNeedsContradiction`, before the seat, the
 /// receipt or the signature is read) and in the V1 fold ("does not decode"), and the carrying block
 /// folds to the empty block's pinned root. The same payload bytes with the tag byte replaced by one
 /// no build decodes are refused with the same two answers — so no testnet-11 verdict moved when the
@@ -511,9 +511,31 @@ fn t11_attribution_tags_and_kinds_are_refused_as_they_were() {
     let seat_kp = generate_key_pair([0x74; 32]);
     let dormant = processor_extras(&f.p, f.daa);
     let refusal_of = |object: &PalwConsensusObjectV2| format!("{:?}", fold_with(&f, std::slice::from_ref(object), &dormant).err());
+    use kaspa_consensus_core::palw_offence_v1::{PalwForgedOutputTiledProofV1, PalwPromptProofV1};
+    use kaspa_consensus_core::palw_step_refute::{PalwTiledDecodeTokensV1, PalwTraceEventDisclosureV1};
+    let opening = kaspa_consensus_core::palw_step_leg::PalwStepOpeningV1 {
+        leaf_index: 0,
+        leaf_hash: Hash64::from_u64_word(1),
+        siblings: vec![],
+    };
     for contradiction in [
         PalwPanelContradictionV1::IdentityMismatch { binding: f.binding.clone() },
         PalwPanelContradictionV1::OutputMismatch { binding: f.binding.clone(), pin: PalwDecodeTokenPinV1::Base0V1(f.pin.clone()) },
+        // ADR-0152 v3.1 F1c / F1-M: 11, 12 and 13, appended — refused as the undecodable tag was.
+        PalwPanelContradictionV1::ForgedOutputTiled {
+            binding: f.binding.clone(),
+            proof: PalwForgedOutputTiledProofV1::OutOfVocab {
+                position: 0,
+                tokens: PalwTiledDecodeTokensV1 { rows_root: Hash64::from_u64_word(2), generated_token_ids: vec![1] },
+            },
+        },
+        PalwPanelContradictionV1::LogitsNotStepOutput {
+            event: PalwTraceEventDisclosureV1::Flat { binding: Box::new(f.binding.clone()), pin: f.pin.clone() },
+            row: 0,
+            head_tile: 0,
+            head_opening: opening.clone(),
+        },
+        PalwPanelContradictionV1::PromptNotAnchored { binding: f.binding.clone(), proof: PalwPromptProofV1::Whole },
     ] {
         let payload = v1_payload(f.claim_id, seat, &seat_kp, domain(&f.p), contradiction.clone(), false);
         let bytes = borsh::to_vec(&payload).unwrap();

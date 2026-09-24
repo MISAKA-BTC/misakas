@@ -325,8 +325,16 @@ pub enum PalwFaultSiteV1 {
     /// The execution as a whole: a shape, a checkpoint chain, a decoded output, a void the chain
     /// wrote — or a step whose verdict read what no segment replay recomputes (a committed KV
     /// checkpoint, a generated token) or a leaf outside the main step space no segment replay
-    /// compares. Only a whole attestation covers it. (F1 adds a site every `Valid` covers.)
+    /// compares. Only a whole attestation covers it.
     Whole,
+    /// **A fault in the JOB the claim answers, which every `Valid` attests** (ADR-0152 v3.1
+    /// addendum §4-bis.7; the user's decision of 2026-09-24): 9's J1/J2/J3/J5a/J5b and 13. A partial
+    /// seat signs only after its SEAT-S4 opening has checked the binding's job field by field
+    /// (`base0_material_job_is_the_claims_v1`, SEAT-S1) — the class, the anchor, the seed, the
+    /// canonical context and the prompt it resumes from — so a `Valid` under ANY non-empty mask
+    /// vouched for them. The ship gate (SEAT-S4 + SEAT-R + T18p-M in the same binary) is on the
+    /// release checklist.
+    AnyValid,
 }
 
 impl PalwFaultSiteV1 {
@@ -524,8 +532,14 @@ pub fn palw_false_valid_admission_v1(
         C::CourtFraud { voided_daa } => {
             Ok(PalwFalseValidAdmissionV1::NamedVoid { reason: PalwVoidReasonV2::CourtFraud, voided_daa: *voided_daa })
         }
-        C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
-        C::IdentityMismatch { .. } | C::OutputMismatch { .. } => Ok(PalwFalseValidAdmissionV1::ClaimProving),
+        C::StepArithmetic { .. }
+        | C::StepStructural(_)
+        | C::ForgedOutput { .. }
+        | C::ForgedOutputTiled { .. }
+        | C::LogitsNotStepOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } => {
+            Ok(PalwFalseValidAdmissionV1::ClaimProving)
+        }
         C::ProducerWithholding { .. } => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
             "ProducerWithholding is a void the producer's own silence writes, and a seat owes no disclosure it could answer it with (until F3)",
         )),
@@ -654,11 +668,14 @@ pub fn palw_false_valid_fault_site_v1(
                 Ok((PalwFaultSiteV1::Whole, 0))
             }
         },
-        // F1: 9 and 10 at `Whole` (addendum §4-bis.7). A partial seat's resume replays its segment
-        // from the committed context; whether that replay is also held to the anchor's canonical
-        // job is SEAT-S1's, and `AnyValid` waits on it (T18p-M), so only a whole attestation is
-        // liable here.
+        // F1/F1c: 10, 11 and 12 at `Whole` — a partial seat never sees the output, the logits
+        // trace or the argmax — and 9 and 13 at `Whole` HERE: which of their faults are job faults
+        // every `Valid` attests (`AnyValid`) is known only once the identity rule has named the
+        // failing check, so [`palw_claim_proving_site_v1`] raises them after adjudication.
         PalwPanelContradictionV1::ForgedOutput { .. }
+        | PalwPanelContradictionV1::ForgedOutputTiled { .. }
+        | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
+        | PalwPanelContradictionV1::PromptNotAnchored { .. }
         | PalwPanelContradictionV1::ProducerWithholding { .. }
         | PalwPanelContradictionV1::CourtFraud { .. }
         | PalwPanelContradictionV1::ExecutorEquivocation(_)
@@ -667,6 +684,29 @@ pub fn palw_false_valid_fault_site_v1(
         | PalwPanelContradictionV1::Legs(_)
         | PalwPanelContradictionV1::IdentityMismatch { .. }
         | PalwPanelContradictionV1::OutputMismatch { .. } => Ok((PalwFaultSiteV1::Whole, 0)),
+    }
+}
+
+/// **The site of a claim-proving fault, once the identity rule has named it** (addendum §4-bis.7,
+/// the user's decision of 2026-09-24): `AnyValid` for a job fault — 9's J2 (the class), J1 (the
+/// anchor), J3 (the seed), J5a (the canonical context), J5b (the prompt root) and 13 (the prompt)
+/// — which a partial seat's SEAT-S4 opening checked field by field before it signed; `None` (keep
+/// the table's `Whole`) for 9's J4/J6/J7 (a trace root, an activation leg, a checkpoint profile: no
+/// partial seat reads them) and for everything else.
+pub fn palw_claim_proving_site_v1(
+    contradiction: &PalwPanelContradictionV1,
+    identity_fault: Option<PalwIdentityFaultV1>,
+) -> Option<PalwFaultSiteV1> {
+    use PalwIdentityFaultV1 as J;
+    match contradiction {
+        PalwPanelContradictionV1::PromptNotAnchored { .. } => Some(PalwFaultSiteV1::AnyValid),
+        PalwPanelContradictionV1::IdentityMismatch { .. } => match identity_fault? {
+            J::ClassNotTheClaims | J::JobNotTheClaims | J::SeedNotTheJobs | J::ContextNotCanonical | J::PromptNotTheAnchors => {
+                Some(PalwFaultSiteV1::AnyValid)
+            }
+            J::TraceNotTheClaims | J::ActivationLegNotCanonical | J::CheckpointProfileNotCanonical => None,
+        },
+        _ => None,
     }
 }
 
@@ -682,7 +722,8 @@ pub fn palw_false_valid_fault_site_v1(
 ///   only at a [`PalwFaultSiteV1::Leaf`] whose leaf and every leaf the verdict read lie in segments
 ///   the mask covers (segments are cut from the binding's committed `step_leaf_count`, as the
 ///   producer cut them; every segment between the first and the last read is asked for, which is
-///   exact for the one-segment masks a panel assigns). Never at `Whole`.
+///   exact for the one-segment masks a panel assigns), and always at [`PalwFaultSiteV1::AnyValid`]
+///   (a job fault its SEAT-S4 opening checked). Never at `Whole`.
 ///
 /// Refused with `SiteNotAttested` when the receipt does not reach all of the site, and
 /// `SegmentsUnknown` when `k` is not in state and the mask is neither empty nor placeable without it.
@@ -711,6 +752,10 @@ pub fn palw_false_valid_liable_v1(
     }
     match site {
         PalwFaultSiteV1::Whole => Err(PalwOffenceVerifyError::SiteNotAttested),
+        // A job fault every `Valid` attested: the seat's own assigned partial mask is liable too,
+        // wherever its segment sits (the assignment check above still holds a mask to the one the
+        // panel drew — a receipt no licence would take is not a `Valid` this rule reads).
+        PalwFaultSiteV1::AnyValid => Ok(()),
         PalwFaultSiteV1::Leaf { leaf, first_read, last_read } => {
             let segment_of = |l: u64| palw_segment_index_of_leaf_v2(step_leaf_count, k, l);
             match (segment_of(first_read.min(leaf)), segment_of(last_read.max(leaf))) {
@@ -913,7 +958,256 @@ pub fn palw_output_fault_v1(
     Ok(crate::palw_attempt_rules_v1::palw_attempt_output_root_v1(&binding.job_context, ids) != target.output_root)
 }
 
-/// **What a claim-proving contradiction (9, 10) proves about `target`**, or the refusal. The
+/// The common prefix of 11, 12 and 13: the binding verifies, it IS the claim's execution, and it
+/// is the claim's class (J2 is `IdentityMismatch`'s, a refusal here).
+fn palw_claims_own_binding_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+) -> Result<(), PalwOffenceVerifyError> {
+    crate::palw_step_leg::verify_binding_v1(binding).map_err(|_| PalwOffenceVerifyError::BindingUnverified)?;
+    if binding.committed_execution_root != target.execution_root {
+        return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
+    }
+    if binding.shape_profile.shape_profile_id() != target.class_id {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "the binding is another class's: that is an IdentityMismatch (J2)",
+        ));
+    }
+    Ok(())
+}
+
+/// **`ForgedOutputTiled` (11)** (addendum §4-bis.5): a TILED integer class's committed token is not
+/// its row's selection (`NotSelected`, the tiled decode-token close:
+/// [`crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1`]) or is past the
+/// vocabulary (`OutOfVocab`, the ids pinned by the rows root). `Ok(())` convicts; `TokenHolds` is the
+/// honest answer. `verify_binding` runs first — the tiled checker authenticates rows against the
+/// binding's trace root and never asks whether the binding is the claim's, so without it a copied
+/// root with a bent binding convicted an honest claim. A flat class files `ForgedOutput` (8); under
+/// ADR-0082's decode rules a free-prompt claim's token is not the greedy argmax and is refused.
+pub fn palw_forged_output_tiled_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    proof: &crate::palw_offence_v1::PalwForgedOutputTiledProofV1,
+    ladder: u64,
+    fp_decode_rules_active: bool,
+) -> Result<(), PalwOffenceVerifyError> {
+    use crate::palw_offence_v1::PalwForgedOutputTiledProofV1 as P;
+    palw_claims_own_binding_v1(target, binding)?;
+    let profile = &binding.shape_profile;
+    if profile.lane != crate::palw_step::PalwStepLaneV1::Int32
+        || profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+    {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "ForgedOutputTiled judges a tiled integer class; a flat class's forged token is ForgedOutput (8)",
+        ));
+    }
+    if fp_decode_rules_active && target.lane != Some(PalwClaimSourceKindV1::Attempt) {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "under ADR-0082's decode rules a free-prompt token is not the greedy selection",
+        ));
+    }
+    match proof {
+        P::NotSelected { pin } => match crate::palw_step_refute::check_tiled_decode_token_refutation_capped_v1(binding, pin, ladder) {
+            Ok(verdict) if matches!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { .. }) => Ok(()),
+            Ok(_) => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+            Err(crate::palw_step_refute::PalwStepRefuteError::NoFaultFound) => Err(PalwOffenceVerifyError::TokenHolds),
+            Err(_) => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
+        },
+        P::OutOfVocab { position, tokens } => {
+            crate::palw_step_refute::check_tiled_decode_pin(binding, tokens)
+                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            let id =
+                tokens.generated_token_ids.get(*position as usize).ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            if *id >= profile.vocab_size { Ok(()) } else { Err(PalwOffenceVerifyError::TokenHolds) }
+        }
+    }
+}
+
+/// **`LogitsNotStepOutput` (12)** (addendum §4-bis.6): a committed logits row is not its step
+/// tree's head output. In order — every refusal before the one comparison that convicts:
+///
+/// 1. the event opens a row (`OutOfRange` is refused); its binding is the claim's (verify, root,
+///    class);
+/// 2. the class's graph passes [`crate::palw_step::palw_logits_head_v1`], else `HeadUnproven`;
+/// 3. `row` is a committed row and `head_tile` a head tile;
+/// 4. the binding's shape is clean (`check_step_refutation_capped_v1` on the `Shape` evidence answers
+///    `NoFaultFound`) — a non-canonical shape is `StepStructural`'s (6), and the head coordinate
+///    below is only meaningful on a canonical one;
+/// 5. the event authenticates the row's lanes against the claim's trace root
+///    ([`crate::palw_step_refute::check_trace_event_disclosure_v1`], at the logits tile holding the
+///    head tile — `0` on the flat scheme);
+/// 6. the head leaf's coordinate is DERIVED (row, `G − 1`, `P − 1` or `0`, `head_tile`), never
+///    carried, and `head_opening` names its canonical index and walks to the binding's step root;
+/// 7. **the fault**: the step leaf those lanes hash to (`step_tile_leaf_hash_v1`) is not the leaf the
+///    claim committed there. `LogitsHold` otherwise.
+///
+/// An honest producer cannot be convicted: its binding reproduces the root, so both sides are that
+/// execution's own committed values and the head's output IS its logits row (Tier B,
+/// `f1c_logits_not_step_output`). No sampler is read.
+pub fn palw_logits_not_step_output_fault_v1(
+    target: &PalwOffenceTargetV1,
+    event: &crate::palw_step_refute::PalwTraceEventDisclosureV1,
+    row: u32,
+    head_tile: u32,
+    head_opening: &crate::palw_step_leg::PalwStepOpeningV1,
+    ladder: u64,
+) -> Result<(), PalwOffenceVerifyError> {
+    use crate::palw_step_refute::{PALW_LOGITS_TILE_LANES, PalwTraceEventDisclosureV1 as Ev};
+    let needs = PalwOffenceVerifyError::PanelFalseValidNeedsContradiction;
+    if matches!(event, Ev::OutOfRange { .. }) {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("an OutOfRange disclosure opens no logits row"));
+    }
+    let binding = event.binding();
+    palw_claims_own_binding_v1(target, binding)?;
+    let (profile, ctx) = (&binding.shape_profile, &binding.job_context);
+    let head = crate::palw_step::palw_logits_head_v1(profile).ok_or(PalwOffenceVerifyError::HeadUnproven)?;
+    if row >= ctx.exact_decode_tokens || head_tile >= head.tiles {
+        return Err(needs);
+    }
+    let shape = crate::palw_step_leg::PalwStepRefutationV1 {
+        binding: binding.clone(),
+        evidence: crate::palw_step_leg::PalwStepEvidenceV1::Shape,
+    };
+    if crate::palw_step_leg::check_step_refutation_capped_v1(&shape, ladder)
+        != Err(crate::palw_step_leg::PalwStepLegError::NoFaultFound)
+    {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "the binding's shape is not canonical: that is StepStructural's (6), and no head coordinate is meaningful on it",
+        ));
+    }
+    let vocab = profile.vocab_size as usize;
+    let lo = head_tile as usize * head.tile_len as usize;
+    let hi = (lo + head.tile_len as usize).min(vocab);
+    let flat = profile.logits_scheme_id == crate::palw_step_refute::flat_logits_scheme_id_v1();
+    let logits_tile = if flat { 0usize } else { lo / PALW_LOGITS_TILE_LANES };
+    let logits_tile_u8 = u8::try_from(logits_tile).map_err(|_| PalwOffenceVerifyError::HeadUnproven)?;
+    crate::palw_step_refute::check_trace_event_disclosure_v1(
+        binding.full_logits_trace_root,
+        target.execution_root,
+        row,
+        logits_tile_u8,
+        event,
+        ladder,
+    )
+    .map_err(|_| needs.clone())?;
+    let lanes: &[i32] = match event {
+        Ev::Flat { pin, .. } => pin.logits_rows.get(row as usize).and_then(|r| r.get(lo..hi)).ok_or(needs.clone())?,
+        Ev::Tiled { tile_lanes, .. } => {
+            let base = logits_tile * PALW_LOGITS_TILE_LANES;
+            tile_lanes.get(lo - base..hi - base).ok_or(needs.clone())?
+        }
+        Ev::OutOfRange { .. } => return Err(needs),
+    };
+    let coord = crate::palw_step::palw_logits_head_coordinate_v1(&head, ctx, row, head_tile).ok_or(needs.clone())?;
+    let index = crate::palw_step::canonical_step_leaf_index(profile, ctx, &coord).ok_or(needs.clone())?;
+    if head_opening.leaf_index != index {
+        return Err(needs);
+    }
+    let root =
+        crate::palw_step_leg::step_opening_root_capped_v1(binding.step_leaf_count, head_opening, ladder).map_err(|_| needs.clone())?;
+    if root != binding.step_merkle_root {
+        return Err(needs);
+    }
+    let values_le: Vec<u8> = lanes.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let derived = crate::palw_step_leg::step_tile_leaf_hash_v1(
+        &ctx.context_hash(),
+        &profile.shape_profile_id(),
+        &crate::palw_step_leg::PalwStepTileLeafV1 {
+            version: crate::palw_step_leg::PALW_STEP_LEG_OBJECT_VERSION_V1,
+            coord,
+            value_count: (hi - lo) as u32,
+            values_le,
+        },
+    );
+    if derived != head_opening.leaf_hash { Ok(()) } else { Err(PalwOffenceVerifyError::LogitsHold) }
+}
+
+/// **`PromptNotAnchored` (13)** (addendum §4-bis.3): an attempt claim's committed prompt is not the
+/// one its anchor names, on a class whose canonical prompt is past J5b's inline bound. `Ok(true)` is
+/// the fault. In order: the binding is the claim's (verify, root, class — J2 is a refusal); the
+/// claim recorded its identity; the lane is the attempt lane; the class derives a canonical job and
+/// the binding declares its prefill (else 9's J5a), past [`PALW_J5_INLINE_PROMPT_IDS_V1`] (else 9's
+/// J5b recomputes it inline); the class's form is `MerkleV1`. Then `Tile`: the opening verifies
+/// against the binding's prompt root and its ids are not the anchor's at that range
+/// (`palw_attempt_prompt_ids_range_v1`, ~10 µs); `Whole`: the anchor's root recomputed
+/// (`palw_attempt_prompt_root_v1`, 13.6 ms at 2M) is not the binding's — the caller charges the
+/// prefill against the block's heavy budget BEFORE this runs ([`palw_offence_heavy_prompt_ids_v1`]).
+pub fn palw_prompt_not_anchored_fault_v1(
+    target: &PalwOffenceTargetV1,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    proof: &crate::palw_offence_v1::PalwPromptProofV1,
+    rules: PalwIdentityRulesV1,
+) -> Result<bool, PalwOffenceVerifyError> {
+    use crate::palw_attempt_rules_v1::{
+        PALW_J5_INLINE_PROMPT_IDS_V1, palw_attempt_canonical_v1, palw_attempt_prompt_ids_range_v1, palw_attempt_prompt_root_v1,
+    };
+    use crate::palw_offence_v1::PalwPromptProofV1 as P;
+    palw_claims_own_binding_v1(target, binding)?;
+    let identity = target.job_identity;
+    if identity == Hash64::default() {
+        return Err(PalwOffenceVerifyError::IdentityNotRecorded);
+    }
+    if target.lane.ok_or(PalwOffenceVerifyError::LaneUnknown)? != PalwClaimSourceKindV1::Attempt {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("PromptNotAnchored judges an attempt's anchored prompt"));
+    }
+    let (profile, ctx) = (&binding.shape_profile, &binding.job_context);
+    let canonical = palw_attempt_canonical_v1(profile, target.class_id == rules.base_class_id)
+        .ok_or(PalwOffenceVerifyError::IdentityNotDerivable)?;
+    if ctx.declared_prefill_tokens != canonical.0 {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "the binding's prefill is not the canonical one: that is an IdentityMismatch (J5a)",
+        ));
+    }
+    if canonical.0 <= PALW_J5_INLINE_PROMPT_IDS_V1 {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
+            "a canonical prompt of at most 4,096 ids is recomputed inline: that is an IdentityMismatch (J5b)",
+        ));
+    }
+    let form = crate::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(rules.prompt_ids_form, profile);
+    if form != crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1 {
+        return Err(PalwOffenceVerifyError::ContradictionNotAdmitted("PromptNotAnchored opens a Merkle prompt root"));
+    }
+    match proof {
+        P::Tile(opening) => {
+            crate::palw_prompt_ids_v1::verify_prompt_ids_opening_v1(&ctx.prompt_token_ids_hash, canonical.0, opening)
+                .map_err(|_| PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            let start = u64::from(opening.tile_index) * u64::from(crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN);
+            let anchored =
+                palw_attempt_prompt_ids_range_v1(&identity, u64::from(profile.vocab_size), start, opening.tile_ids.len() as u64);
+            Ok(opening.tile_ids != anchored)
+        }
+        P::Whole => {
+            let root = palw_attempt_prompt_root_v1(profile, &identity, canonical.0, rules.prompt_ids_form)
+                .ok_or(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction)?;
+            Ok(ctx.prompt_token_ids_hash != root)
+        }
+    }
+}
+
+/// **The prompt ids a kind-3 or kind-4 object asks a node to recompute whole**: the binding's
+/// declared prefill for a `PromptNotAnchored { proof: Whole }` (13) that decodes, and 0 for
+/// everything else (a malformed object costs its decode alone). What the processor's acceptance walk
+/// and the fold charge against [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`]
+/// BEFORE the adjudicator runs — one 2M check per block (addendum §4-bis.3).
+pub fn palw_offence_heavy_prompt_ids_v1(kind: crate::palw_offence_v1::PalwOffenceKindV1, evidence: &[u8]) -> u64 {
+    use crate::palw_offence_v1::{PalwOffenceKindV1 as K, PalwPromptProofV1};
+    if evidence.len() as u64 > PALW_OFFENCE_V2_MAX_EVIDENCE_BYTES {
+        return 0;
+    }
+    let contradiction = match kind {
+        K::PanelFalseValidV2 => borsh::from_slice::<PalwPanelFalseValidEvidenceV2>(evidence).ok().map(|p| p.contradiction),
+        K::ExecutorRefuted => borsh::from_slice::<PalwExecutorRefutedEvidenceV1>(evidence).ok().map(|p| p.contradiction),
+        _ => None,
+    };
+    match contradiction {
+        Some(PalwPanelContradictionV1::PromptNotAnchored { binding, proof: PalwPromptProofV1::Whole }) => {
+            u64::from(binding.job_context.declared_prefill_tokens)
+        }
+        _ => 0,
+    }
+}
+
+/// **What a claim-proving contradiction (9, 10, 13) proves about `target`**, or the refusal. The
 /// identity fault, for a 9.
 fn claim_proving_fault_v1(
     target: &PalwOffenceTargetV1,
@@ -929,6 +1223,13 @@ fn claim_proving_fault_v1(
                 Ok(None)
             } else {
                 Err(PalwOffenceVerifyError::OutputHolds)
+            }
+        }
+        PalwPanelContradictionV1::PromptNotAnchored { binding, proof } => {
+            if palw_prompt_not_anchored_fault_v1(target, binding, proof, rules)? {
+                Ok(None)
+            } else {
+                Err(PalwOffenceVerifyError::PromptHolds)
             }
         }
         _ => Err(PalwOffenceVerifyError::PanelFalseValidNeedsContradiction),
@@ -960,13 +1261,21 @@ fn adjudicate_against_claim_v1(
                     "ForgedOutput under ADR-0082's decode rules convicts only a claim known to be an attempt",
                 ));
             }
-            palw_false_valid_convicts_execution_v2(
-                contradiction,
-                prompt_ids_opening,
-                target.execution_root,
-                target.artifact_root,
-                ladder,
-            )?;
+            match contradiction {
+                PalwPanelContradictionV1::ForgedOutputTiled { binding, proof } => {
+                    palw_forged_output_tiled_fault_v1(target, binding, proof, ladder, fp_decode_rules_active)?
+                }
+                PalwPanelContradictionV1::LogitsNotStepOutput { event, row, head_tile, head_opening } => {
+                    palw_logits_not_step_output_fault_v1(target, event, *row, *head_tile, head_opening, ladder)?
+                }
+                _ => palw_false_valid_convicts_execution_v2(
+                    contradiction,
+                    prompt_ids_opening,
+                    target.execution_root,
+                    target.artifact_root,
+                    ladder,
+                )?,
+            }
             Ok((PalwForfeitScopeV1::ByRoot, None))
         }
         PalwFalseValidAdmissionV1::ClaimProving => {
@@ -1072,7 +1381,7 @@ pub fn palw_check_panel_false_valid_v2(
             return Err(PalwOffenceVerifyError::PanelFalseValidWorkMismatch);
         }
     }
-    let (forfeit, _) = adjudicate_against_claim_v1(
+    let (forfeit, identity_fault) = adjudicate_against_claim_v1(
         state,
         &target,
         admission,
@@ -1082,7 +1391,10 @@ pub fn palw_check_panel_false_valid_v2(
         rules,
     )?;
     let ladder = state.class_step_ladder_v1(&target.class_id, PALW_FALSE_VALID_NETWORK_LADDER_V1);
-    let (site, step_leaf_count) = palw_false_valid_fault_site_v1(&payload.contradiction, ladder)?;
+    let (site, step_leaf_count) = match palw_claim_proving_site_v1(&payload.contradiction, identity_fault) {
+        Some(site) => (site, 0),
+        None => palw_false_valid_fault_site_v1(&payload.contradiction, ladder)?,
+    };
     let assigned = palw_false_valid_assigned_mask_v1(state, &target.claim_id, accused);
     palw_false_valid_liable_v1(&payload.receipt, site, target.segment_count, assigned, step_leaf_count)?;
     let acts_on_claim = !matches!(admission, PalwFalseValidAdmissionV1::NamedVoid { .. });
@@ -1108,24 +1420,31 @@ pub fn palw_executor_refuted_offence_id_v1(executor: &TransactionOutpoint, claim
     )
 }
 
-/// **Which contradictions refute an executor** (ADR-0152 v3.1 J-4): the proofs against its own
-/// committed execution (5 `StepArithmetic`, 6 `StepStructural`, 8 `ForgedOutput`) and against the
-/// job or output its claim answers (9 `IdentityMismatch`, 10 `OutputMismatch`). A void the chain
+/// **Which contradictions refute an executor** (ADR-0152 v3.1 J-4, addendum §4-bis.7): the proofs
+/// against its own committed execution (5 `StepArithmetic`, 6 `StepStructural`, 8 `ForgedOutput`,
+/// 11 `ForgedOutputTiled`, 12 `LogitsNotStepOutput`) and against the job or output its claim answers
+/// (9 `IdentityMismatch`, 10 `OutputMismatch`, 13 `PromptNotAnchored`). A void the chain
 /// wrote, a permit, an equivocation and the v1 legs are not refutations of the claim's execution.
 pub fn palw_executor_refuted_admission_v1(
     contradiction: &PalwPanelContradictionV1,
 ) -> Result<PalwFalseValidAdmissionV1, PalwOffenceVerifyError> {
     use PalwPanelContradictionV1 as C;
     match contradiction {
-        C::StepArithmetic { .. } | C::StepStructural(_) | C::ForgedOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
-        C::IdentityMismatch { .. } | C::OutputMismatch { .. } => Ok(PalwFalseValidAdmissionV1::ClaimProving),
+        C::StepArithmetic { .. }
+        | C::StepStructural(_)
+        | C::ForgedOutput { .. }
+        | C::ForgedOutputTiled { .. }
+        | C::LogitsNotStepOutput { .. } => Ok(PalwFalseValidAdmissionV1::ExecutionProving),
+        C::IdentityMismatch { .. } | C::OutputMismatch { .. } | C::PromptNotAnchored { .. } => {
+            Ok(PalwFalseValidAdmissionV1::ClaimProving)
+        }
         C::ExecutorEquivocation(_)
         | C::CourtExecutorGuilty { .. }
         | C::ProducerWithholding { .. }
         | C::ConflictingPermit { .. }
         | C::CourtFraud { .. }
         | C::Legs(_) => Err(PalwOffenceVerifyError::ContradictionNotAdmitted(
-            "an ExecutorRefuted carries a proof against the claim's own execution, job or output (5, 6, 8, 9, 10)",
+            "an ExecutorRefuted carries a proof against the claim's own execution, job or output (5, 6, 8–13)",
         )),
     }
 }
@@ -2342,5 +2661,259 @@ mod tests {
     fn zeroed<T: borsh::BorshDeserialize>() -> T {
         let zeros = vec![0u8; 1 << 16];
         T::deserialize(&mut zeros.as_slice()).expect("an all-zero encoding decodes")
+    }
+}
+
+/// **ADR-0152 v3.1 F1c / F1-M, Tier A** (addendum §4-bis.3–7): the logits head on every shipped
+/// profile, `PromptNotAnchored`'s rule at the 2M width, the heavy-prompt charge, and the site table
+/// that puts the job faults at `AnyValid`.
+#[cfg(test)]
+mod f1c_tests {
+    use super::*;
+    use crate::palw_offence_v1::{PalwOffenceKindV1, PalwOffenceVerifyError as E, PalwPromptProofV1};
+    use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+    use crate::palw_step::palw_logits_head_v1;
+
+    fn h64(n: u64) -> Hash64 {
+        Hash64::from_u64_word(n)
+    }
+
+    fn target_of(binding: &crate::palw_step_leg::PalwStepBindingV2, anchor: Hash64) -> PalwOffenceTargetV1 {
+        PalwOffenceTargetV1 {
+            claim_id: h64(0xC1A1),
+            class_id: binding.shape_profile.shape_profile_id(),
+            artifact_root: Hash64::default(),
+            executor_bond: PalwBondKeyV2(TransactionOutpoint {
+                transaction_id: crate::tx::TransactionId::from_u64_word(0xB0),
+                index: 0,
+            }),
+            execution_root: binding.committed_execution_root,
+            lane: Some(PalwClaimSourceKindV1::Attempt),
+            segment_count: Some(4),
+            phase: None,
+            job_identity: anchor,
+            trace_root: binding.full_logits_trace_root,
+            output_root: h64(0x72),
+        }
+    }
+
+    fn recommitted(mut b: crate::palw_step_leg::PalwStepBindingV2) -> crate::palw_step_leg::PalwStepBindingV2 {
+        b.activation_leg_root = crate::palw_attempt_rules_v1::palw_int_activation_leg_root_v1(&b.job_context);
+        b.committed_execution_root = crate::palw_step_leg::binding_commitment_root_v1(&b);
+        crate::palw_step_leg::verify_binding_v1(&b).expect("a re-committed binding verifies");
+        b
+    }
+
+    /// **`palw_logits_head_v1` holds on every profile the chain ships** — the floor, the t12 rows
+    /// (A16 graph-v7 at 8,192 and 2,097,152, Qwen3.6 graph-v7 at 512) — and on nothing whose lane is
+    /// `Float32`, whose last node is not the head, or whose head is not the vocabulary.
+    #[test]
+    fn the_logits_head_holds_on_every_shipped_profile() {
+        use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        use crate::palw_context_ladder::{palw_a16_context_row_profile_v7, palw_qwen36_context_row_profile_v7};
+        let rows = [
+            ("floor", base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap()),
+            ("A16@8192", palw_a16_context_row_profile_v7(8_192).unwrap()),
+            ("A16@2M", palw_a16_context_row_profile_v7(2_097_152).unwrap()),
+            ("Q36@512", palw_qwen36_context_row_profile_v7(512).unwrap()),
+        ];
+        for (label, profile) in rows {
+            let head = palw_logits_head_v1(&profile).unwrap_or_else(|| panic!("{label}: the head predicate holds"));
+            assert_eq!(head.slot + 1, profile.global_node_count(), "{label}: the last slot");
+            assert_eq!(head.tiles, profile.vocab_size.div_ceil(head.tile_len), "{label}: the row's head tiles");
+            let mut float = profile.clone();
+            float.lane = crate::palw_step::PalwStepLaneV1::Float32;
+            assert_eq!(palw_logits_head_v1(&float), None, "{label}: a Float32 class has no provable head");
+            let mut short = profile.clone();
+            short.post_nodes.last_mut().unwrap().out_len =
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements: profile.vocab_size - 1 };
+            assert_eq!(palw_logits_head_v1(&short), None, "{label}: a head that is not the vocabulary");
+            let mut other_kernel = profile.clone();
+            other_kernel.post_nodes.last_mut().unwrap().kernel_semantics_id = h64(0xBAD);
+            assert_eq!(palw_logits_head_v1(&other_kernel), None, "{label}: a kernel outside the three heads");
+        }
+    }
+
+    /// **`PromptNotAnchored` (13) at the 2M width** (a model class at `n_ctx` 2,097,152: the formula's
+    /// 262,143-id prompt, past J5b's inline bound): a prompt root that is another anchor's convicts by
+    /// a `Tile` and by `Whole`; the honest root is `PromptHolds` both ways; and the refusals — the
+    /// floor's 8-id prompt (9's J5b), a moved prefill (9's J5a), a free-prompt claim, an unrecorded
+    /// identity, another class's binding — never convict. 9 cannot see the relabel at this width (its
+    /// J5b is not inline), which is why 13 exists.
+    #[test]
+    fn prompt_not_anchored_judges_the_2m_prompt() {
+        use crate::palw_attempt_rules_v1::{
+            model_binding_for_tests_v1, palw_attempt_canonical_v1, palw_attempt_prompt_ids_v1, palw_attempt_prompt_root_v1,
+        };
+        let form = PalwPromptIdsFormV1::MerkleV1;
+        let rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: h64(0xF100) };
+        let (anchor, other) = (h64(0x13A0), h64(0x13B0));
+        let honest = model_binding_for_tests_v1(&anchor, 2_097_152, form);
+        let profile = honest.shape_profile.clone();
+        let canonical = palw_attempt_canonical_v1(&profile, false).unwrap();
+        assert_eq!(canonical, (262_143, 2));
+        let vocab = u64::from(profile.vocab_size);
+        let judge = |b: &crate::palw_step_leg::PalwStepBindingV2, proof: &PalwPromptProofV1| {
+            palw_prompt_not_anchored_fault_v1(&target_of(b, anchor), b, proof, rules)
+        };
+        let anchored_ids = palw_attempt_prompt_ids_v1(&anchor, vocab, canonical.0);
+        let tile_of = |ids: &[u32], position: u32| {
+            PalwPromptProofV1::Tile(crate::palw_prompt_ids_v1::prompt_ids_opening_v1(ids, position).expect("an opening"))
+        };
+        assert_eq!(judge(&honest, &PalwPromptProofV1::Whole), Ok(false), "the honest root holds");
+        for position in [0u32, 131_071, 262_142] {
+            assert_eq!(judge(&honest, &tile_of(&anchored_ids, position)), Ok(false), "position {position}: the honest tile holds");
+        }
+        // The relabel: another anchor's prompt, committed under this anchor's context.
+        let mut relabel = honest.clone();
+        relabel.job_context.prompt_token_ids_hash = palw_attempt_prompt_root_v1(&profile, &other, canonical.0, form).unwrap();
+        let relabel = recommitted(relabel);
+        assert_eq!(
+            palw_binding_identity_fault_v1(&target_of(&relabel, anchor), &relabel, rules, true),
+            Ok(None),
+            "9 cannot see it: J5b is not inline at 262,143 ids"
+        );
+        assert_eq!(judge(&relabel, &PalwPromptProofV1::Whole), Ok(true), "Whole convicts");
+        let their_ids = palw_attempt_prompt_ids_v1(&other, vocab, canonical.0);
+        for position in [0u32, 200_000] {
+            assert_eq!(judge(&relabel, &tile_of(&their_ids, position)), Ok(true), "position {position}: a Tile convicts");
+        }
+        // A tile that is not the committed prompt's does not open against it.
+        assert_eq!(judge(&relabel, &tile_of(&anchored_ids, 0)), Err(E::PanelFalseValidNeedsContradiction));
+        // The refusals.
+        let floor = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(&anchor, form);
+        let floor_rules = PalwIdentityRulesV1 { prompt_ids_form: form, base_class_id: floor.shape_profile.shape_profile_id() };
+        assert!(matches!(
+            palw_prompt_not_anchored_fault_v1(&target_of(&floor, anchor), &floor, &PalwPromptProofV1::Whole, floor_rules),
+            Err(E::ContradictionNotAdmitted(_))
+        ));
+        let mut moved = relabel.clone();
+        moved.job_context.declared_prefill_tokens -= 1;
+        assert!(matches!(judge(&recommitted(moved), &PalwPromptProofV1::Whole), Err(E::ContradictionNotAdmitted(_))), "J5a's");
+        let mut fp_target = target_of(&relabel, anchor);
+        fp_target.lane = Some(PalwClaimSourceKindV1::FreePrompt);
+        assert!(matches!(
+            palw_prompt_not_anchored_fault_v1(&fp_target, &relabel, &PalwPromptProofV1::Whole, rules),
+            Err(E::ContradictionNotAdmitted(_))
+        ));
+        let mut unrecorded = target_of(&relabel, anchor);
+        unrecorded.job_identity = Hash64::default();
+        assert_eq!(
+            palw_prompt_not_anchored_fault_v1(&unrecorded, &relabel, &PalwPromptProofV1::Whole, rules),
+            Err(E::IdentityNotRecorded)
+        );
+        let mut other_class = target_of(&relabel, anchor);
+        other_class.class_id = h64(0xC1A55);
+        assert!(matches!(
+            palw_prompt_not_anchored_fault_v1(&other_class, &relabel, &PalwPromptProofV1::Whole, rules),
+            Err(E::ContradictionNotAdmitted(_))
+        ));
+        let mut not_its = target_of(&relabel, anchor);
+        not_its.execution_root = h64(0xE0);
+        assert_eq!(
+            palw_prompt_not_anchored_fault_v1(&not_its, &relabel, &PalwPromptProofV1::Whole, rules),
+            Err(E::PanelFalseValidWorkMismatch)
+        );
+    }
+
+    /// **The heavy charge is the whole prompt a `Whole` 13 recomputes, and nothing else costs one.**
+    #[test]
+    fn only_a_whole_prompt_not_anchored_is_charged() {
+        let binding = crate::palw_attempt_rules_v1::model_binding_for_tests_v1(&h64(1), 2_097_152, PalwPromptIdsFormV1::MerkleV1);
+        let evidence = |contradiction: PalwPanelContradictionV1| {
+            borsh::to_vec(&PalwExecutorRefutedEvidenceV1 {
+                version: PALW_EXECUTOR_REFUTED_VERSION_V1,
+                claim_id: h64(2),
+                contradiction,
+                prompt_ids_opening: None,
+                reporter_reveal: Vec::new(),
+            })
+            .unwrap()
+        };
+        let whole =
+            evidence(PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Whole });
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &whole), 262_143);
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, &whole), 0, "not a kind-3 payload");
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorEquivocation, &whole), 0);
+        let tile = crate::palw_prompt_ids_v1::prompt_ids_opening_v1(&[1, 2, 3], 0).unwrap();
+        let tiled =
+            evidence(PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Tile(tile) });
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &tiled), 0, "a Tile is cheap");
+        let nine = evidence(PalwPanelContradictionV1::IdentityMismatch { binding });
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, &nine), 0);
+        assert_eq!(palw_offence_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, b"junk"), 0);
+        assert!(262_143 <= crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, "one 2M check a block");
+        assert!(2 * 262_143 > crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1, "and not two");
+    }
+
+    /// **The site table** (addendum §4-bis.7; the user's decision of 2026-09-24): 9's job faults
+    /// (J2, J1, J3, J5a, J5b) and 13 at `AnyValid`; 9's J4/J6/J7, 10, 11, 12 at `Whole`. An
+    /// `AnyValid` fault holds the full receipt and the seat's own assigned partial mask; it never
+    /// holds an empty mask or a partial mask the panel did not assign.
+    #[test]
+    fn the_job_faults_are_attested_by_every_valid() {
+        use PalwIdentityFaultV1 as J;
+        let binding = crate::palw_attempt_rules_v1::floor_binding_for_tests_v1(&h64(1), PalwPromptIdsFormV1::MerkleV1);
+        let nine = PalwPanelContradictionV1::IdentityMismatch { binding: binding.clone() };
+        for (fault, any) in [
+            (J::ClassNotTheClaims, true),
+            (J::JobNotTheClaims, true),
+            (J::SeedNotTheJobs, true),
+            (J::ContextNotCanonical, true),
+            (J::PromptNotTheAnchors, true),
+            (J::TraceNotTheClaims, false),
+            (J::ActivationLegNotCanonical, false),
+            (J::CheckpointProfileNotCanonical, false),
+        ] {
+            assert_eq!(palw_claim_proving_site_v1(&nine, Some(fault)), any.then_some(PalwFaultSiteV1::AnyValid), "{fault:?}");
+        }
+        let thirteen = PalwPanelContradictionV1::PromptNotAnchored { binding: binding.clone(), proof: PalwPromptProofV1::Whole };
+        assert_eq!(palw_claim_proving_site_v1(&thirteen, None), Some(PalwFaultSiteV1::AnyValid));
+        let pin = crate::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(crate::palw_step_refute::PalwBase0DecodeTokensV1 {
+            logits_rows: vec![],
+            generated_token_ids: vec![],
+        });
+        assert_eq!(palw_claim_proving_site_v1(&PalwPanelContradictionV1::OutputMismatch { binding, pin }, None), None, "10 is Whole");
+
+        // Liability at AnyValid, over a five-seat panel's four segments.
+        let receipt = |mask: PalwSegmentMaskV2| {
+            PalwFalseValidReceiptV1::Segmented(crate::palw_panel_v2::PalwSeatReceiptV3 {
+                receipt: crate::palw_panel_v2::PalwSeatReceiptV2 {
+                    claim: h64(1),
+                    verdict: PalwReceiptVerdictV2::Valid,
+                    seat_bond: PalwBondKeyV2(TransactionOutpoint {
+                        transaction_id: crate::tx::TransactionId::from_u64_word(9),
+                        index: 0,
+                    }),
+                    signed_daa: 1,
+                    signature: vec![],
+                },
+                segments: mask,
+            })
+        };
+        let assignment = palw_segment_assignment_v2(h64(0xA7), h64(1), 5);
+        for seat in 0..5u16 {
+            let mask = assignment.mask_of(seat);
+            let liable = palw_false_valid_liable_v1(&receipt(mask), PalwFaultSiteV1::AnyValid, Some(4), Some(mask), 1_000);
+            assert_eq!(liable, Ok(()), "seat {seat}: its assigned mask attested the job");
+            assert_eq!(
+                palw_false_valid_liable_v1(&receipt(mask), PalwFaultSiteV1::Whole, Some(4), Some(mask), 1_000),
+                if mask.is_full(4) { Ok(()) } else { Err(E::SiteNotAttested) },
+                "seat {seat} at Whole"
+            );
+        }
+        let partial = assignment.mask_of(if assignment.full_seat == 0 { 1 } else { 0 });
+        let other = assignment.mask_of(if assignment.full_seat == 2 { 3 } else { 2 });
+        assert_ne!(partial, other);
+        assert_eq!(
+            palw_false_valid_liable_v1(&receipt(partial), PalwFaultSiteV1::AnyValid, Some(4), Some(other), 1_000),
+            Err(E::SegmentMaskNotAssigned),
+            "a mask the panel did not assign is not a Valid this rule reads"
+        );
+        assert_eq!(
+            palw_false_valid_liable_v1(&receipt(PalwSegmentMaskV2::NONE), PalwFaultSiteV1::AnyValid, Some(4), Some(partial), 1_000),
+            Err(E::SiteNotAttested),
+            "an empty mask attested nothing"
+        );
     }
 }

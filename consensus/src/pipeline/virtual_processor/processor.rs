@@ -5824,6 +5824,8 @@ impl VirtualStateProcessor {
         let mut court_closes_completed = 0usize;
         // 2026-09-24 DoS audit #12 (b): bought class registrations this block has been charged for.
         let mut class_registrations_charged = 0usize;
+        // ADR-0152 v3.1 addendum §4-bis.3: prompt ids charged for whole-prompt recomputations.
+        let mut heavy_prompt_ids_charged = 0u64;
         // Review of #12: the registrant bonds whose charged registration the gate then refused in
         // this block. Each takes no further slot this block (see the charging site).
         let mut class_registrants_refused: std::collections::BTreeSet<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> =
@@ -6299,6 +6301,29 @@ impl VirtualStateProcessor {
                     continue;
                 }
                 class_registrations_charged += 1;
+            }
+            // **ADR-0152 v3.1 addendum §4-bis.3: the heavy prompt budget.** A `PromptNotAnchored
+            // { Whole }` (13) asks every node to recompute its binding's whole prefill (13.6 ms at
+            // 2M); a block holds `PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1` of them — one 2M check. Charged
+            // HERE, before the gate computes anything, and kept when the gate then refuses, like the
+            // registration slot above; the object that would breach it is dropped and the block
+            // stands. The fold holds the same number as its second lock.
+            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectiveOffence { kind, evidence, .. } = &object
+                && self.palw_offence_attribution_at(point.daa_score)
+            {
+                let heavy = kaspa_consensus_core::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(*kind, evidence);
+                if heavy > 0 {
+                    let budget = kaspa_consensus_core::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1;
+                    if heavy_prompt_ids_charged.saturating_add(heavy) > budget {
+                        info!(
+                            "Block {block}: a whole-prompt PromptNotAnchored ({heavy} ids) was dropped before it was computed, and \
+                             the block stands: the block has already charged {heavy_prompt_ids_charged} of {budget} \
+                             (PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1)"
+                        );
+                        continue;
+                    }
+                    heavy_prompt_ids_charged += heavy;
+                }
             }
             let spends_the_court_slot = kaspa_consensus_core::palw_state_v2::palw_court_close_completes_a_group_v1(&folded, &object)
                 || kaspa_consensus_core::palw_state_v2::palw_court_move_spends_the_slot_v1(&folded, &object);

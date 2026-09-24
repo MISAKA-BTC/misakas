@@ -10429,6 +10429,12 @@ struct TransitionBuilder<'a> {
     /// against [`PALW_CLASS_REGISTRATION_MAX_PER_BLOCK_V1`]. Not state: one builder is one block's
     /// fold, and the count is the block's.
     class_registrations: usize,
+    /// **Prompt ids this builder has recomputed whole for `PromptNotAnchored { Whole }`** (ADR-0152
+    /// v3.1 addendum §4-bis.3), charged BEFORE the adjudicator runs, against
+    /// [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`]. The processor's
+    /// acceptance walk holds the same budget and drops the object that would breach it with the
+    /// block standing, so this is the second lock; not state, like the counter above.
+    heavy_prompt_ids_charged: u64,
 }
 
 /// **What the class gate counts as a class's claims in flight** (2026-09-24 DoS audit #11 and its
@@ -10817,6 +10823,7 @@ impl<'a> TransitionBuilder<'a> {
             own_attempt_fit: false,
             room_exempt_class: None,
             class_registrations: 0,
+            heavy_prompt_ids_charged: 0,
         }
     }
 
@@ -12085,6 +12092,7 @@ impl<'a> TransitionBuilder<'a> {
                 "evidence_id is not the digest of the evidence bytes".into(),
             ));
         }
+        self.charge_heavy_prompt_ids_v1(PalwOffenceKindV1::PanelFalseValidV2, evidence_id, evidence)?;
         // The reporter slot is F7's; until its fence arms it the adjudicator refuses a filled one.
         let finding = palw_check_panel_false_valid_v2(
             &self.state,
@@ -12168,6 +12176,31 @@ impl<'a> TransitionBuilder<'a> {
 
     /// The identity rules the attribution adjudicators read: the network's prompt-id form and the
     /// base class (F1's J5 derives the base class's canonical job).
+    /// **The heavy prompt budget, charged before the adjudicator computes** (addendum §4-bis.3): a
+    /// `PromptNotAnchored { Whole }` recomputes its binding's whole prefill, and a block holds
+    /// [`crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1`] of them — one 2M check.
+    /// Refused (`HeavyBudgetExhausted`) without computing past it; everything else is free here.
+    fn charge_heavy_prompt_ids_v1(
+        &mut self,
+        kind: crate::palw_offence_v1::PalwOffenceKindV1,
+        evidence_id: Hash64,
+        evidence: &[u8],
+    ) -> Result<(), PalwStateV2Error> {
+        let heavy = crate::palw_offence_attribution_v1::palw_offence_heavy_prompt_ids_v1(kind, evidence);
+        if heavy == 0 {
+            return Ok(());
+        }
+        let charged = self.heavy_prompt_ids_charged.saturating_add(heavy);
+        if charged > crate::palw_attempt_rules_v1::PALW_HEAVY_PROMPT_IDS_PER_BLOCK_V1 {
+            return Err(PalwStateV2Error::ObjectiveOffenceRefused(
+                evidence_id,
+                crate::palw_offence_v1::PalwOffenceVerifyError::HeavyBudgetExhausted.to_string(),
+            ));
+        }
+        self.heavy_prompt_ids_charged = charged;
+        Ok(())
+    }
+
     fn identity_rules_v1(&self) -> crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
         crate::palw_offence_attribution_v1::PalwIdentityRulesV1 {
             prompt_ids_form: self.extras.prompt_ids_form_v1(),
@@ -12268,6 +12301,7 @@ impl<'a> TransitionBuilder<'a> {
                 "evidence_id is not the digest of the evidence bytes".into(),
             ));
         }
+        self.charge_heavy_prompt_ids_v1(PalwOffenceKindV1::ExecutorRefuted, evidence_id, evidence)?;
         let finding = palw_check_executor_refuted_v1(
             &self.state,
             &accused,
@@ -12584,7 +12618,11 @@ impl<'a> TransitionBuilder<'a> {
             | PalwPanelContradictionV1::Legs(_)
             | PalwPanelContradictionV1::ForgedOutput { .. } => {}
             // V1 parity: refused right after decode by the caller; here too, as it was refused.
-            PalwPanelContradictionV1::IdentityMismatch { .. } | PalwPanelContradictionV1::OutputMismatch { .. } => {
+            PalwPanelContradictionV1::IdentityMismatch { .. }
+            | PalwPanelContradictionV1::OutputMismatch { .. }
+            | PalwPanelContradictionV1::ForgedOutputTiled { .. }
+            | PalwPanelContradictionV1::LogitsNotStepOutput { .. }
+            | PalwPanelContradictionV1::PromptNotAnchored { .. } => {
                 return Err(refused("PanelFalseValid evidence does not decode".into()));
             }
         }
