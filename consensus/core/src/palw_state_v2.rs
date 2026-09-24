@@ -16936,10 +16936,12 @@ impl<'a> TransitionBuilder<'a> {
         Ok(())
     }
 
-    /// **ADR-0152 V-5: the burn hook** (S-SPEC P5/P12; S-4's conviction funnel calls it, S ships a
-    /// stub until this lands). Deletes `claim_id`'s row if one exists and returns its whole amount —
-    /// `Some` is S3's once-per-claim marker; `None` when the claim has no row (never written, an FP
-    /// claim, already burned, or already MOVED to the queue, after which there is nothing to burn).
+    /// **ADR-0152 V-5: the burn hook** (S-SPEC P5/P12; S-4's conviction funnel will call it, and
+    /// until that lands only the tests do). S-1 declared it with a stub; the integration
+    /// (rcore/int-1) deleted that stub for this body. Deletes `claim_id`'s row if one exists and
+    /// returns its whole amount — `Some` is S3's once-per-claim marker; `None` when the claim has no
+    /// row (never written, an FP claim, already burned, or already MOVED to the queue, after which
+    /// there is nothing to burn).
     /// A row is burnable until it moves, latched-but-carried included. Burned value goes to
     /// `vesting_burned` and is never minted. Counters: `burned`. Note: `Burned`, naming the offence
     /// and its kind so Phase 2 can attribute every burn (V-2b).

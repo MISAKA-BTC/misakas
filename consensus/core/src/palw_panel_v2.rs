@@ -156,9 +156,12 @@ pub const PALW_DRAW_WEIGHT_MAX_MSK_V1: u64 = 1 << 40;
 /// Where it is `Some`, each eligible operator's lottery entry is weighted by its one bond's POSTED
 /// collateral in whole MSK, capped at `weight_cap_msk` (operator ids are unique on testnet-12, so
 /// an operator is one bond): the key is `L / W` with `L = −log2((u + 1) / 2^64)` from an integer
-/// routine, and the smallest keys sit — successive sampling without replacement. The one-ledger
-/// headroom and the Valid-lock filter still decide WHETHER a bond is drawn; posted stake decides HOW
-/// OFTEN (SW-2). ADR-0147's outsider seat is weighted the same way under its own domain.
+/// routine, and the smallest keys sit — successive sampling without replacement. The Valid lock
+/// still decides WHETHER a bond is drawn: past `palw_rcore_plus`, where the processor arms this
+/// draw, through S-3's one-ledger seat filter (`PalwPanelValidLockV1::rcore`, L-4b), and the
+/// panel economy's headroom (ADR-0124 Decision 4) is not asked — only a policy without that
+/// filter asks it (`Eligible { headroom: true }`). Posted stake decides HOW OFTEN (SW-2).
+/// ADR-0147's outsider seat is weighted the same way under its own domain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwPanelStakeDrawV1 {
     /// SW-2's cap, in whole MSK ([`PALW_DRAW_WEIGHT_CAP_MSK_V1`] on every network that arms it).
@@ -448,12 +451,14 @@ pub enum PalwPanelV2Error {
     OutsiderHasNotAnswered { claim: Hash64, seat: PalwBondKeyV2 },
     /// **ADR-0152 SW-10: the eligible-stake floor.** The operators the stake draw may seat weigh
     /// `eligible` whole MSK (capped, SW-2) against a base of `base` — every operator that could sit
-    /// on this claim but for the load-dependent filters (the one ledger's headroom and the
-    /// route-matrix Valid lock) — and `1000 · eligible < floor‰ · base`. The claim does not bind
-    /// here: a saturated honest population halts binding instead of leaving the seats to whoever is
-    /// idle (SW-A1: without the floor the collusion threshold falls to 0.52M MSK at one genesis seat
-    /// eligible and to any five idle Sybils at none). Fail closed, like `InsufficientEligibleBonds`,
-    /// and checked after it, so that refusal keeps exactly the operator lottery's condition (T92).
+    /// on this claim but for the load-dependent filters (the route-matrix Valid lock — past
+    /// `palw_rcore_plus`, its one-ledger seat filter, S-3's L-4b — and, only where that filter
+    /// is absent, the panel economy's headroom) — and `1000 · eligible < floor‰ · base`. The
+    /// claim does not bind here: a saturated honest population halts binding instead of leaving
+    /// the seats to whoever is idle (SW-A1: without the floor the collusion threshold falls to
+    /// 0.52M MSK at one genesis seat eligible and to any five idle Sybils at none). Fail closed,
+    /// like `InsufficientEligibleBonds`, and checked after it, so that refusal keeps exactly the
+    /// operator lottery's condition (T92).
     #[error(
         "the eligible operators weigh {eligible} MSK of a base of {base} MSK, under the eligible-stake floor: the draw does not bind"
     )]
@@ -846,7 +851,7 @@ pub fn palw_panel_eligible_bonds_judging_v2<'a>(
 }
 
 /// **ADR-0152 SW-10: the base population** — [`palw_panel_eligible_bonds_judging_v1`] with every
-/// filter EXCEPT the load-dependent one: the one ledger's exposure headroom (ADR-0124 Decision 4,
+/// filter EXCEPT the load-dependent one: the panel economy's exposure headroom (ADR-0124 Decision 4,
 /// ADR-0130's floor). What stays is structural for this claim — `Active` at the floor (the panel's
 /// floor past the economy), registered by the maturity floor (and, under ADR-0147, before the
 /// anchor), not the executor's bond, operator or key, and able to run the judged class (capability
@@ -957,7 +962,8 @@ enum PalwPanelPopulationV1 {
     /// always returned; `headroom: false` leaves the load question to the one-ledger seat filter
     /// (`PalwPanelValidLockV1::rcore`) the caller applies after (S-3's L-4b).
     Eligible { headroom: bool },
-    /// SW-10's base: every predicate but the one-ledger headroom.
+    /// SW-10's base: every predicate but the panel economy's headroom (the callers apply the Valid
+    /// lock, and with it the one-ledger seat filter, to the eligible list only).
     StakeBase,
     /// SW-10's executor term: the base's structural predicates over the executor operator's own
     /// bonds (the executor clause inverted), headroom unread.
@@ -1698,12 +1704,14 @@ impl PalwPanelStakeEntryV1 {
 /// sum makes splitting stake across one operator's bonds buy nothing, as ADR-0130 made it buy
 /// nothing in the lottery.
 ///
-/// **Posted collateral, never the free stake.** The one ledger decides WHETHER a bond is on the
-/// list (the headroom and the Valid lock); posted stake decides HOW OFTEN it sits (SW-2). So an
-/// operator's key reads the seed, its own id and its own posted collateral and nothing else:
-/// adding or removing any other operator, or any change to another bond's commitments, never moves
-/// it (T87, T93). The first `needed` keys are a weighted sample without replacement — successive
-/// sampling, the exponential race — which a walk over cumulative weight intervals would not be.
+/// **Posted collateral, never the free stake.** The free stake decides WHETHER a bond is on the
+/// list — past `palw_rcore_plus`, where the processor arms this race, through the Valid lock's
+/// one-ledger seat filter (S-3's L-4b), not the panel economy's headroom; posted stake decides HOW
+/// OFTEN it sits (SW-2). So an operator's key reads the seed, its own id and its own posted
+/// collateral and nothing else: adding or removing any other operator, or any change to another
+/// bond's commitments, never moves it (T87, T93). The first `needed` keys are a weighted sample
+/// without replacement — successive sampling, the exponential race — which a walk over cumulative
+/// weight intervals would not be.
 pub fn palw_panel_stake_entries_under_v1(
     claim_id: &Hash64,
     anchor_block: BlockHash,
@@ -6146,7 +6154,7 @@ mod tests {
 
         /// A class whose attempts may claim `2 × 10^13` pwu, so one of them reserves 1,000,000 MSK
         /// (at the network's 5 sompi a pwu) on its producer — past any genesis seat's 500‰ ceiling
-        /// (469,531 MSK) — and one attempt SATURATES a bond's one-ledger headroom. Folded without
+        /// (469,531 MSK) — and one attempt SATURATES a bond's economy headroom. Folded without
         /// the 2026-09-23 audit extras, the only place an attempt is refused at the ceiling, so the
         /// reservation lands whole.
         const HEAVY_PWU: u64 = 20_000_000_000_000;
@@ -6897,7 +6905,7 @@ mod tests {
         // ---- T94: SW-10 --------------------------------------------------------------------------
 
         /// **T94 (SW-10): the eligible-stake floor.** The eight genesis seats beside five idle
-        /// floor-sized operators, with `k` genesis seats SATURATED — their one-ledger headroom
+        /// floor-sized operators, with `k` genesis seats SATURATED — their economy headroom
         /// spent by work they produced, so the headroom filter drops them while the base keeps them.
         /// `k = 1` binds (7,223,441 of 8,162,504 MSK, 885‰); `k = 2` refuses (6,284,378: 770‰); and
         /// SW-A1's cliff, seven saturated, refuses where the lottery seats at least four idle Sybils
@@ -6951,7 +6959,7 @@ mod tests {
 
         /// **T94 (SW-10): the class's base keeps the seats the Valid lock refuses.** The route
         /// matrix's Valid-lock filter ([`PalwPanelValidLockV1`]) is load-dependent like the
-        /// one-ledger headroom: a seat already standing behind the live locks of claims it judged is
+        /// economy headroom: a seat already standing behind the live locks of claims it judged is
         /// exactly the "locked honest seat" SW-A1 is about, so it leaves the eligible list and stays
         /// in the base — the base is never filtered by `lock.admits`. The test above spends seats'
         /// headroom; this one leaves every headroom whole and locks seats instead: a live slashable
@@ -7352,7 +7360,7 @@ mod tests {
 
             /// **T89 (SW-8): two claims bound in one block — the second sees the first's duties.**
             /// Nine operators of equal weight beside the executor; one of them ("thin", bond 2) has
-            /// one-ledger headroom for exactly ONE seat of these claims. Both claims anchor at the same
+            /// economy headroom for exactly ONE seat of these claims. Both claims anchor at the same
             /// block. The processor derives them the way the acceptance walk validates them: on the
             /// block's pre-object base, advanced by the first binding in claim-id order. Wherever thin
             /// sits on the first panel, it is not eligible for the second (its duty took its

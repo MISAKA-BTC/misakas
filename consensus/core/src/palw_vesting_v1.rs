@@ -52,8 +52,9 @@ use crate::palw_state_v2::{
 };
 
 /// B-3's vesting term. It is defined in `palw_state_v2` beside the withdrawal gates, where S-1
-/// declares it with this exact signature, so merging S replaces S's `false` stub with this body
-/// and adds no second definition. Re-exported here with the rest of the vesting rules.
+/// declared it with this exact signature and a `false` body; the integration (rcore/int-1) deleted
+/// that stub for this body, so there is one definition and v6 reads it by name. Re-exported here
+/// with the rest of the vesting rules.
 pub use crate::palw_state_v2::palw_bond_is_payee_of_unmatured_row_v1;
 
 /// **One Final claim's vested reward** (ADR-0152 V-1, v3.1), exactly the ADR's field list and order.
