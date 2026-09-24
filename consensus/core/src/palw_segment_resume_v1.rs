@@ -89,12 +89,37 @@ pub fn palw_segment_resume_window_v1(
     })
 }
 
-/// What a seat recomputed for one assigned segment. `matches` is whether every leaf in
-/// `[leaf_start, leaf_end)` agreed with the committed hashes the opening carried.
+/// **What a partial seat's segment replay is judged against** (SEAT-S4): the claim's committed
+/// roots, read off chain, and the seat's own assignment — never anything an opening says about
+/// itself.
+///
+/// An opening is served by the producer (or anyone relaying it), so every field in it is the
+/// server's; the replay is worth a signature only if the opening is tied to THIS claim. The family
+/// checks the opening's binding against `execution_root` and `trace_root` (and its job against the
+/// job the seat derived), its segment against `(seat_count, segment_index)`, and only then replays.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwSegmentClaimV1 {
+    pub execution_root: Hash64,
+    pub trace_root: Hash64,
+    /// The panel's seat count — the cut is `palw_segment_count_v2(seat_count)` segments.
+    pub seat_count: u16,
+    /// The segment this seat is replaying (a bit of its assigned mask).
+    pub segment_index: u16,
+}
+
+/// What a seat recomputed for one assigned segment.
+///
+/// `matches` is whether the leaves the seat recomputed from the claim's committed state root, under
+/// the opening's path, to the claim's `step_merkle_root` (SEAT-S4) — an opening that is not the
+/// claim's is refused before anything is replayed and never reaches this struct.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwSegmentReplayV1 {
     pub window: PalwSegmentResumeWindowV1,
+    /// The leaf hashes the replay recomputed, from its window's first leaf, in leaf order —
+    /// diagnostics only, never read by the verdict, and EMPTY when the window recomputed more than
+    /// the family keeps (a held segment is tens of millions of leaves).
     pub leaf_hashes: Vec<(u64, Hash64)>,
+    /// Steps re-executed: prefill positions and decode calls.
     pub calls_replayed: u32,
     pub matches: bool,
 }

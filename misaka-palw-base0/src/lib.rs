@@ -76,6 +76,9 @@ pub mod qwen36_plan;
 pub mod qwen36_reference;
 pub mod rc;
 pub mod rope;
+/// ADR-0133 S1, authenticated (SEAT-S4): the V2 segment opening a partial seat replays, tied to
+/// the claim before one step runs.
+pub mod segment_opening;
 pub mod tokenizer;
 
 pub mod convert;

@@ -3379,6 +3379,7 @@ async fn t18e_the_floor_relabel_is_refuted_by_j5() {
             trace_root: claim.envelope.attempt.trace_root,
             anchor: claim.anchor,
             attempt_draw: Some(true),
+            output_root: Some(claim.envelope.attempt.output_root),
         },
     );
     assert_eq!(verdict, kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Mismatch, "a seat refuses the relabel");

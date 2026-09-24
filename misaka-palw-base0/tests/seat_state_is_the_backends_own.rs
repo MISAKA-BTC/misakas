@@ -144,6 +144,8 @@ fn a_seats_verdict_is_moved_by_no_computation_but_its_own_backends() {
         trace_root: lying.outcome.trace_root,
         anchor: fp_job_id_v3(&job),
         attempt_draw: None,
+        // SEAT-S2's field (merged after this test was written): a fixture with no claim output.
+        output_root: None,
     };
     let lie = liar.open_fp_interval(&lying_capture, mid, &ids).expect("the liar serves its interval");
 
