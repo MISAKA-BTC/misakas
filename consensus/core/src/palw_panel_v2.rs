@@ -104,6 +104,47 @@ pub struct PalwPanelDrawPolicyV1 {
     /// #3). `None` where the lock ledger is not armed at the binding block — byte-identical to the
     /// draw before it existed.
     pub valid_lock: Option<PalwPanelValidLockV1>,
+    /// **ADR-0152 SW: the stake-weighted draw** (Q4, v3.1), resolved at the claim's ANCHOR by
+    /// `palw_panel_draw_policy_at`: `Some` iff `Params::palw_rcore_plus` is active at the anchor DAA.
+    /// `None` is the draw before it, byte for byte — ADR-0130's operator lottery and ADR-0147's
+    /// outsider ticket — on testnet-11, devnet and mainnet. The admission jury never reads it
+    /// (SW-A4: the jury stays ADR-0147's).
+    pub stake: Option<PalwPanelStakeDrawV1>,
+}
+
+/// **ADR-0152 SW-2: an operator's weight is capped here**, in whole MSK. Above it an operator gains
+/// nothing by staying whole (SW-A5), and one heavy ready operator cannot cut a class's
+/// effective-ready count below what the cap allows (SW-A6).
+pub const PALW_DRAW_WEIGHT_CAP_MSK_V1: u64 = 1_000_000;
+
+/// **ADR-0152 SW-10: the eligible-stake floor**, in permille of the base weight. A draw whose
+/// eligible operators weigh less than this share of every operator that could sit (Active, at the
+/// floor, registered before the anchor, capable) refuses with `InsufficientEligibleStake`: a
+/// saturated honest population halts binding instead of leaving the seats to idle Sybils.
+pub const PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1: u16 = 875;
+
+/// **ADR-0152 SW (v3.1): the stake-weighted draw's terms**, carried on [`PalwPanelDrawPolicyV1`].
+/// Not Borsh and not state — a policy value, resolved at the anchor like every other field, so the
+/// policy stays `Copy`.
+///
+/// Where it is `Some`, each eligible operator's lottery entry is weighted by its one bond's POSTED
+/// collateral in whole MSK, capped at `weight_cap_msk` (operator ids are unique on testnet-12, so
+/// an operator is one bond): the key is `L / W` with `L = −log2((u + 1) / 2^64)` from an integer
+/// routine, and the smallest keys sit — successive sampling without replacement. The one-ledger
+/// headroom and the Valid-lock filter still decide WHETHER a bond is drawn; posted stake decides HOW
+/// OFTEN (SW-2). ADR-0147's outsider seat is weighted the same way under its own domain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwPanelStakeDrawV1 {
+    /// SW-2's cap, in whole MSK ([`PALW_DRAW_WEIGHT_CAP_MSK_V1`] on every network that arms it).
+    pub weight_cap_msk: u64,
+    /// SW-10's floor, in permille of the base weight ([`PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1`]).
+    pub eligible_floor_permille: u16,
+}
+
+impl PalwPanelStakeDrawV1 {
+    /// The terms ADR-0152 v3.1 fixes: the 1,000,000 MSK cap and the 875‰ floor.
+    pub const V1: Self =
+        Self { weight_cap_msk: PALW_DRAW_WEIGHT_CAP_MSK_V1, eligible_floor_permille: PALW_DRAW_ELIGIBLE_FLOOR_PERMILLE_V1 };
 }
 
 /// **What a seat must be able to lock to be drawn at all**, resolved by the processor for ONE claim
@@ -780,7 +821,7 @@ pub fn derive_panel_v2_with_capability_proof(
         min_collateral_sompi,
         registered_by_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None, valid_lock: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None, valid_lock: None, stake: None },
     )
 }
 
@@ -1259,7 +1300,7 @@ pub fn validate_panel_bound_v2_with_shards(
         proposed_seats,
         bond_maturity_daa,
         capability_proof,
-        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None, valid_lock: None },
+        PalwPanelDrawPolicyV1 { weighted, economy: None, readiness: None, independence: None, valid_lock: None, stake: None },
         stratified,
     )
 }
@@ -2515,7 +2556,14 @@ mod tests {
             reward_multiple_permille: 0,
         };
         assert_eq!(economy.panel_floor_sompi, 1_000);
-        let policy = PalwPanelDrawPolicyV1 { weighted: true, economy: Some(economy), readiness: None, independence: None, valid_lock: None };
+        let policy = PalwPanelDrawPolicyV1 {
+            weighted: true,
+            economy: Some(economy),
+            readiness: None,
+            independence: None,
+            valid_lock: None,
+            stake: None,
+        };
 
         for i in 0..40u64 {
             let anchor = BlockHash::from_u64_word(0xB000 + i);
@@ -2531,7 +2579,14 @@ mod tests {
             }
             // One ticket a bond: the draw past the economy equals the legacy unweighted draw over the
             // same eligible set, whatever `weighted` says.
-            let unweighted = PalwPanelDrawPolicyV1 { weighted: false, economy: Some(economy), readiness: None, independence: None, valid_lock: None };
+            let unweighted = PalwPanelDrawPolicyV1 {
+                weighted: false,
+                economy: Some(economy),
+                readiness: None,
+                independence: None,
+                valid_lock: None,
+                stake: None,
+            };
             assert_eq!(
                 derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, unweighted).unwrap(),
                 seats,
@@ -2637,6 +2692,7 @@ mod tests {
             }),
             independence: None,
             valid_lock: None,
+            stake: None,
         }
     }
 
@@ -2788,6 +2844,7 @@ mod tests {
                 }),
                 independence: None,
                 valid_lock: None,
+                stake: None,
             };
             let lottery = derive_panel_v2_with_policy(&state, &params, &claim_id, anchor, mc, None, false, economy).unwrap();
             let fact = PalwAnchorFactV2 { anchor_block: anchor, anchor_daa: 105, predecessor_daa: 104 };
