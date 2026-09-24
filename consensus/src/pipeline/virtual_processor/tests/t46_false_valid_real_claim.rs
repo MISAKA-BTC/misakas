@@ -5214,3 +5214,8 @@ async fn t18n_a_convicted_representatives_unspent_tickets_pass_to_the_lender() {
 /// so it runs on this harness, these doors and these assertions rather than a copy of them.
 #[path = "t47_model_class_attribution.rs"]
 mod t47_model_class_attribution;
+
+/// **ADR-0152 v3.1 Phase 2, P2-8b / P2-8d (T54f's processor half)** — the replay filer's ONE builder on
+/// this suite's real claims, every object it leads to through this suite's doors; a child, like T47.
+#[path = "t54f_replay_filer.rs"]
+mod t54f_replay_filer;
