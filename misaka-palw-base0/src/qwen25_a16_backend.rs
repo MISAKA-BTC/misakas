@@ -3092,6 +3092,33 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         digest.opening_v1(index, bytes).ok_or_else(|| format!("leaf {index} does not open against the digest"))
     }
 
+    fn execute_with_drill_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        if let kaspa_consensus_core::palw_backend::PalwDrillFaultV1::StepLeaf(leaf) = fault {
+            return self.execute_with_injected_fault(job, prompt, leaf);
+        }
+        if !self.court_capable {
+            return Err("the v1 class carries no capture to drill".to_string());
+        }
+        // The dense capture on every class, the held one included — the reason is
+        // `execute_with_injected_fault`'s.
+        let (job, prompt) = crate::produce::base0_drill_job_v1(self, self.prompt_ids_form, job, prompt, fault)?;
+        let mut run =
+            a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), &job, &prompt, self.network_ladder)?;
+        let honest_output = self.committed_output_root_v1(&run.binding.job_context, &run.generated_token_ids, run.output_root);
+        run.output_root = honest_output;
+        crate::produce::base0_drill_run_v1(&mut run, fault, |ctx, ids| {
+            self.output_root_for_context_v1(ctx, ids)
+                .unwrap_or_else(|| kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1(ctx, ids))
+        })?;
+        let output_root = run.output_root;
+        crate::produce::base0_drill_outcome_v1(&run, output_root, fault)
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,

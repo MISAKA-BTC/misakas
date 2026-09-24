@@ -1100,6 +1100,155 @@ pub fn base0_material_job_is_the_claims_v1<B: kaspa_consensus_core::palw_backend
     Ok(())
 }
 
+/// **The pre-run half of a drill** (ADR-0152 v3.1 addendum §4-bis.10): the job and prompt a
+/// `RelabelPrompt`, `ShortPrefill`, `LegacyContextField` or `GarbagePromptRoot` producer runs —
+/// the honest job and prompt for every other fault. `form` is the backend's own prompt form.
+pub fn base0_drill_job_v1<B: kaspa_consensus_core::palw_backend::PalwExecutionBackendV1 + ?Sized>(
+    backend: &B,
+    form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    job: &PalwJobContextV2,
+    prompt: &[usize],
+    fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+) -> Result<(PalwJobContextV2, Vec<usize>), String> {
+    use kaspa_consensus_core::palw_backend::PalwDrillFaultV1 as F;
+    let mut drilled = job.clone();
+    match fault {
+        F::RelabelPrompt { from } => {
+            let (their, their_prompt) = backend.job_for_anchor(from)?;
+            if their_prompt == prompt {
+                return Err("the relabel's anchor names the same prompt".to_string());
+            }
+            // Another anchor's canonical job, at this job's draw, under THIS job's id and seed.
+            drilled = PalwJobContextV2 {
+                exact_decode_tokens: job.exact_decode_tokens,
+                job_id: job.job_id,
+                execution_seed: job.execution_seed,
+                ..their
+            };
+            Ok((drilled, their_prompt))
+        }
+        F::ShortPrefill(n) => {
+            if n == 0 || n as usize >= prompt.len() {
+                return Err(format!("a short prefill cuts the {}-id prompt to between 1 and {} ids", prompt.len(), prompt.len() - 1));
+            }
+            let short = prompt[..n as usize].to_vec();
+            let ids: Vec<u32> = short.iter().map(|t| *t as u32).collect();
+            drilled.declared_prefill_tokens = n;
+            drilled.prompt_token_ids_hash =
+                kaspa_consensus_core::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(form, &ids).map_err(|e| format!("{e:?}"))?;
+            Ok((drilled, short))
+        }
+        F::LegacyContextField => {
+            drilled.tokenizer_id = Hash64::from_u64_word(0x1E6A_C7F1);
+            Ok((drilled, prompt.to_vec()))
+        }
+        F::GarbagePromptRoot => {
+            drilled.prompt_token_ids_hash = Hash64::from_u64_word(0x6A2B_A6E0);
+            Ok((drilled, prompt.to_vec()))
+        }
+        _ => Ok((drilled, prompt.to_vec())),
+    }
+}
+
+/// **The post-run half of a drill** (ADR-0152 v3.1 addendum §4-bis.10): the dense run's rows, ids,
+/// legs or roots moved and the commitment re-derived exactly as the producer derives it — the trace
+/// root under the class's scheme, the manifest over it, the execution root over the binding's parts
+/// (`binding_commitment_root_v1`), and for a token fault the output root its ids render to
+/// (`output_root_of`). The step tree is the honest run's under every fault here.
+pub fn base0_drill_run_v1(
+    run: &mut Base0ExecutionV1,
+    fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+    output_root_of: impl Fn(&PalwJobContextV2, &[u32]) -> Hash64,
+) -> Result<(), String> {
+    use kaspa_consensus_core::palw_backend::{PalwDrillBendV1, PalwDrillFaultV1 as F};
+    use kaspa_consensus_core::palw_step_refute::{
+        base0_decode_token_select_v1, base0_logits_trace_root_v1, flat_logits_scheme_id_v1, tiled_logits_trace_root_v1,
+    };
+    let vocab = run.binding.shape_profile.vocab_size;
+    let mut retrace = false;
+    match fault {
+        F::BendLogits { row, mode, lane } => {
+            let r = run.logits_rows.get_mut(row as usize).ok_or_else(|| format!("the run has no logits row {row}"))?;
+            let top = base0_decode_token_select_v1(r);
+            let max = r[top];
+            let lane = match lane {
+                Some(lane) => lane as usize,
+                None => (1..r.len().saturating_sub(1))
+                    .find(|l| *l != top && r[*l].saturating_add(1) < max)
+                    .ok_or("no interior lane below the argmax to bend")?,
+            };
+            if lane >= r.len() {
+                return Err(format!("lane {lane} is past the row"));
+            }
+            match mode {
+                PalwDrillBendV1::NewArgmax => r[lane] = max.saturating_add(1),
+                PalwDrillBendV1::SameArgmax if lane == top => r[lane] = max.saturating_add(1),
+                PalwDrillBendV1::SameArgmax if r[lane].saturating_add(1) < max => r[lane] += 1,
+                PalwDrillBendV1::SameArgmax => r[lane] = r[lane].saturating_sub(1),
+            }
+            retrace = true;
+        }
+        F::TokenNotSelected { pos, lane } => {
+            let id = run.generated_token_ids.get_mut(pos as usize).ok_or_else(|| format!("the run generated no token {pos}"))?;
+            if *id == lane {
+                return Err(format!("token {pos} already is lane {lane}"));
+            }
+            *id = lane;
+            retrace = true;
+        }
+        F::TokenOutOfVocab { pos } => {
+            let id = run.generated_token_ids.get_mut(pos as usize).ok_or_else(|| format!("the run generated no token {pos}"))?;
+            *id = vocab.saturating_add(1);
+            retrace = true;
+        }
+        F::ActivationRoot(root) => run.binding.activation_leg_root = root,
+        F::CheckpointInterval(interval) => run.binding.checkpoint_profile.checkpoint_interval = interval,
+        _ => return Ok(()),
+    }
+    if retrace {
+        let ctx = run.binding.job_context.clone();
+        let trace_root = if run.binding.shape_profile.logits_scheme_id == flat_logits_scheme_id_v1() {
+            base0_logits_trace_root_v1(&ctx, &run.logits_rows, &run.generated_token_ids)
+        } else {
+            tiled_logits_trace_root_v1(&ctx, &run.logits_rows, &run.generated_token_ids).ok_or("the drilled rows build no tree")?
+        };
+        run.binding.full_logits_trace_root = trace_root;
+        run.trace_root = trace_root;
+        run.trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, run.trace_chunk_count);
+        if matches!(fault, F::TokenNotSelected { .. } | F::TokenOutOfVocab { .. }) {
+            run.output_root = output_root_of(&ctx, &run.generated_token_ids);
+        }
+    }
+    run.binding.committed_execution_root = kaspa_consensus_core::palw_step_leg::binding_commitment_root_v1(&run.binding);
+    run.execution_root = run.binding.committed_execution_root;
+    Ok(())
+}
+
+/// **What a drilled run commits**: its material and roots, then the two faults that are the claim's
+/// own roots rather than the run's (`UnboundExecutionRoot`, `OutputRoot`).
+pub fn base0_drill_outcome_v1(
+    run: &Base0ExecutionV1,
+    output_root: Hash64,
+    fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+) -> Result<kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1, String> {
+    use kaspa_consensus_core::palw_backend::PalwDrillFaultV1 as F;
+    let material = base0_material_encode_v1(run).map_err(|e| e.to_string())?;
+    let mut outcome = kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1 {
+        trace_root: run.trace_root,
+        output_root,
+        execution_root: run.execution_root,
+        trace_manifest_root: run.trace_manifest_root,
+        trace_chunk_count: run.trace_chunk_count,
+        material,
+    };
+    match fault {
+        F::UnboundExecutionRoot(root) => outcome.execution_root = root,
+        F::OutputRoot(root) => outcome.output_root = root,
+        _ => {}
+    }
+    Ok(outcome)
+}
+
 /// **The claim's whole statement, as a seat holding its material checks it** (ADR-0152 v3.1
 /// T18p-M; the Phase 1–2 review's H-1) — every `verify_material` branch of every family, one rule:
 ///

@@ -236,3 +236,77 @@ fn a_legacy_seat_does_not_bind_the_answer_on_the_material_route() {
     assert_eq!(backend.verify_material(&honest.material, ground), MATCHES, "Legacy: the material route as it was");
     assert!(!replay_reproduces_every_root(&backend, &job, &prompt, &ground), "and the replay still compares the answer");
 }
+
+// ---------------------------------------------------------------------------------------------
+// T18p-M over the drill hook: every fault a producer can commit, through its own path
+// ---------------------------------------------------------------------------------------------
+
+/// **T18p-M (addendum §4-bis.10's drill hook): every drill fault gets no full `Valid`.** For every
+/// family, every [`PalwDrillFaultV1`] produced by the family's own `execute_with_drill_fault`: the
+/// seat's REPLAY of the job the chain asked for reproduces none of the claim's roots (the full
+/// seat's only `Valid` exit under SEAT-R); and the MATERIAL route refuses every fault it can see —
+/// all but the step lie, which re-derives its capture's own self-consistent roots and is the
+/// replay's to find (SEAT-R's reason). The honest run passes both.
+fn drill_duty(label: &str, backend: &dyn PalwExecutionBackendV1, profile: &PalwShapeProfileV3) {
+    use kaspa_consensus_core::palw_backend::{PalwDrillBendV1, PalwDrillFaultV1 as F};
+    let anchor = Hash64::from_u64_word(0x7D1C_0000);
+    let (canonical, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+    let job = palw_attempt_job_v1(canonical, true);
+    let honest = backend.execute(&job, &prompt).expect("the honest run");
+    assert_eq!(backend.verify_material(&honest.material, attempt_claim(anchor, &honest)), MATCHES, "{label}: honest");
+    let capture = misaka_palw_base0::produce::base0_material_decode_any_v1(&honest.material).expect("decodes");
+    let top = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&capture.logits_rows()[0]) as u32;
+    let vocab = profile.vocab_size;
+    let runner_up = (top + 1) % vocab;
+    let faults = [
+        F::StepLeaf(capture.binding().step_leaf_count / 2),
+        F::BendLogits { row: 0, mode: PalwDrillBendV1::SameArgmax, lane: None },
+        F::BendLogits { row: 0, mode: PalwDrillBendV1::NewArgmax, lane: Some(runner_up) },
+        F::RelabelPrompt { from: Hash64::from_u64_word(0x4E1A_BE7D) },
+        F::ShortPrefill(prompt.len() as u32 - 1),
+        F::LegacyContextField,
+        F::GarbagePromptRoot,
+        F::UnboundExecutionRoot(Hash64::from_u64_word(0xB0B0)),
+        F::ActivationRoot(Hash64::from_u64_word(0xAC70)),
+        F::CheckpointInterval(profile.n_ctx + 7),
+        F::TokenNotSelected { pos: 0, lane: runner_up },
+        F::TokenOutOfVocab { pos: 0 },
+        F::OutputRoot(Hash64::from_u64_word(0x0A70)),
+    ];
+    for fault in faults {
+        let drilled = match backend.execute_with_drill_fault(&job, &prompt, fault) {
+            Ok(drilled) => drilled,
+            Err(why) => panic!("{label}: the drill produces {fault:?}: {why}"),
+        };
+        let claim = attempt_claim(anchor, &drilled);
+        assert!(!replay_reproduces_every_root(backend, &job, &prompt, &claim), "{label}: {fault:?} — the replay refuses it");
+        let material = backend.verify_material(&drilled.material, claim);
+        if matches!(fault, F::StepLeaf(_)) {
+            continue; // the replay's to find: SEAT-R makes it the full seat's only Valid exit
+        }
+        assert_ne!(material, MATCHES, "{label}: {fault:?} — the material route refuses it");
+    }
+}
+
+#[test]
+fn t18p_m_no_drill_fault_gets_a_full_valid() {
+    use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_held_canonical_v1, qwen25_a16_profile_v2, qwen25_a16_profile_v7};
+    use kaspa_consensus_core::palw_qwen36_profile::{qwen36_held_canonical_v1, qwen36_profile_v7};
+    let floor = floor_backend(PalwPromptIdsFormV1::MerkleV1).with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+    let profile = floor.profile().clone();
+    drill_duty("floor", &floor, &profile);
+    let artifact = a16_artifact(128);
+    for (label, profile) in [
+        ("A16 held v7", qwen25_a16_profile_v7(a16_geometry(128)).unwrap()),
+        ("A16 v2", qwen25_a16_profile_v2(a16_geometry(128)).unwrap()),
+    ] {
+        let backend = a16_backend(&artifact, &profile, qwen25_a16_held_canonical_v1(profile.n_ctx))
+            .with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+        drill_duty(label, &backend, &profile);
+    }
+    let (q36, mut geometry) = qwen36_fixture();
+    geometry.n_ctx = 32;
+    let held = qwen36_profile_v7(geometry).unwrap();
+    let backend = qwen36_backend(&q36, &held, qwen36_held_canonical_v1(32)).with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+    drill_duty("Qwen3.6 held v7", &backend, &held);
+}

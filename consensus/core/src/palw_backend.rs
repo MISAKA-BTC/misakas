@@ -1157,6 +1157,66 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     ) -> Result<PalwFpRunV1, String> {
         Err("this backend has no free-prompt drill fault".to_string())
     }
+
+    /// **A DRILL fault of any kind** ([`PalwDrillFaultV1`], ADR-0152 v3.1 addendum §4-bis.10) on the
+    /// attempt lane: the job run through this family's own dense capture path — the prompt, context
+    /// or prefill moved before the run, or the rows, ids, legs or roots moved after it — and every
+    /// root the claim carries re-derived from what was committed. `StepLeaf` is
+    /// [`Self::execute_with_injected_fault`]. The same contract: callers refuse to reach this on a
+    /// network carrying value.
+    fn execute_with_drill_fault(
+        &self,
+        _job: &PalwJobContextV2,
+        _prompt: &[usize],
+        _fault: PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        Err("this backend has no drill".to_string())
+    }
+}
+
+/// **How a `BendLogits` drill moves a lane** (ADR-0152 v3.1 addendum §4-bis.10).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillBendV1 {
+    /// The lane becomes the row's argmax.
+    NewArgmax,
+    /// The lane moves and the argmax does not — the R1 residual: the committed token is still the
+    /// row's selection, so only `LogitsNotStepOutput` (12) sees it.
+    SameArgmax,
+}
+
+/// **The drill faults** (ADR-0152 v3.1 addendum §4-bis.10) — every way a producer can commit
+/// something other than its honest run that F1, F1c and F1-M exist to convict, each produced
+/// through the producer's OWN execution path and committed as the producer commits (every root
+/// re-derived, the material self-consistent), so a drill — and T18p-M — exercises the real commit
+/// and not an injector. The contract of
+/// [`PalwExecutionBackendV1::execute_with_injected_fault`] holds: never on a network carrying value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwDrillFaultV1 {
+    /// One lane of one step tile moved at `leaf` (`execute_with_injected_fault`) — 5.
+    StepLeaf(u64),
+    /// Logits row `row` bent at `lane` (the first interior lane that can move so when `None`) over
+    /// the honest step tree, the trace root re-committed — 12.
+    BendLogits { row: u32, mode: PalwDrillBendV1, lane: Option<u32> },
+    /// Another anchor's prompt run under this job's id and seed — 9 (J5b) or 13 past 4,096 ids.
+    RelabelPrompt { from: Hash64 },
+    /// The job's prefill cut to `n` ids, run — 9 (J5a).
+    ShortPrefill(u32),
+    /// An instance field written into the context (the tokenizer id), run — 9 (J5a).
+    LegacyContextField,
+    /// A prompt root with no preimage committed in the context, run — 9 (J5b) or 13.
+    GarbagePromptRoot,
+    /// The claim's execution root replaced by one no binding reproduces.
+    UnboundExecutionRoot(Hash64),
+    /// The activation leg root replaced, re-committed — 9 (J6).
+    ActivationRoot(Hash64),
+    /// The checkpoint interval replaced, re-committed — 9 (J7).
+    CheckpointInterval(u32),
+    /// Token `pos` replaced by `lane`, re-committed — 8 (flat) or 11 `NotSelected` (tiled).
+    TokenNotSelected { pos: u32, lane: u32 },
+    /// Token `pos` replaced by an id past the vocabulary, re-committed — 8 or 11 `OutOfVocab`.
+    TokenOutOfVocab { pos: u32 },
+    /// The claim's output root replaced — 10.
+    OutputRoot(Hash64),
 }
 
 /// **ADR-0085's path to a leaf's refutation, for a family's own retention**: the leaf's interval

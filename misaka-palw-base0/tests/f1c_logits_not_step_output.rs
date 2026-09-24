@@ -468,3 +468,150 @@ fn t18r_eleven_convicts_a_forged_tiled_token() {
         Err(E::ContradictionNotAdmitted(_))
     ));
 }
+
+/// **Every drill fault is convicted by the contradiction it exists for** (the drill hook,
+/// addendum §4-bis.10): each [`PalwDrillFaultV1`] produced by the family's own
+/// `execute_with_drill_fault` — every root the producer commits re-derived from what it committed —
+/// is named by the chain's adjudicator: 12 for bent logits over the honest tree, 11 (tiled) or 8
+/// (flat) for a forged token, 9's J5b / J5a / J6 / J7 for a relabelled or garbage prompt root, a
+/// short prefill or an instance field, a moved activation leg or checkpoint profile, 10 for a moved
+/// output root; an execution root no binding reproduces is refused `WorkMismatch` (it is the DA
+/// court's: nobody can answer for it). The step lie is T46's (5).
+#[test]
+fn every_drill_fault_is_convicted_by_its_contradiction() {
+    use kaspa_consensus_core::palw_backend::{PalwDrillBendV1, PalwDrillFaultV1 as F};
+    use kaspa_consensus_core::palw_offence_attribution_v1::{
+        PalwIdentityFaultV1 as J, PalwIdentityRulesV1, palw_binding_identity_fault_v1, palw_output_fault_v1,
+    };
+    use kaspa_consensus_core::palw_offence_v1::{PalwPanelContradictionV1 as C, palw_panel_contradiction_convicts_execution_v1};
+    use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_held_canonical_v1, qwen25_a16_profile_v2};
+    use kaspa_consensus_core::palw_qwen36_profile::{qwen36_held_canonical_v1, qwen36_profile_v7};
+    use kaspa_consensus_core::palw_step_refute::{PalwBase0DecodeTokensV1, PalwDecodeTokenPinV1};
+    let artifact = a16_artifact(8_292);
+    let a16 = qwen25_a16_profile_v2(a16_geometry(8_292)).unwrap();
+    let (q36, mut geometry) = qwen36_fixture();
+    geometry.n_ctx = 32;
+    let held = qwen36_profile_v7(geometry).unwrap();
+    let floor = floor_backend(PalwPromptIdsFormV1::MerkleV1).with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+    let floor_id = floor.profile().shape_profile_id();
+    let families: Vec<(&str, Box<dyn PalwExecutionBackendV1>)> = vec![
+        ("floor", Box::new(floor)),
+        (
+            "A16 v2 dense 8,292",
+            Box::new(
+                a16_backend(&artifact, &a16, qwen25_a16_held_canonical_v1(a16.n_ctx)).with_attempt_rules(PalwAttemptRulesV1::CoreV1),
+            ),
+        ),
+        (
+            "Qwen3.6 held v7",
+            Box::new(qwen36_backend(&q36, &held, qwen36_held_canonical_v1(32)).with_attempt_rules(PalwAttemptRulesV1::CoreV1)),
+        ),
+    ];
+    let rules = PalwIdentityRulesV1 { prompt_ids_form: PalwPromptIdsFormV1::MerkleV1, base_class_id: floor_id };
+    for (label, backend) in &families {
+        let anchor = Hash64::from_u64_word(0xD1F7_0000);
+        let (canonical, prompt) = backend.job_for_anchor(anchor).unwrap();
+        let job = palw_attempt_job_v1(canonical, true);
+        let honest = backend.execute(&job, &prompt).unwrap();
+        let honest_rows = misaka_palw_base0::produce::base0_material_decode_any_v1(&honest.material).unwrap().logits_rows().to_vec();
+        let top = base0_decode_token_select_v1(&honest_rows[0]) as u32;
+        for fault in [
+            F::BendLogits { row: 0, mode: PalwDrillBendV1::SameArgmax, lane: None },
+            F::RelabelPrompt { from: Hash64::from_u64_word(0x4E1A_D1F7) },
+            F::GarbagePromptRoot,
+            F::ShortPrefill(prompt.len() as u32 - 1),
+            F::LegacyContextField,
+            F::ActivationRoot(Hash64::from_u64_word(0xAC70)),
+            F::CheckpointInterval(1_000_003),
+            F::TokenNotSelected { pos: 0, lane: (top + 1) % 64 },
+            F::OutputRoot(Hash64::from_u64_word(0x0A70)),
+            F::UnboundExecutionRoot(Hash64::from_u64_word(0xB0B0)),
+        ] {
+            let out = backend.execute_with_drill_fault(&job, &prompt, fault).unwrap_or_else(|e| panic!("{label}: {fault:?}: {e}"));
+            let retention = misaka_palw_base0::produce::base0_material_decode_any_v1(&out.material).unwrap();
+            let binding = retention.binding().clone();
+            let (rows, ids) = (retention.logits_rows().to_vec(), retention.generated_token_ids().to_vec());
+            let target = PalwOffenceTargetV1 {
+                execution_root: out.execution_root,
+                trace_root: out.trace_root,
+                output_root: out.output_root,
+                ..target_of(&binding, anchor)
+            };
+            let identity = palw_binding_identity_fault_v1(&target, &binding, rules, true);
+            let tiled = binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1();
+            match fault {
+                F::BendLogits { .. } => {
+                    let head = palw_logits_head_v1(&binding.shape_profile).unwrap();
+                    let lane = rows[0].iter().zip(honest_rows[0].iter()).position(|(a, b)| a != b).expect("a bent lane") as u32;
+                    let tile = lane / head.tile_len;
+                    let logits_tile = if tiled { (lane as usize / PALW_LOGITS_TILE_LANES) as u8 } else { 0 };
+                    let event = logits_event_disclosure_v1(&binding, &rows, &ids, 0, logits_tile).unwrap();
+                    let coord = palw_logits_head_coordinate_v1(&head, &binding.job_context, 0, tile).unwrap();
+                    let index = canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &coord).unwrap();
+                    let opening = backend.refutation_for_index(&out.material, index).unwrap().output_opening;
+                    assert_eq!(
+                        palw_logits_not_step_output_fault_v1(&target, &event, 0, tile, &opening, PALW_STEP_LEG_MAX_LEAVES),
+                        Ok(()),
+                        "{label}: 12 convicts the bent row"
+                    );
+                }
+                F::RelabelPrompt { .. } | F::GarbagePromptRoot => {
+                    assert_eq!(identity, Ok(Some(J::PromptNotTheAnchors)), "{label}: {fault:?} is J5b")
+                }
+                F::ShortPrefill(_) | F::LegacyContextField => {
+                    assert_eq!(identity, Ok(Some(J::ContextNotCanonical)), "{label}: {fault:?} is J5a")
+                }
+                F::ActivationRoot(_) => assert_eq!(identity, Ok(Some(J::ActivationLegNotCanonical)), "{label}: J6"),
+                F::CheckpointInterval(_) => assert_eq!(identity, Ok(Some(J::CheckpointProfileNotCanonical)), "{label}: J7"),
+                F::TokenNotSelected { .. } if tiled => {
+                    let pin = tiled_decode_pin_v1(&binding.job_context, &rows, &ids, 0, top).unwrap();
+                    assert_eq!(
+                        palw_forged_output_tiled_fault_v1(
+                            &target,
+                            &binding,
+                            &PalwForgedOutputTiledProofV1::NotSelected { pin },
+                            PALW_STEP_LEG_MAX_LEAVES,
+                            false
+                        ),
+                        Ok(()),
+                        "{label}: 11 NotSelected"
+                    );
+                }
+                F::TokenNotSelected { .. } => {
+                    let forged = C::ForgedOutput {
+                        binding: binding.clone(),
+                        pin: PalwBase0DecodeTokensV1 { logits_rows: rows.clone(), generated_token_ids: ids.clone() },
+                        position: 0,
+                    };
+                    assert_eq!(
+                        palw_panel_contradiction_convicts_execution_v1(
+                            &forged,
+                            out.execution_root,
+                            Hash64::default(),
+                            PALW_STEP_LEG_MAX_LEAVES
+                        ),
+                        Ok(()),
+                        "{label}: 8 ForgedOutput on the flat floor"
+                    );
+                }
+                F::OutputRoot(_) => {
+                    let rows_root = tiled_logits_rows_root_v1(&binding.job_context, &rows);
+                    let pin = match rows_root {
+                        Some(rows_root) if tiled => {
+                            PalwDecodeTokenPinV1::TiledV1(PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: ids.clone() })
+                        }
+                        _ => PalwDecodeTokenPinV1::Base0V1(PalwBase0DecodeTokensV1 {
+                            logits_rows: rows.clone(),
+                            generated_token_ids: ids.clone(),
+                        }),
+                    };
+                    assert_eq!(palw_output_fault_v1(&target, &binding, &pin), Ok(true), "{label}: 10");
+                }
+                F::UnboundExecutionRoot(_) => {
+                    assert_eq!(identity, Err(E::PanelFalseValidWorkMismatch), "{label}: no binding reproduces an unbound root")
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+}

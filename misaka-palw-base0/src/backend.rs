@@ -629,6 +629,23 @@ impl PalwExecutionBackendV1 for Base0Backend {
         }
     }
 
+    fn execute_with_drill_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        fault: kaspa_consensus_core::palw_backend::PalwDrillFaultV1,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        if let kaspa_consensus_core::palw_backend::PalwDrillFaultV1::StepLeaf(leaf) = fault {
+            return self.execute_with_injected_fault(job, prompt, leaf);
+        }
+        let (job, prompt) = crate::produce::base0_drill_job_v1(self, self.prompt_ids_form, job, prompt, fault)?;
+        let mut run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, &job, &prompt, self.network_ladder)
+            .map_err(|e| e.to_string())?;
+        crate::produce::base0_drill_run_v1(&mut run, fault, kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_output_root_v1)?;
+        let output_root = run.output_root;
+        crate::produce::base0_drill_outcome_v1(&run, output_root, fault)
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,
