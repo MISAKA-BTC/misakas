@@ -6654,13 +6654,20 @@ impl VirtualStateProcessor {
         if !matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
             return None;
         }
-        let duties = state.panel_duties_of(&claim)?;
+        state.panel_duties_of(&claim)?;
+        // The door's own predicate: a seat not yet credited, or (ADR-0152 V3S-01, on a licence that
+        // awaits its replay) a credited seat not yet counted over the whole job.
         let receipts: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = mine
             .iter()
             .filter(|receipt| {
                 receipt.claim == claim
                     && matches!(receipt.verdict, kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid)
-                    && duties.get(&receipt.seat_bond).is_some_and(|at| *at == 0)
+                    && kaspa_consensus_core::palw_state_v2::palw_rcore_v2_door_takes_seat_v1(
+                        &state,
+                        &claim,
+                        record,
+                        &receipt.seat_bond,
+                    )
             })
             .cloned()
             .collect();
@@ -6684,13 +6691,14 @@ impl VirtualStateProcessor {
         Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts })
     }
 
-    /// **ADR-0152 SR-10 / Q-7: the V3 supplementary set a collector offers**, on the tip state at
+    /// **ADR-0152 SR-10 / Q-7 / V3S-01: the supplementary set a collector offers**, on the tip state at
     /// virtual's point — where the carrying transaction would be accepted, as every assembler here
-    /// evaluates ([`Self::palw_v2_supplementary_v3_assemble_on_v1`]).
-    pub fn palw_v2_supplementary_v3_assemble_impl(
+    /// evaluates ([`Self::palw_v2_supplementary_assemble_on_v1`]).
+    pub fn palw_v2_supplementary_assemble_impl(
         &self,
         claim: kaspa_hashes::Hash64,
-        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+        v3_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+        v2_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
@@ -6701,25 +6709,27 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
-        self.palw_v2_supplementary_v3_assemble_on_v1(&state, state_params, &point, claim, candidates)
+        self.palw_v2_supplementary_assemble_on_v1(&state, state_params, &point, claim, v3_candidates, v2_candidates)
     }
 
-    /// [`Self::palw_v2_supplementary_v3_assemble_impl`] on a given state and point (the tests fold
-    /// their own). The selection is `palw_select_supplementary_v3_v1`, and both of its judges are
-    /// the chain's: `validate_supplementary_receipts_v3` bound exactly as the acceptance arm binds it
-    /// (the chain's network domain, the ML-DSA-87 verify), and the fold's own answer
-    /// (`palw_v2_supplementary_effect_v1`, at this processor's fences and extras). So the set it
-    /// returns is the set the gate admits and the door credits, every seat of it — the property the
-    /// collector exists for.
-    pub(crate) fn palw_v2_supplementary_v3_assemble_on_v1(
+    /// [`Self::palw_v2_supplementary_assemble_impl`] on a given state and point (the tests fold their
+    /// own). The selection is `palw_select_supplementary_offer_v1` — SR-10's V3 set, or on a licence
+    /// awaiting its replay the V2 door's full-replay upgrade before any pay set — and every one of its
+    /// judges is the chain's: `validate_supplementary_receipts_v3` and `validate_supplementary_receipts_v1`
+    /// bound exactly as the acceptance arms bind them (the chain's network domain, the ML-DSA-87
+    /// verify), and the fold's own answer (`palw_v2_supplementary_effect_v1`, at this processor's
+    /// fences and extras). So the object it returns is the one the gate admits and the door credits,
+    /// every seat of it — the property the collector exists for.
+    pub(crate) fn palw_v2_supplementary_assemble_on_v1(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         claim: kaspa_hashes::Hash64,
-        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+        v3_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+        v2_candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1> {
-        use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwConsensusObjectV2};
+        use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
         if !state_params.rcore_plus_active_at(point.daa_score)
             || !state.claim(&claim).is_some_and(|record| matches!(record.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }))
         {
@@ -6730,7 +6740,7 @@ impl VirtualStateProcessor {
             Some(self.genesis.hash),
         );
         let extras = self.palw_transition_extras_for(point);
-        let validate = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
+        let validate_v3 = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
             kaspa_consensus_core::palw_panel_v2::validate_supplementary_receipts_v3(
                 state,
                 state_params,
@@ -6741,12 +6751,23 @@ impl VirtualStateProcessor {
                 Self::verify_mldsa87_with_context_bool,
             )
         };
-        let effect = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3]| {
+        let validate_v2 = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2]| {
+            kaspa_consensus_core::palw_panel_v2::validate_supplementary_receipts_v1(
+                state,
+                state_params,
+                point,
+                network_domain,
+                &claim,
+                receipts,
+                Self::verify_mldsa87_with_context_bool,
+            )
+        };
+        let effect = |object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2| {
             kaspa_consensus_core::palw_state_v2::palw_v2_supplementary_effect_v1(
                 state,
                 state_params,
                 point,
-                &PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: receipts.to_vec() },
+                object,
                 self.palw_unavailable_abstains_at(point.daa_score),
                 self.palw_capability_bound_at(point.daa_score),
                 self.palw_uncertified_weightless_at(point.daa_score),
@@ -6754,12 +6775,15 @@ impl VirtualStateProcessor {
                 &extras,
             )
         };
-        let (receipts, effect) =
-            kaspa_consensus_core::palw_panel_v2::palw_select_supplementary_v3_v1(state, &claim, candidates, validate, effect)?;
-        Some(kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1 {
-            object: PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts },
+        kaspa_consensus_core::palw_panel_v2::palw_select_supplementary_offer_v1(
+            state,
+            &claim,
+            v3_candidates,
+            v2_candidates,
+            validate_v3,
+            validate_v2,
             effect,
-        })
+        )
     }
 
     pub fn palw_v2_receipt_quorum_assemble_impl(
@@ -6767,7 +6791,6 @@ impl VirtualStateProcessor {
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let panel_params = self.palw_panel_params_v2.as_ref()?;
         let (tip_block, state) = self.palw_state_v2_store.read().load_tip_cached(state_params).ok().flatten()?;
@@ -6783,6 +6806,21 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
+        self.palw_v2_receipt_quorum_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
+    }
+
+    /// [`Self::palw_v2_receipt_quorum_assemble_impl`] on a given state and point — the tests fold their
+    /// own (ADR-0152 X22: the V1 door a node offers before S2).
+    pub(crate) fn palw_v2_receipt_quorum_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -6934,6 +6972,20 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
+        self.palw_v2_receipt_coverage_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
+    }
+
+    /// [`Self::palw_v2_receipt_coverage_assemble_impl`] on a given state and point — the tests fold
+    /// their own (ADR-0152 X22). The caller has checked the Verification V2 fence.
+    pub(crate) fn palw_v2_receipt_coverage_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -6992,6 +7044,20 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
+        self.palw_v2_optimistic_assemble_on_v1(&state, state_params, panel_params, &point, claim, candidates)
+    }
+
+    /// [`Self::palw_v2_optimistic_assemble_impl`] on a given state and point — the tests fold their
+    /// own (ADR-0152 X22). The caller has checked the S2 fence.
+    pub(crate) fn palw_v2_optimistic_assemble_on_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        claim: kaspa_hashes::Hash64,
+        candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3],
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),

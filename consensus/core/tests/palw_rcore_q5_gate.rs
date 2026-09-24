@@ -14,6 +14,10 @@
 //! * **Q-7's duties** follow an S2 licence while it awaits its upgrade, to the seats it did not count.
 //! * **The collector offers exactly what the door credits** (`palw_select_supplementary_v3_v1` over
 //!   the validator and the fold's own `palw_v2_supplementary_effect_v1`).
+//! * **T72b, V3S-01 (the M4 review's finding 1)**: one silent partial seat, and a V3 set that pays two
+//!   partial seats carried FIRST (by anyone), still leave the claim upgradable — the V2 door takes a
+//!   counted seat's full-replay V2 `Valid` and widens its lock to the whole cut — and the collector
+//!   offers that V2 upgrade before any pay set, and never a pay set of `Valid`s on a gated claim.
 //! * Every one with its fence-off twin, and every write round-trips through its delta.
 
 use kaspa_consensus_core::palw_attempt_v2::{
@@ -22,15 +26,16 @@ use kaspa_consensus_core::palw_attempt_v2::{
 use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1;
 use kaspa_consensus_core::palw_optimistic_licence_v2::palw_optimistic_full_seat_bond_v2;
 use kaspa_consensus_core::palw_panel_v2::{
-    PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3, palw_select_supplementary_v3_v1, validate_supplementary_receipts_v3,
+    PalwPanelV2Error, PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3, palw_select_supplementary_offer_v1,
+    palw_select_supplementary_v3_v1, validate_supplementary_receipts_v1, validate_supplementary_receipts_v3,
 };
 use kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2;
 use kaspa_consensus_core::palw_state_v2::{
     PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimRcoreV1, PalwConsensusObjectV2 as Obj,
     PalwPanelSeatV2, PalwPwuRuleV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
     PalwTransitionExtrasV1, PalwVoidReasonV2, apply_delta_v2, apply_palw_transition_v2_with_extras, palw_claim_receipt_deadline_v1,
-    palw_operator_id_v2, palw_rcore_licence_awaits_replay_v1, palw_seat_uncounted_on_licence_v1, palw_v2_supplementary_effect_v1,
-    revert_delta_v2,
+    palw_operator_id_v2, palw_rcore_licence_awaits_replay_v1, palw_rcore_v2_door_takes_seat_v1, palw_rcore_v2_widens_seat_v1,
+    palw_seat_uncounted_on_licence_v1, palw_v2_supplementary_effect_v1, revert_delta_v2,
 };
 use kaspa_consensus_core::palw_verification_v2::{PalwSegmentMaskV2, palw_segment_assignment_v2};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -485,4 +490,176 @@ fn the_collector_offers_exactly_what_the_door_credits() {
     let (t3, twin_id, _, twin_partial) = s2_licensed(&off);
     let set = door(twin_id, vec![v3(twin_id, FIRST_ANCHOR, twin_partial[1], PalwReceiptVerdictV2::Valid, L + 1)]);
     assert_eq!(palw_v2_supplementary_effect_v1(&t3, &off, &at, &set, false, false, false, false, &extras()), None);
+}
+
+/// The V2 door's upgrade from `seat`'s whole-job replay, signed at `at`.
+fn whole(claim_id: Hash64, seat: PalwBondKeyV2, at: u64) -> Obj {
+    Obj::ReceiptLicensed { claim: claim_id, receipts: vec![v2(claim_id, seat, PalwReceiptVerdictV2::Valid, at)] }
+}
+
+/// **T72b at the fold: a silent partial seat and a pay set carried first do not push an honest S2
+/// claim into S0′** (V3S-01; the M4 review's finding 1). The S2 licence counts the full seat and
+/// `partial[0]`; `partial[3]` is silent; `partial[1]` and `partial[2]` replayed and filed their V3
+/// `Valid`s and their whole-job V2 `Valid`s. A V3 set of their two `Valid`s — which does not upgrade
+/// (segment 3 has one replay) — is carried first, as any third party may: the V3 door credits and
+/// locks both with their partial masks. Then `partial[1]`'s whole-job V2 through the V2 door: before
+/// the fix "already credited"; now the seat's lock is WIDENED to the whole cut (the amount, the expiry
+/// and the second clock unmoved: Q-4), the recount reaches 2, the door is recorded Coverage (two
+/// partial masks stay counted), the deadline is re-armed to `L + 120`, and the claim finalizes —
+/// never redrawn. The block round-trips through its delta and the carriage rebuilds its deadline.
+///
+/// The same holds for the licence's own rider (`partial[0]`, counted at the licence by its V3) and
+/// for a seat whose `Sampled` was credited (no lock: its V2 locks fresh). A seat already counted over
+/// the whole job (the full seat) is refused "already credited", and so is every credited seat once
+/// the claim no longer awaits its replay — or below the fence, where nothing is gated.
+#[test]
+fn t72b_a_silent_seat_and_a_pay_set_first_still_upgrade_through_the_v2_door() {
+    let p = params(true);
+    let (s3, claim_id, full, partial) = s2_licensed(&p);
+    let valid = |seat: PalwBondKeyV2, at: u64| v3(claim_id, FIRST_ANCHOR, seat, PalwReceiptVerdictV2::Valid, at);
+    let pay = door(claim_id, vec![valid(partial[1], L + 1), valid(partial[2], L + 1)]);
+    let (s4, _) = apply(&s3, &p, &ctx(5, L + 1), &[pay], None).expect("the V3 door takes a pay set from any carrier");
+    let paid = s4.claim(&claim_id).unwrap().clone();
+    assert_eq!(paid.rcore.basis_k, 1, "segment 3 has one replay: no upgrade");
+    assert!(palw_rcore_licence_awaits_replay_v1(&paid));
+    let before = *s4.slashable_lock(partial[1], claim_id).expect("the pay set locks its Valids");
+    assert_eq!((before.attested, before.segments), (mask_of(claim_id, FIRST_ANCHOR, partial[1]), 4), "a partial mask");
+    assert!(credited(&s4, claim_id, partial[1]) && palw_rcore_v2_widens_seat_v1(&s4, &claim_id, &paid, &partial[1]));
+    assert!(palw_rcore_v2_door_takes_seat_v1(&s4, &claim_id, &paid, &partial[1]));
+    assert!(!palw_rcore_v2_door_takes_seat_v1(&s4, &claim_id, &paid, &full), "the full seat is counted whole already");
+
+    // The acceptance validator takes it by the same predicate (signatures are the gate's; the fixture's
+    // verify takes every one).
+    let at = ctx(6, L + 2);
+    let accept_all = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
+    let validate = |state: &PalwChainStateV2, p: &PalwStateParamsV2, seat: PalwBondKeyV2| {
+        validate_supplementary_receipts_v1(
+            state,
+            p,
+            &at,
+            h64(999),
+            &claim_id,
+            &[v2(claim_id, seat, PalwReceiptVerdictV2::Valid, L + 2)],
+            accept_all,
+        )
+    };
+    assert!(validate(&s4, &p, partial[1]).is_ok(), "the gate admits the counted seat's whole-job replay");
+    assert!(matches!(validate(&s4, &p, full), Err(PalwPanelV2Error::SeatAlreadyCredited(seat)) if seat == full));
+
+    let (s5, d5) = apply(&s4, &p, &at, &[whole(claim_id, partial[1], L + 2)], None).expect("the V2 door widens and upgrades");
+    let upgraded = s5.claim(&claim_id).unwrap().clone();
+    assert_eq!(upgraded.rcore.basis_k, 2, "every segment now has two replays");
+    assert_eq!(
+        upgraded.rcore.licence_door,
+        Some(PalwLicenceDoorTagV1::Coverage),
+        "partial[0] and partial[2] still count partial masks"
+    );
+    assert!(!palw_rcore_licence_awaits_replay_v1(&upgraded));
+    let widened = *s5.slashable_lock(partial[1], claim_id).unwrap();
+    assert_eq!((widened.attested, widened.segments), (PalwSegmentMaskV2::full(4), 4), "the lock records the whole cut");
+    assert_eq!(
+        (widened.amount, widened.expiry_daa, widened.settled_at_final),
+        (before.amount, before.expiry_daa, before.settled_at_final),
+        "never repriced, never re-dated (Q-4)"
+    );
+    assert_eq!(s5.deadline_of(&claim_id), Some(L + 120), "Q-5's re-arm: max(L + wc(L), U)");
+    carriage_rebuilds(&s5, &p, claim_id);
+    round_trips(&s4, &s5, &d5, &p);
+    // Nothing is gated any more: a credited seat is counted once.
+    let err = apply(&s5, &p, &ctx(7, L + 3), &[whole(claim_id, partial[2], L + 3)], None).expect_err("not gated: counted once");
+    assert!(err.to_string().contains("already credited"), "{err}");
+    let (s6, _) = apply(&s5, &p, &ctx(8, L + 121), &[], None).expect("past L + 120");
+    assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "finalized, never redrawn");
+
+    // Without the widening the same pool strands the claim: a redraw at the gate.
+    let (stranded, _) = apply(&s4, &p, &ctx(9, GATE + 1), &[], None).expect("the gate");
+    assert_eq!(stranded.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional, "what the V2 door now prevents");
+
+    // The licence's own rider, alone.
+    let (r4, _) = apply(&s3, &p, &ctx(5, L + 1), &[whole(claim_id, partial[0], L + 1)], None).expect("the rider's whole-job replay");
+    assert_eq!(r4.claim(&claim_id).unwrap().rcore.basis_k, 2);
+    assert_eq!(r4.claim(&claim_id).unwrap().rcore.licence_door, Some(PalwLicenceDoorTagV1::Quorum), "every counted mask whole");
+    assert!(r4.slashable_lock(partial[0], claim_id).unwrap().attested.is_full(4));
+    // A seat credited for its `Sampled` (no lock): its whole-job replay locks fresh and counts.
+    let sampled = door(claim_id, vec![v3(claim_id, FIRST_ANCHOR, partial[3], PalwReceiptVerdictV2::Sampled, L + 1)]);
+    let (q4, _) = apply(&s3, &p, &ctx(5, L + 1), &[sampled], None).expect("a Sampled rides");
+    assert!(credited(&q4, claim_id, partial[3]) && q4.slashable_lock(partial[3], claim_id).is_none());
+    let (q5, d) = apply(&q4, &p, &ctx(6, L + 2), &[whole(claim_id, partial[3], L + 2)], None).expect("its replay after all");
+    assert_eq!(q5.claim(&claim_id).unwrap().rcore.basis_k, 2);
+    assert!(q5.slashable_lock(partial[3], claim_id).unwrap().attested.is_full(4));
+    round_trips(&q4, &q5, &d, &p);
+
+    // Below the fence nothing is gated: the rider is credited, and the V2 door refuses it as always.
+    let off = params(false);
+    let (t3, twin_id, _, twin_partial) = s2_licensed(&off);
+    let err = apply(&t3, &off, &ctx(5, L + 1), &[whole(twin_id, twin_partial[0], L + 1)], None).expect_err("credited");
+    assert!(err.to_string().contains("already credited"), "{err}");
+}
+
+/// **The collector's offer on a gated claim: the V2 upgrade before any pay set, never a pay set of
+/// `Valid`s** (Q-7, V3S-01; `palw_select_supplementary_offer_v1` over the validators and the fold).
+/// With `partial[3]` silent, the V3 pool's two `Valid`s cannot upgrade, so the V3 selection offers
+/// none of them on the gated claim (only a `Sampled`, which counts nowhere and is paid); the offer is
+/// the V2 door's — ONE whole-job `Valid`, which upgrades on its own. After a third party's pay set it
+/// is the same seat's V2, widening its lock (credited nobody new, recounted one). Once the claim is
+/// replay-backed the V3 pool's remaining `Valid` rides as pay.
+#[test]
+fn the_collector_upgrades_through_the_v2_door_before_any_pay_set() {
+    let p = params(true);
+    let (s3, claim_id, _, partial) = s2_licensed(&p);
+    let valid = |seat: PalwBondKeyV2, at: u64| v3(claim_id, FIRST_ANCHOR, seat, PalwReceiptVerdictV2::Valid, at);
+    let accept_all = |_: &[u8], _: &[u8], _: &[u8], _: &[u8]| true;
+    let offer = |state: &PalwChainStateV2, at: &PalwBlockContextV2, v3s: &[PalwSeatReceiptV3], v2s: &[PalwSeatReceiptV2]| {
+        palw_select_supplementary_offer_v1(
+            state,
+            &claim_id,
+            v3s,
+            v2s,
+            |set| validate_supplementary_receipts_v3(state, &p, at, h64(999), &claim_id, set, accept_all),
+            |set| validate_supplementary_receipts_v1(state, &p, at, h64(999), &claim_id, set, accept_all),
+            |object| palw_v2_supplementary_effect_v1(state, &p, at, object, false, false, false, false, &extras()),
+        )
+    };
+    let at = ctx(5, L + 1);
+    let v3_pool = vec![valid(partial[1], L + 1), valid(partial[2], L + 1)];
+    let v2_pool = vec![
+        v2(claim_id, partial[1], PalwReceiptVerdictV2::Valid, L + 1),
+        v2(claim_id, partial[2], PalwReceiptVerdictV2::Valid, L + 1),
+    ];
+
+    // The V3 selection alone: no pay set of `Valid`s on a gated claim; a `Sampled` beside them rides alone.
+    let v3_only = |pool: &[PalwSeatReceiptV3]| {
+        palw_select_supplementary_v3_v1(
+            &s3,
+            &claim_id,
+            pool,
+            |set| validate_supplementary_receipts_v3(&s3, &p, &at, h64(999), &claim_id, set, accept_all),
+            |set| palw_v2_supplementary_effect_v1(&s3, &p, &at, &door(claim_id, set.to_vec()), false, false, false, false, &extras()),
+        )
+    };
+    assert!(v3_only(&v3_pool).is_none(), "two Valids that do not upgrade are not carried on a gated claim");
+    let sampled = v3(claim_id, FIRST_ANCHOR, partial[3], PalwReceiptVerdictV2::Sampled, L + 1);
+    let (set, effect) = v3_only(&[v3_pool.clone(), vec![sampled.clone()]].concat()).expect("the Sampled, for pay");
+    assert_eq!((set, effect.credited, effect.upgrades), (vec![sampled.clone()], vec![partial[3]], false));
+
+    // The offer: one whole-job V2, which upgrades.
+    let made = offer(&s3, &at, &v3_pool, &v2_pool).expect("an upgrade");
+    assert_eq!(made.object, whole(claim_id, partial[1], L + 1), "one receipt is enough");
+    assert_eq!((made.effect.basis_k_before, made.effect.basis_k_after, made.effect.upgrades), (1, 2, true));
+    assert_eq!((made.effect.credited.clone(), made.effect.recounted.clone()), (vec![partial[1]], vec![partial[1]]));
+    let (s4, _) = apply(&s3, &p, &at, &[made.object], None).expect("the door takes the offer");
+    assert!(!palw_rcore_licence_awaits_replay_v1(s4.claim(&claim_id).unwrap()));
+
+    // After a third party's pay set: the same seat's V2 widens (credits nobody new).
+    let (paid, _) = apply(&s3, &p, &at, &[door(claim_id, v3_pool.clone())], None).expect("a third party's pay set");
+    let later = ctx(6, L + 2);
+    let made = offer(&paid, &later, &[], &v2_pool).expect("the widening upgrade");
+    assert_eq!(made.object, whole(claim_id, partial[1], L + 1));
+    assert!(made.effect.upgrades && made.effect.credited.is_empty() && made.effect.recounted == vec![partial[1]]);
+
+    // Replay-backed: no V2 upgrade is offered, and the V3 pool's remaining Valid rides as pay.
+    let (s5, _) = apply(&s4, &p, &later, &[], None).expect("a quiet block");
+    let made = offer(&s5, &ctx(7, L + 3), &v3_pool, &v2_pool).expect("pay");
+    assert_eq!(made.object, door(claim_id, vec![valid(partial[2], L + 1)]), "partial[1] is counted; partial[2] is paid");
+    assert!(!made.effect.upgrades);
 }

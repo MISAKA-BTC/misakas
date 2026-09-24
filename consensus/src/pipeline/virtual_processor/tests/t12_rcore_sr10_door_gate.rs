@@ -558,7 +558,7 @@ async fn t12_q5_an_s2_licence_redraws_once_then_voids_not_replay_backed() {
 /// lifts the gate (Q-5)** — at the processor, with real signatures. The pool holds the three partial
 /// seats the S2 licence left out, each signed as a seat signs, plus a copy under the V2 receipt
 /// context, a copy over the V2 message, the licence's own rider again, and a `Sampled` beside a
-/// `Valid`. The assembler (`palw_v2_supplementary_v3_assemble_on_v1`, the one the node calls at
+/// `Valid`. The assembler (`palw_v2_supplementary_assemble_on_v1`, the one the node calls at
 /// virtual) offers the three sound `Valid`s and nothing else; the gate admits the offer, the walk
 /// carries it, the fold credits and locks exactly those seats and recounts to 2, and the deadline is
 /// re-derived off the gate to `max(L + wc(L), U)`. On the fence-off twin the assembler offers nothing.
@@ -586,7 +586,7 @@ async fn t12_the_collector_builds_what_the_door_credits_and_the_upgrade_lifts_th
     pool.extend(sound.iter().cloned());
     let offer = g
         .vp()
-        .palw_v2_supplementary_v3_assemble_on_v1(&g.state, g.sp(), &point, claim, &pool)
+        .palw_v2_supplementary_assemble_on_v1(&g.state, g.sp(), &point, claim, &pool, &[])
         .expect("the collector has a set to offer");
     assert_eq!(offer.object, Obj::ReceiptLicensedV2 { claim, receipts: sound.clone() }, "exactly the sound Valids");
     assert_eq!((offer.effect.basis_k_before, offer.effect.basis_k_after, offer.effect.upgrades), (1, 2, true));
@@ -605,7 +605,7 @@ async fn t12_the_collector_builds_what_the_door_credits_and_the_upgrade_lifts_th
     let floor = licensed_daa + g.sp().window_challenge_at(licensed_daa);
     assert_eq!(g.state.deadline_of(&claim), Some(floor.max(g.daa)), "Q-5's re-arm: max(L + wc(L), U)");
     assert!(
-        g.vp().palw_v2_supplementary_v3_assemble_on_v1(&g.state, g.sp(), &g.next(), claim, &pool).is_none(),
+        g.vp().palw_v2_supplementary_assemble_on_v1(&g.state, g.sp(), &g.next(), claim, &pool, &[]).is_none(),
         "nothing left to credit"
     );
     g.quiet_block_at(floor.max(g.daa) + 1);
@@ -621,7 +621,7 @@ async fn t12_the_collector_builds_what_the_door_credits_and_the_upgrade_lifts_th
         })
         .collect();
     assert!(
-        twin.vp().palw_v2_supplementary_v3_assemble_on_v1(&twin.state, twin.sp(), &point, claim, &set).is_none(),
+        twin.vp().palw_v2_supplementary_assemble_on_v1(&twin.state, twin.sp(), &point, claim, &set, &[]).is_none(),
         "no door below the fence"
     );
 }
@@ -649,4 +649,139 @@ async fn t12_q5_one_seats_full_replay_v2_valid_upgrades_through_the_v2_door() {
     assert_eq!(g.state.deadline_of(&claim), Some(floor.max(g.daa)), "Q-5's re-arm");
     g.quiet_block_at(floor.max(g.daa) + 1);
     assert!(matches!(g.state.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "finalized, never redrawn");
+}
+
+/// **T72b at the processor (V3S-01; the M4 review's finding 1), with real signatures.** An S2 licence
+/// of the full seat and one rider; of the three partial seats it left out one is silent and two
+/// replayed — each filed its V3 `Valid` and its whole-job V2 `Valid`. A V3 set of those two `Valid`s
+/// is carried FIRST, as any third party may (the gate admits it; the door credits and locks both
+/// with their partial masks; segment coverage stays 1). The node's collector
+/// (`palw_v2_supplementary_assemble_on_v1`, what `palw_v2_supplementary_assemble` runs at virtual),
+/// handed both pools, then offers ONE whole-job V2 through the V2 door — a seat the pay set already
+/// credited — and the gate admits it, the walk carries it, the fold widens that seat's lock to the
+/// whole cut, recounts to 2 and re-arms the deadline, and the claim finalizes, never redrawn. On a
+/// clean pool the collector offers the V2 upgrade and never the non-upgrading pay set. On the
+/// fence-off twin the V2 door refuses a credited seat, as it always did.
+#[tokio::test]
+async fn t12_t72b_a_silent_seat_and_a_pay_set_first_still_upgrade() {
+    let mut g = gate(true);
+    let (claim, assignment, left) = s2_licensed(&mut g);
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = g.state.claim(&claim).unwrap().phase else { unreachable!() };
+    let point = g.next();
+    let replayed = &left[..2];
+    let v3_pool: Vec<PalwSeatReceiptV3> = replayed
+        .iter()
+        .map(|&(card, index)| {
+            g.v3_receipt(card, claim, PalwReceiptVerdictV2::Valid, point.daa_score, assignment.mask_of(index), Signed::AsV3)
+        })
+        .collect();
+    let v2_pool: Vec<PalwSeatReceiptV2> = replayed.iter().map(|&(card, _)| g.full_receipt(card, claim, point.daa_score)).collect();
+
+    // A clean pool: the collector offers the V2 upgrade, not the two Valids that cannot upgrade.
+    let clean =
+        g.vp().palw_v2_supplementary_assemble_on_v1(&g.state, g.sp(), &point, claim, &v3_pool, &v2_pool).expect("an upgrade on hand");
+    assert_eq!(clean.object, Obj::ReceiptLicensed { claim, receipts: vec![v2_pool[0].clone()] }, "one whole-job V2");
+    assert!(clean.effect.upgrades);
+
+    // A third party carries the pay set first.
+    g.carry(Obj::ReceiptLicensedV2 { claim, receipts: v3_pool.clone() });
+    let paid = g.state.claim(&claim).unwrap().clone();
+    assert_eq!(paid.rcore.basis_k, 1, "the silent seat's segment has one replay");
+    let (first, first_index) = replayed[0];
+    let before = *g.state.slashable_lock(g.cards[first], claim).expect("the pay set locked it");
+    assert_eq!(before.attested, assignment.mask_of(first_index), "with its partial mask");
+
+    // The collector's offer on the tip it would be carried into, and its whole path into a block.
+    let point = g.next();
+    let offer = g
+        .vp()
+        .palw_v2_supplementary_assemble_on_v1(&g.state, g.sp(), &point, claim, &v3_pool, &v2_pool)
+        .expect("the credited seats' whole-job replays still upgrade");
+    assert_eq!(offer.object, Obj::ReceiptLicensed { claim, receipts: vec![v2_pool[0].clone()] });
+    assert!(offer.effect.upgrades && offer.effect.credited.is_empty(), "it widens a credited seat: nobody new is credited");
+    assert_eq!(offer.effect.recounted, vec![g.cards[first]]);
+    let (parent, delta) = g.carry(offer.object);
+    let record = g.state.claim(&claim).unwrap().clone();
+    assert_eq!(record.rcore.basis_k, 2, "every segment replayed twice");
+    let widened = *g.state.slashable_lock(g.cards[first], claim).unwrap();
+    assert_eq!((widened.attested, widened.segments), (PalwSegmentMaskV2::full(4), 4), "the whole cut");
+    assert_eq!(widened.amount, before.amount, "never repriced");
+    let floor = licensed_daa + g.sp().window_challenge_at(licensed_daa);
+    assert_eq!(g.state.deadline_of(&claim), Some(floor.max(g.daa)), "Q-5's re-arm");
+    assert_eq!(revert_delta_v2(&g.state, &delta, g.sp()).unwrap().state_root(), parent.state_root(), "the widening reverts");
+    g.quiet_block_at(floor.max(g.daa) + 1);
+    assert!(matches!(g.state.claim(&claim).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "finalized, never redrawn");
+
+    // The twin: below the fence the V2 door refuses the licence's credited rider, as always.
+    let mut twin = gate(false);
+    let (claim, assignment, _) = s2_licensed(&mut twin);
+    let panel = twin.state.panel(&claim).unwrap().clone();
+    let rider = (0..panel.seats.len() as u16)
+        .find(|i| {
+            *i != assignment.full_seat
+                && twin
+                    .state
+                    .panel_duties_of(&claim)
+                    .and_then(|row| row.get(&panel.seats[*i as usize].bond))
+                    .is_some_and(|at| *at != 0)
+        })
+        .expect("the licence's rider is credited");
+    let point = twin.next();
+    let card = twin.card_of(&panel.seats[rider as usize].bond);
+    let again = Obj::ReceiptLicensed { claim, receipts: vec![twin.full_receipt(card, claim, point.daa_score)] };
+    twin.refused(&point, &again, &["already credited"]);
+}
+
+/// **X22 at the processor: three whole-job V2 `Valid`s on hand license V1, not S2** (the M4 review's
+/// HIGH). The pool holds the full seat's V3 `Valid` and a partial seat's — an S2 set the optimistic
+/// door would take — and the full seat's and two partial seats' whole-job V2 `Valid`s. Handed the
+/// processor's own assemblers (`_on_v1`, what the node's calls run at virtual), the order past the
+/// fence (`palw_licence_offer_order_v1(true, …)`, what kaspad's licence collector calls) offers the V1
+/// licence: carried through the gate, the walk and the fold it records `basis_k` 3 and the plain
+/// licence deadline, off Q-5's gate. The S2 set it passed over would have recorded 1 and been gated.
+/// Below the fence the order is the old one and S2 is offered.
+#[tokio::test]
+async fn t12_x22_three_v2_valids_license_v1_not_s2() {
+    use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1 as Door;
+    let mut g = gate(true);
+    let claim = g.open_claim();
+    let assignment = g.bind(claim);
+    let panel = g.state.panel(&claim).expect("a bound panel").clone();
+    let full = assignment.full_seat;
+    let partials: Vec<u16> = (0..panel.seats.len() as u16).filter(|i| *i != full).collect();
+    let point = g.next();
+    let card = |i: u16| g.card_of(&panel.seats[i as usize].bond);
+    let v3_pool: Vec<PalwSeatReceiptV3> = [full, partials[0]]
+        .iter()
+        .map(|&i| g.v3_receipt(card(i), claim, PalwReceiptVerdictV2::Valid, point.daa_score, assignment.mask_of(i), Signed::AsV3))
+        .collect();
+    let v2_pool: Vec<PalwSeatReceiptV2> =
+        [full, partials[0], partials[1]].iter().map(|&i| g.full_receipt(card(i), claim, point.daa_score)).collect();
+    let panel_params = g.bundle.panel;
+    let offer = |x22: bool| {
+        kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(
+            x22,
+            || g.vp().palw_v2_receipt_coverage_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+            || g.vp().palw_v2_receipt_quorum_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v2_pool),
+            || g.vp().palw_v2_optimistic_assemble_on_v1(&g.state, g.sp(), &panel_params, &point, claim, &v3_pool),
+        )
+    };
+    let (object, door) = offer(true).expect("a licence on hand");
+    assert_eq!(door, Door::Quorum, "V1 before S2");
+    assert!(matches!(object, Obj::ReceiptLicensed { .. }));
+    let (s2_object, s2_door) = offer(false).expect("the old order");
+    assert_eq!(s2_door, Door::Optimistic, "below the fence S2 came first");
+
+    // What each would record.
+    let (s2_state, _) = g.fold(&point, &s2_object).expect("the S2 set folds");
+    assert_eq!(s2_state.claim(&claim).unwrap().rcore.basis_k, 1, "S2: onto Q-5's gate");
+    g.carry(object);
+    let record = g.state.claim(&claim).unwrap().clone();
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = record.phase else { panic!("licensed: {:?}", record.phase) };
+    assert_eq!(record.rcore.basis_k, 3, "V1: three whole-job replays");
+    assert_eq!(
+        g.state.deadline_of(&claim),
+        Some(licensed_daa + g.sp().window_challenge_at(licensed_daa)),
+        "the plain licence row, off the gate"
+    );
 }

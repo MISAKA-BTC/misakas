@@ -427,6 +427,21 @@ pub(crate) const PALW_SEAT_S3_CAPTURES_V1: usize = 6;
 ///
 /// The seat loop asks it only while no replay or resume of this seat's is running for the claim, and
 /// samples once per duty ([`palw_seat_s3_sample_v1`]).
+///
+/// **A deviation from Q-7's letter, recorded (the M4 review's LOW; the operator's decision 1).** Q-7
+/// has the seat sample BESIDE its replay and sign `Sampled` when only the sampling finished by the
+/// deadline — so a replay still running at the deadline ends `Sampled`. Here the sampling starts only
+/// inside the lead and only while no replay of the seat's runs, so that case ends in silence. Kept,
+/// because (a) sampling beside a running replay is a second model-sized working set on the same host
+/// at once (each site replays a segment), which the replay slots and the memory ledger were sized
+/// without; (b) a `Sampled` filed while the seat's own replay may still end `Valid` credits the seat
+/// and latches `unserved_seen`, so it would cost the seat its count and the producer its SR-1b
+/// release — the order the ADR asks for needs a cancel the V3 door does not have; and (c) at launch
+/// the arm fires almost nowhere: the floor's family cannot sample a site, the 2M class is closed, and
+/// an 8k attempt's capture does not travel to the partial seats. What silence costs is the seat's pay
+/// (the escrow is held either way — a silent seat never serves), never the claim's liveness (Q-5's
+/// upgrade comes from the replays). The ADR text is the main session's to amend; the sampler beside
+/// the replay is Phase 2's if it is wanted.
 pub(crate) fn palw_seat_sampled_due_v1(
     seat_r: bool,
     sampled_admitted: bool,
@@ -495,11 +510,58 @@ pub(crate) fn palw_seat_s3_sample_v1(
     PalwSeatS3SampleV1::Sampled
 }
 
-/// **The order a collector carries V3 supplementary sets in** (ADR-0152 Q-7, SR-1b, Q-5; node policy).
+/// **The receipt pools' sweep rule** (`ReceiptSweepV1`), for the V2 and the V3 pool alike.
+///
+/// Below `palw_rcore_plus` a claim this node carried a licence for is done with (`submitted`), and
+/// its receipts go with it, as they always did. **Past it a licence does not end a claim's
+/// receipts** (ADR-0152 SR-10, Q-5, V3S-01): SR-10's V3 door and the V2 door take them on the
+/// licensed claim until its receipt deadline, and the supplementary collector reads both pools —
+/// after an S2 licence the partial seats' V3 `Valid`s and every replaying seat's whole-job V2 `Valid`
+/// are the only things that can lift it off Q-5's gate. So the licence this node carried drops
+/// nothing (`carried_nothing` stands in for `submitted`); the retention age bounds the claim, as it
+/// bounds every claim no duty names, and a duty or a dispute keeps it as before.
+pub(crate) fn palw_receipt_pools_sweep_v1<'a>(
+    rcore_plus: bool,
+    sweep: crate::palw_receipt_pool::ReceiptSweepV1<'a>,
+    carried_nothing: &'a HashMap<Hash64, u64>,
+) -> crate::palw_receipt_pool::ReceiptSweepV1<'a> {
+    if rcore_plus { crate::palw_receipt_pool::ReceiptSweepV1 { submitted: carried_nothing, ..sweep } } else { sweep }
+}
+
+/// A fingerprint of the candidates a supplementary offer is asked over — every receipt as it
+/// travels, in the order offered — so the collector can tell "the same pool again" from a pool
+/// that changed ([`palw_supplementary_idle_v1`]). A process-local hash: it names nothing outside.
+pub(crate) fn palw_supplementary_candidates_fingerprint_v1(v3: &[PalwSeatReceiptV3], v2: &[PalwSeatReceiptV2]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for receipt in v3 {
+        borsh::to_vec(receipt).expect("a V3 receipt serializes").hash(&mut hasher);
+    }
+    0xF4B2u16.hash(&mut hasher);
+    for receipt in v2 {
+        borsh::to_vec(receipt).expect("a V2 receipt serializes").hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// **Whether the collector skips a claim this tick** (the M4 review's LOW on its per-tick cost): its
+/// candidates came to no offer at `at` with the same `fingerprint`, fewer than
+/// `COURT_MOVE_REPLAN_DAA` ago. Each ask costs an ML-DSA-87 check per candidate and up to a few folds
+/// of a whole-state clone (`palw_v2_supplementary_effect_v1`), and a pool whose `Valid` is unbacked
+/// or whose seats are all counted answers `None` every tick until the retention age. The same pool
+/// on a later tip rarely answers differently — what the tip changes (a seat's room, another node's
+/// carrier crediting a seat) only shrinks what can ride, and the receipt window only closes — so it
+/// is re-asked when a receipt arrives or leaves, and otherwise once a replan interval. Keyed on the
+/// tip block as well, it would be re-asked at every block, which buys little for those reasons.
+pub(crate) fn palw_supplementary_idle_v1(last_none: Option<&(u64, u64)>, fingerprint: u64, current_daa: u64) -> bool {
+    last_none.is_some_and(|(seen, at)| *seen == fingerprint && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
+}
+
+/// **The order a collector carries supplementary sets in** (ADR-0152 Q-7, SR-1b, Q-5; node policy).
 ///
 /// The collector runs after every licence this tick could offer, on the same carrier budget
 /// (`MAX_INFLIGHT_CARRIERS`), so a supplementary set never takes a licence's place. Among the sets
-/// the fold says do something (`palw_select_supplementary_v3_v1`):
+/// the fold says do something (`palw_select_supplementary_offer_v1`, one a claim):
 ///
 /// 1. **a set that releases the escrow first** — SR-1b's window, `min(L + ⌊wc(L)/2⌋, bound +
 ///    window_receipt)`, is the shortest clock a supplementary set races (sixty DAA on testnet-12), and
@@ -1830,7 +1892,43 @@ fn seat_duty_is_due_until_v1(
     current_daa: u64,
     deadline: u64,
 ) -> bool {
-    !answered.contains(&seat_duty_panel_key_v1(duty)) && current_daa <= deadline
+    !answered.iter().any(|key| seat_duty_key_answers_v1(key, duty)) && current_daa <= deadline
+}
+
+/// **Whether a receipt this seat filed under `key` answers `duty`** — the same claim, anchor, seat
+/// index and panel size (so the same panel, the same place and the same mask), and a `key` bound DAA
+/// no earlier than the duty's.
+///
+/// A duty's `bound_daa` is not one number across its life (the M4 review's LOW on the duty key): while
+/// the claim is `PanelBound` it is the phase's, which DA-5 shifts forward when a seat session closes —
+/// and there a receipt signed before the shift is refused by the licence doors ("signed before the
+/// panel was bound"), so the shifted duty must be answered again, as it always was; once an S2 licence
+/// awaits its replay (`palw_seat_duties_v2`) it is the panel record's own, unshifted — what both
+/// supplementary doors read. A receipt signed at or after the later of the two is inside the earlier
+/// one's window as well, and a receipt signed past the duty's deadline is past the window the duty
+/// is still due in; so a key at a bound DAA `≥` the duty's answers it, and the S2 licence does not
+/// make the seat re-sign and re-file a receipt it already filed. A redraw re-binds from a new anchor
+/// at a later DAA, and a sibling panel differs in its anchor: neither is answered by the other.
+fn seat_duty_key_answers_v1(key: &SeatDutyPanelKeyV1, duty: &kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2) -> bool {
+    let (claim, bound_daa, anchor, seat_index, panel_seat_count) = *key;
+    claim == duty.claim_id
+        && anchor == duty.panel_anchor
+        && seat_index == duty.seat_index
+        && panel_seat_count == duty.panel_seat_count
+        && bound_daa >= duty.bound_daa
+}
+
+/// **The own filings whose re-send stands** (fix (4) of the receipt pool): each duty's own key, and
+/// every filing key that answers a standing duty ([`seat_duty_key_answers_v1`]) — so a receipt filed
+/// while the claim was `PanelBound` keeps going out after an S2 licence keeps its seat on duty under
+/// the panel's unshifted bound DAA.
+fn seat_duty_standing_keys_v1<'a>(
+    duties: &[kaspa_consensus_core::palw_producer_v2::PalwSeatDutyV2],
+    filed: impl Iterator<Item = &'a SeatDutyPanelKeyV1>,
+) -> HashSet<SeatDutyPanelKeyV1> {
+    let mut standing: HashSet<SeatDutyPanelKeyV1> = duties.iter().map(seat_duty_panel_key_v1).collect();
+    standing.extend(filed.filter(|key| duties.iter().any(|duty| seat_duty_key_answers_v1(key, duty))).copied());
+    standing
 }
 
 /// **The claims the receipt pools keep whatever their ceiling says** (the launch review of the
@@ -4789,9 +4887,13 @@ impl PalwPanelService {
         // seat, the receipt rides a supplementary object until the window closes.
         let mut own_receipts: HashMap<Hash64, (PalwSeatReceiptV2, u64)> = HashMap::new();
         let mut supplementary_submitted: HashMap<Hash64, u64> = HashMap::new();
-        // ADR-0152 SR-10 / Q-7: when this node last carried a V3 supplementary set for a claim — a
+        // ADR-0152 SR-10 / Q-7: when this node last carried a supplementary set for a claim — a
         // debounce like `submitted`'s, re-offered after the replan interval if the carrier was lost.
         let mut supplementary_v3_submitted: HashMap<Hash64, u64> = HashMap::new();
+        // …and the claims whose candidates last came to no offer: `(candidates' fingerprint, DAA)`,
+        // not asked again until the candidates change or the replan interval passes
+        // (`palw_supplementary_idle_v1`, the M4 review's LOW on the collector's per-tick cost).
+        let mut supplementary_idle: HashMap<Hash64, (u64, u64)> = HashMap::new();
         // One move per (session, round, side): the ladder advances on acceptance, so a move
         // resubmitted before the block that carries it lands is a duplicate the chain drops.
         // **A debounce, not a receipt.** This used to be a `HashSet` written on MEMPOOL acceptance
@@ -7932,7 +8034,7 @@ impl PalwPanelService {
             // global `receipt_deadline` (ADR-0133 §11.3), and the re-sends run as long as it does.
             {
                 let now = std::time::Instant::now();
-                let standing: HashSet<SeatDutyPanelKeyV1> = duties.iter().map(seat_duty_panel_key_v1).collect();
+                let standing = seat_duty_standing_keys_v1(&duties, own_filed.keys().chain(own_filed_whole.keys()));
                 let kp = self.keypair.as_ref().expect("checked at start");
                 // The receipts filed alone first, then the whole-job ones filed beside a V3 past SEAT-R,
                 // under one budget a tick.
@@ -8398,23 +8500,26 @@ impl PalwPanelService {
                     let v3 = receipt_pool_v3.candidates(&claim, &receipt_facts);
                     // Past SEAT-R the V1 door is offered its quorum and nothing past it, a different
                     // one each time (`palw_v1_offer_v1`); below it, every candidate, as always.
-                    let mut through_v1 = false;
-                    let Some(object) = session
-                        .palw_v2_receipt_coverage_assemble(claim, v3.clone())
-                        .or_else(|| session.palw_v2_optimistic_assemble(claim, v3))
-                        .or_else(|| {
-                            through_v1 = true;
+                    // **ADR-0152 Q-7's X22, past `palw_rcore_plus`**: coverage, then V1, then S2 — a set
+                    // that licenses at `basis_k ≥ 2` before the fast path that lands the claim on Q-5's
+                    // gate (`palw_licence_offer_order_v1`); below the fence the order it always had.
+                    let Some((object, door)) = kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(
+                        self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                        || session.palw_v2_receipt_coverage_assemble(claim, v3.clone()),
+                        || {
                             if seat_r {
                                 palw_v1_offer_v1(&pool, v1_sent.get(&claim).copied().unwrap_or(0), |set| {
                                     session.palw_v2_receipt_quorum_assemble(claim, set)
                                 })
                             } else {
-                                session.palw_v2_receipt_quorum_assemble(claim, pool)
+                                session.palw_v2_receipt_quorum_assemble(claim, pool.clone())
                             }
-                        })
-                    else {
+                        },
+                        || session.palw_v2_optimistic_assemble(claim, v3.clone()),
+                    ) else {
                         continue;
                     };
+                    let through_v1 = door == kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1::Quorum;
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
                             let txid = tx.id();
@@ -8462,34 +8567,56 @@ impl PalwPanelService {
                         }
                     }
                 }
-                // **ADR-0152 SR-10 / Q-7: the V3 supplementary collector** — after every licence this
-                // tick could offer, on the same carrier budget, so it never takes a licence's place.
-                // For each claim the chain holds `ReceiptLicensed`, the node offers the V3 receipts
-                // SR-10's door credits: the selection (`palw_select_supplementary_v3_v1`) puts them to
-                // the acceptance validator and to the fold itself, so what rides is exactly what the
-                // door credits. That is how an S2 licence's other seats raise it to `basis_k ≥ 2`
-                // before Q-5's gate (the redraw, or `NotReplayBacked` on the second panel), complete
-                // SR-1b's release inside its window, and get paid — a `Sampled` among them. Sets that
-                // release the escrow first, then upgrades, then pay, each soonest-first
-                // (`palw_supplementary_offer_order_v1`). Only past `palw_rcore_plus`; below it the door
-                // does not exist and nothing here runs. Nothing is assembled while no carrier can go
-                // (each offer costs its signature checks and a fold of the tip).
+                // **ADR-0152 SR-10 / Q-7 / V3S-01: the supplementary collector** — after every licence
+                // this tick could offer, on the same carrier budget, so it never takes a licence's
+                // place. For each claim the chain holds `ReceiptLicensed`, the node offers ONE object
+                // (`palw_select_supplementary_offer_v1`): SR-10's V3 set where it lifts an S2 licence
+                // off Q-5's gate; else, on a licence awaiting its replay, a full-replay V2 `Valid` of any
+                // seat the V2 door takes — the licence's own rider, a partial seat it left out, a seat a
+                // V3 set paid — which covers every segment and upgrades it on its own, AHEAD of any pay
+                // set, so one silent partial seat cannot hold an honest S2 claim on the gate (the M4
+                // review's finding 1); else the V3 set (a release, pay, a `Sampled`). Every candidate is
+                // put to the acceptance validators and the set to the fold itself, so what rides is
+                // exactly what the doors credit. Sets that release the escrow first, then upgrades, then
+                // pay, each soonest-first (`palw_supplementary_offer_order_v1`). Only past
+                // `palw_rcore_plus`; below it the V3 door and the gate do not exist and nothing here
+                // runs. Nothing is assembled while no carrier can go, and a claim whose candidates came
+                // to nothing is not asked again until they change or `COURT_MOVE_REPLAN_DAA` passes
+                // (`palw_supplementary_idle_v1`: each ask costs signature checks and folds of the tip).
                 if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)
                     && inflight < MAX_INFLIGHT_CARRIERS
                     && !readiness_waiting
                     && funding.is_some()
                 {
                     let mut offers: Vec<(Hash64, kaspa_consensus_core::palw_state_v2::PalwSupplementaryOfferV1)> = Vec::new();
-                    for claim in receipt_pool_v3.claim_ids() {
+                    let mut claims = receipt_pool_v3.claim_ids();
+                    claims.extend(receipt_pool_v2.claim_ids());
+                    claims.sort_unstable();
+                    claims.dedup();
+                    for claim in claims {
                         if supplementary_v3_submitted
                             .get(&claim)
                             .is_some_and(|at| current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA))
                         {
                             continue;
                         }
-                        let candidates = receipt_pool_v3.candidates(&claim, &receipt_facts);
-                        if let Some(offer) = session.palw_v2_supplementary_v3_assemble(claim, candidates) {
-                            offers.push((claim, offer));
+                        let v3 = receipt_pool_v3.candidates(&claim, &receipt_facts);
+                        let v2 = receipt_pool_v2.candidates(&claim, &receipt_facts);
+                        if v3.is_empty() && v2.is_empty() {
+                            continue;
+                        }
+                        let fingerprint = palw_supplementary_candidates_fingerprint_v1(&v3, &v2);
+                        if palw_supplementary_idle_v1(supplementary_idle.get(&claim), fingerprint, current_daa) {
+                            continue;
+                        }
+                        match session.palw_v2_supplementary_assemble(claim, v3, v2) {
+                            Some(offer) => {
+                                supplementary_idle.remove(&claim);
+                                offers.push((claim, offer));
+                            }
+                            None => {
+                                supplementary_idle.insert(claim, (fingerprint, current_daa));
+                            }
                         }
                     }
                     palw_supplementary_offer_order_v1(&mut offers);
@@ -8505,9 +8632,14 @@ impl PalwPanelService {
                                 match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                                     Ok(()) => {
                                         info!(
-                                            "[{PALW_PANEL}] submitted a V3 supplementary set for claim {claim} in tx {txid} — {} seat(s) \
-                                             credited, basis {} → {}{}{} (SR-10)",
+                                            "[{PALW_PANEL}] submitted a {} supplementary set for claim {claim} in tx {txid} — {} seat(s) \
+                                             credited, {} recounted, basis {} → {}{}{} (SR-10, V3S-01)",
+                                            match offer.object {
+                                                PalwConsensusObjectV2::ReceiptLicensed { .. } => "V2 full-replay",
+                                                _ => "V3",
+                                            },
                                             offer.effect.credited.len(),
+                                            offer.effect.recounted.len(),
                                             offer.effect.basis_k_before,
                                             offer.effect.basis_k_after,
                                             if offer.effect.upgrades { ", lifting the S2 gate" } else { "" },
@@ -8676,22 +8808,14 @@ impl PalwPanelService {
                 current_daa,
                 retention_daa: PANEL_POOL_RETENTION_DAA,
             };
-            receipt_pool_v2.sweep(&receipt_sweep);
-            // **ADR-0152 SR-10: past `palw_rcore_plus` a licence does not end a claim's V3 receipts.**
-            // SR-10's door takes them on the licensed claim until its receipt deadline, and the V3
-            // supplementary collector reads them from this pool — after an S2 licence they are the
-            // only thing that can lift it off Q-5's gate. So the licence this node carried does not
-            // drop them; the retention age bounds them, as it bounds every claim no duty names.
             let carried_nothing = HashMap::new();
-            let v3_sweep = crate::palw_receipt_pool::ReceiptSweepV1 {
-                submitted: if self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
-                    &carried_nothing
-                } else {
-                    &submitted
-                },
-                ..receipt_sweep
-            };
-            receipt_pool_v3.sweep(&v3_sweep);
+            let pools_sweep = palw_receipt_pools_sweep_v1(
+                self.consensus_config.params.palw_rcore_plus_active_at(current_daa),
+                receipt_sweep,
+                &carried_nothing,
+            );
+            receipt_pool_v2.sweep(&pools_sweep);
+            receipt_pool_v3.sweep(&pools_sweep);
             // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
             // keep become the thing that grows.
             first_seen
@@ -8781,7 +8905,9 @@ impl PalwPanelService {
             // as its window; the chain refuses anything past `receipt_deadline` regardless.
             own_receipts.retain(|_, (_, deadline)| current_daa <= *deadline);
             supplementary_submitted.retain(|claim, _| own_receipts.contains_key(claim));
-            supplementary_v3_submitted.retain(|claim, _| receipt_pool_v3.contains_claim(claim));
+            supplementary_v3_submitted
+                .retain(|claim, _| receipt_pool_v3.contains_claim(claim) || receipt_pool_v2.contains_claim(claim));
+            supplementary_idle.retain(|claim, _| receipt_pool_v3.contains_claim(claim) || receipt_pool_v2.contains_claim(claim));
             // Our own executions are only needed while the dispute they support is open.
             own_executions.retain(|claim, _| live.contains(claim));
             submit_attempts.retain(|claim, _| receipt_pool_v2.contains_claim(claim));
@@ -12176,7 +12302,10 @@ mod seat_reask_tests {
 
 #[cfg(test)]
 mod seat_duty_panel_key_tests {
-    use super::{PalwPanelService, SeatDutyPanelKeyV1, receipt_pool_kept_v1, seat_duty_is_due_v1, seat_duty_panel_key_v1};
+    use super::{
+        PalwPanelService, SeatDutyPanelKeyV1, receipt_pool_kept_v1, seat_duty_is_due_v1, seat_duty_panel_key_v1,
+        seat_duty_standing_keys_v1,
+    };
     use crate::palw_receipt_pool::{
         OwnFiledV1, OwnRebroadcastV1, PalwReceiptPoolV1, ReceiptChainFactsV1, VerifyBudgetV1, own_receipts_due_v1,
     };
@@ -12295,6 +12424,46 @@ mod seat_duty_panel_key_tests {
         assert_eq!(own_receipts_due_v1(&filed, &standing_a, late, 8), vec![seat_duty_panel_key_v1(&panel_a)], "only A re-sends");
         // Once the claim leaves `PanelBound` no panel of it stands, and nothing re-sends.
         assert!(own_receipts_due_v1(&filed, &HashSet::new(), late, 8).is_empty());
+    }
+
+    /// **An S2 licence after a seat DA pause is not a new duty** (the M4 review's LOW on the duty key).
+    /// The panel binds at 120; a seat DA session pauses the claim before this seat answers, and DA-5
+    /// shifts the phase's bound DAA to 150 when it closes — so the seat answers under the key at 150
+    /// (a receipt signed before 150 is refused by the licence doors, which is why a shift is a new
+    /// duty, and still is). An S2 licence then keeps the seat on duty under the panel record's own
+    /// bound DAA, 120 (`palw_seat_duties_v2`, what the supplementary doors read): the receipt filed at
+    /// 150 answers it — no second signature, no second filing — and its re-send stands. A later shift,
+    /// a redraw (a new anchor at a later DAA) and a sibling (another anchor at the same DAA) are
+    /// still new duties.
+    #[test]
+    fn an_s2_licence_after_a_seat_da_pause_is_not_a_new_duty() {
+        let shifted = duty(9, 150, 0xA1);
+        let licensed = duty(9, 120, 0xA1);
+        let mut answered: HashSet<SeatDutyPanelKeyV1> = HashSet::new();
+        assert!(seat_duty_is_due_v1(&shifted, &answered, 160));
+        answered.insert(seat_duty_panel_key_v1(&shifted));
+        assert!(!seat_duty_is_due_v1(&licensed, &answered, 170), "the S2 licence does not make the seat re-sign");
+        assert!(seat_duty_is_due_v1(&duty(9, 180, 0xA1), &answered, 181), "a later shift is answered again");
+        assert!(seat_duty_is_due_v1(&duty(9, 720, 0xA2), &answered, 721), "a redraw is a new duty");
+        assert!(seat_duty_is_due_v1(&duty(9, 150, 0xB1), &answered, 170), "a sibling is a new duty");
+
+        let t0 = Instant::now();
+        let filed: HashMap<SeatDutyPanelKeyV1, OwnFiledV1> = [(
+            seat_duty_panel_key_v1(&shifted),
+            OwnFiledV1 {
+                claim: shifted.claim_id,
+                verdict: PalwReceiptVerdictV2::Valid,
+                signed_daa: 160,
+                segments: None,
+                schedule: OwnRebroadcastV1::filed(t0),
+            },
+        )]
+        .into();
+        let standing = seat_duty_standing_keys_v1(std::slice::from_ref(&licensed), filed.keys());
+        let late = t0 + Duration::from_secs(31);
+        assert_eq!(own_receipts_due_v1(&filed, &standing, late, 8), vec![seat_duty_panel_key_v1(&shifted)], "its re-send stands");
+        let redrawn = seat_duty_standing_keys_v1(&[duty(9, 720, 0xA2)], filed.keys());
+        assert!(own_receipts_due_v1(&filed, &redrawn, late, 8).is_empty(), "a redrawn panel's duty stands for none of it");
     }
 
     /// **The kept set is chain facts only** (LOW (a)): this tick's duties and this node's own
@@ -12592,17 +12761,24 @@ mod court_responder_coverage_pin {
         assert!(resume_body.contains("PalwV2SeatPathV1::Waiting"), "a partial that cannot open waits");
     }
 
-    /// **ADR-0133 S1/S2, pinned where they live: the collector assembles coverage, then the
-    /// optimistic licence, then the V1 quorum.**
+    /// **ADR-0133 S1/S2 with ADR-0152's X22, pinned where they live: the collector hands the licence
+    /// doors to `palw_licence_offer_order_v1` — coverage, V1, S2 — under the R-core+ fence.** Past it
+    /// they are asked in that order (a set at `basis_k ≥ 2` before the fast path that lands on Q-5's
+    /// gate); below it in the order this test pinned before X22, coverage, then the optimistic
+    /// licence, then the V1 quorum (`x22_offers_a_replay_backed_licence_before_s2_and_asks_lazily`
+    /// runs both orders).
     #[test]
     fn the_collector_assembles_coverage_then_optimistic_then_v1() {
         const MARKER: &str = "mod court_responder_coverage_pin";
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
-        let coverage = source.find(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("S1 coverage");
-        let optimistic = source.find(".palw_v2_optimistic_assemble(claim, v3)").expect("S2 optimistic");
-        let v1 = source.find(".palw_v2_receipt_quorum_assemble(claim, pool)").expect("V1 quorum");
-        assert!(coverage < optimistic && optimistic < v1, "coverage, then optimistic, then V1");
+        let call = source.find("kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(").expect("the order");
+        let call = &source[call..call + 1_200];
+        assert!(call.contains("self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"), "the fence's order");
+        let coverage = call.find(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("S1 coverage");
+        let v1 = call.find(".palw_v2_receipt_quorum_assemble(claim, pool.clone())").expect("V1 quorum");
+        let optimistic = call.find(".palw_v2_optimistic_assemble(claim, v3.clone())").expect("S2 optimistic");
+        assert!(coverage < v1 && v1 < optimistic, "handed as coverage, V1, S2");
     }
 
     /// **ADR-0111, pinned where it lives: a named leaf is pursued, a leaf request is served, and a
@@ -13768,6 +13944,28 @@ mod seat_r_tests {
         assert!(replays.fits(&floor_class(), 599, 600));
     }
 
+    /// **`runs_for_claim` is "still running", not "held"** (the M4 review's LOW: Q-7's `Sampled` gate
+    /// read it untested). True while this seat's task for the claim runs, and while it runs detached
+    /// (its claim left the duties); false once it has returned — though `holds_claim` still holds the
+    /// result — and false for a claim that never started one.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runs_for_claim_is_true_while_a_task_runs_or_is_detached_and_false_once_it_returned() {
+        let (release, gate) = std::sync::mpsc::channel::<()>();
+        let gate = Arc::new(std::sync::Mutex::new(gate));
+        let mut replays = PalwSeatReplaysV1::default();
+        let key = (h(1), h(0xA));
+        assert!(!replays.runs_for_claim(&h(1)), "nothing started");
+        replays.start(key, floor_class(), false, 10, None, Box::new(floor_backend()), gated(&gate));
+        assert!(replays.runs_for_claim(&h(1)) && !replays.runs_for_claim(&h(2)), "running, for its own claim only");
+        replays.retain_live(|claim| *claim != h(1));
+        assert!(replays.runs_for_claim(&h(1)), "detached, still running");
+        assert!(matches!(replays.poll(&key, 11).await, PalwSeatReplayPollV1::Running), "taken back");
+        release.send(()).expect("the gate is held");
+        assert!(returned(&mut replays, &key, 12).await.is_err(), "the gated replay refuses");
+        assert!(!replays.runs_for_claim(&h(1)), "returned: nothing runs");
+        assert!(replays.holds_claim(&h(1)), "though its result is held");
+    }
+
     /// **(g) A claim that leaves the duties detaches its running replay**: it stops holding a slot at
     /// once, so the queue moves; it is taken back, not started twice, if the claim returns; the
     /// running and detached together stay bounded for a second light replay; and one that returns
@@ -14242,13 +14440,16 @@ mod seat_r_tests {
         );
         // The roles read the outsider; the V1 door is offered its quorum past the fence only.
         assert!(source.contains("role: palw_seat_r_role_v1(full_seat, class.held_to_final(), outsider, mask_is_full),"));
-        let collector = source.find("let mut through_v1 = false;").expect("the collector");
-        let collector = &source[collector..collector + 900];
+        let collector = source
+            .find("let Some((object, door)) = kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(")
+            .expect("the collector");
+        let collector = &source[collector..collector + 1_200];
         assert!(collector.contains(
             "if seat_r {\n                                palw_v1_offer_v1(&pool, v1_sent.get(&claim).copied().unwrap_or(0), |set| {"
         ));
         assert!(
-            collector.contains("} else {\n                                session.palw_v2_receipt_quorum_assemble(claim, pool)\n"),
+            collector
+                .contains("} else {\n                                session.palw_v2_receipt_quorum_assemble(claim, pool.clone())\n"),
             "below it, as always"
         );
     }
@@ -15345,15 +15546,25 @@ mod q7_sampled_and_collector_tests {
     //! the fold (the consensus crate's tests hold the set it builds to what the door credits:
     //! `palw_rcore_q5_gate`, `t12_rcore_sr10_door_gate`).
     use super::{
-        MARKER_SEAT_S, PALW_SEAT_SAMPLED_LEAD_DAA_V1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1, PalwSeatS3SampleV1,
-        palw_seat_receipt_forms_v1, palw_seat_s3_sample_v1, palw_seat_sampled_due_v1, palw_supplementary_offer_order_v1,
+        COURT_MOVE_REPLAN_DAA, MARKER_SEAT_S, PALW_SEAT_SAMPLED_LEAD_DAA_V1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1,
+        PalwSeatS3SampleV1, palw_receipt_pools_sweep_v1, palw_seat_receipt_forms_v1, palw_seat_s3_sample_v1, palw_seat_sampled_due_v1,
+        palw_supplementary_candidates_fingerprint_v1, palw_supplementary_idle_v1, palw_supplementary_offer_order_v1,
     };
+    use crate::palw_receipt_pool::{PalwReceiptPoolV1, ReceiptSweepV1};
     use kaspa_consensus_core::palw_backend::{
         PalwCaptureShapeV1, PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
     };
-    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwSupplementaryEffectV1, PalwSupplementaryOfferV1};
+    use kaspa_consensus_core::palw_economic_safety_v1::PalwLicenceDoorTagV1;
+    use kaspa_consensus_core::palw_panel_v2::{
+        PalwReceiptVerdictV2, PalwSeatReceiptV2, PalwSeatReceiptV3, palw_licence_offer_order_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBondKeyV2, PalwConsensusObjectV2, PalwSupplementaryEffectV1, PalwSupplementaryOfferV1,
+    };
     use kaspa_consensus_core::palw_verification_v2::PalwSegmentMaskV2;
+    use kaspa_consensus_core::tx::TransactionOutpoint;
     use kaspa_hashes::Hash64;
+    use std::collections::{HashMap, HashSet};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn h(n: u64) -> Hash64 {
@@ -15509,6 +15720,7 @@ mod q7_sampled_and_collector_tests {
                 object: PalwConsensusObjectV2::ReceiptLicensedV2 { claim: h(claim), receipts: Vec::new() },
                 effect: PalwSupplementaryEffectV1 {
                     credited: Vec::new(),
+                    recounted: Vec::new(),
                     basis_k_before: 1,
                     basis_k_after: if upgrades { 2 } else { 1 },
                     upgrades,
@@ -15536,23 +15748,53 @@ mod q7_sampled_and_collector_tests {
         assert_eq!(order, vec![h(5), h(3), h(4), h(2), h(1), h(6)]);
     }
 
-    /// **Where the two live in the loop.** The V3 collector runs after the licence collector (which
-    /// offers every door's licence first) and before a seat carries its own V2 receipt, and only past
-    /// `palw_rcore_plus`; `Sampled` is decided before the memory check (its case is a host that fits a
-    /// segment, not the whole replay) and answers the verdict block first.
+    /// **Where the pieces live in the loop.** The licence collector offers coverage, then V1, then S2
+    /// past the fence (X22, `palw_licence_offer_order_v1` handed the fence); the supplementary
+    /// collector runs after it (so it never takes a licence's slot), over both pools, with the
+    /// V2 full-replay upgrade chosen ahead of any pay set inside `palw_select_supplementary_offer_v1`,
+    /// and before a seat carries its own V2 receipt, only past `palw_rcore_plus`, skipping a pool that
+    /// came to nothing; `Sampled` is decided before the memory check (its case is a host that fits a
+    /// segment, not the whole replay), answers the verdict block first, and a sampled site that
+    /// disagrees is noted as the seat's fault (the court's), never filed.
     #[test]
     fn the_collector_follows_the_licences_and_sampled_precedes_the_memory_check() {
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find(MARKER_SEAT_S).expect("the production code")];
-        let licences = source.find(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("the licence collector");
-        let collector = source.find("session.palw_v2_supplementary_v3_assemble(claim, candidates)").expect("the V3 collector");
+        let licences =
+            source.find("kaspa_consensus_core::palw_panel_v2::palw_licence_offer_order_v1(").expect("the licence collector");
+        let licence_call = &source[licences..licences + 1_200];
+        let (coverage, quorum, optimistic) = (
+            licence_call.find(".palw_v2_receipt_coverage_assemble(claim, v3.clone())").expect("coverage"),
+            licence_call.find("session.palw_v2_receipt_quorum_assemble(claim, set)").expect("V1"),
+            licence_call.find(".palw_v2_optimistic_assemble(claim, v3.clone())").expect("S2"),
+        );
+        assert!(coverage < quorum && quorum < optimistic, "the doors handed over as coverage, V1, S2");
+        assert!(
+            licence_call.contains("self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"),
+            "X22's order is the fence's"
+        );
+        let collector = source.find("session.palw_v2_supplementary_assemble(claim, v3, v2)").expect("the supplementary collector");
         let own = source.find("session.palw_v2_supplementary_receipt_assemble(claim, vec![receipt])").expect("the own V2 receipt");
-        assert!(licences < collector && collector < own, "licences, then the V3 collector, then the seat's own receipt");
+        assert!(licences < collector && collector < own, "licences, then the collector, then the seat's own receipt");
         let gated = &source[..collector];
         assert!(
             gated.rfind("if self.consensus_config.params.palw_rcore_plus_active_at(current_daa)").is_some_and(|at| at > licences),
             "the collector runs only past the fence"
         );
+        let asked = &source[gated.rfind("for claim in claims {").expect("the collector's claims")..collector];
+        assert!(asked.contains("palw_supplementary_idle_v1(supplementary_idle.get(&claim), fingerprint, current_daa)"));
+        let claims = &source[gated.rfind("let mut claims = receipt_pool_v3.claim_ids();").expect("the V3 pool's claims")..collector];
+        assert!(claims.contains("claims.extend(receipt_pool_v2.claim_ids());"), "and the V2 pool's");
+        assert!(
+            source.contains("Ok(PalwSeatS3SampleV1::Faulted) => self.note_seat_fault_v1(duty.claim_id, 0, 0),"),
+            "a disagreeing site is the court's"
+        );
+        let sweep = source.find("let pools_sweep = palw_receipt_pools_sweep_v1(").expect("one sweep rule");
+        assert!(source[sweep..].starts_with(
+            "let pools_sweep = palw_receipt_pools_sweep_v1(\n                self.consensus_config.params.palw_rcore_plus_active_at(current_daa),"
+        ));
+        let after = &source[sweep..sweep + 400];
+        assert!(after.contains("receipt_pool_v2.sweep(&pools_sweep);") && after.contains("receipt_pool_v3.sweep(&pools_sweep);"));
         let duty_loop = &source[source.find("for index in order {").expect("the duty loop")..];
         let due = duty_loop.find("palw_seat_sampled_due_v1(").expect("the Sampled decision");
         let memory = duty_loop.find("self.replay_memory_budget_v1(").expect("the memory check");
@@ -15563,5 +15805,112 @@ mod q7_sampled_and_collector_tests {
             answers < duty_loop.find("if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {").unwrap(),
             "ahead of every arm"
         );
+    }
+
+    /// **X22: a licence at `basis_k ≥ 2` before S2, past the fence** (the M4 review's HIGH). With a V1
+    /// set and an S2 set both on hand, the node offers V1 — S2 would land the claim on Q-5's gate at
+    /// basis 1 — and asks S2 not at all; coverage still comes first; S2 only when neither is on hand.
+    /// Below the fence the order is what it was (coverage, S2, V1). The processor half —
+    /// `t12_x22_three_v2_valids_license_v1_not_s2` — holds the doors to what they build.
+    #[test]
+    fn x22_offers_a_replay_backed_licence_before_s2_and_asks_lazily() {
+        use std::cell::Cell;
+        let asked = Cell::new(Vec::<&str>::new());
+        let door = |name: &'static str, on_hand: bool| {
+            let asked = &asked;
+            move || {
+                let mut seen = asked.take();
+                seen.push(name);
+                asked.set(seen);
+                on_hand.then_some(name)
+            }
+        };
+        let offer = |x22: bool, coverage: bool, quorum: bool, optimistic: bool| {
+            asked.set(Vec::new());
+            let got =
+                palw_licence_offer_order_v1(x22, door("coverage", coverage), door("quorum", quorum), door("optimistic", optimistic));
+            (got, asked.take())
+        };
+        assert_eq!(
+            offer(true, false, true, true),
+            (Some(("quorum", PalwLicenceDoorTagV1::Quorum)), vec!["coverage", "quorum"]),
+            "V1 on hand: offered, and S2 never built"
+        );
+        assert_eq!(offer(true, true, true, true), (Some(("coverage", PalwLicenceDoorTagV1::Coverage)), vec!["coverage"]));
+        assert_eq!(
+            offer(true, false, false, true),
+            (Some(("optimistic", PalwLicenceDoorTagV1::Optimistic)), vec!["coverage", "quorum", "optimistic"]),
+            "S2 only when nothing else is on hand"
+        );
+        assert_eq!(offer(true, false, false, false).0, None);
+        assert_eq!(
+            offer(false, false, true, true),
+            (Some(("optimistic", PalwLicenceDoorTagV1::Optimistic)), vec!["coverage", "optimistic"]),
+            "below the fence: coverage, S2, then V1, as before"
+        );
+        assert_eq!(offer(false, false, true, false).0, Some(("quorum", PalwLicenceDoorTagV1::Quorum)));
+    }
+
+    fn receipt(claim: Hash64, seat: u64) -> PalwSeatReceiptV2 {
+        PalwSeatReceiptV2 {
+            claim,
+            verdict: PalwReceiptVerdictV2::Valid,
+            seat_bond: PalwBondKeyV2(TransactionOutpoint::new(h(seat), 0)),
+            signed_daa: 105,
+            signature: vec![seat as u8; 8],
+        }
+    }
+
+    /// **Past the fence a licence this node carried drops none of the claim's receipts** (the M4
+    /// review's LOW: the sweep change was untested). Both pools hold a seat's V2 and V3 for a claim
+    /// this node submitted a licence for: past `palw_rcore_plus` both are kept — the V3 door and the
+    /// V2 door take them on the licensed claim, and the collector reads them — until the retention age,
+    /// which still bounds them; below the fence both go the moment the licence was carried, as before.
+    #[test]
+    fn past_the_fence_the_pools_keep_a_licensed_claims_receipts_until_the_retention_age() {
+        let claim = h(0xC1);
+        let pools = || {
+            let mut v2: PalwReceiptPoolV1<PalwSeatReceiptV2> = PalwReceiptPoolV1::new(h(999));
+            let mut v3: PalwReceiptPoolV1<PalwSeatReceiptV3> = PalwReceiptPoolV1::new(h(999));
+            v2.insert_own(receipt(claim, 7), 100);
+            v3.insert_own(PalwSeatReceiptV3 { receipt: receipt(claim, 7), segments: PalwSegmentMaskV2::single(1) }, 100);
+            (v2, v3)
+        };
+        let live = HashSet::new();
+        let submitted: HashMap<Hash64, u64> = [(claim, 110)].into();
+        let carried_nothing = HashMap::new();
+        let sweep = |current_daa: u64| ReceiptSweepV1 { live: &live, submitted: &submitted, current_daa, retention_daa: 4_000 };
+        for (rcore, at, kept) in [(true, 120, true), (false, 120, false), (true, 100 + 4_001, false)] {
+            let (mut v2, mut v3) = pools();
+            let rule = palw_receipt_pools_sweep_v1(rcore, sweep(at), &carried_nothing);
+            v2.sweep(&rule);
+            v3.sweep(&rule);
+            assert_eq!((v2.contains_claim(&claim), v3.contains_claim(&claim)), (kept, kept), "fence {rcore}, DAA {at}");
+        }
+    }
+
+    /// **The collector does not re-ask a pool that came to nothing** (the M4 review's LOW on its
+    /// per-tick cost) — until a receipt arrives or leaves (the fingerprint moves) or the replan
+    /// interval passes.
+    #[test]
+    fn the_collector_skips_a_pool_that_came_to_nothing_until_it_changes() {
+        let claim = h(0xC2);
+        let v3 = vec![PalwSeatReceiptV3 { receipt: receipt(claim, 7), segments: PalwSegmentMaskV2::single(1) }];
+        let v2 = vec![receipt(claim, 8)];
+        let print = palw_supplementary_candidates_fingerprint_v1(&v3, &v2);
+        assert_eq!(print, palw_supplementary_candidates_fingerprint_v1(&v3, &v2), "the same pool");
+        let more = [v2.clone(), vec![receipt(claim, 9)]].concat();
+        assert_ne!(print, palw_supplementary_candidates_fingerprint_v1(&v3, &more), "a receipt arrived");
+        assert_ne!(print, palw_supplementary_candidates_fingerprint_v1(&[], &v2), "a receipt left");
+        assert_ne!(
+            palw_supplementary_candidates_fingerprint_v1(&v3, &[]),
+            palw_supplementary_candidates_fingerprint_v1(&[], &[v3[0].receipt.clone()]),
+            "a V3 is not its inner V2"
+        );
+        let none_at = Some(&(print, 500));
+        assert!(!palw_supplementary_idle_v1(None, print, 500), "never asked");
+        assert!(palw_supplementary_idle_v1(none_at, print, 500 + COURT_MOVE_REPLAN_DAA - 1), "the same pool, inside the interval");
+        assert!(!palw_supplementary_idle_v1(none_at, print ^ 1, 501), "a changed pool is asked at once");
+        assert!(!palw_supplementary_idle_v1(none_at, print, 500 + COURT_MOVE_REPLAN_DAA), "and the same pool once an interval");
     }
 }
