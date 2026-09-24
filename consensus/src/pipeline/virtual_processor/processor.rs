@@ -5724,6 +5724,32 @@ impl VirtualStateProcessor {
         self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block, None).0
     }
 
+    /// The fold's two answers on a licence object that the V1 and coverage assemblers read
+    /// (ADR-0152 SR-6, Phase 2 P2-5) — its backed subset (`palw_v2_licence_backed_seats_v1`) and
+    /// whether it licenses at all ([`Self::palw_v2_offered_licence_licenses_v1`]) — at this
+    /// processor's fences and extras, reachable from the sibling test module.
+    #[cfg(test)]
+    pub(super) fn palw_v2_licence_fold_answers_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> (Option<Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>>, bool) {
+        let backed = kaspa_consensus_core::palw_state_v2::palw_v2_licence_backed_seats_v1(
+            state,
+            state_params,
+            point,
+            object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        );
+        (backed, self.palw_v2_offered_licence_licenses_v1(state, state_params, point, object))
+    }
+
     /// [`Self::palw_v2_derived_panel_bindings`] — the chain's own derivation of the bindings `block`
     /// owes on the parent `state` — reachable from the sibling test module, so ADR-0152 T89 can hold
     /// build (this), accept (`palw_v2_accepted_objects_for_tests`) and fold (the stored panel) to one
@@ -7299,24 +7325,29 @@ impl VirtualStateProcessor {
             return None;
         }
 
-        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
-        let mut verdict: Option<Q> = None;
-        for candidate in candidates {
-            let mut attempt = kept.clone();
-            attempt.push(candidate.clone());
-            match kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
+        // The acceptance layer's V1 check, bound as the gate binds it: the greedy loop's judge and,
+        // past `palw_rcore_plus`, the backed subset's (below).
+        let quorum = |receipts: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2]| {
+            kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
                 &state,
                 panel_params,
                 state_params,
                 &point,
                 network_domain,
                 &claim,
-                &attempt,
+                receipts,
                 verify,
                 self.palw_unavailable_abstains_at(point.daa_score),
                 // ADR-0147: the same height the fold and the acceptance layer read.
                 self.palw_admission_independence_daa(),
-            ) {
+            )
+        };
+        let mut kept: Vec<kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2> = Vec::new();
+        let mut verdict: Option<Q> = None;
+        for candidate in candidates {
+            let mut attempt = kept.clone();
+            attempt.push(candidate.clone());
+            match quorum(&attempt) {
                 Ok(q) => {
                     kept = attempt;
                     verdict = Some(q);
@@ -7334,9 +7365,23 @@ impl VirtualStateProcessor {
             }
         }
         match verdict? {
-            Q::Licensed { .. } => {
-                Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: kept })
-            }
+            // ADR-0152 SR-6 (Phase 2 P2-5): past `palw_rcore_plus` the loop's set — every clean
+            // candidate, which is where a backed subset is found if any part of the pool has one
+            // (`palw_v2_offered_backed_subset_v1`) — is offered as the fold's backed subset, or not
+            // at all. Not the `ProducerDefaulted` arm below, nor the shard parts above.
+            Q::Licensed { .. } => self.palw_v2_offered_backed_subset_v1(
+                state,
+                state_params,
+                point,
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { claim, receipts: kept },
+                |backed| {
+                    matches!(
+                        backed,
+                        kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensed { receipts, .. }
+                            if matches!(quorum(receipts), Ok(Q::Licensed { .. }))
+                    )
+                },
+            ),
             Q::ProducerUnavailable { .. } => {
                 Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ProducerDefaulted { claim, receipts: kept })
             }
@@ -7407,7 +7452,7 @@ impl VirtualStateProcessor {
                 self.palw_admission_independence_daa(),
             )
         };
-        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_coverage_licence_v2(candidates, coverage, |receipts| {
+        let receipts = kaspa_consensus_core::palw_panel_v2::palw_select_coverage_licence_v2(candidates, &coverage, |receipts| {
             self.palw_v2_offered_licence_licenses_v1(
                 &state,
                 state_params,
@@ -7415,7 +7460,105 @@ impl VirtualStateProcessor {
                 &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts: receipts.to_vec() },
             )
         })?;
-        Some(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts })
+        // ADR-0152 SR-6 (Phase 2 P2-5): past `palw_rcore_plus`, the fold's backed subset of the set
+        // the selection found (its largest sound set, so a backed subset is found if one exists).
+        // On testnet-12's cut every segment has ONE partial holder beside the full seat, so a
+        // coverage set needs every one of its `Valid`s: its backed subset is the whole set or
+        // nothing, and the fold's `licenses` above already refused the nothing — here the rule is
+        // the V1 door's, kept in one place for a cut where a seat could be spared.
+        self.palw_v2_offered_backed_subset_v1(
+            state,
+            state_params,
+            point,
+            kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { claim, receipts },
+            |backed| {
+                matches!(
+                    backed,
+                    kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ReceiptLicensedV2 { receipts, .. }
+                        if matches!(coverage(receipts), Ok(kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2::Licensed { .. }))
+                )
+            },
+        )
+    }
+
+    /// **ADR-0152 SR-6 at the V1 and coverage doors (Phase 2 P2-5): offer the fold's backed subset, or
+    /// nothing.** Past `Params::palw_rcore_plus` a licence set carrying a `Valid` whose seat cannot post
+    /// `lock_{max(k,2)}` licenses on its backed subset when that subset still meets the door's rule,
+    /// and is INERT otherwise (`license_rcore_v1`). The two assemblers that keep every clean
+    /// candidate would offer such a set whole: an inert one — and X22 asks V1 BEFORE S2
+    /// (`palw_licence_offer_order_v1`), so kaspad would resubmit it every replan and never reach the
+    /// fast path until the receipt window voided the claim — or a licensing one carrying a `Valid`
+    /// the fold neither locks nor credits.
+    ///
+    /// The fold is asked which carried `Valid`s it licenses on
+    /// (`palw_v2_licence_backed_seats_v1`: read off the locks the fold writes, so SR-6's price
+    /// arithmetic is not restated here); `None` when it licenses nothing. Those it does not back
+    /// are dropped, and a set that changed is put to the door (`door_takes`, the acceptance check
+    /// bound as the gate binds it) and to the fold once more. **The whole clean set is the right set to
+    /// ask**: backing is monotone in the set — more `Valid`s recount no lower, so the price each is
+    /// tested at is no higher (SR-6's fall-once re-test included) — so a subset never backs a seat
+    /// the whole set does not, and when the whole set licenses nothing no part of it does. The
+    /// backed subset re-tests to itself (same recount, same price), so the second fold agrees.
+    ///
+    /// **The re-check is kept in release builds, by choice (the P2-5 review's LOW 3).** It is
+    /// redundant by the argument above — the review's exhaustive probe over every sub-pool found it
+    /// never changes the answer — but the door is a separate predicate from the fold (its own verdict
+    /// precedence over what remains: the `Unavailable` obligations, the outsider, the window), and a
+    /// carrier the door refuses is not an inert licence but a mempool refusal, on which kaspad's
+    /// licence collector drops its funding chain for the rest of the tick. So what is offered is what
+    /// the door and the fold were both shown, not what a monotonicity proof says they would say. Its
+    /// price — one acceptance check (the ML-DSA verifications) and one more fold (a parent-state
+    /// clone) — is paid only when a `Valid` was dropped, and such a set is offered, submitted and
+    /// throttled for `COURT_MOVE_REPLAN_DAA`, so it does not recur each tick. What does recur is the
+    /// first fold, on a pool that licenses nothing (re-assembled every tick; only submitted claims
+    /// are throttled): that is SR-6's own question, the price the coverage and S2 doors already pay
+    /// through `palw_v2_offered_licence_licenses_v1`, once per `palw_v1_offer_v1` prefix that reaches
+    /// the acceptance quorum.
+    ///
+    /// Below the fence `object` is returned as it came (byte-identical to the assemblers before
+    /// P2-5): a licence there is the whole set's or nothing, and each caller keeps the rule it had.
+    fn palw_v2_offered_backed_subset_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        door_takes: impl FnOnce(&kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> bool,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        use kaspa_consensus_core::palw_panel_v2::PalwReceiptVerdictV2::Valid;
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        if !state_params.rcore_plus_active_at(point.daa_score) {
+            return Some(object);
+        }
+        let backed = kaspa_consensus_core::palw_state_v2::palw_v2_licence_backed_seats_v1(
+            state,
+            state_params,
+            point,
+            &object,
+            self.palw_unavailable_abstains_at(point.daa_score),
+            self.palw_capability_bound_at(point.daa_score),
+            self.palw_uncertified_weightless_at(point.daa_score),
+            self.palw_da_court_at(point.daa_score),
+            &self.palw_transition_extras_for(point),
+        )?;
+        let keeps = |receipt: &kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2| {
+            !matches!(receipt.verdict, Valid) || backed.contains(&receipt.seat_bond)
+        };
+        let subset = match &object {
+            Obj::ReceiptLicensed { claim, receipts } => {
+                Obj::ReceiptLicensed { claim: *claim, receipts: receipts.iter().filter(|receipt| keeps(receipt)).cloned().collect() }
+            }
+            Obj::ReceiptLicensedV2 { claim, receipts } => Obj::ReceiptLicensedV2 {
+                claim: *claim,
+                receipts: receipts.iter().filter(|signed| keeps(&signed.receipt)).cloned().collect(),
+            },
+            // Only the two doors that keep every clean candidate come here.
+            _ => return None,
+        };
+        if subset == object {
+            return Some(object);
+        }
+        (door_takes(&subset) && self.palw_v2_offered_licence_licenses_v1(state, state_params, point, &subset)).then_some(subset)
     }
 
     /// ADR-0133 S2: assemble an `OptimisticLicensed` from V3 receipts when the full-replay seat's
@@ -7504,15 +7647,16 @@ impl VirtualStateProcessor {
     /// whose `Valid` signer cannot post its door's price licenses nothing: past the audit fence it
     /// is INERT — it folds, and the claim stays `PanelBound` (an S2 set whose full-replay seat
     /// cannot post the whole-gain price is the case the review found) — and below it the fold
-    /// refuses it (`SeatValidLockRefused`) and the rehearsal drops the object. kaspad asks coverage,
+    /// refuses it (`SeatValidLockRefused`) and the rehearsal drops the object. kaspad asked coverage,
     /// then optimistic (`.or_else` in `palw_panel.rs`), so a set the first door offered and the fold
     /// did not take kept the second from ever being tried: the node resubmitted it every replan
     /// until the receipt window voided a claim the other door would have licensed.
     ///
-    /// On a Verification V2 chain those two are the only doors kaspad can form. Its V1 pool holds
-    /// the inner halves of its V3 receipts, signed over the V3 message, and the V1 quorum and
-    /// supplementary validators check the V2 message — so nothing falls through past optimistic,
-    /// and a seat the licence did not carry is not credited later.
+    /// On a Verification V2 chain those two were the only doors kaspad could form while its V1 pool
+    /// held only the inner halves of its V3 receipts (signed over the V3 message, which the V1
+    /// validators refuse). Past SEAT-R a replaying seat also files its whole-job V2 `Valid`, so the V1
+    /// door forms too, and past `palw_rcore_plus` it is asked before S2 (X22); from Phase 2 (P2-5) it
+    /// asks the fold as well, through [`Self::palw_v2_offered_backed_subset_v1`].
     ///
     /// The fold is asked directly (`palw_v2_object_licenses_claim_v1`), so this is the fold's
     /// predicate, not a second copy of it. It is asked on every network: it decides only which set

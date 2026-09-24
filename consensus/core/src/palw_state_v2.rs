@@ -20289,21 +20289,117 @@ pub fn palw_v2_object_licenses_claim_v1(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> bool {
+    palw_v2_licensed_state_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .is_some()
+}
+
+/// The one fold behind [`palw_v2_object_licenses_claim_v1`] and [`palw_v2_licence_backed_seats_v1`]:
+/// the claim and the state `object` leaves, when it licenses that claim on `base`.
+#[allow(clippy::too_many_arguments)]
+fn palw_v2_licensed_state_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Option<(Hash64, PalwChainStateV2)> {
     let claim = match object {
         PalwConsensusObjectV2::ReceiptLicensed { claim, .. }
         | PalwConsensusObjectV2::ReceiptLicensedV2 { claim, .. }
         | PalwConsensusObjectV2::OptimisticLicensed { claim, .. } => *claim,
-        _ => return false,
+        _ => return None,
     };
     // ADR-0152 S-SPEC §3.4 step 6: past `palw_rcore_plus` only a `PanelBound → ReceiptLicensed`
     // transition is a licence for the assemblers — a supplementary set on a licensed claim is not.
     if params.rcore_plus_active_at(ctx.daa_score)
         && !base.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. }))
     {
-        return false;
+        return None;
     }
-    palw_v2_apply_one_object_v1(base, params, ctx, object, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)
-        .is_ok_and(|next| next.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })))
+    palw_v2_apply_one_object_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )
+    .ok()
+    .filter(|next| next.claims.get(&claim).is_some_and(|c| matches!(c.phase, PalwClaimPhaseV2::ReceiptLicensed { .. })))
+    .map(|next| (claim, next))
+}
+
+/// **Which carried `Valid`s a licence object is licensed on, as the fold says** (ADR-0152 SR-6;
+/// Phase 2 P2-5, the assemblers' half).
+///
+/// Past `Params::palw_rcore_plus` a licence set whose `Valid`s include an unbacked signer — one whose
+/// seat cannot post `lock_{max(k,2)}` over its duty — licenses on its BACKED SUBSET when that subset
+/// still meets the door's rule, and is inert otherwise (`license_rcore_v1`); the unbacked `Valid`
+/// gets no lock, no credit and no served bit. `Some(seats)` when `object` licenses its claim on `base`
+/// (the fold and the answer of [`palw_v2_object_licenses_claim_v1`]): the carried `Valid` signers the
+/// licence locks, in carried order. That is the backed subset exactly — every backed signer locks
+/// (or keeps the lock that backed it: a seat already locked on the claim is backed by that lock) and
+/// an unbacked one never does — read off the state the fold leaves, so this is the fold's subset and
+/// not a second copy of SR-6's price arithmetic. `None` when the object licenses nothing, and below
+/// the fence, where a licence is the whole set's or nothing (`receipt_set_is_backed`) and
+/// [`palw_v2_object_licenses_claim_v1`] is the whole answer.
+///
+/// Node policy: the V1 and coverage assemblers read it to offer the backed subset (SR-6: they "skip
+/// unbacked candidates"), never what a block accepts.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_licence_backed_seats_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Option<Vec<PalwBondKeyV2>> {
+    if !params.rcore_plus_active_at(ctx.daa_score) {
+        return None;
+    }
+    let (claim, next) = palw_v2_licensed_state_v1(
+        base,
+        params,
+        ctx,
+        object,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+    )?;
+    let valid = |receipt: &crate::palw_panel_v2::PalwSeatReceiptV2| {
+        matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid).then_some(receipt.seat_bond)
+    };
+    let carried: Vec<PalwBondKeyV2> = match object {
+        PalwConsensusObjectV2::ReceiptLicensed { receipts, .. } => receipts.iter().filter_map(valid).collect(),
+        PalwConsensusObjectV2::ReceiptLicensedV2 { receipts, .. } | PalwConsensusObjectV2::OptimisticLicensed { receipts, .. } => {
+            receipts.iter().filter_map(|signed| valid(&signed.receipt)).collect()
+        }
+        _ => return None,
+    };
+    Some(carried.into_iter().filter(|seat| next.slashable_locks.contains_key(&(*seat, claim))).collect())
 }
 
 /// **What one supplementary set does to its licensed claim, as the fold says** (ADR-0152 SR-10, Q-5,

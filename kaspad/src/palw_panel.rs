@@ -754,28 +754,11 @@ pub(crate) fn palw_seat_duty_order_v1(deadlines: &[(u64, Hash64)], by_deadline: 
     order
 }
 
-/// **The V1 set this node offers past SEAT-R: its quorum and nothing past it, and a different one
-/// each time** (the SEAT-R review, MEDIUM — the half a node can do without the consensus crate).
-///
-/// `palw_v2_receipt_quorum_assemble` keeps every clean candidate past the quorum and asks the fold
-/// nothing, and past `palw_audit_2026_09_23` a set any one of whose `Valid` signers cannot post its
-/// lock folds INERT (`receipt_set_is_backed`): the claim stays `PanelBound` and this node pays a
-/// carrier every replan until the window closes. Past SEAT-R every seat of a floor or 8k panel
-/// replays and signs `Valid`, so the greedy set carries all five, and one short seat is enough. So
-/// the assembler is offered the SHORTEST prefix of the candidates it assembles from — the quorum,
-/// and the outsider where the claim has one — and the candidates are rotated by `sent`, the V1 sets
-/// this node has already sent for the claim, so a set that went inert is followed by one that
-/// leaves other seats out. The fold-aware choice (the coverage and optimistic doors ask the fold,
-/// `palw_v2_offered_licence_licenses_v1`) is the assembler's to make; this is the node's half until
-/// it does.
-pub(crate) fn palw_v1_offer_v1<R: Clone, O>(candidates: &[R], sent: u32, mut assemble: impl FnMut(Vec<R>) -> Option<O>) -> Option<O> {
-    if candidates.is_empty() {
-        return None;
-    }
-    let mut rotated = candidates.to_vec();
-    rotated.rotate_left(sent as usize % candidates.len());
-    (1..=rotated.len()).find_map(|n| assemble(rotated[..n].to_vec()))
-}
+// The V1 set this node offers past SEAT-R — its quorum and nothing past it, rotated by the sets
+// already sent — is consensus-core's `palw_v1_offer_v1` (its doc says why and what P2-5 changed),
+// kept beside `palw_licence_offer_order_v1` so the processor's T45 drives this collector's own V1
+// composition over the real assembler (ADR-0152 X22 with SR-6, Phase 2 P2-5).
+pub(crate) use kaspa_consensus_core::palw_panel_v2::palw_v1_offer_v1;
 
 /// Which replay: the claim, and the job it runs — the block's anchor for an attempt, the job's id
 /// for a free prompt (whose served jobs are not the chain's to name, so each distinct one is its own
@@ -14231,9 +14214,10 @@ mod court_responder_coverage_pin {
     /// they are asked in that order (a set at `basis_k ≥ 2` before the fast path that lands on Q-5's
     /// gate); below it in the order this test pinned before X22, coverage, then the optimistic
     /// licence, then the V1 quorum (`x22_offers_a_replay_backed_licence_before_s2_and_asks_lazily`
-    /// runs both orders).
+    /// runs both orders; T45 — the backed V1 before S2 over the real assemblers — is the processor's
+    /// `t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an_unbacked_one`).
     #[test]
-    fn the_collector_assembles_coverage_then_optimistic_then_v1() {
+    fn the_collector_assembles_coverage_then_v1_then_optimistic() {
         const MARKER: &str = "mod court_responder_coverage_pin";
         let whole = include_str!("palw_panel.rs");
         let source = &whole[..whole.find(MARKER).expect("this module is in this file")];
@@ -17917,7 +17901,7 @@ mod q7_sampled_and_collector_tests {
     use super::{
         COURT_MOVE_REPLAN_DAA, MARKER_SEAT_S, PALW_SEAT_SAMPLED_LEAD_DAA_V1, PalwSeatRRoleV1, PalwSeatReceiptFormsV1,
         PalwSeatS3SampleV1, palw_receipt_pools_sweep_v1, palw_seat_receipt_forms_v1, palw_seat_s3_sample_v1, palw_seat_sampled_due_v1,
-        palw_supplementary_candidates_fingerprint_v1, palw_supplementary_idle_v1, palw_supplementary_offer_order_v1,
+        palw_supplementary_candidates_fingerprint_v1, palw_supplementary_idle_v1, palw_supplementary_offer_order_v1, palw_v1_offer_v1,
     };
     use crate::palw_receipt_pool::{PalwReceiptPoolV1, ReceiptSweepV1};
     use kaspa_consensus_core::palw_backend::{
@@ -18219,6 +18203,56 @@ mod q7_sampled_and_collector_tests {
             "below the fence: coverage, S2, then V1, as before"
         );
         assert_eq!(offer(false, false, true, false).0, Some(("quorum", PalwLicenceDoorTagV1::Quorum)));
+    }
+
+    /// **The collector's composition under P2-5's contract, ASSUMED (ADR-0152 X22 with SR-6): a backed
+    /// V1 before S2, an unbacked one passed over.** Not T45's guard — the assembler here is a stand-in
+    /// that states the contract (the backed subset of the set, if it is a quorum), and P2-5 changed
+    /// neither `palw_v1_offer_v1` nor `palw_licence_offer_order_v1`, so this passes with or without
+    /// P2-5. What pins P2-5 is the processor's
+    /// `t12_t45_the_collector_prefers_a_backed_v1_over_s2_and_never_waits_on_an_unbacked_one`, which
+    /// drives these same two functions (both consensus-core's) over the REAL assemblers on a 2M claim
+    /// with an unbacked seat, and goes red without P2-5. What this test adds is the order's arithmetic
+    /// on a contract-shaped assembler: with an unbacked seat first in the pool the three-seat prefix is
+    /// passed over and the four-seat one offers its three backed seats, through V1, S2 never built;
+    /// rotated by `sent` the unbacked seat moves and the quorum prefix is backed at once; with two
+    /// backed seats in the pool no prefix licenses and S2 is offered.
+    #[test]
+    fn the_collector_composes_a_backed_v1_before_s2_under_the_assumed_p2_5_contract() {
+        use std::cell::Cell;
+        const UNBACKED: u64 = 9;
+        const QUORUM: usize = 3;
+        // The P2-5 assembler's contract: the backed subset of the set, if it is a quorum.
+        let assemble = |set: Vec<u64>| {
+            let backed: Vec<u64> = set.into_iter().filter(|seat| *seat != UNBACKED).collect();
+            (backed.len() >= QUORUM).then_some(backed)
+        };
+        let s2_built = Cell::new(false);
+        let collect = |pool: &[u64], sent: u32| {
+            s2_built.set(false);
+            palw_licence_offer_order_v1(
+                true,
+                || None,
+                || palw_v1_offer_v1(pool, sent, assemble),
+                || {
+                    s2_built.set(true);
+                    Some(vec![0])
+                },
+            )
+        };
+        assert_eq!(
+            collect(&[UNBACKED, 1, 2, 3, 4], 0),
+            Some((vec![1, 2, 3], PalwLicenceDoorTagV1::Quorum)),
+            "the backed three, via V1"
+        );
+        assert!(!s2_built.get(), "S2 never built while a backed V1 is on hand");
+        assert_eq!(
+            collect(&[UNBACKED, 1, 2, 3, 4], 1),
+            Some((vec![1, 2, 3], PalwLicenceDoorTagV1::Quorum)),
+            "rotated: backed at once"
+        );
+        assert_eq!(collect(&[UNBACKED, 1, 2], 0), Some((vec![0], PalwLicenceDoorTagV1::Optimistic)), "no backed quorum: S2");
+        assert!(s2_built.get());
     }
 
     fn receipt(claim: Hash64, seat: u64) -> PalwSeatReceiptV2 {
