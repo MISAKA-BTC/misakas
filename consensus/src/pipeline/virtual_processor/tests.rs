@@ -13572,9 +13572,11 @@ async fn an_exhausted_sink_search_holds_at_the_previous_sink() {
 ///
 /// The pruning snapshot is a second base: a state at a block the candidates descend from, with a
 /// delta on every chain block above it. This drives exactly the broken shape — tip elsewhere, its
-/// delta deleted — and demands the walk still arrive at `to`.
+/// delta deleted — and demands the walk still get past `from` on the snapshot and re-apply every
+/// delta it holds: to the block below the deleted one, and, asked for that block, exactly to it.
 #[tokio::test]
 async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
     let catalog = palw_v2_test_catalog();
@@ -13636,10 +13638,25 @@ async fn a_missing_delta_under_the_tip_is_recovered_from_the_pruning_snapshot() 
         "whatever it reached must be on the chain it was asked to walk"
     );
 
-    // 2. And it arrives. The recovery is not a partial one: with the base rebuilt, the forward leg
-    //    walks the chain to the block it was asked for. The process being alive to assert it is the
-    //    other half — the missing row used to reach an `expect` on this path.
-    assert_eq!(reached, sink, "the rebuilt base must carry the walk all the way to {sink}");
+    // 2. And it walks every row it holds. The recovery is not a partial one: with the base rebuilt,
+    //    the forward leg re-applies the chain's stored deltas up to the one this fixture deleted —
+    //    the tip's own, which is the sink's — and stops BELOW it, at the last block whose PALW state
+    //    it established. It used to return the sink itself here, one block past its PALW state (the
+    //    UTXO diff and `diff_point` were advanced before the apply that failed), which is the shape
+    //    that panicked the sink search when the block so returned had no other way to its state
+    //    (ADR-0152 Phase 2, P2-3 review; `p2_a_damaged_row_the_forward_leg_must_reapply_holds_the_old_sink`).
+    //    The process being alive to assert it is the other half — the missing row used to reach an
+    //    `expect` on this path.
+    assert_eq!(tip_block, sink, "the tip row stands at the sink, so the deleted delta is the sink's own");
+    let below = vp.ghostdag_store.get_selected_parent(sink).unwrap();
+    assert_eq!(reached, below, "the rebuilt base carries the walk to {below}, the last block before the deleted row");
+
+    // 3. And it arrives: asked for the block below the gap, the walk (from the same broken tip, on
+    //    the same snapshot) returns exactly that block.
+    let mut diff = kaspa_consensus_core::utxo::utxo_diff::UtxoDiff::default();
+    let mut bond_view = vp.initial_active_bond_view();
+    let reached = vp.calculate_utxo_state_relatively(&virtual_read, &mut diff, &mut bond_view, genesis_hash, below);
+    assert_eq!(reached, below, "the rebuilt base must carry the walk all the way to {below}");
     let _ = state_params;
 }
 

@@ -14,15 +14,28 @@
 //!
 //! **What the plan's T50 asked, and what V-7 now answers.** The plan (written before ADR-0152 v3.1's
 //! market reserve) expected a maturity burst to refuse 3c's market actions. Under V-7 as landed a
-//! burst takes at most `8 − PALW_V2_VESTING_MARKET_RESERVE` drain slots while market rows wait: the
-//! market rows stand at most at the 1,024 cap after 3c (the non-market part is drained by then) and
-//! 3d adds at most six, so step 1b of the next block leaves room for at least one two-row move,
-//! whatever the backlog — room that step 3′'s refunds and 3c's earlier Filled moves then share, and
-//! whose exhaustion is the fold's `PAYOUT_QUEUE_FULL` (`palw_state_v2`'s M-10 tests; T30/T58 for the
-//! drain). The test therefore pins the landed rule at the processor: EVM sells folded at 3c in the
-//! very block whose 3d moves a burst row are settled for their own reason (`MARKET_MISSING`: the line
-//! has no seeded market), never for the queue; their settlements are the child's `MarketSettle` ops
-//! in order; and the lane agrees on build and validate throughout.
+//! burst alone cannot: while market rows wait, step 3d queues at most
+//! `8 − PALW_V2_VESTING_MARKET_RESERVE` new keys, so the next block's 1b drain takes at least two
+//! market rows; the market rows stand at most at the 1,024 cap (every writer of one checks it); so
+//! 3c starts with room for at least one two-row EVM move, and only the block's other market writers
+//! (3′'s refunds, 3c's earlier `Filled` moves) can take it — their exhaustion is the fold's
+//! `PAYOUT_QUEUE_FULL`. T50 therefore runs twice from one prefix, and the two runs differ only in the
+//! queue planted under the settling block:
+//!
+//! * **at V-7's bound** — the market at the cap and the burst's six keys ahead of it, the widest
+//!   queue V-7 lets a block leave with the market at its cap — 3c's room is EXACTLY one sell's two
+//!   rows. Both sells pass the room check at that boundary and are refused for their own reason
+//!   (`MARKET_MISSING`: the line has no seeded market; `model_sell_v1` asks the room before it looks
+//!   the market up, so this outcome IS the room check passing). The burst's rows are two-key rows,
+//!   so what limits each step 3d is the reserve and not a wide row's stop: the same rows without
+//!   the reserve would have queued eight keys (asserted against the block's own parent), and the
+//!   drain would then have left the market no room;
+//! * **without the reserve** — that counterfactual planted: two more burst keys ahead of the capped
+//!   market, the queue a step 3d that took all eight slots would have left. The sells are refused
+//!   `PAYOUT_QUEUE_FULL`, the child carries both settlements with that reason as `MarketSettle` ops,
+//!   and the node accepts it — the plan's T50 chain (`Refused`, then `MarketSettle`, then
+//!   `evm_commitment_root` agreeing) on the queue-full reason, from a state V-7 keeps one chain from
+//!   reaching.
 //!
 //! **The EVM account is funded the way a user funds one**: a `EVM_DEPOSIT_LOCK` output spent from a
 //! card's fee float, claimed by a `DepositClaim` the node's own template carries. Its two sells are
@@ -33,12 +46,15 @@
 use super::super::t12_round_lane_e2e::t12_with_harness_cards_and_evm;
 use super::*;
 use kaspa_consensus_core::coinbase::MinerData;
+use kaspa_consensus_core::dns_finality::split_finality_fees;
 use kaspa_consensus_core::evm::model_market::{
     MISAKA_MODEL_WRITER, PALW_EVM_ACTION_SELL, PalwEvmSettlementOutcomeV1, refusal, send_action_sell_calldata,
 };
 use kaspa_consensus_core::evm::{DepositClaim, EVM_CHAIN_ID, EvmAddress, EvmSystemOp, EvmTemplateData};
 use kaspa_consensus_core::header::Header;
-use kaspa_consensus_core::palw_vesting_v1::PALW_V2_VESTING_MARKET_RESERVE;
+use kaspa_consensus_core::palw_vesting_v1::{
+    PALW_V2_VESTING_LEGS_PER_BLOCK, PALW_V2_VESTING_MARKET_RESERVE, palw_vesting_mint_plan_v1,
+};
 
 /// The test account: the address of the secp256k1 key `[0x50; 32]`.
 const ACCOUNT: [u8; 20] =
@@ -108,6 +124,7 @@ fn evm_minting() -> Minting {
         books: Books::default(),
         wallets: floats.into_iter().enumerate().collect(),
         last_attempt: None,
+        last_attempt_fee_worker: 0,
         nonce: 0x50_0000,
     }
 }
@@ -199,7 +216,9 @@ fn own_beat(m: &mut Minting) -> (MutableBlock, Header) {
 
 /// Insert a block of [`own_attempt`] / [`own_beat`], demand it is the UTXO-valid sink — the node
 /// re-executed the lane to the root its builder committed — and hold it to `Minting::after`.
-async fn take(m: &mut Minting, block: MutableBlock, attempt: Option<(usize, Hash64)>, what: &str) -> Stepped {
+/// `fee_worker` is the worker's share of the fees an attempt's own transactions paid, which its
+/// child's coinbase pays in the same output as the worker base less the carve (`after`'s check 0).
+async fn take(m: &mut Minting, block: MutableBlock, attempt: Option<(usize, Hash64)>, fee_worker: u64, what: &str) -> Stepped {
     let (parent_hash, parent) = m.chain.tip_state();
     let block = block.to_immutable();
     let hash = block.header.hash;
@@ -214,10 +233,8 @@ async fn take(m: &mut Minting, block: MutableBlock, attempt: Option<(usize, Hash
     assert_eq!(m.chain.sink(), hash, "{what} is the sink");
     assert_ne!(block.header.evm_commitment_root, Hash64::default(), "{what}: the lane committed");
     let stepped = m.after(parent_hash, parent, block, attempt.map(|(_, claim)| claim));
-    // `after` reads an attempt's carve off its child's coinbase as the worker base less the carve,
-    // paid to the attempt's card. An attempt that carries fee-paying transactions is paid its fee
-    // share in the same output, so its carve is booked (the withheld side) but not read there.
-    m.last_attempt = attempt.filter(|_| stepped.block.transactions.len() == 1).map(|(card, _)| (hash, card));
+    m.last_attempt = attempt.map(|(card, _)| (hash, card));
+    m.last_attempt_fee_worker = fee_worker;
     stepped
 }
 
@@ -268,33 +285,60 @@ fn sells(line: &Hash64) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// **The burst**: this many latched TWO-key rows (a producer and one credited seat), one DAA apart in
+/// expiry so V-7's order is `n`'s, the seat payee `(n + 1) mod 8` — different in any four consecutive
+/// rows, so every row costs two new keys and each block's step 3d is limited by V-7's budget alone:
+/// three rows while market rows wait, four if none did. Enough for three moves in every block of the
+/// run, and for the reserve-less counterfactual at the fourth attempt.
+const BURST_ROWS: u64 = 24;
+
+/// **The rows one EVM sell adds to the payout queue when it fills**: its two fee legs (its net leg
+/// is credited through the settlement, ADR-0089 Decision 6) — the fold's private
+/// `model_payout_rows_would_add(false, false)`, the room `model_sell_v1` asks before anything else.
+const EVM_SELL_ROWS: usize = 2;
+
+/// **The queue T50 plants under its settling block** (the module doc's two runs).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SettlingQueue {
+    /// The widest queue V-7 lets a block leave with the market at its cap: the burst's six keys ahead.
+    AtV7sBound,
+    /// The queue a step 3d WITHOUT the reserve would have left: two more burst keys ahead of the
+    /// capped market, so the drain takes no market row.
+    WithoutTheReserve,
+}
+
 /// **T50: with the lane as shipped, a maturity burst's payouts and the market's settlements ride the
-/// node's own blocks, and the lane agrees on build and validate** (phase2-plan T50, §5.4).
+/// node's own blocks, and the lane agrees on build and validate** (phase2-plan T50, §5.4; ADR-0152
+/// V-7; ADR-0089 Decision 6).
 ///
 /// On testnet-12 with the EVM lane active from genesis and nothing re-stamped:
 ///
-/// 1. the node's first heartbeat, stamped at the clock; then a burst is planted — eight latched
-///    six-key rows and 64 market rows, so V-7 keeps the market's two drain slots throughout;
+/// 1. the node's first heartbeat, stamped at the clock; then a burst is planted — [`BURST_ROWS`]
+///    latched two-key rows and 64 market rows, so V-7 keeps the market's two drain slots throughout;
 /// 2. the next heartbeat's slot is two minutes ahead: the adapter stamps it there, into another
 ///    second than its builder's, and re-derives `evm_commitment_root` for the stamp — a heartbeat
-///    restamped with the burst's first move queued, whose coinbase mints the parent's first eight
+///    restamped with the burst's first moves queued, whose coinbase mints the parent's first eight
 ///    rows, and which the node accepts;
 /// 3. an attempt carries a card's `EVM_DEPOSIT_LOCK` output to the test account; the next attempt's
-///    template carries the `DepositClaim` for it — the account is funded as a user funds one;
-/// 4. an attempt's payload carries the account's two sells on a founding model line; the next
-///    attempt's lane executes them (two `ActionQueued`), and its fold, in ONE block, settles both at
-///    step 3c — `Refused { MARKET_MISSING }`, in order, the room V-7 leaves the market after a drain
-///    that took six burst keys and two market rows ≥ 2 — and moves a burst row at step 3d;
-/// 5. the next attempt's template carries exactly those settlements as `MarketSettle` ops, in order,
+///    template carries the `DepositClaim` for it — the account is funded as a user funds one. The
+///    lock's fee is finality-class (ADR-0018 §F), and its worker share rides the next coinbase's
+///    output to the attempt's card beside the worker base less the carve, which `after` reads;
+/// 4. an attempt's payload carries the account's two sells on a founding model line. Its own step 3d
+///    moves V-7's plan — three rows, six keys — where the same rows without the reserve would take
+///    four, eight (both asked of its committed parent);
+/// 5. the queue under the settling block is planted on that attempt's tip ([`SettlingQueue`]);
+/// 6. the next attempt's lane executes the sells (two `ActionQueued`), and its fold, in ONE block,
+///    drains 1b, settles both at step 3c — at V-7's bound with exactly [`EVM_SELL_ROWS`] of room,
+///    both `Refused { MARKET_MISSING }`; without the reserve with none, both
+///    `Refused { PAYOUT_QUEUE_FULL }`; refused, so 3c writes no row — and moves burst rows at 3d;
+/// 7. the next attempt's template carries exactly those settlements as `MarketSettle` ops, in order,
 ///    and the node accepts it.
 ///
 /// Every block is the node's own template and is its UTXO-valid sink (the lane re-executed to the
-/// committed root), and every one passes `Minting::after`: the carve off each attempt's child
-/// coinbase (but the lock's carrier's, whose fee share rides the same output), the parent queue's
-/// first eight rows minted, the next-block plan, the latch, the queue lemma, every moved leg in the
-/// child's first eight, V-3.
-#[tokio::test]
-async fn p2_t50_with_the_lane_as_shipped_a_burst_s_payouts_and_the_market_s_settlements_ride_the_node_s_own_blocks() {
+/// committed root), and every one passes `Minting::after`: the carve off every attempt's child
+/// coinbase (the lock's carrier's with its fee share), the parent queue's first eight rows minted,
+/// the next-block plan, the latch, the queue lemma, every moved leg in the child's first eight, V-3.
+async fn t50(queue: SettlingQueue) {
     let mut m = evm_minting();
     let line = {
         let (_, genesis) = m.chain.tip_state();
@@ -305,13 +349,12 @@ async fn p2_t50_with_the_lane_as_shipped_a_burst_s_payouts_and_the_market_s_sett
 
     // 1. The first heartbeat, then the burst.
     let (b0, _) = own_beat(&mut m);
-    take(&mut m, b0, None, "the first heartbeat").await;
+    take(&mut m, b0, None, 0, "the first heartbeat").await;
     m.plant(|p, c| {
-        for n in 0..8u64 {
+        for n in 0..BURST_ROWS {
             let claim_id = Hash64::from_u64_word(0x50_0000 + n);
-            let producer = (n % 8) as usize;
-            let seats: Vec<usize> = (1..=5).map(|k| ((n + k) % 8) as usize).collect();
-            c.vesting.insert(claim_id, p.row(claim_id, n, producer, &seats, p.daa, Clock::Latched));
+            let seat = ((n + 1) % 8) as usize;
+            c.vesting.insert(claim_id, p.row(claim_id, n, (n % 8) as usize, &[seat], p.daa + n, Clock::Latched));
         }
         for i in 0..64 {
             c.pending_payouts.insert(market_key(i), PalwPayoutV2 { payload: p.payloads[7], amount: 10_000 + i });
@@ -323,9 +366,9 @@ async fn p2_t50_with_the_lane_as_shipped_a_burst_s_payouts_and_the_market_s_sett
     let (_, parent) = m.chain.tip_state();
     assert_ne!(b1.header.timestamp / 1000, built.timestamp / 1000, "the adapter stamped the beat into another second, its slot");
     assert_ne!(b1.header.evm_commitment_root, built.evm_commitment_root, "and re-derived the lane's commitment for the stamp");
-    let restamped = take(&mut m, b1, None, "the restamped heartbeat").await;
+    let restamped = take(&mut m, b1, None, 0, "the restamped heartbeat").await;
     assert_eq!(mints_the_queue(&parent, &restamped.block), PALW_V2_MAX_PAYOUTS_PER_BLOCK, "a full drain of payouts");
-    assert!(restamped.moved().iter().any(|(s, _)| matches!(s, PalwVestingSourceV1::Row { .. })), "and the burst's first move");
+    assert!(restamped.moved().iter().any(|(s, _)| matches!(s, PalwVestingSourceV1::Row { .. })), "and the burst's first moves");
 
     // 3. The deposit: a lock output, then the claim in the node's own template.
     let (lock, lock_entry) = m.wallets.remove(&1).expect("card 1's float");
@@ -346,7 +389,18 @@ async fn p2_t50_with_the_lane_as_shipped_a_burst_s_payouts_and_the_market_s_sett
     );
     sign_spend(&mut lock_tx, lock_entry, 1, m.chain.config.params.storage_mass_parameter);
     let (e1, claim) = own_attempt(&mut m, 0, vec![lock_tx.clone()], no_evm());
-    let e1 = take(&mut m, e1, Some((0, claim)), "the attempt carrying the lock").await;
+    // ADR-0018 §F: a transaction creating an `EVM_DEPOSIT_LOCK` output is a bridge transaction, and on
+    // a net whose lane and §F fence are both active its whole fee (`CARRIER_FEE`, in − out) splits at
+    // the finality ratios; the worker's part is paid to the lock's carrier with its worker base.
+    let fee_worker = {
+        let (params, daa) = (&m.chain.config.params, e1.header.daa_score);
+        assert!(
+            params.is_evm_active(daa) && params.dns_params.as_ref().is_some_and(|d| daa >= d.finality_fee_activation_daa_score),
+            "testnet-12 classifies a lock's fee as finality-class from genesis"
+        );
+        split_finality_fees(CARRIER_FEE, &m.chain.vp().fee_split_at(daa).expect("the overlay split")).worker_sompi
+    };
+    let e1 = take(&mut m, e1, Some((0, claim)), fee_worker, "the attempt carrying the lock").await;
     assert!(e1.block.transactions.iter().any(|tx| tx.id() == lock_tx.id()), "the lock rides");
     let deposit = DepositClaim {
         deposit_outpoint: TransactionOutpoint::new(lock_tx.id(), 0),
@@ -356,14 +410,65 @@ async fn p2_t50_with_the_lane_as_shipped_a_burst_s_payouts_and_the_market_s_sett
     };
     let (e2, claim) = own_attempt(&mut m, 2, Vec::new(), EvmTemplateData { system_ops: vec![deposit.clone()], ..no_evm() });
     assert_eq!(e2.evm_payload.system_ops, vec![EvmSystemOp::DepositClaim(deposit)], "the node's template carries the claim");
-    take(&mut m, e2, Some((2, claim)), "the attempt claiming the deposit").await;
+    take(&mut m, e2, Some((2, claim)), 0, "the attempt claiming the deposit").await;
 
-    // 4. The sells ride a payload; the next block's lane queues them and its fold settles them.
+    // 4. The sells ride a payload; that block's own step 3d is V-7's plan, the reserve deciding it.
     let (e3, claim) = own_attempt(&mut m, 3, Vec::new(), EvmTemplateData { transactions: raws.clone(), ..no_evm() });
     assert_eq!(e3.evm_payload.transactions, raws, "the payload carries both sells");
-    take(&mut m, e3, Some((3, claim)), "the attempt carrying the sells").await;
+    let e3 = take(&mut m, e3, Some((3, claim)), 0, "the attempt carrying the sells").await;
+    let reserved = palw_vesting_mint_plan_v1(&e3.parent, PALW_V2_VESTING_LEGS_PER_BLOCK, PALW_V2_VESTING_MARKET_RESERVE);
+    let unreserved = palw_vesting_mint_plan_v1(&e3.parent, PALW_V2_VESTING_LEGS_PER_BLOCK, 0);
+    assert_eq!(
+        e3.moved().into_iter().map(|(source, _)| source).collect::<Vec<_>>(),
+        reserved.moves.iter().map(|mv| mv.source.clone()).collect::<Vec<_>>(),
+        "the block's 3d moved V-7's plan"
+    );
+    assert_eq!((reserved.moves.len(), reserved.new_keys), (3, 6), "under the reserve: three two-key rows, six keys");
+    assert_eq!(
+        (unreserved.moves.len(), unreserved.new_keys),
+        (4, PALW_V2_VESTING_LEGS_PER_BLOCK),
+        "without it the same rows take all eight slots — the reserve alone keeps two for the market"
+    );
+
+    // 5. The queue under the settling block, planted on this tip: the market topped up to the cap
+    //    behind the six keys the block above queued, and — without the reserve — two more burst keys
+    //    ahead of it (A-KEY producer keys of rows that do not exist: non-market keys, drained first).
+    let (_, tip) = m.chain.tip_state();
+    assert_eq!(palw_vesting_non_market_rows_waiting_v1(&tip), 6, "the six keys wait ahead of the market");
+    let market = tip.pending_payouts_iter().filter(|(k, _)| is_market(k)).count() as u64;
+    let extra: Vec<Hash64> = match queue {
+        SettlingQueue::AtV7sBound => Vec::new(),
+        SettlingQueue::WithoutTheReserve => {
+            (0..2).map(|j| palw_vesting_payout_key_v1(&Hash64::from_u64_word(0x50_FF00 + j))).collect()
+        }
+    };
+    m.plant(|p, c| {
+        for i in 0..PALW_V2_MAX_PENDING_PAYOUTS as u64 - market {
+            c.pending_payouts.insert(market_key(0x1_0000 + i), PalwPayoutV2 { payload: p.payloads[7], amount: 20_000 + i });
+        }
+        for (j, key) in extra.iter().enumerate() {
+            c.pending_payouts.insert(*key, PalwPayoutV2 { payload: p.payloads[j], amount: 3_000_000 + j as u64 });
+        }
+    });
+    // `after`'s check 1 asks that every non-market key a coinbase mints was queued by a step 3d;
+    // these two were queued by the test's hand, standing in for one.
+    m.row_keys.extend(extra.iter().copied());
+
+    // 6. The settling block: its lane queues the sells, its fold drains, settles them at 3c, and
+    //    moves burst rows at 3d.
     let (e4, claim) = own_attempt(&mut m, 4, Vec::new(), no_evm());
-    let settling = take(&mut m, e4, Some((4, claim)), "the attempt whose lane executes the sells").await;
+    let settling = take(&mut m, e4, Some((4, claim)), 0, "the attempt whose lane executes the sells").await;
+    let queued = settling.parent.pending_payouts_iter().count();
+    let drained_market =
+        settling.parent.pending_payouts_iter().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).filter(|(k, _)| is_market(k)).count();
+    let after_drain = queued - PALW_V2_MAX_PAYOUTS_PER_BLOCK;
+    let room = PALW_V2_MAX_PENDING_PAYOUTS.saturating_sub(after_drain);
+    assert_eq!(PALW_V2_MAX_PENDING_PAYOUTS, 1_024);
+    let (want, reason) = match queue {
+        SettlingQueue::AtV7sBound => ((1_030, PALW_V2_VESTING_MARKET_RESERVE, 1_022, EVM_SELL_ROWS), refusal::MARKET_MISSING),
+        SettlingQueue::WithoutTheReserve => ((1_032, 0, 1_024, 0), refusal::PAYOUT_QUEUE_FULL),
+    };
+    assert_eq!((queued, drained_market, after_drain, room), want, "{queue:?}: (queued, market rows drained, after 1b, 3c's room)");
     let settlements = settling.child.evm_settlements();
     assert_eq!(settlements.len(), 2, "both sells were queued and folded: {settlements:?}");
     for (i, s) in settlements.iter().enumerate() {
@@ -373,35 +478,49 @@ async fn p2_t50_with_the_lane_as_shipped_a_burst_s_payouts_and_the_market_s_sett
         );
         assert_eq!(
             s.outcome,
-            PalwEvmSettlementOutcomeV1::Refused { reason: refusal::MARKET_MISSING },
-            "sell {i}: refused for its own reason — never PAYOUT_QUEUE_FULL: V-7 left the market its room"
+            PalwEvmSettlementOutcomeV1::Refused { reason },
+            "{queue:?}: sell {i} ({})",
+            match queue {
+                SettlingQueue::AtV7sBound => "the room check passes at its boundary; the line has no market",
+                SettlingQueue::WithoutTheReserve => "no room: the fold's own queue is full",
+            }
         );
     }
+    assert_eq!(
+        settling.child.pending_payouts_iter().filter(|(k, _)| is_market(k)).count(),
+        after_drain,
+        "{queue:?}: refused, never truncated — 3c wrote no row"
+    );
     let moved_keys: usize = settling
         .moved()
         .iter()
         .filter(|(s, _)| matches!(s, PalwVestingSourceV1::Row { .. }))
         .map(|(_, legs)| legs.iter().filter(|leg| leg.takes_budget()).count())
         .sum();
-    assert!(moved_keys > 0, "the same block's 3d moved a burst row");
-    let drained_market =
-        settling.parent.pending_payouts_iter().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).filter(|(k, _)| is_market(k)).count();
-    assert!(drained_market >= PALW_V2_VESTING_MARKET_RESERVE, "the drain before 3c took the market's reserve");
-    let after_drain = settling.parent.pending_payouts_iter().count() - PALW_V2_MAX_PAYOUTS_PER_BLOCK;
-    assert!(
-        PALW_V2_MAX_PENDING_PAYOUTS - after_drain >= PALW_V2_VESTING_MARKET_RESERVE,
-        "so 3c had room for a two-row move ({after_drain} rows after the drain)"
-    );
+    assert_eq!(moved_keys, 6, "the same block's 3d moved three burst rows, the reserve kept");
 
-    // 5. The child's payload carries the settlements as `MarketSettle`, in order, and is accepted.
+    // 7. The child's payload carries the settlements as `MarketSettle`, in order, and is accepted.
     let (e5, claim) = own_attempt(&mut m, 5, Vec::new(), no_evm());
     let ops: Vec<EvmSystemOp> = settlements.iter().map(|s| EvmSystemOp::MarketSettle(*s)).collect();
     assert_eq!(e5.evm_payload.system_ops, ops, "the child's template carries its parent's settlements");
-    let settled = take(&mut m, e5, Some((5, claim)), "the attempt settling the sells").await;
+    let settled = take(&mut m, e5, Some((5, claim)), 0, "the attempt settling the sells").await;
     assert_eq!(settled.block.evm_payload.system_ops, ops);
+    assert_eq!(m.books.carves_read, 4, "every attempt's carve read off its child's coinbase, the lock's carrier's included");
     eprintln!(
-        "[p2-t50] line {line}: {} settlements refused MARKET_MISSING in a block moving {moved_keys} burst keys; {}",
+        "[p2-t50] {queue:?}: line {line}: {} settlements refused (reason {reason}) with {room} rows of room after 1b; {}",
         settlements.len(),
         m.books.summary()
     );
+}
+
+/// T50 at V-7's bound: 3c's room is exactly one sell's two rows, and both sells pass it.
+#[tokio::test]
+async fn p2_t50_at_v7_s_bound_a_burst_leaves_3c_exactly_one_sell_s_room_and_the_lane_agrees() {
+    t50(SettlingQueue::AtV7sBound).await;
+}
+
+/// T50 without the reserve: the sells are refused `PAYOUT_QUEUE_FULL`, and the child settles them.
+#[tokio::test]
+async fn p2_t50_without_the_reserve_3c_refuses_payout_queue_full_and_the_child_settles_it() {
+    t50(SettlingQueue::WithoutTheReserve).await;
 }

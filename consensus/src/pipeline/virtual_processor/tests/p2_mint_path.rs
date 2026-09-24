@@ -314,6 +314,11 @@ struct Minting {
     wallets: BTreeMap<usize, (TransactionOutpoint, UtxoEntry)>,
     /// The last block, if it was an attempt: its hash and card (its child's coinbase pays that card).
     last_attempt: Option<(BlockHash, usize)>,
+    /// **The worker's share of the fees that attempt's own transactions paid** (ADR-0018 §F, split
+    /// by fee class): its child's coinbase pays it in the SAME output as the worker base, so check
+    /// (0) reads `base − carve + this`. Set by a caller that mined fee-paying transactions into an
+    /// attempt (T50's deposit lock); consumed by the next `after`, so it never outlives its block.
+    last_attempt_fee_worker: u64,
     nonce: u64,
 }
 
@@ -346,6 +351,7 @@ async fn mined() -> Minting {
         books: Books::default(),
         wallets: floats.into_iter().enumerate().collect(),
         last_attempt: None,
+        last_attempt_fee_worker: 0,
         nonce: 0x9E_0000,
     }
 }
@@ -485,9 +491,11 @@ impl Minting {
 
         // (0) T03's withheld side: the carve this coinbase withholds from its selected parent — for
         //     an attempt parent, read off the coinbase: the attempt's miner is paid its worker base
-        //     less exactly the carve (outside the queue's rendered rows, which may pay it too).
+        //     less exactly the carve (outside the queue's rendered rows, which may pay it too), plus
+        //     the worker's share of the fees its own transactions paid, which rides the same output.
         let withheld = vp.palw_v2_escrow_withheld_at(parent, parent_hash);
         self.books.withheld += withheld as u128;
+        let fee_worker = std::mem::take(&mut self.last_attempt_fee_worker);
         if let Some((attempt, card)) = self.last_attempt
             && attempt == parent_hash
         {
@@ -504,7 +512,11 @@ impl Minting {
                 .map(|(_, o)| o.value)
                 .sum();
             assert!(withheld > 0, "{what}: a testnet-12 attempt escrows a carve");
-            assert_eq!(paid, base - withheld, "{what}: the coinbase pays card {card}'s attempt its worker base less the carve");
+            assert_eq!(
+                paid,
+                base - withheld + fee_worker,
+                "{what}: the coinbase pays card {card}'s attempt its worker base less the carve, plus its fee share ({fee_worker})"
+            );
             self.books.carves_read += 1;
         }
 

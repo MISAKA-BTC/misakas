@@ -1461,8 +1461,10 @@ impl VirtualStateProcessor {
     /// The provided `diff` is assumed to initially hold the UTXO diff of `from` from virtual.
     /// The function returns the top-most UTXO-valid block on `chain(to)` which is ideally
     /// `to` itself (with the exception of returning `from` if `to` is already known to be UTXO disqualified,
-    /// and of returning the old-chain block whose PALW delta the backward walk could not revert).
-    /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual
+    /// of returning the old-chain block whose PALW delta the backward walk could not revert, and of
+    /// returning the block below the one whose stored PALW delta the forward walk could not re-apply).
+    /// When returning it is guaranteed that `diff` holds the diff of the returned block from virtual —
+    /// and that the bond view and, wherever the walk established one, its PALW state stand there too.
     pub(super) fn calculate_utxo_state_relatively(
         &self,
         stores: &VirtualStores,
@@ -1692,17 +1694,27 @@ impl VirtualStateProcessor {
 
             match self.utxo_diffs_store.get(current) {
                 Ok(mergeset_diff) => {
-                    diff.with_diff_in_place(mergeset_diff.deref()).unwrap();
-                    diff_point = current;
-                    if track_bonds {
-                        // `current` is an already-validated chain block joining
-                        // the diff; its acceptance data is committed.
-                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
-                    }
                     // Unit C, forward leg: this block was validated before, so its delta is on
                     // disk and re-applying it reproduces the transition bit-for-bit. Re-running
                     // the transition here instead would be a second computation of one fact, and
                     // a second chance to disagree with what the chain already committed to.
+                    //
+                    // **Applied FIRST, before `diff`, `diff_point` and the bond view** — the
+                    // forward twin of the backward leg's order above (ADR-0152 Phase 2, P2-3
+                    // review; `p2_a_damaged_row_the_forward_leg_must_reapply_holds_the_old_sink`).
+                    // This used to run after all three had moved onto `current`, so a row that
+                    // would not apply returned `current` — a block whose PALW state this walk
+                    // never reached. The sink search took it as established; every later walk
+                    // from it had to derive its state through the same damaged row (the tip row
+                    // stood elsewhere), failed there and returned it again; no candidate, not
+                    // even the previous sink, could be reached from it; and the exhausted-heap
+                    // `assert_eq!` killed the virtual processor — on that block and again on
+                    // every restart. A node on a chain B that kept an old chain A's rows, one of
+                    // them damaged, died the moment A's heavier tail arrived. Now a stop returns
+                    // the unchanged `diff_point`, where `diff`, the bond view and the PALW state
+                    // all still stand, and the next walk from there reads only rows that apply.
+                    // The PALW apply reads neither `diff` nor the bond view, so on a store that
+                    // reads the order is free and nothing moves.
                     if let Some(state) = palw_state.as_mut() {
                         // **A delta this node does not have is a gap in this node, not a verdict on
                         // the block.** Both of these used to be `expect`, on the reasoning above:
@@ -1729,6 +1741,13 @@ impl VirtualStateProcessor {
                                 return diff_point;
                             }
                         }
+                    }
+                    diff.with_diff_in_place(mergeset_diff.deref()).unwrap();
+                    diff_point = current;
+                    if track_bonds {
+                        // `current` is an already-validated chain block joining
+                        // the diff; its acceptance data is committed.
+                        bond_view.apply(&self.dns_bond_mutations_for_chain_block(current, bond_view));
                     }
                 }
                 Err(StoreError::KeyNotFound(_)) => {

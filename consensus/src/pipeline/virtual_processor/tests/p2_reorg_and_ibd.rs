@@ -21,6 +21,10 @@
 //!   `palw_v2_an_undecodable_delta_refuses_a_deep_reorg_rather_than_abstaining`): a delta holding
 //!   `Vesting`, `VestingNote` and `VestingCounters` entries walks exactly; damaged inside a vesting
 //!   entry it is a fault, not an absence, and the reorg that needs it holds the sink.
+//! * **A damaged row below the sink, and one the walk must re-apply** (the P2-3 review): the
+//!   backward walk stopping at an old-chain block under `from`, and the forward walk stopping on a
+//!   row it must re-apply — which used to panic the virtual processor — each hold the sink the node
+//!   stands on, with its UTXO set and its PALW tip, and the node moves once the row is restored.
 //!
 //! **Why the rows are planted, not mined to `Final`.** A real maturity is `window_court` (3,000 DAA)
 //! and thirty licences after a `Final`; T03 carries two real `Final`s through a real panel and takes
@@ -109,6 +113,7 @@ async fn follower(of: &Minting, upto: BlockHash) -> Minting {
         books: Books::default(),
         wallets: of.wallets.clone(),
         last_attempt: None,
+        last_attempt_fee_worker: 0,
         nonce: of.nonce,
     }
 }
@@ -870,4 +875,195 @@ async fn p2_an_undecodable_vesting_delta_is_a_fault_and_the_reorg_it_blocks_hold
     arrive(&z.chain, b_blocks[2].block.clone(), "a competing block").await;
     assert_eq!(z.chain.sink(), b_blocks[2].block.header.hash, "with its row back, the node reorgs");
     assert_eq!(z.chain.tip_state().1.state_root(), b_blocks[2].child.state_root(), "onto the competing builder's root");
+}
+
+/// **Damage `block`'s delta row on `node`** — three bytes no build decodes, under the row's own
+/// state root — and return what restores it (`(state_root, healthy bytes)`, for [`restore_row`]).
+fn damage_row(node: &T12Chain, block: BlockHash) -> (Hash64, Vec<u8>) {
+    let vp = node.vp();
+    let (state_root, delta) = vp.palw_state_v2_store.read().delta_of(block).expect("the healthy row decodes");
+    restore_row(node, block, (state_root, vec![0xFF; 3]));
+    assert!(
+        matches!(vp.palw_state_v2_store.read().delta_of(block), Err(kaspa_database::prelude::StoreError::DataInconsistency(_))),
+        "the damaged row is undecodable, not absent"
+    );
+    (state_root, borsh::to_vec(&delta).expect("serializes"))
+}
+
+/// Write `row` back as `block`'s delta row on `node` (the fixture's hand on its own store).
+fn restore_row(node: &T12Chain, block: BlockHash, (state_root, delta_borsh): (Hash64, Vec<u8>)) {
+    node.vp()
+        .palw_state_v2_store
+        .write()
+        .set_delta_record_for_tests(block, PalwStateDeltaRecordV2 { state_root, delta_borsh })
+        .expect("the fixture writes its own row")
+}
+
+/// **A damaged row BELOW the sink: the backward walk stops at an old-chain block under `from`, and
+/// the node holds its sink with its UTXO set and PALW tip** (the P2-3 review's deep-gap case of the
+/// test above; `calculate_utxo_state_relatively`'s backward leg, 12a1e9a4).
+///
+/// The test above damages the sink's own row, so the backward walk fails on its FIRST block, where
+/// the block it returns is `from` under either order of its steps. Here the row is the sink's
+/// selected parent's: the walk from `a1` reverts `a1` whole (its PALW delta, its UTXO diff, its bond
+/// mutations), cannot revert `a0`, and returns `a0` — below `from` — with `diff`, the bond view and
+/// the PALW state all standing at `a0`, which is the branch the reordering exists for. The search
+/// cannot move onto the competing chain from there; it walks forward to `a1` again (one healthy
+/// row) and holds it: the transfer `a0` accepted stays spent and its change an output, the
+/// competing blocks are not disqualified, and the PALW tip is rewritten at `a1` with `a1`'s root.
+/// Restored, the next competing block moves the sink onto the competing chain's root. (After that
+/// the virtual still merges A's tip, so the transfer stays accepted by the virtual on B: it is not
+/// asserted gone.)
+#[tokio::test]
+async fn p2_a_damaged_row_below_the_sink_holds_the_sink_with_its_utxo_set() {
+    let first = Hash64::from_u64_word(0x3C_0001);
+    let second = Hash64::from_u64_word(0x3C_0002);
+    let mut a = minting(|p, c| {
+        c.vesting.insert(first, p.row(first, 0, 0, &[1, 2, 3, 4, 5], p.daa, Clock::Latched));
+        c.vesting.insert(second, p.row(second, 1, 6, &[7, 0], p.daa, Clock::Latched));
+    })
+    .await;
+    let fork = a.chain.sink();
+    let mut b = follower(&a, fork).await;
+    let z = follower(&a, fork).await;
+
+    // A: `C` carries a transfer, `a0` accepts it (its UTXO diff is not empty), `a1` on top.
+    let (paid, spent) = transfer(&mut a, 2);
+    let c_step = a.step(Kind::Heartbeat(vec![paid.clone()])).await;
+    let a0 = a.step(beat()).await;
+    let a1 = a.step(beat()).await;
+    let (a0_hash, a1_hash) = (a0.block.header.hash, a1.block.header.hash);
+    let change = TransactionOutpoint::new(paid.id(), 0);
+
+    // B, from the plant: a claim and four beats — more blocks and more live work than A's three.
+    let b_blocks =
+        [b.step(Kind::Attempt(3)).await, b.step(beat()).await, b.step(beat()).await, b.step(beat()).await, b.step(beat()).await];
+    dominates(&b.chain, b_blocks[3].block.header.hash, &a.chain, a1_hash, "B over A");
+
+    for s in [&c_step, &a0, &a1] {
+        arrive(&z.chain, s.block.clone(), "A's block").await;
+    }
+    assert_eq!(z.chain.sink(), a1_hash);
+    let utxo_intact = |what: &str| {
+        let consensus = &z.chain.ctx.consensus;
+        assert!(consensus.get_virtual_utxo_entry(spent).is_none(), "{what}: the transfer a0 accepted stays spent");
+        assert!(consensus.get_virtual_utxo_entry(change).is_some(), "{what}: and its change stays an output");
+    };
+    utxo_intact("healthy");
+
+    // `a0` is the sink's selected parent: the walk back from `a1` reverts `a1` and fails on `a0`.
+    let healthy = damage_row(&z.chain, a0_hash);
+    for (i, s) in b_blocks[..4].iter().enumerate() {
+        arrive(&z.chain, s.block.clone(), "a competing block").await;
+        assert_eq!(z.chain.sink(), a1_hash, "competing block {i}: the node holds on a1");
+        utxo_intact(&format!("competing block {i}"));
+        let (tip_block, tip) = z.chain.tip_state();
+        assert_eq!(
+            (tip_block, tip.state_root()),
+            (a1_hash, a1.child.state_root()),
+            "competing block {i}: the PALW tip stands at the sink with a1's root"
+        );
+    }
+    let vp = z.chain.vp();
+    let bw = |h: BlockHash| vp.ghostdag_store.get_blue_work(h).unwrap();
+    assert!(bw(b_blocks[3].block.header.hash) > bw(a1_hash), "B out-works A on Z, so the search tried it first");
+    for s in &b_blocks[..4] {
+        assert_ne!(
+            z.chain.ctx.consensus.block_status(s.block.header.hash),
+            BlockStatus::StatusDisqualifiedFromChain,
+            "this node's gap is not the chain's fault"
+        );
+    }
+
+    // Restored: the next competing block moves the sink onto B, root for root.
+    restore_row(&z.chain, a0_hash, healthy);
+    arrive(&z.chain, b_blocks[4].block.clone(), "a competing block").await;
+    assert_eq!(z.chain.sink(), b_blocks[4].block.header.hash, "with its row back, the node reorgs");
+    assert_eq!(z.chain.tip_state().1.state_root(), b_blocks[4].child.state_root(), "onto B's root");
+}
+
+/// **A damaged row the FORWARD walk must re-apply: the node holds the chain it stands on, and the
+/// virtual processor does not panic** (the P2-3 review's finding 1; `calculate_utxo_state_relatively`'s
+/// forward leg, the twin of the test above).
+///
+/// Node Z follows chain A (`C` carrying a transfer, `a0`, `a1`), then reorgs onto a heavier chain B
+/// and keeps A's delta rows, as every reorg does. `a0`'s row is then damaged, and A's tail arrives:
+/// more blue work than B, and more live work (two claims against B's one). To move onto A the walk
+/// reverts B's rows (healthy), re-applies `C`'s, and must re-apply `a0`'s, which it cannot. That arm
+/// used to move `diff`, `diff_point` and the bond view onto `a0` BEFORE the PALW apply and return
+/// `a0` — a block whose PALW state the walk never reached — and from there no walk could establish a
+/// state (the tip row stood on B, and the path to `a0` crosses its row): every candidate was
+/// refused, the heap emptied, and the exhausted search's `assert_eq!` panicked the virtual processor
+/// (`the previous sink … is not UTXO-valid`), as it would again on every restart. Now the walk stops
+/// at `C`, where its `diff`, bond view and PALW state stand; the search walks back onto B's tip from
+/// there, and Z HOLDS on B — its PALW tip B's tip with B's root, no block of A disqualified. Restored,
+/// the last block of A's tail moves Z onto A with A's root, and the transfer is accepted there.
+#[tokio::test]
+async fn p2_a_damaged_row_the_forward_leg_must_reapply_holds_the_old_sink() {
+    let first = Hash64::from_u64_word(0x3D_0001);
+    let second = Hash64::from_u64_word(0x3D_0002);
+    let mut a = minting(|p, c| {
+        c.vesting.insert(first, p.row(first, 0, 0, &[1, 2, 3, 4, 5], p.daa, Clock::Latched));
+        c.vesting.insert(second, p.row(second, 1, 6, &[7, 0], p.daa, Clock::Latched));
+    })
+    .await;
+    let fork = a.chain.sink();
+    let mut b = follower(&a, fork).await;
+    let z = follower(&a, fork).await;
+
+    let (paid, spent) = transfer(&mut a, 2);
+    let c_step = a.step(Kind::Heartbeat(vec![paid.clone()])).await;
+    let a0 = a.step(beat()).await;
+    let a1 = a.step(beat()).await;
+    let (a0_hash, a1_hash) = (a0.block.header.hash, a1.block.header.hash);
+    let change = TransactionOutpoint::new(paid.id(), 0);
+    let b_blocks = [b.step(Kind::Attempt(3)).await, b.step(beat()).await, b.step(beat()).await, b.step(beat()).await];
+    let b_tip = b_blocks[3].block.header.hash;
+    dominates(&b.chain, b_tip, &a.chain, a1_hash, "B over A's first three");
+    let a_tail = [a.step(Kind::Attempt(4)).await, a.step(Kind::Attempt(5)).await, a.step(beat()).await];
+    let a_tip = a_tail[2].block.header.hash;
+    dominates(&a.chain, a_tip, &b.chain, b_tip, "A's six over B's four");
+
+    for s in [&c_step, &a0, &a1] {
+        arrive(&z.chain, s.block.clone(), "A's block").await;
+    }
+    assert_eq!(z.chain.sink(), a1_hash);
+    for s in &b_blocks {
+        arrive(&z.chain, s.block.clone(), "B's block").await;
+    }
+    assert_eq!(z.chain.sink(), b_tip, "Z reorgs onto B");
+    let healthy = damage_row(&z.chain, a0_hash);
+
+    let vp = z.chain.vp();
+    let a_side: Vec<BlockHash> = [&c_step, &a0, &a1, &a_tail[0], &a_tail[1]].iter().map(|s| s.block.header.hash).collect();
+    for (i, s) in a_tail[..2].iter().enumerate() {
+        arrive(&z.chain, s.block.clone(), "A's heavier tail").await;
+        assert_eq!(z.chain.sink(), b_tip, "A's tail block {i}: Z holds on B — it cannot re-apply a0");
+        let (tip_block, tip) = z.chain.tip_state();
+        assert_eq!(
+            (tip_block, tip.state_root()),
+            (b_tip, b_blocks[3].child.state_root()),
+            "A's tail block {i}: the PALW tip stands at the sink with B's root"
+        );
+        for block in &a_side[..4 + i] {
+            assert_ne!(
+                z.chain.ctx.consensus.block_status(*block),
+                BlockStatus::StatusDisqualifiedFromChain,
+                "A's tail block {i}: this node's gap is not A's fault ({block})"
+            );
+        }
+    }
+    assert!(
+        vp.ghostdag_store.get_blue_work(a_side[4]).unwrap() > vp.ghostdag_store.get_blue_work(b_tip).unwrap(),
+        "A's tail out-works B on Z, so the search walked toward it first"
+    );
+
+    // Restored: A's last block moves Z onto A, root for root.
+    restore_row(&z.chain, a0_hash, healthy);
+    arrive(&z.chain, a_tail[2].block.clone(), "A's last block").await;
+    assert_eq!(z.chain.sink(), a_tip, "with its row back, Z reorgs onto A");
+    assert_eq!(z.chain.tip_state().1.state_root(), a_tail[2].child.state_root(), "onto A's root");
+    let consensus = &z.chain.ctx.consensus;
+    assert!(consensus.get_virtual_utxo_entry(spent).is_none(), "on A the transfer a0 accepted is spent");
+    assert!(consensus.get_virtual_utxo_entry(change).is_some(), "and its change is an output");
 }
