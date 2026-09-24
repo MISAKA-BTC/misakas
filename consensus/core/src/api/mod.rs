@@ -910,6 +910,22 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **ADR-0152 R-3/R-4 (Phase 2, P2-8): what the reporter's filer reads of one filing** at the
+    /// tip, for the DAA the virtual's next block folds at — its commitment's row, the conviction and
+    /// the reward under `offence_key` ([`crate::palw_state_v2::palw_reporter_filing_read_v1`]) — and,
+    /// when `evidence` is given, the processor's own object gate on it at that DAA (the adjudicator
+    /// the fold runs), so the node never pays a carrier for evidence the chain refuses. A read: it
+    /// decides nothing a block accepts. `None` when there is no tip state (off `ConsensusV2`).
+    fn palw_reporter_filing_read_v1(
+        &self,
+        _offence_key: crate::Hash64,
+        _commitment: crate::Hash64,
+        _reporter: crate::palw_state_v2::PalwBondKeyV2,
+        _evidence: Option<crate::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Option<crate::palw_state_v2::PalwReporterFilingReadV1> {
+        None
+    }
+
     /// **Who may be served a claim's private material** (ADR-0077 Decision 16's transport half):
     /// the executor, the bound panel's seats and the open sessions' challengers, at the tip.
     fn palw_claim_readers_v2(&self, _claim: crate::Hash64) -> Vec<crate::palw_state_v2::PalwBondKeyV2> {

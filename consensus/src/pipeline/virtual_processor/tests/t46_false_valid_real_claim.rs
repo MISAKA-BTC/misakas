@@ -5214,3 +5214,8 @@ async fn t18n_a_convicted_representatives_unspent_tickets_pass_to_the_lender() {
 /// so it runs on this harness, these doors and these assertions rather than a copy of them.
 #[path = "t47_model_class_attribution.rs"]
 mod t47_model_class_attribution;
+
+/// **Phase 2, P2-8: the reporter's commit–reveal filer on real claims** (ADR-0152 v3.1 R-3/R-4,
+/// SR-8, J-6) — a child of this suite, so the filer's pieces run on this harness's claims and doors.
+#[path = "t46_p2_8_reporter_filer.rs"]
+mod t46_p2_8_reporter_filer;

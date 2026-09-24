@@ -63,6 +63,12 @@ use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
 use kaspa_utils::triggers::SingleTrigger;
 
+/// **ADR-0152 R-3 (P2-8): the reporter's commit–reveal filer**, and the capture arm's
+/// `ExecutorRefuted` and J1 auto that feed it — a child of this module, so each call site below is
+/// one line (see its own header).
+#[path = "palw_reporter_filer.rs"]
+pub(crate) mod reporter_filer;
+
 const PALW_PANEL: &str = "palw-panel";
 
 /// **The `event` lines for this bond's own claims** (ADR-0122 Decision 8): one per claim whose
@@ -5554,6 +5560,9 @@ impl PalwPanelService {
         // was busy carrying a receipt — and the claim had already been marked judged, so the
         // dispute was never rebuilt. Measured: 22 frauds detected, 0 courts opened.
         let mut court_pending: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
+        // ADR-0152 R-3 (P2-8): every conviction this node files on its own evidence — commit, then the
+        // evidence, then the reveal, through `court_pending` — persisted so a restart still reveals.
+        let mut reporter_filer = reporter_filer::PalwReporterFilerV1::load(&self.config.state_dir);
         // ADR-0100: the claims this seat has accused in the one-move court, so a fault that
         // recurs on every tick (the duty stands until the claim ends) is filed once.
         let mut accused: HashSet<Hash64> = HashSet::new();
@@ -7846,6 +7855,19 @@ impl PalwPanelService {
                                     job_pin: duty.fp_job_pin_v1(),
                                 };
                                 if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
+                                    // P2-8, J1 auto: the claim's committed execution under another job?
+                                    self.j1_auto_probe_v1(
+                                        &session,
+                                        &mut reporter_filer,
+                                        duty,
+                                        deadline,
+                                        current_daa,
+                                        bond_key,
+                                        &network_domain,
+                                        &payload.capture,
+                                        roots,
+                                    )
+                                    .await;
                                     continue;
                                 }
                                 let Some(shape) = backend.capture_shape(&payload.capture) else { continue };
@@ -7977,6 +7999,25 @@ impl PalwPanelService {
                                     // this seat found, and it is recorded rather than dropped.
                                     CaptureSamplesV1::FaultAt { leaf, refutation, openings, prompt_opening } => {
                                         self.note_seat_fault_v1(duty.claim_id, leaf, 1);
+                                        // **P2-8 (SR-8): past `palw_rcore_plus` the proven fault is
+                                        // filed as `ExecutorRefuted` through the reporter filer**; the
+                                        // one-move court below is its fallback, and the whole path
+                                        // below the fence.
+                                        if self.capture_arm_files_refutation_v1(
+                                            &session,
+                                            &mut reporter_filer,
+                                            duty,
+                                            deadline,
+                                            current_daa,
+                                            bond_key,
+                                            &network_domain,
+                                            &refutation,
+                                            &openings,
+                                            &prompt_opening,
+                                        ) {
+                                            accused.insert(duty.claim_id);
+                                            break 'verdict None;
+                                        }
                                         // **The one thing a seat that found a lie files** (ADR-0098
                                         // Decision 2, ADR-0099 Decision 5): on a network whose
                                         // acceptance layer takes it, the accusation — the leaf, the
@@ -8203,20 +8244,31 @@ impl PalwPanelService {
                             ) else {
                                 break 'verdict None;
                             };
-                            let arm = palw_attempt_material_arm_v1(
-                                seat_r,
-                                PalwSeatArmV1::AttemptMaterial,
-                                backend.as_ref(),
-                                bytes,
-                                PalwClaimRootsV1 {
-                                    execution_root: duty.execution_root,
-                                    trace_root: duty.trace_root,
-                                    anchor,
-                                    attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
-                                    output_root: Some(duty.output_root),
-                                    job_pin: duty.fp_job_pin_v1(),
-                                },
-                            );
+                            let roots = PalwClaimRootsV1 {
+                                execution_root: duty.execution_root,
+                                trace_root: duty.trace_root,
+                                anchor,
+                                attempt_draw: self.attempt_draw_for_claim(&session, duty.accepted_block),
+                                output_root: Some(duty.output_root),
+                                job_pin: duty.fp_job_pin_v1(),
+                            };
+                            let arm =
+                                palw_attempt_material_arm_v1(seat_r, PalwSeatArmV1::AttemptMaterial, backend.as_ref(), bytes, roots);
+                            if arm == PalwMaterialArmV1::Nothing {
+                                // P2-8, J1 auto: the claim's committed execution under another job?
+                                self.j1_auto_probe_v1(
+                                    &session,
+                                    &mut reporter_filer,
+                                    duty,
+                                    deadline,
+                                    current_daa,
+                                    bond_key,
+                                    &network_domain,
+                                    bytes,
+                                    roots,
+                                )
+                                .await;
+                            }
                             if arm != PalwMaterialArmV1::Nothing {
                                 // **Retained here, and only here**: the chain carries this claim, this
                                 // seat is on its panel, and these exact bytes reproduce its committed
@@ -8944,6 +8996,9 @@ impl PalwPanelService {
                 // review's note).
                 court_moved.retain(|key, _| *key != palw_da_accusation_queue_key_v1(key.0) || accusations.wants(&key.0));
             }
+
+            // --- P2-8: the reporter's commit–reveal filer (ADR-0152 R-3; `reporter_filer`) ---
+            self.reporter_filer_tick_v1(&session, &mut reporter_filer, &mut court_pending);
 
             // --- the collector + submitter's half ---
             if self.config.fee_outpoint.is_some() {
