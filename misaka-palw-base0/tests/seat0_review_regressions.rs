@@ -7,8 +7,8 @@
 //! * `fold_attempt_*` — an attempt served as a fold: SEAT-0's head rule reads dense leaves only, so
 //!   the fold's selecting row was free and every bend a fresh root. On a class whose attempts keep
 //!   their tiles no producer serves one; refused. On this line a HELD class's attempt folds, so its
-//!   fold stays licensable and its selecting row is a residual (`held_fold_attempt_*`, ignored)
-//!   that SEAT-R and F1c's rule 12 close.
+//!   fold stays licensable by material and its selecting row is a residual there; the seat's replay
+//!   (the only full-seat route under SEAT-R) reproduces none of the bent roots (`held_fold_attempt_*`).
 //! * `crafted_profile_*` — a stranger's profile whose node count overflows `u32` panicked inside the
 //!   head rule (`overflow-checks = true`, and the node's panic hook exits). The floor now checks
 //!   the class profile id as the other tiers do, and the rules count the profile checked first.
@@ -215,10 +215,26 @@ fn legacy_rows_only_material_is_not_licensed_on_a_registered_qwen36_class() {
 // F-B: an attempt served as a fold — rule 5 is dense-only, so the selecting row is free
 // ------------------------------------------------------------------------------------------------
 
+/// What [`bend_a_fold_attempt`] saw: the honest fold's verdict, every bent `(execution, trace)` root
+/// pair with the material verdict it got, and the roots the seat's own replay (`execute_for_verdict`,
+/// the route SEAT-R leaves a full seat) reproduces for the same job.
+struct BentFoldAttempt {
+    honest: PalwMaterialVerdictV1,
+    honest_roots: (Hash64, Hash64),
+    bent: Vec<((Hash64, Hash64), PalwMaterialVerdictV1)>,
+    replay: (Hash64, Hash64),
+}
+
+impl BentFoldAttempt {
+    fn licensed_by_material(&self) -> Vec<Hash64> {
+        self.bent.iter().filter(|(_, v)| *v == PalwMaterialVerdictV1::Matches).map(|((root, _), _)| *root).collect()
+    }
+}
+
 /// One honest execution of an attempt job through the fold sink, served as a fold under the
 /// attempt claim, then its selecting row bent four ways (token moved, trace root and binding
-/// re-derived). Returns the honest fold's verdict and every bent execution root the seat licensed.
-fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> (PalwMaterialVerdictV1, Vec<Hash64>) {
+/// re-derived), and the same job replayed as a seat replays it.
+fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> BentFoldAttempt {
     use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_held_canonical_v1;
     let artifact = a16_artifact(8_292);
     let backend =
@@ -240,7 +256,8 @@ fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> (PalwMaterialVerdictV1, V
         &base0_fp_material_encode_v2(&run, &ids).unwrap(),
         PalwClaimRootsV1 { execution_root: run.execution_root, trace_root: run.trace_root, anchor, attempt_draw: Some(draw) },
     );
-    let mut licensed = Vec::new();
+    let replay = backend.execute_for_verdict(&job, &prompt).expect("the seat's replay runs");
+    let mut bent = Vec::new();
     for bend in 1..=4usize {
         let mut m: Base0FpMaterialV2 = honest.clone();
         let last = m.logits_rows.len() - 1;
@@ -265,11 +282,14 @@ fn bend_a_fold_attempt(profile: PalwShapeProfileV3) -> (PalwMaterialVerdictV1, V
             "fold attempt bend #{bend}: token {a} -> {k}, root {}…, verdict {verdict:?}",
             &roots.execution_root.to_string()[..16]
         );
-        if verdict == PalwMaterialVerdictV1::Matches {
-            licensed.push(roots.execution_root);
-        }
+        bent.push(((roots.execution_root, roots.trace_root), verdict));
     }
-    (honest_verdict, licensed)
+    BentFoldAttempt {
+        honest: honest_verdict,
+        honest_roots: (run.execution_root, run.trace_root),
+        bent,
+        replay: (replay.execution_root, replay.trace_root),
+    }
 }
 
 /// A class whose attempts keep their tiles (`palw_attempt_capture_folds_v1` false): no producer
@@ -280,8 +300,9 @@ fn fold_attempt_bent_row_is_not_licensed() {
     use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2;
     let profile = qwen25_a16_profile_v2(a16_geometry(8_292)).expect("v2");
     assert!(!kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&profile));
-    let (honest, licensed) = bend_a_fold_attempt(profile);
-    assert_eq!(honest, PalwMaterialVerdictV1::Mismatch, "no producer serves this class's attempt as a fold");
+    let seen = bend_a_fold_attempt(profile);
+    assert_eq!(seen.honest, PalwMaterialVerdictV1::Mismatch, "no producer serves this class's attempt as a fold");
+    let licensed = seen.licensed_by_material();
     assert!(
         licensed.is_empty(),
         "{} distinct execution roots from ONE execution were licensed by re-bending the selecting row of a fold attempt",
@@ -289,21 +310,28 @@ fn fold_attempt_bent_row_is_not_licensed() {
     );
 }
 
-/// **The launch line's residual.** A HELD class's attempt folds here, so its fold is the honest
-/// producer's material and the seat licenses it — and SEAT-0's head rule reads dense leaves only,
-/// so the selecting row of that fold is not tied to its step tree: one execution still licenses a
-/// fresh execution root per bend. What closes it is SEAT-R (a full-mask `Valid` only from a replay,
-/// in the same binary as F2's `palw_offence_attribution`) and F1c's rule 12 (`LogitsNotStepOutput`).
-/// Ignored until they land; un-ignore it then, and it must pass.
+/// **The launch line's residual, and what closes it.** A HELD class's attempt folds here, so its
+/// fold is the honest producer's material and the seat licenses it — and SEAT-0's head rule reads
+/// dense leaves only, so the selecting row of that fold is not tied to its step tree: through the
+/// MATERIAL route one execution still licenses a fresh execution root per bend (asserted here, so a
+/// change to it is seen). What closes it is SEAT-R (the peer's F4, in the same binary as F2's
+/// `palw_offence_attribution`): a full seat signs a full-mask `Valid` only from its replay, and
+/// every door needs that seat (full 1 + partial 4, one holder a segment). The replay reproduces the
+/// honest roots and none of the bent ones — `replay_licenses_v1` compares both roots, and the
+/// execution root commits the logits trace root — so no bend is licensed there.
 #[test]
-#[ignore = "residual on the launch line: a held fold attempt's selecting row — closed by SEAT-R and F1c rule 12"]
-fn held_fold_attempt_bent_row_is_not_licensed() {
+fn held_fold_attempt_bent_rows_are_licensed_by_material_and_refused_by_the_replay() {
     use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v7;
     let profile = qwen25_a16_profile_v7(a16_geometry(8_292)).expect("v7");
     assert!(kaspa_consensus_core::palw_resource_profile_v1::palw_attempt_capture_folds_v1(&profile));
-    let (honest, licensed) = bend_a_fold_attempt(profile);
-    assert_eq!(honest, PalwMaterialVerdictV1::Matches, "the honest held fold attempt is licensed");
-    assert!(licensed.is_empty(), "{} bent execution roots licensed from ONE held execution", licensed.len());
+    let seen = bend_a_fold_attempt(profile);
+    assert_eq!(seen.honest, PalwMaterialVerdictV1::Matches, "the honest held fold attempt is licensed");
+    assert_eq!(seen.licensed_by_material().len(), seen.bent.len(), "the material route's residual: every bend is licensed");
+    assert_eq!(seen.replay, seen.honest_roots, "the seat's replay reproduces the honest roots");
+    for ((execution_root, trace_root), _) in &seen.bent {
+        assert_ne!(*execution_root, seen.replay.0, "a bent execution root is not the replay's");
+        assert_ne!(*trace_root, seen.replay.1, "a bent trace root is not the replay's");
+    }
 }
 
 // ------------------------------------------------------------------------------------------------
