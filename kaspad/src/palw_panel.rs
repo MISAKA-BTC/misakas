@@ -13247,6 +13247,58 @@ mod seat_r_tests {
         }
     }
 
+    /// **The production replay step judges the ANSWER under the network's attempt rule** (the
+    /// audit's H-A, closed at the seat on a real model-class replay). On the held A16 v7 row with the
+    /// testnet-12 rule (`CoreV1`) the seat's replay reproduces the producer's roots AND its committed
+    /// `output_root`, so `palw_seat_replay_step_v1` — the one rule the off-loop poll reads — licenses
+    /// it. The same roots under a `Legacy` producer's `output_root` (the root a worker that never set
+    /// its rule commits: the hybrid FP worker before a4682a8d) are the honest arithmetic with another
+    /// answer, and the step refutes them; so does any ground answer. The two rules really differ here
+    /// (a model class), which a floor test cannot show — the floor's root is the same under both.
+    #[test]
+    fn past_seat_r_the_replay_step_refutes_a_claim_whose_answer_is_not_the_core_v1_root() {
+        use kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1;
+        use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_held_canonical_v1, qwen25_a16_profile_v7};
+        use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
+        let artifact = a16_artifact(8_292);
+        let profile = qwen25_a16_profile_v7(a16_geometry(8_292)).expect("held v7");
+        let backend_under = |rules: PalwAttemptRulesV1| {
+            Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), qwen25_a16_held_canonical_v1(profile.n_ctx))
+                .expect("servable")
+                .with_step_ladder_cap(kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES)
+                .with_prompt_ids_form(PalwPromptIdsFormV1::MerkleV1)
+                .with_attempt_rules(rules)
+        };
+        let (core, legacy) = (backend_under(PalwAttemptRulesV1::CoreV1), backend_under(PalwAttemptRulesV1::Legacy));
+        let anchor = h(0x0A57_0E12);
+        let (job, prompt) = core.job_for_anchor(anchor).expect("job");
+        let job = palw_attempt_job_v1(job, true);
+        let claim = core.execute(&job, &prompt).expect("the CoreV1 producer's run");
+        let replayed = core.execute_for_verdict(&job, &prompt);
+        assert_eq!(
+            palw_seat_replay_step_v1(&replayed, claim.execution_root, claim.trace_root, 0, claim.output_root),
+            PalwSeatReplayStepV1::Licensed,
+            "the honest CoreV1 claim: its roots and its answer"
+        );
+        let legacy_claim = legacy.execute(&job, &prompt).expect("the Legacy producer's run");
+        assert_eq!(
+            (legacy_claim.execution_root, legacy_claim.trace_root),
+            (claim.execution_root, claim.trace_root),
+            "the premise: the same arithmetic under either rule"
+        );
+        assert_ne!(legacy_claim.output_root, claim.output_root, "the premise: a model class's two rules name different answers");
+        assert_eq!(
+            palw_seat_replay_step_v1(&replayed, claim.execution_root, claim.trace_root, 0, legacy_claim.output_root),
+            PalwSeatReplayStepV1::Refuted,
+            "the honest roots under the Legacy answer: refuted by a CoreV1 seat"
+        );
+        assert_eq!(
+            palw_seat_replay_step_v1(&replayed, claim.execution_root, claim.trace_root, 0, h(0xA11)),
+            PalwSeatReplayStepV1::Refuted,
+            "and any ground answer"
+        );
+    }
+
     /// **The replay runs off the panel's loop and is polled to its verdict.** Absent until started;
     /// running while the task runs, and its claim held; returned once (`fresh`) and kept, so it is
     /// never run again; a replay that panics is a refusal, not a hang; and a claim that leaves the
