@@ -246,6 +246,14 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// rule IS `CoreV1` (the floor) keeps the default no-op.
     fn set_attempt_rules_v1(&mut self, _rules: crate::palw_attempt_rules_v1::PalwAttemptRulesV1) {}
 
+    /// **The attempt rule this instance runs** ([`Self::set_attempt_rules_v1`]); `Legacy` for a
+    /// backend that never takes one. A seat's checks that exist only under `CoreV1` read it
+    /// (the material route's output-root binding, ADR-0152 v3.1 T18p-M), so a `Legacy` network's
+    /// seats judge exactly as before.
+    fn attempt_rules_v1(&self) -> crate::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+        crate::palw_attempt_rules_v1::PalwAttemptRulesV1::Legacy
+    }
+
     /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;

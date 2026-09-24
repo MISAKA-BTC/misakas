@@ -62,6 +62,10 @@ pub struct Base0Backend {
     prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     /// This instance's seat state and walk; nothing outside the instance reaches it.
     seat_memo: crate::fp_recompute::Base0FpSeatMemoV1,
+    /// **The attempt rule of the network this instance serves** (ADR-0152 v3.1). The floor's job
+    /// and output are one rule under both, so the producer reads nothing of it; the SEAT does — the
+    /// material route binds a claim's output root only under `CoreV1` (T18p-M).
+    attempt_rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1,
 }
 
 impl Base0Backend {
@@ -75,7 +79,14 @@ impl Base0Backend {
             network_ladder: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
             prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
             seat_memo: Default::default(),
+            attempt_rules: Default::default(),
         }
+    }
+
+    /// The network's attempt rule — see the field.
+    pub fn with_attempt_rules(mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) -> Self {
+        self.attempt_rules = rules;
+        self
     }
 
     /// **The ladder top from the ruleset**, for a caller that holds `PalwCourtParamsV2`. Passing
@@ -452,6 +463,14 @@ impl Base0Backend {
 }
 
 impl PalwExecutionBackendV1 for Base0Backend {
+    fn set_attempt_rules_v1(&mut self, rules: kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1) {
+        self.attempt_rules = rules;
+    }
+
+    fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+        self.attempt_rules
+    }
+
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -586,7 +605,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         //
         // **The whole job, not only its id** (ADR-0117; SEAT-S1): one rule for every family and
         // retention, `base0_material_job_is_the_claims_v1`.
-        if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &decoded.0.job_context, &claim) {
+        if let Err(verdict) = crate::produce::base0_material_answers_the_claim_v1(self, &decoded.0, &decoded.3, &claim) {
             return verdict;
         }
         // **A capture for some other profile is not this backend's to vouch for** — the check the

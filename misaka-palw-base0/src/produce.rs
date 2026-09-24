@@ -1089,6 +1089,39 @@ pub fn base0_material_job_is_the_claims_v1<B: kaspa_consensus_core::palw_backend
     Ok(())
 }
 
+/// **The claim's whole statement, as a seat holding its material checks it** (ADR-0152 v3.1
+/// T18p-M; the Phase 1–2 review's H-1) — every `verify_material` branch of every family, one rule:
+///
+/// * the whole job ([`base0_material_job_is_the_claims_v1`], SEAT-S1);
+/// * under `CoreV1`, and where the caller has the claim's committed `output_root`, the ANSWER: the
+///   material's generated ids must render to it under this backend's rule
+///   (`output_root_for_context_v1` over the binding's own context — the context the claim was
+///   committed under, the executed one for an early-stopping free prompt). The roots say the
+///   arithmetic is the claim's; without this a claim whose roots are the honest run's and whose
+///   `output_root` names other tokens was licensed by every seat holding the material, while only
+///   a replaying seat (SEAT-S2) compared it. `Unverifiable` where the backend cannot render one.
+///
+/// Below `CoreV1` (every `Legacy` network) the answer is not compared here, so those seats judge
+/// exactly as before. J6/J7 and the head rule are SEAT-0's (`base0_seat_rules_v1`), in the tail.
+pub fn base0_material_answers_the_claim_v1<B: kaspa_consensus_core::palw_backend::PalwExecutionBackendV1 + ?Sized>(
+    backend: &B,
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    generated_token_ids: &[u32],
+    claim: &kaspa_consensus_core::palw_backend::PalwClaimRootsV1,
+) -> Result<(), kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1> {
+    use kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1;
+    base0_material_job_is_the_claims_v1(backend, &binding.job_context, claim)?;
+    if backend.attempt_rules_v1() != kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1 {
+        return Ok(());
+    }
+    let Some(committed) = claim.output_root else { return Ok(()) };
+    match backend.output_root_for_context_v1(&binding.job_context, generated_token_ids) {
+        Some(rendered) if rendered == committed => Ok(()),
+        Some(_) => Err(PalwMaterialVerdictV1::Mismatch),
+        None => Err(PalwMaterialVerdictV1::Unverifiable),
+    }
+}
+
 /// **What a panel seat checks before it signs `Valid`.**
 ///
 /// A seat's receipt is an attestation that the producer served material matching what its claim

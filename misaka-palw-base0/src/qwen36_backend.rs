@@ -1372,6 +1372,10 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         self.attempt_rules = rules;
     }
 
+    fn attempt_rules_v1(&self) -> kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1 {
+        self.attempt_rules
+    }
+
     fn job_for_anchor(&self, anchor: Hash64) -> Result<(PalwJobContextV2, Vec<usize>), String> {
         let (prefill, decode) = self.canonical_job;
         let shape = &self.artifact.shape;
@@ -1816,7 +1820,9 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             }
             // **SEAT-S1: the whole job, here too** — a held class's attempt is a fold, and this
             // branch checked the id alone (`base0_material_job_is_the_claims_v1`).
-            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &folded.binding.job_context, &claim) {
+            if let Err(verdict) =
+                crate::produce::base0_material_answers_the_claim_v1(self, &folded.binding, &folded.generated_token_ids, &claim)
+            {
                 return verdict;
             }
             if folded.binding.shape_profile.shape_profile_id() != self.class_profile_id {
@@ -1836,7 +1842,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
             // **The whole job, not only its id** (ADR-0117; SEAT-S1): the fold branch's rule,
             // `base0_material_job_is_the_claims_v1`.
-            if let Err(verdict) = crate::produce::base0_material_job_is_the_claims_v1(self, &decoded.0.job_context, &claim) {
+            if let Err(verdict) = crate::produce::base0_material_answers_the_claim_v1(self, &decoded.0, &decoded.3, &claim) {
                 return verdict;
             }
             if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
