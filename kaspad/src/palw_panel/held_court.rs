@@ -702,8 +702,9 @@ pub(crate) trait PalwHeldHostV1 {
     fn carried_prompt(&self, duty: &PalwCourtDutyV2, backend: &dyn PalwExecutionBackendV1) -> Result<Option<Vec<u32>>, String>;
     /// **Whether `claim_id` can still be convicted, and until when** — `Some(daa)`: the claim is not
     /// final or voided, and its current phase ends by itself at `daa` (the licence's window, a DA
-    /// session's backstop — the claim row's `deadline_daa`); `None`: it is final, voided, retired, or
-    /// not a claim this node's bond seats. What a step-6 pursuit reads once its session is gone.
+    /// session's backstop — the claim row's `deadline_daa`; `u64::MAX` where the claim is only known
+    /// disputable); `None`: it is final, voided, retired, or neither seated by this node's bond nor
+    /// disputable by it. What a step-6 pursuit reads once its session is gone.
     fn claim_open_until_v1(&self, claim_id: &Hash64) -> Option<u64>;
 }
 
@@ -1758,18 +1759,27 @@ impl PalwHeldHostV1 for PalwPanelHeldHostV1<'_> {
     }
 }
 
-/// **The pursued claims still open, and until when** — out of the claim rows this bond seats
-/// (`palw_claim_rows_v1`, the panel loop's per-bond read, taken off the tick only while a step-6
-/// pursuit exists, which is rare): each non-terminal claim's current phase end. A challenger that
-/// is no seat of the claim's panel finds no row, and its pursuit ends with the session.
+/// **The pursued claims still open, and until when** — read off the tick only while a step-6
+/// pursuit exists, which is rare. First the claim rows this bond seats (`palw_claim_rows_v1`, the
+/// panel loop's per-bond read): each non-terminal claim's current phase end. Then, for a challenger
+/// that is no seat of the claim's panel, the claims it could still dispute
+/// (`palw_disputable_claims_v2`: licensed, not its own, no session of its own open) — open, with no
+/// date this read can give (`u64::MAX`, the priority lane's last dated place). Past R-core+ a DA
+/// session leaves the claim licensed, so the pursuit outlives its demand there too.
 pub(crate) fn palw_held_open_claims_v1(
     rows: &[kaspa_consensus_core::palw_producer_v2::PalwClaimRowV1],
+    disputable: &[kaspa_consensus_core::palw_producer_v2::PalwDisputableClaimV2],
     pursued: &HashSet<Hash64>,
 ) -> HashMap<Hash64, u64> {
-    rows.iter()
+    let mut open: HashMap<Hash64, u64> = rows
+        .iter()
         .filter(|row| pursued.contains(&row.claim_id) && !row.phase.is_terminal())
         .map(|row| (row.claim_id, row.deadline_daa.unwrap_or(u64::MAX)))
-        .collect()
+        .collect();
+    for claim in disputable.iter().filter(|claim| pursued.contains(&claim.claim_id)) {
+        open.entry(claim.claim_id).or_insert(u64::MAX);
+    }
+    open
 }
 
 #[cfg(test)]

@@ -7345,7 +7345,13 @@ impl PalwPanelService {
                         .await
                         .map(|read| read.rows)
                         .unwrap_or_default();
-                    held_court::palw_held_open_claims_v1(&rows, &pursued)
+                    // A challenger that is no seat of the claim's panel: the claims it could still dispute.
+                    let disputable = if pursued.iter().all(|claim| rows.iter().any(|row| row.claim_id == *claim)) {
+                        Vec::new()
+                    } else {
+                        session.clone().spawn_blocking(move |c| c.palw_disputable_claims_v2(vec![bond_key])).await
+                    };
+                    held_court::palw_held_open_claims_v1(&rows, &disputable, &pursued)
                 };
                 let held_host = held_court::PalwPanelHeldHostV1 {
                     panel: self,

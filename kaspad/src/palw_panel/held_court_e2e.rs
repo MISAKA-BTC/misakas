@@ -217,17 +217,24 @@ thread_local! {
     static TURN: std::cell::Cell<u64> = const { std::cell::Cell::new(20) };
     /// Whether this test's fold runs past `palw_offence_attribution` (unless a test sets it).
     static FENCED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    /// Whether this test's fold runs R-core+ from genesis, as testnet-12 does (unless a test sets it).
+    static RCORE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn params() -> PalwStateParamsV2 {
-    PalwStateParamsV2::new(100, 10, 10, 20, 600, 1000, h64(1), 4, 1000, 10_000, 1000, 0)
+    let p = PalwStateParamsV2::new(100, 10, 10, 20, 600, 1000, h64(1), 4, 1000, 10_000, 1000, 0)
         .unwrap()
         .with_fp_quanta(8, 64)
         .unwrap()
         .with_turn_deadline_daa(TURN.with(|turn| turn.get()))
         .unwrap()
         .with_worker_carve_permille(300)
-        .unwrap()
+        .unwrap();
+    if RCORE.with(|rcore| rcore.get()) {
+        p.with_fp_exposure_ceiling(500).unwrap().with_rcore_plus_mirrors(Some(0), 0, Vec::new())
+    } else {
+        p
+    }
 }
 
 /// testnet-12's launch line as far as the fold reads it — `palw_offence_attribution` in force.
@@ -240,6 +247,11 @@ fn launch() -> PalwTransitionExtrasV1 {
         attn_anchored_root_active: true,
         court_responder_coverage_active: true,
         offence_attribution_active: FENCED.with(|fenced| fenced.get()),
+        // Past R-core+ (testnet-12): the V2 verification doors S2's optimistic licence rides.
+        verification_v2_active: RCORE.with(|rcore| rcore.get()),
+        verification_s2_active: RCORE.with(|rcore| rcore.get()),
+        objective_offence_daa: RCORE.with(|rcore| rcore.get()).then_some(0),
+        panel_economy_active: RCORE.with(|rcore| rcore.get()),
         ..Default::default()
     }
 }
@@ -377,7 +389,31 @@ fn licensed_many_under(
     };
     let licences: Vec<_> = claims
         .iter()
-        .map(|claim| PalwConsensusObjectV2::ReceiptLicensed { claim: *claim, receipts: vec![valid(SEAT), valid(COLLUDER)] })
+        .map(|claim| {
+            if !RCORE.with(|rcore| rcore.get()) {
+                return PalwConsensusObjectV2::ReceiptLicensed { claim: *claim, receipts: vec![valid(SEAT), valid(COLLUDER)] };
+            }
+            // Past R-core+ (testnet-12): S2's optimistic door — the full-replay seat's `Valid` and the
+            // auditor's, each over the segments its draw assigned it.
+            let bonds: Vec<PalwBondKeyV2> = seats.iter().map(|seat| seat.bond).collect();
+            let assignment =
+                kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2(h64(77), *claim, bonds.len() as u16);
+            PalwConsensusObjectV2::OptimisticLicensed {
+                claim: *claim,
+                receipts: bonds
+                    .iter()
+                    .enumerate()
+                    .map(|(index, bond)| kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV3 {
+                        receipt: PalwSeatReceiptV2 {
+                            claim: *claim,
+                            signed_daa: at + 1,
+                            ..valid(if *bond == bond_key(SEAT) { SEAT } else { COLLUDER })
+                        },
+                        segments: assignment.mask_of(index as u16),
+                    })
+                    .collect(),
+            }
+        })
         .collect();
     let s = step(&s, at + 1, &licences).expect("the licences");
     (s, claims)
@@ -1030,11 +1066,13 @@ impl PalwHeldHostV1 for FixtureHost {
     fn carried_prompt(&self, _duty: &PalwCourtDutyV2, _backend: &dyn PalwExecutionBackendV1) -> Result<Option<Vec<u32>>, String> {
         Ok(self.carried.clone())
     }
-    /// The panel's own read, on the fixture chain: this bond's seat rows, through the panel's filter.
+    /// The panel's own reads, on the fixture chain: this bond's seat rows and the claims it could
+    /// still dispute, through the panel's filter.
     fn claim_open_until_v1(&self, claim_id: &Hash64) -> Option<u64> {
-        use kaspa_consensus_core::palw_producer_v2::{PalwClaimRoleV1, palw_claim_rows_v1};
+        use kaspa_consensus_core::palw_producer_v2::{PalwClaimRoleV1, palw_claim_rows_v1, palw_disputable_claims_v2};
         let (rows, _) = palw_claim_rows_v1(&self.state, &params(), &self.bond, PalwClaimRoleV1::Seat, false, 4_096);
-        super::held_court::palw_held_open_claims_v1(&rows, &HashSet::from([*claim_id])).get(claim_id).copied()
+        let disputable = palw_disputable_claims_v2(&self.state, &[self.bond]);
+        super::held_court::palw_held_open_claims_v1(&rows, &disputable, &HashSet::from([*claim_id])).get(claim_id).copied()
     }
 }
 
@@ -1473,7 +1511,8 @@ fn disclosure_of(
     }
 }
 
-/// What a step-6 play recorded: the end state and the DAA each landmark landed at.
+/// What a step-6 play recorded: the end state and the DAA each landmark landed at, and the held
+/// forfeit the claim last held.
 #[derive(Default)]
 struct Step6Played {
     demand: Option<(u64, u64)>,
@@ -1481,6 +1520,31 @@ struct Step6Played {
     accused: Option<(u64, u64)>,
     forger_closed: Option<u64>,
     choices: usize,
+    forfeit: Option<kaspa_consensus_core::palw_state_v2::PalwHeldForfeitV1>,
+}
+
+/// The forger's R-core+ answer to one unit of the seat's DA session: P2-7's builders
+/// (`palw_da_unit_answer_v1`, `palw_da_answer_object_v1`) over its own capture, with its own backend
+/// (which replays its lie).
+fn rcore_answer_of(
+    forger: &Produced,
+    claim: Hash64,
+    unit: kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1,
+) -> PalwConsensusObjectV2 {
+    let facts = attempt_facts(forger, claim);
+    let material = super::PalwDaCaptureV1::Attempt(forger.material.clone());
+    let answer = super::palw_da_unit_answer_v1(&forger.backend, &facts, &material, unit)
+        .unwrap_or_else(|e| panic!("the forger answers {unit:?}: {e}"));
+    kaspa_consensus_core::palw_da_rcore_v1::palw_da_answer_object_v1(
+        &h64(999),
+        claim,
+        unit,
+        answer,
+        bond_key(PRODUCER),
+        u64::MAX,
+        |_, _| Some(vec![0xAA; 8]),
+    )
+    .unwrap_or_else(|e| panic!("the forger's answer object: {e:?}"))
 }
 
 /// **The forger against the seat's node, block by block.** The forger plays its held dissection from
@@ -1492,8 +1556,8 @@ struct Step6Played {
 #[allow(clippy::too_many_arguments)]
 async fn play_step6(
     mut s: PalwChainStateV2,
-    claim: Hash64,
-    sid: Hash64,
+    forger: &Produced,
+    (claim, sid): (Hash64, Hash64),
     artifact_root: Hash64,
     accused: &PalwAttnHeldEvidenceV1,
     seat: &mut Node,
@@ -1508,6 +1572,9 @@ async fn play_step6(
         if matches!(phase_of(&s, &claim), PalwClaimPhaseV2::Voided { .. }) {
             break;
         }
+        if let Some((_, record)) = s.held_forfeits_of_claim(&claim).next() {
+            played.forfeit = Some(record.clone());
+        }
         let mut objects = Vec::new();
         // The forger's moves.
         if let Some(duty) = duty_of(&s, PRODUCER, sid)
@@ -1520,7 +1587,14 @@ async fn play_step6(
             objects.push(object);
         }
         if let Some((checkpoint, chunk)) = owed.take() {
-            objects.push(disclosure_of(accused, claim, positions, checkpoint, chunk));
+            if RCORE.with(|rcore| rcore.get()) {
+                // Past R-core+ the session draws more units beside the named one, and the producer
+                // answers every one — through P2-7's own builders, from its own (forged) capture.
+                let units = s.da_session(&claim, &bond_key(SEAT)).expect("the seat's DA session").units.clone();
+                objects.extend(units.into_iter().map(|unit| rcore_answer_of(forger, claim, unit)));
+            } else {
+                objects.push(disclosure_of(accused, claim, positions, checkpoint, chunk));
+            }
             played.disclosed = Some(daa);
         }
         // The seat's node.
@@ -1585,7 +1659,7 @@ async fn step6_the_seats_node_demands_the_forged_chunk_and_convicts_on_the_discl
     host.carried = Some(forger.ids());
     let mut seat = Node::new(host);
     let mut chain = vec![accusation];
-    let (end, played) = play_step6(s, claim, sid, root, &accused, &mut seat, &mut chain, false, 1_200).await;
+    let (end, played) = play_step6(s, &forger, (claim, sid), root, &accused, &mut seat, &mut chain, false, 1_200).await;
     assert!(played.choices >= 1, "the seat's node names the lie's child");
     let (demanded, demand_due) = played.demand.expect("the seat's node demands the forged chunk (step 6)");
     assert!(demanded <= demand_due, "the demand lands by its due ({demanded} ≤ {demand_due})");
@@ -1601,16 +1675,20 @@ async fn step6_the_seats_node_demands_the_forged_chunk_and_convicts_on_the_discl
     assert!(end.court_session(&sid).is_none(), "the void closed the dissection");
 }
 
-/// **Step 6 outlives the session: the forger's race.** A consistent forger's own node closes the
-/// bottom with its acquittal the block the bottom is reached — its bottom, built from its own forged
-/// anchor, acquits it (`ChallengerDefeated`), and the session closes with the seat's demand still
-/// unanswered. The claim is still licensed, and the DA court and the checkpoint court try it whether
-/// a court is open or not: the seat's node, having recorded the pursuit when its last choice named
-/// the bottom, reads the forger's disclosure, opens the committed row and files `CheckpointAccused`
-/// on the claim — dated by the claim's own phase end — before it is final: voided `CourtFraud`, the
-/// forger charged. (The seat still lost its dissection: the acquittal charged it.)
+/// **The forger's race, fold and node together (testnet-12's rules: R-core+ from genesis): the seat
+/// that lost to a forged anchor is made whole when step 6 convicts.** A consistent forger's own node
+/// closes the bottom with its acquittal the block the bottom is reached — its bottom, built from
+/// its own forged anchor, acquits it (`ChallengerDefeated`) — and the fold charges the seat
+/// `max(reserved, G)` and the court time, keeping the forfeit (the anchor and the chunks that bottom
+/// opened). The seat's node, having recorded the pursuit when its last choice named the bottom,
+/// files the `StateChunk` demand (it goes with the close), reads the forger's disclosure of every
+/// drawn unit (P2-7's `MaterialDisclosedV2`), opens the committed row and files `CheckpointAccused`
+/// on the very chunk — after the session, dated by the claim's own phase end — before the claim is
+/// final: voided `CourtFraud`, the forger charged, and the forfeit restored to the seat's
+/// collateral, which ends no lower than it started. No forfeit record outlives the void.
 #[tokio::test(flavor = "multi_thread")]
-async fn step6_a_forger_that_closes_first_is_still_convicted_after_its_session() {
+async fn step6_the_seat_that_lost_to_a_forged_anchor_is_made_whole_when_step_6_convicts() {
+    RCORE.with(|rcore| rcore.set(true));
     let (artifact, profile) = held_fixture(128);
     let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
     let canonical = binding_of(&produce(&artifact, &profile, false).material).job_context;
@@ -1620,6 +1698,7 @@ async fn step6_a_forger_that_closes_first_is_still_convicted_after_its_session()
         .expect("a cache-row lie that reaches a committed fused tile");
     let (s, claims) = licensed_many_under(&[&forger], &canonical, &profile, root);
     let claim = claims[0];
+    assert!(matches!(phase_of(&s, &claim), PalwClaimPhaseV2::ReceiptLicensed { .. }), "licensed through S2's door");
     let accusation = accusation_of(&forger, claim);
     let s = step(&s, 104, std::slice::from_ref(&accusation)).expect("the held dissection opens");
     let sid = session_of(&s, claim);
@@ -1633,14 +1712,18 @@ async fn step6_a_forger_that_closes_first_is_still_convicted_after_its_session()
     host.carried = Some(forger.ids());
     let mut seat = Node::new(host);
     let mut chain = vec![accusation];
-    let (end, played) = play_step6(s, claim, sid, root, &accused, &mut seat, &mut chain, true, 600).await;
+    let (end, played) = play_step6(s, &forger, (claim, sid), root, &accused, &mut seat, &mut chain, true, 600).await;
     let closed = played.forger_closed.expect("the forger's node closes the bottom with its acquittal");
     assert!(
         chain.iter().any(|o| matches!(o, PalwConsensusObjectV2::CourtClosed { verdict: PalwCourtVerdictV2::ChallengerDefeated, .. })),
         "the acquittal landed"
     );
+    let forfeit = played.forfeit.expect("the acquitting close kept the seat's forfeit");
+    assert_eq!(forfeit.challenger, bond_key(SEAT));
+    assert!(forfeit.amount > 0 && !forfeit.chunks.is_empty(), "{forfeit:?}");
     let (demanded, _) = played.demand.expect("the seat's node demanded the chunk");
     assert!(demanded <= closed, "the demand went with the forger's close, not after it ({demanded} ≤ {closed})");
+    assert!(played.disclosed.is_some(), "the forger answered every drawn unit");
     let (accused_at, due) = played.accused.expect("the pursuit files CheckpointAccused after the session closed");
     assert!(accused_at > closed && accused_at <= due, "after the close, by the claim's phase end ({closed} < {accused_at} ≤ {due})");
     assert!(
@@ -1649,7 +1732,55 @@ async fn step6_a_forger_that_closes_first_is_still_convicted_after_its_session()
         phase_of(&end, &claim)
     );
     assert!(collateral(&end, PRODUCER) < before_p, "the forger is charged");
-    assert!(collateral(&end, SEAT) < before_s, "the seat lost its dissection to the acquittal");
+    assert!(
+        collateral(&end, SEAT) >= before_s,
+        "the seat is made whole: {} ≥ {before_s} (forfeit {})",
+        collateral(&end, SEAT),
+        forfeit.amount
+    );
+    assert_eq!(end.held_forfeits_of_claim(&claim).count(), 0, "no forfeit outlives the void");
+    RCORE.with(|rcore| rcore.set(false));
+}
+
+/// **…and the honest acquittal's twin: the losing challenger is still charged.** The same rules; an
+/// honest producer; a seat that plays on to the bottom. The producer's node files its acquittal, the
+/// fold charges the seat exactly as before and keeps the forfeit — and with nothing that could ever
+/// prove the anchor forged, the claim goes on to `Final`, the record goes with the claim's last
+/// live phase, and the seat stays charged.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_honest_acquittal_still_charges_the_challenger_and_its_forfeit_goes_at_final() {
+    RCORE.with(|rcore| rcore.set(true));
+    let (artifact, profile) = held_fixture(128);
+    let root = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the inventory").root();
+    let honest = produce(&artifact, &profile, false);
+    let seat = backend(&artifact, &profile);
+    let (s, claim, sid) = opened(&honest, &profile, root);
+    let before_s = collateral(&s, SEAT);
+    let (responder, _, _) = responder_evidence(&honest, claim, vec![honest.material.clone()]);
+    let played = play(s, sid, root, Some(&responder), None, &seat, true);
+    let end = played.state;
+    assert!(
+        played.filed.iter().any(|(_, by, mv, object)| *by == PRODUCER
+            && *mv == PalwHeldMoveV1::Close
+            && matches!(object, PalwConsensusObjectV2::CourtClosed { verdict: PalwCourtVerdictV2::ChallengerDefeated, .. })),
+        "the producer's node files its acquittal"
+    );
+    let charged = before_s - collateral(&end, SEAT);
+    assert!(charged > 0, "the losing challenger pays, as before");
+    let forfeits: Vec<_> = end.held_forfeits_of_claim(&claim).map(|(session, record)| (*session, record.clone())).collect();
+    assert_eq!(forfeits.len(), 1, "the forfeit is kept while the claim can still be tried");
+    assert_eq!((forfeits[0].0, forfeits[0].1.challenger, forfeits[0].1.amount), (sid, bond_key(SEAT), charged), "what the close took");
+    let mut state = end;
+    for at in 3_000..6_000 {
+        if matches!(phase_of(&state, &claim), PalwClaimPhaseV2::Final { .. }) {
+            break;
+        }
+        state = step(&state, at, &[]).unwrap_or_else(|e| panic!("DAA {at}: {e}"));
+    }
+    assert!(matches!(phase_of(&state, &claim), PalwClaimPhaseV2::Final { .. }), "the claim goes on to Final");
+    assert_eq!(state.held_forfeits_of_claim(&claim).count(), 0, "the forfeit goes with the claim's last live phase");
+    assert_eq!(collateral(&state, SEAT), before_s - charged, "and the seat stays charged");
+    RCORE.with(|rcore| rcore.set(false));
 }
 
 /// **The review's item 11, F5 on the node: a held row whose compute turn exceeds the court's turn.**
