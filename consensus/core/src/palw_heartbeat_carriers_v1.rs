@@ -159,11 +159,11 @@ pub fn palw_h1_carrier_ids_v1(txs: &[Transaction]) -> Vec<TransactionId> {
 
 /// **The most 0x4b payloads the relay decodes in a beat a peer sent before validating it** (P2-9
 /// review, finding 4). One open carrier is all an exemption needs, and a template built by this
-/// code puts its carriers first: the lane is selected ahead of everything, and a block's
-/// transactions are ordered by subnetwork with a stable sort, so a lane-built beat's first
-/// lifecycle transactions ARE its carriers. Eight is room for a lane that also carries a few
-/// objects the gate refused since, and it bounds what a junk body can make this node decode to
-/// eight payloads, whatever the message holds.
+/// code puts its carriers first: the lane's batch is the first the template builder takes, and a
+/// block keeps its selection order behind the coinbase (no rule re-sorts a body), so a lane-built
+/// beat's first lifecycle transactions ARE its carriers. Eight is room for a lane whose head the
+/// sending node's tip still took and this node's no longer does, and it bounds what a junk body
+/// can make this node decode to eight payloads, whatever the message holds.
 pub const PALW_H1_CARRIERS_EXAMINED_PER_BEAT_V1: usize = 8;
 
 /// **The H-1 carriers the relay may ask about in an unvalidated beat**: among the first

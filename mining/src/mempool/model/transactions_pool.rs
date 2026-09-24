@@ -107,6 +107,7 @@ pub(crate) struct TransactionsPool {
 impl TransactionsPool {
     pub(crate) fn new(config: Arc<Config>) -> Self {
         let target_time_per_block = 1.0 / (config.network_blocks_per_second as f64);
+        let palw_carrier_reserve = PalwCarrierReserveV1::of(&config);
         Self {
             config,
             all_transactions: MempoolTransactionCollection::default(),
@@ -119,7 +120,7 @@ impl TransactionsPool {
             estimated_size: 0,
             attestation_index: AttestationIndex::default(),
             attestation_quarantine: AttestationQuarantine::default(),
-            palw_carriers: PalwCarrierIndexV1::default(),
+            palw_carriers: PalwCarrierIndexV1::new(palw_carrier_reserve),
         }
     }
 
@@ -540,11 +541,11 @@ impl TransactionsPool {
     /// there are not enough lower feerate transactions that can be removed to accommodate `transaction`
     ///
     /// **ADR-0152 H-1 (P2-9 review, finding 1): the carrier reserve** ([`PalwCarrierReserveV1`]).
-    /// Where `Config::palw_h1_carrier_priority` is set and the pool's carriers are inside the
-    /// reserve, an incoming carrier that still fits it takes its room from the cheapest ordinary
-    /// transactions whatever they pay, and an incoming ordinary transaction may not take a carrier's
-    /// room — nor that of a transaction whose eviction would take a carrier with it. Everywhere else
-    /// this is upstream's rule, unchanged.
+    /// Where `Config::palw_h1_carrier_priority` is set, an incoming carrier the reserve will hold
+    /// (`PalwCarrierIndexV1::would_reserve`: room by count and bytes, its lane key not yet held)
+    /// takes its room from the cheapest unreserved transactions whatever they pay, and no incoming
+    /// transaction takes a reserved carrier's room — nor that of a transaction whose eviction would
+    /// take a reserved carrier with it. Everywhere else this is upstream's rule, unchanged.
     pub(crate) fn limit_transaction_count(
         &self,
         transaction: &MutableTransaction,
@@ -557,18 +558,16 @@ impl TransactionsPool {
             return Ok(Default::default());
         }
 
-        // ADR-0152 H-1: which side of the reserve this admission is on. Decoded only for a full pool.
-        // While the pool's carriers are inside the reserve none of them is evicted, by anything; an
-        // incoming carrier that still fits the reserve takes its room whatever the fee market pays.
-        let (takes_reserve, shields_carriers) = if self.config.palw_h1_carrier_priority {
-            let reserve = PalwCarrierReserveV1::of(&self.config);
-            let (held, held_bytes) = (self.palw_carriers.len(), self.palw_carriers.bytes());
-            let takes = reserve.holds(held + 1, held_bytes + transaction_size)
-                && kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_tx_v1(&transaction.tx);
-            (takes, held > 0 && reserve.holds(held, held_bytes))
-        } else {
-            (false, false)
-        };
+        // ADR-0152 H-1: does this admission take a reserved place? Decoded only for a full pool, and
+        // asked through the index's own rule, so the carrier let evict for the reserve is the one
+        // the insertion then reserves (the evictions below never touch a reserved carrier).
+        let takes_reserve = self.config.palw_h1_carrier_priority
+            && kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_object_of_tx_v1(&transaction.tx).is_some_and(
+                |object| {
+                    let lane_key = kaspa_consensus_core::palw_heartbeat_carriers_v1::palw_h1_carrier_lane_key_v1(&object);
+                    self.palw_carriers.would_reserve(transaction_size, lane_key.as_ref())
+                },
+            );
 
         // Returns a vector of transactions to be removed (the caller has to actually remove)
         let feerate_threshold = transaction.calculated_feerate().unwrap();
@@ -585,10 +584,11 @@ impl TransactionsPool {
             if transaction.has_parent_in_set(&redeemers) {
                 continue;
             }
-            // ADR-0152 H-1: inside the reserve no carrier is evicted — not for an ordinary
-            // transaction, and not for another carrier (one past the reserve competes with the fee
-            // market only) — nor anything whose eviction would take a carrier with it.
-            if shields_carriers && redeemers.iter().any(|id| self.palw_carriers.contains(id)) {
+            // ADR-0152 H-1: a reserved carrier is evicted by nothing — not for an ordinary
+            // transaction, not for another carrier — nor is anything whose eviction would take one
+            // with it. An unreserved carrier is an ordinary transaction here. (The index is empty
+            // where the flag is off.)
+            if redeemers.iter().any(|id| self.palw_carriers.is_reserved(id)) {
                 continue;
             }
 
@@ -1305,21 +1305,58 @@ mod palw_carrier_lane_tests {
 
         // Carriers fill the reserve; the next one competes with the fee market on feerate, and loses
         // — it may not take a reserved carrier's room either.
-        let reserve = PalwCarrierReserveV1::of(&pool.config);
         let mut claim = 2;
-        while reserve
-            .holds(pool.palw_carriers.len() + 1, pool.palw_carriers.bytes() + carrier(claim, 2_000, 2_000).mempool_estimated_bytes())
-        {
-            admit(&mut pool, carrier(claim, 2_000, 2_000)).expect("inside the reserve a carrier is admitted");
+        while pool.palw_carriers.would_reserve(carrier(claim, 2_000, 2_000).mempool_estimated_bytes(), Some(&session(claim))) {
+            let (id, _) = admit(&mut pool, carrier(claim, 2_000, 2_000)).expect("inside the reserve a carrier is admitted");
+            assert!(pool.palw_carriers.is_reserved(&id));
             claim += 1;
         }
         let held = pool.palw_carriers.len();
-        assert!(held >= 2, "the reserve holds more than one carrier: {held}");
+        assert!(held >= 2 && pool.palw_carriers.reserved().0 == held, "the reserve holds every carrier so far: {held}");
         assert!(
             matches!(admit(&mut pool, carrier(claim, 2_000, 2_000)), Err(RuleError::RejectMempoolIsFull)),
             "past the reserve a carrier is an ordinary transaction"
         );
         assert_eq!(pool.palw_carriers.len(), held, "and no reserved carrier made room for it");
+    }
+
+    fn session(claim: u64) -> kaspa_consensus_core::palw_heartbeat_carriers_v1::PalwH1LaneKeyV1 {
+        kaspa_consensus_core::palw_heartbeat_carriers_v1::PalwH1LaneKeyV1::DaSession(Hash64::from_u64_word(claim))
+    }
+
+    /// **The reserve is not first-come for one party** (the reserve's own flood): the H-1 gate judges
+    /// each carrier alone against the tip, so one bond's reporter can file many commitments that
+    /// each pass it. Keyed, the bond holds ONE reserved place — its other commitments are ordinary
+    /// min-fee transactions a full pool refuses — and the conviction filed after the flood still
+    /// takes a place of its own and leads the template.
+    #[test]
+    fn one_reporters_flood_holds_one_reserved_place() {
+        let mut pool = full_pool(true, 40); // a reserve of 5 places
+        let commitment = |n: u64| {
+            mtx(
+                SUBNETWORK_ID_PALW_LIFECYCLE,
+                payload(PalwConsensusObjectV2::ReporterCommitted {
+                    commitment: Hash64::from_u64_word(n),
+                    reporter: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(0xBAD), 0)),
+                    signature: vec![1; 8],
+                }),
+                5_000 + n,
+                2_000,
+                2_000,
+            )
+        };
+        let (first, _) = admit(&mut pool, commitment(1)).expect("the bond's first commitment takes the bond's place");
+        for n in 2..=20 {
+            assert!(
+                matches!(admit(&mut pool, commitment(n)), Err(RuleError::RejectMempoolIsFull)),
+                "commitment {n}: the bond already holds its place, so it competes on feerate and loses"
+            );
+        }
+        assert_eq!(pool.palw_carriers.reserved().0, 1);
+        let (accused, _) = admit(&mut pool, carrier(1, 2_000, 2_000)).expect("the conviction still finds a place");
+        assert!(pool.palw_carriers.is_reserved(&first) && pool.palw_carriers.is_reserved(&accused));
+        let lane: Vec<_> = pool.build_palw_carrier_lane().iter().map(|c| c.tx.id()).collect();
+        assert_eq!(lane, vec![first, accused], "both lead the template, in arrival order");
     }
 
     /// Only H-1's kinds ride the lane: a licence, a quorum of `Unavailable` or an unfileable offence

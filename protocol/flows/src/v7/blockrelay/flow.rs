@@ -316,6 +316,18 @@ impl HandleRelayInvsFlow {
 
             let ancestor_batch = match block_task.await {
                 Ok(_) => Default::default(),
+                // **ADR-0152 H-1: an exemption buys a beat this node can validate, not an orphan.** A
+                // spared beat claims its carrier only once valid (below); an orphan is not validated,
+                // so it could not claim, and one pending carrier would carry beat after beat with
+                // made-up parents into the orphan pool. It is dropped as the allowance would have
+                // dropped it — a descendant still brings it back as an orphan root, as H2 intends.
+                Err(RuleError::MissingParents(_)) if h1_spared => {
+                    debug!(
+                        "Relay heartbeat {} from {} was spared the allowance for an H-1 carrier but is an orphan — not processed",
+                        inv.hash, self.router
+                    );
+                    continue;
+                }
                 Err(RuleError::MissingParents(missing_parents)) => {
                     debug!("Block {} is orphan and has missing parents: {:?}", block.hash(), missing_parents);
                     if let Some(mut ancestor_batch) = self.process_orphan(&session, block.clone(), inv.known_within_range).await? {

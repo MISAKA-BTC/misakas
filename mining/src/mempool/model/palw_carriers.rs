@@ -8,9 +8,9 @@
 //! * **The lane** (`TransactionsPool::build_palw_carrier_lane`): the ready carriers lead every
 //!   template, up to half its mass ([`PALW_H1_CARRIER_LANE_MASS_DIVISOR`]), in the order this index
 //!   keeps — feerate descending, then ARRIVAL — one per [`PalwH1LaneKeyV1`].
-//! * **The reserve** ([`PalwCarrierReserveV1`]): a carrier may take a full pool's room from the
-//!   cheapest ordinary transactions whatever they pay, and no ordinary transaction may take a
-//!   carrier's room, while the carriers stay inside the reserve.
+//! * **The reserve** ([`PalwCarrierReserveV1`]): up to a bounded count and bytes of carriers, one
+//!   per lane key, hold a reserved place — such a carrier takes a full pool's room from the
+//!   cheapest unreserved transactions whatever they pay, and nothing evicts it.
 //! * **The gate** (consensus: `palw_mempool_h1_carrier_refusal`): only a carrier the tip's fold would
 //!   take enters the pool at all, and one it stops taking is evicted at the next template. That is
 //!   what makes the other two safe to give: the lane and the reserve are sold to objects the fold
@@ -24,7 +24,7 @@
 use kaspa_consensus_core::palw_heartbeat_carriers_v1::PalwH1LaneKeyV1;
 use kaspa_consensus_core::tx::TransactionId;
 use std::cmp::Ordering;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::mempool::config::Config;
 
@@ -63,16 +63,21 @@ pub(crate) const PALW_H1_CARRIER_RESERVE_POOL_FRACTION: usize = 8;
 /// The lane only orders what is already in the pool, and a min-fee carrier is the first
 /// transaction a full pool refuses and the first it evicts — so under congestion the accused could
 /// keep every mempool full for about one block's fees a slot, and the conviction that should stop it
-/// would enter none (V-8's case). Inside the reserve, therefore:
+/// would enter none (V-8's case). So some carriers hold a RESERVED place ([`PalwCarrierIndexV1`]
+/// decides which), and for those:
 ///
-/// * an incoming carrier evicts the cheapest ordinary transactions WHATEVER THEY PAY (never another
-///   carrier, never its own ancestor), and
-/// * an incoming ordinary transaction never evicts a carrier (nor a transaction a carrier spends
-///   from), however much it pays.
+/// * an incoming carrier that will be reserved evicts the cheapest ordinary transactions WHATEVER
+///   THEY PAY (never a reserved carrier, never its own ancestor), and
+/// * no incoming transaction, whatever it pays, evicts a reserved carrier or a transaction a
+///   reserved carrier spends from.
 ///
-/// Outside the reserve a carrier is an ordinary transaction and competes on feerate, so carriers can
-/// hold at most the reserve against the fee market — and every one of them is an object the tip's
-/// fold would take (the gate), which the lane then drains at up to half a block a template.
+/// A carrier is reserved while the reserve has room by count and bytes AND no reserved carrier
+/// already holds its lane key ([`PalwH1LaneKeyV1`]). The key is what keeps the reserve from being
+/// one party's: the gate judges each carrier alone against the tip, so one bond's reporter could
+/// file a thousand commitments that each pass it and fill a first-come reserve before the
+/// conviction arrives; keyed, that bond holds one reserved place, a claim's DA session one, an
+/// offence's evidence one. Every other carrier — a second of a key, one past the reserve — is an
+/// ordinary transaction and competes on feerate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PalwCarrierReserveV1 {
     pub txs: usize,
@@ -125,46 +130,121 @@ struct PalwCarrierEntryV1 {
     order: PalwCarrierOrderKeyV1,
     lane_key: Option<PalwH1LaneKeyV1>,
     bytes: usize,
+    /// Whether this carrier holds a place in the reserve ([`PalwCarrierReserveV1`]).
+    reserved: bool,
 }
 
-/// **The carriers in the pool, kept in lane order.** Written only at the pool's one insertion site
-/// and its one removal site, so it cannot drift from `all_transactions`; a template build reads it
-/// in order and decodes nothing.
-#[derive(Default)]
+/// **The carriers in the pool, kept in lane order, and which of them the reserve holds.** Written
+/// only at the pool's one insertion site and its one removal site, so it cannot drift from
+/// `all_transactions`; a template build reads it in order and decodes nothing.
+///
+/// Reservation is decided at insertion — whether the pool is full or not, since a carrier that
+/// entered an idle pool is exactly the one better-paying traffic would evict first once it fills —
+/// and a place a reserved carrier leaves goes to the best unreserved carrier that fits
+/// ([`Self::remove`]), within [`PALW_H1_CARRIER_LANE_SCAN`] of the lane order.
 pub(crate) struct PalwCarrierIndexV1 {
     order: BTreeSet<PalwCarrierOrderKeyV1>,
     entries: HashMap<TransactionId, PalwCarrierEntryV1>,
     bytes: usize,
     next_seq: u64,
+    reserve: PalwCarrierReserveV1,
+    reserved_txs: usize,
+    reserved_bytes: usize,
+    reserved_keys: HashSet<PalwH1LaneKeyV1>,
 }
 
 impl PalwCarrierIndexV1 {
+    pub(crate) fn new(reserve: PalwCarrierReserveV1) -> Self {
+        Self {
+            order: Default::default(),
+            entries: Default::default(),
+            bytes: 0,
+            next_seq: 0,
+            reserve,
+            reserved_txs: 0,
+            reserved_bytes: 0,
+            reserved_keys: Default::default(),
+        }
+    }
+
+    /// **Would a carrier of `bytes` under `lane_key` be reserved if it entered now?** The one rule
+    /// both the insertion and the full pool's admission (`limit_transaction_count`) read, so the
+    /// carrier that was let evict for the reserve is the carrier the reserve then holds.
+    pub(crate) fn would_reserve(&self, bytes: usize, lane_key: Option<&PalwH1LaneKeyV1>) -> bool {
+        self.reserve.holds(self.reserved_txs + 1, self.reserved_bytes + bytes)
+            && lane_key.is_none_or(|key| !self.reserved_keys.contains(key))
+    }
+
     /// Index a carrier that just entered the pool: its fee and mass as the frontier weighs them, its
-    /// estimated bytes as the pool counts them, and its lane key.
+    /// estimated bytes as the pool counts them, and its lane key; reserved if [`Self::would_reserve`].
     pub(crate) fn insert(&mut self, id: TransactionId, fee: u64, mass: u64, bytes: usize, lane_key: Option<PalwH1LaneKeyV1>) {
+        // The pool never adds an id twice (it asserts so); keep the index exact regardless.
+        self.remove(&id);
         let order = PalwCarrierOrderKeyV1 { fee, mass, seq: self.next_seq, id };
         self.next_seq += 1;
-        if let Some(stale) = self.entries.insert(id, PalwCarrierEntryV1 { order, lane_key, bytes }) {
-            // The pool never adds an id twice (it asserts so); keep the index exact regardless.
-            self.order.remove(&stale.order);
-            self.bytes -= stale.bytes;
+        let reserved = self.would_reserve(bytes, lane_key.as_ref());
+        if reserved {
+            self.take_place(bytes, lane_key.as_ref());
         }
+        self.entries.insert(id, PalwCarrierEntryV1 { order, lane_key, bytes, reserved });
         self.order.insert(order);
         self.bytes += bytes;
     }
 
-    /// Forget a transaction that left the pool (a no-op for one that is not a carrier).
+    /// Forget a transaction that left the pool (a no-op for one that is not a carrier). A reserved
+    /// carrier's place passes to the best unreserved carrier that fits it, in lane order.
     pub(crate) fn remove(&mut self, id: &TransactionId) {
-        if let Some(entry) = self.entries.remove(id) {
-            self.order.remove(&entry.order);
-            self.bytes -= entry.bytes;
+        let Some(entry) = self.entries.remove(id) else { return };
+        self.order.remove(&entry.order);
+        self.bytes -= entry.bytes;
+        if !entry.reserved {
+            return;
+        }
+        self.reserved_txs -= 1;
+        self.reserved_bytes -= entry.bytes;
+        if let Some(key) = &entry.lane_key {
+            self.reserved_keys.remove(key);
+        }
+        // Promotion: disjoint fields, so the walk over `order` and the writes can share the body.
+        for key in self.order.iter().take(PALW_H1_CARRIER_LANE_SCAN) {
+            if self.reserved_txs >= self.reserve.txs {
+                break;
+            }
+            let Some(candidate) = self.entries.get_mut(&key.id) else { continue };
+            if candidate.reserved
+                || !self.reserve.holds(self.reserved_txs + 1, self.reserved_bytes + candidate.bytes)
+                || candidate.lane_key.as_ref().is_some_and(|key| self.reserved_keys.contains(key))
+            {
+                continue;
+            }
+            candidate.reserved = true;
+            self.reserved_txs += 1;
+            self.reserved_bytes += candidate.bytes;
+            if let Some(key) = &candidate.lane_key {
+                self.reserved_keys.insert(key.clone());
+            }
         }
     }
 
+    fn take_place(&mut self, bytes: usize, lane_key: Option<&PalwH1LaneKeyV1>) {
+        self.reserved_txs += 1;
+        self.reserved_bytes += bytes;
+        if let Some(key) = lane_key {
+            self.reserved_keys.insert(key.clone());
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn contains(&self, id: &TransactionId) -> bool {
         self.entries.contains_key(id)
     }
 
+    /// Whether `id` is a carrier the reserve holds — one no admission may evict.
+    pub(crate) fn is_reserved(&self, id: &TransactionId) -> bool {
+        self.entries.get(id).is_some_and(|entry| entry.reserved)
+    }
+
+    #[cfg(test)]
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }
@@ -174,8 +254,15 @@ impl PalwCarrierIndexV1 {
     }
 
     /// The estimated bytes the indexed carriers occupy.
+    #[cfg(test)]
     pub(crate) fn bytes(&self) -> usize {
         self.bytes
+    }
+
+    /// How many carriers the reserve holds, and their bytes.
+    #[cfg(test)]
+    pub(crate) fn reserved(&self) -> (usize, usize) {
+        (self.reserved_txs, self.reserved_bytes)
     }
 
     /// The carriers in lane order: `(id, mass, lane key)`.
@@ -193,12 +280,16 @@ mod tests {
         TransactionId::from_u64_word(n)
     }
 
+    fn roomy() -> PalwCarrierIndexV1 {
+        PalwCarrierIndexV1::new(PalwCarrierReserveV1 { txs: PALW_H1_CARRIER_RESERVE_TXS, bytes: PALW_H1_CARRIER_RESERVE_BYTES })
+    }
+
     /// **Feerate first, then arrival**: a later carrier paying more goes first; at an equal feerate
     /// the earlier one does, whatever either weighs (review finding 5's probe B: five light junk
     /// accusations filed after one heavy honest one no longer out-rank it).
     #[test]
     fn the_lane_order_is_feerate_then_arrival() {
-        let mut index = PalwCarrierIndexV1::default();
+        let mut index = roomy();
         index.insert(id(1), 4_000, 4_000, 10, None); // honest: feerate 1, heavy, first
         for n in 2..7 {
             index.insert(id(n), 1_000, 1_000, 10, None); // junk: feerate 1, light, later
@@ -212,7 +303,7 @@ mod tests {
     /// with its carrier.
     #[test]
     fn the_index_counts_what_it_holds() {
-        let mut index = PalwCarrierIndexV1::default();
+        let mut index = roomy();
         let key = PalwH1LaneKeyV1::DaSession(Hash64::from_u64_word(9));
         index.insert(id(1), 1_000, 1_000, 300, Some(key.clone()));
         index.insert(id(2), 1_000, 1_000, 200, None);
@@ -222,7 +313,53 @@ mod tests {
         index.remove(&id(3));
         assert_eq!((index.len(), index.bytes(), index.contains(&id(1))), (1, 200, false));
         index.remove(&id(2));
-        assert!(index.is_empty() && index.bytes() == 0);
+        assert!(index.is_empty() && index.bytes() == 0 && index.reserved() == (0, 0));
+    }
+
+    /// **One reserved place per lane key, and a place that frees goes to the best carrier that fits
+    /// it** (the reserve's own flood: one bond's reporter filing many commitments that each pass the
+    /// gate must not fill a first-come reserve ahead of the conviction).
+    #[test]
+    fn the_reserve_holds_one_carrier_per_key_and_passes_freed_places_on() {
+        let reporter = PalwH1LaneKeyV1::Reporter(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(
+            kaspa_consensus_core::tx::TransactionOutpoint::new(id(0xB0), 0),
+        ));
+        let session = |claim: u64| Some(PalwH1LaneKeyV1::DaSession(Hash64::from_u64_word(claim)));
+        let mut index = PalwCarrierIndexV1::new(PalwCarrierReserveV1 { txs: 3, bytes: 1_000 });
+
+        // A reporter's flood: the first commitment holds the bond's place, the rest are ordinary.
+        for n in 1..=10 {
+            assert_eq!(index.would_reserve(100, Some(&reporter)), n == 1);
+            index.insert(id(n), 1_000, 1_000, 100, Some(reporter.clone()));
+        }
+        assert_eq!(index.reserved(), (1, 100));
+        assert!(index.is_reserved(&id(1)) && !index.is_reserved(&id(2)));
+
+        // The conviction still finds a place, and so does an unkeyed court move.
+        assert!(index.would_reserve(300, session(7).as_ref()));
+        index.insert(id(20), 1_000, 1_000, 300, session(7));
+        index.insert(id(21), 1_000, 1_000, 300, None);
+        assert!(index.is_reserved(&id(20)) && index.is_reserved(&id(21)));
+        assert_eq!(index.reserved(), (3, 700));
+        // Full by count: nothing else is reserved, whatever its key.
+        assert!(!index.would_reserve(1, session(8).as_ref()));
+        index.insert(id(22), 5_000, 1_000, 200, session(8));
+        assert!(!index.is_reserved(&id(22)));
+
+        // The reporter's reserved commitment is mined: its place goes to the best unreserved
+        // carrier that fits — the richer accusation of claim 8, not the bond's next commitment.
+        index.remove(&id(1));
+        assert!(index.is_reserved(&id(22)), "the freed place passes on in lane order");
+        assert!((2..=10).all(|n| !index.is_reserved(&id(n))), "and the key rule still applies: {:?}", index.reserved());
+        assert_eq!(index.reserved(), (3, 800));
+
+        // Removing an unreserved carrier changes no place.
+        index.remove(&id(5));
+        assert_eq!(index.reserved(), (3, 800));
+        // The conviction is mined: its place goes to the bond's next commitment, now that the bond
+        // holds none — the earliest of the feerate tie.
+        index.remove(&id(20));
+        assert!(index.is_reserved(&id(2)) && (3..=10).all(|n| !index.is_reserved(&id(n))));
     }
 
     /// The reserve is the constant, or an eighth of a smaller pool — never all of it.

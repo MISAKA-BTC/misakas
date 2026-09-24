@@ -44,7 +44,8 @@
 //!    whatever its slot verdict (review finding 3: a `First` beat used to leave its carrier unspent,
 //!    so one pending carrier exempted every beat that copied it), and a `Repeat` at its
 //!    announcement. A beat that fails validation never claims, so a forged block cannot burn an
-//!    honest carrier's exemption.
+//!    honest carrier's exemption; and a spared beat that turns out an orphan is dropped, not
+//!    processed — it cannot claim, so it must not ride the exemption into the orphan pool either.
 //!
 //! An unconditional exemption would reopen the flood H2 closed, since a 0x4b payload costs nothing
 //! to put in a block; a pending carrier costs a relay fee, the gate's fold check and buys one beat
@@ -614,6 +615,9 @@ mod tests {
         let validated = flow.find("block_task.await").expect("the flow validates the block");
         let claim = flow.find("self.ctx.palw_heartbeat_h1_exempt(&block, true).await").expect("a spared beat claims");
         assert!(ask < validated && validated < claim, "ask, validate, then claim");
+        let orphan = flow.find("Err(RuleError::MissingParents(_)) if h1_spared => {").expect("a spared orphan is dropped");
+        let processed = flow.find("self.process_orphan(").expect("the flow processes orphans");
+        assert!(validated < orphan && orphan < processed, "a spared beat never reaches the orphan pool unclaimed");
 
         let ctx = include_str!("flow_context.rs");
         let body_of = |name: &str| -> &'static str {
