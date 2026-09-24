@@ -1489,3 +1489,11 @@ async fn p2_t29_the_rehearsal_and_the_fold_agree_at_a_1016_row_queue_with_maturi
 /// same `Minting` on more than one node and holds every block a builder mines to `after`.
 #[path = "p2_reorg_and_ibd.rs"]
 mod p2_reorg_and_ibd;
+
+/// **ADR-0152 Phase 2, P2-4: the EVM twin** (T50) — the mint path on testnet-12 with the EVM lane as
+/// shipped, every block the node's own template at this host's clock. A child of this suite so it
+/// holds every block to `after`; only a build with the `evm` feature can build a template for an
+/// active lane.
+#[cfg(feature = "evm")]
+#[path = "p2_evm_twin.rs"]
+mod p2_evm_twin;

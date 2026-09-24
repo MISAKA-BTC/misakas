@@ -14721,6 +14721,11 @@ impl VirtualStateProcessor {
                 &self.palw_round_blocks_of(&virtual_state.ghostdag_data),
             )
             .unwrap();
+        // **The coinbase is fixed HERE, before `evm_template_fields` commits the lane** (phase2-plan
+        // §5.4, F6): the lane never reads the block's own coinbase, so the vesting mints and seat
+        // pay it renders need no re-commit — and a later edit of these outputs must re-derive the
+        // lane (`palw_v2_payout_outputs`' rules). T50 (`p2_evm_twin`) holds build == validate with
+        // the lane as shipped over mint-carrying attempts and a restamped heartbeat.
         txs.insert(0, coinbase.tx);
         // kaspa-pq EVM Lane v0.4 (§4.3/§15): the template declares the
         // fork-correct header version — v2 (two EVM commitments) at/after
